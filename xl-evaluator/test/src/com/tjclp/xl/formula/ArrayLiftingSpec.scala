@@ -318,9 +318,52 @@ class ArrayLiftingSpec extends FunSuite:
     arrayEval("=VLOOKUP(B2:B4,Missing!A1:B3,2,FALSE)") match
       case Left(EvalError.EvalFailed(msg, _)) => assert(msg.contains("Missing"), msg)
       case other => fail(s"expected a loud failure, got $other")
+  }
+
+  test("a text or math domain error is an element's #VALUE!/#NUM!, so IFERROR keeps the rest") {
+    // FIND's miss, LEFT's negative length and CEILING's sign rule are Excel error values, not host
+    // failures: each element keeps its own result, and IFERROR replaces only the failing ones
     arrayEval("=LEFT(A1:D1,-1)") match
-      case Left(EvalError.EvalFailed(_, _)) => ()
-      case other => fail(s"expected a loud failure, got $other")
+      case Right(ar: ArrayResult) =>
+        assert(ar.values.flatten.forall(_ == CellValue.Error(CellError.Value)), ar.toString)
+      case other => fail(s"expected an array of #VALUE!, got $other")
+    val words = Sheet(SheetName.unsafe("Words"))
+      .put(ref"A1", text("banana"))
+      .put(ref"A2", text("cherry"))
+      .put(ref"A3", text("apple"))
+    // FIND("a") over banana/cherry/apple = {2;#VALUE!;1}: 2 + 0 + 1
+    assertEquals(
+      words.evaluateFormula("=SUMPRODUCT(IFERROR(FIND(\"a\",A1:A3),0))"),
+      Right(CellValue.Number(3))
+    )
+    assertEquals(
+      words.evaluateFormula("=SUMPRODUCT(--ISNUMBER(FIND(\"a\",A1:A3)))"),
+      Right(CellValue.Number(2))
+    )
+  }
+
+  test("per-element domain errors: FIND, LEFT and CEILING agree with Excel and LibreOffice") {
+    val sheet = List("apple", "Banana", "grape", "kiwi", "pear").zipWithIndex
+      .foldLeft(Sheet(SheetName.unsafe("S"))) { case (s, (word, i)) =>
+        s.put(ARef.from0(0, i), text(word))
+      }
+      .put(ref"B1", CellValue.Number(2))
+      .put(ref"B2", CellValue.Number(-1))
+      .put(ref"B3", CellValue.Number(3))
+      .put(ref"B4", CellValue.Number(0))
+      .put(ref"B5", CellValue.Number(1))
+    List(
+      "=SUMPRODUCT(--ISNUMBER(FIND(\"p\",A1:A5)))" -> 3,
+      "=SUMPRODUCT(--ISNUMBER(SEARCH(\"p\",A1:A5)))" -> 3,
+      "=SUMPRODUCT(IFERROR(FIND(\"p\",A1:A5),0))" -> 7,
+      "=SUMPRODUCT(--ISERROR(FIND(\"p\",A1:A5)))" -> 2,
+      // LEFT("Banana",-1) is #VALUE!: 2 + 0 + 3 + 0 + 1
+      "=SUMPRODUCT(LEN(IFERROR(LEFT(A1:A5,B1:B5),\"\")))" -> 6,
+      // Excel 2010+: CEILING(-1.5,1) is -1 and CEILING(-0.5,1) is 0: 2 - 1 + 3 + 0 + 1
+      "=SUMPRODUCT(IFERROR(CEILING(B1:B5-0.5,1),0))" -> 5
+    ).foreach { (formula, expected) =>
+      assertEquals(sheet.evaluateFormula(formula), Right(CellValue.Number(expected)), formula)
+    }
   }
 
   // ===== Single evaluation =====

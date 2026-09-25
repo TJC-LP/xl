@@ -32,12 +32,15 @@ class IndirectFunctionSpec extends ScalaCheckSuite:
     assertEquals(base.evaluateFormula("=INDIRECT(\"B2\")"), Right(num(42)))
   }
 
-  test("INDIRECT of an empty cell preserves emptiness (OFFSET parity)") {
-    // Direct `=Z9` resolves Empty -> 0 (decodeResolvedValue); the array path preserves
-    // Empty so aggregate semantics stay correct (e.g. COUNTA over an empty target is 0).
-    // Both render as zero-valued; pinned deliberately.
-    assertEquals(base.evaluateFormula("=INDIRECT(\"Z9\")"), Right(CellValue.Empty))
+  test("INDIRECT of an empty cell is 0 as a cell's value, blank inside a formula (OFFSET parity)") {
+    // As a formula's final value a reference to a blank cell reads 0, exactly like `=Z9` (a
+    // formula cell is never blank in Excel); inside a formula the reference keeps its emptiness,
+    // so aggregate semantics stay correct (COUNTA over an empty target is 0, ISBLANK is TRUE).
+    assertEquals(base.evaluateFormula("=INDIRECT(\"Z9\")"), base.evaluateFormula("=Z9"))
+    assertEquals(base.evaluateFormula("=INDIRECT(\"Z9\")"), Right(num(0)))
     assertEquals(base.evaluateFormula("=SUM(INDIRECT(\"Z9\"))"), Right(num(0)))
+    assertEquals(base.evaluateFormula("=COUNTA(INDIRECT(\"Z9\"))"), Right(num(0)))
+    assertEquals(base.evaluateFormula("=ISBLANK(INDIRECT(\"Z9\"))"), Right(CellValue.Bool(true)))
   }
 
   test("INDIRECT(\"$B$2\") accepts anchored text") {

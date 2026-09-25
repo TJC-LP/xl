@@ -246,7 +246,7 @@ object SheetEvaluator:
       clock: Clock = Clock.system,
       workbook: Option[Workbook] = None
     ): XLResult[Map[ARef, CellValue]] =
-      rangePlan(sheet, range, workbook) match
+      rangePlan(sheet, Vector(range), workbook) match
         // If no formulas in range, return empty (nothing to evaluate)
         case None => scala.util.Right(Map.empty)
         case Some(RangePlan(rangeFormulaCells, graph, _, targetCells, dynamic)) =>
@@ -317,12 +317,12 @@ object SheetEvaluator:
       clock: Clock,
       workbook: Option[Workbook]
     ): RangeEvalResult =
-      evaluateForRangePerCellImpl(sheet, range, clock, workbook)
+      evaluateForRangesPerCell(sheet, Vector(range), clock, workbook)
 
     /** [[evaluateForRangePerCell]] with the system clock and no workbook context. */
     @annotation.targetName("evaluateForRangePerCellDefault")
     def evaluateForRangePerCell(range: CellRange): RangeEvalResult =
-      evaluateForRangePerCellImpl(sheet, range, Clock.system, None)
+      evaluateForRangesPerCell(sheet, Vector(range), Clock.system, None)
 
     /**
      * Evaluate an array formula and spill results into adjacent cells.
@@ -406,8 +406,8 @@ object SheetEvaluator:
   // ========== Implementation shared by the public overloads ==========
 
   /**
-   * What a range evaluation evaluates: the range's formula cells, the sheet's dependency graph, the
-   * range's static closure (its formulas plus their transitive formula precedents), the target
+   * What a range evaluation evaluates: the ranges' formula cells, the sheet's dependency graph, the
+   * ranges' static closure (their formulas plus their transitive formula precedents), the target
    * formulas (the closure, or every formula when the sheet has dynamic references) and the sheet's
    * dynamic cells.
    */
@@ -419,14 +419,19 @@ object SheetEvaluator:
     dynamic: Set[ARef]
   )
 
-  /** The [[RangePlan]] of `range`, None when the range holds no formula. */
+  /** The [[RangePlan]] of `ranges`, None when they hold no formula. */
   private def rangePlan(
     sheet: Sheet,
-    range: CellRange,
+    ranges: Vector[CellRange],
     workbook: Option[Workbook]
   ): Option[RangePlan] =
+    // a small range is a handful of point lookups: many of them (a formula rule's reads at every
+    // cell of a render window) never make the scan below quadratic
+    val (small, large) = ranges.partition(r => r.width.toLong * r.height <= 256L)
+    val points = small.iterator.flatMap(_.cells).toSet
+    def covered(ref: ARef): Boolean = points.contains(ref) || large.exists(_.contains(ref))
     val rangeFormulaCells = sheet.cells.iterator.collect {
-      case (ref, cell) if range.contains(ref) && isFormula(cell.value) => ref
+      case (ref, cell) if isFormula(cell.value) && covered(ref) => ref
     }.toSet
     Option.when(rangeFormulaCells.nonEmpty) {
       val graph = DependencyGraph.fromSheet(sheet)
@@ -446,22 +451,24 @@ object SheetEvaluator:
     case _ => false
 
   /**
-   * The per-cell range evaluation behind [[evaluateForRangePerCell]]. Cycle members inside the
-   * targets fail as circular and block their dependents; the rest evaluates in topological order
-   * against a threaded sheet. A failure blocks its transitive dependents, and every failed or
-   * blocked cell loses its cache on the threaded sheet, so a dynamic reader (INDIRECT, invisible to
-   * the static graph) re-derives it and fails too instead of reading a stale value. Only failures
-   * and blocked cells in the range's static closure are reported: with dynamic references every
-   * formula is a target, but one that feeds the range only through a dynamic read makes that reader
-   * — in the closure — fail on its own, so an unrelated failure elsewhere stays silent.
+   * The per-cell evaluation of the formulas in `ranges` behind [[evaluateForRangePerCell]] (one
+   * range) and `view --eval`'s pictures ([[LiveRender]]: the window and the cells its conditional
+   * formatting reads). Cycle members inside the targets fail as circular and block their
+   * dependents; the rest evaluates in topological order against a threaded sheet. A failure blocks
+   * its transitive dependents, and every failed or blocked cell loses its cache on the threaded
+   * sheet, so a dynamic reader (INDIRECT, invisible to the static graph) re-derives it and fails
+   * too instead of reading a stale value. Only failures and blocked cells in the range's static
+   * closure are reported: with dynamic references every formula is a target, but one that feeds the
+   * range only through a dynamic read makes that reader — in the closure — fail on its own, so an
+   * unrelated failure elsewhere stays silent.
    */
-  private def evaluateForRangePerCellImpl(
+  private[eval] def evaluateForRangesPerCell(
     sheet: Sheet,
-    range: CellRange,
+    ranges: Vector[CellRange],
     clock: Clock,
     workbook: Option[Workbook]
   ): RangeEvalResult =
-    rangePlan(sheet, range, workbook) match
+    rangePlan(sheet, ranges, workbook) match
       case None => RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
       case Some(RangePlan(rangeFormulaCells, graph, closure, targets, dynamic)) =>
         def formulaText(ref: ARef): String = sheet(ref).value match
@@ -673,7 +680,13 @@ object SheetEvaluator:
     currentCell: Option[ARef]
   ): XLResult[CellValue] =
     evaluator.eval(expr, sheet, clock, workbook, currentCell) match
-      case scala.util.Right(value) => scala.util.Right(EvalResult.toCellValue(value))
+      case scala.util.Right(value) =>
+        // A formula cell is never blank in Excel: a result that is a reference to an empty cell
+        // (INDEX, INDIRECT, OFFSET, CHOOSE, a lookup) reads 0, as `=Z1` already does. Only the
+        // cell's final value changes — inside a formula the reference stays blank (ISBLANK, COUNTA).
+        EvalResult.toCellValue(value) match
+          case CellValue.Empty => scala.util.Right(CellValue.Number(BigDecimal(0)))
+          case other => scala.util.Right(other)
       case scala.util.Left(evalError) =>
         EvalError.toErrorValue(evalError) match
           case Some(code) => scala.util.Right(CellValue.Error(code))

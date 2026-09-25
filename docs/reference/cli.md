@@ -536,12 +536,15 @@ true rule combine, and a true rule with *Stop If True* stops every rule below it
 scales and bars included. Formula rules are evaluated relative to the top-left cell of the rule's
 range; top/bottom, scale and bar statistics cover the rule's whole range, not just the rendered
 window. The rules see the values the picture draws — cached values, or live ones under `--eval`.
-A formula with no cached value (as openpyxl writes them) is computed: top/bottom, scale and bar
-statistics follow a chain filled down or across whatever its length, but a formula rule (which
-evaluates each cell on its own) and a chain read from its far end stop at the evaluator's
-100-level recursion guard: a rule that reaches deeper is named in `CF_NOT_RENDERED`. Run
-`xl recalc` first to cache every value and paint it (`--eval` keeps the values of the rendered
-window's cells only, so it helps when those are the cells the rule reads).
+Under `--eval` every formula the window's rules read is evaluated with the window: a top/bottom,
+scale or bar rule's whole range, and the same-sheet cells a formula rule reads at each window
+cell. So a cell's paint never depends on the window asked for, and a formula among them that
+cannot evaluate is part of the one `EVAL_FAILED` warning (and of the `--strict` gate for html and
+svg). Without `--eval`, a formula with no cached value (as openpyxl writes them) is computed:
+top/bottom, scale and bar statistics follow a chain filled down or across whatever its length,
+but a formula rule (which evaluates each cell on its own) and a chain read from its far end stop
+at the evaluator's 100-level recursion guard: a rule that reaches deeper is named in
+`CF_NOT_RENDERED`. Run `xl recalc` first to cache every value, or view with `--eval`.
 A rule xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel 2010+
 data bars, formatting outside xl's model) or whose formula does not parse is named in a
 `CF_NOT_RENDERED` warning and the picture is drawn without it; so is a top/bottom, scale or bar
@@ -2242,7 +2245,10 @@ Two rows worth spelling out:
   `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle or a
   failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
   `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
-  only failures in the window's closure are reported. An internal evaluator
+  only failures in the window's closure are reported. For the pictures (html, svg and the raster
+  formats) the closure also covers what the window's conditional formatting reads — a
+  top/bottom, scale or bar rule's whole range, the cells a formula rule reads — since the paint
+  shows those values too. An internal evaluator
   defect in one cell (a throwable the evaluator should never raise) is contained the same way, as
   `Evaluation threw <class>: … at <cell> — an internal evaluator defect, not an Excel error value;
   please report it with the formula`, never an `INTERNAL` exit.

@@ -8,7 +8,9 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.raster.BatikRasterizer
+import com.tjclp.xl.cli.read.ReadTestKit
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 
@@ -274,4 +276,19 @@ class ViewEvalDegradeSpec extends CatsEffectSuite:
       assert(concat.stdout.contains("-2x"), concat.stdout)
       assert(concat.stdout.contains("3x"), concat.stdout)
       assert(!concat.stdout.contains("ArrayResult"), concat.stdout)
+  }
+
+  test("a formula reading an empty cell is 0 under --eval: text never spills over it") {
+    // Excel shows =INDEX(Z1:Z5,2) as 0, so A1's title stops at B1 in the live picture as in the
+    // cached one (the cache holds the 0 a recalc writes)
+    val sheet = Sheet("Data")
+      .put(ref"A1", "Quarterly revenue by region")
+      .put(ref"B1", CellValue.Formula("INDEX(Z1:Z5,2)", None))
+    val query = ReadTestKit.view(Some("A1:C1"), ViewFormat.Svg, evalFormulas = true)
+    ReadTestKit.inMemory(Workbook(Vector(sheet)), Some("Data"), query).map { outcome =>
+      val svg = ReadTestKit.text(outcome)
+      assert(svg.contains("""<clipPath id="clip-A1"><rect x="0" y="0" width="72" """), svg)
+      assert("""clip-path="url\(#clip-B1\)"[^>]*>0</text>""".r.findFirstIn(svg).isDefined, svg)
+      assertEquals(outcome.warnings, Vector.empty)
+    }
   }

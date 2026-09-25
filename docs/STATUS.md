@@ -262,7 +262,7 @@
 
 ### Test Coverage
 
-**7,856 test cases** (verified via `./mill __.test`, 2026-09-25, the Weaver wave): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
+**7,875 test cases** (verified via `./mill __.test`, 2026-09-25, the Weaver wave): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|

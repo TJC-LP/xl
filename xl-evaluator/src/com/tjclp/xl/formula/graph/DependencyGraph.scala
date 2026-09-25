@@ -2038,6 +2038,25 @@ object DependencyGraph:
         .toMap
     sheet => byFold.getOrElse(sheet.value.toLowerCase(java.util.Locale.ROOT), sheet)
 
+  /**
+   * What `expr`, a formula on `sheet`, reads on that sheet, never expanded: each cell it names and
+   * each range it reads (a whole column stays one range). References to other sheets or books, and
+   * defined names (no workbook resolves them here), are left out.
+   */
+  private[formula] def localReads[A](
+    expr: TExpr[A],
+    sheet: SheetName
+  ): (Set[ARef], Vector[CellRange]) =
+    val ranges = Vector.newBuilder[CellRange]
+    val cells = extractQualifiedDependencies(
+      expr,
+      sheet,
+      cellsFor = (target, range) =>
+        if target == sheet then ranges += range
+        Set.empty
+    )
+    (cells.collect { case QualifiedRef(`sheet`, ref) => ref }, ranges.result())
+
   @nowarn("msg=Unreachable case")
   private[graph] def extractQualifiedDependencies[A](
     expr: TExpr[A],

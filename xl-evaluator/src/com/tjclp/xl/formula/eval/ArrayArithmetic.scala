@@ -51,9 +51,16 @@ object ArrayArithmetic:
       if y.isValidInt && y >= 0 then
         // Exact precision for non-negative integer exponents
         Right(x.pow(y.toInt))
+      else if x == 0 && y < 0 then
+        // Excel: 0 raised to a negative power is #DIV/0!
+        Left(EvalError.ErrorValue(CellError.Div0, Some(s"$x^$y")))
       else
-        // Fall back to Double for fractional/negative exponents
-        Right(BigDecimal(scala.math.pow(x.toDouble, y.toDouble)))
+        // Fall back to Double for fractional/negative exponents; a NaN (a negative base under a
+        // fractional exponent) or an overflow is Excel's #NUM!
+        val d = scala.math.pow(x.toDouble, y.toDouble)
+        if d.isNaN || d.isInfinite then
+          Left(EvalError.ErrorValue(CellError.Num, Some(s"$x^$y is not a finite number")))
+        else Right(BigDecimal(d))
     catch
       // GH-344: a genuine magnitude/scale overflow is Excel's #NUM! (op-level classification);
       // any other failure stays a generic loud EvalFailed

@@ -195,8 +195,13 @@ ascending (default), −1 = descending; `UNIQUE` keeps first-seen order; `FILTER
 [if_empty])` keeps the rows where `include` is truthy and returns `if_empty` (else `#N/A`) when
 none match. Scalar functions lift over arrays as in Excel 365 — `=SUMPRODUCT(--(B2:B4>0),
 ABS(C2:C4+D2:D4))`, `=SUMPRODUCT(--ISNUMBER(r))`, `=SUMPRODUCT(1/COUNTIF(r,r))` (the distinct
-count of a bounded `r` without blanks) work — while a range in a plain cell's scalar argument
-reads the cell in the formula's row (`=ABS(C2:C4)` in row 3 is `ABS(C3)`).
+count of a bounded `r` without blanks) work. In a plain cell, a multi-cell reference passed
+directly as a lifted function's argument reads the cell in the formula's row (`=ABS(C2:C4)` in
+row 3 is `ABS(C3)`), but a range under an operator or `&`, or inside a computed argument, takes
+the range's FIRST cell, unlike Excel: `=C2:C4*2`, `=C2:C4&"x"`, `=ROUND(C2:C4/7,1)` and
+`COUNTIF(r,">"&r)` all read C2 / r's first cell. Write the single cell (`C3`) or `@C2:C4`
+(`=@C2:C4&"x"`, `COUNTIF(r,">"&@r)`) for per-row results. Inside SUM/MAX/AVERAGE a lifted call
+sums every element (`=SUM(ABS(r))`), as in Excel 365.
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range there
 (pass `+A2:A10` to lift). No array constants (`{1,2,3}`).
 

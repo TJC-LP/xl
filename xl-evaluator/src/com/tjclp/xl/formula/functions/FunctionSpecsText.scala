@@ -34,8 +34,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         text <- ctx.evalExpr(textExpr)
         nValue <- ctx.evalExpr(nExpr)
         result <-
-          if nValue < 0 then
-            Left(EvalError.EvalFailed(s"LEFT: n must be non-negative, got $nValue"))
+          if nValue < 0 then Left(valueError(s"LEFT: n must be non-negative, got $nValue"))
           else if nValue >= text.length then Right(text)
           else Right(text.take(nValue))
       yield result
@@ -52,8 +51,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         text <- ctx.evalExpr(textExpr)
         nValue <- ctx.evalExpr(nExpr)
         result <-
-          if nValue < 0 then
-            Left(EvalError.EvalFailed(s"RIGHT: n must be non-negative, got $nValue"))
+          if nValue < 0 then Left(valueError(s"RIGHT: n must be non-negative, got $nValue"))
           else if nValue >= text.length then Right(text)
           else Right(text.takeRight(nValue))
       yield result
@@ -114,9 +112,8 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         start <- ctx.evalExpr(startExpr)
         length <- ctx.evalExpr(lengthExpr)
         result <-
-          if start < 1 then Left(EvalError.EvalFailed(s"MID: start must be >= 1, got $start"))
-          else if length < 0 then
-            Left(EvalError.EvalFailed(s"MID: length must be >= 0, got $length"))
+          if start < 1 then Left(valueError(s"MID: start must be >= 1, got $start"))
+          else if length < 0 then Left(valueError(s"MID: length must be >= 0, got $length"))
           else if start > text.length then Right("")
           else
             val from = start - 1
@@ -137,16 +134,16 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         haystack <- ctx.evalExpr(withinExpr)
         start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
         result <-
-          if start < 1 then Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
+          if start < 1 then Left(valueError(s"FIND: start must be >= 1, got $start"))
           else if start > haystack.length then
             // Excel: "If start_num is greater than the length of within_text,
             // FIND returns the #VALUE! error value." This applies to both empty
             // and non-empty needles — start past length is invalid regardless.
-            Left(EvalError.EvalFailed(s"FIND: start ($start) is past end of text"))
+            Left(valueError(s"FIND: start ($start) is past end of text"))
           else if needle.isEmpty then Right(BigDecimal(start))
           else
             val idx = haystack.indexOf(needle, start - 1)
-            if idx < 0 then Left(EvalError.EvalFailed(s"FIND: '$needle' not found in '$haystack'"))
+            if idx < 0 then Left(valueError(s"FIND: '$needle' not found in '$haystack'"))
             else Right(BigDecimal(idx + 1))
       yield result
     }
@@ -230,7 +227,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
   ): Either[EvalError, String] =
     instOpt match
       case Some(n) if n < 1 =>
-        Left(EvalError.EvalFailed(s"SUBSTITUTE: instance must be >= 1, got $n"))
+        Left(valueError(s"SUBSTITUTE: instance must be >= 1, got $n"))
       case _ if oldS.isEmpty => Right(text)
       case Some(n) => Right(replaceNthOccurrence(text, oldS, newS, n))
       case None => Right(text.replace(oldS, newS))
@@ -255,6 +252,14 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
     }
+
+  /**
+   * An argument outside a text function's domain (a negative length, a start before 1, a FIND miss,
+   * a SUBSTITUTE instance below 1) is Excel's `#VALUE!` — an error value IFERROR and ISERROR see,
+   * and a lifted call keeps per element — never a host failure.
+   */
+  private def valueError(message: String): EvalError =
+    EvalError.ErrorValue(CellError.Value, Some(message))
 
   /**
    * GH-476: unparseable VALUE input is an Excel error VALUE, not a host failure.

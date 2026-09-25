@@ -118,6 +118,12 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
       yield result
     }
 
+  /** A Double result, or Excel's `#NUM!` when it is not a finite number (an overflow, a NaN). */
+  private def finite(name: String, d: Double): Either[EvalError, BigDecimal] =
+    if d.isNaN || d.isInfinite then
+      Left(EvalError.ErrorValue(CellError.Num, Some(s"$name: the result is not a finite number")))
+    else Right(BigDecimal(d))
+
   val power: FunctionSpec[BigDecimal] { type Args = BinaryNumeric } =
     FunctionSpec.simple[BigDecimal, BinaryNumeric](
       "POWER",
@@ -128,7 +134,11 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
       for
         number <- ctx.evalExpr(numberExpr)
         power <- ctx.evalExpr(powerExpr)
-      yield BigDecimal(Math.pow(number.toDouble, power.toDouble))
+        result <-
+          if number == 0 && power < 0 then
+            Left(EvalError.ErrorValue(CellError.Div0, Some(s"POWER($number, $power)")))
+          else finite("POWER", Math.pow(number.toDouble, power.toDouble))
+      yield result
     }
 
   val log: FunctionSpec[BigDecimal] { type Args = BinaryNumericOpt } =
@@ -176,9 +186,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
       Arity.one,
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
-      ctx.evalExpr(expr).map { value =>
-        BigDecimal(Math.exp(value.toDouble))
-      }
+      ctx.evalExpr(expr).flatMap(value => finite("EXP", Math.exp(value.toDouble)))
     }
 
   val floor: FunctionSpec[BigDecimal] { type Args = BinaryNumeric } =
@@ -192,20 +200,12 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
         number <- ctx.evalExpr(numberExpr)
         significance <- ctx.evalExpr(significanceExpr)
         result <-
+          // Excel: a zero significance is #DIV/0!; a positive number with a negative significance
+          // is #NUM!; a negative number with a positive one rounds away from zero (Excel 2010+)
           if significance == 0 then
-            Left(
-              EvalError.EvalFailed(
-                "FLOOR: significance cannot be zero",
-                Some(s"FLOOR($number, $significance)")
-              )
-            )
-          else if (number > 0 && significance < 0) || (number < 0 && significance > 0) then
-            Left(
-              EvalError.EvalFailed(
-                "FLOOR: number and significance must have same sign",
-                Some(s"FLOOR($number, $significance)")
-              )
-            )
+            Left(EvalError.ErrorValue(CellError.Div0, Some(s"FLOOR($number, $significance)")))
+          else if number > 0 && significance < 0 then
+            Left(EvalError.ErrorValue(CellError.Num, Some(s"FLOOR($number, $significance)")))
           else
             val quotient = (number / significance).setScale(0, BigDecimal.RoundingMode.FLOOR)
             Right(quotient * significance)
@@ -223,20 +223,11 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
         number <- ctx.evalExpr(numberExpr)
         significance <- ctx.evalExpr(significanceExpr)
         result <-
-          if significance == 0 then
-            Left(
-              EvalError.EvalFailed(
-                "CEILING: significance cannot be zero",
-                Some(s"CEILING($number, $significance)")
-              )
-            )
-          else if (number > 0 && significance < 0) || (number < 0 && significance > 0) then
-            Left(
-              EvalError.EvalFailed(
-                "CEILING: number and significance must have same sign",
-                Some(s"CEILING($number, $significance)")
-              )
-            )
+          // Excel: a zero significance is 0; a positive number with a negative significance is
+          // #NUM!; a negative number with a positive one rounds toward zero (Excel 2010+)
+          if significance == 0 then Right(BigDecimal(0))
+          else if number > 0 && significance < 0 then
+            Left(EvalError.ErrorValue(CellError.Num, Some(s"CEILING($number, $significance)")))
           else
             val quotient =
               (number / significance).setScale(0, BigDecimal.RoundingMode.CEILING)
@@ -258,12 +249,7 @@ trait FunctionSpecsMath extends FunctionSpecsBase:
           // Excel: MROUND(x, 0) = 0 — unlike CEILING/FLOOR, a zero multiple is NOT an error
           if multiple == 0 then Right(BigDecimal(0))
           else if (number > 0 && multiple < 0) || (number < 0 && multiple > 0) then
-            Left(
-              EvalError.EvalFailed(
-                "MROUND: number and multiple must have same sign",
-                Some(s"MROUND($number, $multiple)")
-              )
-            )
+            Left(EvalError.ErrorValue(CellError.Num, Some(s"MROUND($number, $multiple)")))
           else
             // multiple * ROUND(number/multiple, 0); HALF_UP matches Excel's half-away-from-zero
             // on the sign-equal domain (7.5/5 = 1.5 -> 2 -> 10; -7.5/-5 = 1.5 -> 2 -> -10)

@@ -27,7 +27,8 @@ object WarningCode:
   /**
    * `view --eval` could not evaluate some formulas of the window's closure (without `--strict`, or
    * with it on a raster format, which never gates): the failing cells and the formulas blocked
-   * behind them show the file's values, the rest is live.
+   * behind them show the file's values, the rest is live. For a picture (html, svg, raster) the
+   * closure includes what the window's conditional formatting reads.
    */
   val EVAL_FAILED: String = "EVAL_FAILED"
 
@@ -63,8 +64,9 @@ object WarningCode:
    * GH-497: an html/svg/raster `view` could not paint a conditional-format rule that applies to the
    * window — a kind xl does not evaluate yet (icon sets, above/below average, duplicate/unique
    * values, Excel 2010+ data bars), a rule formula that failed, or an evaluation that failed
-   * outright. The picture is drawn without that rule. Informational: never gates, `--strict`
-   * included.
+   * outright — and the picture is drawn without that rule (`not rendered`); or a formula rule
+   * failed at some cells only, and is painted wherever it evaluated (`partly rendered`).
+   * Informational: never gates, `--strict` included.
    */
   val CF_NOT_RENDERED: String = "CF_NOT_RENDERED"
 

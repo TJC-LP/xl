@@ -18,6 +18,7 @@ import com.tjclp.xl.cf.{
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaShifter
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.Dxf
@@ -27,15 +28,17 @@ import com.tjclp.xl.workbooks.Workbook
 
 /**
  * The conditional formatting of one render window, evaluated (GH-497): the paint the renderers'
- * overlay overloads draw, and every rule that intersects the window but could not be painted.
+ * overlay overloads draw, and every rule that intersects the window but could not be painted, or
+ * was painted only in part.
  */
 final case class CfEvaluation(overlay: CfOverlay, unevaluated: Vector[CfUnevaluated])
     derives CanEqual
 
 /**
- * A conditional-format rule the evaluation could not paint: its priority (None for a rule whose
- * priority did not parse), its OOXML kind (`cellIs`, `iconSet`, ... — `block` for a whole block
- * whose range could not be read), the block's ranges, and why.
+ * A conditional-format rule the evaluation could not paint, or painted only in part (a formula rule
+ * that failed at some cells, [[CfUnevaluated.Reason.FailedAt]]): its priority (None for a rule
+ * whose priority did not parse), its OOXML kind (`cellIs`, `iconSet`, ... — `block` for a whole
+ * block whose range could not be read), the block's ranges, and why.
  */
 final case class CfUnevaluated(
   priority: Option[Int],
@@ -55,7 +58,7 @@ final case class CfUnevaluated(
     s"conditional format $kind$at$where $verb: ${reason.describe}"
 
 object CfUnevaluated:
-  /** Why a rule was not painted. */
+  /** Why a rule was not painted, or not everywhere. */
   enum Reason derives CanEqual:
     /** A kind (or formatting) xl does not model for rendering yet: icon sets, x14 data bars, ... */
     case NotModeled
@@ -125,10 +128,12 @@ object CfUnevaluated:
  * A formula rule evaluates each target cell on its own, so an uncached chain it reads is bounded by
  * the recursion guard like any single evaluation.
  *
- * Total: an Excel error value is simply no match; a formula that does not parse, or fails for a
- * reason of the host (an unknown sheet, no workbook for a cross-sheet reference, the recursion
- * guard), paints nothing and is reported once, with the first failing cell in row-major order.
- * Randomness is seeded, so a render is a function of the sheet, the workbook and the clock.
+ * Total: an Excel error value is simply no match. A formula that does not parse paints nothing and
+ * is reported once. A formula that fails for a reason of the host (an unknown sheet, no workbook
+ * for a cross-sheet reference, the recursion guard) at some target cells paints nothing there,
+ * still paints wherever it evaluates, and is reported once with the first failing cell in row-major
+ * order — `partly rendered` when it evaluated elsewhere, `not rendered` when nowhere. Randomness is
+ * seeded, so a render is a function of the sheet, the workbook and the clock.
  */
 object CfEvaluator:
 
@@ -154,6 +159,13 @@ object CfEvaluator:
      */
     def conditionalFormatOverlay(window: CellRange): CfOverlay =
       Engine(sheet, None, Clock.system).evaluate(window).overlay
+
+  /**
+   * What the paint of `window` reads on `sheet` ([[Engine.reads]]): `view --eval` evaluates these
+   * cells with the window, so the paint comes from the values the picture draws.
+   */
+  private[eval] def reads(sheet: Sheet, window: CellRange): Vector[CellRange] =
+    Engine(sheet, None, Clock.system).reads(window)
 
   /** A rule and where it sits: its precedence key and its block. */
   private final case class Entry(block: Block, ruleIndex: Int, rule: CfRule):
@@ -215,13 +227,60 @@ object CfEvaluator:
     private val theme: ThemePalette = workbook.fold(ThemePalette.office)(_.metadata.theme)
     private val date1904: Boolean = workbook.exists(_.metadata.date1904)
 
-    def evaluate(window: CellRange): CfEvaluation =
-      val indexed = sheet.conditionalFormats.zipWithIndex
-      val blocks = indexed.collect {
+    /** The Rules blocks intersecting `window`, in document order. */
+    private def blocksOver(window: CellRange): Vector[Block] =
+      sheet.conditionalFormats.zipWithIndex.collect {
         case (ConditionalFormat.Rules(ranges, rules, _), i)
             if ranges.exists(_.intersects(window)) =>
           Block(i, ranges, rules)
       }
+
+    /**
+     * The cells of the sheet the paint of `window` reads, as ranges never expanded (a whole-column
+     * reference stays one range): every range of a block with a numeric rule, whose statistics span
+     * the block; what each formula rule reads at each window cell it covers, the cell itself
+     * included; and what each value-object formula reads at the block's anchor. References to other
+     * sheets and defined names are left out, as is a formula that does not parse.
+     */
+    def reads(window: CellRange): Vector[CellRange] =
+      def read(expr: TExpr[?]): Vector[CellRange] =
+        val (cells, ranges) = DependencyGraph.localReads(expr, sheet.name)
+        cells.toVector.map(ref => CellRange(ref, ref)) ++ ranges.map(r => CellRange(r.start, r.end))
+      def parsed(formula: String): Option[TExpr[?]] = SheetEvaluator.parseFormula(formula).toOption
+      blocksOver(window).flatMap { b =>
+        val anchorA1 = b.anchor.toA1
+        val statistics = if b.rules.exists(numericRule) then b.ranges else Vector.empty
+        val targets = b.ranges.flatMap(_.intersect(window)).flatMap(_.cellsRowMajor).distinct
+        val ruleReads = b.rules.flatMap(ruleFormula(_, anchorA1)).flatMap(parsed).flatMap { expr =>
+          targets.flatMap { ref =>
+            val dc = ref.col.index0 - b.anchor.col.index0
+            val dr = ref.row.index0 - b.anchor.row.index0
+            read(FormulaShifter.shift(expr, dc, dr))
+          }
+        }
+        val cfvoReads = b.rules.flatMap(cfvoFormulas).flatMap(parsed).flatMap(read)
+        statistics ++ ruleReads ++ cfvoReads
+      }.distinct
+
+    /** The formula a cell-value, expression or text rule tests, written for `anchorA1`. */
+    private def ruleFormula(rule: CfRule, anchorA1: String): Option[String] = rule match
+      case CfRule.CellIs(op, f1, f2, _, _, _) => cellIsFormula(op, f1, f2, anchorA1).toOption
+      case CfRule.Expression(formula, _, _, _) => Some(formula)
+      case CfRule.Text(op, text, _, _, _) => Some(CfTextOp.formula(op, text, anchorA1))
+      case _ => None
+
+    /** The formulas of a colour scale's or data bar's value objects. */
+    private def cfvoFormulas(rule: CfRule): Vector[String] =
+      val cfvos = rule match
+        case CfRule.ColorScale(min, mid, max, _) =>
+          Vector(Some(min), mid, Some(max)).flatten.map(_.cfvo)
+        case CfRule.DataBar(min, max, _, _, _) => Vector(min, max)
+        case _ => Vector.empty
+      cfvos.collect { case Cfvo.Formula(f) => f }
+
+    def evaluate(window: CellRange): CfEvaluation =
+      val indexed = sheet.conditionalFormats.zipWithIndex
+      val blocks = blocksOver(window)
       // A block whose envelope did not parse has no known range: reported, never painted
       val unreadable = indexed.collect { case (ConditionalFormat.Preserved(xml), i) =>
         val priority = ConditionalFormat.scanPriorities(xml).minOption

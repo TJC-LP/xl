@@ -23,10 +23,12 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   in Excel's precedence: the lower priority wins each property, non-conflicting formats combine,
   and Stop If True stops lower rules, scales and bars included. Relative references anchor at the
   block's top-left cell and shift per cell. Rules see the values the picture draws — cached, or live
-  under `--eval`; an uncached formula (as openpyxl writes them) is computed, and top/bottom, scale
-  and bar statistics follow a chain filled down or across whatever its length (a formula rule, or
-  a chain read from its far end, stops at the 100-level recursion guard and is reported: run
-  `xl recalc` first). The new informational `CF_NOT_RENDERED` warning names every rule not painted
+  under `--eval`, which evaluates every formula the window's rules read with the window (a
+  top/bottom, scale or bar rule's whole range, the cells a formula rule reads), so a cell's paint
+  never depends on the window asked for. Without `--eval` an uncached formula (as openpyxl writes
+  them) is computed, and top/bottom, scale and bar statistics follow a chain filled down or across
+  whatever its length (a formula rule, or a chain read from its far end, stops at the 100-level
+  recursion guard and is reported: run `xl recalc` first, or view with `--eval`). The new informational `CF_NOT_RENDERED` warning names every rule not painted
   — a kind xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel
   2010+ data bars), a rule whose formula does not parse, or a numeric rule over a cell xl cannot
   compute, which is never painted from partial statistics nor affects another rule — and every
@@ -37,8 +39,9 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   `sheet.evaluateConditionalFormats(range, workbook, clock)` produce a `CfOverlay` (engine:
   xl-evaluator's `CfEvaluator`, reporting unpainted rules as `CfUnevaluated`); the new overloads
   `sheet.toSvg(range, overlay)` / `sheet.toHtml(range, overlay)` (plus full-option and
-  `SvgRenderer`/`HtmlRenderer` object forms) paint it, while the existing `toSvg`/`toHtml` stay
-  CF-blind and byte-identical. Also new: `Dxf.orElse` (a monoid), `Dxf.applyTo` (a homomorphism
+  `SvgRenderer`/`HtmlRenderer` object forms) paint it, while the existing `toSvg`/`toHtml` take no
+  overlay and stay CF-blind (`CfOverlay.empty` renders byte-identically to them; their output still
+  changes in this release through the text-spill and row-autofit fixes under Fixed). Also new: `Dxf.orElse` (a monoid), `Dxf.applyTo` (a homomorphism
   onto `CellStyle`), the shared `CfTextOp.formula`, and xl-ooxml's render-only `CfRenderLift.lift`.
 - **Excel array lifting for scalar functions**: a scalar function handed an array evaluates once
   per element, as in Excel 365 — `=ABS(C2:C4+D2:D4)` is `{2;2;3}` under `evala`,
@@ -50,7 +53,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   (`IFERROR(5,A1:A3)` is 5); the Analysis ToolPak functions (EDATE, EOMONTH, WORKDAY, NETWORKDAYS,
   YEARFRAC, MROUND) lift an array but answer `#VALUE!` for a multi-cell range reference, as Excel
   does (pass `+A2:A10`). Arrays broadcast like the operators, each lifted argument is evaluated
-  once, an element that fails to coerce is `#VALUE!` and a host failure fails the call. The lift is
+  once, an element that fails to coerce is `#VALUE!`, a function's own domain error is its Excel
+  error value per element (see Fixed) and a host failure (a missing sheet) fails the call. The lift is
   implemented once, at the call node (`FunctionFlags.lift` = `ArrayLift.Off | On(slots,
   rangeRefs)`, `ArgSpec.scalarSlots`/`replaceScalarSlots`, `ExprCoercer.liftSlot`, `LiftSlot`);
   the policy is not yet published in `xl functions --json`. `docs/LIMITATIONS.md` lists the
@@ -120,7 +124,11 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   as Excel shows the legacy formula (`=ABS(C2:C4)` in row 3 is `=ABS(@C2:C4)`, i.e. C3; outside
   the range `#VALUE!`), where it was a "must be used within a function" error; `xl eval` without a
   cell position reports the same loud error as `@`. A computed array in a plain cell keeps the
-  top-left value (GH-302).
+  top-left value (GH-302), unlike Excel: a range under an operator or `&`, a computed argument, a
+  criterion built from a range (`COUNTIF(r,">"&r)` reads r's first cell in every row, where it
+  used to fail loudly) — write `@r` or the single cell for per-row results. Inside an aggregate's
+  argument a lifted call is an array context, as `=SUM(A1:A10*E1:E10)` always was: `=SUM(ABS(r))`
+  sums every element where Excel's legacy evaluation of a plain `<f>` intersects.
 - **Cached values move where formulas relied on the old array collapse**: recalculated books
   change for array contexts (SUMPRODUCT and aggregate arguments, IF conditions, LET, CSE records),
   and a defined name bound to a single blank cell now reads as that cell (LEN 0, YEAR 1900) instead
@@ -146,13 +154,15 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   show what the file holds, and one `EVAL_FAILED` warning names them. Under `--strict` the
   markdown/csv/json/html/svg renders gate with `RECALC_GATE` (nothing rendered); raster formats
   warn. A cycle or a failing formula outside the window's closure no longer fails the view, even
-  when an `INDIRECT` on the sheet makes every formula part of the evaluation.
+  when an `INDIRECT` on the sheet makes every formula part of the evaluation. For html, svg and
+  the raster formats the closure includes what the window's conditional formatting reads.
 - **Array arguments are type-sound**: an array-valued expression reaching a numeric, integer,
   text, boolean or date argument (in `SUMPRODUCT`/`SUM` arguments, `IF` branches, `evala`) used to
   reach the function body as a raw cell value and throw a `ClassCastException` (ABS, ROUND, MOD,
   RANK, RANDBETWEEN, DATE…). Every typed position now receives its type or a clean `Left`
   (`TExpr.scalarKind` drives one typed collapse). `&` broadcasts element-wise instead of
-  returning the text `ArrayResult(Vector(…))x`; `DateToSerial`/`DateTimeToSerial` are total.
+  returning the text `ArrayResult(Vector(…))x` (in a plain cell a range under `&` takes its first
+  cell, above); `DateToSerial`/`DateTimeToSerial` are total.
 - **A throwable escaping the evaluator is contained per cell** (#681): every `Evaluator` factory
   returns a guarded evaluator. A `NonFatal` throw becomes the per-cell failure `Evaluation threw
   <class>: <message> at <cell> — an internal evaluator defect, not an Excel error value; please
@@ -187,6 +197,23 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
 - **CSE and dynamic-array anchors evaluate as arrays**: an `<f t="array">` record's anchor caches
   element (0,0), Excel's anchor value, instead of evaluating scalar-wise — including an uncached
   anchor read by another formula through a reference or an aggregate or criteria range.
+- **Functions' domain errors are Excel error values**: FIND not finding its text (or a bad
+  start), LEFT/RIGHT with a negative length, MID with a start below 1 or a negative length and
+  SUBSTITUTE with an instance below 1 are `#VALUE!`. They were evaluation failures: the cell was
+  left uncached, and inside a lifted call one failing element failed the whole call, which
+  IFERROR/ISNUMBER/ISERROR then caught, so a wrong value was cached silently
+  (`=SUMPRODUCT(IFERROR(FIND("p",A1:A5),0))` was 0; it is now Excel's 7). A POWER, EXP or `^`
+  whose result is not a finite number (`POWER(-8,1/3)`, `EXP(1000)`) is `#NUM!` and 0 to a
+  negative power `#DIV/0!`, where they threw a `NumberFormatException` reported as an internal
+  defect. CEILING, FLOOR and MROUND follow Excel 2010+: a negative number with a positive
+  significance rounds (`CEILING(-1.5,1)` is -1, `FLOOR(-1.5,1)` is -2), a positive number with a
+  negative significance (or an MROUND sign mismatch) is `#NUM!`, `FLOOR(x,0)` is `#DIV/0!` and
+  `CEILING(x,0)` is 0.
+- **A formula whose value is a reference to an empty cell is 0**: `=INDEX(Z1:Z5,2)` — or
+  INDIRECT, OFFSET, CHOOSE or a lookup landing on a blank — cached and showed blank where Excel
+  shows 0, as `=Z1` already did in xl. `recalc`, `batch` and `view --eval` now give 0, so text to
+  its left no longer spills over it in the live picture. Only the cell's value changes: inside a
+  formula the reference stays blank (`ISBLANK`, `COUNTA`).
 - **SUMPRODUCT's whole-column trimming (GH-192) reaches inside lifted arguments, `^` and `&`**:
   `SUMPRODUCT(--(A:A>0),ABS(B:B))` no longer mismatches dimensions. Rows past the used extent are
   dropped there too, so blanks beyond it are not counted (`SUMPRODUCT(--ISBLANK(A:A))`), as with

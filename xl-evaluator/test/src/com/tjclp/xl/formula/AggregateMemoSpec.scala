@@ -172,7 +172,10 @@ class AggregateMemoSpec extends FunSuite:
     val result = Workbook(data, empty, output).recalculate()
 
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
-    assertEquals(result.evaluated(outputName)(ref"A1"), num(0))
+    // Z1000's IFERROR falls back to the blank Empty!A1, which a formula cell shows as 0 (it is
+    // never blank), so Data's used bounds keep row 1000 and COUNTBLANK(Data!A:A) counts A1000
+    assertEquals(result.evaluated(dataName)(ref"Z1000"), num(0))
+    assertEquals(result.evaluated(outputName)(ref"A1"), num(1))
 
   test("uncached formula ranges bypass; cached formula ranges may reuse"):
     val inputRef = ARef.from0(0, 0)

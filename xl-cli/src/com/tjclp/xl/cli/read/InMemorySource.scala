@@ -14,7 +14,7 @@ import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.output.RendererCommon
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.formula.{Clock, DependencyGraph, SheetEvaluator}
-import com.tjclp.xl.formula.eval.CfEvaluation
+import com.tjclp.xl.formula.eval.{CfEvaluation, LiveRender}
 import com.tjclp.xl.ooxml.worksheet.CfRenderLift
 import com.tjclp.xl.styles.CellStyle
 
@@ -120,20 +120,28 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
   ): IO[String] =
     named(sheet).flatMap { s =>
       val theme = wb.metadata.theme
-      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning
+      // GH-497: the pictures paint conditional formatting as Excel does — the rules the reader
+      // preserved typed where xl can paint them — from the values they draw
+      val lifted =
+        if s.conditionalFormats.isEmpty then s
+        else s.copy(conditionalFormats = CfRenderLift.lift(s.conditionalFormats))
+      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning.
+      // Under --eval the formulas the paint reads are live too, so it never depends on the window
       def evaluated(gate: Boolean): IO[Sheet] =
         if spec.evalFormulas then
-          InMemorySource.evaluateSheetFormulas(s, Some(wb), window, gate, warn)
-        else IO.pure(s)
-      // GH-497: the pictures paint conditional formatting as Excel does, from the values they
-      // draw — cached, or live under --eval — with the rendered sheet as the cross-sheet context
+          InMemorySource.evaluateFormulas(
+            lifted,
+            LiveRender.evaluate(lifted, window, Clock.system, Some(wb)),
+            gate,
+            warn
+          )
+        else IO.pure(lifted)
+      // the rendered sheet is the cross-sheet context: cached values, or live under --eval
       def painted(rendered: Sheet): IO[CfOverlay] =
         if rendered.conditionalFormats.isEmpty then IO.pure(CfOverlay.empty)
         else
-          val lifted =
-            rendered.copy(conditionalFormats = CfRenderLift.lift(rendered.conditionalFormats))
           InMemorySource.conditionalPaint(
-            lifted.evaluateConditionalFormats(window, Some(wb.put(rendered)), Clock.system),
+            rendered.evaluateConditionalFormats(window, Some(wb.put(rendered)), Clock.system),
             warn
           )
       def toSvg(rendered: Sheet, overlay: CfOverlay): IO[String] =
@@ -431,10 +439,27 @@ object InMemorySource:
     strict: Boolean,
     warn: Warning => IO[Unit]
   ): IO[Sheet] =
+    evaluateFormulas(
+      sheet,
+      SheetEvaluator.evaluateForRangePerCell(sheet)(range, Clock.system, workbook),
+      strict,
+      warn
+    )
+
+  /**
+   * `sheet` with the live values of `evaluation` written in, its failures the `--strict` gate
+   * (`strict`) or an EVAL_FAILED warning.
+   */
+  private def evaluateFormulas(
+    sheet: Sheet,
+    evaluation: => RangeEvalResult,
+    strict: Boolean,
+    warn: Warning => IO[Unit]
+  ): IO[Sheet] =
     // GH-636: the evaluation builds the dependency graph and every result at once — under the
     // memory guard, so a heap it exhausts is RESOURCE_LIMIT rather than a fatal error
     MemoryGuard
-      .blocking(SheetEvaluator.evaluateForRangePerCell(sheet)(range, Clock.system, workbook))
+      .blocking(evaluation)
       .flatMap { result =>
         // Sheet.put preserves the existing cell styleId
         val evaluated = result.values.foldLeft(sheet) { case (acc, (ref, value)) =>

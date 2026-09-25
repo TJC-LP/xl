@@ -37,7 +37,11 @@ A lifted call (array lifting, `FunctionFlags.lift`) sits between the two:
 element that failed to coerce is Excel's `#VALUE!`), and `EvalFailed`, `RefError` and
 `CircularRef` fail the whole call — each element is a whole function call, so a host failure in
 one (a missing lookup sheet) is the call's failure, never a `#VALUE!` element. Keep it the strict
-table plus the coercion arms; it must not drift toward `toCellError`.
+table plus the coercion arms; it must not drift toward `toCellError`. A function's own domain
+errors are therefore raised as error values at the source, never as `EvalFailed`: FIND's miss and
+LEFT/RIGHT/MID/SUBSTITUTE out of their domain are `ErrorValue(#VALUE!)`, a CEILING/FLOOR/MROUND
+sign mismatch and a non-finite POWER/EXP/`^` are `#NUM!`, `0^-1` is `#DIV/0!` — so they demote per
+element like any Excel error, and IFERROR/ISERROR see each one.
 
 ## Promotion sites (exhaustive)
 

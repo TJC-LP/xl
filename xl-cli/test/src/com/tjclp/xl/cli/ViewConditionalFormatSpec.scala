@@ -144,6 +144,70 @@ class ViewConditionalFormatSpec extends CatsEffectSuite:
       assertEquals(rectFill(ReadTestKit.text(live), 0, 0), Some("#FFC7CE"), "live 150")
   }
 
+  /**
+   * B1:B10 = 1..10; A1:A10 = Bn, each cached ten times too high (saved before B changed), under a
+   * red-to-green scale on A1:A10.
+   */
+  private val staleScale: Workbook =
+    val cells = (1 to 10).foldLeft(Sheet("Data")) { (s, i) =>
+      s.put(aref(s"B$i"), num(i.toDouble))
+        .put(aref(s"A$i"), CellValue.Formula(s"B$i", Some(num(i * 10.0))))
+    }
+    val sheet = cells.conditionalFormat(
+      range("A1:A10"),
+      CfRule.colorScale2(
+        CfPoint(Cfvo.Min, Color.Rgb(0xffff0000)),
+        CfPoint(Cfvo.Max, Color.Rgb(0xff00ff00))
+      )
+    )
+    Workbook(Vector(sheet))
+
+  test("under --eval a scale paints from the live block, whatever window is asked for") {
+    // live 1..10: 2 and 3 sit at 1/9 and 2/9 of the span; the stale caches (max 100) never count
+    for
+      short <- view(staleScale, "A1:B3", ViewFormat.Svg, evalFormulas = true)
+      full <- view(staleScale, "A1:B10", ViewFormat.Svg, evalFormulas = true)
+    yield List(short, full).foreach { outcome =>
+      val svg = ReadTestKit.text(outcome)
+      assertEquals(rectFill(svg, 0, 20), Some("#E31C00"), s"A2 = 2: $svg")
+      assertEquals(rectFill(svg, 0, 40), Some("#C63900"), "A3 = 3")
+      assertEquals(outcome.warnings, Vector.empty)
+    }
+  }
+
+  test("under --eval a formula rule reads live values outside the window") {
+    val sheet = Sheet("Data")
+      .put(aref("A1"), num(1))
+      .put(aref("C1"), CellValue.Formula("D1*2", Some(num(0))))
+      .put(aref("D1"), num(10))
+      .conditionalFormat(range("A1:A3"), CfRule.expression("$C1>5", pink))
+    for
+      cached <- view(Workbook(Vector(sheet)), "A1:A1", ViewFormat.Svg)
+      live <- view(Workbook(Vector(sheet)), "A1:A1", ViewFormat.Svg, evalFormulas = true)
+    yield
+      assertEquals(rectFill(ReadTestKit.text(cached), 0, 0), Some("#FFFFFF"), "cached C1 = 0")
+      assertEquals(rectFill(ReadTestKit.text(live), 0, 0), Some("#FFC7CE"), "live C1 = 20")
+  }
+
+  test("under --eval a block cell that fails is EVAL_FAILED, and --strict gates on it") {
+    val broken = staleScale.sheets.headOption.getOrElse(fail("no sheet"))
+    val wb =
+      Workbook(Vector(broken.put(aref("A9"), CellValue.Formula("NOSUCHFN(1)", Some(num(90))))))
+    for
+      warned <- view(wb, "A1:B3", ViewFormat.Svg, evalFormulas = true)
+      gated <- view(wb, "A1:B3", ViewFormat.Svg, evalFormulas = true, strict = true).attempt
+    yield
+      assert(warned.ok, warned.error.toString)
+      warned.warnings.filter(_.code == WarningCode.EVAL_FAILED) match
+        case Vector(warning) => assertEquals(warning.location.flatMap(_.ref), Some("A9"))
+        case other => fail(s"expected one EVAL_FAILED, got $other")
+      val code = gated match
+        case Right(outcome) => outcome.error.map(_.code)
+        case Left(e: CliException) => Some(e.error.code)
+        case Left(other) => fail(s"unexpected $other")
+      assertEquals(code, Some(ErrorCode.RECALC_GATE))
+  }
+
   test("a rule that cannot be evaluated is one CF_NOT_RENDERED warning; the render proceeds") {
     val sheet = Sheet("Data")
       .put(aref("A1"), num(1))
