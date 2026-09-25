@@ -1,7 +1,7 @@
 # Supported Formula Functions
 
 `xl eval "=F(...)"` evaluates any function below (`xl -f book.xlsx -s Sheet eval` against a
-workbook, no `-f` for constants); `xl evala` displays or spills an array result. The table is
+workbook, no `-f` for constants); `xl evala` displays an array result. The table is
 generated from the binary — `xl functions --json` prints the same rows with their arity, argument
 slots and flags — so it never drifts from what the installed `xl` evaluates. The prose notes below
 it are hand-written semantics worth knowing.
@@ -188,7 +188,7 @@ targets, so cells holding them are always recalculated. `ADDRESS` `abs_num`: 1 =
 `CELL("col", ref)` the reference parts.
 
 **Arrays (dynamic arrays).** `TRANSPOSE`, `SEQUENCE`, `SORT`, `UNIQUE` and `FILTER` return a grid.
-Use `xl evala "=..."` to display it (`--at <ref>` anchors the displayed spill; `evala` writes
+Use `xl evala "=..."` to display it (`--at <ref>` anchors the displayed result; `evala` writes
 nothing); a 1×1 result collapses to a scalar. `SEQUENCE(rows, [cols], [start], [step])` defaults to one column starting at
 1 with step 1; `SORT(array, [sort_index], [sort_order])` sorts rows by a 1-based column, 1 =
 ascending (default), −1 = descending; `UNIQUE` keeps first-seen order; `FILTER(array, include,
@@ -198,20 +198,26 @@ ABS(C2:C4+D2:D4))`, `=SUMPRODUCT(--ISNUMBER(r))`, `=SUMPRODUCT(1/COUNTIF(r,r))` 
 count of a bounded `r` without blanks) work.
 
 **`putf` writes a plain (legacy) formula, and Excel evaluates it with implicit intersection.**
-Excel 365 opens a plain `<f>` as a legacy formula, and xl computes the same values. A multi-cell
-range in a value position reads the cell in the formula's own row (a column) or column (a row),
-and is `#VALUE!` where that row or column misses it. Value positions are operands, `&`, scalar
-arguments, criteria, the IF condition and the CHOOSE index. So in row 3, `=C2:C4*2` is `C3*2`,
-`=ABS(C2:C4)` is `ABS(C3)` and `COUNTIF(r,">"&r)` compares with r's row-3 cell. **Inside
+Excel 365 opens a plain `<f>` as a legacy formula, and xl computes its value the same way (the
+exceptions are listed under "Plain cells are legacy formulas" in `docs/LIMITATIONS.md`). A
+multi-cell range in a value position reads the cell in the formula's own row (a column) or column
+(a row), and is `#VALUE!` where that row or column misses it. Value positions are operands, `&`,
+scalar arguments, criteria, the IF condition and the CHOOSE index. So in row 3, `=C2:C4*2` is
+`C3*2`, `=ABS(C2:C4)` is `ABS(C3)` and `COUNTIF(r,">"&r)` compares with r's row-3 cell. **Inside
 SUM/MAX/AVERAGE/COUNT an expression is still a value**: `=SUM(A1:A10*B1:B10)` in row 5 is
-`A5*B5`, and `#VALUE!` outside rows 1–10. Bare ranges and IF/CHOOSE/OFFSET/INDIRECT/INDEX
-references stay whole there: `SUM(A1:A10)`, and `SUM(IF(c,A1:A10,0))` when `c` holds in the
-formula's row. **For array math in one cell, use SUMPRODUCT**: `=SUMPRODUCT(A1:A10*B1:B10)`,
-`=SUMPRODUCT(--(r>0))`, `=SUMPRODUCT(ABS(r))`. There is no CLI flag for array formulas.
+`A5*B5`, and `#VALUE!` outside rows 1–10. References stay whole there — a range, a name, a LET
+name bound to one, the reference IF/CHOOSE select and the one OFFSET/INDIRECT/INDEX return:
+`SUM(A1:A10)`, `SUM(OFFSET(A1,0,0,10,1))`, `LET(r,A1:A10,SUM(r))`, and `SUM(IF(c,A1:A10,0))` when `c`
+holds in the formula's row. **For array math in one cell, use SUMPRODUCT**:
+`=SUMPRODUCT(A1:A10*B1:B10)`, `=SUMPRODUCT(--(r>0))`, `=SUMPRODUCT(ABS(r))`. Inside SUMPRODUCT
+write a condition as a factor (`=SUMPRODUCT((r>2)*r)`, `=SUMPRODUCT(--(r>2))`), not as `IF` or
+`IFERROR`: Excel evaluates IF and IFERROR inside a plain SUMPRODUCT as legacy and gets the row's
+value, while xl gets the array's. There is no CLI flag for array formulas.
 `eval` without a cell answers as the formula typed into a new Excel 365 cell would (its top-left
-value); `evala` shows the whole array.
-EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range there
-(pass `+A2:A10` to lift). No array constants (`{1,2,3}`).
+value); `evala` shows the whole array. In an array context (`evala`, SUMPRODUCT, an array formula)
+EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
+pass `+A2:A10` to lift them. In a plain cell `+A2:A10` reads the formula's row like any operand. No
+array constants (`{1,2,3}`).
 
 **Randomness.** `RAND()` and `RANDBETWEEN(lo, hi)` are volatile; `xl recalc` and `--eval` draw fresh
 values on every run.

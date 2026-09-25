@@ -1211,7 +1211,7 @@ USAGE:
     }
 
   private val atOpt =
-    Opts.option[String]("at", "Target cell for array spill (default: virtual cell)").orNone
+    Opts.option[String]("at", "Cell the displayed result is anchored at (nothing is written)").orNone
 
   val evalArrayCmd: Opts[CliCommand] =
     Opts.subcommand("evala", "Evaluate array formula and display result grid") {

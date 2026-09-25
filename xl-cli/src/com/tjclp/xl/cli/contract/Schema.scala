@@ -237,7 +237,7 @@ object Schema:
     ),
     read(
       "evala",
-      "Evaluate an array formula and display, or spill (--at), the result grid",
+      "Evaluate an array formula and display the result grid (--at anchors it)",
       sheet = true,
       streaming = false,
       "0.9.0",

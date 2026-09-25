@@ -61,6 +61,13 @@ object SheetEvaluator:
      *   Pass `Some(wb)` iff the formula references other sheets (`='Other'!A1`); intra-sheet
      *   formulas don't need it. Or use `wb.evaluateFormula(formula, onSheet)` which wires the
      *   context automatically.
+     * @param currentCell
+     *   `Some(cell)`: evaluate as the plain (legacy) formula stored at that cell, as Excel 365
+     *   evaluates a plain `<f>` — a multi-cell reference in a value position is implicitly
+     *   intersected with the cell (`=A1:A10*2` at row 5 reads A5). `None` (the default): evaluate
+     *   as the dynamic-array formula typed into a new Excel 365 cell, returning its top-left value
+     *   (`=SUM(A1:A10*B1:B10)` is the array sum). `sheet.evaluateCell(ref)` evaluates a stored cell
+     *   by its own position and kind.
      * @return
      *   Either XLError or evaluated CellValue
      *

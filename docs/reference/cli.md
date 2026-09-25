@@ -963,7 +963,7 @@ cell.
 #### Plain cells and implicit intersection
 
 A plain formula cell — what `putf` and batch `putf` write — does not spill. Excel 365 opens it as a
-legacy formula, and xl computes the same values:
+legacy formula, and xl computes it the same way:
 - **Value positions.** A multi-cell reference in a value position is implicitly intersected with
   the formula's row (a column) or column (a row), and is `#VALUE!` where it is not crossed. Value
   positions are operands, `&`, scalar arguments, criteria, the IF condition and the CHOOSE index.
@@ -972,8 +972,12 @@ legacy formula, and xl computes the same values:
 - **Aggregates.** An aggregate's argument keeps a reference whole but evaluates an expression as a
   value. `=SUM(A1:A10)` sums the range, while `=SUM(A1:A10*B1:B10)` in row 5 is `A5*B5`.
   `SUM(IF(A1:A10>2,A1:A10,0))` sums the whole range when A5 > 2, because IF and CHOOSE return
-  references.
-- **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`.
+  references, as OFFSET, INDIRECT and INDEX do; a name or a LET name bound to a reference keeps it
+  too (`=LET(r,nmRef,SUM(r))` is `=SUM(nmRef)`), and `@` intersects any of them as the plain cell
+  does.
+- **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`, with
+  conditions as factors (`=SUMPRODUCT((A1:A10>2)*A1:A10)`) rather than IF, which Excel evaluates
+  as legacy inside a plain SUMPRODUCT.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").

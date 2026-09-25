@@ -212,7 +212,7 @@ xl -f in.xlsx -s Summary -o out.xlsx putf B4 "='Income Statement'!G8"
 
 # Array formula evaluation (evala command)
 xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"           # Evaluate and display result
-xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Spill result starting at E1
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Display the result anchored at E1
 xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic with broadcasting
 
 # Style command flags (styles merge by default, use --replace for full replacement)

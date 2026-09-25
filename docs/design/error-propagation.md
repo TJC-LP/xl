@@ -66,6 +66,10 @@ host failures keep the loud `LET binding 'x': …` wrap.
   formula's row or column does not cross (and `@`, GH-604) is `#VALUE!`, a value IFERROR and
   ISERROR see; an aggregate given non-numeric text as a value (`SUM("x")`, `MIN("")`) raises
   `#VALUE!` too, as Excel does for a typed argument.
+- `Aggregator` finalizers — STDEV and VAR over fewer than two values, STDEVP and VARP over none,
+  are `#DIV/0!` (a plain cell's `STDEV(A1:A10*1)` sees one intersected value).
+- OFFSET's base — a computed base that denotes no reference is `#VALUE!`; one that computed an
+  error value (`INDIRECT("nowhere")`'s `#REF!`) passes it on.
 - `ArrayArithmetic.compareCellValues` error arms (left operand first) — scalar `=1<#REF!`.
 - The scalar equality fast-path pre-check — `cellValueEquals` itself stays total fold-to-false
   (CriteriaMatcher and the lookups depend on error cells never matching).

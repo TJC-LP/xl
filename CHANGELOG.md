@@ -18,7 +18,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
 
 - **Conditional formatting in the pictures** (#497): `xl view --format html|svg|png|jpeg|webp|pdf`
   paints a sheet's conditional formatting as Excel does, with no flag — cell-value rules (all eight
-  operators), formula rules, the four text rules, top/bottom N and N%, 2- and 3-point colour
+  operators), formula rules (evaluated as array formulas, as Excel evaluates them:
+  `=SUM(($A$1:$A$10=A1)*1)>1`, `=OR(A1=$X$1:$X$5)`), the four text rules, top/bottom N and N%, 2- and 3-point colour
   scales, Excel 2007 data bars, and Excel's blanks, errors and dates-occurring rules. Rules compose
   in Excel's precedence: the lower priority wins each property, non-conflicting formats combine,
   and Stop If True stops lower rules, scales and bars included. Relative references anchor at the
@@ -52,7 +53,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   number and NPV's rate; IFERROR, IFNA and XLOOKUP lift their first argument only
   (`IFERROR(5,A1:A3)` is 5); the Analysis ToolPak functions (EDATE, EOMONTH, WORKDAY, NETWORKDAYS,
   YEARFRAC, MROUND) lift an array but answer `#VALUE!` for a multi-cell range reference, as Excel
-  does (pass `+A2:A10`). Arrays broadcast like the operators, each lifted argument is evaluated
+  does (pass `+A2:A10` in an array context; in a plain cell it is intersected like any operand).
+  Arrays broadcast like the operators, each lifted argument is evaluated
   once, an element that fails to coerce is `#VALUE!`, a function's own domain error is its Excel
   error value per element (see Fixed) and a host failure (a missing sheet) fails the call. The lift is
   implemented once, at the call node (`FunctionFlags.lift` = `ArrayLift.Off | On(slots,
@@ -123,8 +125,9 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   when nothing structural changed.
 - **Breaking: a plain formula cell evaluates as Excel's legacy formula (implicit intersection)**.
   Excel 365 opens a plain `<f>` (what `putf`, batch `putf`, openpyxl and most writers produce) as
-  a legacy formula, and LibreOffice agrees on every value: xl now computes what they compute, pinned
-  against LibreOffice's recalculation of 207 cells inside and outside the referenced rows.
+  a legacy formula, and xl now computes it the same way. `PlainCellIntersectionSpec` pins xl to
+  LibreOffice's recalculation of 327 plain cells inside and outside the referenced rows;
+  `docs/LIMITATIONS.md` lists where xl, LibreOffice and Excel differ.
   - A reference in a value position — an operand (`=A1:A10*2`), `&`, a scalar argument
     (`=ROUND(A1:A10/7,1)`), a criterion (`COUNTIF(r,">"&r)`), the IF condition, the CHOOSE index,
     NOT's operand, a bare `=A1:A10` — reads the cell in the formula's own row (a column) or
@@ -132,25 +135,37 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   - Before, xl read the range's first cell (GH-302) or failed with "must be used within a
     function", and an IF condition over a range was an array whose first element decided every
     row.
-  - An aggregate's argument (SUM, COUNT, AVERAGE, MIN, MAX, … and AND/OR) keeps a reference
-    whole but evaluates an expression as a value. **`=SUM(A1:A10*E1:E10)` in row 5 is now A5*E5,
-    and `#VALUE!` outside rows 1–10, where it was the array sum** (so was `=SUM(ABS(r))`).
-    Excel 365 gets the array sum for that typed formula only because it saves it as an array
-    formula. Write `SUMPRODUCT(...)` for array math in one cell.
-  - IF, IFS, CHOOSE and SWITCH return the reference they select, and OFFSET, INDIRECT, INDEX and
-    dynamic named ranges return theirs: whole in an aggregate (`SUM(IF(A1:A10>2,A1:A10,0))` is the
-    whole-range sum), intersected in a value position.
+  - An aggregate's argument (SUM, COUNT, AVERAGE, MIN, MAX, STDEV, … and AND/OR, ROWS, COLUMNS)
+    keeps a reference whole but evaluates an expression as a value. **`=SUM(A1:A10*E1:E10)` in
+    row 5 is now A5*E5, and `#VALUE!` outside rows 1–10, where it was the array sum** (so was
+    `=SUM(ABS(r))`). Excel 365 gets the array sum for that typed formula only because it saves it
+    as an array formula. Write `SUMPRODUCT(...)` for array math in one cell, with conditions as
+    `--(r>0)` factors rather than IF.
+  - References stay references until a position reads them. A single cell is one; IF, IFS,
+    CHOOSE and SWITCH return the reference they select; OFFSET, INDIRECT and INDEX return theirs;
+    a name bound to or computing a reference (a dynamic range, a scenario switch) is it; a LET
+    name bound to one is it. Whole in an aggregate (`SUM(IF(A1:A10>2,A1:A10,0))` in a row where
+    the condition holds is the whole-range sum, `SUM(IF(TRUE,C1,0))` skips a text C1), counted by
+    ROWS without reading it, intersected in a value position.
   - A value passed to an aggregate follows Excel's typed-argument rule: TRUE is 1, `"5"` is 5, and
     other text is `#VALUE!` where it failed loudly.
-  - LET bindings evaluate in the cell's mode.
-  - Array contexts keep dynamic-array semantics: array formulas (CSE and dynamic-array records),
-    `evala`, SUMPRODUCT, FILTER's include, named formulas, conditional-format formulas, and a
-    formula evaluated without a cell position (`xl eval`, `sheet.evaluateFormula(f)`: as the
-    formula typed into a new Excel 365 cell, showing its top-left value, where a lifted range
-    used to be a loud error).
+  - LET never changes a value: a binding evaluates in the cell's mode and keeps a reference a
+    reference (`LET(r,nmRef,SUM(r))` is `SUM(nmRef)`).
+  - Array contexts keep dynamic-array semantics: array formulas (CSE and dynamic-array records,
+    in an iterative cycle too), `evala`, SUMPRODUCT, FILTER's include, named formulas,
+    conditional-format formulas, and a formula evaluated without a cell position (`xl eval`,
+    `sheet.evaluateFormula(f)`: as the formula typed into a new Excel 365 cell, showing its
+    top-left value, where a lifted range used to be a loud error). The raw `Evaluator.eval(expr,
+    sheet)` without a cell treats a value-position range as the loud `@` failure; pass the cell,
+    or use `sheet.evaluateFormula`.
+  - Every path that evaluates a stored cell evaluates it at its own position by its kind: `recalc`
+    and `view --eval`, `putf --no-recalc` / batch `putf` caching, `recalculateDependents`, `copy
+    --values-only`, the data-table seeder's source formula (a CSE source seeds its array value),
+    the JSON renderer's `--eval`, and the display of an uncached cell (`sheet.displayCell`, the
+    `excel"…"` interpolator with `EvaluatingFormulaDisplay`) through the new
+    `FormulaDisplayStrategy.formatAt(formula, numFmt, sheet, at)`, whose default delegates to
+    `formatCached`.
   - Recalculated books change wherever a plain cell relied on the old reading.
-  - `docs/LIMITATIONS.md` ("Plain cells are legacy formulas") lists the rules and the known
-    divergences, such as SUMPRODUCT passing the array class into IF, which legacy Excel does not.
 - **Cached values move where formulas relied on the old array collapse**: recalculated books
   change for array contexts (SUMPRODUCT arguments, CSE records), and a defined name bound to a
   single blank cell now reads as that cell (LEN 0, YEAR 1900) instead of as 0. An uncached
@@ -218,7 +233,8 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   `=IFERROR(1/(B2:B4-5),0)` spilled 1×1.
 - **CSE and dynamic-array anchors evaluate as arrays**: an `<f t="array">` record's anchor caches
   element (0,0), Excel's anchor value, instead of evaluating scalar-wise — including an uncached
-  anchor read by another formula through a reference or an aggregate or criteria range.
+  anchor read by another formula through a reference or an aggregate or criteria range, and an
+  anchor inside an iterative cycle, evaluated as an array every round.
 - **Functions' domain errors are Excel error values**: FIND not finding its text (or a bad
   start), LEFT/RIGHT with a negative length, MID with a start below 1 or a negative length and
   SUBSTITUTE with an instance below 1 are `#VALUE!`. They were evaluation failures: the cell was
@@ -238,14 +254,26 @@ Chromium for the HTML render, the LibreOffice oracle for the evaluator) before i
   formula the reference stays blank (`ISBLANK`, `COUNTA`).
 - **OFFSET sizes its result like its base reference, on the base's sheet**: an omitted height or
   width is the base's own, as in Excel (`=SUM(OFFSET(A1:A10,0,1))` sums B1:B10 where it read B1
-  only), and a cross-sheet base (`OFFSET(Other!A1,1,0)`) reads that sheet, not the formula's.
-- **Conditional-format formula rules evaluate as array formulas**, as Excel evaluates them
-  (`=SUM(($A$1:$A$10=A1)*1)>1`, `=OR(A1=$X$1:$X$5)`).
-- **Array formulas keep array semantics in an iterative cycle and in the write paths**: the
-  iterative fixpoint evaluated a CSE member as a plain cell every round, and `copy --values-only`,
-  `recalculateDependents`, `putf --no-recalc` / batch `putf` caching, the data-table seeder's
-  source formula and the JSON renderer's `--eval` evaluated cells without their position or
-  record kind. Every one now evaluates a cell at its own position by its kind.
+  only), and a cross-sheet base (`OFFSET(Other!A1,1,0)`) reads that sheet, not the formula's. A
+  whole-column result folds within the used range (`SUM(OFFSET(A:A,0,1))` costs the data, as
+  `SUM(INDIRECT("B:B"))` does).
+- **`@` intersects the reference a function or a name returns**: `=@OFFSET(A1,0,0,10,1)`,
+  `@INDEX(r,0)`, `@INDIRECT("A1:A10")` and `@dyn` (a name bound to OFFSET) read the cell in the
+  formula's row, as Microsoft's `@` rule says for a range, where they read the range's first cell;
+  only an array value (SEQUENCE, FILTER, arithmetic) takes its top-left element. `@f` in a plain
+  cell is now `f`.
+- **A reference passed straight to AND or OR follows Excel's reference rule**: `=AND(C1)` over a
+  text or blank C1 ignores it (`#VALUE!` when no argument is logical, `=AND(C1,TRUE)` is TRUE),
+  where a text cell failed the evaluation.
+- **ROWS and COLUMNS count a returned reference without reading it**: `ROWS(INDIRECT("B:B"))` and
+  `ROWS(OFFSET(A:A,0,1))` are 1048576 where INDIRECT's was the used height; a name bound to
+  CHOOSE or IF of ranges (a scenario switch) now works in a value position and in ROWS, where it
+  failed with "must be used within a function".
+- **OFFSET's base can be any reference**: a name computing one (`OFFSET(dyn,0,1)` over a dynamic
+  range) or a function returning one (`OFFSET(INDEX(A:B,0,2),1,0)`), where it failed with "OFFSET
+  requires a cell reference"; a base that is no reference is `#VALUE!`.
+- **STDEV and VAR of fewer than two values are `#DIV/0!`** (STDEVP and VARP of none), as in Excel,
+  where the evaluation failed and left the cell uncached.
 - **SUMPRODUCT's whole-column trimming (GH-192) reaches inside lifted arguments, `^` and `&`**:
   `SUMPRODUCT(--(A:A>0),ABS(B:B))` no longer mismatches dimensions. Rows past the used extent are
   dropped there too, so blanks beyond it are not counted (`SUMPRODUCT(--ISBLANK(A:A))`), as with
