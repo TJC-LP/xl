@@ -599,3 +599,121 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       )
       assert(envelope("error")("hint").str.startsWith("drop -o/--output"), json.stdout)
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // GH-676: -s on a verb that never takes it, -o on `new`; GH-681: the real mistake first
+  // ---------------------------------------------------------------------------------------------
+
+  /** decline's first error for a command line, or `None` when it parses (or renders help). */
+  private def declineError(args: List[String]): Option[String] =
+    Cli.command(CliIO.system).parse(args, Map.empty) match
+      case Left(help) => help.errors.headOption
+      case Right(_) => None
+
+  test("GH-676: sheetlessVerbs is exactly the verbs whose every parser refuses -s") {
+    // Derived from the parser itself: a verb refuses -s when adding it to a command line decline
+    // otherwise gets past the verb turns the first error into "Unexpected argument: <verb>"
+    val refusing = Argv.verbs.filter { verb =>
+      val bases = Vector(List(verb), List("-f", "f.xlsx", verb), List(verb, "out.xlsx"))
+      val unexpected = s"Unexpected argument: $verb"
+      bases.find(base => !declineError(base).contains(unexpected)).exists { base =>
+        declineError("-s" :: "Data" :: base).contains(unexpected)
+      }
+    }
+    assertEquals(refusing.toSet, Argv.sheetlessVerbs.keySet)
+  }
+
+  test("GH-676: sheetOnSheetlessVerb reads -s as decline does, never for a verb that takes it") {
+    assertEquals(
+      Argv.sheetOnSheetlessVerb(List("-f", "f.xlsx", "-s", "Data", "names")),
+      Some("names")
+    )
+    assertEquals(
+      Argv.sheetOnSheetlessVerb(List("-f", "f.xlsx", "sheets", "--sheet=Data")),
+      Some("sheets")
+    )
+    assertEquals(Argv.sheetOnSheetlessVerb(List("-s", "Data", "lint", "f.xlsx")), Some("lint"))
+    // `new --sheet` is new's own repeatable option; only the global's short form is refused
+    assertEquals(Argv.sheetOnSheetlessVerb(List("new", "out.xlsx", "--sheet", "Data")), None)
+    assertEquals(Argv.sheetOnSheetlessVerb(List("-s", "Data", "new", "out.xlsx")), Some("new"))
+    // a verb that takes -s, -s as another global's value, -s behind `--`
+    assertEquals(Argv.sheetOnSheetlessVerb(List("-f", "f.xlsx", "-s", "Data", "view", "A1")), None)
+    assertEquals(Argv.sheetOnSheetlessVerb(List("-f", "-s", "names")), None)
+    assertEquals(Argv.sheetOnSheetlessVerb(List("-f", "f.xlsx", "names", "--", "-s")), None)
+  }
+
+  test("GH-676: -s on a workbook verb names the flag, not the verb") {
+    for
+      names <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "names")
+      sheets <- CliHarness.run("-f", file("simple.xlsx"), "sheets", "-s", "Data")
+      lint <- CliHarness.run("-s", "Data", "lint", file("simple.xlsx"))
+      schema <- CliHarness.run("--sheet", "Data", "schema")
+      json <- CliHarness.run("--json", "-f", file("simple.xlsx"), "-s", "Data", "names")
+    yield
+      val runs = Vector("names" -> names, "sheets" -> sheets, "lint" -> lint, "schema" -> schema)
+      runs.foreach { (verb, run) =>
+        assertEquals(run.exit, 2, s"$verb: ${run.stderr}")
+        assertEquals(run.stdout, "", verb)
+        assert(
+          run.stderr.startsWith(s"Error: $verb does not take -s/--sheet\n"),
+          s"$verb: ${run.stderr}"
+        )
+        assert(!run.stderr.contains("Unexpected argument"), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains("  code: USAGE"), s"$verb: ${run.stderr}")
+        assert(run.stderr.contains("  hint: drop -s/--sheet;"), s"$verb: ${run.stderr}")
+      }
+      assert(sheets.stderr.contains("sheets hide <name>"), sheets.stderr)
+      assertEquals(json.exit, 2, json.stdout)
+      val envelope = ujson.read(json.stdout)
+      assertEquals(envelope("verb"), ujson.Str("names"))
+      assertEquals(envelope("error")("code"), ujson.Str("USAGE"))
+      assertEquals(envelope("error")("message"), ujson.Str("names does not take -s/--sheet"))
+  }
+
+  test("GH-676: `new -o out.xlsx` points at the positional") {
+    val out = file("new-by-flag.xlsx")
+    for
+      flag <- CliHarness.run("new", "-o", out)
+      eq <- CliHarness.run("--output=" + out, "new")
+      sheet <- CliHarness.run("-s", "Data", "new", out)
+    yield
+      Vector(flag, eq).foreach { run =>
+        assertEquals(run.exit, 2, run.stderr)
+        assert(run.stderr.startsWith("Error: new does not take -o/--output\n"), run.stderr)
+        assert(!run.stderr.contains("Unexpected argument"), run.stderr)
+        assert(
+          run.stderr.contains(s"hint: new takes its output as a positional: `xl new $out`"),
+          run.stderr
+        )
+      }
+      assert(!Files.exists(Path.of(out)), "a refused command line writes nothing")
+      assertEquals(sheet.exit, 2, sheet.stderr)
+      assert(sheet.stderr.startsWith("Error: new does not take -s/--sheet\n"), sheet.stderr)
+      assert(sheet.stderr.contains("--sheet after the verb"), sheet.stderr)
+  }
+
+  test("GH-681: an unknown option beside -o on a read-only verb is reported first") {
+    val out = file("never-written-681.xlsx")
+    for
+      bogus <- CliHarness.run("-f", file("simple.xlsx"), "view", "--bogus", "-o", out)
+      sheetToo <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "names", "--bogus")
+      newToo <- CliHarness.run("new", "-o", out, "--bogus")
+      // -o the only mistake: GH-667's message stands
+      only <- CliHarness.run("-f", file("simple.xlsx"), "view", "A1", "-o", out)
+      // two flag mistakes and nothing else: the first rule's message
+      both <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "-o", out, "names")
+    yield
+      Vector(bogus, sheetToo, newToo).foreach { run =>
+        assertEquals(run.exit, 2, run.stderr)
+        assert(run.stderr.startsWith("Error: Unexpected option: --bogus\n"), run.stderr)
+      }
+      assert(
+        only.stderr.startsWith("Error: view is read-only and does not take -o/--output\n"),
+        only.stderr
+      )
+      assert(
+        both.stderr.startsWith("Error: names is read-only and does not take -o/--output\n"),
+        both.stderr
+      )
+      assert(!Files.exists(Path.of(out)))
+  }

@@ -2264,7 +2264,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 |---|---|---|---|
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | no (a `--strict` gate: `-o` not written, an existing file and `-i`'s input left byte-identical) |
-| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
+| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, a global the verb cannot take (`-o` on a read-only verb or on `new`, whose output is its positional; `-s` on `names`, `sheets`, `lint`, `new` or an info verb — the error names the flag, unless another mistake rides along, which is reported first), `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:
