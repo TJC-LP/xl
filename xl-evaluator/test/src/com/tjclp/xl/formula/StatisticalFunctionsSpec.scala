@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.addressing.SheetName
 import munit.FunSuite
 
@@ -12,6 +12,9 @@ import munit.FunSuite
  * MEDIAN - Returns the middle value in a sorted list STDEV - Sample standard deviation (divides by
  * n-1) STDEVP - Population standard deviation (divides by n) VAR - Sample variance (divides by n-1)
  * VARP - Population variance (divides by n)
+ *
+ * Too few values for the divisor (STDEV/VAR under two, STDEVP/VARP none) is the #DIV/0! error
+ * value, as in Excel and LibreOffice.
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class StatisticalFunctionsSpec extends FunSuite:
@@ -40,6 +43,12 @@ class StatisticalFunctionsSpec extends FunSuite:
         )
       case Left(err) =>
         fail(s"Expected successful evaluation but got error: $err")
+
+  /** Excel's answer for a variance statistic over too few values: the #DIV/0! error value. */
+  def assertDiv0(result: Either[EvalError, BigDecimal])(implicit loc: munit.Location): Unit =
+    result match
+      case Left(EvalError.ErrorValue(CellError.Div0, _)) => ()
+      case other => fail(s"Expected the #DIV/0! error value but got $other")
 
   // ===== MEDIAN Tests =====
 
@@ -146,20 +155,18 @@ class StatisticalFunctionsSpec extends FunSuite:
     assertApprox(result, 7.071, 0.001)
   }
 
-  test("STDEV: single value returns error (requires n >= 2)") {
+  test("STDEV: single value is #DIV/0! (requires n >= 2)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(42))
     val range = CellRange.parse("A1:A1").toOption.get
     val expr = TExpr.Aggregate("STDEV", TExpr.RangeLocation.Local(range))
-    val result = evaluator.eval(expr, sheet)
-    assert(result.isLeft, "Expected error for single value")
+    assertDiv0(evaluator.eval(expr, sheet))
   }
 
-  test("STDEV: empty range returns error") {
+  test("STDEV: empty range is #DIV/0!") {
     val sheet = emptySheet
     val range = CellRange.parse("A1:A5").toOption.get
     val expr = TExpr.Aggregate("STDEV", TExpr.RangeLocation.Local(range))
-    val result = evaluator.eval(expr, sheet)
-    assert(result.isLeft, "Expected error for empty range")
+    assertDiv0(evaluator.eval(expr, sheet))
   }
 
   // ===== STDEVP Tests (Population Standard Deviation) =====
@@ -191,12 +198,11 @@ class StatisticalFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(0)))
   }
 
-  test("STDEVP: empty range returns error") {
+  test("STDEVP: empty range is #DIV/0!") {
     val sheet = emptySheet
     val range = CellRange.parse("A1:A5").toOption.get
     val expr = TExpr.Aggregate("STDEVP", TExpr.RangeLocation.Local(range))
-    val result = evaluator.eval(expr, sheet)
-    assert(result.isLeft, "Expected error for empty range")
+    assertDiv0(evaluator.eval(expr, sheet))
   }
 
   // ===== VAR Tests (Sample Variance) =====
@@ -232,12 +238,11 @@ class StatisticalFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(50)))
   }
 
-  test("VAR: single value returns error (requires n >= 2)") {
+  test("VAR: single value is #DIV/0! (requires n >= 2)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(42))
     val range = CellRange.parse("A1:A1").toOption.get
     val expr = TExpr.Aggregate("VAR", TExpr.RangeLocation.Local(range))
-    val result = evaluator.eval(expr, sheet)
-    assert(result.isLeft, "Expected error for single value")
+    assertDiv0(evaluator.eval(expr, sheet))
   }
 
   // ===== VARP Tests (Population Variance) =====
@@ -269,12 +274,11 @@ class StatisticalFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(0)))
   }
 
-  test("VARP: empty range returns error") {
+  test("VARP: empty range is #DIV/0!") {
     val sheet = emptySheet
     val range = CellRange.parse("A1:A5").toOption.get
     val expr = TExpr.Aggregate("VARP", TExpr.RangeLocation.Local(range))
-    val result = evaluator.eval(expr, sheet)
-    assert(result.isLeft, "Expected error for empty range")
+    assertDiv0(evaluator.eval(expr, sheet))
   }
 
   // ===== Parser Roundtrip Tests =====
@@ -453,4 +457,47 @@ class StatisticalFunctionsSpec extends FunSuite:
       Right(CellValue.Number(BigDecimal("3.5")))
     )
     assertEquals(sheet.evaluateFormula(s"=VAR($args)"), Right(CellValue.Number(BigDecimal("3.5"))))
+  }
+
+  // ===== Too few values in a plain cell: the #DIV/0! error value, not a host failure =====
+
+  /** A1:A10 = 1..10; column B empty. */
+  private val oneToTen: Sheet =
+    (1 to 10).foldLeft(emptySheet)((s, i) => s.put(ARef.from0(0, i - 1), CellValue.Number(i)))
+
+  /** `formula` as a plain formula cell at `at`, evaluated at its own position. */
+  private def plainCell(at: ARef, formula: String) =
+    oneToTen.put(at, CellValue.Formula(formula)).evaluateCell(at)
+
+  private val div0 = Right(CellValue.Error(CellError.Div0))
+
+  test("plain cell: STDEV and VAR of fewer than two values are #DIV/0!") {
+    assertEquals(plainCell(ref"H5", "STDEV(A5)"), div0)
+    assertEquals(plainCell(ref"H5", "VAR(5)"), div0)
+    // A1:A10*1 is an expression, evaluated as a value: at row 5 it is the one value A5*1
+    assertEquals(plainCell(ref"H5", "STDEV(A1:A10*1)"), div0)
+    assertEquals(plainCell(ref"H5", "VAR(A1:A10*1)"), div0)
+    // outside rows 1..10 the intersection fails first
+    assertEquals(plainCell(ref"H20", "STDEV(A1:A10*1)"), Right(CellValue.Error(CellError.Value)))
+  }
+
+  test("plain cell: the too-few-values #DIV/0! is an error value IFERROR and ISERROR see") {
+    assertEquals(plainCell(ref"H5", "IFERROR(STDEV(A5),\"e\")"), Right(CellValue.Text("e")))
+    assertEquals(plainCell(ref"H5", "ISERROR(VAR(5))"), Right(CellValue.Bool(true)))
+  }
+
+  test("plain cell: STDEVP and VARP of one value are 0, of none #DIV/0!") {
+    val zero = Right(CellValue.Number(BigDecimal(0)))
+    assertEquals(plainCell(ref"H5", "STDEVP(A5)"), zero)
+    assertEquals(plainCell(ref"H5", "STDEVP(A1:A10*1)"), zero)
+    assertEquals(plainCell(ref"H5", "VARP(5)"), zero)
+    assertEquals(plainCell(ref"H5", "STDEVP(B1:B10)"), div0)
+    assertEquals(plainCell(ref"H5", "VARP(B1:B10)"), div0)
+  }
+
+  test("positionless STDEV(A1:A10*1) is still the array's standard deviation") {
+    // no cell to intersect with: the array 1..10, sample variance 55/6
+    oneToTen.evaluateFormula("=STDEV(A1:A10*1)") match
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, math.sqrt(55.0 / 6), 1e-9)
+      case other => fail(s"Expected a number but got $other")
   }

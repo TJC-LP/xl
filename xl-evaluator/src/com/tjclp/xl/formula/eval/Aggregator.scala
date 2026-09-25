@@ -7,6 +7,8 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
+import com.tjclp.xl.cells.CellError
+
 /**
  * Typeclass for aggregate functions over cell ranges.
  *
@@ -202,6 +204,15 @@ object Aggregator:
    */
   private type WelfordAcc = (Int, BigDecimal, BigDecimal)
 
+  /**
+   * A variance statistic over fewer values than its divisor needs — STDEV and VAR with fewer than
+   * two, STDEVP and VARP with none — is Excel's #DIV/0! error VALUE (IFERROR catches it, recalc
+   * caches it), never a host failure. A plain cell's `STDEV(A1:A10*1)` reaches this with its one
+   * intersected value.
+   */
+  private def tooFewValues(reason: String, count: Int): Either[EvalError, BigDecimal] =
+    Left(EvalError.ErrorValue(CellError.Div0, Some(s"$reason (count=$count)")))
+
   /** Welford's online algorithm update step */
   private def welfordCombine(acc: WelfordAcc, value: BigDecimal): WelfordAcc =
     val (count, mean, m2) = acc
@@ -222,8 +233,7 @@ object Aggregator:
       if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else BigDecimal(math.sqrt((m2 / (n - 1)).toDouble))
     override def finalizeWithError(acc: WelfordAcc) =
-      if acc._1 < 2 then
-        Left(EvalError.EvalFailed("STDEV requires at least 2 values", Some(s"count=${acc._1}")))
+      if acc._1 < 2 then tooFewValues("STDEV requires at least 2 values", acc._1)
       else Right(finalize(acc))
 
   /** STDEVP: Population standard deviation (divides by n) */
@@ -236,8 +246,7 @@ object Aggregator:
       if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else BigDecimal(math.sqrt((m2 / n).toDouble))
     override def finalizeWithError(acc: WelfordAcc) =
-      if acc._1 < 1 then
-        Left(EvalError.EvalFailed("STDEVP requires at least 1 value", Some(s"count=${acc._1}")))
+      if acc._1 < 1 then tooFewValues("STDEVP requires at least 1 value", acc._1)
       else Right(finalize(acc))
 
   /** VAR: Sample variance (divides by n-1) */
@@ -250,8 +259,7 @@ object Aggregator:
       if n < 2 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else m2 / (n - 1)
     override def finalizeWithError(acc: WelfordAcc) =
-      if acc._1 < 2 then
-        Left(EvalError.EvalFailed("VAR requires at least 2 values", Some(s"count=${acc._1}")))
+      if acc._1 < 2 then tooFewValues("VAR requires at least 2 values", acc._1)
       else Right(finalize(acc))
 
   /** VARP: Population variance (divides by n) */
@@ -264,6 +272,5 @@ object Aggregator:
       if n < 1 then BigDecimal(0) // Fallback; use finalizeWithError for proper error
       else m2 / n
     override def finalizeWithError(acc: WelfordAcc) =
-      if acc._1 < 1 then
-        Left(EvalError.EvalFailed("VARP requires at least 1 value", Some(s"count=${acc._1}")))
+      if acc._1 < 1 then tooFewValues("VARP requires at least 1 value", acc._1)
       else Right(finalize(acc))
