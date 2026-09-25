@@ -1,7 +1,8 @@
 package com.tjclp.xl.render
 
-import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.cf.CfOverlay
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.color.ThemePalette
 
 /**
@@ -75,3 +76,52 @@ object syntax:
       showGridlines: Boolean = false
     ): String =
       SvgRenderer.toSvg(sheet, range, includeStyles, theme, showLabels, showGridlines)
+
+    // GH-497: the conditional-formatting overloads take the overlay explicitly and carry NO
+    // default arguments — this block is wildcard-exported (api.*, the scripting prelude), where a
+    // second defaulted alternative would crash the compiler. The overlay comes from xl-evaluator:
+    // `sheet.toSvg(range, sheet.conditionalFormatOverlay(range))`.
+
+    /** [[toHtml]] with conditional formatting painted from `overlay` (styles, comments on). */
+    @annotation.targetName("toHtmlWithOverlay")
+    def toHtml(range: CellRange, overlay: CfOverlay): String =
+      HtmlRenderer.toHtml(sheet, range, true, true, ThemePalette.office, false, false, overlay)
+
+    /** [[toHtml]] with every option explicit and conditional formatting painted from `overlay`. */
+    @annotation.targetName("toHtmlWithThemeAndOverlay")
+    def toHtml(
+      range: CellRange,
+      includeStyles: Boolean,
+      includeComments: Boolean,
+      theme: ThemePalette,
+      applyPrintScale: Boolean,
+      showLabels: Boolean,
+      overlay: CfOverlay
+    ): String =
+      HtmlRenderer.toHtml(
+        sheet,
+        range,
+        includeStyles,
+        includeComments,
+        theme,
+        applyPrintScale,
+        showLabels,
+        overlay
+      )
+
+    /** [[toSvg]] with conditional formatting painted from `overlay` (styles on). */
+    @annotation.targetName("toSvgWithOverlay")
+    def toSvg(range: CellRange, overlay: CfOverlay): String =
+      SvgRenderer.toSvg(sheet, range, true, ThemePalette.office, false, false, overlay)
+
+    /** [[toSvg]] with every option explicit and conditional formatting painted from `overlay`. */
+    @annotation.targetName("toSvgWithThemeAndOverlay")
+    def toSvg(
+      range: CellRange,
+      includeStyles: Boolean,
+      theme: ThemePalette,
+      showLabels: Boolean,
+      showGridlines: Boolean,
+      overlay: CfOverlay
+    ): String =
+      SvgRenderer.toSvg(sheet, range, includeStyles, theme, showLabels, showGridlines, overlay)

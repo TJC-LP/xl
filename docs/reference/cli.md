@@ -524,6 +524,32 @@ with no explicit height takes the height its content needs (Excel's autofit: Cal
 18pt → 23.25pt, 24pt → 31.5pt; wrapped text its line count), never less than the sheet's default
 row height, and a row with an explicit height (`xl row --height`, `rowheight`) keeps it exactly.
 
+**Conditional formatting** ([#497](https://github.com/TJC-LP/xl/issues/497)): the pictures
+(`html`, `svg` and the raster formats built from the SVG) paint the sheet's conditional formatting
+as Excel shows it, with no flag. Painted: cell-value rules (all eight operators), formula
+(expression) rules, text rules (contains, does not contain, begins with, ends with — the
+case-insensitive `SEARCH` formula Excel stores), top/bottom N and N%, 2- and 3-point colour
+scales, Excel 2007 data bars (a gradient bar, 10%–90% of the cell), and Excel's blanks, errors and
+dates-occurring rules. Rules compose as in Excel: lower priority wins each conflicting property
+(fill, each font attribute, each border side, number format), non-conflicting properties from every
+true rule combine, and a true rule with *Stop If True* stops every rule below it for that cell,
+scales and bars included. Formula rules are evaluated relative to the top-left cell of the rule's
+range; top/bottom, scale and bar statistics cover the rule's whole range, not just the rendered
+window. The rules see the values the picture draws — cached values, or live ones under `--eval`.
+A formula with no cached value (as openpyxl writes them) is computed: top/bottom, scale and bar
+statistics follow a chain filled down or across whatever its length, but a formula rule (which
+evaluates each cell on its own) and a chain read from its far end stop at the evaluator's
+100-level recursion guard: a rule that reaches deeper is named in `CF_NOT_RENDERED`. Run
+`xl recalc` first to cache every value and paint it (`--eval` keeps the values of the rendered
+window's cells only, so it helps when those are the cells the rule reads).
+A rule xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel 2010+
+data bars, formatting outside xl's model) or whose formula fails is named in a `CF_NOT_RENDERED`
+warning and the picture is drawn without it; so is a top/bottom, scale or bar rule over a cell xl
+cannot compute, which is never painted from the other cells' statistics. The warning is
+informational: it never changes the exit code, `--strict` included. Conditional formatting paints
+but never changes layout: text overflow and autofit row heights come from the cells' own values
+and styles.
+
 ---
 
 ### `xl rasterizers`
@@ -1378,7 +1404,8 @@ xl -f in.xlsx -s Model -o out.xlsx batch finish.json
 
 Author conditional formatting (GH-324). `cf add` appends one rule to a range (requires `-o`);
 `cf list` shows the sheet's rules (read-only). Priorities are auto-assigned in add order
-(lower priority wins in Excel) — the CLI never hand-stamps them.
+(lower priority wins in Excel) — the CLI never hand-stamps them. `view --format html|svg|png|…`
+paints the rules ([conditional formatting](#xl-view-range), #497).
 
 **Rule DSL** (`--rule`):
 
@@ -2249,7 +2276,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys

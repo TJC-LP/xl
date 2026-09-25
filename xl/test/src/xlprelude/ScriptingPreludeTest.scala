@@ -72,6 +72,23 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("unit price"))
     assertEquals(sheet.conditionalFormats.size, 1)
 
+  test("conditional formatting paints through the prelude, SVG and HTML alike (GH-497)"):
+    val window = ref"A1:A3"
+    val sheet = Sheet("CF")
+      .put(ref"A1", 50)
+      .put(ref"A2", 150)
+      .conditionalFormat(
+        window,
+        CfRule.cellIs(CfOperator.GreaterThan, "100", Dxf.fill(Color.Rgb(0xffffc7ce)))
+      )
+    val overlay = sheet.conditionalFormatOverlay(window)
+    assertEquals(overlay.cells.keySet.map(_.toA1), Set("A2"))
+    assert(sheet.toSvg(window, overlay).contains("#FFC7CE"))
+    assert(sheet.toHtml(window, overlay).contains("background-color: #FFC7CE"))
+    assert(!sheet.toSvg(window).contains("#FFC7CE"), "the CF-blind render stays CF-blind")
+    val report = sheet.evaluateConditionalFormats(window, None, Clock.system)
+    assertEquals(report.unevaluated, Vector.empty[CfUnevaluated])
+
   test("range fill := and ARef navigation resolve through the prelude"):
     val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
     assertEquals(sheet.cells.size, 4)

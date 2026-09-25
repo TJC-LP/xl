@@ -2,9 +2,10 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.CfPaint
 import com.tjclp.xl.display.{FormatCodeParser, NumFmtFormatter}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.{CellStyle, Dxf}
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.font.Font
@@ -711,6 +712,55 @@ object RenderUtils:
   /** Get cell value as plain text with formatting: the text of [[renderedContent]]. */
   def cellValueToText(value: CellValue, numFmt: NumFmt): String =
     renderedContent(value, numFmt).text
+
+  // ========== Conditional formatting (GH-497) ==========
+
+  /** How far a data bar is inset from each edge of its cell, in pixels. */
+  private[render] val DataBarInsetPx: Int = 2
+
+  /**
+   * A data bar's width in whole pixels: `fraction` of the cell's width inside both insets. The one
+   * geometry both renderers draw, so a bar is as wide in HTML as in SVG and every raster.
+   */
+  private[render] def dataBarWidth(fraction: Double, cellWidth: Int): Int =
+    math.round(fraction * math.max(0, cellWidth - 2 * DataBarInsetPx)).toInt
+
+  /**
+   * `resolved` under a conditional-format paint: the paint's dxf laid over the cell's own style
+   * (the default style for an unstyled cell), and its content re-resolved when the dxf carries a
+   * number format — so a CF format changes the drawn text, its alignment and its `####` decision,
+   * and a CF font feeds the overflow measurement, as Excel measures what it displays. A paint that
+   * carries only a data bar leaves the cell as it is.
+   *
+   * Layout is never repainted: overflow blocking reads neighbour values, and autofit row heights
+   * read the base styles — Excel sizes rows from the cells' own fonts, not from rules that come and
+   * go with the data.
+   */
+  private[render] def painted(resolved: ResolvedCell, paint: Option[CfPaint]): ResolvedCell =
+    paint.map(_.dxf).filter(_ != Dxf()) match
+      case None => resolved
+      case Some(dxf) =>
+        val style = dxf.applyTo(resolved.style.getOrElse(CellStyle.default))
+        val content =
+          if dxf.numFmt.isDefined then renderedContent(resolved.cell.value, style.numFmt)
+          else resolved.content
+        resolved.copy(style = Some(style), content = content)
+
+  /** Whether a paint strikes the text through: strike is a dxf attribute `Font` cannot carry. */
+  private[render] def strikes(paint: Option[CfPaint]): Boolean =
+    paint.exists(_.dxf.font.flatMap(_.strike).contains(true))
+
+  /** Whether a paint hides the cell's value: a data bar drawn with `showValue = false`. */
+  private[render] def hidesValue(paint: Option[CfPaint]): Boolean =
+    paint.flatMap(_.bar).exists(!_.showValue)
+
+  /** The `text-decoration` an underline and a strike draw, when either is on. */
+  private[render] def textDecoration(underline: Boolean, strike: Boolean): Option[String] =
+    (underline, strike) match
+      case (true, true) => Some("underline line-through")
+      case (true, false) => Some("underline")
+      case (false, true) => Some("line-through")
+      case (false, false) => None
 
 /**
  * Base trait for cell renderers.

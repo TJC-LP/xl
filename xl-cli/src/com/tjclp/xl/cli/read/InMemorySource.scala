@@ -14,6 +14,8 @@ import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.output.RendererCommon
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.formula.{Clock, DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.eval.CfEvaluation
+import com.tjclp.xl.ooxml.worksheet.CfRenderLift
 import com.tjclp.xl.styles.CellStyle
 
 /**
@@ -123,30 +125,50 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         if spec.evalFormulas then
           InMemorySource.evaluateSheetFormulas(s, Some(wb), window, gate, warn)
         else IO.pure(s)
+      // GH-497: the pictures paint conditional formatting as Excel does, from the values they
+      // draw — cached, or live under --eval — with the rendered sheet as the cross-sheet context
+      def painted(rendered: Sheet): IO[CfOverlay] =
+        if rendered.conditionalFormats.isEmpty then IO.pure(CfOverlay.empty)
+        else
+          val lifted =
+            rendered.copy(conditionalFormats = CfRenderLift.lift(rendered.conditionalFormats))
+          InMemorySource.conditionalPaint(
+            lifted.evaluateConditionalFormats(window, Some(wb.put(rendered)), Clock.system),
+            warn
+          )
+      def toSvg(rendered: Sheet, overlay: CfOverlay): IO[String] =
+        MemoryGuard.blocking(
+          SvgRenderer.toSvg(
+            rendered,
+            window,
+            includeStyles = true,
+            theme = theme,
+            showLabels = spec.showLabels,
+            showGridlines = spec.showGridlines,
+            overlay = overlay
+          )
+        )
       spec.format match
         // The renders build the whole window's markup at once: under the memory guard (GH-636)
         case ViewFormat.Html =>
           evaluated(spec.strict).flatMap { s =>
-            MemoryGuard.blocking(
-              s.toHtml(
-                window,
-                theme = theme,
-                applyPrintScale = spec.printScale,
-                showLabels = spec.showLabels
+            painted(s).flatMap { overlay =>
+              MemoryGuard.blocking(
+                HtmlRenderer.toHtml(
+                  s,
+                  window,
+                  includeStyles = true,
+                  includeComments = true,
+                  theme = theme,
+                  applyPrintScale = spec.printScale,
+                  showLabels = spec.showLabels,
+                  overlay = overlay
+                )
               )
-            )
+            }
           }
         case ViewFormat.Svg =>
-          evaluated(spec.strict).flatMap { s =>
-            MemoryGuard.blocking(
-              s.toSvg(
-                window,
-                theme = theme,
-                showGridlines = spec.showGridlines,
-                showLabels = spec.showLabels
-              )
-            )
-          }
+          evaluated(spec.strict).flatMap(s => painted(s).flatMap(toSvg(s, _)))
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           spec.rasterOutput match
             case None =>
@@ -161,15 +183,8 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
             case Some(outputPath) =>
               // Raster formats have never gated on --strict: an evaluation failure warns
               evaluated(false).flatMap { rendered =>
-                MemoryGuard
-                  .blocking(
-                    rendered.toSvg(
-                      window,
-                      theme = theme,
-                      showGridlines = spec.showGridlines,
-                      showLabels = spec.showLabels
-                    )
-                  )
+                painted(rendered)
+                  .flatMap(toSvg(rendered, _))
                   .flatMap { svg =>
                     val rasterFormat = spec.format match
                       case ViewFormat.Jpeg => RasterFormat.Jpeg(spec.quality)
@@ -198,6 +213,40 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
     IO.fromEither(Resolve.named(wb, sheet).left.map(CliException(_)))
 
 object InMemorySource:
+
+  /**
+   * The conditional-format paint of a render (GH-497): `evaluate`'s overlay, each rule it could not
+   * paint warned as CF_NOT_RENDERED. The effect boundary of a CF step: an evaluation that throws —
+   * an evaluator defect, a stack overflow on a deep formula — degrades to an unpainted picture and
+   * one CF_NOT_RENDERED, never INTERNAL; a typed CLI failure (RESOURCE_LIMIT from the memory guard)
+   * is re-raised.
+   */
+  def conditionalPaint(evaluate: => CfEvaluation, warn: Warning => IO[Unit]): IO[CfOverlay] =
+    def unpainted(e: Throwable): IO[CfOverlay] =
+      val detail = Option(e.getMessage).fold("")(m => s": $m")
+      warn(
+        Warning(
+          WarningCode.CF_NOT_RENDERED,
+          s"conditional formatting not rendered: its evaluation failed " +
+            s"(${e.getClass.getSimpleName}$detail); the view is drawn without it"
+        )
+      ).as(CfOverlay.empty)
+    MemoryGuard
+      .blocking {
+        // Fatal to the effect runtime once it escapes the thunk, so caught inside it
+        try Right(evaluate)
+        catch case e: StackOverflowError => Left(e)
+      }
+      .attempt
+      .flatMap {
+        case Right(Right(evaluation)) =>
+          evaluation.unevaluated
+            .traverse_(u => warn(Warning(WarningCode.CF_NOT_RENDERED, u.message)))
+            .as(evaluation.overlay)
+        case Right(Left(overflow)) => unpainted(overflow)
+        case Left(typed: CliException) => IO.raiseError(typed)
+        case Left(other) => unpainted(other)
+      }
 
   /** The projection of a loaded sheet's window: what the sheet-based renderer adapters use. */
   def grid(sheet: Sheet, window: CellRange): RecordGrid =

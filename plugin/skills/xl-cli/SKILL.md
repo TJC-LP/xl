@@ -213,6 +213,11 @@ librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/T
 on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
 (ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`
 is the whole-sheet PDF fallback. Add `--eval` when formula cells should show computed values.
+The pictures (`html`, `svg`, `png`, `jpeg`, `webp`, `pdf`) paint conditional formatting as Excel
+does — cell-value, formula, text and top/bottom rules, colour scales, 2007 data bars, Stop If True
+— from the cached values, or live ones with `--eval` (#497); icon sets, above/below average,
+duplicate/unique values and Excel 2010+ data bars are not painted yet and are named in a
+`CF_NOT_RENDERED` warning, which never changes the exit code.
 
 ```bash
 xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels --eval

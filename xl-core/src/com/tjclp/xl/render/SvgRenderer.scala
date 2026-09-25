@@ -2,6 +2,7 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.{CfOverlay, CfPaint}
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -38,7 +39,7 @@ object SvgRenderer:
    *   `SheetView(showGridLines = false)` suppresses gridlines even when this flag is set, matching
    *   how Excel renders such sheets (GH-258).
    * @return
-   *   SVG string
+   *   SVG string, without conditional formatting (see the overload taking a [[CfOverlay]])
    */
   def toSvg(
     sheet: Sheet,
@@ -48,13 +49,33 @@ object SvgRenderer:
     showLabels: Boolean = false,
     showGridlines: Boolean = false
   ): String =
+    toSvg(sheet, range, includeStyles, theme, showLabels, showGridlines, CfOverlay.empty)
+
+  /**
+   * [[toSvg]] with conditional formatting painted from a precomputed `overlay` (GH-497): each
+   * painted cell's dxf is laid over its own style (fill, font, strike, borders, number format) and
+   * its data bar drawn as a gradient rect; a painted cell the sheet does not hold is drawn as an
+   * empty one. The overlay comes from xl-evaluator (`sheet.conditionalFormatOverlay(range)`); an
+   * empty overlay renders byte-identically to the CF-blind [[toSvg]], and `includeStyles = false`
+   * ignores it.
+   */
+  def toSvg(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    theme: ThemePalette,
+    showLabels: Boolean,
+    showGridlines: Boolean,
+    overlay: CfOverlay
+  ): String =
     toSvgResolving(ResolvedCell(_, _))(
       sheet,
       range,
       includeStyles,
       theme,
       showLabels,
-      showGridlines
+      showGridlines,
+      overlay
     )
 
   /**
@@ -68,7 +89,8 @@ object SvgRenderer:
     includeStyles: Boolean,
     theme: ThemePalette,
     showLabels: Boolean,
-    showGridlines: Boolean
+    showGridlines: Boolean,
+    overlay: CfOverlay
   ): String =
     // GH-258: the sheet's own view settings win when they disable gridlines (templates that are
     // gridline-free in Excel must stay gridline-free in exports).
@@ -77,6 +99,8 @@ object SvgRenderer:
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+    // Conditional formatting is styling: an unstyled render paints none of it
+    val paints = if includeStyles then overlay else CfOverlay.empty
 
     // Calculate column widths and row heights using shared utilities
     val colWidths = calculateColumnWidths(sheet, range)
@@ -119,6 +143,8 @@ object SvgRenderer:
 
     // Clip path buffer - will be rendered in <defs> after cell loop
     val clipPathBuffer = new StringBuilder
+    // Data-bar gradients by id, rendered in <defs> after the clip paths, sorted
+    val barGradients = scala.collection.mutable.Map.empty[String, String]
 
     // Column headers (A, B, C...) - only if showLabels
     if showLabels then
@@ -179,18 +205,23 @@ object SvgRenderer:
 
       // The row's drawn cells — every column except the interior of a merge — each resolved
       // ONCE: the spans below, and the fill, anchor, text and hash after them, all read it, and
-      // resolving re-formats the value and re-parses a Custom code.
+      // resolving re-formats the value and re-parses a Custom code. A CF-painted cell the sheet
+      // does not hold is drawn as an empty one.
       val drawn = (startCol to endCol).flatMap { col =>
         val ref = ARef.from0(col, row)
         val mergeRange = sheet.getMergedRange(ref)
         if mergeRange.exists(_.start != ref) then None
-        else Some((col, ref, mergeRange, sheet.cells.get(ref).map(resolve(_, sheet))))
+        else
+          val paint = paints.at(ref)
+          val cellOpt = sheet.cells.get(ref).orElse(paint.map(_ => Cell.empty(ref)))
+          Some((col, ref, mergeRange, cellOpt.map(c => PaintedCell(resolve(c, sheet), paint))))
       }
 
       // Text spill spans, decided before any rect is drawn: a leftward spill covers cells
       // drawn earlier in the row, and no gridline may cross the text.
-      val spans = drawn.flatMap { case (col, ref, _, resolvedOpt) =>
-        resolvedOpt
+      val spans = drawn.flatMap { case (col, ref, _, paintedOpt) =>
+        paintedOpt
+          .map(_.resolved)
           .map { resolved =>
             val width = colWidths(col - startCol)
             col -> overflowSpan(resolved, ref, width, colWidths, sheet, startCol, endCol)
@@ -201,10 +232,10 @@ object SvgRenderer:
         (col - span.left) to (col + span.right)
       }.toSet
 
-      drawn.foreach { case (col, ref, mergeRange, resolvedOpt) =>
+      drawn.foreach { case (col, ref, mergeRange, paintedOpt) =>
         val colIdx = col - startCol
         val xPos = colXPositions(colIdx)
-        val cellOpt = resolvedOpt.map(_.cell)
+        val resolvedOpt = paintedOpt.map(_.resolved)
 
         // A cell's own box: its column, or its merge clamped to the window. A spill never
         // widens it — every cell under a spilled text keeps its own fill and borders.
@@ -232,8 +263,8 @@ object SvgRenderer:
         )
 
         // Cell background (borders rendered separately as line elements)
-        val fillAttr = cellOpt
-          .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
+        val fillAttr = resolvedOpt
+          .flatMap(r => if includeStyles then r.style.map(fillToSvg(_, theme)) else None)
           .getOrElse("""fill="#FFFFFF"""")
 
         // Gridlines: explicit stroke attributes (CSS-only approach unreliable across renderers);
@@ -245,6 +276,21 @@ object SvgRenderer:
           s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
         )
         sb.append(s"""$fillAttr$strokeAttr class="cell"/>\n""")
+
+        // A CF data bar lies on the background, under the borders and the text
+        paintedOpt.flatMap(_.paint).flatMap(_.bar).foreach { bar =>
+          val barWidth = dataBarWidth(bar.fraction, effectiveWidth)
+          val barHeight = effectiveHeight - 2 * DataBarInsetPx
+          if barWidth > 0 && barHeight > 0 then
+            val hex = colorToHex(bar.color, theme)
+            val id = s"cf-bar-${hex.drop(1)}"
+            barGradients(id) = hex
+            val barX = xPos + DataBarInsetPx
+            val barY = y + DataBarInsetPx
+            sb.append(
+              s"""    <rect x="$barX" y="$barY" width="$barWidth" height="$barHeight" fill="url(#$id)" class="cf-bar"/>\n"""
+            )
+        }
 
         // Collect border declarations for second pass, decomposed into the unit grid edges
         // of the cell's own (merge-expanded) rect, so shared edges resolve to the heavier
@@ -263,9 +309,9 @@ object SvgRenderer:
 
         // Collect text for third pass (skip hidden rows/cols), clipped to its clip box
         if effectiveHeight > 0 && effectiveWidth > 0 then
-          resolvedOpt.foreach { resolved =>
+          paintedOpt.filterNot(p => hidesValue(p.paint)).foreach { cell =>
             val box = CellBox(xPos, y, effectiveWidth, effectiveHeight)
-            textBuffer.append(cellText(resolved, sheet, box, clipId, includeStyles, theme))
+            textBuffer.append(cellText(cell, sheet, box, clipId, includeStyles, theme))
           }
       }
 
@@ -292,6 +338,11 @@ object SvgRenderer:
     // Insert defs with clip paths before content
     result.append("  <defs>\n")
     result.append(clipPathBuffer)
+    barGradients.toList.sortBy(_._1).foreach { (id, hex) =>
+      result.append(
+        s"""    <linearGradient id="$id" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="$hex"/><stop offset="1" stop-color="#FFFFFF"/></linearGradient>\n"""
+      )
+    }
     result.append("  </defs>\n")
 
     // Append remaining content (headers and cells)
@@ -317,11 +368,26 @@ object SvgRenderer:
   private final case class CellBox(x: Int, y: Int, width: Int, height: Int)
 
   /**
+   * A drawn cell: resolved once, then laid under its conditional-format paint (GH-497).
+   * `unstyledBase` remembers that the cell had no style of its own, so its text keeps the unstyled
+   * size its neighbours draw at when a paint gives it one.
+   */
+  private final case class PaintedCell(
+    resolved: ResolvedCell,
+    paint: Option[CfPaint],
+    unstyledBase: Boolean
+  )
+
+  private object PaintedCell:
+    def apply(base: ResolvedCell, paint: Option[CfPaint]): PaintedCell =
+      PaintedCell(painted(base, paint), paint, base.style.isEmpty)
+
+  /**
    * The text of one cell, anchored in its own `box` and clipped to `clipId` — the box, or the
    * columns an overflowing text spills across.
    */
   private def cellText(
-    resolved: ResolvedCell,
+    drawn: PaintedCell,
     sheet: Sheet,
     box: CellBox,
     clipId: String,
@@ -329,6 +395,10 @@ object SvgRenderer:
     theme: ThemePalette
   ): String =
     val out = new StringBuilder
+    val resolved = drawn.resolved
+    val strike = strikes(drawn.paint)
+    // An unstyled cell's text is 15px, and a CF font on it (colour, weight) must not resize it
+    val inheritedPx = Option.when(drawn.unstyledBase)(UnstyledFontPx)
     val cell = resolved.cell
     val style = resolved.style
     val cellPt = style.fold(DefaultFontSize.toDouble)(_.font.sizePt)
@@ -359,12 +429,14 @@ object SvgRenderer:
           case "end" => textX - totalWidth
           case _ => textX // "start"
 
-        // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run
+        // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run. A CF
+        // strike decorates the whole text, every run included.
+        val strikeAttr = if strike then """ text-decoration="line-through"""" else ""
         out.append(
-          s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$clipAttr>"""
+          s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$strikeAttr$clipAttr>"""
         )
         rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
-          val runStyle = runToSvgStyle(run, baseFont, theme)
+          val runStyle = runToSvgStyle(run, baseFont, inheritedPx, theme)
           val escapedText = escapeXml(run.text)
           out.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
           val gap = if idx < rt.runs.size - 1 then interRunGap else 0
@@ -378,7 +450,7 @@ object SvgRenderer:
           // includeStyles=false still needs explicit font attrs now that the
           // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
           val textStyle =
-            if includeStyles then cellTextStyle(cell, sheet, theme)
+            if includeStyles then cellTextStyle(style, inheritedPx, strike, theme)
             else """ fill="#000000" font-size="15px" font-family="Calibri""""
           val shouldWrap = style.exists(_.align.wrapText)
 
@@ -435,24 +507,18 @@ object SvgRenderer:
     out.toString
 
   /**
-   * Get SVG fill attribute for a cell's background. Borders are rendered separately as line
-   * elements.
+   * SVG fill attribute for a cell's background, from its effective style. Borders are rendered
+   * separately as line elements.
    */
-  private def cellStyleToSvg(
-    cell: Cell,
-    sheet: Sheet,
-    theme: ThemePalette
-  ): Option[String] =
-    cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
-      style.fill match
-        case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
-        case Fill.Pattern(_, bgColor, _) =>
-          // For pattern fills, use the background color as the cell fill (pattern rendering with
-          // the foreground is not yet supported in SVG); an automatic background is the window
-          // colour, rendered like Fill.None (GH-566)
-          bgColor.map(colorToFillAttrsWithOpacity(_, theme)).getOrElse("""fill="#FFFFFF"""")
-        case Fill.None => """fill="#FFFFFF""""
-    }
+  private def fillToSvg(style: CellStyle, theme: ThemePalette): String =
+    style.fill match
+      case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
+      case Fill.Pattern(_, bgColor, _) =>
+        // For pattern fills, use the background color as the cell fill (pattern rendering with
+        // the foreground is not yet supported in SVG); an automatic background is the window
+        // colour, rendered like Fill.None (GH-566)
+        bgColor.map(colorToFillAttrsWithOpacity(_, theme)).getOrElse("""fill="#FFFFFF"""")
+      case Fill.None => """fill="#FFFFFF""""
 
   /**
    * A border declaration competing for one unit grid edge.
@@ -656,14 +722,22 @@ object SvgRenderer:
       case BorderStyle.SlantDashDot => (1, Some("4,2,1,2"))
       case BorderStyle.Double => (1, None) // Handled separately
 
+  /** The text size of a cell without a style (Calibri 11pt drawn at 15px). */
+  private val UnstyledFontPx: Int = 15
+
   /**
-   * Get SVG text style attributes for a cell.
+   * Get SVG text style attributes for a cell's effective style. `sizePx` overrides the font's own
+   * size (an unstyled cell painted by CF keeps the unstyled size); `strike` adds line-through.
    *
    * ALWAYS includes font properties explicitly for exact fidelity (don't rely on CSS defaults).
    */
-  private def cellTextStyle(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
-    cell.styleId
-      .flatMap(sheet.styleRegistry.get)
+  private def cellTextStyle(
+    styleOpt: Option[CellStyle],
+    sizePx: Option[Int],
+    strike: Boolean,
+    theme: ThemePalette
+  ): String =
+    styleOpt
       .map { style =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
@@ -677,11 +751,13 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
-        // Underline (SVG uses text-decoration, GH-256)
-        if style.font.underline != Underline.None then attrs += """text-decoration="underline""""
+        // Underline (SVG uses text-decoration, GH-256); a CF strike draws line-through
+        textDecoration(style.font.underline != Underline.None, strike).foreach { d =>
+          attrs += s"""text-decoration="$d""""
+        }
 
         // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
-        val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
+        val fontSizePx = sizePx.getOrElse((style.font.sizePt * 4.0 / 3.0).toInt)
         attrs += s"""font-size="${fontSizePx}px""""
 
         // ALWAYS include font family (even if default) - unquoted in SVG attributes (GH-255)
@@ -697,12 +773,19 @@ object SvgRenderer:
   /**
    * Convert a TextRun to SVG tspan style attributes.
    *
-   * When a run has no explicit font, inherits from the cell's base font. This ensures rich text
-   * runs without explicit formatting still display with the cell's styling.
+   * When a run has no explicit font, inherits from the cell's base font — at `inheritedPx` when
+   * given (an unstyled cell painted by CF keeps the unstyled size). This ensures rich text runs
+   * without explicit formatting still display with the cell's styling.
    */
-  private def runToSvgStyle(run: TextRun, baseFont: Option[Font], theme: ThemePalette): String =
+  private def runToSvgStyle(
+    run: TextRun,
+    baseFont: Option[Font],
+    inheritedPx: Option[Int],
+    theme: ThemePalette
+  ): String =
     // Use run's font if present, otherwise fall back to base font
     val effectiveFont = run.font.orElse(baseFont)
+    val sizePx = if run.font.isDefined then None else inheritedPx
 
     effectiveFont match
       case None => ""
@@ -723,7 +806,7 @@ object SvgRenderer:
         if f.underline != Underline.None then attrs += """text-decoration="underline""""
 
         // Font size - always include for exact fidelity - convert pt to px (pt * 4/3)
-        val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
+        val fontSizePx = sizePx.getOrElse((f.sizePt * 4.0 / 3.0).toInt)
         attrs += s"""font-size="${fontSizePx}px""""
 
         // Font family - always include for exact fidelity - unquoted in SVG attributes (GH-255)

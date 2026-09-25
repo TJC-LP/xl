@@ -2,6 +2,7 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.{CfBar, CfOverlay}
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
@@ -38,7 +39,7 @@ object HtmlRenderer:
    * @param showLabels
    *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @return
-   *   HTML table string
+   *   HTML table string, without conditional formatting (see the overload taking a [[CfOverlay]])
    */
   def toHtml(
     sheet: Sheet,
@@ -49,6 +50,35 @@ object HtmlRenderer:
     applyPrintScale: Boolean = false,
     showLabels: Boolean = false
   ): String =
+    toHtml(
+      sheet,
+      range,
+      includeStyles,
+      includeComments,
+      theme,
+      applyPrintScale,
+      showLabels,
+      CfOverlay.empty
+    )
+
+  /**
+   * [[toHtml]] with conditional formatting painted from a precomputed `overlay` (GH-497): each
+   * painted cell's dxf is laid over its own style (fill, font, strike, borders, number format) and
+   * its data bar drawn as a gradient background as wide as SvgRenderer's; a painted cell the sheet
+   * does not hold is drawn as an empty one. The overlay comes from xl-evaluator
+   * (`sheet.conditionalFormatOverlay(range)`); an empty overlay renders byte-identically to the
+   * CF-blind [[toHtml]], and `includeStyles = false` ignores it.
+   */
+  def toHtml(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    includeComments: Boolean,
+    theme: ThemePalette,
+    applyPrintScale: Boolean,
+    showLabels: Boolean,
+    overlay: CfOverlay
+  ): String =
     toHtmlResolving(ResolvedCell(_, _))(
       sheet,
       range,
@@ -56,7 +86,8 @@ object HtmlRenderer:
       includeComments,
       theme,
       applyPrintScale,
-      showLabels
+      showLabels,
+      overlay
     )
 
   /**
@@ -71,12 +102,15 @@ object HtmlRenderer:
     includeComments: Boolean,
     theme: ThemePalette,
     applyPrintScale: Boolean,
-    showLabels: Boolean
+    showLabels: Boolean,
+    overlay: CfOverlay
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+    // Conditional formatting is styling: an unstyled render paints none of it
+    val paints = if includeStyles then overlay else CfOverlay.empty
 
     // Calculate print scale factor (100 = 100% = 1.0)
     val scaleFactor =
@@ -154,8 +188,10 @@ object HtmlRenderer:
                   (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
               // Cell width: its column, or the sum of its merge's columns
               val cellWidthPx = (0 until mergeColspan).map(i => widthAt(colIdx + i)).sum
+              // A CF-painted cell the sheet does not hold is drawn as an empty one
+              val paint = paints.at(ref)
 
-              cellOpt match
+              cellOpt.orElse(paint.map(_ => Cell.empty(ref))) match
                 case None =>
                   if includeStyles then
                     Some(
@@ -166,8 +202,8 @@ object HtmlRenderer:
                 case Some(cell) =>
                   // Style and rendered content, resolved ONCE: the span, alignment, hash and
                   // body below all read them, and resolving re-formats the value and
-                  // re-parses a Custom code.
-                  val resolved = resolve(cell, sheet)
+                  // re-parses a Custom code. Then laid under the cell's CF paint.
+                  val resolved = painted(resolve(cell, sheet), paint)
 
                   // Text spilling into empty neighbours keeps ONE <td> per cell (a colspan
                   // would repaint its fill over theirs and drop their borders): it is drawn in
@@ -184,7 +220,8 @@ object HtmlRenderer:
                   val spills = includeStyles && span.spills
 
                   val style =
-                    if includeStyles then cellStyleToInlineCss(resolved, theme) else ""
+                    if includeStyles then cellStyleToInlineCss(resolved, strikes(paint), theme)
+                    else ""
                   val cellStyle = resolved.style
                   // Excel's #### marker: a clipped numeral reads as a different, plausible
                   // number (GH-459). Must agree with SvgRenderer.
@@ -197,7 +234,7 @@ object HtmlRenderer:
                   // A hidden column's content is never shown: a zero-width cell only clips it,
                   // and a table without inline CSS would not even do that
                   val content =
-                    if cellWidthPx <= 0 then ""
+                    if cellWidthPx <= 0 || hidesValue(paint) then ""
                     else if spills then
                       textBox("xl-overflow", text, resolved, span, colIdx, cellWidthPx, widthAt)
                     else if boxedInMerge then
@@ -225,7 +262,11 @@ object HtmlRenderer:
                       val finalStyle =
                         if spills then withWhitespace
                         else s"$withWhitespace; overflow: hidden"
-                      s""" style="$finalStyle""""
+                      val barCss = paint
+                        .flatMap(_.bar)
+                        .flatMap(dataBarCss(_, cellWidthPx, theme))
+                        .fold("")(css => s"; $css")
+                      s""" style="$finalStyle$barCss""""
 
                   // Add comment as title attribute (tooltip) if present
                   val commentAttr =
@@ -372,12 +413,29 @@ $headerRow$tableRows
         html
 
   /**
+   * A CF data bar as a td background (GH-497): a no-repeat gradient from the bar colour to white,
+   * inset 2px and as wide as SvgRenderer's bar ([[RenderUtils.dataBarWidth]]). None when the cell
+   * leaves it no width.
+   */
+  private def dataBarCss(bar: CfBar, cellWidth: Int, theme: ThemePalette): Option[String] =
+    val width = dataBarWidth(bar.fraction, cellWidth)
+    Option.when(width > 0) {
+      val hex = colorToHex(bar.color, theme)
+      val inset = DataBarInsetPx
+      s"background-image: linear-gradient(to right, $hex, #FFFFFF); background-size: ${width}px calc(100% - ${2 * inset}px); background-position: ${inset}px center; background-repeat: no-repeat"
+    }
+
+  /**
    * Convert cell-level style to inline CSS.
    *
    * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
-   * has no style.
+   * has no style. `strike` (a CF dxf attribute `Font` cannot carry) adds line-through.
    */
-  private def cellStyleToInlineCss(cell: ResolvedCell, theme: ThemePalette): String =
+  private def cellStyleToInlineCss(
+    cell: ResolvedCell,
+    strike: Boolean,
+    theme: ThemePalette
+  ): String =
     val styleOpt = cell.style
     val css = scala.collection.mutable.ArrayBuffer[String]()
 
@@ -385,7 +443,9 @@ $headerRow$tableRows
       // Font properties (apply only if not default)
       if style.font.bold then css += "font-weight: bold"
       if style.font.italic then css += "font-style: italic"
-      if style.font.underline != Underline.None then css += "text-decoration: underline"
+      textDecoration(style.font.underline != Underline.None, strike).foreach { d =>
+        css += s"text-decoration: $d"
+      }
       style.font.color.foreach(c => css += s"color: ${colorToHex(c, theme)}")
       if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
       if style.font.name != Font.default.name then

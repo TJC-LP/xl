@@ -76,8 +76,19 @@ object api:
     SeriesName
   }
 
-  // Conditional formatting (GH-136) — plain enums/case classes, safe export forwarders.
-  export cf.{ConditionalFormat, CfRule, CfOperator, CfTextOp, Cfvo, CfPoint}
+  // Conditional formatting (GH-136) — plain enums/case classes, safe export forwarders. CfPaint /
+  // CfBar / CfOverlay: the evaluated paint the renderers' overlay overloads draw (GH-497).
+  export cf.{
+    ConditionalFormat,
+    CfRule,
+    CfOperator,
+    CfTextOp,
+    Cfvo,
+    CfPoint,
+    CfPaint,
+    CfBar,
+    CfOverlay
+  }
 
   // Patch types
   export patch.Patch

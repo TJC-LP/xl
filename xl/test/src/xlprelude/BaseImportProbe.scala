@@ -53,6 +53,32 @@ object BaseImportProbe:
   val cfBlocks: Vector[ConditionalFormat.Rules] = cfSheet.typedConditionalFormats
   val cfText: CfTextOp = CfTextOp.Contains
 
+  // GH-497: conditional formatting painted in the renders — the evaluator's extensions, the paint
+  // types, and the overlay overloads beside the defaulted CF-blind renders (which still resolve).
+  val cfWindow: CellRange = ref"A1:A9"
+  val cfOverlay: CfOverlay = cfSheet.conditionalFormatOverlay(cfWindow)
+  val cfEvaluation: CfEvaluation =
+    cfSheet.evaluateConditionalFormats(cfWindow, None, Clock.system)
+  val cfReports: Vector[CfUnevaluated] = cfEvaluation.unevaluated
+  val cfReasonNotModeled: CfUnevaluated.Reason = CfUnevaluated.Reason.NotModeled
+  val cfPaint: CfPaint = CfPaint(cfDxf, Some(CfBar(0.5, Color.Rgb(0xff638ec6), showValue = true)))
+  val cfPainted: CfOverlay = CfOverlay(Map(ref"A1" -> cfPaint))
+  val cfEmpty: Boolean = CfOverlay.empty.isEmpty
+  val cfSvg: String = cfSheet.toSvg(cfWindow, cfOverlay)
+  val cfHtml: String = cfSheet.toHtml(cfWindow, cfPainted)
+  val cfSvgFull: String =
+    cfSheet.toSvg(cfWindow, true, ThemePalette.office, false, false, cfOverlay)
+  val cfHtmlFull: String =
+    cfSheet.toHtml(cfWindow, true, true, ThemePalette.office, false, false, cfOverlay)
+  val cfSvgObject: String =
+    SvgRenderer.toSvg(cfSheet, cfWindow, true, ThemePalette.office, false, false, cfOverlay)
+  val blindSvg: String = cfSheet.toSvg(cfWindow)
+  val blindSvgFlag: String = cfSheet.toSvg(cfWindow, false)
+  val blindHtml: String = cfSheet.toHtml(cfWindow, includeComments = true)
+  val cfMerged: Dxf = cfDxf.orElse(Dxf.fill(Color.Rgb(0xff000000)))
+  val cfStyled: CellStyle = cfMerged.applyTo(CellStyle.default)
+  val cfTextFormula: String = CfTextOp.formula(CfTextOp.Contains, "x", "A1")
+
   // GH-589: the recalculating writes reach the base import (package-level ExcelRecalc export), so
   // a model built here has the cache-completing write and not only Excel.write. Never invoked.
   val checkedWrite: Workbook => RecalcResult = wb => Excel.writeChecked(wb, "/tmp/never-run.xlsx")

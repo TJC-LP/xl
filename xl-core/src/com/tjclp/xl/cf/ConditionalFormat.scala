@@ -49,6 +49,21 @@ enum CfOperator derives CanEqual:
 enum CfTextOp derives CanEqual:
   case Contains, NotContains, BeginsWith, EndsWith
 
+object CfTextOp:
+  /**
+   * The formula Excel stores — and evaluates — for a text rule, relative to `topLeft` (the A1 of
+   * the cell the rule's formula is written for). Quotes in the text are doubled per formula
+   * string-literal rules. The one derivation shared by the codec (derived at emission, verified at
+   * parse) and the evaluator (GH-497), so what xl writes is what it paints.
+   */
+  def formula(op: CfTextOp, text: String, topLeft: String): String =
+    val q = text.replace("\"", "\"\"")
+    op match
+      case Contains => s"""NOT(ISERROR(SEARCH("$q",$topLeft)))"""
+      case NotContains => s"""ISERROR(SEARCH("$q",$topLeft))"""
+      case BeginsWith => s"""LEFT($topLeft,LEN("$q"))="$q""""
+      case EndsWith => s"""RIGHT($topLeft,LEN("$q"))="$q""""
+
 /**
  * Conditional format value object (`<cfvo>`): an axis point for color scales and data bars. Formula
  * text is stored WITHOUT a leading '='.
@@ -69,7 +84,10 @@ final case class CfPoint(cfvo: Cfvo, color: Color) derives CanEqual
  * Formula semantics (CellIs/Expression): Excel evaluates rule formulas as if entered for the
  * range's top-left cell, relative references adjusting per cell (fill semantics). XL stores the
  * text verbatim — without the leading '=' (the OOXML `<formula>` child has none) — and does not
- * rewrite anchors at author time. Sheet-qualified references are the author's literal text.
+ * rewrite anchors at author time. Sheet-qualified references are the author's literal text. The
+ * renderers' evaluator (xl-evaluator `CfEvaluator`, GH-497) takes the top-left of the bounding box
+ * of all the block's ranges as that cell (MS-XLS refBound); the text-rule formula is derived from
+ * the first range's top-left, the same cell unless a later range reaches further up or left.
  *
  * Lower `priority` wins in Excel; `CfRule.AutoPriority` (0) means "assign at append" — see
  * `Sheet.conditionalFormat`.

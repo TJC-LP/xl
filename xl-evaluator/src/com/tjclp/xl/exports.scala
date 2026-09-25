@@ -96,6 +96,13 @@ object formulaExports:
   export formula.eval.{SheetSummary, WorkbookAudit, WorkbookInspect, WorkbookSummary}
   export formula.eval.WorkbookInspect.*
 
+  // GH-497: conditional formatting evaluated for the renderers — `sheet.conditionalFormatOverlay`
+  // / `sheet.evaluateConditionalFormats` come from CfEvaluator's extension block, which carries no
+  // default arguments (wildcard-safe); it defines no toSvg/toHtml of its own (those stay xl-core's).
+  export formula.eval.CfEvaluator
+  export formula.eval.CfEvaluator.*
+  export formula.eval.{CfEvaluation, CfUnevaluated}
+
   // Display strategy with formula evaluation
   // The evaluating given has higher priority than default due to LowPriority pattern
   export formula.display.EvaluatingFormulaDisplay

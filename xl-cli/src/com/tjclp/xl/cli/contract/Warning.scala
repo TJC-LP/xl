@@ -58,6 +58,15 @@ object WarningCode:
    */
   val LINT_HYGIENE: String = "LINT_HYGIENE"
 
+  /**
+   * GH-497: an html/svg/raster `view` could not paint a conditional-format rule that applies to the
+   * window — a kind xl does not evaluate yet (icon sets, above/below average, duplicate/unique
+   * values, Excel 2010+ data bars), a rule formula that failed, or an evaluation that failed
+   * outright. The picture is drawn without that rule. Informational: never gates, `--strict`
+   * included.
+   */
+  val CF_NOT_RENDERED: String = "CF_NOT_RENDERED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -72,5 +81,6 @@ object WarningCode:
     MEMORY_PRESSURE,
     NO_NUMERIC_VALUES,
     OFF_GRID_REF,
-    LINT_HYGIENE
+    LINT_HYGIENE,
+    CF_NOT_RENDERED
   )

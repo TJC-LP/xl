@@ -3,13 +3,14 @@ package com.tjclp.xl.render
 import com.tjclp.xl.Generators
 import com.tjclp.xl.addressing.Column
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.cf.{CfOverlay, CfPaint}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.render.syntax.*
 import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.*
-import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.{CellStyle, Dxf}
 import com.tjclp.xl.styles.alignment.{Align, HAlign}
 import com.tjclp.xl.styles.color.ThemePalette
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -379,10 +380,31 @@ class RenderUtilsSpec extends ScalaCheckSuite:
       includeStyles = true,
       theme = ThemePalette.office,
       showLabels = false,
-      showGridlines = false
+      showGridlines = false,
+      overlay = CfOverlay.empty
     )
     assertEquals(resolutions, cells, "one resolution per rendered cell (a Custom code parsed once)")
     assertEquals(svg, perCellPathsSheet.toSvg(range))
+  }
+
+  test("with an overlay, each drawn cell is still resolved once, painted empty cells included") {
+    val range = ref"A1:E4"
+    // D1 and E4 hold nothing: the renderers draw them through a synthetic empty cell
+    val paint = CfPaint(Dxf.fill(com.tjclp.xl.styles.color.Color.Rgb(0xffffc7ce)), None)
+    val overlay = CfOverlay(Map(ref"A1" -> paint, ref"D1" -> paint, ref"E4" -> paint))
+    val cells = perCellPathsSheet.cells.size + 2
+    var svgResolutions = 0
+    var htmlResolutions = 0
+    SvgRenderer.toSvgResolving { (cell, sheet) =>
+      svgResolutions += 1
+      ResolvedCell(cell, sheet)
+    }(perCellPathsSheet, range, true, ThemePalette.office, false, false, overlay)
+    HtmlRenderer.toHtmlResolving { (cell, sheet) =>
+      htmlResolutions += 1
+      ResolvedCell(cell, sheet)
+    }(perCellPathsSheet, range, true, true, ThemePalette.office, false, false, overlay)
+    assertEquals(svgResolutions, cells)
+    assertEquals(htmlResolutions, cells)
   }
 
   test("HtmlRenderer resolves each cell's rendered content once, and the seam changes no byte") {
@@ -399,7 +421,8 @@ class RenderUtilsSpec extends ScalaCheckSuite:
       includeComments = true,
       theme = ThemePalette.office,
       applyPrintScale = false,
-      showLabels = false
+      showLabels = false,
+      overlay = CfOverlay.empty
     )
     assertEquals(resolutions, cells, "one resolution per rendered cell (a Custom code parsed once)")
     assertEquals(html, perCellPathsSheet.toHtml(range))
@@ -419,7 +442,8 @@ class RenderUtilsSpec extends ScalaCheckSuite:
       includeStyles = true,
       theme = ThemePalette.office,
       showLabels = false,
-      showGridlines = false
+      showGridlines = false,
+      overlay = CfOverlay.empty
     )
     val plainTexts = """<text[^>]*>([^<]*)</text>""".r.findAllMatchIn(svg).map(_.group(1)).toList
     val wrappedLines =
@@ -436,7 +460,8 @@ class RenderUtilsSpec extends ScalaCheckSuite:
       includeComments = true,
       theme = ThemePalette.office,
       applyPrintScale = false,
-      showLabels = false
+      showLabels = false,
+      overlay = CfOverlay.empty
     )
     val bodies = """<td[^>]*>([^<]*)</td>""".r.findAllMatchIn(html).map(_.group(1)).toList
     assertEquals(bodies.filter(_.nonEmpty), List.fill(cells)("X"), s"every cell shows X: $html")
