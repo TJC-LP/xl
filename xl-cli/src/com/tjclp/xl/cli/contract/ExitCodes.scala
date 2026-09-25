@@ -7,7 +7,7 @@ import cats.effect.ExitCode
  *
  * {{{
  * 0  ok
- * 1  completed with findings or a failed gate (diff differs, lint findings, --strict) — file written as requested (-o), never with -i
+ * 1  completed with findings or a failed gate (diff differs, lint findings, --strict) — nothing written (-o not written, -i untouched)
  * 2  usage — the command line is wrong; nothing read, nothing written
  * 3  failed — the operation could not complete; nothing written
  * }}}

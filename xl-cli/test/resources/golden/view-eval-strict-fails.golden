@@ -11,6 +11,6 @@ A1:A1
 1
 ## stdout
 ## stderr
-Error: Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0
+Error: Formula evaluation failed: Data!A1: Formula error in 'A1+1': Circular reference; without --strict those cells show the file's values
   code: RECALC_GATE
-  hint: drop --strict to render cached values and see the failure as a warning
+  hint: drop --strict to render the other cells live and see the failure as a warning

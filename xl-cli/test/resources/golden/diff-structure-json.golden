@@ -1,0 +1,70 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/resized.xlsx
+--format
+json
+## exit
+1
+## stdout
+{
+  "identical": false,
+  "sheetsAdded": [],
+  "sheetsRemoved": [],
+  "sheetOrder": null,
+  "namesAdded": [],
+  "namesRemoved": [],
+  "namesChanged": [],
+  "sheets": [
+    {
+      "name": "Data",
+      "added": [],
+      "removed": [],
+      "changed": [],
+      "mergesAdded": [],
+      "mergesRemoved": [],
+      "commentsAdded": [],
+      "commentsRemoved": [],
+      "commentsChanged": [],
+      "hyperlinksAdded": [],
+      "hyperlinksRemoved": [],
+      "hyperlinksChanged": [],
+      "rows": [
+        {
+          "ref": "1:1",
+          "changes": [
+            {
+              "property": "height",
+              "before": 15,
+              "after": 30
+            }
+          ],
+          "styleChanged": false
+        }
+      ],
+      "columns": [
+        {
+          "ref": "A:A",
+          "changes": [
+            {
+              "property": "width",
+              "before": 9.14,
+              "after": 20
+            }
+          ],
+          "styleChanged": false
+        }
+      ],
+      "properties": [],
+      "conditionalFormatsAdded": [],
+      "conditionalFormatsRemoved": [],
+      "conditionalFormatsChanged": [],
+      "dataValidationsAdded": [],
+      "dataValidationsRemoved": [],
+      "dataValidationsChanged": []
+    }
+  ]
+}
+## stderr

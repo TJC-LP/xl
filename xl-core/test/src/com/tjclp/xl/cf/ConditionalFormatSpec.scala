@@ -219,3 +219,25 @@ class ConditionalFormatSpec extends FunSuite:
       Dxf(font = Some(f), fill = Some(com.tjclp.xl.styles.fill.Fill.Solid(red)))
     )
   }
+
+  // ===== text-rule formula (GH-497: one derivation shared by the codec and the evaluator) =====
+
+  test("CfTextOp.formula derives Excel's stored formula for each text operator") {
+    assertEquals(
+      CfTextOp.formula(CfTextOp.Contains, "todo", "E2"),
+      """NOT(ISERROR(SEARCH("todo",E2)))"""
+    )
+    assertEquals(
+      CfTextOp.formula(CfTextOp.NotContains, "todo", "E2"),
+      """ISERROR(SEARCH("todo",E2))"""
+    )
+    assertEquals(CfTextOp.formula(CfTextOp.BeginsWith, "ab", "A1"), """LEFT(A1,LEN("ab"))="ab"""")
+    assertEquals(CfTextOp.formula(CfTextOp.EndsWith, "ab", "A1"), """RIGHT(A1,LEN("ab"))="ab"""")
+  }
+
+  test("CfTextOp.formula doubles quotes in the text, per formula string-literal rules") {
+    assertEquals(
+      CfTextOp.formula(CfTextOp.Contains, "a\"b", "B3"),
+      """NOT(ISERROR(SEARCH("a""b",B3)))"""
+    )
+  }

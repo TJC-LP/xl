@@ -93,8 +93,8 @@ object Schema:
     ExitCodeDoc(
       ExitCodes.signal.code,
       "completed with findings or a failed gate (diff differs, lint findings, audit " +
-        "--fail-on-findings, --strict) — never a failure; with -o the file is written, with -i " +
-        "the input is left untouched"
+        "--fail-on-findings, --strict) — never a failure; nothing written (a --strict gate " +
+        "leaves -o unwritten and -i untouched)"
     ),
     ExitCodeDoc(
       ExitCodes.usage.code,
@@ -147,9 +147,9 @@ object Schema:
     GlobalDoc(
       "--strict",
       None,
-      "Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or " +
-        "data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs " +
-        "(after `view` it is view's own --eval gate)"
+      "Write verbs: exit 1 and write nothing when the recalculation reports formula errors, " +
+        "non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not " +
+        "only repairs (after `view` it is view's own --eval gate)"
     )
   )
 
@@ -237,7 +237,7 @@ object Schema:
     ),
     read(
       "evala",
-      "Evaluate an array formula and display, or spill (--at), the result grid",
+      "Evaluate an array formula and display the result grid (--at anchors it)",
       sheet = true,
       streaming = false,
       "0.9.0",
@@ -343,7 +343,7 @@ object Schema:
     ),
     read(
       "deps",
-      "Trace one cell's precedents and dependents, hop by hop (--direction, --depth)",
+      "Trace one cell's precedents and dependents, hop by hop (--direction, --depth, --expand)",
       sheet = true,
       streaming = false,
       "0.20.0",

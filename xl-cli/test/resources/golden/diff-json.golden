@@ -13,6 +13,10 @@ json
   "identical": false,
   "sheetsAdded": [],
   "sheetsRemoved": [],
+  "sheetOrder": null,
+  "namesAdded": [],
+  "namesRemoved": [],
+  "namesChanged": [],
   "sheets": [
     {
       "name": "Data",
@@ -53,7 +57,16 @@ json
       "commentsChanged": [],
       "hyperlinksAdded": [],
       "hyperlinksRemoved": [],
-      "hyperlinksChanged": []
+      "hyperlinksChanged": [],
+      "rows": [],
+      "columns": [],
+      "properties": [],
+      "conditionalFormatsAdded": [],
+      "conditionalFormatsRemoved": [],
+      "conditionalFormatsChanged": [],
+      "dataValidationsAdded": [],
+      "dataValidationsRemoved": [],
+      "dataValidationsChanged": []
     }
   ]
 }

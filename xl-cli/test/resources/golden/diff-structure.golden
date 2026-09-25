@@ -1,0 +1,21 @@
+## args
+-f
+<DIR>/simple.xlsx
+diff
+-g
+<DIR>/resized.xlsx
+## exit
+1
+## stdout
+Comparing <DIR>/simple.xlsx vs <DIR>/resized.xlsx
+
+## Data
+
+Rows (1):
+  1:1: height 15 -> 30
+
+Columns (1):
+  A:A: width 9.14 -> 20
+
+Summary: 0 changed, 0 added, 0 removed cell(s) across 1 sheet(s); 2 structure change(s)
+## stderr

@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (7,524)
+./mill __.test             # Run all tests (8,255)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -212,7 +212,7 @@ xl -f in.xlsx -s Summary -o out.xlsx putf B4 "='Income Statement'!G8"
 
 # Array formula evaluation (evala command)
 xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"           # Evaluate and display result
-xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Spill result starting at E1
+xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)" --at E1   # Display the result anchored at E1
 xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                   # Array arithmetic with broadcasting
 
 # Style command flags (styles merge by default, use --replace for full replacement)
@@ -416,12 +416,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**7,524 tests** by module: xl-evaluator (2610), xl-core (1719), xl-ooxml (1283), xl-cli (1524), xl-cats-effect (183), xl-agent (147), xl prelude probes (58). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**8,255 tests** by module: xl-evaluator (3151), xl-core (1794), xl-ooxml (1290), xl-cli (1629), xl-cats-effect (183), xl-agent (147), xl prelude probes (61). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 7,524 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 8,255 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

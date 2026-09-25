@@ -1,0 +1,72 @@
+## args
+-f
+<DIR>/ranges.xlsx
+--json
+deps
+Summary!B1
+--direction
+precedents
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "deps",
+  "version": "<VERSION>",
+  "data": {
+    "ref": "Summary!B1",
+    "formula": "=SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2",
+    "value": 170,
+    "direction": "precedents",
+    "depth": 1,
+    "expand": false,
+    "precedents": [
+      {
+        "ref": "Data!A:A",
+        "kind": "range",
+        "depth": 1,
+        "formula": null,
+        "value": null,
+        "occupied": 4,
+        "formulas": 0
+      },
+      {
+        "ref": "Data!B:B",
+        "kind": "range",
+        "depth": 1,
+        "formula": null,
+        "value": null,
+        "occupied": 4,
+        "formulas": 0
+      },
+      {
+        "ref": "Data!B2",
+        "kind": "cell",
+        "depth": 1,
+        "formula": null,
+        "value": 10
+      },
+      {
+        "ref": "Data!C2:C4",
+        "kind": "range",
+        "depth": 1,
+        "formula": null,
+        "value": null,
+        "occupied": 3,
+        "formulas": 3
+      },
+      {
+        "ref": "Summary!A1",
+        "kind": "cell",
+        "depth": 1,
+        "formula": null,
+        "value": "North"
+      }
+    ],
+    "dependents": null
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

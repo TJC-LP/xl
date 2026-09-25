@@ -64,9 +64,10 @@ trait SheetSource:
     }
 
   /**
-   * [[grid]] after evaluating the window's formulas (`view --eval`; capability `eval`): an
-   * evaluation failure is the `--strict` gate (`RECALC_GATE`) or an `EVAL_FAILED` warning through
-   * `warn` with the cached values rendered instead.
+   * [[grid]] after evaluating the window's formulas cell by cell (`view --eval`; capability
+   * `eval`): cells that fail, and the formulas blocked behind them, keep the file's values while
+   * every other formula is live; any failure is the `--strict` gate (`RECALC_GATE`) or one
+   * `EVAL_FAILED` warning through `warn`.
    */
   def evaluated(
     sheet: SheetName,

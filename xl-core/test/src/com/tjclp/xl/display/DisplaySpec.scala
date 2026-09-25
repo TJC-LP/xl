@@ -434,6 +434,47 @@ class DisplaySpec extends ScalaCheckSuite:
     assertEquals(conv.apply(ref"C1").formatted, "60%")
   }
 
+  test("Cell display hands the strategy the formula cell and its position") {
+    import DisplayConversions.given
+    import ExcelInterpolator.*
+    import com.tjclp.xl.display.syntax.*
+
+    // An evaluating strategy needs the position to evaluate an uncached formula as that cell
+    given Sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"B2", CellValue.Formula("SUM(A1:A3)"))
+      .style(ref"B2", CellStyle.default.withNumFmt(NumFmt.Percent))
+      .unsafe
+
+    given FormulaDisplayStrategy with
+      def format(formula: String, sheet: Sheet): String = s"positionless:$formula"
+      override def formatAt(
+        formula: CellValue.Formula,
+        numFmt: NumFmt,
+        sheet: Sheet,
+        at: ARef
+      ): String = s"${at.toA1}:${formula.expression}:${numFmt == NumFmt.Percent}"
+
+    assertEquals(summon[Sheet].displayCell(ref"B2").formatted, "B2:SUM(A1:A3):true")
+    assertEquals(excel"${ref"B2"}", "B2:SUM(A1:A3):true")
+    // a Cell the sheet does not hold is displayed at its own position
+    assertEquals(excel"${Cell(ref"D4", CellValue.Formula("A1*2"))}", "D4:A1*2:false")
+  }
+
+  test("A strategy written without formatAt displays formula cells as before") {
+    import com.tjclp.xl.display.syntax.*
+
+    val sheet = Sheet(name = SheetName.unsafe("Test"))
+      .put(ref"A1", CellValue.Formula("A2+1"))
+      .put(ref"B1", CellValue.Formula("A2+1", Some(CellValue.Number(BigDecimal(3)))))
+
+    // formatAt's default delegates to formatCached, whose default delegates to format
+    given FormulaDisplayStrategy with
+      def format(formula: String, sheet: Sheet): String = s"legacy:$formula"
+
+    assertEquals(sheet.displayCell(ref"A1").formatted, "legacy:A2+1")
+    assertEquals(sheet.displayCell(ref"B1").formatted, "legacy:A2+1")
+  }
+
   // ========== DisplayConversions Tests ==========
 
   test("ARef conversion with given Sheet") {

@@ -344,3 +344,29 @@ class RenderSpec extends FunSuite:
     )
     assertEquals(differs.exitCode, ExitCode(1))
   }
+
+  test("publishesOutput: only a complete exit-0 outcome publishes (#677)") {
+    assert(Outcome.ok("put", Payload.text("Saved: out.xlsx")).publishesOutput)
+    val gate = Outcome.signal(
+      "recalc",
+      Payload.text("summary"),
+      CliError(ErrorCode.RECALC_GATE, "strict")
+    )
+    assert(gate.outputComplete, "a gate's output is complete")
+    assert(!gate.publishesOutput, "a failed --strict gate publishes nothing")
+    val differs = Outcome.signal(
+      "diff",
+      Payload.Json(ujson.Obj("identical" -> ujson.False)),
+      CliError(ErrorCode.DIFFERENCES_FOUND, "Differences found")
+    )
+    assert(!differs.publishesOutput, "findings (exit 1) publish nothing either")
+    assert(!Outcome.failed("put", notFound).publishesOutput)
+    assert(!Outcome.failed("", CliError.usage("Unexpected argument: frob", None)).publishesOutput)
+    assert(!Outcome.failed("put", CliError(ErrorCode.INTERNAL, "boom")).publishesOutput)
+    val incomplete = Outcome("put", None, Vector.empty, None, ExitCodes.ok, outputComplete = false)
+    assert(!incomplete.publishesOutput, "an incomplete output is never published")
+    assert(
+      !Main.CommandOutcome(ExitCode(1), "strict failure", outputComplete = true).publishesOutput
+    )
+    assert(Main.CommandOutcome(ExitCode.Success, "ok", outputComplete = true).publishesOutput)
+  }

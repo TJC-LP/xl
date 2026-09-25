@@ -1,12 +1,19 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-15 (0.23.1)
+**Last Updated**: 2026-09-25 (unreleased: the Weaver wave)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**Unreleased** (2026-09-25) — the Weaver dogfood of 0.23.1 filed five CLI findings, run as seven adversarially reviewed clusters; two **Breaking:** entries:
+- ✅ **`view --eval` never crashes on one cell** — type-sound array arguments, a guarded evaluation boundary (#681), per-cell degradation (`evaluateForRangePerCell`), and Excel array lifting for 74 scalar functions: `=SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))` is 5; CSE/dynamic-array anchors evaluate as arrays
+- ✅ **A failed `--strict` gate writes nothing** (#677) — `-o` and `-i` alike; a file is published only by a run that exits 0
+- ✅ **Renders match Excel's layout and conditional formats** (#497) — text spills into valueless neighbours whatever their style (left, right and centred), rows autofit to their fonts and wrapped text, and conditional formatting paints in SVG/HTML/PNG with `CF_NOT_RENDERED` naming what it cannot
+- ✅ **`diff` compares sheet structure** — row heights, column widths, hidden/outline, defaults, freeze panes, visibility, CF/DV blocks, sheet order and defined names; `--cells-only` for the old scope
+- ✅ **`deps`/`cell` collapse ranges** — a range precedent is one node with occupied/formula counts (`--expand` for cells); `QualifiedGraph` declared view
 
 **New in 0.23.1** (2026-09-15) — wave 30: the 0.23.0 dogfood (103 probes over the CLI, the scripting library and the tjc-modeling template lane; every recorded 0.19.x quirk re-tested as fixed) filed seven issues, run as six adversarially reviewed clusters, then six automated review rounds on the PR; three **Breaking:** entries:
 - ✅ **Typed `#N/A` on legacy lookups** (#662) — a VLOOKUP, HLOOKUP or MATCH miss is the error value XLOOKUP already returned, so IFNA, ISNA, ISERR, IFERROR, ISERROR, ERROR.TYPE and an IF condition all see it; `=IF(ISNA(VLOOKUP(miss)),0,1)` caches 0; an unguarded miss caches `#N/A`; index below 1 is `#VALUE!`, past the table `#REF!`
@@ -66,7 +73,7 @@
 - ✅ **Cycles warm-start from numeric caches** (#469) — zero-seeding no longer wipes valid caches of mutually-ISERROR-guarded pairs
 - ✅ **Data-table what-if lanes evaluate their precedent cone** (#493, #494) — acyclic grids no longer seed silently FLAT, guarded XIRR corners seed real rates, and a guard resolving to its error arm surfaces as `ErrorGuardFired` instead of banking its text arm
 - ✅ **Structural edits refuse to tear a data-table interior** (#495) — was a silent degrade to constants that `data-table-torn` could not see
-- ✅ **Cache-safe CLI writes** (#468, #481, #496) — dirty-cone-scoped recalc, `--no-recalc`/`--preserve-caches`, `--strict` exit codes on write verbs, `batch` honoring declared `calcPr`
+- ✅ **Cache-safe CLI writes** (#468, #481, #496) — dirty-cone-scoped recalc, `--no-recalc`/`--preserve-caches`, `--strict` exit codes on write verbs, `batch` honoring declared `calcPr`; a failed gate writes nothing (#677)
 - ✅ **`####` for overflowing numbers in the raster** (#459) — was a leading-digit clip that rendered a plausible wrong number
 - ✅ **115 functions** (#476 — SEARCH, N, HYPERLINK; #511 — IFNA, NA, ISNA, completing the error-guard family); **the error guards now see an error cached inside a formula cell** (#512 — `ISERROR` over a recalculated formula cell answered FALSE); hidden rows/cols in `view` (#474); streaming numFmt parity (#475); VLOOKUP/HLOOKUP date keys (#488)
 
@@ -255,17 +262,17 @@
 
 ### Test Coverage
 
-**7,524 test cases** (verified via `./mill __.test`, 2026-09-15, 0.23.1 release gate): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
+**8,255 test cases** (verified via `./mill __.test`, 2026-09-25, the Weaver wave): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 2610 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1719 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1283 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1524 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-evaluator | 3151 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1794 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1290 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1629 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 58 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 61 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
@@ -318,7 +325,7 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 - ❌ xl/calcChain.xml (formula calculation order)
 - ✅ Worksheet relationships (`_rels/sheetN.xml.rels`) — written when a sheet has comments, tables, or hyperlinks
 - ⚠️ Print settings, page setup — odd + even/first header/footer, margins, print area, repeat rows (#259, #266), and `fitToPage` tri-state (#284); shipped across 0.11.0–0.12.1
-- ✅ Conditional formatting (0.12.1, #136): typed `Sheet.conditionalFormat` rules (cellIs/expression/colorScale/dataBar/top10/text) + `Dxf` differential formats; library API (no CLI yet) — see LIMITATIONS §10
+- ✅ Conditional formatting (0.12.1, #136): typed `Sheet.conditionalFormat` rules (cellIs/expression/colorScale/dataBar/top10/text) + `Dxf` differential formats; library API plus `cf add` and render painting (#497) — see LIMITATIONS §10
 - ❌ Data validation (preserved through edits, but no authoring API yet)
 - ✅ Named ranges (authoring shipped in 0.10.0: `DefinedName` serialization + CLI `name add/rm`; sheet-scoped via `withDefinedName(name, refersTo, scope)` / `-s`, case-insensitive replace and remove — #462, #538)
 

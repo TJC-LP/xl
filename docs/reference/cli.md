@@ -45,9 +45,9 @@ export PATH="$HOME/.local/bin:$PATH"
 --backend <name>      # XML backend: scalaxml (default) or saxstax (faster)
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
---strict              # Write verbs: exit 1 when the write's recalculation reports problems
+--strict              # Write verbs: exit 1 when the write's recalculation reports problems, and write nothing
 
-# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed
+# Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed — only 0 writes a file
 # Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
 
 # Read-only operations
@@ -235,11 +235,11 @@ xl -f external-model.xlsx -s Data -o out.xlsx --preserve-caches batch ops.json
 
 By default a write reports formula-evaluation errors, iterative non-convergence and data-table seed
 warnings in its summary and still exits 0. `--strict` promotes those to **exit 1** while printing
-the same summary — for CI and scripted pipelines. Excel error *values* (`#DIV/0!`, `#N/A`) are data
-conditions, not failures, and never gate.
+the same summary and writing nothing — for CI and scripted pipelines. Excel error *values*
+(`#DIV/0!`, `#N/A`) are data conditions, not failures, and never gate.
 
 ```bash
-xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1 if any formula failed to evaluate
+xl -f model.xlsx -o out.xlsx --strict recalc    # exit 1, and no out.xlsx, if any formula failed to evaluate
 ```
 
 `recalc --parallel N` evaluates statically independent formula waves on up to `N` workers, then
@@ -249,13 +249,22 @@ books can be limited by allocation and memory bandwidth. If the workbook declare
 calculation (`<calcPr iterate="1"/>`), xl keeps the sequential fixpoint path and reports that
 `--parallel` was ignored in the command summary.
 
-With `-o` the output file is written even on a strict failure (the gate only sets the exit code).
-With `-i` the temp file is discarded and the input is left byte-identical; the summary then says
-`NOT saved (--strict failure): <file> left untouched` instead of `Saved:`. `--strict` is refused
-together with `--stream` (streaming writes never recalculate, so the gate could never fire). Verbs
-that perform no recalculation, such as presentation-only verbs, have no calculation outcome to
-gate. `put`, `putf`, `fill`, and `copy` include authored formulas and affected dependents in their
-reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
+A strict failure writes nothing (#677): with `-o` the staged file is discarded — the target is not
+created, and a file already at that path (the input itself when `-o` names `-f`) is left
+byte-identical — and with `-i` the input is left byte-identical. The summary says
+`NOT saved (--strict failure): nothing written to <out>` (`-o`) or
+`NOT saved (--strict failure): <file> left untouched` (`-i`, or `-o` naming `-f`) instead of
+`Saved:`, and under `--json` `data.saved` is `null` and `data.written` `false`. Every write follows
+one rule — a file is published only by a run that exits 0 — so branch on the exit code or
+`data.written`: a file left at the `-o` path by an earlier run is not replaced, so its existence
+proves nothing. To keep the output for inspection, run the same command without `--strict`: the
+flag decides only the verdict, so the advisory run writes the identical workbook, exits 0 and
+prints the same summary. `--strict` is refused together with `--stream` on the O(1) streaming
+writes (`put`, `putf`, `style`, `batch`: they never recalculate, so the gate could never fire); the
+verbs whose `--stream` run loads the book on a backend (`recalc`, `fill`, `copy`, `name`, the
+structural verbs) accept it, gate and withhold like any other write. Verbs that perform no
+recalculation, such as presentation-only verbs, have no calculation outcome to gate. `put`, `putf`,
+`fill`, and `copy` include authored formulas and affected dependents in their reported outcomes. Structural and batch writes recalculate the whole book but report a failure only
 for a cell inside the cache-write cone or one the written file leaves uncached; a formula outside
 the cone whose cache was kept is never reported as "left uncached" (#606). Use `--strict` without
 `--no-recalc` when the command must validate calculation results.
@@ -425,8 +434,8 @@ Without a range, the sheet's used range; `--offset` and `--limit` page through t
 | `range` | string | No | used range | Cell range (e.g., "A1:D20"), or a whole-column/whole-row span (`B:B`, `A:C`, `3:3`; bare or sheet-qualified, 0.22.0) clamped to the sheet's used range on the open axis — `view B:B` renders column B over the used rows, `totalRows` counting those rows, never the 1,048,576-row axis; absent, the sheet's used range. From the loaded workbook that is the bounding box of every stored cell, styled-but-empty ones included (the `<dimension>` the library's writer records); `--stream` trusts the worksheet's `<dimension>` as written — a stale one, or openpyxl's merged-extent one, can differ from the stored-cell box — and when the file has no readable `<dimension>`, or it names a single cell (Excel's `A1` on an empty sheet), uses the bounding box of the non-empty cells. An empty sheet renders `(empty sheet)`, `""` for csv, `{"sheet", "range": null, "rows": []}` for json from both sources |
 | `--format` | string | No | markdown | Output format: markdown, json, csv, html, svg, png, jpeg, webp, pdf |
 | `--formulas` | flag | No | false | Show formulas instead of values |
-| `--eval` | flag | No | false | Evaluate formulas (compute live values) |
-| `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`) |
+| `--eval` | flag | No | false | Evaluate formulas (compute live values), cell by cell: a formula that cannot evaluate keeps the file's value and is reported as one `EVAL_FAILED` warning (see [errors, warnings and exit codes](#errors-warnings-and-exit-codes)) |
+| `--strict` | flag | No | false | Fail on formula evaluation errors (with `--eval`): for markdown, json, csv, html and svg any failure is the `RECALC_GATE` gate, exit 1, nothing rendered. Raster formats (png, jpeg, webp, pdf) never gate: they still export and print the one `EVAL_FAILED` warning, exit 0 |
 | `--limit` | int | No | 50 | Max rows to display (0 = no limit; below 0 is a usage error). `--limit 0` streams: the rows are written as the source produces them — for csv and json from the first row, for markdown (and csv with `--skip-empty`) after one pass over the window for the column widths — so a whole-sheet dump runs in constant memory under `--stream` (since 0.22.0, [#635](https://github.com/TJC-LP/xl/issues/635)); under `--json` the table streams too (csv and markdown as `data.text`, escaped line by line; json spliced into `data`). A failure before the first row is the ordinary failure envelope; one after bytes went out leaves the envelope unterminated, the exit code and stderr carrying it. When output is clipped, a truncation marker is reported: markdown appends a "… showing X of Y rows" trailer; json adds `truncated`/`totalRows` fields (under `--stream` too, since 0.21.0); csv/svg note on stderr; html notes on stderr and appends an HTML comment; raster formats append the notice to the `Exported:` line |
 | `--offset` | int | No | 0 | Rows to skip from the top of the range before `--limit` applies; the trailer then reads "… showing rows X–Y of N". An offset past the last row is a usage error |
 | `--max-cols` | int | No | 0 | Max columns to display, from the left (0 = all); json adds `totalCols` when clipped, the other formats report "… showing X of Y columns" like the row notice |
@@ -501,6 +510,55 @@ cells when it has none (`bounds --scan` and `sheets --stats` always the non-empt
 
 Why the default: `xl search` finds a value in a hidden row and `xl cell C5` reads it, so a `view`
 that silently elided the same cell read as file corruption.
+
+**Text overflow and row heights in the pictures** (`html`, `svg` and the raster formats lay a
+sheet out as Excel does): text wider than its cell spills into neighbouring cells that hold no
+value. A neighbour's fill, border, font or number format does not stop it; any value does (an
+empty string or a formula returning `""` included), as does a merged cell and the edge of the
+rendered range. Left- and General-aligned text spills right, right-aligned text left, centred text
+both ways while staying centred on its own cell; wrapped text wraps, a merged cell's text is
+clipped at the edges of its merge (still aligned within it), and a number, date, logical or error
+that does not fit shows `####` instead. Every cell under spilled text keeps its own fill
+and borders. A hidden column draws at zero width, and its text is neither shown nor spilled. A row
+with no explicit height takes the height its content needs (Excel's autofit: Calibri 11pt → 15pt,
+18pt → 23.25pt, 24pt → 31.5pt; wrapped text its line count), never less than the sheet's default
+row height, and a row with an explicit height (`xl row --height`, `rowheight`) keeps it exactly.
+
+**Conditional formatting** ([#497](https://github.com/TJC-LP/xl/issues/497)): the pictures
+(`html`, `svg` and the raster formats built from the SVG) paint the sheet's conditional formatting
+as Excel shows it, with no flag. Painted: cell-value rules (all eight operators), formula
+(expression) rules, text rules (contains, does not contain, begins with, ends with — the
+case-insensitive `SEARCH` formula Excel stores), top/bottom N and N%, 2- and 3-point colour
+scales, Excel 2007 data bars (a gradient bar, 10%–90% of the cell), and Excel's blanks, errors and
+dates-occurring rules. Rules compose as in Excel: lower priority wins each conflicting property
+(fill, each font attribute, each border side, number format), non-conflicting properties from every
+true rule combine, and a true rule with *Stop If True* stops every rule below it for that cell,
+scales and bars included. Formula rules are evaluated relative to the top-left cell of the rule's
+range; top/bottom, scale and bar statistics cover the rule's whole range, not just the rendered
+window. The rules see the values the picture draws — cached values, or live ones under `--eval`.
+Under `--eval` every formula the window's rules read is evaluated with the window: a top/bottom,
+scale or bar rule's whole range, and the same-sheet cells a formula rule reads at each window
+cell, including precedents reached through defined names and aliases (with sheet scope respected).
+References to other sheets use those sheets' cached values. So a cell's paint never depends on
+the window asked for, and a formula among its local precedents that
+cannot evaluate is part of the one `EVAL_FAILED` warning (and of the `--strict` gate for html and
+svg). Without `--eval`, a formula with no cached value (as openpyxl writes them) is computed:
+top/bottom, scale and bar statistics follow a chain filled down or across whatever its length,
+but a formula rule (which evaluates each cell on its own) and a chain read from its far end stop
+at the evaluator's 100-level recursion guard: a rule that reaches deeper is named in
+`CF_NOT_RENDERED`. Run `xl recalc` first to cache every value, or view with `--eval`.
+A rule xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel 2010+
+data bars, formatting outside xl's model) or whose formula does not parse is named in a
+`CF_NOT_RENDERED` warning and the picture is drawn without it; so is a top/bottom, scale or bar
+rule over a cell xl cannot compute, which is never painted from the other cells' statistics. A
+cell-value, formula or text rule that cannot be evaluated for some cells (a precedent on a missing
+sheet, say) is still painted on the cells where it evaluates; its warning says `partly rendered`
+and names the first cell it failed at (`not rendered` when it failed for every cell). The warning
+is informational: it never changes the exit code, `--strict` included. Conditional formatting
+never moves cells: which neighbours text may spill into and the autofit row heights come from the
+cells' own values and styles — but, as in Excel, a rule's font or number format changes what a
+cell displays, so it can widen or narrow the cell's own spill and turn a number that no longer
+fits into `####`.
 
 ---
 
@@ -606,14 +664,17 @@ Type: Text
 Value: Revenue
 ```
 
-`Dependencies` lists the cells the formula reads — single references exactly, ranges as their
-occupied cells — and `Dependents` the formulas that read the cell, by name or through a range that
-contains it (an empty cell inside a summed range still names the sum). Empty cells inside a range
-and ranges over a sheet the workbook does not have are not listed (since 0.20.0; before, `SUM(A:A)`
-listed 1,048,576 entries). Same-sheet refs are unqualified; cross-sheet ones carry the sheet
-quoted as a formula would spell it (`'On-Premise'!G9`, `Sheet2!A1`), the same rendering `deps` and
-`search` use, so the text pastes into `putf`/`eval`; both lists are ordered by sheet, then row, then
-column. For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
+`Dependencies` lists what the formula reads as declared — each cell it names, and each range as ONE
+entry spelled as `deps` spells it (`B1:B3`, `Data!A:A`), what `deps --depth 1 --direction
+precedents` lists without its counts — and `Dependents` the formulas that read the cell, by name or
+through a range that contains it (an empty cell inside a summed range still names the sum). A range
+with no occupied cell, even one over a sheet the workbook does not have, is still listed: it
+explains a zero (since 0.24.0; from 0.20.0 a range was listed as its occupied cells, which `deps
+--expand` still prints, and before 0.20.0 `SUM(A:A)` listed 1,048,576 entries). Same-sheet refs are
+unqualified; cross-sheet ones carry the sheet quoted as a formula would spell it (`'On-Premise'!G9`,
+`Sheet2!A1`), the same rendering `deps` and `search` use, so the text pastes into `putf`/`eval`;
+both lists are ordered by sheet, then row, then column (a cell before a range at the same corner).
+For more than one hop, use `deps`. Under `--stream` the graph is not built and both lines
 say so:
 `Dependencies: (not available in streaming mode)` / `Dependents: (not available in streaming mode)`
 (before 0.21.0 streaming listed the formula's reference tokens — `B1, B1:B3, B3` for
@@ -621,7 +682,8 @@ say so:
 
 `--json`: `{ref, sheet, kind, value, formatted, formula, hidden, mergedInto, style, comment,
 hyperlink, dependencies, dependents}` — the typed cell record plus what the sheet attaches to it;
-`style` is `{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
+`dependencies` is an array of strings, each a cell or a range (`["Data!A:A", "A1"]`); `style` is
+`{font, fill, numFmt, align, border}` or `null` (`--no-style`). Under `--stream`
 `dependencies`, `dependents` and `hidden` are `null` (unknown), and `mergedInto`/`hyperlink` are
 `null` whether absent or unknown. The comment text is the same from both sources (the author-prefix
 run XL's writer adds is stripped on both paths).
@@ -732,20 +794,32 @@ unresolvedReaders: [ref], calcPr}` — refs as `Sheet!A1` (quoted when the name 
 
 ---
 
-### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all]`
+### `xl deps <ref> [--direction precedents|dependents|both] [--depth n|all] [--expand]`
 
-Trace one cell hop by hop. **Precedents** are the cells the formula reads — single references
-exactly, ranges as their occupied cells (a full-column reference never expands to a million rows);
-**dependents** are the formulas that read the cell, by name or through a range that contains it.
-Layer k holds the cells exactly k hops away that no earlier layer listed; each node carries its
-depth, formula and value. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
-ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the sheet,
-else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range is
-refused. Not available under `--stream`.
+Trace one cell hop by hop. **Precedents** are what the formula reads, the way Excel's Trace
+Precedents draws it: each cell it names, and each range as ONE node whatever its size, carrying
+how many of its cells hold a value (`occupied`) and how many of those are formulas. A range is
+spelled as Excel displays it, anchors dropped: `Data!A:A`, `Data!3:5`, `Data!1:1048576` for the
+whole sheet, `Data!B2:B9` otherwise; a one-cell range slot (`COUNTIF(C1,…)`) is a cell node; a
+SUMIF/AVERAGEIF sum range shows at the size Excel reads it and a defined name as its resolved range.
+A range with no occupied cell — even one over a sheet the workbook does not have — is listed with
+`0 occupied cells`: it explains a zero. **Dependents** are the formulas that read the cell, by name
+or through a range that contains it. Layer k holds the nodes exactly k hops away: a range node at
+depth k stands for all its occupied cells, the formulas among them continue the walk at k+1 (counted
+in the range, not listed) and its constants are leaves. A cell an earlier layer listed or covered is
+never listed again; a range reached later is still listed once; in one layer a cell and a range
+containing it are both listed. `--expand` lists each range's occupied cells one by one instead (the
+listing before 0.24.0, which also counted a style-only blank as occupied); it affects precedents
+only and is accepted, without effect, with
+`--direction dependents`. `--depth` defaults to `1`; `all` (or `0`) follows the whole cone (a cycle
+ends the walk once every member is seen). The ref follows the sheet rule: a qualified ref names the
+sheet, else `-s`, else the only sheet of a single-sheet book (`SHEET_REQUIRED` otherwise); a range
+is refused. Not available under `--stream`.
 
 ```bash
 xl -f model.xlsx deps Summary!B4                                   # both directions, one hop
 xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+xl -f model.xlsx deps Summary!B4 --direction precedents --expand   # each range's cells, one by one
 xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all | jq '.data.dependents[].ref'
 ```
 
@@ -759,12 +833,35 @@ Precedents (depth 1): 1
 Dependents (depth 1): 1
   1  Sheet2!B1  =A1+1 -> 11
 ```
-Each node line is `<depth>  <ref>  <value>` for a constant and `<depth>  <ref>  <formula> -> <cached
-value>` for a formula (`(uncached)` when it has none); an empty side prints `(none)`.
 
-**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, precedents, dependents}` —
-`depth` is the number or `"all"`, each side is `[{ref, depth, formula, value}]` or `null` when the
-direction was not requested; `formula` is `null` for a constant, `value` a formula's cached value.
+**Output** (ranges, `--direction precedents --depth 2`):
+```
+Cell: Summary!B1
+Formula: =SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2
+Value: 170
+Precedents (depth 2): 6
+  1  Data!A:A  range, 4 occupied cells
+  1  Data!B:B  range, 4 occupied cells
+  1  Data!B2  10
+  1  Data!C2:C4  range, 3 occupied cells (3 formulas)
+  1  Summary!A1  "North"
+  2  Data!E1  2
+```
+Each node line is `<depth>  <ref>  <value>` for a constant, `<depth>  <ref>  <formula> -> <cached
+value>` for a formula (`(uncached)` when it has none) and `<depth>  <range>  range, <n> occupied
+cell(s)[ (<m> formula(s))]` for a range (plain digits; the formula count is omitted when it is 0;
+text values are always quoted, so the forms cannot be confused). The header counts the nodes
+listed; an empty side prints `(none)`. Within a layer nodes are ordered by sheet, top row, left
+column, a cell before a range at the same corner.
+
+**JSON** (`--json`): `data` = `{ref, formula, value, direction, depth, expand, precedents,
+dependents}` — `depth` is the number or `"all"`, `expand` the flag; each side is an array of nodes
+or `null` when the direction was not requested. A cell node is `{ref, kind: "cell", depth, formula,
+value}` (`formula` `null` for a constant, `value` a formula's cached value); a range node is `{ref,
+kind: "range", depth, formula: null, value: null, occupied, formulas}`, its counts describing the
+whole range (cells an earlier layer listed included). Dependents are always cell nodes. Before
+0.24.0 nodes had no `kind`, there was no `expand`, and a range was listed cell by cell (what
+`--expand` prints).
 
 ---
 
@@ -824,6 +921,8 @@ sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the
 
 Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
+The formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
@@ -840,21 +939,50 @@ xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
 
 ### `xl evala <formula> [--at <ref>]`
 
-Evaluate an **array formula** and display the result grid, or spill it into the sheet. Requires `-f` (array formulas need sheet context).
+Evaluate an **array formula** and display the result grid, optionally anchored at a cell (read-only: nothing is written). Requires `-f` (array formulas need sheet context).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Array formula to evaluate |
-| `--at` | string | No | Target cell for array spill (default: display only) |
+| `--at` | string | No | Cell the displayed spill is anchored at (nothing is written) |
 | `--with`, `-w` | string | No | Temporary cell overrides (repeatable) |
 
 **Examples**:
 ```bash
 xl -f data.xlsx -s Sheet1 evala "=TRANSPOSE(A1:C2)"          # Display result grid
-xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Spill starting at E1
+xl -f data.xlsx -s Sheet1 evala "=SEQUENCE(5)" --at E1       # Display the spill anchored at E1
 xl -f data.xlsx -s Sheet1 evala "=A1:B2*10"                  # Array arithmetic with broadcasting
+xl -f data.xlsx -s Sheet1 evala "=ABS(C2:C4+D2:D4)"          # Scalar functions lift element-wise
 ```
+
+Scalar functions lift over arrays as in Excel 365 (`=ABS(C2:C4)` is `{3;4;1}`,
+`=SUMPRODUCT(--ISNUMBER(B2:B4))` counts), the same in `view --eval`, `eval`, `recalc` and `batch`
+wherever the formula is an array context: SUMPRODUCT's arguments, FILTER's include, array (CSE and
+dynamic-array) records, named formulas, conditional-format formulas, and `eval`/`evala` without a
+cell.
+
+#### Plain cells and implicit intersection
+
+A plain formula cell — what `putf` and batch `putf` write — does not spill. Excel 365 opens it as a
+legacy formula, and xl computes it the same way:
+- **Value positions.** A multi-cell reference in a value position is implicitly intersected with
+  the formula's row (a column) or column (a row), and is `#VALUE!` where it is not crossed. Value
+  positions are operands, `&`, scalar arguments, criteria, the IF condition and the CHOOSE index.
+  In row 3, `=ABS(C2:C4)` reads C3 (Excel shows `=ABS(@C2:C4)`), `=C2:C4*2` is `C3*2` and
+  `=IF(C2:C4>0,"y","n")` tests C3.
+- **Aggregates.** An aggregate's argument keeps a reference whole but evaluates an expression as a
+  value. `=SUM(A1:A10)` sums the range, while `=SUM(A1:A10*B1:B10)` in row 5 is `A5*B5`.
+  `SUM(IF(A1:A10>2,A1:A10,0))` sums the whole range when A5 > 2, because IF and CHOOSE return
+  references, as OFFSET, INDIRECT and INDEX do; a name or a LET name bound to a reference keeps it
+  too (`=LET(r,nmRef,SUM(r))` is `=SUM(nmRef)`), and `@` intersects any of them as the plain cell
+  does.
+- **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`, with
+  conditions as factors (`=SUMPRODUCT((A1:A10>2)*A1:A10)`) rather than IF, which Excel evaluates
+  as legacy inside a plain SUMPRODUCT.
+
+The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
+cells are legacy formulas").
 
 ---
 
@@ -981,11 +1109,17 @@ xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running 
 **Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
 survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
 `{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+An array record evaluates as an array (`recalc`, `view --eval`) and its anchor caches the array's
+top-left element, Excel's anchor value; the record's other cells keep their cached constants.
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
 text, not a real function (Excel would show `#NAME?`); data-table *authoring* is tracked in GH-419.
 Writing any value or formula onto a record cell replaces the record; `copy` of a data-table cell
-pastes its cached constant (Excel's paste behavior) and `copy` of an array anchor pastes a plain
-shifted formula.
+pastes its cached constant (Excel's paste behavior). `copy`, `fill` and `sort` move a single-cell
+array formula as one, re-anchored at its target: `{=SUM($A$1:$A$3*10)}` copied to D5, or filled down
+B1:B5, is `{=...}` in every cell and computes the array value, as Excel pastes and fills it. A
+multi-cell array anchor pastes a plain shifted formula, which evaluates as a legacy formula
+(implicit intersection) and so can compute a different value from the anchor; the record's other
+cells paste their cached constants.
 
 ---
 
@@ -1305,7 +1439,8 @@ xl -f in.xlsx -s Model -o out.xlsx batch finish.json
 
 Author conditional formatting (GH-324). `cf add` appends one rule to a range (requires `-o`);
 `cf list` shows the sheet's rules (read-only). Priorities are auto-assigned in add order
-(lower priority wins in Excel) — the CLI never hand-stamps them.
+(lower priority wins in Excel) — the CLI never hand-stamps them. `view --format html|svg|png|…`
+paints the rules ([conditional formatting](#xl-view-range), #497).
 
 **Rule DSL** (`--rule`):
 
@@ -1725,7 +1860,7 @@ EOF
 
 ---
 
-### `xl diff -g <file2> [--format markdown|json]`
+### `xl diff -g <file2> [--format markdown|json] [--formulas-only] [--cells-only]`
 
 Compare two workbooks and report differences. The first file comes from the global `-f`, the second from `-g/--file2`. Optional global `-s/--sheet` restricts the comparison to one sheet.
 
@@ -1735,32 +1870,108 @@ Compare two workbooks and report differences. The first file comes from the glob
 | `-g, --file2` | path | Yes | — | Second file to compare against |
 | `--format` | string | No | markdown | `markdown` (human) or `json` (stable schema) |
 | `--formulas-only` | flag | No | false | Compare formula cells by text alone, ignoring cached values (the rule before 0.22.0) |
+| `--cells-only` | flag | No | false | Compare cells, merges, comments and hyperlinks only: skip rows, columns, sheet properties, conditional formats, data validations, sheet order and defined names (the scope before sheet structure was compared) |
 
 **Exit codes**: `0` identical, `1` differences found, `3` error (unreadable file, sheet filter
 matching neither workbook, ...) — the error goes to stderr with a `code:` line (see
-[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)).
+[Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). Identical means every
+compared category is empty: a structure-only difference (a row height, a hidden column, a moved
+freeze pane, a retargeted name) is a difference and exits `1`; `--cells-only` restores exit `0`
+for it.
 
 **What is compared** (per sheet, refs in A1, row-major order):
 - **Changed cells** — value, formula text, cached formula value and resolved style (`styleChanged` boolean), each change tagged with its `kind`: `value` (a constant changed), `formula` (the text or record kind changed, or a constant became a formula), `cache` (same formula, a cached value that differs or is present on one side only — what a recalculation, a `--no-recalc` edit or a cache-stripping writer produces; 0.22.0) or `style` (only the formatting). `--formulas-only` ignores caches. Styles compare resolved formatting (style id lookup), so equal formatting under different ids is not a difference. Markdown renders a cache change as `B4: =SUM(B1:B3) cached 42.5 -> 43.5 [cache]` (`(none)` for a missing cache).
 - **Added / removed cells** — a cell with Empty value, default style, and no hyperlink counts as absent.
 - **Sheets added / removed** (by name).
 - **Merged ranges, comments, hyperlinks** — separate added/removed/changed deltas per sheet.
+- **Rows and columns** — effective `height` (rows) or `width` (columns), `hidden`, `outlineLevel`
+  and `collapsed`, plus the row/column default style as a `styleChanged` flag (resolved, like
+  cells). Consecutive indices with the same changes collapse into one run, written in Excel's
+  whole-row/column notation that `xl view` accepts: `5:5`, `5:200`, `C:C`, `K:XFD`.
+  - Sizes compare at 2 decimals (15, 15.0 and 15.004 are equal; 15.01 is not) in the unit the
+    file stores and `xl row --height` / `xl col --width` set: points for rows, the stored
+    `<col width>` for columns.
+  - The effective size is the explicit size, else the sheet default, else Excel's stock size:
+    15 pt rows and 9.140625-wide columns (the 64-pixel column Excel's UI shows as 8.43). A size is
+    compared only where one side states it, so a sheet-default change is reported once, as a sheet
+    property, never as a line per row; a row that states 15 against a sheet whose default became
+    20 is reported, because it really renders at a different height.
+  - `outlineLevel` absent equals `0`; a style id resolving to the default style equals no style.
+  - Columns compare per column: one `<col min="11" max="16384">` span and 16,374 single `<col>`
+    elements are the same thing.
+- **Sheet properties** (sheets in both books) — `defaultRowHeight` and `defaultColumnWidth`
+  (effective: an absent default equals the stock one, so a book and its Excel resave agree),
+  `freezePanes` (the anchor only; the scroll position is not compared) and `visibility`
+  (`visible`, `hidden`, `veryHidden`).
+- **Conditional formats and data validations** — added / removed / changed, keyed by sqref (ranges
+  sorted, so token order does not matter). A changed threshold, dropdown list or rule is a change;
+  Excel's sheet-wide renumbering of rule priorities, dxf ids and `xr:uid` revision GUIDs is not.
+  Relative rule precedence is compared across all blocks, including preserved rules: swapping
+  priorities between overlapping ranges is a change. Tied priorities retain document order.
+- **Sheet order** — the relative order of the sheets both books have (`A, B, C -> B, A, C`); a sheet
+  inserted or removed mid-book is already `sheetsAdded` / `sheetsRemoved`, not a reorder.
+- **Defined names** — added / removed / changed (formula text or the hidden flag), keyed by scope
+  and case-insensitive name; a sheet-scoped name follows its sheet by name across a reorder, and an
+  orphaned `localSheetId` is labelled `[localSheetId N]`.
+
+`-s` computes rows, columns, sheet properties, conditional formats and data validations for that
+sheet only, skips the sheet order, and compares only names scoped to that sheet (never
+workbook-scoped ones). `--formulas-only` changes only the formula-cache rule; structure is still
+compared.
+
+**Not compared** (UI state that changes on every open and save, or outside a model review):
+view state (zoom, gridlines, selection, scroll position, view mode, active sheet), tab colour,
+print setup (page setup, print area and titles, margins, header/footer), tables, autofilter (its
+range tracks the data; the rows a filter hides already show as `hidden` rows), drawings and
+charts, calculation settings (`calcPr`), `date1904`, theme, workbook default font, document
+properties, Excel's built-in `_xlnm.*` names and defined-name comments.
+
+Markdown adds, after the cell blocks, `Rows (n):` / `Columns (n):` lines such as
+`5:5: height 15 -> 30`, `7:9: hidden false -> true, outlineLevel 0 -> 1` and `12:12: [style]`,
+a `Sheet properties (n):` block (`freezePanes (none) -> B2`), the conditional-format and
+validation deltas, and — at the top — `Sheet order:` and `Names added|removed|changed (n):`. The
+Summary line gains `; N structure change(s)` only when there are any, so a report with no
+structural change reads exactly as before:
+
+```
+Comparing old.xlsx vs new.xlsx
+
+## Data
+
+Rows (1):
+  1:1: height 15 -> 30
+
+Columns (1):
+  A:A: width 9.14 -> 20
+
+Summary: 0 changed, 0 added, 0 removed cell(s) across 1 sheet(s); 2 structure change(s)
+```
 
 ```bash
 xl -f old.xlsx diff -g new.xlsx                      # Markdown report
 xl -f old.xlsx -s Sheet1 diff -g new.xlsx            # One sheet only
 xl -f old.xlsx diff -g new.xlsx --format json        # Machine-readable
 xl -f old.xlsx diff -g new.xlsx --formulas-only      # Ignore cached values
+xl -f old.xlsx diff -g new.xlsx --cells-only         # Cells only: skip sheet structure
 xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
+xl -f old.xlsx diff -g new.xlsx --format json | jq '.sheets[].rows'   # Row runs
 xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
+xl -f old.xlsx diff -g recalc.xlsx --cells-only && echo "recalc changed no cell"
 ```
 
-**JSON schema** (stable; `sheets` lists only sheets with differences):
+**JSON schema** (stable; every key is always present — empty arrays, `sheetOrder` `null`, also
+under `--cells-only`; `sheets` lists only sheets with differences):
 
 ```json
 {
   "identical": false,
   "sheetsAdded": [], "sheetsRemoved": [],
+  "sheetOrder": {"before": ["Inputs", "Model"], "after": ["Model", "Inputs"]},
+  "namesAdded":   [{"name": "Rate", "scope": null, "formula": "Model!$B$1", "hidden": false}],
+  "namesRemoved": [],
+  "namesChanged": [{"name": "LocalRate", "scope": "Model",
+                    "before": {"formula": "Model!$C$1", "hidden": false},
+                    "after":  {"formula": "Model!$C$2", "hidden": false}}],
   "sheets": [{
     "name": "Sheet1",
     "added":   [{"ref": "D5", "value": "New", "formula": null}],
@@ -1777,12 +1988,44 @@ xl -f old.xlsx diff -g new.xlsx && echo "unchanged"  # Exit-code driven
                  "kind": "cache"}],
     "mergesAdded": [], "mergesRemoved": [],
     "commentsAdded": [], "commentsRemoved": [], "commentsChanged": [],
-    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": []
+    "hyperlinksAdded": [], "hyperlinksRemoved": [], "hyperlinksChanged": [],
+    "rows": [{"ref": "5:5",
+              "changes": [{"property": "height", "before": 15, "after": 30}],
+              "styleChanged": false}],
+    "columns": [{"ref": "K:XFD",
+                 "changes": [{"property": "hidden", "before": false, "after": true}],
+                 "styleChanged": false}],
+    "properties": [{"property": "freezePanes", "before": null, "after": "B2"},
+                   {"property": "visibility", "before": "visible", "after": "hidden"}],
+    "conditionalFormatsAdded": ["H2:H5 J2:J5"], "conditionalFormatsRemoved": [],
+    "conditionalFormatsChanged": [],
+    "dataValidationsAdded": [], "dataValidationsRemoved": [], "dataValidationsChanged": ["B2:B9"]
   }]
 }
 ```
 
-**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level filter yet.
+`sheetOrder`, `namesAdded`, `namesRemoved` and `namesChanged` sit before `sheets`; the nine
+per-sheet structure keys follow `hyperlinksChanged`; the fields that existed before are unchanged.
+Property values are typed: `height`, `width`, `defaultRowHeight` and `defaultColumnWidth` are
+numbers (2 decimals), `hidden` and `collapsed` booleans, `outlineLevel` an integer,
+`freezePanes` an anchor string or `null`, `visibility` a string. Property names inside `rows` /
+`columns` appear in the order `height`/`width`, `hidden`, `outlineLevel`, `collapsed`; sheet
+properties in the order `defaultRowHeight`, `defaultColumnWidth`, `freezePanes`, `visibility`.
+
+**Limitations**: both workbooks load in memory (`--max-size` applies to each); no range-level
+filter yet. Structure is index-aligned, like cells: an inserted row reports every later row that
+carries its own properties. A renamed sheet is removed plus added (its scoped names follow it). The
+stock column width assumes Excel's Calibri 11 Normal font; in a book without `defaultColWidth`
+whose base font differs (Mac Excel's Calibri 12), a column that gains or loses an explicit
+default-width `<col>` can show a width line. LibreOffice writes a height on every row, so an LO
+resave compared with an Excel original lists every row whose height it restated differently.
+Conditional formats and data validations report added / removed / changed per sqref, not what
+changed inside a block; `x14` extension formats are not compared. The same conditional format or
+validation held typed on one side and preserved verbatim on the other reports as changed: an
+Excel-saved validation carrying `xr:uid` (which xl keeps verbatim) against the same validation
+written by openpyxl or LibreOffice, for example. A conditional format preserved at block level
+keeps its `dxfId`, so a renumbered dxfs table flags it; an sqref that does not parse compares as
+raw text, token order included.
 
 ---
 
@@ -2005,16 +2248,39 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 | exit | meaning | examples | file written? |
 |---|---|---|---|
 | `0` | ok | | as requested |
-| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | `-o`: yes; `-i`: no |
+| `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | no (a `--strict` gate: `-o` not written, an existing file and `-i`'s input left byte-identical) |
 | `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:
 
-- `view --eval --strict` whose evaluation fails (a circular reference, an unsupported function) is
-  a **gate**, not a failure: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on
-  stdout — the same code the write verbs' `--strict` uses. Without `--strict` the view renders the
-  cached values and the failure is a stderr warning, exit `0`.
+- `view --eval` evaluates **cell by cell**: the window's formulas and their same-sheet precedents
+  evaluate in dependency order (a formula precedent on another sheet is read from its cached value,
+  or computed when it has none — run `xl recalc` to refresh a whole book), and a formula that
+  cannot evaluate (a circular reference inside that closure,
+  a missing sheet, an unsupported function) no longer sinks the render. Every other formula shows
+  its live value; the failing cell and the formulas that depend on it — which are not evaluated,
+  so no stale cache is mixed in — show exactly what the file holds (the cached value, or the
+  formula text / JSON `value: null` when uncached). One stderr warning names them, located at the
+  first failing cell, and the exit is `0`:
+  `Warning[EVAL_FAILED]: Formula evaluation failed: Sheet1!F2: Formula error in 'Missing!A1+1':
+  …; 1 dependent formula not evaluated (G2); those cells show the file's values` (the first three
+  failures, `… and N more`, then the blocked dependents). With `--strict`, the markdown, csv,
+  json, html and svg renders turn an evaluation failure into a **gate** rather than a failure
+  exit: exit `1` with `code: RECALC_GATE` on stderr and nothing rendered on stdout — the same
+  code the write verbs' `--strict` uses. The gate's message ends `; without --strict those cells
+  show the file's values` and its hint reads `drop --strict to render the other cells live and
+  see the failure as a warning`. The raster formats (png, jpeg, webp, pdf) never gate: under
+  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle or a
+  failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
+  `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
+  only failures in the window's closure are reported. For the pictures (html, svg and the raster
+  formats) the closure also covers what the window's conditional formatting reads — a
+  top/bottom, scale or bar rule's whole range, the cells a formula rule reads — since the paint
+  shows those values too. An internal evaluator
+  defect in one cell (a throwable the evaluator should never raise) is contained the same way, as
+  `Evaluation threw <class>: … at <cell> — an internal evaluator defect, not an Excel error value;
+  please report it with the formula`, never an `INTERNAL` exit.
 - A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
   `names`, `view`, `cell`, `diff`, `lint` alike. A file that does not exist is the one message
   `No such file: <path>` with the hint `check the path; the previous write may have failed`
@@ -2054,7 +2320,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict`, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `READER_WARNING`); `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys
@@ -2084,7 +2350,7 @@ otherwise:
   [`xl schema`](#xl-schema---json)); `describe` → `{sheets, definedNames, date1904}` (`--full`
   adds per-sheet counts and `calcPr`); `audit` → `{clean, findings, errorCells,
   uncachedFormulas, unparseable, volatile, dynamic, cycles, externalRefs, unresolvedReaders,
-  calcPr}`; `deps` → `{ref, formula, value, direction, depth, precedents, dependents}`.
+  calcPr}`; `deps` → `{ref, formula, value, direction, depth, expand, precedents, dependents}`.
 - The record-based reads are typed too (since 0.21.0): `cell` → the cell record with `style`,
   `comment`, `hyperlink`, `dependencies`, `dependents`; `search` → `{pattern, sheets, count,
   total, totalExact, matches}`; `stats` → `{sheet, range, count, sum, min, max, mean}` — every
@@ -2092,7 +2358,7 @@ otherwise:
 - Every other verb (`view` in a text format, and all writes) yields
   `{"text": <what text mode prints>, "saved": <path or null>, "written": <bool>}`. `saved` is the
   user-visible output path once the write was committed; it is `null` (and `written` is `false`)
-  when nothing was — a read, or an `-i` run whose `--strict` gate discarded the staged file.
+  when nothing was — a read, or a run whose `--strict` gate withheld the staged file (`-o` or `-i`).
 
 **Findings and gates are `ok: false` with the report kept.** `diff` with differences, `lint` with
 findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that fails its gate exit

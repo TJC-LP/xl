@@ -751,8 +751,9 @@ class BatchRecalcSpec extends FunSuite:
       r1 = Some(ref"A1"),
       r2 = None
     )
-    // NOT over a bare range is the host-failure fixture (GH-564: AND(range) now folds like Excel)
-    List("INDIRECT(\"B1\")+1", "NOT(B1:B1)").foreach { expression =>
+    // a reference to a sheet the book lacks is the host-failure fixture (GH-564: AND(range) folds
+    // like Excel, and a plain cell reads NOT(B1:B1) as NOT(B1), as Excel does)
+    List("INDIRECT(\"B1\")+1", "NOT(B1)+Missing!A1").foreach { expression =>
       val sheet = Sheet("Data")
         .put(ref"A1" -> 0)
         .put(ref"B1", CellValue.Formula("A1*10", Some(CellValue.Number(0))))
@@ -2152,7 +2153,10 @@ class BatchRecalcSpec extends FunSuite:
       case Left(other) => fail(s"expected StrictFailure, got $other")
       case Right(summary) => fail(s"expected StrictFailure, got a clean summary: $summary")
 
-  test("GH-496: --strict promotes recalc's formula errors to a failure (file still written)") {
+  test(
+    "GH-496: --strict promotes recalc's formula errors to a failure (the verb writes its staging " +
+      "output; the runner withholds it, #677)"
+  ) {
     val wb = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
     val lenientOut = tempXlsx()
     val strictOut = tempXlsx()
@@ -2165,9 +2169,64 @@ class BatchRecalcSpec extends FunSuite:
     assert(failed.contains("Circular reference"), s"the summary must survive verbatim: $failed")
     assert(failed.contains("STRICT FAILURE (--strict)"), s"summary: $failed")
     assert(failed.contains("1 formula evaluation error(s)"), s"summary: $failed")
-    assert(java.nio.file.Files.size(strictOut) > 0L, "the output file is written either way")
+    assert(
+      java.nio.file.Files.size(strictOut) > 0L,
+      "the verb writes its output path (the CLI's staging file) either way"
+    )
     Files.deleteIfExists(lenientOut)
     Files.deleteIfExists(strictOut)
+  }
+
+  test(
+    "#677: --strict decides only the verdict — the gated write's bytes equal the advisory write's"
+  ) {
+    // Why no opt-in keeps the gated -o file: the same command without --strict writes it
+    val cyclic = Workbook(Sheet("Data").put(ref"A1", CellValue.Formula("A1+1", None)))
+    val recalcAdvisory = tempXlsx()
+    val recalcStrict = tempXlsx()
+    val book =
+      Workbook(Sheet("Data").put(ref"A1" -> 1).put(ref"C1", CellValue.Formula("A1*2", None)))
+    val ops = writeOps("""[{"op":"putf","ref":"B1","formula":"=NoSuchName*2"}]""")
+    val batchAdvisory = tempXlsx()
+    val batchStrict = tempXlsx()
+    try
+      WriteCommands.recalc(cyclic, recalcAdvisory, config).unsafeRunSync()
+      strictFailure(WriteCommands.recalc(cyclic, recalcStrict, config, policy = strictPolicy))
+      assert(
+        java.util.Arrays
+          .equals(Files.readAllBytes(recalcAdvisory), Files.readAllBytes(recalcStrict)),
+        "recalc: --strict must not change what is written"
+      )
+      WriteCommands
+        .batch(
+          book,
+          book.sheets.headOption,
+          ops.toString,
+          batchAdvisory,
+          config,
+          warn = _ => IO.unit
+        )
+        .unsafeRunSync()
+      strictFailure(
+        WriteCommands
+          .batch(
+            book,
+            book.sheets.headOption,
+            ops.toString,
+            batchStrict,
+            config,
+            false,
+            strictPolicy
+          )
+      )
+      assert(
+        java.util.Arrays.equals(Files.readAllBytes(batchAdvisory), Files.readAllBytes(batchStrict)),
+        "batch: --strict must not change what is written"
+      )
+    finally
+      List(recalcAdvisory, recalcStrict, batchAdvisory, batchStrict, ops).foreach(
+        Files.deleteIfExists
+      )
   }
 
   test("GH-496: --strict promotes the GH-454 non-convergence WARNING") {

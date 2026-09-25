@@ -46,7 +46,8 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    `xl -f file describe`.
 3. **Reads need `-f`; writes need `-o` (a new file) or `-i` (in place).** A write with neither is
    `OUTPUT_REQUIRED`, exit 2, before anything is read. Writes are atomic: the output appears only
-   when the whole command succeeded. **The file is never positional**: the first non-flag token
+   when the command exits 0 — a failure (2/3) or a failed `--strict` gate (1) leaves `-o` unwritten
+   and `-i`'s input byte-identical. **The file is never positional**: the first non-flag token
    is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
    `UNKNOWN_VERB` (exit 2) — a verb's positionals are its own (the range, the ref, the formula,
    `copy`'s source and target, `delete-rows`' row and count).
@@ -67,7 +68,7 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    | exit | meaning | file written? |
    |---|---|---|
    | `0` | ok | as requested |
-   | `1` | completed with findings or a failed gate (`diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict`) — **never a failure** | `-o`: yes; `-i`: no |
+   | `1` | completed with findings or a failed gate (`diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict`) — **never a failure** | no |
    | `2` | usage — the command line is wrong (unknown verb, `-o` missing, `-i` with `-o`, unsupported under `--stream`) | no |
    | `3` | failed — the operation could not complete (sheet not found, bad ref, formula error, unreadable file) | no |
 
@@ -94,13 +95,13 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 |------|------|-------|
 | Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
 | "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI |
-| Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all` |
-| One cell: value, style, comment, direct deps | `cell <ref>` | |
+| Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all`, `--expand`; a range precedent is ONE node (`Data!A:A  range, 9357 occupied cells (12 formulas)`), `--expand` lists its cells |
+| One cell: value, style, comment, direct deps | `cell <ref>` | `Dependencies` lists a range as one entry (`B1:B3`, `Data!A:A`) |
 | Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
 | Find text or a number | `search <regex>` | all sheets unless `-s`; `--limit` stops the scan (`total` is then a lower bound, `totalExact: false`); `--total` for the exact count |
 | Rows matching a predicate | `filter --where "B > 100 AND D = TRUE"` | `--header` uses row 1 names; `--columns A,C:E` |
 | Used range, numeric summary | `bounds`, `stats <range>` | |
-| What-if without writing | `eval "=…" --with "A1=5"`, `evala "=…"` (arrays; `--at B2` anchors the displayed spill at B2) | no `-f` for constants. Both are reads: `evala --at` writes nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — to land an array, `putf` it |
+| What-if without writing | `eval "=…" --with "A1=5"`, `evala "=…"` (arrays; `--at B2` anchors the displayed result at B2) | no `-f` for constants. Both are reads: `evala --at` writes nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — `putf` writes a plain formula, which Excel evaluates with implicit intersection (see `reference/FORMULAS.md`; use SUMPRODUCT for array math in one cell, with conditions as `--(r>0)` factors rather than IF) |
 | Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring |
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
@@ -108,8 +109,8 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet. `name add\|rm` are workbook-scoped unless `-s` names the scope sheet: `-s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'` sets that sheet's print area; names match case-insensitively (`case` replaces `CASE`) |
 | Deliverable finish | `sheet-view`, `tab-color`, `page-setup`, `header-footer`, `autofilter`, `freeze`, `cf add`, `chart add`, `add-image` | every one but `add-image` has a batch twin |
 | Import data | `import <csv>`, `import-md <table.md\|->` | `--new-sheet`, type detection |
-| Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 on formula errors |
-| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings; `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
+| Refresh cached values | `recalc` (`--tables`, `--parallel n`) | `--strict` exits 1 and writes nothing on formula errors |
+| Compare, validate before sending | `diff -g other.xlsx`, `lint` | exit 1 = differences / repair findings. `diff` covers cells plus row/column sizes, visibility and outline, sheet properties (defaults, freeze panes, visibility), conditional formats, validations, sheet order and defined names; `--cells-only` compares cells only. `lint --strict` fails on hygiene findings (shared-string orphans, unreferenced parts) too |
 | New workbook | `new out.xlsx --sheet Data --sheet Summary` | |
 | What can the binary do? | `schema`, `functions`, `rasterizers`, `batch --schema` | no `-f` |
 
@@ -212,6 +213,11 @@ librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/T
 on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
 (ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`
 is the whole-sheet PDF fallback. Add `--eval` when formula cells should show computed values.
+The pictures (`html`, `svg`, `png`, `jpeg`, `webp`, `pdf`) paint conditional formatting as Excel
+does — cell-value, formula, text and top/bottom rules, colour scales, 2007 data bars, Stop If True
+— from the cached values, or live ones with `--eval` (#497); icon sets, above/below average,
+duplicate/unique values and Excel 2010+ data bars are not painted yet and are named in a
+`CF_NOT_RENDERED` warning, which never changes the exit code.
 
 ```bash
 xl -f data.xlsx -s Sheet1 view A1:F20 --format png --raster-output /tmp/sheet.png --show-labels --eval
@@ -262,8 +268,10 @@ xl -Xmx32g -f huge.xlsx --max-size 0 audit          # native image: -Xmx anywher
 ### Cache posture and strict pipelines
 
 Writes recalculate the edit's dependency cone and report formula errors advisorily (exit 0).
-`--strict` turns those reports into exit 1 (`RECALC_GATE`): with `-o` the file is still written,
-with `-i` the input is left untouched. `--no-recalc` (`--preserve-caches`) applies the edit and
+`--strict` turns those reports into exit 1 (`RECALC_GATE`) and writes nothing: `-o` is not created
+(an existing file there is left as it was), `-i` leaves the input untouched; the summary still
+names the failing cells. To keep the file, run the same command without `--strict` (identical
+bytes, exit 0). `--no-recalc` (`--preserve-caches`) applies the edit and
 recalculates nothing — for books whose numbers come from another engine; structural edits then
 keep only the caches the edit provably left unchanged, write every formula it could have changed
 without a `<v>` (the summary counts both), and mark the workbook `fullCalcOnLoad`: Excel recomputes
@@ -297,7 +305,9 @@ interiors).
 - **Negative numbers** look like flags: `put A1 --value "-100"` or `put A1 -- -5`. After `--`
   every token is data, so `search -- --json` searches for the text `--json`.
 - **`--strict` after `view`** is view's `--eval` gate (exit 1 on evaluation failure, nothing
-  rendered); everywhere else it is the write gate.
+  rendered; png/jpeg/webp/pdf never gate, they export and warn); everywhere else it is the write
+  gate. Without it `--eval` degrades per cell: cells that cannot evaluate (and their dependents)
+  show the file's values, one `EVAL_FAILED` warning names them, the rest is live.
 - **PNG/PDF on the native binary needs an external rasterizer** — `xl rasterizers` tells you.
   `RASTERIZER_UNAVAILABLE` (exit 3) while a backend shows `available` means that backend failed
   to run: retry with `--rasterizer imagemagick` (png/jpeg/webp) and report the stderr.

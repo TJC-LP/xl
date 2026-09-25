@@ -394,24 +394,63 @@ class ErrorContractSpec extends CatsEffectSuite:
       assert(advisory.stdout.contains("| A"), advisory.stdout)
   }
 
-  test("strict gate still exits 1 with the summary on stdout; -o still writes, -i does not") {
+  test("strict gate exits 1 with the summary on stdout and writes nothing, -o or -i (#677)") {
     val out = fixtures().resolve("strict-out.xlsx")
     val input = fixtures().resolve("circular.xlsx")
     for
       before <- IO.blocking(Files.readAllBytes(input))
       viaOutput <- CliHarness.run("-f", input.toString, "-o", out.toString, "--strict", "recalc")
-      written <- IO.blocking(Files.size(out))
+      created <- IO.blocking(Files.exists(out))
       viaInPlace <- CliHarness.run("-f", input.toString, "-i", "--strict", "recalc")
       after <- IO.blocking(Files.readAllBytes(input))
     yield
       assertEquals(viaOutput.exit, 1, viaOutput.stderr)
-      assert(viaOutput.stdout.contains(s"Saved: $out"), viaOutput.stdout)
+      assert(
+        viaOutput.stdout.contains(s"NOT saved (--strict failure): nothing written to $out"),
+        viaOutput.stdout
+      )
+      assert(viaOutput.stdout.contains("STRICT FAILURE (--strict)"), viaOutput.stdout)
+      assert(!viaOutput.stdout.contains("Saved:"), viaOutput.stdout)
       assertEquals(viaOutput.stderr, "", "a gate is not an error")
-      assert(written > 0L, "-o still writes on a strict failure")
+      assert(!created, "a failed --strict gate must not create the -o file")
       assertEquals(viaInPlace.exit, 1, viaInPlace.stderr)
       assert(viaInPlace.stdout.contains("NOT saved (--strict failure)"), viaInPlace.stdout)
       assertEquals(viaInPlace.stderr, "")
       assert(java.util.Arrays.equals(before, after), "-i leaves the input untouched")
+  }
+
+  test(
+    "--stream --strict recalc (backend-only) withholds -o and unsays the streaming save (#677)"
+  ) {
+    val out = fixtures().resolve("strict-stream-out.xlsx")
+    CliHarness
+      .run("-f", file("circular.xlsx"), "-o", out.toString, "--stream", "--strict", "recalc")
+      .map { run =>
+        assertEquals(run.exit, 1, run.stderr)
+        assert(run.stderr.contains("Warning[STREAM_BACKEND_ONLY]"), run.stderr)
+        assert(
+          run.stdout.contains(s"NOT saved (--strict failure): nothing written to $out"),
+          run.stdout
+        )
+        assert(!run.stdout.contains("Saved (streaming):"), run.stdout)
+        assert(!Files.exists(out), "a failed --strict gate must not create the -o file")
+      }
+  }
+
+  test("-o equal to -f under a failed gate leaves the input byte-identical (#677)") {
+    val same = fixtures().resolve("strict-same.xlsx")
+    for
+      _ <- IO.blocking(Files.copy(fixtures().resolve("circular.xlsx"), same))
+      before <- IO.blocking(Files.readAllBytes(same))
+      run <- CliHarness.run("-f", same.toString, "-o", same.toString, "--strict", "recalc")
+      after <- IO.blocking(Files.readAllBytes(same))
+    yield
+      assertEquals(run.exit, 1, run.stderr)
+      assert(java.util.Arrays.equals(before, after), "the input must stay byte-identical")
+      assert(
+        run.stdout.contains(s"NOT saved (--strict failure): $same left untouched"),
+        run.stdout
+      )
   }
 
   test(

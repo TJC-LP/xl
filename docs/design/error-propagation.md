@@ -32,6 +32,17 @@ absent from the boundary table so infrastructure failures never launder into `#V
 `DivByZero` promotes because every raise site is a genuine Excel `#DIV/0!` and scalar `=1/0`
 must agree with the array path's element carriage.
 
+A lifted call (array lifting, `FunctionFlags.lift`) sits between the two:
+`ArrayLifting.elementResult` is the boundary table plus `TypeMismatch/CodecFailed → #VALUE!` (an
+element that failed to coerce is Excel's `#VALUE!`), and `EvalFailed`, `RefError` and
+`CircularRef` fail the whole call — each element is a whole function call, so a host failure in
+one (a missing lookup sheet) is the call's failure, never a `#VALUE!` element. Keep it the strict
+table plus the coercion arms; it must not drift toward `toCellError`. A function's own domain
+errors are therefore raised as error values at the source, never as `EvalFailed`: FIND's miss and
+LEFT/RIGHT/MID/SUBSTITUTE out of their domain are `ErrorValue(#VALUE!)`, a CEILING/FLOOR/MROUND
+sign mismatch and a non-finite POWER/EXP/`^` are `#NUM!`, `0^-1` is `#DIV/0!` — so they demote per
+element like any Excel error, and IFERROR/ISERROR see each one.
+
 ## Promotion sites (exhaustive)
 
 1. `SheetEvaluator.evaluateFormulaWith` — funnels every `evaluateFormula` overload,
@@ -50,7 +61,15 @@ host failures keep the loud `LET binding 'x': …` wrap.
 ## Where ErrorValue is raised
 
 - `ScalarCoercion.coerce` Error arm — every typed argument position, IF/IFS scalar conditions,
-  `toIntArg`, LET/`Coerced` positions, and the scalar-entry top-left collapse.
+  `toIntArg`, LET/`Coerced` positions, and the scalar-entry top-left collapse of an array value.
+- `Evaluator.implicitIntersection` — a plain cell's reference in a value position that the
+  formula's row or column does not cross (and `@`, GH-604) is `#VALUE!`, a value IFERROR and
+  ISERROR see; an aggregate given non-numeric text as a value (`SUM("x")`, `MIN("")`) raises
+  `#VALUE!` too, as Excel does for a typed argument.
+- `Aggregator` finalizers — STDEV and VAR over fewer than two values, STDEVP and VARP over none,
+  are `#DIV/0!` (a plain cell's `STDEV(A1:A10*1)` sees one intersected value).
+- OFFSET's base — a computed base that denotes no reference is `#VALUE!`; one that computed an
+  error value (`INDIRECT("nowhere")`'s `#REF!`) passes it on.
 - `ArrayArithmetic.compareCellValues` error arms (left operand first) — scalar `=1<#REF!`.
 - The scalar equality fast-path pre-check — `cellValueEquals` itself stays total fold-to-false
   (CriteriaMatcher and the lookups depend on error cells never matching).

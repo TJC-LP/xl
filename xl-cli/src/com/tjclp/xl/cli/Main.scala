@@ -85,7 +85,8 @@ import com.tjclp.xl.cli.output.Format
  *     structural verbs keep only the caches the edit provably left unchanged, leave the rest
  *     uncached and mark the book `fullCalcOnLoad` (GH-509, see [[WritePolicy]])
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
- *     errors, non-convergence, or data-table seed warnings
+ *     errors, non-convergence, or data-table seed warnings; the output is then withheld, `-o` and
+ *     `-i` alike (#677)
  *   - `--json` — every verb (ADR-017 §2.4): print the result, success or failure, as one JSON
  *     envelope `{ok, exitCode, verb, version, data, warnings, error}` on stdout; `--format json`
  *     payloads ride inside it unchanged
@@ -255,7 +256,7 @@ object Main extends IOApp:
     Opts
       .flag(
         "strict",
-        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); with -o the output is written, with -i a strict failure leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only)."
+        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only)."
       )
       .orFalse
 
@@ -625,12 +626,24 @@ COMPARES (per sheet, refs in A1):
   - Added / removed cells
   - Sheets added / removed
   - Merged-range, comment, and hyperlink deltas
+  - Rows and columns: height / width, hidden, outlineLevel, collapsed, default style
+  - Sheet properties: defaultRowHeight, defaultColumnWidth, freezePanes, visibility
+  - Conditional formats and data validations, added / removed / changed by sqref
+  - Sheet order (of the sheets both books have) and defined names
 
 NOTES:
   - A formula cell whose text is unchanged but whose cached value differs, or is present on
     one side only, is a difference of kind "cache": what a recalculation, a --no-recalc edit
     or a cache-stripping writer produces. --formulas-only ignores caches (text-only rule).
   - Styles compare RESOLVED formatting, not raw style ids
+  - Sizes compare at 2 decimals in stored units (row points, <col width>): the explicit size,
+    else the sheet default, else Excel's stock 15pt row / 9.140625 column. A default change is
+    one sheet-property line, never a line per row
+  - Consecutive rows or columns with the same change collapse into one run: 5:200, K:XFD
+  - --cells-only compares cells, merges, comments and hyperlinks only, skipping all structure
+  - Not compared: view state (zoom, selection, scroll), tab colour, print setup, tables,
+    autofilter, drawings and charts, calculation settings, theme, document properties,
+    built-in _xlnm.* names
   - Both files load in memory (--max-size applies to each)
 
 EXIT CODES (diff-tool convention):
@@ -644,7 +657,9 @@ EXAMPLES:
   xl -f v1.xlsx diff -g v2.xlsx
   xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[0].changed'
   xl -f model.xlsx diff -g recalc.xlsx --format json | jq '[.sheets[].changed[] | select(.kind == "cache")]'
+  xl -f v1.xlsx diff -g v2.xlsx --format json | jq '.sheets[].rows'
   xl -f v1.xlsx diff -g v2.xlsx --formulas-only         # text-only formula comparison
+  xl -f v1.xlsx diff -g v2.xlsx --cells-only            # cells only: skip sheet structure
   xl -f v1.xlsx diff -g v2.xlsx && echo "no changes\""""
 
   // --- Diff command (GH-137) ---
@@ -672,9 +687,19 @@ EXAMPLES:
       )
       .orFalse
 
+  private val cellsOnlyOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "cells-only",
+        "Compare cells only (values, formulas, caches, styles) plus merges, comments and " +
+          "hyperlinks: skip rows, columns, sheet properties, conditional formats, data " +
+          "validations, sheet order and defined names"
+      )
+      .orFalse
+
   val diffCmd: Opts[CliCommand] =
     Opts.subcommand("diff", diffHelp) {
-      (file2Opt, diffFormatOpt, formulasOnlyOpt).mapN(CliCommand.Diff.apply)
+      (file2Opt, diffFormatOpt, formulasOnlyOpt, cellsOnlyOpt).mapN(CliCommand.Diff.apply)
     }
 
   // --- Lint command (GH-397) ---
@@ -1105,14 +1130,19 @@ USAGE:
 
   private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
 
-Precedents are the cells the formula reads (single refs exactly, ranges as their occupied cells);
-dependents are the formulas that read the cell, by name or through a range that contains it.
-Each node carries its depth, formula and value. The ref follows the sheet rule: a qualified ref
-('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a single-sheet book.
+Precedents are what the formula reads, as Excel's Trace Precedents draws it: each cell it names,
+and each range as ONE node with its counts, whatever its size:
+  1  Data!A:A  range, 9357 occupied cells (12 formulas)
+The walk continues through the formulas inside a range; --expand lists a range's occupied cells
+one by one instead. Dependents are the formulas that read the cell, by name or through a range
+that contains it. Each cell node carries its depth, formula and value. The ref follows the sheet
+rule: a qualified ref ('Q1 Data'!B4) names the sheet, else -s, else the only sheet of a
+single-sheet book.
 
 USAGE:
   xl -f model.xlsx deps Summary!B4                          # both directions, one hop
   xl -f model.xlsx -s Data deps B4 --direction precedents --depth 3
+  xl -f model.xlsx deps Summary!B4 --direction precedents --expand   # each range's cells
   xl -f model.xlsx --json deps Summary!B4 --direction dependents --depth all
 """
 
@@ -1148,9 +1178,17 @@ USAGE:
       }
       .withDefault(Depth.Hops(1))
 
+  private val expandOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "expand",
+        "List each precedent range's occupied cells one by one instead of one node per range"
+      )
+      .orFalse
+
   val depsCmd: Opts[CliCommand] =
     Opts.subcommand("deps", depsHelp) {
-      (refArg, directionOpt, depthOpt).mapN(CliCommand.Deps.apply)
+      (refArg, directionOpt, depthOpt, expandOpt).mapN(CliCommand.Deps.apply)
     }
 
   // --- Analyze ---
@@ -1173,7 +1211,9 @@ USAGE:
     }
 
   private val atOpt =
-    Opts.option[String]("at", "Target cell for array spill (default: virtual cell)").orNone
+    Opts
+      .option[String]("at", "Cell the displayed result is anchored at (nothing is written)")
+      .orNone
 
   val evalArrayCmd: Opts[CliCommand] =
     Opts.subcommand("evala", "Evaluate array formula and display result grid") {
@@ -1439,7 +1479,7 @@ openpyxl data_only=True, previewers, Excel before a manual recalc).
 Formula errors (e.g. circular references) are data conditions, not tool
 failures: affected cells are left uncached, the file is still written, the
 errors are listed in the summary, and the exit code is 0. Pass the global
---strict flag (before the verb) to exit 1 instead when the summary carries
+--strict flag to exit 1 and write nothing instead when the summary carries
 formula errors, iterative non-convergence, or --tables seed warnings.
 
 Data-table records (<f t="dataTable">) keep their PINNED caches by default —
@@ -1936,10 +1976,9 @@ EXAMPLES:
    * GH-496: a [[StrictFailure]] is not a crash — the write completed and its summary is the
    * payload, verbatim (counts, failing refs, convergence verdict, plus the strict reason); the
    * outcome is a `RECALC_GATE` signal (exit 1) whose one-line reason is the summary's
-   * `STRICT FAILURE` line. With `-i` that non-success code means the temp file is discarded and the
-   * input is left untouched, which is the atomic reading of "this book did not pass the gate" — so
-   * the summary's `Saved:` line is rewritten to say exactly that. With `-o` the completed temp is
-   * still committed and `Saved:` stands.
+   * `STRICT FAILURE` line. A StrictFailure's staged output is never published, with `-o` or `-i`
+   * (#677: [[contract.Outcome.publishesOutput]]), which is the atomic reading of "this book did not
+   * pass the gate" — so the summary's `Saved:` line is replaced by what is true.
    *
    * Any other failure yields an outcome with NO payload and the exit code its [[contract.CliError]]
    * selects: 2 for a wrong command line, 3 for an operation that could not complete. An un-migrated
@@ -1956,7 +1995,6 @@ EXAMPLES:
     stream: Boolean,
     cmd: CliCommand,
     policy: WritePolicy = WritePolicy.default,
-    strictFailureDiscardsOutput: Boolean = false,
     io: CliIO,
     mode: OutputMode = OutputMode.Text
   ): IO[Outcome] =
@@ -1979,10 +2017,12 @@ EXAMPLES:
             case Right(payload) =>
               Outcome.ok(cmd.verb, relocate(payload, outputOpt, displayOpt), collected)
             case Left(strict: StrictFailure) =>
-              val rendered = renderWithTarget(strict.summary, outputOpt, displayOpt)
-              val summary =
-                if strictFailureDiscardsOutput then unsayTheSave(rendered, outputOpt, displayOpt)
-                else rendered
+              val summary = unsayTheSave(
+                renderWithTarget(strict.summary, outputOpt, displayOpt),
+                filePath,
+                outputOpt,
+                displayOpt
+              )
               Outcome.signal(
                 cmd.verb,
                 Payload.text(summary),
@@ -2031,22 +2071,26 @@ EXAMPLES:
       case streamed: Payload.Streamed => streamed // a read's table names no staging file
 
   /**
-   * GH-496: an in-place run whose exit code is non-success never commits its temp file, so the
+   * GH-496/#677: a staged run whose exit code is non-success never commits its temp file, so the
    * summary a write command already built ("...\nSaved: <path>") describes a save that did not
-   * happen. Replace that line with what is true. Only `-i` is affected: with `-o` the completed
-   * output is committed even though the gate selects exit code 1, so its `Saved:` line stays.
+   * happen. Replace that line with what is true: the input (`-i`, or `-o` naming `-f`) was left
+   * untouched, or nothing was written to the `-o` destination. An unstaged run (write path ==
+   * display path) really did write, so its text stands.
    */
   private def unsayTheSave(
     text: String,
+    input: Path,
     outputOpt: Option[Path],
     displayOpt: Option[Path]
   ): String =
     (outputOpt, displayOpt) match
       case (Some(write), Some(display)) if write != display =>
+        val fate =
+          if display == input then s"$display left untouched" else s"nothing written to $display"
         text.linesIterator
           .map { line =>
             if line.startsWith("Saved: ") || line.startsWith("Saved (streaming): ") then
-              s"NOT saved (--strict failure): $display left untouched"
+              s"NOT saved (--strict failure): $fate"
             else line
           }
           .mkString("\n")
@@ -2577,6 +2621,7 @@ EXAMPLES:
     maxSizeOpt: Option[Long],
     format: DiffFormat,
     formulasOnly: Boolean = false,
+    cellsOnly: Boolean = false,
     io: CliIO = CliIO.system,
     mode: OutputMode = OutputMode.Text
   ): IO[ExitCode] =
@@ -2596,6 +2641,7 @@ EXAMPLES:
         readerConfig,
         format,
         formulasOnly,
+        cellsOnly,
         io,
         mode
       )
@@ -2610,6 +2656,7 @@ EXAMPLES:
     readerConfig: ReaderConfig,
     format: DiffFormat,
     formulasOnly: Boolean,
+    cellsOnly: Boolean,
     io: CliIO,
     mode: OutputMode
   ): IO[ExitCode] =
@@ -2622,7 +2669,7 @@ EXAMPLES:
       )
       wbA <- readWorkbook(excel, fileA, readerConfig)
       wbB <- readWorkbook(excel, fileB, readerConfig)
-      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter, formulasOnly) match
+      diff <- DiffCommands.computeDiff(wbA, wbB, sheetFilter, formulasOnly, cellsOnly) match
         case Right(d) => IO.pure(d)
         // The only refusal: a -s filter naming a sheet neither workbook has — SHEET_NOT_FOUND
         // with the nearest names from both books, keeping the diff's own message
@@ -2911,11 +2958,11 @@ EXAMPLES:
           payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
         yield payload
 
-      case CliCommand.Deps(refStr, direction, depth) =>
+      case CliCommand.Deps(refStr, direction, depth, expand) =>
         for
           wb <- readWorkbook(excel, filePath, readerConfig)
           sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, mode)
+          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, expand, mode)
         yield payload
 
       // Other commands: regular execution path
@@ -3650,11 +3697,11 @@ EXAMPLES:
       IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
     case CliCommand.Audit(_) =>
       IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
-    case CliCommand.Deps(_, _, _) =>
+    case CliCommand.Deps(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
 
     // Diff has its own runner (two input files, custom exit codes) — never reaches here
-    case CliCommand.Diff(_, _, _) =>
+    case CliCommand.Diff(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: diff is dispatched via runDiff"))
 
     // Lint has its own runner (raw-zip inspection, custom exit codes) — never reaches here
@@ -3696,8 +3743,9 @@ EXAMPLES:
    * same filesystem permits an atomic replacement on supporting providers.
    *
    * Cases:
-   *   - `-o` only: writes to a sibling temp and commits every complete output, including the file
-   *     intentionally produced by a strict-validation exit
+   *   - `-o` only: writes to a sibling temp and replaces the destination only when the run exits 0.
+   *     A failed `--strict` gate (exit 1) or a failure (2/3) leaves the destination byte-identical,
+   *     or absent if it did not exist (#677)
    *   - `-i` only: writes to a sibling temp file then atomically moves onto input. If the command
    *     exits with a non-success code OR throws, the temp is deleted and the original is untouched
    *   - Neither: passes `None` through (for read-only subcommands that don't need output)
@@ -3716,15 +3764,9 @@ EXAMPLES:
         val error =
           CliError.usage("--in-place (-i) and --output (-o) are mutually exclusive", None)
         emit(Outcome.failed(verb, error), mode, io)
-      case (Some(out), false) =>
-        runStagedOutput(out, ".xl-output-", io, mode, verb)(outcome => outcome.outputComplete)(
-          execute
-        )
+      case (Some(out), false) => runStagedOutput(out, ".xl-output-", io, mode, verb)(execute)
       case (None, false) => execute(None, None).flatMap(emit(_, mode, io))
-      case (None, true) =>
-        runStagedOutput(file, ".xl-inplace-", io, mode, verb)(outcome =>
-          outcome.outputComplete && outcome.exitCode == ExitCode.Success
-        )(execute)
+      case (None, true) => runStagedOutput(file, ".xl-inplace-", io, mode, verb)(execute)
 
   /**
    * Allocate a sibling staging path and register it with the JVM before handing it to a writer. A
@@ -3753,9 +3795,10 @@ EXAMPLES:
     )
 
   /**
-   * Run one command against a staging path and publish only an explicitly complete output. What the
-   * payload then says about the write (`saved`, `written`) is what this step actually did — a
-   * committed run names its target, a discarded one (an `-i` strict failure) says nothing was.
+   * Run one command against a staging path and publish only the complete output of a run that exits
+   * 0 ([[contract.Outcome.publishesOutput]]). What the payload then says about the write (`saved`,
+   * `written`) is what this step actually did — a committed run names its target, a withheld one (a
+   * failed `--strict` gate, `-o` or `-i`) says nothing was saved.
    *
    * Nothing escapes: a staging file that cannot be allocated or a commit that fails is an
    * `IO_WRITE` failure ([[classifyWrite]]) rendered like any other — no payload, exit 3, the run's
@@ -3768,15 +3811,13 @@ EXAMPLES:
     mode: OutputMode,
     verb: String
   )(
-    shouldCommit: Outcome => Boolean
-  )(
     execute: (Option[Path], Option[Path]) => IO[Outcome]
   ): IO[ExitCode] =
     stagedOutput(target, prefix)
       .use { tmp =>
         execute(Some(tmp), Some(target)).flatMap { outcome =>
           val commit: IO[Boolean] =
-            if shouldCommit(outcome) then
+            if outcome.publishesOutput then
               // A read-only command may accept the global -o flag but never touch its staging
               // file. An XLSX is necessarily non-empty, so do not replace a target with the
               // untouched file.

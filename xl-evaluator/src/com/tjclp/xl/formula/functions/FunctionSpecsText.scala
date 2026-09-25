@@ -10,7 +10,11 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 
 trait FunctionSpecsText extends FunctionSpecsBase:
   val concatenate: FunctionSpec[String] { type Args = TextList } =
-    FunctionSpec.simple[String, TextList]("CONCATENATE", Arity.atLeastOne) { (args, ctx) =>
+    FunctionSpec.simple[String, TextList](
+      "CONCATENATE",
+      Arity.atLeastOne,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       args.foldLeft[Either[EvalError, String]](Right("")) { (accEither, expr) =>
         for
           acc <- accEither
@@ -20,28 +24,34 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     }
 
   val left: FunctionSpec[String] { type Args = BinaryTextInt } =
-    FunctionSpec.simple[String, BinaryTextInt]("LEFT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, BinaryTextInt](
+      "LEFT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, nExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
         nValue <- ctx.evalExpr(nExpr)
         result <-
-          if nValue < 0 then
-            Left(EvalError.EvalFailed(s"LEFT: n must be non-negative, got $nValue"))
+          if nValue < 0 then Left(valueError(s"LEFT: n must be non-negative, got $nValue"))
           else if nValue >= text.length then Right(text)
           else Right(text.take(nValue))
       yield result
     }
 
   val right: FunctionSpec[String] { type Args = BinaryTextInt } =
-    FunctionSpec.simple[String, BinaryTextInt]("RIGHT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, BinaryTextInt](
+      "RIGHT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, nExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
         nValue <- ctx.evalExpr(nExpr)
         result <-
-          if nValue < 0 then
-            Left(EvalError.EvalFailed(s"RIGHT: n must be non-negative, got $nValue"))
+          if nValue < 0 then Left(valueError(s"RIGHT: n must be non-negative, got $nValue"))
           else if nValue >= text.length then Right(text)
           else Right(text.takeRight(nValue))
       yield result
@@ -51,23 +61,35 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryText](
       "LEN",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(text => BigDecimal(text.length))
     }
 
   val upper: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("UPPER", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "UPPER",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.toUpperCase)
     }
 
   val lower: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("LOWER", Arity.one) { (expr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "LOWER",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(_.toLowerCase)
     }
 
   val trim: FunctionSpec[String] { type Args = UnaryText } =
-    FunctionSpec.simple[String, UnaryText]("TRIM", Arity.one) { (textExpr, ctx) =>
+    FunctionSpec.simple[String, UnaryText](
+      "TRIM",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).map(trimAsciiSpaces)
     }
 
@@ -79,16 +101,19 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     s.split(' ').iterator.filter(_.nonEmpty).mkString(" ")
 
   val mid: FunctionSpec[String] { type Args = TextIntInt } =
-    FunctionSpec.simple[String, TextIntInt]("MID", Arity.three) { (args, ctx) =>
+    FunctionSpec.simple[String, TextIntInt](
+      "MID",
+      Arity.three,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, startExpr, lengthExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
         start <- ctx.evalExpr(startExpr)
         length <- ctx.evalExpr(lengthExpr)
         result <-
-          if start < 1 then Left(EvalError.EvalFailed(s"MID: start must be >= 1, got $start"))
-          else if length < 0 then
-            Left(EvalError.EvalFailed(s"MID: length must be >= 0, got $length"))
+          if start < 1 then Left(valueError(s"MID: start must be >= 1, got $start"))
+          else if length < 0 then Left(valueError(s"MID: length must be >= 0, got $length"))
           else if start > text.length then Right("")
           else
             val from = start - 1
@@ -101,7 +126,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, FindArgs](
       "FIND",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (findExpr, withinExpr, startOpt) = args
       for
@@ -109,16 +134,16 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         haystack <- ctx.evalExpr(withinExpr)
         start <- startOpt.fold[Either[EvalError, Int]](Right(1))(e => ctx.evalExpr(e))
         result <-
-          if start < 1 then Left(EvalError.EvalFailed(s"FIND: start must be >= 1, got $start"))
+          if start < 1 then Left(valueError(s"FIND: start must be >= 1, got $start"))
           else if start > haystack.length then
             // Excel: "If start_num is greater than the length of within_text,
             // FIND returns the #VALUE! error value." This applies to both empty
             // and non-empty needles — start past length is invalid regardless.
-            Left(EvalError.EvalFailed(s"FIND: start ($start) is past end of text"))
+            Left(valueError(s"FIND: start ($start) is past end of text"))
           else if needle.isEmpty then Right(BigDecimal(start))
           else
             val idx = haystack.indexOf(needle, start - 1)
-            if idx < 0 then Left(EvalError.EvalFailed(s"FIND: '$needle' not found in '$haystack'"))
+            if idx < 0 then Left(valueError(s"FIND: '$needle' not found in '$haystack'"))
             else Right(BigDecimal(idx + 1))
       yield result
     }
@@ -135,7 +160,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, FindArgs](
       "SEARCH",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (findExpr, withinExpr, startOpt) = args
       for
@@ -176,7 +201,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       Option.when(idx >= 0)(idx + 1)
 
   val substitute: FunctionSpec[String] { type Args = SubstituteArgs } =
-    FunctionSpec.simple[String, SubstituteArgs]("SUBSTITUTE", Arity.Range(3, 4)) { (args, ctx) =>
+    FunctionSpec.simple[String, SubstituteArgs](
+      "SUBSTITUTE",
+      Arity.Range(3, 4),
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (textExpr, oldExpr, newExpr, instExpr) = args
       for
         text <- ctx.evalExpr(textExpr)
@@ -198,7 +227,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
   ): Either[EvalError, String] =
     instOpt match
       case Some(n) if n < 1 =>
-        Left(EvalError.EvalFailed(s"SUBSTITUTE: instance must be >= 1, got $n"))
+        Left(valueError(s"SUBSTITUTE: instance must be >= 1, got $n"))
       case _ if oldS.isEmpty => Right(text)
       case Some(n) => Right(replaceNthOccurrence(text, oldS, newS, n))
       case None => Right(text.replace(oldS, newS))
@@ -219,10 +248,18 @@ trait FunctionSpecsText extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryText](
       "VALUE",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (textExpr, ctx) =>
       ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
     }
+
+  /**
+   * An argument outside a text function's domain (a negative length, a start before 1, a FIND miss,
+   * a SUBSTITUTE instance below 1) is Excel's `#VALUE!` — an error value IFERROR and ISERROR see,
+   * and a lifted call keeps per element — never a host failure.
+   */
+  private def valueError(message: String): EvalError =
+    EvalError.ErrorValue(CellError.Value, Some(message))
 
   /**
    * GH-476: unparseable VALUE input is an Excel error VALUE, not a host failure.
@@ -271,7 +308,11 @@ trait FunctionSpecsText extends FunctionSpecsBase:
             Left(unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
-    FunctionSpec.simple[String, TextArgs]("TEXT", Arity.two) { (args, ctx) =>
+    FunctionSpec.simple[String, TextArgs](
+      "TEXT",
+      Arity.two,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (args, ctx) =>
       val (valueExpr, formatExpr) = args
       for
         formatStr <- ctx.evalExpr(formatExpr)

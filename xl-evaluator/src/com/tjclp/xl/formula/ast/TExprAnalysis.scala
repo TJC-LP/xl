@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.ast
 
-import com.tjclp.xl.formula.functions.{FunctionSpecs, ArgValue}
+import com.tjclp.xl.formula.functions.{ArgValue, ArrayLift, FunctionSpecs}
 import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
@@ -171,6 +171,8 @@ trait TExprAnalysis:
     case Sub(l, r) => collectRanges(l) ++ collectRanges(r)
     case Mul(l, r) => collectRanges(l) ++ collectRanges(r)
     case Div(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Pow(l, r) => collectRanges(l) ++ collectRanges(r)
+    case Concat(l, r) => collectRanges(l) ++ collectRanges(r)
     // Comparisons
     case Eq(l, r) => collectRanges(l) ++ collectRanges(r)
     case Neq(l, r) => collectRanges(l) ++ collectRanges(r)
@@ -180,6 +182,8 @@ trait TExprAnalysis:
     case Gte(l, r) => collectRanges(l) ++ collectRanges(r)
     // Type conversion
     case ToInt(e) => collectRanges(e)
+    case DateToSerial(e) => collectRanges(e)
+    case DateTimeToSerial(e) => collectRanges(e)
     // GH-374/GH-355: unary plus and percent are transparent — nested ranges still get bounded
     case UnaryPlus(e) => collectRanges(e)
     case Percent(e) => collectRanges(e)
@@ -224,6 +228,10 @@ trait TExprAnalysis:
         Mul(transformRanges(l, f), transformRanges(r, f))
       case Div(l, r) =>
         Div(transformRanges(l, f), transformRanges(r, f))
+      case Pow(l, r) =>
+        Pow(transformRanges(l, f), transformRanges(r, f))
+      case Concat(l, r) =>
+        Concat(transformRanges(l, f), transformRanges(r, f))
       // Comparisons
       case Eq(l, r) =>
         Eq(transformRanges(l, f), transformRanges(r, f))
@@ -240,6 +248,10 @@ trait TExprAnalysis:
       // Type conversion
       case ToInt(e) =>
         ToInt(transformRanges(e, f))
+      case DateToSerial(e) =>
+        DateToSerial(transformRanges(e, f))
+      case DateTimeToSerial(e) =>
+        DateTimeToSerial(transformRanges(e, f))
       // GH-374/GH-355: unary plus and percent are transparent — transform ranges under them
       case UnaryPlus(e) =>
         UnaryPlus(transformRanges(e, f))
@@ -253,6 +265,23 @@ trait TExprAnalysis:
         )
       // GH-306: runtime coercion wrapper — transform the wrapped expression
       case Coerced(inner, target) => Coerced(transformRanges(inner, f), target)
-      // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, Call, etc.)
+      // A lifted call evaluates element-wise over its lifted scalar slots, so a range there is an
+      // element source like an operand's and takes the same bounds (SUMPRODUCT(--(A:A>0),ABS(B:B))
+      // must not mismatch its dimensions). Other calls are shape-sensitive (ROWS(A:A), INDEX).
+      case call: Call[?] => transformLiftedSlots(call, f)
+      // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other
     ).asInstanceOf[TExpr[A]]
+
+  private def transformLiftedSlots[A](
+    call: Call[A],
+    f: (Option[SheetName], CellRange) => CellRange
+  ): TExpr[A] =
+    call.spec.flags.lift match
+      case ArrayLift.Off => call
+      case ArrayLift.On(lifted, _) =>
+        val replacements =
+          call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
+            if lifted.forall(_.contains(position)) then transformRanges(slot, f) else slot
+          }
+        Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)

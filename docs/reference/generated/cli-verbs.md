@@ -32,7 +32,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `--stream` | — | no | O(1)-memory streaming for large files: search, stats, bounds, view, cell, filter, describe, sheets, names, lint; put, putf, style and the streamable batch ops (other write verbs accept the flag but load the workbook; each verb's `stream` says which — o1, backend, refused) |
 | `--no-recalc` | — | no | Write verbs: apply the edit and recalculate nothing; structural edits keep only the caches the edit provably left unchanged, leave the rest uncached and mark the workbook fullCalcOnLoad (Excel recomputes on open; LibreOffice and cache-only readers display what is cached) |
 | `--preserve-caches` | — | no | Alias for --no-recalc |
-| `--strict` | — | no | Write verbs: exit 1 when the recalculation reports formula errors, non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs (after `view` it is view's own --eval gate) |
+| `--strict` | — | no | Write verbs: exit 1 and write nothing when the recalculation reports formula errors, non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not only repairs (after `view` it is view's own --eval gate) |
 
 ## Verbs
 
@@ -45,7 +45,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `diff` | `-f` | `refused` | 0 1 2 3 | — | 0.11.3 | Compare two workbooks (-g <file2>) and report cell, style and structure differences |
 | `lint` | `-f` `--stream` | `o1` | 0 1 2 3 | — | 0.15.0 | Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain, empty inline strings, mc:Ignorable prefixes, dxf ids, package reachability, shared-string orphans (read-only) |
 | `eval` | `-s` | `refused` | 0 2 3 | — | 0.4.2 | Evaluate a formula without modifying the sheet (--with overrides; no -f for constants) |
-| `evala` | `-f` `-s` | `refused` | 0 2 3 | — | 0.9.0 | Evaluate an array formula and display, or spill (--at), the result grid |
+| `evala` | `-f` `-s` | `refused` | 0 2 3 | — | 0.9.0 | Evaluate an array formula and display the result grid (--at anchors it) |
 | `sheets` | `-f` `--stream` | `o1` (refuses `--stats`) | 0 2 3 | — | 0.1.0 | List sheets with visibility state and dimension (--stats loads the book for counts) |
 | `sheets hide` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.9.2 | Hide a sheet from the sheet tabs (--very for VBA-only) |
 | `sheets show` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.9.2 | Show a hidden sheet |
@@ -58,7 +58,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `filter` | `-f` `-s` `--stream` | `o1` | 0 2 3 | — | 0.11.3 | Filter rows of the used range with a --where predicate (read-only) |
 | `describe` | `-f` `--stream` | `o1` (refuses `--full`) | 0 2 3 | — | 0.20.0 | Orient in a workbook: sheets, defined names, date system (--full adds per-sheet counts) |
 | `audit` | `-f` | `refused` | 0 1 2 3 | — | 0.20.0 | Find every reason a number can be wrong, in one pass (--fail-on-findings exits 1) |
-| `deps` | `-f` `-s` | `refused` | 0 2 3 | — | 0.20.0 | Trace one cell's precedents and dependents, hop by hop (--direction, --depth) |
+| `deps` | `-f` `-s` | `refused` | 0 2 3 | — | 0.20.0 | Trace one cell's precedents and dependents, hop by hop (--direction, --depth, --expand) |
 | `batch` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`) | 0 1 2 3 | — | 0.1.0 | Apply multiple operations atomically from JSON (--dry-run validates; --schema prints the op schema) |
 | `put` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--csv`, `--strict`) | 0 1 2 3 | `put` | 0.1.0 | Write value(s) to a cell or range with smart type detection (--no-detect, --csv) |
 | `putf` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`) | 0 1 2 3 | `putf` | 0.1.0 | Write formula(s) to a cell or range; one formula over a range drags with $ anchoring |

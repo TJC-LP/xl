@@ -390,7 +390,7 @@ object WorkbookEvaluator:
                 case None => state
                 case Some(idx) =>
                   val result =
-                    try
+                    EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
                       SheetEvaluator.evaluateCellWithEvaluator(
                         sheets(idx),
                         q.ref,
@@ -398,14 +398,7 @@ object WorkbookEvaluator:
                         calculationClock,
                         Some(wb.copy(sheets = sheets))
                       )
-                    catch
-                      case NonFatal(e) =>
-                        Left(
-                          XLError.FormulaError(
-                            formulaText(q),
-                            s"Evaluation threw ${e.getClass.getName}"
-                          )
-                        )
+                    }
                   result match
                     case Right(value) =>
                       (
@@ -585,8 +578,9 @@ object WorkbookEvaluator:
             // GH-388 defense in depth: recalculate is documented total — a numeric blowup
             // escaping a function implementation (e.g. BigDecimal scale overflow in a
             // diverging Newton loop) must degrade to this cell's per-cell error, never
-            // unwind the whole recalculation.
-            try
+            // unwind the whole recalculation. The guarded evaluator contains throws from the
+            // evaluation itself (#681); this catches anything around it.
+            EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
               SheetEvaluator.evaluateCellWithEvaluator(
                 tempSheet,
                 q.ref,
@@ -594,14 +588,7 @@ object WorkbookEvaluator:
                 clk,
                 Some(tempWb)
               )
-            catch
-              case NonFatal(e) =>
-                Left(
-                  XLError.FormulaError(
-                    formulaText(q),
-                    s"Evaluation threw ${e.getClass.getName}"
-                  )
-                )
+            }
           }
 
         def foldResult(
@@ -1103,6 +1090,22 @@ object WorkbookEvaluator:
       members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
     val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
       members.map((q, _, text) => q -> parsedText(text)).toMap
+    // Each member's formula kind, read from the book: an array formula member (a CSE record or a
+    // dynamic-array anchor) evaluates as an array in every round, a plain one as a plain cell.
+    val kinds: Map[QualifiedRef, FormulaKind] =
+      members.map { (q, idx, _) =>
+        val kind: FormulaKind =
+          baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
+            case Some(CellValue.Formula(_, _, k)) => k
+            case _ => FormulaKind.Normal()
+        q -> kind
+      }.toMap
+    def memberEvaluator(q: QualifiedRef, evaluator: Evaluator): Evaluator =
+      kinds.get(q) match
+        case Some(_: FormulaKind.ArrayFormula) => evaluator.withArrayResults
+        case _ => evaluator
+    def overlay(q: QualifiedRef, text: String, value: Option[CellValue]): CellValue =
+      CellValue.Formula(text, value, kinds.getOrElse(q, FormulaKind.Normal()))
     // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
     val pinnedConstant: Map[QualifiedRef, CellValue] =
       members.flatMap { (q, _, text) =>
@@ -1136,21 +1139,19 @@ object WorkbookEvaluator:
       pinnedConstant.get(q) match
         case Some(constant) => Right(constant)
         case None =>
-          try
+          EvalDefect.xlGuard(text, Some(q.ref)) {
             parsed(q).flatMap(expr =>
               SheetEvaluator.evaluateParsedWith(
                 sheets(idx),
                 text,
                 expr,
-                evaluator,
+                memberEvaluator(q, evaluator),
                 pinnedClock,
                 Some(tempWb),
                 Some(q.ref)
               )
             )
-          catch
-            case NonFatal(e) =>
-              Left(XLError.FormulaError(text, s"Evaluation threw ${e.getClass.getName}"))
+          }
 
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
@@ -1163,7 +1164,7 @@ object WorkbookEvaluator:
           drewRandomness = true
           rng.nextDouble()
       val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, CellValue.Formula(text, prev.get(q))))
+        sheets.updated(idx, sheets(idx).put(q.ref, overlay(q, text, prev.get(q))))
       }
       val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
         case IterationScheme.Jacobi =>
@@ -1194,7 +1195,7 @@ object WorkbookEvaluator:
                   case Right(value) =>
                     sheets.updated(
                       idx,
-                      sheets(idx).put(q.ref, CellValue.Formula(text, Some(value)))
+                      sheets(idx).put(q.ref, overlay(q, text, Some(value)))
                     )
                   case Left(_) => sheets
                 (published, acc.updated(q, result))

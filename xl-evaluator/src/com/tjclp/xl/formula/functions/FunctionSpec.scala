@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.functions
 
-import com.tjclp.xl.formula.ast.{ExprValue, RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
@@ -37,8 +37,55 @@ final case class FunctionFlags(
    * source of truth: `FunctionRegistry.volatileFunctionNames` lists the flagged specs and
    * `WorkbookAudit.volatile` reports the cells that call one.
    */
-  volatile: Boolean = false
+  volatile: Boolean = false,
+  /**
+   * Excel array lifting: whether (and where) the function evaluates once per element when a scalar
+   * parameter receives an array — `ABS(C2:C4+D2:D4)` is `{2;2;3}` in an array context. The flag is
+   * the single source of truth; the evaluator implements the lift once, at the Call node, over the
+   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
+   */
+  lift: ArrayLift = ArrayLift.Off
 )
+
+/**
+ * Which scalar slots of a function lift over arrays (see [[FunctionFlags.lift]]).
+ *
+ * `slots` indexes the list [[ArgSpec.scalarSlots]] returns (None = every scalar slot), so IFERROR
+ * lifts its value and never replicates its fallback. `rangeRefs = false` is the Analysis ToolPak
+ * lineage (EDATE, EOMONTH, WORKDAY, NETWORKDAYS, YEARFRAC, MROUND): an array lifts, but a
+ * multi-cell range REFERENCE in a scalar slot is `#VALUE!` — `EOMONTH(A2:A10,0)` is `#VALUE!` in
+ * Excel while `EOMONTH(+A2:A10,0)` spills.
+ */
+enum ArrayLift derives CanEqual:
+  case Off
+  case On(slots: Option[Set[Int]], rangeRefs: Boolean)
+
+object ArrayLift:
+  /** Every scalar slot lifts; range references lift like arrays. */
+  val all: ArrayLift = On(None, rangeRefs = true)
+
+  /** Only the scalar slots at these positions (indices into [[ArgSpec.scalarSlots]]) lift. */
+  def slots(positions: Int*): ArrayLift = On(Some(positions.toSet), rangeRefs = true)
+
+  /** Every scalar slot lifts over arrays; a multi-cell range reference is `#VALUE!`. */
+  val arraysOnly: ArrayLift = On(None, rangeRefs = false)
+
+/**
+ * How one element of a lifted array is handed to its slot — the conventions a cell reference gets
+ * in that slot, so `f(range)[i]` equals `f(cell_i)` (except for numeric text and cached formula
+ * cells, whose single-reference decoders predate lifting; ArrayLiftingLawsSpec pins both).
+ */
+enum LiftSlot derives CanEqual:
+  /** A typed slot: the element coerces to the target (`Coerced(Lit(element), target)`). */
+  case Typed(target: BindingCoercion)
+
+  /** A raw CellValue slot (IS*, IFERROR, lookup values): the element as is — ISBLANK sees Empty. */
+  case Cell
+
+  /**
+   * An Any-typed value slot (criteria, MATCH/TEXT values): a cell element resolves (blank is 0).
+   */
+  case Value
 
 final case class ArgPrinter(
   expr: TExpr[?] => String,
@@ -86,8 +133,66 @@ final case class EvalContext(
    * One WorkbookEvaluator recalculation generation's single-range aggregate memo. Public/direct
    * evaluation leaves this absent, preserving its one-shot semantics and allocation profile.
    */
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
-)
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  /**
+   * Excel's operand classes for this call (internal to the evaluator): see
+   * [[EvalContext.Operands]].
+   */
+  private[formula] operands: EvalContext.Operands = EvalContext.Operands.array
+):
+
+  /**
+   * Whether the formula evaluates as an array (an array formula, `evala`, SUMPRODUCT's arguments)
+   * or as a plain cell's legacy formula, where a reference in a value position is implicitly
+   * intersected with the formula's cell.
+   */
+  private[formula] def arrayMode: Boolean = operands.arrayMode
+
+  /**
+   * Whether this call's result feeds a reference position, so the value IF, IFS, CHOOSE and SWITCH
+   * select is kept as a reference (Excel's IF and CHOOSE return references):
+   * `SUM(IF(A1:A10>2,A1:A10,0))` in row 5 sums the whole range.
+   */
+  private[formula] def selectsReference: Boolean = operands.selectsReference
+
+  /**
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
+   * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
+   * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
+   * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
+   * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
+   * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
+   * formula. In array mode, [[evalArrayExpr]].
+   */
+  private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    if arrayMode then evalArrayExpr(expr) else evalReference(expr)
+
+  /**
+   * The reference an expression denotes, in either mode, as a
+   * [[com.tjclp.xl.formula.eval.RangeOperand]] — for the positions that need the reference itself
+   * whatever the formula's mode: the `@` operand, OFFSET's base, the reference IF, IFS, CHOOSE or
+   * SWITCH select for a reference position. An expression that denotes no reference evaluates in
+   * the formula's mode, its result not collapsed.
+   */
+  private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
+    operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
+
+object EvalContext:
+  /**
+   * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
+   * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
+   * (the evaluator sets it for every call; None only for a context built outside the evaluator).
+   * `selectsReference`: the call feeds a reference position.
+   */
+  private[formula] final case class Operands(
+    arrayMode: Boolean,
+    referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
+    selectsReference: Boolean
+  )
+
+  private[formula] object Operands:
+    /** Array evaluation: every argument may be an array; references materialize. */
+    val array: Operands = Operands(arrayMode = true, referenceArg = None, selectsReference = false)
 
 sealed trait ArgValue
 object ArgValue:
@@ -101,6 +206,21 @@ object ArgValue:
 trait ArgSpec[A]:
   def describeParts: List[String]
   final def describe: String = describeParts.mkString(", ")
+
+  /**
+   * The argument's scalar slots, in declaration order, with the kind each lifts as
+   * ([[FunctionFlags.lift]]). Range, variadic-numeric and SUMPRODUCT slots take arrays whole and
+   * are never offered. The default offers none — an ArgSpec that does not override it never lifts.
+   */
+  def scalarSlots(args: A): List[(TExpr[?], LiftSlot)] = Nil
+
+  /**
+   * Rebuild `args` with its scalar slots replaced, in [[scalarSlots]] order, consuming the
+   * replacements it uses and returning the rest (like [[parse]]). Law:
+   * `replaceScalarSlots(a, scalarSlots(a).map(_._1)) == (a, Nil)`.
+   */
+  def replaceScalarSlots(args: A, replacements: List[TExpr[?]]): (A, List[TExpr[?]]) =
+    (args, replacements)
 
   def parse(
     args: List[TExpr[?]],
@@ -141,6 +261,16 @@ trait FunctionSpec[A]:
   def argSpec: ArgSpec[Args]
   def eval(args: Args, ctx: EvalContext): Either[EvalError, A]
   def flags: FunctionFlags = FunctionFlags()
+
+  /**
+   * The reference the call returns, for a function that returns one (OFFSET, INDIRECT, INDEX): a
+   * [[com.tjclp.xl.formula.eval.RangeOperand]], unread, or the value the call computes when it
+   * names no reference (a `#REF!`). The evaluator asks for it where Excel keeps a function's result
+   * a reference: an aggregate's argument, ROWS', the `@` operand, OFFSET's base, a LET binding.
+   * None for every other function.
+   */
+  private[formula] def reference(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
+    None
 
   def render(args: Args, printer: ArgPrinter): String =
     s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
@@ -187,34 +317,69 @@ object FunctionSpec:
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
 
+  /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
+  private[formula] final case class Referencing[A, A0](
+    name: String,
+    arity: Arity,
+    argSpec: ArgSpec[A0],
+    referenceFn: (A0, EvalContext) => Either[EvalError, Any],
+    evalFn: (A0, EvalContext) => Either[EvalError, A],
+    override val flags: FunctionFlags = FunctionFlags()
+  ) extends FunctionSpec[A]:
+    type Args = A0
+    def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
+    override private[formula] def reference(
+      args: A0,
+      ctx: EvalContext
+    ): Option[Either[EvalError, Any]] =
+      Some(referenceFn(args, ctx))
+
+  private[formula] def referencing[A, A0](
+    name: String,
+    arity: Arity,
+    flags: FunctionFlags = FunctionFlags()
+  )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
+    evalFn: (A0, EvalContext) => Either[EvalError, A]
+  )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
+    Referencing(name, arity, spec, referenceFn, evalFn, flags)
+
 trait ExprCoercer[A]:
   def label: String
   def coerce(expr: TExpr[?]): TExpr[A]
+
+  /** How an array element enters a slot this coercer typed, when the function lifts. */
+  def liftSlot: Option[LiftSlot] = None
 
 object ExprCoercer:
   given numeric: ExprCoercer[BigDecimal] with
     val label = "number"
     def coerce(expr: TExpr[?]): TExpr[BigDecimal] = TExpr.asNumericExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Typed(BindingCoercion.Numeric))
 
   given boolean: ExprCoercer[Boolean] with
     val label = "boolean"
     def coerce(expr: TExpr[?]): TExpr[Boolean] = TExpr.asBooleanExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Typed(BindingCoercion.Bool))
 
   given text: ExprCoercer[String] with
     val label = "text"
     def coerce(expr: TExpr[?]): TExpr[String] = TExpr.asStringExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Typed(BindingCoercion.Text))
 
   given intExpr: ExprCoercer[Int] with
     val label = "integer"
     def coerce(expr: TExpr[?]): TExpr[Int] = TExpr.asIntExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Typed(BindingCoercion.Integer))
 
   given cellValue: ExprCoercer[CellValue] with
     val label = "cell"
     def coerce(expr: TExpr[?]): TExpr[CellValue] = TExpr.asCellValueExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Cell)
 
   given dateExpr: ExprCoercer[java.time.LocalDate] with
     val label = "date"
     def coerce(expr: TExpr[?]): TExpr[java.time.LocalDate] = TExpr.asDateExpr(expr)
+    override def liftSlot: Option[LiftSlot] = Some(LiftSlot.Typed(BindingCoercion.Date))
 
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 object ArgSpec:
@@ -234,6 +399,19 @@ object ArgSpec:
 
       def toValues(args: TExpr[A]): List[ArgValue] =
         List(ArgValue.Expr(args))
+
+      override def scalarSlots(args: TExpr[A]): List[(TExpr[?], LiftSlot)] =
+        coercer.liftSlot.map(slot => (args, slot)).toList
+
+      // a replacement is the slot's own expression or a lifted element typed for the slot
+      // (Coerced to its target, a CellValue literal, a resolved value) — never a mistyped node
+      override def replaceScalarSlots(
+        args: TExpr[A],
+        replacements: List[TExpr[?]]
+      ): (TExpr[A], List[TExpr[?]]) =
+        (coercer.liftSlot, replacements) match
+          case (Some(_), head :: rest) => (head.asInstanceOf[TExpr[A]], rest)
+          case _ => (args, replacements)
 
       def map(
         args: TExpr[A]
@@ -386,6 +564,19 @@ object ArgSpec:
     def toValues(args: Option[A]): List[ArgValue] =
       args.toList.flatMap(inner.toValues)
 
+    override def scalarSlots(args: Option[A]): List[(TExpr[?], LiftSlot)] =
+      args.toList.flatMap(inner.scalarSlots)
+
+    override def replaceScalarSlots(
+      args: Option[A],
+      replacements: List[TExpr[?]]
+    ): (Option[A], List[TExpr[?]]) =
+      args match
+        case None => (None, replacements)
+        case Some(value) =>
+          val (replaced, rest) = inner.replaceScalarSlots(value, replacements)
+          (Some(replaced), rest)
+
     override def renderSlots(args: Option[A], printer: ArgPrinter): List[Option[String]] =
       args match
         // one absent marker per slot the inner spec would render, so the comma count matches
@@ -425,6 +616,20 @@ object ArgSpec:
 
     def toValues(args: List[A]): List[ArgValue] =
       args.flatMap(inner.toValues)
+
+    override def scalarSlots(args: List[A]): List[(TExpr[?], LiftSlot)] =
+      args.flatMap(inner.scalarSlots)
+
+    override def replaceScalarSlots(
+      args: List[A],
+      replacements: List[TExpr[?]]
+    ): (List[A], List[TExpr[?]]) =
+      val (replacedReversed, rest) =
+        args.foldLeft((List.empty[A], replacements)) { case ((acc, remaining), value) =>
+          val (replaced, next) = inner.replaceScalarSlots(value, remaining)
+          (replaced :: acc, next)
+        }
+      (replacedReversed.reverse, rest)
 
     override def renderSlots(args: List[A], printer: ArgPrinter): List[Option[String]] =
       args.flatMap(inner.renderSlots(_, printer))
@@ -475,6 +680,17 @@ object ArgSpec:
 
     def toValues(args: H *: T): List[ArgValue] =
       head.toValues(args.head) ++ tail.toValues(args.tail)
+
+    override def scalarSlots(args: H *: T): List[(TExpr[?], LiftSlot)] =
+      head.scalarSlots(args.head) ++ tail.scalarSlots(args.tail)
+
+    override def replaceScalarSlots(
+      args: H *: T,
+      replacements: List[TExpr[?]]
+    ): (H *: T, List[TExpr[?]]) =
+      val (h, rest) = head.replaceScalarSlots(args.head, replacements)
+      val (t, rest2) = tail.replaceScalarSlots(args.tail, rest)
+      (h *: t, rest2)
 
     override def renderSlots(args: H *: T, printer: ArgPrinter): List[Option[String]] =
       head.renderSlots(args.head, printer) ++ tail.renderSlots(args.tail, printer)

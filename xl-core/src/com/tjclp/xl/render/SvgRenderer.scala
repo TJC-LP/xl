@@ -2,8 +2,10 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.{CfOverlay, CfPaint}
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.border.{Border, BorderSide, BorderStyle}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
@@ -37,7 +39,7 @@ object SvgRenderer:
    *   `SheetView(showGridLines = false)` suppresses gridlines even when this flag is set, matching
    *   how Excel renders such sheets (GH-258).
    * @return
-   *   SVG string
+   *   SVG string, without conditional formatting (see the overload taking a [[CfOverlay]])
    */
   def toSvg(
     sheet: Sheet,
@@ -47,13 +49,33 @@ object SvgRenderer:
     showLabels: Boolean = false,
     showGridlines: Boolean = false
   ): String =
+    toSvg(sheet, range, includeStyles, theme, showLabels, showGridlines, CfOverlay.empty)
+
+  /**
+   * [[toSvg]] with conditional formatting painted from a precomputed `overlay` (GH-497): each
+   * painted cell's dxf is laid over its own style (fill, font, strike, borders, number format) and
+   * its data bar drawn as a gradient rect; a painted cell the sheet does not hold is drawn as an
+   * empty one. The overlay comes from xl-evaluator (`sheet.conditionalFormatOverlay(range)`); an
+   * empty overlay renders byte-identically to the CF-blind [[toSvg]], and `includeStyles = false`
+   * ignores it.
+   */
+  def toSvg(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    theme: ThemePalette,
+    showLabels: Boolean,
+    showGridlines: Boolean,
+    overlay: CfOverlay
+  ): String =
     toSvgResolving(ResolvedCell(_, _))(
       sheet,
       range,
       includeStyles,
       theme,
       showLabels,
-      showGridlines
+      showGridlines,
+      overlay
     )
 
   /**
@@ -67,7 +89,8 @@ object SvgRenderer:
     includeStyles: Boolean,
     theme: ThemePalette,
     showLabels: Boolean,
-    showGridlines: Boolean
+    showGridlines: Boolean,
+    overlay: CfOverlay
   ): String =
     // GH-258: the sheet's own view settings win when they disable gridlines (templates that are
     // gridline-free in Excel must stay gridline-free in exports).
@@ -76,6 +99,8 @@ object SvgRenderer:
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+    // Conditional formatting is styling: an unstyled render paints none of it
+    val paints = if includeStyles then overlay else CfOverlay.empty
 
     // Calculate column widths and row heights using shared utilities
     val colWidths = calculateColumnWidths(sheet, range)
@@ -118,6 +143,8 @@ object SvgRenderer:
 
     // Clip path buffer - will be rendered in <defs> after cell loop
     val clipPathBuffer = new StringBuilder
+    // Data-bar gradients by id, rendered in <defs> after the clip paths, sorted
+    val barGradients = scala.collection.mutable.Map.empty[String, String]
 
     // Column headers (A, B, C...) - only if showLabels
     if showLabels then
@@ -170,221 +197,132 @@ object SvgRenderer:
 
     // Pass 1: Cell backgrounds (also generates clip paths in clipPathBuffer)
     sb.append("  <g class=\"cells\">\n")
+    val gridStroke = """ stroke="#D0D0D0" stroke-width="0.5""""
     (startRow to endRow).foreach { row =>
       val rowIdx = row - startRow
       val y = rowYPositions(rowIdx)
       val rowHeight = rowHeights(rowIdx)
 
-      // Track columns covered by text overflow from previous cells in this row
-      val overflowSkipCols = scala.collection.mutable.Set[Int]()
+      // The row's drawn cells — every column except the interior of a merge — each resolved
+      // ONCE: the spans below, and the fill, anchor, text and hash after them, all read it, and
+      // resolving re-formats the value and re-parses a Custom code. A CF-painted cell the sheet
+      // does not hold is drawn as an empty one.
+      val drawn = (startCol to endCol).flatMap { col =>
+        val ref = ARef.from0(col, row)
+        val mergeRange = sheet.getMergedRange(ref)
+        if mergeRange.exists(_.start != ref) then None
+        else
+          val paint = paints.at(ref)
+          val cellOpt = sheet.cells.get(ref).orElse(paint.map(_ => Cell.empty(ref)))
+          Some((col, ref, mergeRange, cellOpt.map(c => PaintedCell(resolve(c, sheet), paint))))
+      }
 
-      (startCol to endCol).foreach { col =>
+      // Text spill spans, decided before any rect is drawn: a leftward spill covers cells
+      // drawn earlier in the row, and no gridline may cross the text.
+      val spans = drawn.flatMap { case (col, ref, _, paintedOpt) =>
+        paintedOpt
+          .map(_.resolved)
+          .map { resolved =>
+            val width = colWidths(col - startCol)
+            col -> overflowSpan(resolved, ref, width, colWidths, sheet, startCol, endCol)
+          }
+          .filter(_._2.spills)
+      }.toMap
+      val spannedCols = spans.flatMap { case (col, span) =>
+        (col - span.left) to (col + span.right)
+      }.toSet
+
+      drawn.foreach { case (col, ref, mergeRange, paintedOpt) =>
         val colIdx = col - startCol
         val xPos = colXPositions(colIdx)
-        val ref = ARef.from0(col, row)
-        val width = colWidths(colIdx)
+        val resolvedOpt = paintedOpt.map(_.resolved)
 
-        // Skip if this cell is covered by a previous cell's text overflow
-        if !overflowSkipCols.contains(col) then
-          // Check if this cell is part of a merged region
-          val mergeRange = sheet.getMergedRange(ref)
-          val isInteriorMergeCell = mergeRange.exists(_.start != ref)
-
-          // Skip interior cells of merged regions (they're covered by the anchor cell's rect)
-          if !isInteriorMergeCell then
-            val cellOpt = sheet.cells.get(ref)
-            // Style and rendered content, resolved ONCE: the span, anchor, text and hash below
-            // all read them, and resolving re-formats the value and re-parses a Custom code.
-            val resolvedOpt = cellOpt.map(resolve(_, sheet))
-
-            // Calculate effective dimensions (expanded for merged cells)
-            val (mergeWidth, mergeHeight) = mergeRange match
-              case Some(range) =>
-                // Sum widths of merged columns (clamped to visible range)
-                val mergeEndCol = math.min(range.end.col.index0, endCol)
-                val mergedWidth = (colIdx to (mergeEndCol - startCol)).map(colWidths).sum
-                // Sum heights of merged rows (clamped to visible range)
-                val mergeEndRow = math.min(range.end.row.index0, endRow)
-                val mergedHeight = (rowIdx to (mergeEndRow - startRow)).map(rowHeights).sum
-                (mergedWidth, mergedHeight)
-              case None =>
-                (width, rowHeight)
-
-            // Calculate overflow colspan (only if no merge)
-            val overflowColspan = resolvedOpt match
-              case Some(resolved) if mergeRange.isEmpty =>
-                calculateOverflowColspan(resolved, ref, width, colWidths, sheet, startCol, endCol)
-              case _ => 1
-
-            // Mark subsequent columns to skip due to overflow
-            if overflowColspan > 1 then
-              (1 until overflowColspan).foreach(i => overflowSkipCols += (col + i))
-
-            // Calculate effective width (merge or overflow)
-            val effectiveWidth =
-              if mergeRange.isDefined then mergeWidth
-              else if overflowColspan > 1 then
-                (0 until overflowColspan).map { i =>
-                  val widthIdx = colIdx + i
-                  if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
-                  else DefaultColumnWidthPx
-                }.sum
-              else width
-
-            val effectiveHeight = if mergeRange.isDefined then mergeHeight else rowHeight
-
-            // Generate clip path for this cell (to prevent text overflow beyond effective
-            // width). Keyed by cell ref: pixel positions collide when hidden rows/columns
-            // collapse to the same coordinates, emitting duplicate ids — invalid SVG (GH-298).
-            val clipId = s"clip-${ref.toA1}"
-            clipPathBuffer.append(
-              s"""    <clipPath id="$clipId"><rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight"/></clipPath>\n"""
+        // A cell's own box: its column, or its merge clamped to the window. A spill never
+        // widens it — every cell under a spilled text keeps its own fill and borders.
+        val (effectiveWidth, effectiveHeight) = mergeRange match
+          case Some(range) =>
+            val mergeEndCol = math.min(range.end.col.index0, endCol)
+            val mergeEndRow = math.min(range.end.row.index0, endRow)
+            (
+              (colIdx to (mergeEndCol - startCol)).map(colWidths).sum,
+              (rowIdx to (mergeEndRow - startRow)).map(rowHeights).sum
             )
+          case None => (colWidths(colIdx), rowHeight)
 
-            // Cell background (borders rendered separately as line elements)
-            val fillAttr = cellOpt
-              .flatMap(c => if includeStyles then cellStyleToSvg(c, sheet, theme) else None)
-              .getOrElse("""fill="#FFFFFF"""")
+        // The text's clip: its own box, or the columns its text spills across. Keyed by cell
+        // ref: pixel positions collide when hidden rows/columns collapse to the same
+        // coordinates, emitting duplicate ids — invalid SVG (GH-298).
+        val (clipX, clipWidth) = spans.get(col) match
+          case Some(span) =>
+            val left = colBoundaries(colIdx - span.left)
+            (left, colBoundaries(colIdx + span.right + 1) - left)
+          case None => (xPos, effectiveWidth)
+        val clipId = s"clip-${ref.toA1}"
+        clipPathBuffer.append(
+          s"""    <clipPath id="$clipId"><rect x="$clipX" y="$y" width="$clipWidth" height="$effectiveHeight"/></clipPath>\n"""
+        )
 
-            // Gridlines: add explicit stroke attributes (CSS-only approach unreliable across renderers)
-            val strokeAttr =
-              if gridlinesEnabled then """ stroke="#D0D0D0" stroke-width="0.5""""
-              else ""
+        // Cell background (borders rendered separately as line elements)
+        val fillAttr = resolvedOpt
+          .flatMap(r => if includeStyles then r.style.map(fillToSvg(_, theme)) else None)
+          .getOrElse("""fill="#FFFFFF"""")
 
+        // Gridlines: explicit stroke attributes (CSS-only approach unreliable across renderers);
+        // a spanned cell's are drawn once around its whole span below
+        val strokeAttr =
+          if gridlinesEnabled && !spannedCols.contains(col) then gridStroke else ""
+
+        sb.append(
+          s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
+        )
+        sb.append(s"""$fillAttr$strokeAttr class="cell"/>\n""")
+
+        // A CF data bar lies on the background, under the borders and the text
+        paintedOpt.flatMap(_.paint).flatMap(_.bar).foreach { bar =>
+          val barWidth = dataBarWidth(bar.fraction, effectiveWidth)
+          val barHeight = effectiveHeight - 2 * DataBarInsetPx
+          if barWidth > 0 && barHeight > 0 then
+            val hex = colorToHex(bar.color, theme)
+            val id = s"cf-bar-${hex.drop(1)}"
+            barGradients(id) = hex
+            val barX = xPos + DataBarInsetPx
+            val barY = y + DataBarInsetPx
             sb.append(
-              s"""    <rect x="$xPos" y="$y" width="$effectiveWidth" height="$effectiveHeight" """
+              s"""    <rect x="$barX" y="$barY" width="$barWidth" height="$barHeight" fill="url(#$id)" class="cf-bar"/>\n"""
             )
-            sb.append(s"""$fillAttr$strokeAttr class="cell"/>\n""")
+        }
 
-            // Collect border declarations for second pass, decomposed into the unit grid
-            // edges of the cell's effective rect (merge- or overflow-expanded), so shared
-            // edges resolve to the heavier declaration (GH-298)
-            if includeStyles then
-              cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).foreach { style =>
-                if style.border != Border.none then
-                  val spanCols = mergeRange match
-                    case Some(range) => math.min(range.end.col.index0, endCol) - col + 1
-                    case None => math.min(overflowColspan, endCol - col + 1)
-                  val spanRows = mergeRange match
-                    case Some(range) => math.min(range.end.row.index0, endRow) - row + 1
-                    case None => 1
-                  declareCellEdges(hEdges, vEdges, style.border, col, row, spanCols, spanRows)
-              }
+        // Collect border declarations for second pass, decomposed into the unit grid edges
+        // of the cell's own (merge-expanded) rect, so shared edges resolve to the heavier
+        // declaration (GH-298)
+        if includeStyles then
+          resolvedOpt.flatMap(_.style).foreach { style =>
+            if style.border != Border.none then
+              val spanCols = mergeRange match
+                case Some(range) => math.min(range.end.col.index0, endCol) - col + 1
+                case None => 1
+              val spanRows = mergeRange match
+                case Some(range) => math.min(range.end.row.index0, endRow) - row + 1
+                case None => 1
+              declareCellEdges(hEdges, vEdges, style.border, col, row, spanCols, spanRows)
+          }
 
-            // Collect text for third pass (skip hidden rows/cols)
-            // Apply clip-path to prevent text overflow beyond effective width
-            if effectiveHeight > 0 && effectiveWidth > 0 then
-              resolvedOpt.foreach { resolved =>
-                val cell = resolved.cell
-                val (textX, anchor) = textAlignment(resolved, xPos, effectiveWidth)
-                val textY = textYPosition(cell, sheet, y, effectiveHeight)
-
-                // Apply clip-path to constrain text within cell boundaries
-                val clipAttr = s""" clip-path="url(#$clipId)""""
-
-                cell.value match
-                  case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
-                    // Get cell's base font for inheritance by unstyled runs
-                    val baseFont = resolved.style.map(_.font)
-
-                    // Inter-run gap to account for AWT vs SVG font metric differences
-                    // SVG renders slightly wider than AWT measures, so add extra spacing
-                    val interRunGap = InterRunGapPx
-
-                    // Calculate total width of all runs (including gaps) for proper alignment
-                    val runWidths =
-                      rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(baseFont)))
-                    val totalGaps = interRunGap * math.max(0, rt.runs.size - 1)
-                    val totalWidth = runWidths.sum + totalGaps
-
-                    // Adjust starting x based on alignment (anchor doesn't work with explicit tspan x)
-                    val adjustedTextX = anchor match
-                      case "middle" => textX - totalWidth / 2
-                      case "end" => textX - totalWidth
-                      case _ => textX // "start"
-
-                    // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run
-                    textBuffer.append(
-                      s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$clipAttr>"""
-                    )
-                    rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
-                      val runStyle = runToSvgStyle(run, baseFont, theme)
-                      val escapedText = escapeXml(run.text)
-                      textBuffer.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
-                      val gap = if idx < rt.runs.size - 1 then interRunGap else 0
-                      currentX + measureTextWidth(run.text, run.font.orElse(baseFont)) + gap
-                    }
-                    textBuffer.append("</text>\n")
-
-                  case _ =>
-                    val formatted = resolved.content.text
-                    if formatted.nonEmpty then
-                      // includeStyles=false still needs explicit font attrs now that the
-                      // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
-                      val textStyle =
-                        if includeStyles then cellTextStyle(cell, sheet, theme)
-                        else """ fill="#000000" font-size="15px" font-family="Calibri""""
-                      val style = resolved.style
-                      val shouldWrap = style.exists(_.align.wrapText)
-
-                      // Excel's #### marker: a clipped numeral reads as a different, plausible
-                      // number (GH-459)
-                      val text = hashOverflowText(resolved.content, style, effectiveWidth)
-                        .getOrElse(formatted)
-
-                      if shouldWrap then
-                        val availableWidth = effectiveWidth - CellPaddingX * 2
-                        val font = style.map(_.font)
-                        val lines = wrapText(text, availableWidth, font)
-                        val lh = lineHeight(font)
-                        val firstLineY =
-                          textYPositionWrapped(cell, sheet, y, effectiveHeight, lines.size, lh)
-
-                        textBuffer.append(
-                          s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
-                        )
-                        lines.zipWithIndex.foreach { (line, idx) =>
-                          val lineY = firstLineY + idx * lh
-                          val escapedLine = escapeXml(line)
-                          textBuffer.append(
-                            s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>"""
-                          )
-                        }
-                        textBuffer.append("</text>\n")
-                      else
-                        // The right anchor sits CellPaddingX inside the clip box, so text
-                        // measuring in (effectiveWidth - CellPaddingX, effectiveWidth] would
-                        // start left of the clip and lose its leading glyph — a sheared digit
-                        // or, worse, a dropped minus sign (GH-459). Clamp the anchor to the
-                        // clip's left edge for exactly that band.
-                        //
-                        // The clamp must NOT fire once the text is wider than the cell: Excel
-                        // right-anchors an overflowing right-aligned value and cuts its head.
-                        // Only Text reaches here at full width — Numeric, Bool and Error hash
-                        // above (GH-459, GH-500), and Bool and Error are centred anyway — and
-                        // pulling its anchor right would show the head and push the tail out
-                        // of the cell (it would also contradict the RichText branch, which
-                        // left-shifts by the run width).
-                        //
-                        // Precision note: the clamp lands the left edge exactly on the clip
-                        // edge, so it relies on the rasterizer laying the string out no wider
-                        // than AWT measured it. Batik can run ~2px wider than AWT's
-                        // stringWidth, which can still shave the flag off a leading '1' when
-                        // the slack is under ~2px (rsvg-convert and resvg do not). A blind
-                        // safety margin is not the fix — it would only move the shave to the
-                        // trailing digit. Tracked as GH-505.
-                        val textW = measureTextWidth(text, style.map(_.font))
-                        val anchorX =
-                          if anchor == "end" && textW <= effectiveWidth then
-                            math.max(textX, xPos + textW)
-                          else textX
-                        val escapedText = escapeXml(text)
-                        textBuffer.append(
-                          s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
-                        )
-                        textBuffer.append(s"""$escapedText</text>\n""")
-              }
+        // Collect text for third pass (skip hidden rows/cols), clipped to its clip box
+        if effectiveHeight > 0 && effectiveWidth > 0 then
+          paintedOpt.filterNot(p => hidesValue(p.paint)).foreach { cell =>
+            val box = CellBox(xPos, y, effectiveWidth, effectiveHeight)
+            textBuffer.append(cellText(cell, sheet, box, clipId, includeStyles, theme))
+          }
       }
+
+      if gridlinesEnabled then
+        spans.toList.sortBy(_._1).foreach { case (col, span) =>
+          val left = colBoundaries(col - startCol - span.left)
+          val width = colBoundaries(col - startCol + span.right + 1) - left
+          sb.append(
+            s"""    <rect x="$left" y="$y" width="$width" height="$rowHeight" fill="none"$gridStroke/>\n"""
+          )
+        }
     }
     sb.append("  </g>\n")
 
@@ -400,6 +338,11 @@ object SvgRenderer:
     // Insert defs with clip paths before content
     result.append("  <defs>\n")
     result.append(clipPathBuffer)
+    barGradients.toList.sortBy(_._1).foreach { (id, hex) =>
+      result.append(
+        s"""    <linearGradient id="$id" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="$hex"/><stop offset="1" stop-color="#FFFFFF"/></linearGradient>\n"""
+      )
+    }
     result.append("  </defs>\n")
 
     // Append remaining content (headers and cells)
@@ -421,25 +364,161 @@ object SvgRenderer:
     result.append("</svg>")
     result.toString
 
+  /** A cell's own drawing box in pixels: its column, or its merge. */
+  private final case class CellBox(x: Int, y: Int, width: Int, height: Int)
+
   /**
-   * Get SVG fill attribute for a cell's background. Borders are rendered separately as line
-   * elements.
+   * A drawn cell: resolved once, then laid under its conditional-format paint (GH-497).
+   * `unstyledBase` remembers that the cell had no style of its own, so its text keeps the unstyled
+   * size its neighbours draw at when a paint gives it one.
    */
-  private def cellStyleToSvg(
-    cell: Cell,
+  private final case class PaintedCell(
+    resolved: ResolvedCell,
+    paint: Option[CfPaint],
+    unstyledBase: Boolean
+  )
+
+  private object PaintedCell:
+    def apply(base: ResolvedCell, paint: Option[CfPaint]): PaintedCell =
+      PaintedCell(painted(base, paint), paint, base.style.isEmpty)
+
+  /**
+   * The text of one cell, anchored in its own `box` and clipped to `clipId` — the box, or the
+   * columns an overflowing text spills across.
+   */
+  private def cellText(
+    drawn: PaintedCell,
     sheet: Sheet,
+    box: CellBox,
+    clipId: String,
+    includeStyles: Boolean,
     theme: ThemePalette
-  ): Option[String] =
-    cell.styleId.flatMap(sheet.styleRegistry.get).map { style =>
-      style.fill match
-        case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
-        case Fill.Pattern(_, bgColor, _) =>
-          // For pattern fills, use the background color as the cell fill (pattern rendering with
-          // the foreground is not yet supported in SVG); an automatic background is the window
-          // colour, rendered like Fill.None (GH-566)
-          bgColor.map(colorToFillAttrsWithOpacity(_, theme)).getOrElse("""fill="#FFFFFF"""")
-        case Fill.None => """fill="#FFFFFF""""
-    }
+  ): String =
+    val out = new StringBuilder
+    val resolved = drawn.resolved
+    val strike = strikes(drawn.paint)
+    // An unstyled cell's text is 15px, and a CF font on it (colour, weight) must not resize it
+    val inheritedPx = Option.when(drawn.unstyledBase)(UnstyledFontPx)
+    val cell = resolved.cell
+    val style = resolved.style
+    val cellPt = style.fold(DefaultFontSize.toDouble)(_.font.sizePt)
+    val (textX, anchor) = textAlignment(resolved, box.x, box.width)
+    // Rich text shares one baseline: its largest run must fit the row like Excel autofits it
+    val drawnPt = if includeStyles then largestFontPt(cell.value, cellPt) else cellPt
+    val textY = textYPosition(style, drawnPt, box.y, box.height)
+    val clipAttr = s""" clip-path="url(#$clipId)""""
+
+    cell.value match
+      case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
+        // Get cell's base font for inheritance by unstyled runs
+        val baseFont = style.map(_.font)
+
+        // Inter-run gap to account for AWT vs SVG font metric differences
+        // SVG renders slightly wider than AWT measures, so add extra spacing
+        val interRunGap = InterRunGapPx
+
+        // Calculate total width of all runs (including gaps) for proper alignment
+        val runWidths =
+          rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(baseFont)))
+        val totalGaps = interRunGap * math.max(0, rt.runs.size - 1)
+        val totalWidth = runWidths.sum + totalGaps
+
+        // Adjust starting x based on alignment (anchor doesn't work with explicit tspan x)
+        val adjustedTextX = anchor match
+          case "middle" => textX - totalWidth / 2
+          case "end" => textX - totalWidth
+          case _ => textX // "start"
+
+        // Explicit base font attrs (was CSS .cell-text): tspan runs override per-run. A CF
+        // strike decorates the whole text, every run included.
+        val strikeAttr = if strike then """ text-decoration="line-through"""" else ""
+        out.append(
+          s"""    <text y="$textY" class="cell-text" font-size="15px" font-family="Calibri"$strikeAttr$clipAttr>"""
+        )
+        rt.runs.zipWithIndex.foldLeft(adjustedTextX) { case (currentX, (run, idx)) =>
+          val runStyle = runToSvgStyle(run, baseFont, inheritedPx, theme)
+          val escapedText = escapeXml(run.text)
+          out.append(s"""<tspan x="$currentX"$runStyle>$escapedText</tspan>""")
+          val gap = if idx < rt.runs.size - 1 then interRunGap else 0
+          currentX + measureTextWidth(run.text, run.font.orElse(baseFont)) + gap
+        }
+        out.append("</text>\n")
+
+      case _ =>
+        val formatted = resolved.content.text
+        if formatted.nonEmpty then
+          // includeStyles=false still needs explicit font attrs now that the
+          // .cell-text CSS rule no longer declares them (GH-255 cascade fix)
+          val textStyle =
+            if includeStyles then cellTextStyle(style, inheritedPx, strike, theme)
+            else """ fill="#000000" font-size="15px" font-family="Calibri""""
+          val shouldWrap = style.exists(_.align.wrapText)
+
+          // Excel's #### marker: a clipped numeral reads as a different, plausible
+          // number (GH-459)
+          val text = hashOverflowText(resolved.content, style, box.width).getOrElse(formatted)
+
+          if shouldWrap then
+            val availableWidth = box.width - CellPaddingX * 2
+            val font = style.map(_.font)
+            val lines = wrapText(text, availableWidth, font)
+            // The line pitch autofit sizes the row by, so n lines fill an autofitted row
+            val lh = lineHeightPx(sheet, cellPt)
+            val firstLineY = textYPositionWrapped(style, cellPt, box.y, box.height, lines.size, lh)
+
+            out.append(
+              s"""    <text x="$textX" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
+            )
+            lines.zipWithIndex.foreach { (line, idx) =>
+              val lineY = firstLineY + idx * lh
+              val escapedLine = escapeXml(line)
+              out.append(s"""<tspan x="$textX" y="$lineY">$escapedLine</tspan>""")
+            }
+            out.append("</text>\n")
+          else
+            // The right anchor sits CellPaddingX inside the cell, so text measuring in
+            // (width - CellPaddingX, width] would start left of the cell and lose its
+            // leading glyph — a sheared digit or, worse, a dropped minus sign (GH-459).
+            // Clamp the anchor to the cell's left edge for exactly that band.
+            //
+            // The clamp must NOT fire once the text is wider than the cell: Excel
+            // right-anchors an overflowing right-aligned value, spills it left into empty
+            // neighbours and cuts its head at the first one that blocks. Only Text reaches
+            // here at full width — Numeric, Bool and Error hash above (GH-459, GH-500), and
+            // Bool and Error are centred anyway — and pulling its anchor right would show the
+            // head and push the tail out of the cell (it would also contradict the RichText
+            // branch, which left-shifts by the run width).
+            //
+            // Precision note: the clamp lands the left edge exactly on the cell edge, so it
+            // relies on the rasterizer laying the string out no wider than AWT measured it.
+            // Batik can run ~2px wider than AWT's stringWidth, which can still shave the flag
+            // off a leading '1' when the slack is under ~2px (rsvg-convert and resvg do not).
+            // A blind safety margin is not the fix — it would only move the shave to the
+            // trailing digit. Tracked as GH-505.
+            val textW = measureTextWidth(text, style.map(_.font))
+            val anchorX =
+              if anchor == "end" && textW <= box.width then math.max(textX, box.x + textW)
+              else textX
+            val escapedText = escapeXml(text)
+            out.append(
+              s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
+            )
+            out.append(s"""$escapedText</text>\n""")
+    out.toString
+
+  /**
+   * SVG fill attribute for a cell's background, from its effective style. Borders are rendered
+   * separately as line elements.
+   */
+  private def fillToSvg(style: CellStyle, theme: ThemePalette): String =
+    style.fill match
+      case Fill.Solid(color) => colorToFillAttrsWithOpacity(color, theme)
+      case Fill.Pattern(_, bgColor, _) =>
+        // For pattern fills, use the background color as the cell fill (pattern rendering with
+        // the foreground is not yet supported in SVG); an automatic background is the window
+        // colour, rendered like Fill.None (GH-566)
+        bgColor.map(colorToFillAttrsWithOpacity(_, theme)).getOrElse("""fill="#FFFFFF"""")
+      case Fill.None => """fill="#FFFFFF""""
 
   /**
    * A border declaration competing for one unit grid edge.
@@ -643,14 +722,22 @@ object SvgRenderer:
       case BorderStyle.SlantDashDot => (1, Some("4,2,1,2"))
       case BorderStyle.Double => (1, None) // Handled separately
 
+  /** The text size of a cell without a style (Calibri 11pt drawn at 15px). */
+  private val UnstyledFontPx: Int = 15
+
   /**
-   * Get SVG text style attributes for a cell.
+   * Get SVG text style attributes for a cell's effective style. `sizePx` overrides the font's own
+   * size (an unstyled cell painted by CF keeps the unstyled size); `strike` adds line-through.
    *
    * ALWAYS includes font properties explicitly for exact fidelity (don't rely on CSS defaults).
    */
-  private def cellTextStyle(cell: Cell, sheet: Sheet, theme: ThemePalette): String =
-    cell.styleId
-      .flatMap(sheet.styleRegistry.get)
+  private def cellTextStyle(
+    styleOpt: Option[CellStyle],
+    sizePx: Option[Int],
+    strike: Boolean,
+    theme: ThemePalette
+  ): String =
+    styleOpt
       .map { style =>
         val attrs = scala.collection.mutable.ArrayBuffer[String]()
 
@@ -664,11 +751,13 @@ object SvgRenderer:
         // Font style
         if style.font.italic then attrs += """font-style="italic""""
 
-        // Underline (SVG uses text-decoration, GH-256)
-        if style.font.underline != Underline.None then attrs += """text-decoration="underline""""
+        // Underline (SVG uses text-decoration, GH-256); a CF strike draws line-through
+        textDecoration(style.font.underline != Underline.None, strike).foreach { d =>
+          attrs += s"""text-decoration="$d""""
+        }
 
         // ALWAYS include font size (don't rely on CSS defaults) - convert pt to px (pt * 4/3)
-        val fontSizePx = (style.font.sizePt * 4.0 / 3.0).toInt
+        val fontSizePx = sizePx.getOrElse((style.font.sizePt * 4.0 / 3.0).toInt)
         attrs += s"""font-size="${fontSizePx}px""""
 
         // ALWAYS include font family (even if default) - unquoted in SVG attributes (GH-255)
@@ -684,12 +773,19 @@ object SvgRenderer:
   /**
    * Convert a TextRun to SVG tspan style attributes.
    *
-   * When a run has no explicit font, inherits from the cell's base font. This ensures rich text
-   * runs without explicit formatting still display with the cell's styling.
+   * When a run has no explicit font, inherits from the cell's base font — at `inheritedPx` when
+   * given (an unstyled cell painted by CF keeps the unstyled size). This ensures rich text runs
+   * without explicit formatting still display with the cell's styling.
    */
-  private def runToSvgStyle(run: TextRun, baseFont: Option[Font], theme: ThemePalette): String =
+  private def runToSvgStyle(
+    run: TextRun,
+    baseFont: Option[Font],
+    inheritedPx: Option[Int],
+    theme: ThemePalette
+  ): String =
     // Use run's font if present, otherwise fall back to base font
     val effectiveFont = run.font.orElse(baseFont)
+    val sizePx = if run.font.isDefined then None else inheritedPx
 
     effectiveFont match
       case None => ""
@@ -710,7 +806,7 @@ object SvgRenderer:
         if f.underline != Underline.None then attrs += """text-decoration="underline""""
 
         // Font size - always include for exact fidelity - convert pt to px (pt * 4/3)
-        val fontSizePx = (f.sizePt * 4.0 / 3.0).toInt
+        val fontSizePx = sizePx.getOrElse((f.sizePt * 4.0 / 3.0).toInt)
         attrs += s"""font-size="${fontSizePx}px""""
 
         // Font family - always include for exact fidelity - unquoted in SVG attributes (GH-255)
@@ -718,83 +814,36 @@ object SvgRenderer:
 
         if attrs.nonEmpty then " " + attrs.mkString(" ") else ""
 
-  // ========== Text Wrapping Utilities ==========
-
-  /**
-   * Wrap text to fit within a given width.
-   *
-   * @param text
-   *   The text to wrap
-   * @param maxWidth
-   *   Maximum width in pixels
-   * @param font
-   *   Font for measuring text
-   * @return
-   *   List of lines
-   */
-  private def wrapText(text: String, maxWidth: Int, font: Option[Font]): List[String] =
-    if maxWidth <= 0 || text.isEmpty then List(text)
-    else
-      val words = text.split("\\s+").toList
-      if words.isEmpty then List("")
-      else wrapWords(words, maxWidth, font)
-
-  @scala.annotation.tailrec
-  private def wrapWords(
-    words: List[String],
-    maxWidth: Int,
-    font: Option[Font],
-    lines: List[String] = Nil,
-    currentLine: String = ""
-  ): List[String] =
-    words match
-      case Nil =>
-        if currentLine.isEmpty then lines.reverse
-        else (currentLine :: lines).reverse
-      case word :: rest =>
-        val testLine = if currentLine.isEmpty then word else s"$currentLine $word"
-        if measureTextWidth(testLine, font) <= maxWidth then
-          wrapWords(rest, maxWidth, font, lines, testLine)
-        else if currentLine.isEmpty then
-          // Word is too long to fit on a line, force it
-          wrapWords(rest, maxWidth, font, word :: lines, "")
-        else
-          // Start a new line with this word
-          wrapWords(rest, maxWidth, font, currentLine :: lines, word)
-
-  /**
-   * Calculate line height for wrapped text in pixels.
-   */
-  private def lineHeight(font: Option[Font]): Int =
-    val fontSizePt = font.map(_.sizePt).getOrElse(DefaultFontSize.toDouble)
-    val fontSizePx = (fontSizePt * 4.0 / 3.0).toInt // Convert pt to px
-    (fontSizePx * 1.4).toInt // Standard line height multiplier
-
   /**
    * Calculate text y position based on vertical alignment.
    *
    * SVG text baseline is at the y coordinate, so we need to adjust for font metrics. Approximation:
    * ascender ~ 80% of font size.
    */
-  private def textYPosition(cell: Cell, sheet: Sheet, cellY: Int, cellHeight: Int): Int =
-    textYPositionWrapped(cell, sheet, cellY, cellHeight, lineCount = 1, lh = 0)
+  private def textYPosition(
+    style: Option[CellStyle],
+    fontSizePt: Double,
+    cellY: Int,
+    cellHeight: Int
+  ): Int =
+    textYPositionWrapped(style, fontSizePt, cellY, cellHeight, lineCount = 1, lh = 0)
 
   /**
    * Calculate y position for the first line of wrapped text.
    *
-   * Accounts for vertical alignment and total text height (lineCount * lineHeight).
+   * Accounts for vertical alignment and total text height (lineCount * lineHeight). A
+   * bottom-aligned last line sits [[RenderUtils.baselineInsetPx]] above the bottom edge, so a large
+   * font's descenders stay inside its autofitted row.
    */
   private def textYPositionWrapped(
-    cell: Cell,
-    sheet: Sheet,
+    style: Option[CellStyle],
+    fontSizePt: Double,
     cellY: Int,
     cellHeight: Int,
     lineCount: Int,
     lh: Int
   ): Int =
-    val style = cell.styleId.flatMap(sheet.styleRegistry.get)
     val vAlign = style.map(_.align.vertical).getOrElse(VAlign.Bottom)
-    val fontSizePt = style.map(_.font.sizePt).getOrElse(DefaultFontSize.toDouble)
     val fontSizePx = (fontSizePt * 4.0 / 3.0).toInt // Convert pt to px
 
     // Text baseline adjustment (SVG places text at baseline, not top)
@@ -802,6 +851,7 @@ object SvgRenderer:
 
     // Total height of wrapped text (lineCount - 1 because first line doesn't have spacing above it)
     val totalTextHeight = if lineCount > 1 then (lineCount - 1) * lh + fontSizePx else fontSizePx
+    val bottomBaseline = cellY + cellHeight - baselineInsetPx(fontSizePt)
 
     vAlign match
       case VAlign.Top =>
@@ -812,8 +862,8 @@ object SvgRenderer:
         else cellY + cellHeight / 2 + baselineOffset / 3
       case VAlign.Bottom =>
         // Position last line near bottom, calculate where first line should start
-        if lineCount > 1 then cellY + cellHeight - 4 - (lineCount - 1) * lh
-        else cellY + cellHeight - 4
+        if lineCount > 1 then bottomBaseline - (lineCount - 1) * lh
+        else bottomBaseline
       case VAlign.Justify | VAlign.Distributed =>
         // Same as Middle for wrapped text
         if lineCount > 1 then cellY + (cellHeight - totalTextHeight) / 2 + baselineOffset

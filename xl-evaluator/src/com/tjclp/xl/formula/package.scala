@@ -31,6 +31,7 @@ package object formula:
   export eval.WorkbookEvaluator
   export eval.ArrayResult
   export eval.FormulaFormatting
+  export eval.CfEvaluator
 
   // Functions
   export functions.FunctionSpec

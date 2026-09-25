@@ -81,10 +81,11 @@ class ScenarioTableIntegritySpec extends FunSuite:
     assertEquals(value(report, ref"F12"), Some(num(31)))
   }
 
-  // The "supported formula whose evaluation fails" fixture: NOT over a bare range is a host error
-  // (GH-564 made AND/OR fold ranges like Excel, so AND(B1:B1) no longer fails).
+  // The "supported formula whose evaluation fails" fixture: a reference to a sheet the book lacks
+  // is a host error (GH-564 made AND/OR fold ranges like Excel, so AND(B1:B1) no longer fails, and
+  // a plain cell reads NOT(B1:B1) as NOT(B1), as Excel does).
   test("GH-506: a failed source reports every unseeded interior") {
-    val wb = Workbook(base.put(ref"F9", CellValue.Formula("NOT(B1:B1)")))
+    val wb = Workbook(base.put(ref"F9", CellValue.Formula("NOT(Missing!B1)")))
     val report = seed(wb)
     assertEquals(skipped(report), 3)
     assertEquals(report.workbook, wb)
@@ -92,7 +93,7 @@ class ScenarioTableIntegritySpec extends FunSuite:
   }
 
   test("GH-506: source failure preserves unresolved cone diagnostics across combinations") {
-    val sheet = base.put(ref"B1", CellValue.Formula("IF(A1=1,10,NOT(A1:A1))"))
+    val sheet = base.put(ref"B1", CellValue.Formula("IF(A1=1,10,NOT(Missing!A1))"))
     val report = seed(Workbook(sheet))
     assertEquals(value(report, ref"F10"), Some(num(11)))
     assertEquals(value(report, ref"F11"), None)
@@ -121,7 +122,7 @@ class ScenarioTableIntegritySpec extends FunSuite:
 
   test("GH-506: iterative member failures retain their unresolved upstream cone") {
     val sheet = base
-      .put(ref"D1", CellValue.Formula("NOT(A1:A1)"))
+      .put(ref"D1", CellValue.Formula("NOT(Missing!A1)"))
       .put(ref"B1", CellValue.Formula("C1+D1"))
       .put(ref"C1", CellValue.Formula("B1/2"))
     val report = Workbook(sheet)

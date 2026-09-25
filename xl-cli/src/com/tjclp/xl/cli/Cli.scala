@@ -60,7 +60,7 @@ object Cli:
       |
       |Exit codes:
       |  0  ok
-      |  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure
+      |  1  completed with findings or a failed gate (diff differs, lint findings, --strict) — never a failure; nothing written
       |  2  usage — the command line is wrong; nothing read, nothing written
       |  3  failed — the operation could not complete; nothing written
       |Results go to stdout; errors (Error: <message>, then code:/hint: lines) and warnings go to stderr.
@@ -100,7 +100,6 @@ object Cli:
             maxSize,
             stream,
             cmd,
-            strictFailureDiscardsOutput = inPlace,
             io = io,
             mode = mode
           )
@@ -155,7 +154,6 @@ object Cli:
             stream,
             cmd,
             policy,
-            strictFailureDiscardsOutput = inPlace,
             io = io,
             mode = mode
           )
@@ -172,7 +170,7 @@ object Cli:
     val diffOpts = (fileOpt, sheetOpt, maxSizeOpt, jsonOpt, diffCmd).mapN {
       (file, sheet, maxSize, mode, cmd) =>
         cmd match
-          case CliCommand.Diff(file2, format, formulasOnly) =>
+          case CliCommand.Diff(file2, format, formulasOnly, cellsOnly) =>
             runDiff(
               file,
               file2,
@@ -180,6 +178,7 @@ object Cli:
               maxSize,
               CliCommand.diffFormat(format, mode),
               formulasOnly,
+              cellsOnly,
               io,
               mode
             )

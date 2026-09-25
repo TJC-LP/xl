@@ -20,11 +20,16 @@ A1:A1
   "warnings": [],
   "error": {
     "code": "RECALC_GATE",
-    "message": "Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0",
-    "hint": "drop --strict to render cached values and see the failure as a warning",
+    "message": "Formula evaluation failed: Data!A1: Formula error in 'A1+1': Circular reference; without --strict those cells show the file's values",
+    "hint": "drop --strict to render the other cells live and see the failure as a warning",
     "candidates": [],
-    "location": null
+    "location": {
+      "file": null,
+      "sheet": "Data",
+      "ref": "A1",
+      "opIndex": null
+    }
   }
 }
 ## stderr
-Error: Formula evaluation failed: Formula error in '': Circular reference detected: cell_0 → cell_0
+Error: Formula evaluation failed: Data!A1: Formula error in 'A1+1': Circular reference; without --strict those cells show the file's values

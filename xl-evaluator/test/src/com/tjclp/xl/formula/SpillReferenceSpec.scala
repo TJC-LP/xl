@@ -60,6 +60,16 @@ class SpillReferenceSpec extends FunSuite:
   private def value(formula: String): XLResult[CellValue] =
     sheet.evaluateFormula(formula, Clock.system, Some(wb), Some(ref"H1"))
 
+  /** `formula` as an array formula at H1 (a dynamic-array anchor), its anchor value. */
+  private def arrayNumber(formula: String): BigDecimal =
+    val placed = sheet.put(
+      ref"H1",
+      CellValue.Formula(formula, None, FormulaKind.ArrayFormula(CellRange(ref"H1", ref"H1")))
+    )
+    placed.evaluateCell(ref"H1", Clock.system, Some(wb.put(placed))) match
+      case Right(CellValue.Number(v)) => v
+      case other => fail(s"$formula: expected a number, got $other")
+
   private def number(formula: String): BigDecimal =
     value(formula) match
       case Right(CellValue.Number(v)) => v
@@ -74,7 +84,9 @@ class SpillReferenceSpec extends FunSuite:
   test("an uncached dynamic formula's spill is its array evaluation at the anchor") {
     assertEquals(number("=SUM(A1#)"), BigDecimal(6))
     assertEquals(number("=ROWS(A1#)"), BigDecimal(3))
-    assertEquals(number("=SUM(A1#*10)"), BigDecimal(60), "the spill enters array arithmetic")
+    assertEquals(arrayNumber("=SUM(A1#*10)"), BigDecimal(60), "the spill enters array arithmetic")
+    // a plain cell reads an array value under an operator at its top-left, as a legacy formula
+    assertEquals(number("=SUM(A1#*10)"), BigDecimal(10))
     assertEquals(number("=A1#"), BigDecimal(1), "a scalar position collapses to the top-left cell")
   }
 

@@ -2,15 +2,15 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.CfPaint
 import com.tjclp.xl.display.{FormatCodeParser, NumFmtFormatter}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.styles.{CellStyle, Dxf}
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
 import com.tjclp.xl.styles.color.{Color, ThemePalette}
 import com.tjclp.xl.styles.font.Font
 import com.tjclp.xl.styles.numfmt.NumFmt
-
-import scala.util.boundary, boundary.break
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * What a cell lays out as once its number format is applied.
@@ -58,6 +58,19 @@ object ResolvedCell:
     val style = cell.styleId.flatMap(sheet.styleRegistry.get)
     val numFmt = style.map(_.numFmt).getOrElse(NumFmt.General)
     ResolvedCell(cell, style, RenderUtils.renderedContent(cell.value, numFmt))
+
+/**
+ * How many neighbour columns a cell's text spills into on each side (see
+ * [[RenderUtils.overflowSpan]]): its clip box runs from `left` columns before the cell to `right`
+ * columns after it.
+ */
+final case class OverflowSpan(left: Int, right: Int):
+  /** Whether the text reaches past its own cell at all. */
+  def spills: Boolean = left > 0 || right > 0
+
+object OverflowSpan:
+  /** Text that stays inside its own cell. */
+  val none: OverflowSpan = OverflowSpan(0, 0)
 
 /**
  * Shared utilities for rendering.
@@ -150,71 +163,123 @@ object RenderUtils:
   // ========== Text Overflow Calculation ==========
 
   /**
-   * Check if a cell is both empty (no content) and unstyled (no borders/fills).
-   *
-   * Excel prevents text overflow into cells with styling even if they're empty. This helper checks
-   * both content and styling to match Excel's overflow behavior.
-   *
-   * @param ref
-   *   Cell reference to check
-   * @param sheet
-   *   Sheet containing the cell
-   * @return
-   *   true if cell is empty and has no styling (allows overflow)
+   * Whether text may spill into the cell at `ref`: Excel lets it into a cell that holds no value,
+   * whatever that cell's fill, borders, number format or font. Any value blocks — an empty string,
+   * a formula whose result is `""` — and so does every cell of a merged range.
    */
-  private def isCellEmptyAndUnstyled(ref: ARef, sheet: Sheet): Boolean =
-    boundary:
-      import com.tjclp.xl.styles.border.Border
-      import com.tjclp.xl.styles.fill.Fill
-
-      val cellOpt = sheet.cells.get(ref)
-
-      // Check if cell has content
-      val isEmpty = cellOpt.forall { c =>
-        c.value match
-          case CellValue.Empty => true
-          case _ => false
-      }
-      if !isEmpty then break(false)
-
-      // Check if cell has styling (borders or fills) - Excel blocks overflow into styled cells
-      val hasNoStyle = cellOpt.flatMap(_.styleId).flatMap(sheet.styleRegistry.get).forall { style =>
-        style.border == Border.none && style.fill == Fill.None
-      }
-      if !hasNoStyle then break(false)
-
-      // Check if cell is part of a merged region
-      val notMerged = sheet.getMergedRange(ref).isEmpty
-
-      isEmpty && hasNoStyle && notMerged
+  private def allowsOverflowInto(ref: ARef, sheet: Sheet): Boolean =
+    val holdsNoValue = sheet.cells.get(ref).forall { c =>
+      c.value match
+        case CellValue.Empty => true
+        case _ => false
+    }
+    holdsNoValue && sheet.getMergedRange(ref).isEmpty
 
   /**
-   * Calculate overflow colspan for a cell with text that exceeds its width.
+   * The empty neighbour columns a cell's text spills into (Excel's text overflow): how far past
+   * each edge of its own cell the text's clip box reaches. The renderers clip the text to that box
+   * and nothing else — every cell under it keeps its own fill and borders, and the text is drawn
+   * above them.
    *
-   * Only TEXT overflows. A number, date, logical or error never borrows a neighbour, however empty
-   * and whatever the cell's alignment: Excel confines it to its own column and shows `####` when it
-   * does not fit (GH-459, GH-500). For left/centre-aligned text, counts empty cells to the right
-   * until:
-   *   - A non-empty cell is reached
-   *   - The accumulated width covers the text overflow
-   *   - The range boundary is reached
+   * Only TEXT spills. A number, date, logical or error never borrows a neighbour, however empty and
+   * whatever the cell's alignment: Excel confines it to its own column and shows `####` when it
+   * does not fit (GH-459, GH-500). Wrapped text wraps instead, a merged cell clips to its merge,
+   * and a cell in a hidden column (`cellWidth` 0) spills nowhere: Excel never shows it. The
+   * direction follows the alignment the renderers anchor by: left and General text spills right,
+   * right-aligned text spills LEFT, centred text spills both ways while staying centred on its own
+   * cell (clipped on a side whose neighbour blocks). A side stops at the first neighbour that holds
+   * a value or is merged, at the render window's edge, or once it covers the text.
    *
    * @param cell
-   *   The cell to check for overflow, with its style and rendered content resolved
+   *   the cell, with its style and rendered content resolved
    * @param cellRef
-   *   The cell reference
+   *   the cell's reference
    * @param cellWidth
-   *   The width of the cell in pixels
+   *   the cell's width in pixels
    * @param colWidths
-   *   Vector of column widths (indexed from startCol)
+   *   the window's column widths, indexed from `startCol`
    * @param sheet
-   *   The sheet containing the data
+   *   the sheet holding the neighbours
    * @param startCol
-   *   The starting column index of the range
+   *   the window's first column (0-based)
    * @param endCol
-   *   The ending column index of the range
-   * @return
-   *   The colspan (1 if no overflow, >1 if overflowing into adjacent cells)
+   *   the window's last column (0-based)
+   */
+  def overflowSpan(
+    cell: ResolvedCell,
+    cellRef: ARef,
+    cellWidth: Int,
+    colWidths: IndexedSeq[Int],
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int
+  ): OverflowSpan =
+    val style = cell.style
+    val spills = cell.content.kind match
+      case RenderedKind.Text => !style.exists(_.align.wrapText)
+      case _ => false
+    if !spills || cellWidth <= 0 || sheet.getMergedRange(cellRef).isDefined then OverflowSpan.none
+    else
+      // Size the span from what the renderers DRAW — the formatted text — never the raw value:
+      // a rounding format must not claim neighbours for digits it never shows, and a widening
+      // one must get the room its text needs (GH-502).
+      val textWidth = measureContentWidth(cell.cell.value, cell.content, style.map(_.font))
+      val (pastLeft, pastRight) = textOverhang(cell.align, style, cellWidth, textWidth)
+      def side(step: Int, need: Double): Int =
+        emptyNeighbours(cellRef, step, need, colWidths, sheet, startCol, endCol)
+      OverflowSpan(side(-1, pastLeft), side(1, pastRight))
+
+  /**
+   * How far (px) text of `textWidth` reaches past the left and right edges of its cell, placed the
+   * way SvgRenderer places it: left text starts `CellPaddingX` plus the indent in; right text ends
+   * `CellPaddingX` in, but is clamped to start at the cell's left edge while it fits the cell;
+   * centred text is centred half an indent right of the middle.
+   */
+  private def textOverhang(
+    align: HAlign,
+    style: Option[CellStyle],
+    cellWidth: Int,
+    textWidth: Int
+  ): (Double, Double) =
+    val indentPx = style.map(_.align.indent).getOrElse(0) * IndentPxPerLevel
+    align match
+      case HAlign.Left | HAlign.General =>
+        (0.0, (CellPaddingX + indentPx + textWidth - cellWidth).toDouble)
+      case HAlign.Right =>
+        if textWidth <= cellWidth then (0.0, 0.0)
+        else ((textWidth + CellPaddingX - cellWidth).toDouble, 0.0)
+      case HAlign.Center | HAlign.CenterContinuous =>
+        val middle = cellWidth / 2 + indentPx / 2
+        (textWidth / 2.0 - middle, middle + textWidth / 2.0 - cellWidth)
+      case _ => (0.0, 0.0)
+
+  /**
+   * How many consecutive neighbours from `cellRef` in direction `step` (-1 left, +1 right) the text
+   * takes to cover `need` px: it stops at a neighbour that blocks, at the window's edge, or once
+   * the columns taken cover the need.
+   */
+  private def emptyNeighbours(
+    cellRef: ARef,
+    step: Int,
+    need: Double,
+    colWidths: IndexedSeq[Int],
+    sheet: Sheet,
+    startCol: Int,
+    endCol: Int
+  ): Int =
+    val row = cellRef.row.index0
+
+    @scala.annotation.tailrec
+    def loop(col: Int, taken: Int, covered: Int): Int =
+      if covered >= need || col < startCol || col > endCol then taken
+      else if !allowsOverflowInto(ARef.from0(col, row), sheet) then taken
+      else loop(col + step, taken + 1, covered + colWidths.lift(col - startCol).getOrElse(0))
+
+    if need <= 0 then 0 else loop(cellRef.col.index0 + step, 0, 0)
+
+  /**
+   * The rightward extent of a cell's text overflow as a colspan: 1 plus the empty neighbours its
+   * text spills into on the RIGHT (see [[overflowSpan]], which also reports a leftward spill).
    */
   def calculateOverflowColspan(
     cell: ResolvedCell,
@@ -225,45 +290,7 @@ object RenderUtils:
     startCol: Int,
     endCol: Int
   ): Int =
-    import scala.util.boundary, boundary.break
-
-    boundary:
-      val style = cell.style
-
-      // If wrapText is true, text wraps instead of overflowing
-      if style.exists(_.align.wrapText) then break(1)
-
-      // A kind that hashes never spans: Excel draws a too-wide number, date, logical or error
-      // as #### inside its own column, empty neighbour or not, Left/Center alignment or not.
-      // Gating here — before the alignment match — is what lets hashOverflowText see the
-      // cell's OWN width instead of an already widened span (GH-500).
-      if hashesOnOverflow(cell.content.kind) then break(1)
-
-      val font = style.map(_.font)
-      // Size the span from what the renderers DRAW — the formatted text — never the raw value:
-      // a rounding format must not claim neighbours for digits it never shows, and a widening
-      // one must get the room its text needs (GH-502).
-      val textWidth = measureContentWidth(cell.cell.value, cell.content, font)
-
-      // If text fits within cell, no overflow needed
-      if textWidth <= cellWidth then break(1)
-
-      // Determine overflow direction based on alignment: the same resolution the renderers use
-      // when they anchor the text.
-      cell.align match
-        case HAlign.Left | HAlign.General =>
-          // Overflow to the right (General alignment for text behaves like Left)
-          countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
-        case HAlign.Center | HAlign.CenterContinuous =>
-          // Center-aligned text can overflow right (like Excel)
-          // Excel allows center text to bleed into empty cells on the right
-          countEmptyToRight(cellRef, cellWidth, colWidths, sheet, startCol, endCol, textWidth)
-        case HAlign.Right =>
-          // Right-aligned text clips in Excel (doesn't overflow left)
-          // This matches Excel's actual behavior
-          1
-        case _ =>
-          1
+    1 + overflowSpan(cell, cellRef, cellWidth, colWidths, sheet, startCol, endCol).right
 
   /** [[calculateOverflowColspan]] resolving `cell`'s style and content against `sheet` first. */
   def calculateOverflowColspan(
@@ -284,45 +311,6 @@ object RenderUtils:
       startCol,
       endCol
     )
-
-  /**
-   * Count how many adjacent empty cells to the right can accommodate text overflow.
-   *
-   * @return
-   *   colspan (1 + number of empty cells needed to fit overflow)
-   */
-  private def countEmptyToRight(
-    cellRef: ARef,
-    cellWidth: Int,
-    colWidths: IndexedSeq[Int],
-    sheet: Sheet,
-    startCol: Int,
-    endCol: Int,
-    textWidth: Int
-  ): Int =
-    val colIdx = cellRef.col.index0
-
-    // Use tail recursion to iterate through cells
-    @scala.annotation.tailrec
-    def loop(nextCol: Int, colspan: Int, accumulatedWidth: Int): Int =
-      if nextCol > endCol || accumulatedWidth >= textWidth then colspan
-      else
-        val nextRef = ARef.from0(nextCol, cellRef.row.index0)
-
-        // Use helper to check if cell allows overflow (empty AND unstyled)
-        if !isCellEmptyAndUnstyled(nextRef, sheet) then
-          // Stop - can't overflow into non-empty, styled, or merged cell
-          colspan
-        else
-          // Include this empty unstyled cell in the overflow span
-          val widthIdx = nextCol - startCol
-          val newWidth =
-            if widthIdx >= 0 && widthIdx < colWidths.length then
-              accumulatedWidth + colWidths(widthIdx)
-            else accumulatedWidth
-          loop(nextCol + 1, colspan + 1, newWidth)
-
-    loop(colIdx + 1, 1, cellWidth)
 
   // ========== Numeric Overflow Marker (####) ==========
 
@@ -538,25 +526,29 @@ object RenderUtils:
     range: CellRange,
     scaleFactor: Double = 1.0
   ): IndexedSeq[Int] =
-    val startCol = range.start.col.index0
-    val endCol = range.end.col.index0
+    (range.start.col.index0 to range.end.col.index0).map(columnWidthPx(sheet, _, scaleFactor))
 
-    (startCol to endCol).map { colIdx =>
-      val col = Column.from0(colIdx)
-      val props = sheet.getColumnProperties(col)
-      if props.hidden then 0
-      else
-        val baseWidth = props.width
-          .map(excelColWidthToPixels)
-          .getOrElse(
-            sheet.defaultColumnWidth
-              .map(excelColWidthToPixels)
-              .getOrElse(DefaultColumnWidthPx)
-          )
-        (baseWidth * scaleFactor).toInt
-    }
+  /** One column's width in pixels: 0 when hidden, else its own width or the sheet's default. */
+  private def columnWidthPx(sheet: Sheet, colIdx: Int, scaleFactor: Double): Int =
+    val props = sheet.getColumnProperties(Column.from0(colIdx))
+    if props.hidden then 0
+    else
+      val baseWidth = props.width
+        .map(excelColWidthToPixels)
+        .getOrElse(
+          sheet.defaultColumnWidth
+            .map(excelColWidthToPixels)
+            .getOrElse(DefaultColumnWidthPx)
+        )
+      (baseWidth * scaleFactor).toInt
 
-  /** Calculate row heights for a range, respecting sheet properties. */
+  // ========== Row Heights (Excel autofit) ==========
+
+  /**
+   * Calculate row heights for a range. A row with an explicit height keeps it exactly and a hidden
+   * row is 0; every other row takes the height its content needs, as Excel autofits it, and never
+   * less than the sheet's default row height (see [[autofitRowHeights]]).
+   */
   def calculateRowHeights(
     sheet: Sheet,
     range: CellRange,
@@ -564,29 +556,211 @@ object RenderUtils:
   ): IndexedSeq[Int] =
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+    val content = autofitRowHeights(sheet, startRow, endRow)
+    (startRow to endRow).map(r => rowHeightPx(sheet, Row.from0(r), content.get(r), scaleFactor))
 
-    (startRow to endRow).map { rowIdx =>
-      val row = Row.from0(rowIdx)
-      getRowHeight(sheet, row, scaleFactor)
-    }
-
-  /** Get the height of a single row in pixels. */
+  /**
+   * Get the height of a single row in pixels (see [[calculateRowHeights]]). Autofit reads the row's
+   * cells, so a renderer sizes its window with one [[calculateRowHeights]] call instead.
+   */
   def getRowHeight(sheet: Sheet, row: Row, scaleFactor: Double = 1.0): Int =
+    val r = row.index0
+    rowHeightPx(sheet, row, autofitRowHeights(sheet, r, r).get(r), scaleFactor)
+
+  private def rowHeightPx(
+    sheet: Sheet,
+    row: Row,
+    contentPx: Option[Int],
+    scaleFactor: Double
+  ): Int =
     val props = sheet.getRowProperties(row)
     if props.hidden then 0
     else
       val baseHeight = props.height
         .map(excelRowHeightToPixels)
-        .getOrElse(
-          sheet.defaultRowHeight
-            .map(excelRowHeightToPixels)
-            .getOrElse(DefaultCellHeightPx)
-        )
+        .getOrElse(math.max(defaultRowHeightPx(sheet), contentPx.getOrElse(0)))
       (baseHeight * scaleFactor).toInt
+
+  private def defaultRowHeightPx(sheet: Sheet): Int =
+    sheet.defaultRowHeight.map(excelRowHeightToPixels).getOrElse(DefaultCellHeightPx)
+
+  /** The size of the book's base font: the style in registry slot 0 (Excel's Normal style). */
+  private def baseFontPt(sheet: Sheet): Double =
+    sheet.styleRegistry.get(StyleId(0)).fold(DefaultFontSize.toDouble)(_.font.sizePt)
+
+  /**
+   * Excel's autofit height, in whole pixels at 96 DPI, of one line of text at `sizePt`: the rounded
+   * Calibri win ascent and descent (1950 and 550 of 2048 font units) plus a pixel above and below.
+   * It reproduces Excel's Calibri autofit rows — 11pt 15pt (20px), 14pt 18.75pt (25px), 18pt
+   * 23.25pt (31px), 24pt 31.5pt (42px) — and depends on no installed font, so a headless sandbox
+   * renders the heights a desktop does. Other families are sized with Calibri's metrics.
+   */
+  private[render] def autofitLineHeightPx(sizePt: Double): Int =
+    val px = sizePt * 4.0 / 3.0
+    val ascent = math.ceil(px * 1950.0 / 2048.0 - 1e-9).toInt
+    val descent = math.round(px * 550.0 / 2048.0).toInt
+    ascent + descent + 2
+
+  /**
+   * The height one line of text at `sizePt` takes in `sheet`: [[autofitLineHeightPx]], except that
+   * the book's base font never needs more than the default row the sheet stores — Excel sized that
+   * row for it, and Calibri's metrics would grow every row of, say, an Arial 10 book by two pixels.
+   * With no stored default the fallback row is Calibri 11's, which says nothing of the base font.
+   */
+  private[render] def lineHeightPx(sheet: Sheet, sizePt: Double): Int =
+    val autofit = autofitLineHeightPx(sizePt)
+    sheet.defaultRowHeight match
+      case Some(stored) if sizePt == baseFontPt(sheet) =>
+        math.min(autofit, excelRowHeightToPixels(stored))
+      case _ => autofit
+
+  /** The largest font a value draws in: its largest rich-text run, else the cell's own font. */
+  private[render] def largestFontPt(value: CellValue, cellFontPt: Double): Double =
+    value match
+      case CellValue.RichText(rt) =>
+        rt.runs.map(_.font.fold(cellFontPt)(_.sizePt)).maxOption.getOrElse(cellFontPt)
+      case _ => cellFontPt
+
+  /**
+   * How far above a cell's bottom edge a bottom-aligned baseline sits: the line's descent (a
+   * quarter of its em), and never less than 4px, so the descenders of a large font stay inside an
+   * autofitted row.
+   */
+  private[render] def baselineInsetPx(sizePt: Double): Int =
+    math.max(4, math.ceil(sizePt * 4.0 / 3.0 / 4.0 - 1e-9).toInt)
+
+  /**
+   * The height each row in `startRow..endRow` needs for its content, for the rows Excel autofits
+   * (no explicit height, not hidden): the tallest cell's need, where a cell needs the line height
+   * of its largest font (rich-text runs included) times its line count — one, or for wrapped text
+   * the lines [[wrapText]] breaks it into at its column's width, exactly as SvgRenderer draws it.
+   *
+   * Every cell of a row counts, not only the rendered window's columns, in ONE pass over the
+   * sheet's cells per call. Cells without a value, cells in a merged range (Excel's autofit ignores
+   * merges) and cells in hidden columns do not count. A row with no counting cell is absent.
+   */
+  private[render] def autofitRowHeights(sheet: Sheet, startRow: Int, endRow: Int): Map[Int, Int] =
+    val merges = sheet.mergedRanges.filter { m =>
+      m.start.row.index0 <= endRow && m.end.row.index0 >= startRow
+    }
+    sheet.cells.valuesIterator.foldLeft(Map.empty[Int, Int]) { (acc, cell) =>
+      val r = cell.ref.row.index0
+      if r < startRow || r > endRow then acc
+      else
+        val props = sheet.getRowProperties(cell.ref.row)
+        if props.height.isDefined || props.hidden || merges.exists(_.contains(cell.ref)) then acc
+        else
+          contentHeightPx(cell, sheet) match
+            case Some(h) if h > acc.getOrElse(r, 0) => acc.updated(r, h)
+            case _ => acc
+    }
+
+  /** The height a cell's content needs (see [[autofitRowHeights]]); None when it needs none. */
+  private def contentHeightPx(cell: Cell, sheet: Sheet): Option[Int] =
+    val width = columnWidthPx(sheet, cell.ref.col.index0, 1.0)
+    cell.value match
+      case CellValue.Empty => None
+      case _ if width <= 0 => None
+      case value =>
+        val style = cell.styleId.flatMap(sheet.styleRegistry.get)
+        val fontPt = largestFontPt(value, style.fold(baseFontPt(sheet))(_.font.sizePt))
+        val lines = value match
+          // SvgRenderer draws rich text on one line, wrapText or not
+          case CellValue.RichText(_) => 1
+          case _ if style.exists(_.align.wrapText) =>
+            val text = renderedContent(value, style.fold(NumFmt.General)(_.numFmt)).text
+            wrapText(text, width - CellPaddingX * 2, style.map(_.font)).size
+          case _ => 1
+        Some(lines * lineHeightPx(sheet, fontPt))
+
+  // ========== Text Wrapping ==========
+
+  /**
+   * Break `text` into lines no wider than `maxWidth` px, at whitespace; a too-long word stands
+   * alone.
+   */
+  private[render] def wrapText(text: String, maxWidth: Int, font: Option[Font]): List[String] =
+    if maxWidth <= 0 || text.isEmpty then List(text)
+    else
+      val words = text.split("\\s+").toList
+      if words.isEmpty then List("")
+      else wrapWords(words, maxWidth, font)
+
+  @scala.annotation.tailrec
+  private def wrapWords(
+    words: List[String],
+    maxWidth: Int,
+    font: Option[Font],
+    lines: List[String] = Nil,
+    currentLine: String = ""
+  ): List[String] =
+    words match
+      case Nil =>
+        if currentLine.isEmpty then lines.reverse
+        else (currentLine :: lines).reverse
+      case word :: rest =>
+        val testLine = if currentLine.isEmpty then word else s"$currentLine $word"
+        if measureTextWidth(testLine, font) <= maxWidth then
+          wrapWords(rest, maxWidth, font, lines, testLine)
+        else if currentLine.isEmpty then
+          // Word is too long to fit on a line, force it
+          wrapWords(rest, maxWidth, font, word :: lines, "")
+        else
+          // Start a new line with this word
+          wrapWords(rest, maxWidth, font, currentLine :: lines, word)
 
   /** Get cell value as plain text with formatting: the text of [[renderedContent]]. */
   def cellValueToText(value: CellValue, numFmt: NumFmt): String =
     renderedContent(value, numFmt).text
+
+  // ========== Conditional formatting (GH-497) ==========
+
+  /** How far a data bar is inset from each edge of its cell, in pixels. */
+  private[render] val DataBarInsetPx: Int = 2
+
+  /**
+   * A data bar's width in whole pixels: `fraction` of the cell's width inside both insets. The one
+   * geometry both renderers draw, so a bar is as wide in HTML as in SVG and every raster.
+   */
+  private[render] def dataBarWidth(fraction: Double, cellWidth: Int): Int =
+    math.round(fraction * math.max(0, cellWidth - 2 * DataBarInsetPx)).toInt
+
+  /**
+   * `resolved` under a conditional-format paint: the paint's dxf laid over the cell's own style
+   * (the default style for an unstyled cell), and its content re-resolved when the dxf carries a
+   * number format — so a CF format changes the drawn text, its alignment and its `####` decision,
+   * and a CF font feeds the overflow measurement, as Excel measures what it displays. A paint that
+   * carries only a data bar leaves the cell as it is.
+   *
+   * Layout is never repainted: overflow blocking reads neighbour values, and autofit row heights
+   * read the base styles — Excel sizes rows from the cells' own fonts, not from rules that come and
+   * go with the data.
+   */
+  private[render] def painted(resolved: ResolvedCell, paint: Option[CfPaint]): ResolvedCell =
+    paint.map(_.dxf).filter(_ != Dxf()) match
+      case None => resolved
+      case Some(dxf) =>
+        val style = dxf.applyTo(resolved.style.getOrElse(CellStyle.default))
+        val content =
+          if dxf.numFmt.isDefined then renderedContent(resolved.cell.value, style.numFmt)
+          else resolved.content
+        resolved.copy(style = Some(style), content = content)
+
+  /** Whether a paint strikes the text through: strike is a dxf attribute `Font` cannot carry. */
+  private[render] def strikes(paint: Option[CfPaint]): Boolean =
+    paint.exists(_.dxf.font.flatMap(_.strike).contains(true))
+
+  /** Whether a paint hides the cell's value: a data bar drawn with `showValue = false`. */
+  private[render] def hidesValue(paint: Option[CfPaint]): Boolean =
+    paint.flatMap(_.bar).exists(!_.showValue)
+
+  /** The `text-decoration` an underline and a strike draw, when either is on. */
+  private[render] def textDecoration(underline: Boolean, strike: Boolean): Option[String] =
+    (underline, strike) match
+      case (true, true) => Some("underline line-through")
+      case (true, false) => Some("underline")
+      case (false, true) => Some("line-through")
+      case (false, false) => None
 
 /**
  * Base trait for cell renderers.

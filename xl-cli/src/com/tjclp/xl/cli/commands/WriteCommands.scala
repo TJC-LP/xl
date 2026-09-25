@@ -566,7 +566,10 @@ object WriteCommands:
       )
       cachedValue =
         if policy.noRecalc then
-          SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+          // evaluated as the plain cell it becomes: at its position (a legacy formula)
+          SheetEvaluator
+            .evaluateFormula(sheet)(fullFormula, workbook = Some(wb), currentCell = Some(ref))
+            .toOption
         else None
       sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
       // Auto-apply date format if formula involves date functions
@@ -662,7 +665,13 @@ object WriteCommands:
               ).map { _ =>
                 val cachedValue =
                   if policy.noRecalc then
-                    SheetEvaluator.evaluateFormula(sheet)(fullFormula, workbook = Some(wb)).toOption
+                    SheetEvaluator
+                      .evaluateFormula(sheet)(
+                        fullFormula,
+                        workbook = Some(wb),
+                        currentCell = Some(ref)
+                      )
+                      .toOption
                   else None
                 (ref, CellValue.Formula(formula, cachedValue))
               }
@@ -709,7 +718,13 @@ object WriteCommands:
         val fullShiftedFormula = s"=$shiftedFormula"
         val cachedValue =
           if cacheFormulas then
-            SheetEvaluator.evaluateFormula(s)(fullShiftedFormula, workbook = Some(wb)).toOption
+            SheetEvaluator
+              .evaluateFormula(s)(
+                fullShiftedFormula,
+                workbook = Some(wb),
+                currentCell = Some(targetRef)
+              )
+              .toOption
           else None
         val recorded =
           if shifted.anyVoided then hits :+ OffGridRef(targetRef, shifted.voided) else hits
@@ -1404,7 +1419,9 @@ object WriteCommands:
     }
 
   /**
-   * GH-496: the `--strict` gate. The write has already happened; this only decides the exit code.
+   * GH-496: the `--strict` gate. The verb has already written its output path — in the CLI always a
+   * staging file; this only decides the outcome, and the runner publishes the staged file only on
+   * exit 0 (#677).
    *
    * Advisory by default (the summary is returned as-is, exit 0). Under `--strict` a recalculation
    * that reported formula errors, left a cyclic component unconverged (exhausted its budget or
@@ -1528,7 +1545,8 @@ object WriteCommands:
    * Formula errors (circular references, bad refs) are data conditions, not tool failures: failing
    * cells are left uncached — exactly as Excel leaves them — the workbook is still written, and the
    * errors are reported in the summary. Callers exit 0 unless `--strict` is set (GH-496), which
-   * promotes errors, non-convergence and seed warnings to exit 1 — the file is written either way.
+   * promotes errors, non-convergence and seed warnings to exit 1 — the staged file is written
+   * either way; the runner withholds it on a gate failure (#677).
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -1682,16 +1700,23 @@ object WriteCommands:
 
   /**
    * `--no-recalc` (GH-468) leaves every cache in the book as it was but still caches the formulas
-   * the fill wrote: each uncached plain formula in the target is evaluated in row-major order
-   * against the filled sheet, so a filled cell sees the filled cells before it.
+   * the fill wrote: each uncached plain or array formula in the target is evaluated in row-major
+   * order against the filled sheet, so a filled cell sees the filled cells before it. A cell
+   * evaluates at its position and by its record kind, so a filled single-cell array formula caches
+   * the array value and stays an array formula.
    */
   private def cacheFilledFormulas(filled: Sheet, wb: Workbook, target: CellRange): Sheet =
     target.cellsRowMajor.foldLeft(filled) { (s, ref) =>
       s.cells.get(ref).map(_.value) match
-        case Some(CellValue.Formula(expr, None, _: FormulaKind.Normal)) =>
-          val cached =
-            SheetEvaluator.evaluateFormula(s)(s"=$expr", workbook = Some(wb.put(s))).toOption
-          s.put(ref, CellValue.Formula(expr, cached))
+        case Some(
+              formula @ CellValue.Formula(
+                _,
+                None,
+                _: (FormulaKind.Normal | FormulaKind.ArrayFormula)
+              )
+            ) =>
+          val cached = SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
+          s.put(ref, formula.copy(cachedValue = cached))
         case _ => s
     }
 

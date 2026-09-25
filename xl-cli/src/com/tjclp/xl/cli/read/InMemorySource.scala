@@ -9,11 +9,13 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.ViewFormat
-import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Warning, WarningCode}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.Resolve
 import com.tjclp.xl.cli.output.RendererCommon
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
-import com.tjclp.xl.formula.{DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.{Clock, DependencyGraph, SheetEvaluator}
+import com.tjclp.xl.formula.eval.{CfEvaluation, LiveRender}
+import com.tjclp.xl.ooxml.worksheet.CfRenderLift
 import com.tjclp.xl.styles.CellStyle
 
 /**
@@ -47,7 +49,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
   ): IO[RecordGrid] =
     named(sheet).flatMap { s =>
       InMemorySource
-        .evaluateSheetFormulas(s, Some(wb), Some(window), strict, warn)
+        .evaluateSheetFormulas(s, Some(wb), window, strict, warn)
         .map(InMemorySource.grid(_, window))
     }
 
@@ -85,8 +87,9 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         Some(InMemorySource.isHidden(s, ref)),
         s.getMergedRange(ref)
       )
-      // ADR-017 §2.10: the bounded cross-sheet graph — precedents at cell granularity (ranges as
-      // their occupied cells), dependents through the symbolic range index. Same-sheet refs are
+      // ADR-017 §2.10: the bounded cross-sheet graph — precedents as declared (each named cell,
+      // each range as one entry: what `deps --depth 1` lists, without its counts, so the line
+      // stays pasteable), dependents through the symbolic range index. Same-sheet refs are
       // unqualified; cross-sheet ones carry the sheet spelled as a formula would (`QualifiedRef`'s
       // own rendering, the printer `deps` uses): `'On-Premise'!G9`, not `On-Premise!G9` (GH-609).
       // Ordered by (sheet, row, column) BEFORE rendering, so the order owes nothing to quoting.
@@ -96,11 +99,15 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
         if q.sheet == s.name then q.ref.toA1 else q.toString
       def listed(qs: Iterable[DependencyGraph.QualifiedRef]): Vector[String] =
         qs.toVector.sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0)).map(show)
+      val declared = graph.declaredPrecedentsOf(current).map {
+        case QualifiedGraph.Node.Cell(q) => show(q)
+        case QualifiedGraph.Node.Range(r) => if r.sheet == s.name then r.a1 else r.toString
+      }
       CellDetail(
         record,
         s.getComment(ref),
         cell.flatMap(_.hyperlink),
-        Some(listed(graph.precedentsOf(current))),
+        Some(declared),
         Some(listed(graph.dependentsOf(current)))
       )
     }
@@ -113,35 +120,63 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
   ): IO[String] =
     named(sheet).flatMap { s =>
       val theme = wb.metadata.theme
-      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning
+      // GH-497: the pictures paint conditional formatting as Excel does — the rules the reader
+      // preserved typed where xl can paint them — from the values they draw
+      val lifted =
+        if s.conditionalFormats.isEmpty then s
+        else s.copy(conditionalFormats = CfRenderLift.lift(s.conditionalFormats))
+      // `gate` is whether an evaluation failure is the --strict gate or an EVAL_FAILED warning.
+      // Under --eval the formulas the paint reads are live too, so it never depends on the window
       def evaluated(gate: Boolean): IO[Sheet] =
         if spec.evalFormulas then
-          InMemorySource.evaluateSheetFormulas(s, Some(wb), Some(window), gate, warn)
-        else IO.pure(s)
+          InMemorySource.evaluateFormulas(
+            lifted,
+            LiveRender.evaluate(lifted, window, Clock.system, Some(wb)),
+            gate,
+            warn
+          )
+        else IO.pure(lifted)
+      // the rendered sheet is the cross-sheet context: cached values, or live under --eval
+      def painted(rendered: Sheet): IO[CfOverlay] =
+        if rendered.conditionalFormats.isEmpty then IO.pure(CfOverlay.empty)
+        else
+          InMemorySource.conditionalPaint(
+            rendered.evaluateConditionalFormats(window, Some(wb.put(rendered)), Clock.system),
+            warn
+          )
+      def toSvg(rendered: Sheet, overlay: CfOverlay): IO[String] =
+        MemoryGuard.blocking(
+          SvgRenderer.toSvg(
+            rendered,
+            window,
+            includeStyles = true,
+            theme = theme,
+            showLabels = spec.showLabels,
+            showGridlines = spec.showGridlines,
+            overlay = overlay
+          )
+        )
       spec.format match
         // The renders build the whole window's markup at once: under the memory guard (GH-636)
         case ViewFormat.Html =>
           evaluated(spec.strict).flatMap { s =>
-            MemoryGuard.blocking(
-              s.toHtml(
-                window,
-                theme = theme,
-                applyPrintScale = spec.printScale,
-                showLabels = spec.showLabels
+            painted(s).flatMap { overlay =>
+              MemoryGuard.blocking(
+                HtmlRenderer.toHtml(
+                  s,
+                  window,
+                  includeStyles = true,
+                  includeComments = true,
+                  theme = theme,
+                  applyPrintScale = spec.printScale,
+                  showLabels = spec.showLabels,
+                  overlay = overlay
+                )
               )
-            )
+            }
           }
         case ViewFormat.Svg =>
-          evaluated(spec.strict).flatMap { s =>
-            MemoryGuard.blocking(
-              s.toSvg(
-                window,
-                theme = theme,
-                showGridlines = spec.showGridlines,
-                showLabels = spec.showLabels
-              )
-            )
-          }
+          evaluated(spec.strict).flatMap(s => painted(s).flatMap(toSvg(s, _)))
         case ViewFormat.Png | ViewFormat.Jpeg | ViewFormat.WebP | ViewFormat.Pdf =>
           spec.rasterOutput match
             case None =>
@@ -156,15 +191,8 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
             case Some(outputPath) =>
               // Raster formats have never gated on --strict: an evaluation failure warns
               evaluated(false).flatMap { rendered =>
-                MemoryGuard
-                  .blocking(
-                    rendered.toSvg(
-                      window,
-                      theme = theme,
-                      showGridlines = spec.showGridlines,
-                      showLabels = spec.showLabels
-                    )
-                  )
+                painted(rendered)
+                  .flatMap(toSvg(rendered, _))
                   .flatMap { svg =>
                     val rasterFormat = spec.format match
                       case ViewFormat.Jpeg => RasterFormat.Jpeg(spec.quality)
@@ -194,6 +222,40 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
 
 object InMemorySource:
 
+  /**
+   * The conditional-format paint of a render (GH-497): `evaluate`'s overlay, each rule it could not
+   * paint warned as CF_NOT_RENDERED. The effect boundary of a CF step: an evaluation that throws —
+   * an evaluator defect, a stack overflow on a deep formula — degrades to an unpainted picture and
+   * one CF_NOT_RENDERED, never INTERNAL; a typed CLI failure (RESOURCE_LIMIT from the memory guard)
+   * is re-raised.
+   */
+  def conditionalPaint(evaluate: => CfEvaluation, warn: Warning => IO[Unit]): IO[CfOverlay] =
+    def unpainted(e: Throwable): IO[CfOverlay] =
+      val detail = Option(e.getMessage).fold("")(m => s": $m")
+      warn(
+        Warning(
+          WarningCode.CF_NOT_RENDERED,
+          s"conditional formatting not rendered: its evaluation failed " +
+            s"(${e.getClass.getSimpleName}$detail); the view is drawn without it"
+        )
+      ).as(CfOverlay.empty)
+    MemoryGuard
+      .blocking {
+        // Fatal to the effect runtime once it escapes the thunk, so caught inside it
+        try Right(evaluate)
+        catch case e: StackOverflowError => Left(e)
+      }
+      .attempt
+      .flatMap {
+        case Right(Right(evaluation)) =>
+          evaluation.unevaluated
+            .traverse_(u => warn(Warning(WarningCode.CF_NOT_RENDERED, u.message)))
+            .as(evaluation.overlay)
+        case Right(Left(overflow)) => unpainted(overflow)
+        case Left(typed: CliException) => IO.raiseError(typed)
+        case Left(other) => unpainted(other)
+      }
+
   /** The projection of a loaded sheet's window: what the sheet-based renderer adapters use. */
   def grid(sheet: Sheet, window: CellRange): RecordGrid =
     val (hiddenRows, hiddenCols) = hiddenLines(sheet, window)
@@ -214,8 +276,9 @@ object InMemorySource:
     base.copy(rows = base.rows.map(_.map { record =>
       record.formula match
         case Some(f) if evaluable(f.kind) =>
+          // the cell as it is: at its position and by its record kind
           val result = SheetEvaluator
-            .evaluateFormula(sheet)(f.text)
+            .evaluateCell(sheet)(record.ref)
             .left
             .map(err => RendererCommon.formatEvalError(err.message))
           CellRecord.evaluated(record, result)
@@ -360,49 +423,77 @@ object InMemorySource:
       a.start.row.index0 <= b.end.row.index0 && b.start.row.index0 <= a.end.row.index0
 
   /**
-   * Evaluate the formula cells of a sheet, replacing them with their computed values so a render
-   * shows live numbers (`view --eval`). Dependency-aware: formulas are evaluated in topological
-   * order, and with a range only the formulas inside it (plus their transitive dependencies) are
-   * evaluated.
+   * Evaluate the formula cells of a window, replacing them with their computed values so a render
+   * shows live numbers (`view --eval`). Dependency-aware and per cell: the window's formulas and
+   * their transitive precedents evaluate in topological order, and a formula that cannot evaluate
+   * no longer sinks the render — it and the formulas blocked behind it keep exactly what the file
+   * holds (the cached value, or the uncached formula), every other formula shows its live value.
    *
    * @param strict
-   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1) or an
-   *   `EVAL_FAILED` warning through `warn`, with the original sheet rendered from its caches
+   *   whether an evaluation failure is the `--strict` gate (`RECALC_GATE`, exit 1, nothing
+   *   rendered) or one `EVAL_FAILED` warning through `warn`, located at the first failing cell
    */
   def evaluateSheetFormulas(
     sheet: Sheet,
     workbook: Option[Workbook],
-    range: Option[CellRange],
+    range: CellRange,
+    strict: Boolean,
+    warn: Warning => IO[Unit]
+  ): IO[Sheet] =
+    evaluateFormulas(
+      sheet,
+      SheetEvaluator.evaluateForRangePerCell(sheet)(range, Clock.system, workbook),
+      strict,
+      warn
+    )
+
+  /**
+   * `sheet` with the live values of `evaluation` written in, its failures the `--strict` gate
+   * (`strict`) or an EVAL_FAILED warning.
+   */
+  private def evaluateFormulas(
+    sheet: Sheet,
+    evaluation: => RangeEvalResult,
     strict: Boolean,
     warn: Warning => IO[Unit]
   ): IO[Sheet] =
     // GH-636: the evaluation builds the dependency graph and every result at once — under the
     // memory guard, so a heap it exhausts is RESOURCE_LIMIT rather than a fatal error
     MemoryGuard
-      .blocking {
-        range match
-          case Some(r) => SheetEvaluator.evaluateForRange(sheet)(r, workbook = workbook)
-          case None => SheetEvaluator.evaluateWithDependencyCheck(sheet)(workbook = workbook)
-      }
-      .flatMap {
-        case Right(results) =>
-          // Sheet.put preserves the existing cell styleId
-          IO.pure(results.foldLeft(sheet) { case (acc, (ref, value)) => acc.put(ref, value) })
-        case Left(error) =>
-          // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
-          // RECALC_GATE, never a failure. The message text is unchanged.
-          if strict then
-            IO.raiseError(
-              CliException(
-                CliError(
-                  ErrorCode.RECALC_GATE,
-                  s"Formula evaluation failed: ${error.message}",
-                  hint =
-                    Some("drop --strict to render cached values and see the failure as a warning")
+      .blocking(evaluation)
+      .flatMap { result =>
+        // Sheet.put preserves the existing cell styleId
+        val evaluated = result.values.foldLeft(sheet) { case (acc, (ref, value)) =>
+          acc.put(ref, value)
+        }
+        result.failures.headOption match
+          case None => IO.pure(evaluated)
+          case Some(first) =>
+            val failed = s"Formula evaluation failed: ${result.summary}"
+            val location = Location(None, Some(first.sheet.value), Some(first.ref.toA1), None)
+            // `view --eval --strict` is a user-requested gate (ADR-017 invariant 5): exit 1 with
+            // RECALC_GATE, never a failure. Nothing renders under the gate, so its message says
+            // what the render without --strict shows.
+            if strict then
+              IO.raiseError(
+                CliException(
+                  CliError(
+                    ErrorCode.RECALC_GATE,
+                    s"$failed; without --strict those cells show the file's values",
+                    hint = Some(
+                      "drop --strict to render the other cells live and see the failure as a " +
+                        "warning"
+                    ),
+                    location = Some(location)
+                  )
                 )
               )
-            )
-          else
-            warn(Warning(WarningCode.EVAL_FAILED, s"Formula evaluation failed: ${error.message}"))
-              .as(sheet)
+            else
+              warn(
+                Warning(
+                  WarningCode.EVAL_FAILED,
+                  s"$failed; those cells show the file's values",
+                  Some(location)
+                )
+              ).as(evaluated)
       }

@@ -26,27 +26,37 @@ private[xl] object SheetEdits:
   // ===== Formula shifting shared by fill / copy / sort =====
 
   /**
-   * The value a cell takes when it moves by `(colDelta, rowDelta)`, with the references the shift
-   * voided (GH-628). A data-table record always copies as its cached constant (GH-430: pasting the
-   * TABLE(...) display text would be a `#NAME?` bomb, and the record would claim a table interior
-   * that does not exist at the target). A formula is shifted; its cache is dropped because it no
-   * longer describes the shifted text.
+   * The value a cell takes when it moves to `target` by `(colDelta, rowDelta)`, with the references
+   * the shift voided (GH-628). A data-table record always copies as its cached constant (GH-430:
+   * pasting the TABLE(...) display text would be a `#NAME?` bomb, and the record would claim a
+   * table interior that does not exist at the target). A formula is shifted; its cache is dropped
+   * because it no longer describes the shifted text.
+   *
+   * A single-cell array formula (a 1x1 CSE record) stays one, re-anchored at `target`: Excel pastes
+   * and fills `{=...}` as `{=...}`, and a plain paste would be a legacy formula computing another
+   * value. A multi-cell array anchor pastes a plain formula, since its record claims cells the
+   * paste does not write.
    */
   private def shifted(
     value: CellValue,
+    target: ARef,
     colDelta: Int,
     rowDelta: Int
   )(using fs: FormulaSupport): XLResult[(CellValue, Vector[String])] =
     value match
       case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
         Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
-      case CellValue.Formula(expr, _, _) =>
+      case CellValue.Formula(expr, _, kind) =>
+        val pastedKind = kind match
+          case arr: FormulaKind.ArrayFormula if arr.ref.width == 1 && arr.ref.height == 1 =>
+            arr.copy(ref = CellRange(target, target))
+          case _ => FormulaKind.Normal()
         fs.shiftReporting(expr, colDelta, rowDelta) match
           case Right(FormulaSupport.Shifted(text, voided)) =>
-            Right((CellValue.Formula(text, None), voided))
+            Right((CellValue.Formula(text, None, pastedKind), voided))
           case Left(refusal: XLError.UnsupportedCapability) => Left(refusal)
           // unparseable: copied as written
-          case Left(_) => Right((CellValue.Formula(expr, None), Vector.empty))
+          case Left(_) => Right((CellValue.Formula(expr, None, pastedKind), Vector.empty))
       case other => Right((other, Vector.empty))
 
   /** `foldLeft` that stops at the first `Left`. */
@@ -154,7 +164,7 @@ private[xl] object SheetEdits:
     sheet.cells.get(sourceRef) match
       case None => Right(acc)
       case Some(sourceCell) =>
-        shifted(sourceCell.value, colDelta, rowDelta).map { (v, voided) =>
+        shifted(sourceCell.value, targetRef, colDelta, rowDelta).map { (v, voided) =>
           (sheet.put(targetRef, v), recordOffGrid(offGrid, targetRef, voided))
         }
 
@@ -204,7 +214,7 @@ private[xl] object SheetEdits:
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
             case CellValue.Formula(_, cachedOpt, _) if valuesOnly =>
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
-            case other => shifted(other, colDelta, rowDelta)
+            case other => shifted(other, tgtRef, colDelta, rowDelta)
           copied.map { (v, voided) =>
             val withValue = s.put(tgtRef, v)
             val styled = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
@@ -302,7 +312,8 @@ private[xl] object SheetEdits:
   /**
    * Sort the rows of `range` by `keys` (a stable sort, so equal keys keep their order). Only cells
    * within the range's columns move; styles and comments move with their rows; a formula that moves
-   * has its relative row references shifted by the displacement and its cache dropped.
+   * has its relative row references shifted by the displacement and its cache dropped (a
+   * single-cell array formula stays one at its new row).
    */
   def sort(
     sheet: Sheet,
@@ -365,7 +376,7 @@ private[xl] object SheetEdits:
                 case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
                   Right(cachedOpt.getOrElse(CellValue.Empty))
                 case v => Right(v)
-            else shifted(cell.value, 0, rowDelta).map(_._1)
+            else shifted(cell.value, newRef, 0, rowDelta).map(_._1)
           moved.map(v => s2.put(Cell(newRef, v, cell.styleId, None, cell.hyperlink)))
         }
     }

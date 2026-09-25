@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -143,10 +143,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           case None =>
             // GH-655: an array-valued argument — a spill reference, a call, range arithmetic —
             // counts the array's rows, as in Excel (ROWS(A1#), ROWS(SEQUENCE(3))); a scalar is 1
-            evalMaybeArrayArg(ctx, expr).map {
-              case ar: ArrayResult => BigDecimal(ar.rows)
-              case _ => BigDecimal(1)
-            }
+            dimensions(ctx, expr).map((rowCount, _) => BigDecimal(rowCount))
       }
     }
 
@@ -164,11 +161,23 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           case None =>
             // GH-655: an array-valued argument counts the array's columns, as in Excel; a scalar
             // is 1
-            evalMaybeArrayArg(ctx, expr).map {
-              case ar: ArrayResult => BigDecimal(ar.cols)
-              case _ => BigDecimal(1)
-            }
+            dimensions(ctx, expr).map((_, colCount) => BigDecimal(colCount))
       }
+    }
+
+  /**
+   * ROWS' and COLUMNS' argument is Excel's reference class: a reference it evaluates to — one IF or
+   * CHOOSE select, the one OFFSET, INDIRECT or INDEX return, a name bound to one — is counted
+   * without reading it (`ROWS(OFFSET(A:A,0,1))` is 1048576), an array by its shape, a scalar as
+   * 1x1. In a plain cell the argument's value positions intersect as everywhere else
+   * (`ROWS(IF(A1:A10>2,A1:A10,A1:A3))` in a row where the condition fails is 3).
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def dimensions(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, (Int, Int)] =
+    ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).map {
+      case RangeOperand(_, range) => (range.height, range.width)
+      case ar: ArrayResult => (ar.rows, ar.cols)
+      case _ => (1, 1)
     }
 
   val address: FunctionSpec[String] { type Args = AddressArgs } =
@@ -296,38 +305,6 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     case _ => None
 
   /**
-   * Excel's implicit intersection of `range` with the formula's own cell: a single cell is itself;
-   * a one-row range yields the cell in the formula's column, a one-column range the cell in the
-   * formula's row; anything else — a 2-D range, or a vector the formula's row/column does not cross
-   * — is `#VALUE!`.
-   */
-  private def intersectionCell(range: CellRange, current: Option[ARef]): Either[EvalError, ARef] =
-    if range.width == 1 && range.height == 1 then Right(range.start)
-    else
-      current match
-        case None =>
-          Left(
-            EvalError.EvalFailed(
-              s"@${range.toA1} (implicit intersection) needs the formula's cell position",
-              Some("@range")
-            )
-          )
-        case Some(cell) =>
-          val col = cell.col.index0
-          val row = cell.row.index0
-          if range.height == 1 && col >= range.colStart.index0 && col <= range.colEnd.index0 then
-            Right(ARef.from0(col, range.rowStart.index0))
-          else if range.width == 1 && row >= range.rowStart.index0 && row <= range.rowEnd.index0
-          then Right(ARef.from0(range.colStart.index0, row))
-          else
-            Left(
-              EvalError.ErrorValue(
-                CellError.Value,
-                Some(s"@${range.toA1}: no cell in the formula's row or column (${cell.toA1})")
-              )
-            )
-
-  /**
    * Shapes that print as one primary — everything the `@` operand slot re-parses unparenthesized.
    */
   private def isPrimaryShape(expr: TExpr[?]): Boolean = expr match
@@ -354,9 +331,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * printer emits `@x`, `FormulaStorage` maps the two at the `<f>` boundary).
    *
    * Semantics: a scalar or a single cell is itself; a range intersects with the formula's cell (see
-   * [[intersectionCell]]) — the cell in the formula's row for a column vector, in its column for a
-   * row vector, `#VALUE!` otherwise; a defined name bound to a range intersects the same way; an
-   * array VALUE (a call result, not a reference) collapses to its top-left element.
+   * [[Evaluator.implicitIntersection]]) — the cell in the formula's row for a column vector, in its
+   * column for a row vector, `#VALUE!` otherwise; a reference a name, a LET name or a function
+   * (OFFSET, INDIRECT, INDEX, IF, CHOOSE…) evaluates to intersects the same way, so `@f` is the
+   * plain cell's `f`; an array VALUE (SEQUENCE, FILTER, arithmetic) collapses to its top-left
+   * element.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   val single: FunctionSpec[CellValue] { type Args = ArgSpec.SumProductArg } =
@@ -366,7 +345,9 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       renderFn = Some((arg, printer) => s"@${renderIntersectionOperand(arg, printer)}")
     ) { (arg, ctx) =>
       def intersect(targetSheet: Sheet, range: CellRange): Either[EvalError, CellValue] =
-        intersectionCell(range, ctx.currentCell).flatMap(rangeCellReader(targetSheet, ctx))
+        Evaluator
+          .implicitIntersection(range, ctx.currentCell)
+          .flatMap(rangeCellReader(targetSheet, ctx))
       def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
         Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).toOption
       arg match
@@ -377,16 +358,34 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
         case Right(expr) =>
           nameLocation(expr).flatMap(resolved) match
             case Some((targetSheet, range)) => intersect(targetSheet, range)
+            // a function that returns a reference (OFFSET, INDIRECT, INDEX, IF, CHOOSE…), a name
+            // computing one, a LET name bound to one: the reference it evaluates to intersects
+            case None if denotesReference(expr) =>
+              ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+                case RangeOperand(targetSheet, range) => intersect(targetSheet, range)
+                case other => Right(topLeft(other))
+              }
             case None =>
               val value = expr match
                 case _: TExpr.PolyRef | _: TExpr.SheetPolyRef | _: TExpr.UnaryPlus[?] =>
                   TExpr.asResolvedValueExpr(expr)
                 case other => other
-              ctx.evalArrayExpr(value.asInstanceOf[TExpr[Any]]).map {
-                case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
-                case scalar => ArrayArithmetic.anyToCellValue(scalar)
-              }
+              ctx.evalArrayExpr(value.asInstanceOf[TExpr[Any]]).map(topLeft)
     }
+
+  /** An array value's top-left element (Empty when empty); a scalar as its CellValue. */
+  private def topLeft(value: Any): CellValue = value match
+    case ar: ArrayResult => if ar.isEmpty then CellValue.Empty else ar(0, 0)
+    case scalar => ArrayArithmetic.anyToCellValue(scalar)
+
+  /** An operand of `@` that may evaluate to a reference rather than an array value. */
+  private def denotesReference(expr: TExpr[?]): Boolean = expr match
+    case call: TExpr.Call[?] => Evaluator.referenceFunctions.contains(call.spec.name)
+    case _: TExpr.NameRef | _: TExpr.SheetNameRef | _: TExpr.BindingRef |
+        _: TExpr.CoercedBindingRef[?] | _: TExpr.Let[?] =>
+      true
+    case TExpr.Coerced(inner, _) => denotesReference(inner)
+    case _ => false
 
   // ===== GH-655: ANCHORARRAY — the spill reference `x#` =====
 

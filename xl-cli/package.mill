@@ -105,8 +105,10 @@ object `package` extends build.XLInternalModule with NativeImageModule {
 
   object test extends ScalaTests with build.XLTestModule {
     // xl-core.test provides the shared ScalaCheck generators (com.tjclp.xl.Generators) the
-    // sheet-rule property (ResolveSpec) draws sheet names from.
-    override def moduleDeps = super.moduleDeps ++ Seq(build.`xl-core`.test)
+    // sheet-rule property (ResolveSpec) draws sheet names from; xl-ooxml.test carries the
+    // real-file fixture corpus (resources and com.tjclp.xl.ooxml.TestFixtures) the diff law runs
+    // over, the xl-cats-effect precedent.
+    override def moduleDeps = super.moduleDeps ++ Seq(build.`xl-core`.test, build.`xl-ooxml`.test)
 
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.0.3",

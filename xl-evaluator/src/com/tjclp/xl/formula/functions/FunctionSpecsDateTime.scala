@@ -107,7 +107,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[LocalDate, DateTripleInt](
       "DATE",
       Arity.three,
-      flags = FunctionFlags(returnsDate = true)
+      flags = FunctionFlags(returnsDate = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (yearExpr, monthExpr, dayExpr) = args
       for
@@ -143,7 +143,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryDate](
       "YEAR",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(date => BigDecimal(date.getYear))
     }
@@ -152,7 +152,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryDate](
       "MONTH",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(date => BigDecimal(date.getMonthValue))
     }
@@ -161,7 +161,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, UnaryDate](
       "DAY",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (expr, ctx) =>
       ctx.evalExpr(expr).map(date => BigDecimal(date.getDayOfMonth))
     }
@@ -170,7 +170,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[LocalDate, DateInt](
       "EOMONTH",
       Arity.two,
-      flags = FunctionFlags(returnsDate = true)
+      flags = FunctionFlags(returnsDate = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (startDateExpr, monthsExpr) = args
       for
@@ -187,7 +187,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[LocalDate, DateInt](
       "EDATE",
       Arity.two,
-      flags = FunctionFlags(returnsDate = true)
+      flags = FunctionFlags(returnsDate = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (startDateExpr, monthsExpr) = args
       for
@@ -202,7 +202,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, DatePairUnit](
       "DATEDIF",
       Arity.three,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, unitExpr) = args
       for
@@ -253,7 +253,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, DatePairOptRange](
       "NETWORKDAYS",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, holidaysOpt) = args
       for
@@ -270,7 +270,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[LocalDate, DateIntOptRange](
       "WORKDAY",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsDate = true)
+      flags = FunctionFlags(returnsDate = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (startDateExpr, daysExpr, holidaysOpt) = args
       for
@@ -289,7 +289,7 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, DatePairOptBasis](
       "YEARFRAC",
       Arity.Range(2, 3),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.arraysOnly)
     ) { (args, ctx) =>
       val (startDateExpr, endDateExpr, basisOpt) = args
       val basisValueEither = basisOpt match

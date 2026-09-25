@@ -4,8 +4,8 @@ import cats.effect.ExitCode
 
 /**
  * Everything a run produced, before anything is printed (ADR-017 §2.4). [[Render]] turns it into
- * the bytes of either mode; `runStagedOutput`'s commit rule reads `outputComplete` exactly as it
- * read the field of the same name on the old `CommandOutcome`.
+ * the bytes of either mode; `runStagedOutput`'s commit rule reads [[publishesOutput]], for `-o` and
+ * `-i` alike.
  *
  * Three shapes, built through the constructors on the companion so the exit code always follows the
  * error code table ([[ExitCodes.forCode]]) and `ok ⇔ error.isEmpty` holds:
@@ -28,6 +28,15 @@ final case class Outcome(
 ) derives CanEqual:
 
   def ok: Boolean = error.isEmpty
+
+  /**
+   * #677: whether the staging step may publish this run's file — only a complete run that exits 0.
+   * A finding or gate (exit 1; a write verb's only one is a failed `--strict` gate) publishes
+   * nothing: `-o` is neither created nor replaced, `-i`'s input stays byte-identical. A failure
+   * (exit 2/3) has no complete output. One rule for both write modes, so a caller checking the exit
+   * code and one checking the file reach the same verdict.
+   */
+  def publishesOutput: Boolean = outputComplete && ok
 
   /** The staging step's verdict: what the payload's `saved`/`written` now say. */
   def committed(target: Option[String]): Outcome =

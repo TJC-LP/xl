@@ -113,13 +113,10 @@ object CopyOps:
           // Sheet.copyRange pastes Empty for an uncached formula; the CLI evaluates it against the
           // source sheet first and pastes the value when the evaluation succeeds.
           liveFormulas.foldLeft(pure) {
-            case (s, (src, expr, None)) =>
+            case (s, (src, _, None)) =>
+              // the source cell as it is: at its position and by its record kind
               SheetEvaluator
-                .evaluateFormula(sourceSheet)(
-                  s"=$expr",
-                  workbook = Some(wb),
-                  currentCell = Some(src)
-                )
+                .evaluateCell(sourceSheet)(src, workbook = Some(wb))
                 .fold(_ => s, value => s.put(targetOf(src), value))
             case (s, _) => s
           }
@@ -153,10 +150,11 @@ object CopyOps:
     def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
       val nextSheet = refs.foldLeft(currentSheet) { (s, ref) =>
         s.cells.get(ref).map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) =>
+          // the pasted record keeps its kind: a single-cell array formula stays one
+          case Some(formula: CellValue.Formula) =>
             val cached =
               SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
-            s.put(ref, CellValue.Formula(expr, cached))
+            s.put(ref, formula.copy(cachedValue = cached))
           case _ => s
       }
       if nextSheet == currentSheet || passesRemaining <= 1 then nextSheet

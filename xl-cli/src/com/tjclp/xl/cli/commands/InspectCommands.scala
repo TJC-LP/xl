@@ -21,7 +21,7 @@ import com.tjclp.xl.workbooks.{CalcMode, CalcPr, DefinedName}
  * answers; this object only resolves arguments and renders.
  *
  * Every listing is deterministic: cells in workbook order (sheet position, row, column) for the
- * audit, [[QualifiedGraph.byPosition]] for dependency layers, sheets in workbook order.
+ * audit, [[QualifiedGraph.nodeOrder]] for dependency layers, sheets in workbook order.
  */
 object InspectCommands:
 
@@ -373,10 +373,13 @@ object InspectCommands:
   // ===========================================================================================
 
   /**
-   * `deps <ref> [--direction precedents|dependents|both] [--depth N|all]`: the cell, then its
-   * precedent and/or dependent layers from [[QualifiedGraph]] — each node with its depth, formula
-   * and value. The ref resolves through the one sheet rule ([[SheetResolver.resolveRef]]); the
-   * parser has already turned the flags into [[Direction]] and [[Depth]] (`Depth.Hops(1)` when
+   * `deps <ref> [--direction precedents|dependents|both] [--depth N|all] [--expand]`: the cell,
+   * then its precedent and/or dependent layers from [[QualifiedGraph]] — each node with its depth,
+   * formula and value. A precedent range is ONE node carrying its occupied-cell and formula counts
+   * ([[QualifiedGraph.declaredPrecedents]]), as Excel's Trace Precedents draws it; `--expand` lists
+   * its occupied cells one by one instead ([[QualifiedGraph.precedents]]). Dependents are formula
+   * cells either way. The ref resolves through the one sheet rule ([[SheetResolver.resolveRef]]);
+   * the parser has already turned the flags into [[Direction]] and [[Depth]] (`Depth.Hops(1)` when
    * `--depth` is absent).
    */
   def deps(
@@ -385,6 +388,7 @@ object InspectCommands:
     refStr: String,
     direction: Direction,
     depth: Depth,
+    expand: Boolean,
     mode: OutputMode
   ): IO[Payload] =
     for
@@ -410,14 +414,21 @@ object InspectCommands:
       val bound = depth match
         case Depth.All => 0
         case Depth.Hops(n) => n
-      val precedents =
-        Option.when(direction != Direction.Dependents)(graph.precedents(start, bound))
+      def cells(layers: Vector[Vector[QualifiedRef]]): Vector[Vector[QualifiedGraph.Node]] =
+        layers.map(_.map(QualifiedGraph.Node.Cell(_)))
+      val precedents = Option.when(direction != Direction.Dependents) {
+        if expand then cells(graph.precedents(start, bound))
+        else graph.declaredPrecedents(start, bound)
+      }
       val dependents =
-        Option.when(direction != Direction.Precedents)(graph.dependents(start, bound))
+        Option.when(direction != Direction.Precedents)(cells(graph.dependents(start, bound)))
       mode match
         case OutputMode.Json =>
-          Payload.Json(depsJson(wb, start, direction, depth, precedents, dependents))
-        case OutputMode.Text => Payload.text(depsText(wb, start, depth, precedents, dependents))
+          Payload.Json(
+            depsJson(wb, graph, start, direction, depth, expand, precedents, dependents)
+          )
+        case OutputMode.Text =>
+          Payload.text(depsText(wb, graph, start, depth, precedents, dependents))
 
   private def valueAt(wb: Workbook, q: QualifiedRef): CellValue =
     wb.sheets.find(_.name == q.sheet).flatMap(_.cells.get(q.ref)).fold(CellValue.Empty)(_.value)
@@ -449,18 +460,48 @@ object InspectCommands:
     case CellValue.Empty => "(empty)"
     case CellValue.Formula(_, cached, _) => cached.fold("(uncached)")(valueText)
 
-  private def nodeJson(wb: Workbook, q: QualifiedRef, depth: Int): ujson.Obj =
-    val value = valueAt(wb, q)
-    ujson.Obj(
-      "ref" -> ujson.Str(q.toString),
-      "depth" -> ujson.Num(depth),
-      "formula" -> formulaOf(value).fold[ujson.Value](ujson.Null)(ujson.Str.apply),
-      "value" -> valueJson(value)
-    )
+  /** A range node's counts: its occupied cells, and how many of those are formulas. */
+  private def rangeCounts(graph: QualifiedGraph, range: QualifiedGraph.DeclaredRange): (Int, Int) =
+    val occupied = graph.occupiedIn(range)
+    (occupied.size, occupied.count(graph.formulas.contains))
 
-  private def layersJson(wb: Workbook, layers: Vector[Vector[QualifiedRef]]): ujson.Arr =
+  // `kind` second, so a reader that switches on it sees it before the fields it gates; a range
+  // keeps every cell-node key (`formula`/`value` null) so `.ref`/`.value` readers never miss one
+  private def nodeJson(
+    wb: Workbook,
+    graph: QualifiedGraph,
+    node: QualifiedGraph.Node,
+    depth: Int
+  ): ujson.Obj =
+    node match
+      case QualifiedGraph.Node.Cell(q) =>
+        val value = valueAt(wb, q)
+        ujson.Obj(
+          "ref" -> ujson.Str(q.toString),
+          "kind" -> ujson.Str("cell"),
+          "depth" -> ujson.Num(depth),
+          "formula" -> formulaOf(value).fold[ujson.Value](ujson.Null)(ujson.Str.apply),
+          "value" -> valueJson(value)
+        )
+      case QualifiedGraph.Node.Range(range) =>
+        val (occupied, formulas) = rangeCounts(graph, range)
+        ujson.Obj(
+          "ref" -> ujson.Str(range.toString),
+          "kind" -> ujson.Str("range"),
+          "depth" -> ujson.Num(depth),
+          "formula" -> ujson.Null,
+          "value" -> ujson.Null,
+          "occupied" -> ujson.Num(occupied),
+          "formulas" -> ujson.Num(formulas)
+        )
+
+  private def layersJson(
+    wb: Workbook,
+    graph: QualifiedGraph,
+    layers: Vector[Vector[QualifiedGraph.Node]]
+  ): ujson.Arr =
     ujson.Arr.from(layers.zipWithIndex.flatMap { (layer, i) =>
-      layer.map(q => nodeJson(wb, q, i + 1))
+      layer.map(node => nodeJson(wb, graph, node, i + 1))
     })
 
   private def depthJson(depth: Depth): ujson.Value = depth match
@@ -469,11 +510,13 @@ object InspectCommands:
 
   private def depsJson(
     wb: Workbook,
+    graph: QualifiedGraph,
     start: QualifiedRef,
     direction: Direction,
     depth: Depth,
-    precedents: Option[Vector[Vector[QualifiedRef]]],
-    dependents: Option[Vector[Vector[QualifiedRef]]]
+    expand: Boolean,
+    precedents: Option[Vector[Vector[QualifiedGraph.Node]]],
+    dependents: Option[Vector[Vector[QualifiedGraph.Node]]]
   ): ujson.Obj =
     val value = valueAt(wb, start)
     ujson.Obj(
@@ -482,26 +525,35 @@ object InspectCommands:
       "value" -> valueJson(value),
       "direction" -> ujson.Str(direction.flag),
       "depth" -> depthJson(depth),
-      "precedents" -> precedents.fold[ujson.Value](ujson.Null)(layersJson(wb, _)),
-      "dependents" -> dependents.fold[ujson.Value](ujson.Null)(layersJson(wb, _))
+      "expand" -> ujson.Bool(expand),
+      "precedents" -> precedents.fold[ujson.Value](ujson.Null)(layersJson(wb, graph, _)),
+      "dependents" -> dependents.fold[ujson.Value](ujson.Null)(layersJson(wb, graph, _))
     )
 
   private def depsText(
     wb: Workbook,
+    graph: QualifiedGraph,
     start: QualifiedRef,
     depth: Depth,
-    precedents: Option[Vector[Vector[QualifiedRef]]],
-    dependents: Option[Vector[Vector[QualifiedRef]]]
+    precedents: Option[Vector[Vector[QualifiedGraph.Node]]],
+    dependents: Option[Vector[Vector[QualifiedGraph.Node]]]
   ): String =
     val depthLabel = depth match
       case Depth.All => "depth all"
       case Depth.Hops(n) => s"depth $n"
-    def describe(q: QualifiedRef): String =
-      val value = valueAt(wb, q)
-      formulaOf(value).fold(valueText(value))(f => s"$f -> ${valueText(value)}")
-    def block(title: String, layers: Vector[Vector[QualifiedRef]]): Vector[String] =
+    // Plain digits, never locale grouping: the line stays deterministic and greppable
+    def count(n: Int, noun: String): String = if n == 1 then s"1 $noun" else s"$n ${noun}s"
+    def describe(node: QualifiedGraph.Node): String = node match
+      case QualifiedGraph.Node.Cell(q) =>
+        val value = valueAt(wb, q)
+        formulaOf(value).fold(valueText(value))(f => s"$f -> ${valueText(value)}")
+      case QualifiedGraph.Node.Range(range) =>
+        val (occupied, formulas) = rangeCounts(graph, range)
+        val formulaNote = if formulas == 0 then "" else s" (${count(formulas, "formula")})"
+        s"range, ${count(occupied, "occupied cell")}$formulaNote"
+    def block(title: String, layers: Vector[Vector[QualifiedGraph.Node]]): Vector[String] =
       val nodes = layers.zipWithIndex.flatMap { (layer, i) =>
-        layer.map(q => s"  ${i + 1}  $q  ${describe(q)}")
+        layer.map(node => s"  ${i + 1}  ${node.label}  ${describe(node)}")
       }
       s"$title ($depthLabel): ${nodes.size}" +: (if nodes.isEmpty then Vector("  (none)")
                                                  else nodes)

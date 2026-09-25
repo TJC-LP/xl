@@ -72,6 +72,23 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(sheet.getComment(ref"B2").map(_.text.toPlainText), Some("unit price"))
     assertEquals(sheet.conditionalFormats.size, 1)
 
+  test("conditional formatting paints through the prelude, SVG and HTML alike (GH-497)"):
+    val window = ref"A1:A3"
+    val sheet = Sheet("CF")
+      .put(ref"A1", 50)
+      .put(ref"A2", 150)
+      .conditionalFormat(
+        window,
+        CfRule.cellIs(CfOperator.GreaterThan, "100", Dxf.fill(Color.Rgb(0xffffc7ce)))
+      )
+    val overlay = sheet.conditionalFormatOverlay(window)
+    assertEquals(overlay.cells.keySet.map(_.toA1), Set("A2"))
+    assert(sheet.toSvg(window, overlay).contains("#FFC7CE"))
+    assert(sheet.toHtml(window, overlay).contains("background-color: #FFC7CE"))
+    assert(!sheet.toSvg(window).contains("#FFC7CE"), "the CF-blind render stays CF-blind")
+    val report = sheet.evaluateConditionalFormats(window, None, Clock.system)
+    assertEquals(report.unevaluated, Vector.empty[CfUnevaluated])
+
   test("range fill := and ARef navigation resolve through the prelude"):
     val sheet = Sheet("Fill").put(ref"A1:B2" := 0)
     assertEquals(sheet.cells.size, 4)
@@ -138,6 +155,20 @@ class ScriptingPreludeTest extends FunSuite:
     assert(FormulaParser.parse("=SUM(A1:A10)").isRight)
     val clock = Clock.system
     assert(clock != null || true)
+
+  test("per-cell range evaluation (view --eval) resolves through the prelude, both overloads"):
+    val sheet = Sheet("Calc")
+      .put(ref"A1", 2)
+      .put(ref"B1", fx"=A1*10")
+      .put(ref"B2", fx"=Missing!A1")
+      .put(ref"B3", fx"=B2+1")
+    val result: RangeEvalResult = sheet.evaluateForRangePerCell(ref"A1:B3", Clock.system, None)
+    assertEquals(result.values.get(ref"B1"), Some(CellValue.Number(BigDecimal(20))))
+    assertEquals(result.failures.map(_.ref), Vector(ref"B2"))
+    assertEquals(result.blocked, Vector(ref"B3"))
+    assert(!result.isClean)
+    assert(result.summary.startsWith("Calc!B2: "), result.summary)
+    assertEquals(sheet.evaluateForRangePerCell(ref"A1:B3"), result)
 
   test("GH-612: RangeForm resolves and whole-column references survive shift and print"):
     assertEquals(FormulaOps.shift("=COUNTIF($A:$A,B1)", 0, 2), Right("=COUNTIF($A:$A,B3)"))
@@ -691,6 +722,32 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(iterative.iterativeCycles.map(_.members.size), Vector(1))
     // the same cycle without the declaration is a finding
     assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))
+
+  test(
+    "ADR-017 §2.10: the declared precedent view (a range is one node) resolves through the prelude"
+  ):
+    val data = SheetName.unsafe("Data")
+    val wb = Workbook(Sheet("Data").put(ref"A1", 1).put(ref"A2", 2).put(ref"B1", fx"=SUM(A:A)+A2"))
+    val graph: QualifiedGraph = QualifiedGraph.of(wb)
+    val b1 = QualifiedRef(data, ref"B1")
+    val nodes: Vector[QualifiedGraph.Node] = graph.declaredPrecedentsOf(b1)
+    assertEquals(nodes.map(_.label), Vector("Data!A:A", "Data!A2"))
+    assertEquals(nodes, nodes.sorted(using QualifiedGraph.nodeOrder))
+    // a nested enum and case class reached through `export formula.graph.QualifiedGraph`
+    val column: Option[QualifiedGraph.DeclaredRange] =
+      nodes.collectFirst { case QualifiedGraph.Node.Range(r) => r }
+    assertEquals(column.map(_.a1), Some("A:A"))
+    assertEquals(column.map(graph.occupiedIn(_).size), Some(2))
+    assertEquals(
+      graph.declaredPrecedents(b1, 0),
+      Vector(
+        Vector(
+          QualifiedGraph.Node.Range(QualifiedGraph.DeclaredRange.of(data, ref"A1:A1048576")),
+          QualifiedGraph.Node.Cell(QualifiedRef(data, ref"A2"))
+        )
+      )
+    )
+    assertEquals(graph.rangeCells.keySet.map(_.toString), Set("Data!A:A"))
 
   // ===== GH-589 (W2.8): scripting completions — one probe per new name =====
 

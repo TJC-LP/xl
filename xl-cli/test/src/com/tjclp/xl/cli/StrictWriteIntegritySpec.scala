@@ -144,7 +144,7 @@ class StrictWriteIntegritySpec extends FunSuite:
           wb,
           Some(wb.sheets.head),
           "C1",
-          List("=NOT(Z1:Z1)"),
+          List("=NOT(Missing!Z1)"),
           out,
           config,
           policy = strict
@@ -200,7 +200,7 @@ class StrictWriteIntegritySpec extends FunSuite:
     withOutput { out =>
       val sheet = Sheet("Data")
         .put(ref"A1", num(1))
-        .put(ref"B1", CellValue.Formula("NOT(A1:A1)", Some(num(1))))
+        .put(ref"B1", CellValue.Formula("IF(A1>0,NOT(Missing!A1),0)", Some(num(1))))
         .put(ref"C1", CellValue.Formula("B1*2", Some(num(2))))
       val summary = failure(
         WriteCommands.put(

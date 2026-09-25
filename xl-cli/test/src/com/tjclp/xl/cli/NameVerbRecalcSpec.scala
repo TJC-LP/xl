@@ -158,7 +158,7 @@ class NameVerbRecalcSpec extends FunSuite:
       Files.deleteIfExists(dir)
   }
 
-  test("name rm --strict exits 1 when a reader is left uncached, like the batch twin") {
+  test("name rm --strict exits 1 when a reader is left uncached, like the batch twin; no file") {
     val dir = Files.createTempDirectory("name-verb-strict")
     try
       val in = dir.resolve("in.xlsx")
@@ -170,6 +170,10 @@ class NameVerbRecalcSpec extends FunSuite:
       assertEquals(run.exit, 1, run.stdout)
       val envelope = ujson.read(run.stdout)
       assertEquals(envelope("error")("code"), ujson.Str("RECALC_GATE"))
+      // #677: a failed gate publishes nothing under -o either
+      assertEquals(envelope("data")("written"), ujson.False)
+      assertEquals(envelope("data")("saved"), ujson.Null)
+      assert(!Files.exists(out), "a failed --strict gate must not create the -o file")
     finally
       val entries = Files.list(dir)
       try entries.forEach(p => Files.deleteIfExists(p))

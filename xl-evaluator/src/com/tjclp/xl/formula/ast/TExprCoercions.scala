@@ -25,6 +25,9 @@ trait TExprCoercions:
     case _: TExpr.NameRef => true
     // GH-394: sheet-qualified names likewise (=EOMONTH(Model!named_date, 0))
     case _: TExpr.SheetNameRef => true
+    // a range in a scalar slot is a value position: a plain cell reads the implicitly intersected
+    // cell, which must coerce to the slot's type (=CHOOSE(D1:D10, ...), =OFFSET(A1, B1:B5, 0))
+    case _: TExpr.RangeRef | _: TExpr.SheetRange => true
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent =>
       true
@@ -37,6 +40,44 @@ trait TExprCoercions:
     // (0 / "" / FALSE / the blank date) — `LEFT("abc",)` is "", `RATE(10,,-100,150)` reads pmt 0
     case TExpr.Missing => true
     case _ => false
+
+  /**
+   * The static scalar kind of a node's value — what an array it yields in array mode must collapse
+   * through at a scalar position (ScalarCoercion.collapseTo). The array-mode typing invariant: any
+   * `TExpr[A]` may evaluate to an ArrayResult in array mode, and every consumer either handles the
+   * array or turns it into a value of its position's type or a Left, never a mistyped value.
+   *
+   * Complete by construction of the as*Expr tables below: a statically typed node survives BARE in
+   * a typed slot only as arithmetic, Aggregate, date-serial nodes and returnsNumeric calls in
+   * numeric slots, returnsDate calls in date slots, ToInt in integer slots and Concat in text
+   * slots; everything else is wrapped in Coerced (isRuntimePolymorphic). None marks nodes whose
+   * value is not pinned by a scalar kind — they reach only Any/CellValue slots, tolerant by design.
+   * No wildcard arm: a new TExpr case must decide its kind here.
+   */
+  private[formula] def scalarKind(expr: TExpr[?]): Option[BindingCoercion] = expr match
+    case TExpr.Add(_, _) | TExpr.Sub(_, _) | TExpr.Mul(_, _) | TExpr.Div(_, _) | TExpr.Pow(_, _) |
+        TExpr.Percent(_) =>
+      Some(BindingCoercion.Numeric)
+    case TExpr.Aggregate(_, _) | TExpr.DateToSerial(_) | TExpr.DateTimeToSerial(_) =>
+      Some(BindingCoercion.Numeric)
+    case TExpr.ToInt(_) => Some(BindingCoercion.Integer)
+    case TExpr.Concat(_, _) => Some(BindingCoercion.Text)
+    case TExpr.Eq(_, _) | TExpr.Neq(_, _) | TExpr.Lt(_, _) | TExpr.Lte(_, _) | TExpr.Gt(_, _) |
+        TExpr.Gte(_, _) =>
+      Some(BindingCoercion.Bool)
+    case TExpr.Coerced(_, target) => Some(target)
+    case TExpr.CoercedBindingRef(_, target) => Some(target)
+    case TExpr.UnaryPlus(inner) => scalarKind(inner)
+    case TExpr.Call(spec, _) =>
+      if spec.flags.returnsNumeric then Some(BindingCoercion.Numeric)
+      else if spec.flags.returnsDate then Some(BindingCoercion.Date)
+      else None
+    case TExpr.Lit(_) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) | TExpr.SheetRef(_, _, _, _) |
+        TExpr.SheetPolyRef(_, _, _) | TExpr.ExternalRef(_, _, _, _) |
+        TExpr.ExternalRange(_, _, _, _) | TExpr.RangeRef(_, _) | TExpr.SheetRange(_, _, _) |
+        TExpr.ErrorLit(_) | TExpr.Missing | TExpr.Let(_, _) | TExpr.BindingRef(_) |
+        TExpr.NameRef(_) | TExpr.SheetNameRef(_, _) =>
+      None
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def coerced[A](expr: TExpr[?], target: BindingCoercion): TExpr[A] =
@@ -66,6 +107,9 @@ trait TExprCoercions:
     case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(ScalarCoercion.dateSerialText(value))
     case TExpr.Lit(value: java.time.LocalDateTime) =>
       TExpr.Lit(ScalarCoercion.dateSerialText(value))
+    // Any other literal (a programmatic AST: a CellValue, an Int, an array) coerces at evaluation
+    // time rather than being cast to a String it is not
+    case lit: TExpr.Lit[?] => coerced[String](lit, BindingCoercion.Text)
     // Concat is String by construction — the only statically text-typed operator
     case c: TExpr.Concat => c
     // GH-302/GH-306: numeric/boolean/array call results render as text at evaluation time
@@ -153,10 +197,10 @@ trait TExprCoercions:
     case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeNumericScalar)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[BigDecimal](name, BindingCoercion.Numeric)
-    // GH-307: cross-typed literals coerce at evaluation time (=SQRT("16") → 4, TRUE → 1);
-    // numeric literals keep their shape
-    case TExpr.Lit(_: String) | TExpr.Lit(_: Boolean) =>
-      coerced[BigDecimal](expr, BindingCoercion.Numeric)
+    // GH-307: cross-typed literals coerce at evaluation time (=SQRT("16") → 4, TRUE → 1, and a
+    // programmatic date, CellValue or array literal likewise); numeric literals keep their shape
+    case TExpr.Lit(_: BigDecimal) => expr.asInstanceOf[TExpr[BigDecimal]]
+    case lit: TExpr.Lit[?] => coerced[BigDecimal](lit, BindingCoercion.Numeric)
     // Date functions return LocalDate/LocalDateTime - convert to Excel serial number
     case call: TExpr.Call[?] if call.spec.flags.returnsDate =>
       DateToSerial(call.asInstanceOf[TExpr[java.time.LocalDate]])
@@ -207,9 +251,10 @@ trait TExprCoercions:
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[Boolean](name, BindingCoercion.Bool)
     // GH-307: cross-typed literals coerce at evaluation time (=IF(1, ...) uses Excel
-    // truthiness; text is a clean error); boolean literals keep their shape
-    case TExpr.Lit(_: BigDecimal) | TExpr.Lit(_: String) =>
-      coerced[Boolean](expr, BindingCoercion.Bool)
+    // truthiness; text is a clean error; a programmatic CellValue or array literal likewise);
+    // boolean literals keep their shape
+    case TExpr.Lit(_: Boolean) => expr.asInstanceOf[TExpr[Boolean]]
+    case lit: TExpr.Lit[?] => coerced[Boolean](lit, BindingCoercion.Bool)
     // GH-333: comparisons are statically Boolean but runtime-polymorphic — over a range operand
     // in array mode they yield an ArrayResult of booleans. Coerce at evaluation time so scalar
     // boolean positions (IFS/AND/OR/NOT conditions) collapse-and-coerce totally instead of

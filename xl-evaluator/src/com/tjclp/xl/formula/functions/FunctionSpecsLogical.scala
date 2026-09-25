@@ -1,7 +1,13 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, BindingCoercion}
-import com.tjclp.xl.formula.eval.{EvalError, ArrayArithmetic, ArrayResult, ScalarCoercion}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  ArrayArithmetic,
+  ArrayResult,
+  RangeOperand,
+  ScalarCoercion
+}
 import com.tjclp.xl.formula.Arity
 
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -25,23 +31,30 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
    * blank cells are ignored, and an error cell propagates. A range with nothing to fold contributes
    * `None`; when no argument contributes at all the function is #VALUE!, as in Excel.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def conditionArg(fnName: String, ctx: EvalContext, expr: TExpr[?])(
     seed: Boolean,
     combine: (Boolean, Boolean) => Boolean
   ): Either[EvalError, Option[Boolean]] =
     val label = s"$fnName condition"
-    // A bare range always arrives as an ArrayResult (evalMaybeArrayArg wraps RangeRef/SheetRange),
-    // so the two shapes differ only in which fold applies to the array: Excel's reference rule
-    // for a range, the array-condition rule for everything else.
-    val isRange = expr match
-      case _: TExpr.RangeRef | _: TExpr.SheetRange => true
-      case _ => false
-    evalMaybeArrayArg(ctx, expr).flatMap {
-      case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
-      case arr: ArrayResult =>
-        ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
-      case scalar => scalarCondition(label, scalar).map(Some(_))
-    }
+    // AND's and OR's arguments are Excel's reference class: a bare range arrives whole as an
+    // ArrayResult and folds by Excel's reference rule; any other expression evaluates in the
+    // formula's mode (in a plain cell its references intersect) and an array result folds by the
+    // array-condition rule.
+    val range = bareRange(expr)
+    val isRange = range.isDefined
+    range
+      .fold(ctx.evalReferenceArg(expr.asInstanceOf[TExpr[Any]]))(evalMaybeArrayArg(ctx, _))
+      .flatMap {
+        // a reference IF/CHOOSE selected, or a range name: Excel's reference rule, as for a range
+        case RangeOperand(target, selected) =>
+          extractRangeAsMatrixEval(selected, target, ctx)
+            .flatMap(m => rangeFold(label, ArrayResult(m), combine))
+        case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
+        case arr: ArrayResult =>
+          ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
+        case scalar => scalarCondition(label, scalar).map(Some(_))
+      }
 
   private def scalarCondition(label: String, scalar: Any): Either[EvalError, Boolean] =
     ScalarCoercion.coerce(label, scalar, BindingCoercion.Bool).flatMap {
@@ -145,12 +158,9 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
       // GH-338: an array condition broadcasts elementwise (Excel NOT is elementwise, not an
       // aggregate); the ArrayResult travels through the erased Boolean slot exactly like
       // comparison results do — cast the Either container, not the value. Scalar conditions
-      // keep Excel truthiness; bare ranges keep their pre-existing "must be used within a
-      // function" error (NOT is elementwise, so there is no reference fold to apply).
-      val evaluated = expr match
-        case _: TExpr.RangeRef | _: TExpr.SheetRange => evalAny(ctx, expr)
-        case other => evalMaybeArrayArg(ctx, other)
-      evaluated.flatMap {
+      // keep Excel truthiness. NOT's operand is a value position: in a plain cell a range is
+      // implicitly intersected (`=NOT(A1:A10>2)` in row 5 is NOT(A5>2)).
+      evalCondition(ctx, expr).flatMap {
         case arr: ArrayResult =>
           ArrayArithmetic
             .broadcastNot("NOT condition", arr)

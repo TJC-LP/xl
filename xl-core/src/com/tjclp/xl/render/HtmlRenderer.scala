@@ -2,6 +2,7 @@ package com.tjclp.xl.render
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cf.{CfBar, CfOverlay}
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
@@ -38,7 +39,7 @@ object HtmlRenderer:
    * @param showLabels
    *   Whether to show column letters (A, B, C...) and row numbers (1, 2, 3...) (default: false)
    * @return
-   *   HTML table string
+   *   HTML table string, without conditional formatting (see the overload taking a [[CfOverlay]])
    */
   def toHtml(
     sheet: Sheet,
@@ -49,6 +50,35 @@ object HtmlRenderer:
     applyPrintScale: Boolean = false,
     showLabels: Boolean = false
   ): String =
+    toHtml(
+      sheet,
+      range,
+      includeStyles,
+      includeComments,
+      theme,
+      applyPrintScale,
+      showLabels,
+      CfOverlay.empty
+    )
+
+  /**
+   * [[toHtml]] with conditional formatting painted from a precomputed `overlay` (GH-497): each
+   * painted cell's dxf is laid over its own style (fill, font, strike, borders, number format) and
+   * its data bar drawn as a gradient background as wide as SvgRenderer's; a painted cell the sheet
+   * does not hold is drawn as an empty one. The overlay comes from xl-evaluator
+   * (`sheet.conditionalFormatOverlay(range)`); an empty overlay renders byte-identically to the
+   * CF-blind [[toHtml]], and `includeStyles = false` ignores it.
+   */
+  def toHtml(
+    sheet: Sheet,
+    range: CellRange,
+    includeStyles: Boolean,
+    includeComments: Boolean,
+    theme: ThemePalette,
+    applyPrintScale: Boolean,
+    showLabels: Boolean,
+    overlay: CfOverlay
+  ): String =
     toHtmlResolving(ResolvedCell(_, _))(
       sheet,
       range,
@@ -56,7 +86,8 @@ object HtmlRenderer:
       includeComments,
       theme,
       applyPrintScale,
-      showLabels
+      showLabels,
+      overlay
     )
 
   /**
@@ -71,12 +102,15 @@ object HtmlRenderer:
     includeComments: Boolean,
     theme: ThemePalette,
     applyPrintScale: Boolean,
-    showLabels: Boolean
+    showLabels: Boolean,
+    overlay: CfOverlay
   ): String =
     val startCol = range.start.col.index0
     val endCol = range.end.col.index0
     val startRow = range.start.row.index0
     val endRow = range.end.row.index0
+    // Conditional formatting is styling: an unstyled render paints none of it
+    val paints = if includeStyles then overlay else CfOverlay.empty
 
     // Calculate print scale factor (100 = 100% = 1.0)
     val scaleFactor =
@@ -84,29 +118,17 @@ object HtmlRenderer:
       else 1.0
 
     // Calculate column widths for <colgroup>
-    val colWidths = (startCol to endCol).map { colIdx =>
-      val col = Column.from0(colIdx)
-      val props = sheet.getColumnProperties(col)
-      if props.hidden then 0
-      else
-        val baseWidth = props.width
-          .map(excelColWidthToPixels)
-          .getOrElse(
-            sheet.defaultColumnWidth
-              .map(excelColWidthToPixels)
-              .getOrElse(DefaultColumnWidthPx)
-          )
-        (baseWidth * scaleFactor).toInt
-    }
+    val colWidths = calculateColumnWidths(sheet, range, scaleFactor)
+    val widthAt: Int => Int = col => colWidths.lift(col - startCol).getOrElse(DefaultColumnWidthPx)
 
-    // Generate <colgroup> element
-    val colgroupCols =
-      if showLabels then
-        // Include row number column first
-        s"""  <col style="width: ${HeaderWidth}px">""" +:
-          colWidths.map(w => s"""  <col style="width: ${w}px">""")
-      else colWidths.map(w => s"""  <col style="width: ${w}px">""")
-    val colgroup = colgroupCols.mkString("<colgroup>\n", "\n", "\n</colgroup>")
+    // Row heights, autofitted exactly as SvgRenderer's (row labels share each <tr>)
+    val rowHeights = calculateRowHeights(sheet, range, scaleFactor)
+
+    // Generate <colgroup> element, the row number column first (if showLabels)
+    val colgroupWidths = if showLabels then HeaderWidth +: colWidths else colWidths
+    val colgroup = colgroupWidths
+      .map(w => s"""  <col style="width: ${w}px">""")
+      .mkString("<colgroup>\n", "\n", "\n</colgroup>")
 
     val sb = new StringBuilder
 
@@ -114,7 +136,9 @@ object HtmlRenderer:
     val headerRow =
       if showLabels then
         val headerCells = (startCol to endCol).map { colIdx =>
-          val colLetter = Column.from0(colIdx).toLetter
+          // A hidden column keeps its zero-width cell but not its letter, which the fixed layout
+          // would draw over the next column's header
+          val colLetter = if widthAt(colIdx) > 0 then Column.from0(colIdx).toLetter else ""
           s"""<td class="xl-header">$colLetter</td>"""
         }
         val cornerCell = """<td class="xl-header"></td>""" // Top-left corner
@@ -132,154 +156,132 @@ object HtmlRenderer:
 
     val tableRows = cellsByRow
       .map { (rowObj, rowCells) =>
-        // Calculate row height
-        val props = sheet.getRowProperties(rowObj)
-        val baseRowHeight =
-          props.height
-            .map(excelRowHeightToPixels)
-            .getOrElse(
-              sheet.defaultRowHeight
-                .map(excelRowHeightToPixels)
-                .getOrElse(DefaultCellHeightPx)
-            )
-        val rowHeight = (baseRowHeight * scaleFactor).toInt
+        val rowHeight = rowHeights(rowObj.index0 - startRow)
 
         // Row number cell (if showLabels)
         val rowNumCell =
           if showLabels then s"""<td class="xl-header">${rowObj.index1}</td>"""
           else ""
 
-        // Track columns covered by text overflow from previous cells in this row
-        val overflowSkipCols = scala.collection.mutable.Set[Int]()
-
         val cellsHtml = rowCells
           .sortBy(_._1.col.index0)
           .flatMap { (ref, cellOpt) =>
             val colIdx = ref.col.index0
 
-            // Skip if this cell is covered by a previous cell's text overflow
-            if overflowSkipCols.contains(colIdx) then None
+            // Check if this cell is an interior cell of a merged region (skip it)
+            val mergeRange = sheet.getMergedRange(ref)
+            val isInteriorMergeCell = mergeRange.exists(_.start != ref)
+            if isInteriorMergeCell then None
             else
-              // Check if this cell is an interior cell of a merged region (skip it)
-              val mergeRange = sheet.getMergedRange(ref)
-              val isInteriorMergeCell = mergeRange.exists(_.start != ref)
-              if isInteriorMergeCell then None
-              else
-                // Check for colspan/rowspan if this is a merge anchor
-                val (mergeColspan, mergeRowspan) = mergeRange match
-                  case Some(range) =>
-                    // Clamp merge region to visible range
-                    val visibleColspan =
-                      math.min(range.end.col.index0, endCol) - ref.col.index0 + 1
-                    val visibleRowspan =
-                      math.min(range.end.row.index0, endRow) - ref.row.index0 + 1
-                    (visibleColspan, visibleRowspan)
-                  case None => (1, 1)
+              // Check for colspan/rowspan if this is a merge anchor
+              val (mergeColspan, mergeRowspan) = mergeRange match
+                case Some(range) =>
+                  // Clamp merge region to visible range
+                  val visibleColspan =
+                    math.min(range.end.col.index0, endCol) - ref.col.index0 + 1
+                  val visibleRowspan =
+                    math.min(range.end.row.index0, endRow) - ref.row.index0 + 1
+                  (visibleColspan, visibleRowspan)
+                case None => (1, 1)
+              val mergeAttrs =
+                (if mergeColspan > 1 then s""" colspan="$mergeColspan"""" else "") +
+                  (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
+              // Cell width: its column, or the sum of its merge's columns
+              val cellWidthPx = (0 until mergeColspan).map(i => widthAt(colIdx + i)).sum
+              // A CF-painted cell the sheet does not hold is drawn as an empty one
+              val paint = paints.at(ref)
 
-                cellOpt match
-                  case None =>
-                    // Empty cell - render normally (no overflow from empty cells)
-                    val mergeAttrs =
-                      (if mergeColspan > 1 then s""" colspan="$mergeColspan"""" else "") +
-                        (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
-                    // Calculate cell width (sum of column widths for colspan)
-                    val cellWidthPx = (0 until mergeColspan).map { i =>
-                      val widthIdx = colIdx - startCol + i
-                      if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
-                      else DefaultColumnWidthPx
-                    }.sum
-                    if includeStyles then
-                      Some(
-                        s"""<td$mergeAttrs style="width: ${cellWidthPx}px; background-color: #FFFFFF; white-space: nowrap; overflow: hidden"></td>"""
-                      )
-                    else Some(s"<td$mergeAttrs></td>")
+              cellOpt.orElse(paint.map(_ => Cell.empty(ref))) match
+                case None =>
+                  if includeStyles then
+                    Some(
+                      s"""<td$mergeAttrs style="width: ${cellWidthPx}px; background-color: #FFFFFF; white-space: nowrap; overflow: hidden"></td>"""
+                    )
+                  else Some(s"<td$mergeAttrs></td>")
 
-                  case Some(cell) =>
-                    // Style and rendered content, resolved ONCE: the span, alignment, hash and
-                    // body below all read them, and resolving re-formats the value and
-                    // re-parses a Custom code.
-                    val resolved = resolve(cell, sheet)
+                case Some(cell) =>
+                  // Style and rendered content, resolved ONCE: the span, alignment, hash and
+                  // body below all read them, and resolving re-formats the value and
+                  // re-parses a Custom code. Then laid under the cell's CF paint.
+                  val resolved = painted(resolve(cell, sheet), paint)
 
-                    // Calculate overflow colspan (only if no merge colspan)
-                    val overflowColspan =
-                      if mergeColspan > 1 then 1 // Merged cells take priority
-                      else
-                        val widthIdx = colIdx - startCol
-                        val cellWidth =
-                          if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
-                          else DefaultColumnWidthPx
-                        calculateOverflowColspan(
-                          resolved,
-                          ref,
-                          cellWidth,
-                          colWidths,
-                          sheet,
-                          startCol,
-                          endCol
-                        )
+                  // Text spilling into empty neighbours keeps ONE <td> per cell (a colspan
+                  // would repaint its fill over theirs and drop their borders): it is drawn in
+                  // a box laid over them. Merged cells never spill.
+                  val span = overflowSpan(
+                    resolved,
+                    ref,
+                    widthAt(colIdx),
+                    colWidths,
+                    sheet,
+                    startCol,
+                    endCol
+                  )
+                  val spills = includeStyles && span.spills
 
-                    // Mark subsequent columns to skip due to overflow
-                    if overflowColspan > 1 then
-                      (1 until overflowColspan).foreach(i => overflowSkipCols += (colIdx + i))
+                  val style =
+                    if includeStyles then cellStyleToInlineCss(resolved, strikes(paint), theme)
+                    else ""
+                  val cellStyle = resolved.style
+                  // Excel's #### marker: a clipped numeral reads as a different, plausible
+                  // number (GH-459). Must agree with SvgRenderer.
+                  val text = hashOverflowText(resolved.content, cellStyle, cellWidthPx)
+                    .getOrElse(cellValueToHtml(resolved, theme))
+                  // A merge's single line is anchored in a box as wide as the merge, as
+                  // SvgRenderer anchors it: a td's own line box overflows only at its end
+                  val boxedInMerge = includeStyles && mergeRange.isDefined &&
+                    !resolved.style.exists(_.align.wrapText)
+                  // A hidden column's content is never shown: a zero-width cell only clips it,
+                  // and a table without inline CSS would not even do that
+                  val content =
+                    if cellWidthPx <= 0 || hidesValue(paint) then ""
+                    else if spills then
+                      textBox("xl-overflow", text, resolved, span, colIdx, cellWidthPx, widthAt)
+                    else if boxedInMerge then
+                      val noSpan = OverflowSpan.none
+                      textBox("xl-merge", text, resolved, noSpan, colIdx, cellWidthPx, widthAt)
+                    else text
+                  // Add default white background if no fill is specified (only when includeStyles)
+                  // Add overflow: hidden unless spilling: a merge clips to itself, as in Excel
+                  // And white-space: nowrap if not explicitly wrapping (Excel default)
+                  val styleAttr =
+                    if !includeStyles then ""
+                    else
+                      val hasBackground = style.contains("background-color")
+                      val hasWhitespace = style.contains("white-space")
+                      // Start with explicit width to match colgroup
+                      val withWidth = s"width: ${cellWidthPx}px"
+                      val baseStyle =
+                        if hasBackground then s"$withWidth; $style"
+                        else if style.isEmpty then s"$withWidth; background-color: #FFFFFF"
+                        else s"$withWidth; background-color: #FFFFFF; $style"
+                      // Add nowrap default if cell has no explicit white-space setting
+                      val withWhitespace =
+                        if hasWhitespace then baseStyle
+                        else s"$baseStyle; white-space: nowrap"
+                      val finalStyle =
+                        if spills then withWhitespace
+                        else s"$withWhitespace; overflow: hidden"
+                      val barCss = paint
+                        .flatMap(_.bar)
+                        .flatMap(dataBarCss(_, cellWidthPx, theme))
+                        .fold("")(css => s"; $css")
+                      s""" style="$finalStyle$barCss""""
 
-                    // Use overflow colspan or merge colspan (merge takes priority)
-                    val effectiveColspan =
-                      if mergeColspan > 1 then mergeColspan else overflowColspan
-                    val mergeAttrs =
-                      (if effectiveColspan > 1 then s""" colspan="$effectiveColspan"""" else "") +
-                        (if mergeRowspan > 1 then s""" rowspan="$mergeRowspan"""" else "")
+                  // Add comment as title attribute (tooltip) if present
+                  val commentAttr =
+                    if includeComments then
+                      sheet
+                        .getComment(ref)
+                        .map { comment =>
+                          val commentText = comment.text.toPlainText
+                          val authorPrefix = comment.author.map(a => s"$a: ").getOrElse("")
+                          s""" title="${escapeHtml(authorPrefix + commentText)}""""
+                        }
+                        .getOrElse("")
+                    else ""
 
-                    val style =
-                      if includeStyles then cellStyleToInlineCss(resolved, theme) else ""
-                    val cellStyle = resolved.style
-                    // Calculate cell width (sum of column widths for colspan)
-                    val cellWidthPx = (0 until effectiveColspan).map { i =>
-                      val widthIdx = colIdx - startCol + i
-                      if widthIdx >= 0 && widthIdx < colWidths.length then colWidths(widthIdx)
-                      else DefaultColumnWidthPx
-                    }.sum
-                    // Excel's #### marker: a clipped numeral reads as a different, plausible
-                    // number (GH-459). Must agree with SvgRenderer.
-                    val content = hashOverflowText(resolved.content, cellStyle, cellWidthPx)
-                      .getOrElse(cellValueToHtml(resolved, theme))
-                    // Add default white background if no fill is specified (only when includeStyles)
-                    // Add overflow: hidden only when not spanning (colspan=1)
-                    // And white-space: nowrap if not explicitly wrapping (Excel default)
-                    val styleAttr =
-                      if !includeStyles then ""
-                      else
-                        val hasBackground = style.contains("background-color")
-                        val hasWhitespace = style.contains("white-space")
-                        // Start with explicit width to match colgroup
-                        val withWidth = s"width: ${cellWidthPx}px"
-                        val baseStyle =
-                          if hasBackground then s"$withWidth; $style"
-                          else if style.isEmpty then s"$withWidth; background-color: #FFFFFF"
-                          else s"$withWidth; background-color: #FFFFFF; $style"
-                        // Add nowrap default if cell has no explicit white-space setting
-                        val withWhitespace =
-                          if hasWhitespace then baseStyle
-                          else s"$baseStyle; white-space: nowrap"
-                        // Only add overflow: hidden when not spanning (text fits or clips)
-                        val finalStyle =
-                          if effectiveColspan > 1 then withWhitespace
-                          else s"$withWhitespace; overflow: hidden"
-                        s""" style="$finalStyle""""
-
-                    // Add comment as title attribute (tooltip) if present
-                    val commentAttr =
-                      if includeComments then
-                        sheet
-                          .getComment(ref)
-                          .map { comment =>
-                            val commentText = comment.text.toPlainText
-                            val authorPrefix = comment.author.map(a => s"$a: ").getOrElse("")
-                            s""" title="${escapeHtml(authorPrefix + commentText)}""""
-                          }
-                          .getOrElse("")
-                      else ""
-
-                    Some(s"<td$mergeAttrs$styleAttr$commentAttr>$content</td>")
+                  Some(s"<td$mergeAttrs$styleAttr$commentAttr>$content</td>")
           }
           .mkString
 
@@ -288,9 +290,11 @@ object HtmlRenderer:
       }
       .mkString("\n")
 
-    // table-layout: fixed ensures column widths from colgroup are respected
+    // table-layout: fixed keeps the colgroup's widths, but only on a table with a width (CSS 2.1
+    // §17.5.2.1): an auto-width table is laid out automatically, and a spilled text box would widen
+    // its own column instead of lying over the neighbours
     val tableStyle =
-      """style="border-collapse: collapse; table-layout: fixed; font-family: Calibri, sans-serif; font-size: 11pt;""""
+      s"""style="border-collapse: collapse; table-layout: fixed; font-family: Calibri, sans-serif; font-size: 11pt; width: ${colgroupWidths.sum}px""""
 
     // Header style (embedded in <style> tag when showLabels)
     val headerStyles =
@@ -311,6 +315,49 @@ object HtmlRenderer:
 $colgroup
 $headerRow$tableRows
 </table>"""
+
+  /**
+   * The box a single line of text is drawn in: SvgRenderer's clip box. For a spill (`xl-overflow`)
+   * that is exactly the columns [[RenderUtils.overflowSpan]] grants it, laid over its neighbours
+   * from inside the source `<td>`, which is left without `overflow: hidden`. CSS paints every table
+   * cell's background and border before any cell's text, so the text lies above the neighbours'
+   * fills, each still painted by its own `<td>`. For a merge (`xl-merge`, with no span) it is the
+   * merge itself.
+   *
+   * The box is pulled left, out of the source cell's content box (its indent padding included),
+   * over the leftward span and clips to the whole span. A flex row anchors the text: unlike a line
+   * box, which always overflows towards its end, a `flex-end` or `center` item overflows towards
+   * the start too — right-aligned text spills (or is clipped) left, centred text both ways. Padding
+   * on the longer side keeps centred text centred on its own cell when one side is blocked.
+   */
+  private def textBox(
+    cssClass: String,
+    content: String,
+    cell: ResolvedCell,
+    span: OverflowSpan,
+    col: Int,
+    cellWidth: Int,
+    widthAt: Int => Int
+  ): String =
+    val leftPx = (col - span.left until col).map(widthAt).sum
+    val rightPx = (col + 1 to col + span.right).map(widthAt).sum
+    val indentPx = cell.style.map(_.align.indent).getOrElse(0) * IndentPxPerLevel
+    // Left of the box to the text's centre, minus the centre to the box's right: the cell's
+    // centre is half an indent right of its middle, as in SvgRenderer
+    val lean = leftPx - rightPx + indentPx
+    val (justify, padding) = cell.align match
+      case HAlign.Right => ("flex-end", "")
+      case HAlign.Center | HAlign.CenterContinuous =>
+        val pad =
+          if lean > 0 then s" padding-left: ${lean}px;"
+          else if lean < 0 then s" padding-right: ${-lean}px;"
+          else ""
+        ("center", pad)
+      case _ => ("flex-start", if indentPx > 0 then s" padding-left: ${indentPx}px;" else "")
+    val boxStyle =
+      s"margin-left: ${-(leftPx + indentPx)}px; width: ${leftPx + cellWidth + rightPx}px;" +
+        s"$padding box-sizing: border-box; overflow: hidden; display: flex; justify-content: $justify"
+    s"""<div class="$cssClass" style="$boxStyle"><span>$content</span></div>"""
 
   /**
    * Convert a CellValue to HTML content with Excel-style number formatting.
@@ -366,12 +413,29 @@ $headerRow$tableRows
         html
 
   /**
+   * A CF data bar as a td background (GH-497): a no-repeat gradient from the bar colour to white,
+   * inset 2px and as wide as SvgRenderer's bar ([[RenderUtils.dataBarWidth]]). None when the cell
+   * leaves it no width.
+   */
+  private def dataBarCss(bar: CfBar, cellWidth: Int, theme: ThemePalette): Option[String] =
+    val width = dataBarWidth(bar.fraction, cellWidth)
+    Option.when(width > 0) {
+      val hex = colorToHex(bar.color, theme)
+      val inset = DataBarInsetPx
+      s"background-image: linear-gradient(to right, $hex, #FFFFFF); background-size: ${width}px calc(100% - ${2 * inset}px); background-position: ${inset}px center; background-repeat: no-repeat"
+    }
+
+  /**
    * Convert cell-level style to inline CSS.
    *
    * Generates CSS properties for font, fill, borders, alignment, etc. Returns empty string if cell
-   * has no style.
+   * has no style. `strike` (a CF dxf attribute `Font` cannot carry) adds line-through.
    */
-  private def cellStyleToInlineCss(cell: ResolvedCell, theme: ThemePalette): String =
+  private def cellStyleToInlineCss(
+    cell: ResolvedCell,
+    strike: Boolean,
+    theme: ThemePalette
+  ): String =
     val styleOpt = cell.style
     val css = scala.collection.mutable.ArrayBuffer[String]()
 
@@ -379,7 +443,9 @@ $headerRow$tableRows
       // Font properties (apply only if not default)
       if style.font.bold then css += "font-weight: bold"
       if style.font.italic then css += "font-style: italic"
-      if style.font.underline != Underline.None then css += "text-decoration: underline"
+      textDecoration(style.font.underline != Underline.None, strike).foreach { d =>
+        css += s"text-decoration: $d"
+      }
       style.font.color.foreach(c => css += s"color: ${colorToHex(c, theme)}")
       if style.font.sizePt != Font.default.sizePt then css += s"font-size: ${style.font.sizePt}pt"
       if style.font.name != Font.default.name then

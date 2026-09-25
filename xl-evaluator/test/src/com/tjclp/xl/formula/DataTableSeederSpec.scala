@@ -1026,11 +1026,13 @@ class DataTableSeederSpec extends FunSuite:
     }
   }
 
-  test("GH-494: IFS materializes a range condition before choosing its banked branch") {
+  test("GH-494: IFS's banked branch follows its condition as the plain source cell reads it") {
+    // the source F9 is a plain cell: its range condition reads the cell in row 9 (implicit
+    // intersection), never the range's first cell, and the probe follows the same branch
     val selected = seedReport(
       guardedColumnTable(
-        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
-        s => s.put(ref"B1", num(1)).put(ref"B2", num(0))
+        "IFS(B8:B10,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B8", num(0)).put(ref"B9", num(1)).put(ref"B10", num(0))
       )
     )
     val selectedOut = sheetNamed(selected.workbook, "S")
@@ -1039,8 +1041,8 @@ class DataTableSeederSpec extends FunSuite:
 
     val selectedAway = seedReport(
       guardedColumnTable(
-        "IFS(B1:B2,IFERROR(1/A1,0),TRUE,42)",
-        s => s.put(ref"B1", num(0)).put(ref"B2", num(1))
+        "IFS(B8:B10,IFERROR(1/A1,0),TRUE,42)",
+        s => s.put(ref"B8", num(1)).put(ref"B9", num(0)).put(ref"B10", num(1))
       )
     )
     val selectedAwayOut = sheetNamed(selectedAway.workbook, "S")
@@ -1048,7 +1050,7 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(
       selectedAway.warnings,
       Vector.empty,
-      "the guarded top-left branch was not selected"
+      "the guarded branch was not selected in row 9"
     )
   }
 
@@ -1174,6 +1176,116 @@ class DataTableSeederSpec extends FunSuite:
         assertEquals(cells, 1, "one DISTINCT cone ref, reported once per table not per combination")
         assertEquals(refs, Vector("S!B1"), "the warning must name the stale cone cell")
       case other => fail(s"expected exactly one ConeUnresolved, got $other")
+  }
+
+  // ===== CSE sources: the what-if recalculates the source as the array formula it is stored as =====
+
+  /** B1:B20 = 1..20: a plain formula in rows 1-20 intersects it, a CSE formula reads it whole. */
+  private def columnB(sheet: Sheet): Sheet =
+    (1 to 20).foldLeft(sheet)((s, i) => s.put(ARef.from0(1, i - 1), num(i)))
+
+  private def cseSource(formula: String, at: String): CellValue =
+    CellValue.Formula(formula, None, FormulaKind.ArrayFormula(range(s"$at:$at")))
+
+  /**
+   * Input A1 = 1, source F9, column table F10:F12 over A1 with left axis E10:E12 = 0, 1, 2. A plain
+   * F9 reads B1:B20 through row 9 (B9 = 9); a CSE F9 reads the whole column, and so must its table.
+   */
+  private def cseColumnTable(source: CellValue): Sheet =
+    columnB(Sheet("S"))
+      .put(ref"A1", num(1))
+      .put(ref"F9", source)
+      .put(ref"E10", num(0))
+      .put(ref"E11", num(1))
+      .put(ref"E12", num(2))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F12", "A1"), None))
+
+  Vector(
+    ("SUM(B1:B20*A1)", 210),
+    ("SUM(IF(B1:B20>5,B1:B20*A1,0))", 195),
+    ("MAX(B1:B20*A1)", 20)
+  ).foreach { (formula, atOne) =>
+    test(s"a CSE source {=$formula} seeds its array value at every axis value") {
+      val sheet = cseColumnTable(cseSource(formula, "F9"))
+      // the interior at the source's own input value is what the source cell itself computes
+      assertEquals(sheet.evaluateCell(ref"F9"), Right(num(atOne)))
+      val report = seedReport(sheet)
+      assertEquals(report.warnings, Vector.empty)
+      val out = sheetNamed(report.workbook, "S")
+      interiorRefs.zip(Vector(0, 1, 2)).foreach { (r, a) =>
+        assertSeededNumber(out, r, (atOne * a).toDouble, 1e-9)
+      }
+    }
+  }
+
+  test("a plain source keeps its legacy value: SUM(B1:B20*A1) in row 9 seeds 9 per unit") {
+    val sheet = cseColumnTable(CellValue.Formula("SUM(B1:B20*A1)"))
+    assertEquals(sheet.evaluateCell(ref"F9"), Right(num(9)))
+    val report = seedReport(sheet)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(0.0, 9.0, 18.0)).foreach { (r, expected) =>
+      assertSeededNumber(out, r, expected, 1e-9)
+    }
+  }
+
+  test("a two-variable table over a CSE corner seeds the array value per combination") {
+    // corner D4 {=SUM(B1:B20*A1)*A2}; row axis E4:F4 = 1, 2 -> A1, column axis D5:D6 = 10, 100 ->
+    // A2. The plain corner would read B4 = 4 and seed 40, 80, 400, 800.
+    val twoVar: FormulaKind.DataTable = FormulaKind.DataTable(
+      ref = range("E5:F6"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("A1")),
+      r2 = Some(aref("A2"))
+    )
+    val sheet = columnB(Sheet("S"))
+      .put(ref"A1", num(1))
+      .put(ref"A2", num(1))
+      .put(ref"D4", cseSource("SUM(B1:B20*A1)*A2", "D4"))
+      .put(ref"E4", num(1))
+      .put(ref"F4", num(2))
+      .put(ref"D5", num(10))
+      .put(ref"D6", num(100))
+      .put(ref"E5", CellValue.dataTable(twoVar, None))
+    val report = seedReport(sheet)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    Vector(ref"E5" -> 2100.0, ref"F5" -> 4200.0, ref"E6" -> 21000.0, ref"F6" -> 42000.0).foreach {
+      (r, expected) => assertSeededNumber(out, r, expected, 1e-9)
+    }
+  }
+
+  test("the circular lane evaluates a CSE source off the converged cycle as an array") {
+    // G1/G2 is a declared cycle (fixpoint G1 = 2) the source reads but is not part of, so each axis
+    // value fixpoints the cycle and then evaluates the source formula itself.
+    val sheet = cseColumnTable(cseSource("SUM(B1:B20*A1)*G1", "F9"))
+      .put(ref"G1", CellValue.Formula("G2+1"))
+      .put(ref"G2", CellValue.Formula("G1*0+1"))
+    val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(100), None))
+    val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
+    assertEquals(report.warnings, Vector.empty)
+    val out = sheetNamed(report.workbook, "S")
+    interiorRefs.zip(Vector(0.0, 420.0, 840.0)).foreach { (r, expected) =>
+      assertSeededNumber(out, r, expected, 1e-9)
+    }
+  }
+
+  test("a CSE source's error-guard probe reads the source as an array, as its value was") {
+    // As an array SUM(B1:B20*A1) is 210*A1, so the guard fires at A1 = 1 only. Read as the plain
+    // cell (9*A1) the probe would miss that firing and would report one at 9 instead.
+    val fired = seedReport(cseColumnTable(cseSource("IFERROR(1/(SUM(B1:B20*A1)-210),-1)", "F9")))
+    val firedOut = sheetNamed(fired.workbook, "S")
+    assertSeededNumber(firedOut, ref"F10", -1.0 / 210.0, 1e-9)
+    assertSeededNumber(firedOut, ref"F11", -1.0, 1e-9)
+    assertSeededNumber(firedOut, ref"F12", 1.0 / 210.0, 1e-9)
+    val guard = assertOneGuardFired(fired.warnings, 1)
+    assert(guard.contains("SUM"), s"the warning must name the guarded expression: $guard")
+
+    val clean = seedReport(cseColumnTable(cseSource("IFERROR(1/(SUM(B1:B20*A1)-9),-1)", "F9")))
+    val cleanOut = sheetNamed(clean.workbook, "S")
+    assertSeededNumber(cleanOut, ref"F11", 1.0 / 201.0, 1e-9)
+    assertEquals(clean.warnings, Vector.empty, "no combination took the fallback")
   }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

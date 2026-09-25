@@ -43,7 +43,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
       // Boolean position and crashed with a ClassCastException.
       // A failing CONDITION stays fatal (it is not a branch); GH-339 carriage below applies to
       // the two branch expressions only.
-      evalMaybeArrayArg(ctx, condExpr).flatMap {
+      evalCondition(ctx, condExpr).flatMap {
         case condArr: ArrayResult =>
           // CSE semantics: both branches evaluate (they broadcast elementwise against the
           // condition), so branch laziness only applies to the scalar path below. GH-339: a
@@ -61,7 +61,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
           // Scalar condition: coerce totally (Excel truthiness) and keep lazy branch selection.
           ScalarCoercion.coerce("IF condition", scalarCond, BindingCoercion.Bool).flatMap {
             case cond: Boolean =>
-              if cond then evalAny(ctx, ifTrueExpr) else evalAny(ctx, ifFalseExpr)
+              if cond then evalSelected(ctx, ifTrueExpr) else evalSelected(ctx, ifFalseExpr)
             case other =>
               Left(EvalError.TypeMismatch("IF condition", "boolean", other.toString))
           }
@@ -83,11 +83,11 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
       def loop(pairs: List[TExpr[Any]]): Either[EvalError, Any] =
         pairs match
           case cond :: value :: rest =>
-            evalMaybeArrayArg(ctx, cond).flatMap {
+            evalCondition(ctx, cond).flatMap {
               case condArr: ArrayResult =>
                 for
                   valueVal <- evalBranchCarrying(ctx, value)
-                  restVal <- carryLeft(loop(rest))
+                  restVal <- carryLeft(loop(rest).flatMap(materializeOperand(ctx, _)))
                   result <- ArrayArithmetic.broadcastIf(
                     condArr,
                     toCellArray(valueVal),
@@ -97,7 +97,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
               case scalarCond =>
                 ScalarCoercion.coerce("IFS condition", scalarCond, BindingCoercion.Bool).flatMap {
                   case condBool: Boolean =>
-                    if condBool then evalAny(ctx, value) else loop(rest)
+                    if condBool then evalSelected(ctx, value) else loop(rest)
                   case other =>
                     Left(EvalError.TypeMismatch("IFS condition", "boolean", other.toString))
                 }
@@ -136,9 +136,9 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
                             case None =>
                               if ArrayArithmetic
                                   .cellValueEquals(tcv, ArrayArithmetic.anyToCellValue(cv))
-                              then evalAny(ctx, value)
+                              then evalSelected(ctx, value)
                               else loop(rest2)
-                    case default :: Nil => evalAny(ctx, default) // trailing default
+                    case default :: Nil => evalSelected(ctx, default) // trailing default
                     case _ => Right(CellValue.Error(CellError.NA))
                 loop(rest)
           }
@@ -152,7 +152,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
         case idxExpr :: values =>
           ctx.evalExpr(TExpr.asNumericExpr(idxExpr)).flatMap { n =>
             values.lift(n.toInt - 1) match
-              case Some(v) => evalAny(ctx, v)
+              case Some(v) => evalSelected(ctx, v)
               case None => Right(CellValue.Error(CellError.Value))
           }
         case _ => Right(CellValue.Error(CellError.Value))

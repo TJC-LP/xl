@@ -102,7 +102,8 @@ enum CliCommand derives CanEqual:
   // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
   case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
   case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
-  case Deps(ref: String, direction: Direction, depth: Depth) // deps <ref> [--direction] [--depth]
+  // deps <ref> [--direction] [--depth] [--expand]; expand lists a precedent range's cells
+  case Deps(ref: String, direction: Direction, depth: Depth, expand: Boolean)
   // Analyze
   case Eval(formula: String, overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
@@ -243,8 +244,8 @@ enum CliCommand derives CanEqual:
   case DeleteColumns(col: String, count: Int) // Delete `count` columns starting at column `col`
   // Compare two workbooks (-f vs -g); exit code 0 = identical, 1 = differs, 3 = error
   // format None: markdown, or JSON under --json; formulasOnly (GH-607) keeps the text-only formula
-  // comparison, cached values ignored
-  case Diff(file2: Path, format: Option[DiffFormat], formulasOnly: Boolean)
+  // comparison, cached values ignored; cellsOnly skips the sheet-structure comparison
+  case Diff(file2: Path, format: Option[DiffFormat], formulasOnly: Boolean, cellsOnly: Boolean)
   // Validate package structure on the raw zip (GH-397); exit 0 = clean, 1 = findings, 3 = error
   case Lint(format: Option[LintFormat]) // None: text, or JSON under --json
 
@@ -257,7 +258,7 @@ enum CliCommand derives CanEqual:
   def takesSheet: Boolean = this match
     case Sheets(_) | Names | Search(_, _, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
         AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
-        CopySheet(_, _) | Name(_) | Diff(_, _, _) | Lint(_) =>
+        CopySheet(_, _) | Name(_) | Diff(_, _, _, _) | Lint(_) =>
       false
     case _ => true
 
@@ -269,7 +270,7 @@ enum CliCommand derives CanEqual:
     case v: View => v.range.toList
     case Cell(ref, _) => List(ref)
     case Stats(ref) => List(ref)
-    case Deps(ref, _, _) => List(ref)
+    case Deps(ref, _, _, _) => List(ref)
     case p: Put => List(p.ref)
     case PutFormula(ref, _) => List(ref)
     case s: Style => List(s.range)
@@ -329,7 +330,7 @@ enum CliCommand derives CanEqual:
     case _: Filter => "filter"
     case Describe(_) => "describe"
     case Audit(_) => "audit"
-    case Deps(_, _, _) => "deps"
+    case Deps(_, _, _, _) => "deps"
     case Eval(_, _) => "eval"
     case EvalArray(_, _, _) => "evala"
     case _: Put => "put"
@@ -374,7 +375,7 @@ enum CliCommand derives CanEqual:
     case DeleteRows(_, _) => "delete-rows"
     case InsertColumns(_, _) => "insert-cols"
     case DeleteColumns(_, _) => "delete-cols"
-    case Diff(_, _, _) => "diff"
+    case Diff(_, _, _, _) => "diff"
     case Lint(_) => "lint"
 
 object CliCommand:

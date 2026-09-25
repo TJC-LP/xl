@@ -234,7 +234,7 @@ object Diagnostics:
 | exit | meaning | examples | file written? |
 |---|---|---|---|
 | 0 | ok | | as requested |
-| 1 | completed with findings / a gate — **never a failure** | `diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict` gate | `-o`: yes (today's GH-496 rule); `-i`: no |
+| 1 | completed with findings / a gate — **never a failure** | `diff` differs, `lint` findings, `audit --fail-on-findings`, `--strict` gate | no (#677: a `--strict` gate withholds `-o`; `-i` untouched) |
 | 2 | usage — the command line is wrong | unknown verb, flag not accepted, `-o` missing, `-i` with `-o`, `--stream` on an unsupported verb, batch JSON not an array, unknown or malformed batch op | no (nothing read) |
 | 3 | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, count mismatch, batch op failed at apply time, security limit, a workbook that does not fit the heap (`RESOURCE_LIMIT`, GH-636), I/O | no |
 

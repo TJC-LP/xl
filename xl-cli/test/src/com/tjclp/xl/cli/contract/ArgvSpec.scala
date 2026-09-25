@@ -282,9 +282,11 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     for
       trailing <- CliHarness.run("-f", file("circular.xlsx"), "recalc", "--strict", "-o", out)
       leading <- CliHarness.run("-f", file("circular.xlsx"), "--strict", "-o", out, "recalc")
+      created <- IO.blocking(Files.exists(Path.of(out)))
     yield
       assertEquals(trailing.exit, 1, trailing.stderr)
       assertEquals(trailing, leading)
+      assert(!created, "a failed --strict gate writes nothing, however the flag is placed (#677)")
   }
 
   test("`view A1:B2 --eval --strict` keeps --strict as view's own flag") {

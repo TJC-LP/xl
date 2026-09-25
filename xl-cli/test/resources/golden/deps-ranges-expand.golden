@@ -1,0 +1,31 @@
+## args
+-f
+<DIR>/ranges.xlsx
+deps
+Summary!B1
+--direction
+precedents
+--depth
+2
+--expand
+## exit
+0
+## stdout
+Cell: Summary!B1
+Formula: =SUMIFS(Data!B:B,Data!A:A,A1)+SUM(Data!C2:C4)+Data!B2
+Value: 170
+Precedents (depth 2): 13
+  1  Data!A1  "Region"
+  1  Data!B1  "Amount"
+  1  Data!A2  "North"
+  1  Data!B2  10
+  1  Data!C2  =B2*$E$1 -> 20
+  1  Data!A3  "South"
+  1  Data!B3  20
+  1  Data!C3  =B3*$E$1 -> 40
+  1  Data!A4  "North"
+  1  Data!B4  30
+  1  Data!C4  =B4*$E$1 -> 60
+  1  Summary!A1  "North"
+  2  Data!E1  2
+## stderr

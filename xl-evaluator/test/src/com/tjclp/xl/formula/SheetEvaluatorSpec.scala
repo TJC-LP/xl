@@ -221,6 +221,30 @@ class SheetEvaluatorSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(42))))
   }
 
+  test("a formula whose value is a reference to an empty cell is 0, as Excel shows it") {
+    // Excel never displays a formula cell as empty: a reference to a blank cell reads 0 there,
+    // whether it comes straight (=Z1) or through INDEX, INDIRECT, OFFSET, CHOOSE or a lookup.
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Text("k"),
+      ref"A2" -> CellValue.Text("m"),
+      ref"C1" -> CellValue.Formula("INDEX(Z1:Z3,2)")
+    )
+    val zero = Right(CellValue.Number(BigDecimal(0)))
+    List(
+      "=Z1",
+      "=INDEX(Z1:Z3,2)",
+      "=INDIRECT(\"Z9\")",
+      "=OFFSET(A1,5,5)",
+      "=CHOOSE(2,A1,Z1)",
+      "=VLOOKUP(\"m\",A1:B2,2,FALSE)"
+    ).foreach(f => assertEquals(sheet.evaluateFormula(f), zero, f))
+    assertEquals(sheet.evaluateCell(ref"C1"), zero)
+    // inside a formula the reference is still blank: only the cell's final value is 0
+    assertEquals(sheet.evaluateFormula("=ISBLANK(INDEX(Z1:Z3,2))"), Right(CellValue.Bool(true)))
+    assertEquals(sheet.evaluateFormula("=COUNTA(INDEX(Z1:Z3,2))"), zero)
+    assertEquals(sheet.evaluateFormula("=\"\""), Right(CellValue.Text("")))
+  }
+
   test("evaluateCell: empty cell returns Empty") {
     val result = emptySheet.evaluateCell(ref"Z99")
     assertEquals(result, Right(CellValue.Empty))

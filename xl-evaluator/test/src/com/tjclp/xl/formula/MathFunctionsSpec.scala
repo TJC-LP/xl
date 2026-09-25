@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.addressing.SheetName
 import munit.FunSuite
 
@@ -257,22 +257,49 @@ class MathFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(1.5)))
   }
 
-  test("CEILING: significance 0 returns error") {
-    val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
-    val result = evaluator.eval(expr, emptySheet)
-    assert(result.isLeft, "CEILING with significance 0 should return error")
+  test("CEILING: significance 0 is 0, FLOOR's is #DIV/0! (Excel)") {
+    val ceiling = TExpr.ceiling(TExpr.Lit(BigDecimal(2.5)), TExpr.Lit(BigDecimal(0)))
+    assertEquals(evaluator.eval(ceiling, emptySheet), Right(BigDecimal(0)))
+    assertEquals(
+      emptySheet.evaluateFormula("=FLOOR(2.5, 0)"),
+      Right(CellValue.Error(CellError.Div0))
+    )
   }
 
-  test("FLOOR: negative number with positive significance returns error") {
+  test(
+    "FLOOR: a negative number with a positive significance rounds away from zero (Excel 2010+)"
+  ) {
     val expr = TExpr.floor(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
-    val result = evaluator.eval(expr, emptySheet)
-    assert(result.isLeft, "FLOOR(-2.5, 1) should return error (mismatched signs)")
+    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(-3)))
+    assertEquals(
+      emptySheet.evaluateFormula("=FLOOR(2.5, -1)"),
+      Right(CellValue.Error(CellError.Num))
+    )
   }
 
-  test("CEILING: negative number with positive significance returns error") {
+  test("CEILING: a negative number with a positive significance rounds toward zero (Excel 2010+)") {
     val expr = TExpr.ceiling(TExpr.Lit(BigDecimal(-2.5)), TExpr.Lit(BigDecimal(1)))
-    val result = evaluator.eval(expr, emptySheet)
-    assert(result.isLeft, "CEILING(-2.5, 1) should return error (mismatched signs)")
+    assertEquals(evaluator.eval(expr, emptySheet), Right(BigDecimal(-2)))
+    assertEquals(
+      emptySheet.evaluateFormula("=CEILING(2.5, -1)"),
+      Right(CellValue.Error(CellError.Num))
+    )
+  }
+
+  test("POWER, EXP and ^: a non-finite result is #NUM!, 0 to a negative power #DIV/0! (Excel)") {
+    val num = Right(CellValue.Error(CellError.Num))
+    val div0 = Right(CellValue.Error(CellError.Div0))
+    assertEquals(emptySheet.evaluateFormula("=POWER(-8, 1/3)"), num)
+    assertEquals(emptySheet.evaluateFormula("=POWER(2, 2000)"), num)
+    assertEquals(emptySheet.evaluateFormula("=EXP(1000)"), num)
+    assertEquals(emptySheet.evaluateFormula("=(-8)^(1/3)"), num)
+    assertEquals(emptySheet.evaluateFormula("=POWER(0, -1)"), div0)
+    assertEquals(emptySheet.evaluateFormula("=0^-1"), div0)
+    assertEquals(emptySheet.evaluateFormula("=POWER(-8, 3)"), Right(CellValue.Number(-512)))
+    assertEquals(
+      emptySheet.evaluateFormula("=IFERROR(POWER(-8, 0.5), 7)"),
+      Right(CellValue.Number(7))
+    )
   }
 
   test("FLOOR: negative number with negative significance works") {
@@ -367,11 +394,10 @@ class MathFunctionsSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(0))))
   }
 
-  test("MROUND parser: mismatched signs return error") {
-    val result = emptySheet.evaluateFormula("=MROUND(-10, 3)")
-    assert(result.isLeft, "MROUND(-10, 3) should return error (mismatched signs)")
-    val result2 = emptySheet.evaluateFormula("=MROUND(10, -3)")
-    assert(result2.isLeft, "MROUND(10, -3) should return error (mismatched signs)")
+  test("MROUND parser: mismatched signs are #NUM! (Excel)") {
+    val num = Right(CellValue.Error(CellError.Num))
+    assertEquals(emptySheet.evaluateFormula("=MROUND(-10, 3)"), num)
+    assertEquals(emptySheet.evaluateFormula("=MROUND(10, -3)"), num)
   }
 
   // ===== TRUNC Tests =====

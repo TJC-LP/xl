@@ -83,3 +83,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `NO_NUMERIC_VALUES` |
 | `OFF_GRID_REF` |
 | `LINT_HYGIENE` |
+| `CF_NOT_RENDERED` |

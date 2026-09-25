@@ -252,9 +252,16 @@ class LogicalArrayFoldSpec extends FunSuite:
   }
 
   test(
-    "GH-338: NOT over a bare range keeps its pre-existing error (elementwise, no reference fold)"
+    "GH-338: NOT over a bare range broadcasts as an array formula and intersects in a plain cell"
   ) {
-    assert(mixedTF.evaluateFormula("=NOT(A1:A2)").isLeft)
+    val zeroSecond =
+      Sheet("Test").put(ref"A1", CellValue.Number(5)).put(ref"A2", CellValue.Number(0))
+    // without a cell position it evaluates as typed into a new cell: the spill's top-left value
+    assertEquals(zeroSecond.evaluateFormula("=NOT(A1:A2)"), Right(CellValue.Bool(false)))
+    def at(cell: ARef) = zeroSecond.evaluateFormula("=NOT(A1:A2)", Clock.system, None, Some(cell))
+    assertEquals(at(ref"B1"), Right(CellValue.Bool(false)))
+    assertEquals(at(ref"B2"), Right(CellValue.Bool(true)))
+    assertEquals(at(ref"B3"), Right(CellValue.Error(CellError.Value)))
   }
 
   // ===== IFS condition slots evaluate array-aware like IF =====

@@ -4,6 +4,8 @@ import java.io.{ByteArrayOutputStream, PrintStream}
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
+import scala.jdk.CollectionConverters.*
+
 import cats.effect.{ExitCode, IO}
 import munit.CatsEffectSuite
 
@@ -17,6 +19,8 @@ import com.tjclp.xl.macros.ref
  *
  * Verifies:
  *   - `-o` writes are staged beside their destination before replacement
+ *   - Only a run that exits 0 publishes: a failed `--strict` gate (exit 1) leaves the `-o`
+ *     destination byte-identical, or absent (#677), as it leaves `-i`'s input
  *   - `-i` alone writes to a sibling temp file, then atomically moves onto the input
  *   - `-i` + `-o` together is an error (mutually exclusive)
  *   - A failed execution leaves the original file untouched and cleans up the temp
@@ -119,13 +123,50 @@ class InPlaceSpec extends CatsEffectSuite:
     }
   }
 
-  test("runWithOutput: -o commits a complete strict-failure output") {
+  /** The names in `directory`, sorted, so a leftover staging file shows up in a failure message. */
+  private def entries(directory: Path): List[String] =
+    val stream = Files.list(directory)
+    try stream.iterator.asScala.map(_.getFileName.toString).toList.sorted
+    finally stream.close()
+
+  test(
+    "runWithOutput: -o withholds a complete gate outcome (exit 1): destination byte-identical, " +
+      "staging removed (#677)"
+  ) {
     IO.blocking {
       val directory = Files.createTempDirectory("xl-output-strict-")
       val out = directory.resolve("output.xlsx")
       Files.writeString(out, "original")
       (directory, out)
-    }.bracket { case (_, out) =>
+    }.bracket { case (directory, out) =>
+      var staged: Option[Path] = None
+      Main
+        .runWithOutput(Some(out), inPlace = false, Path.of("input.xlsx")) { (outOpt, _) =>
+          staged = outOpt
+          IO.blocking(Files.writeString(outOpt.get, "complete")) *>
+            IO.pure(outcome(ExitCode(1), "strict failure", outputComplete = true))
+        }
+        .flatMap { code =>
+          IO.blocking {
+            assertEquals(code, ExitCode(1))
+            assertEquals(Files.readString(out), "original")
+            assert(!staged.exists(Files.exists(_)), s"staging file must be removed: $staged")
+            assertEquals(entries(directory), List("output.xlsx"))
+          }
+        }
+    } { case (directory, out) =>
+      IO.blocking {
+        Files.deleteIfExists(out)
+        Files.deleteIfExists(directory)
+      }.void
+    }
+  }
+
+  test("runWithOutput: -o gate on an absent destination creates nothing (#677)") {
+    IO.blocking {
+      val directory = Files.createTempDirectory("xl-output-strict-absent-")
+      (directory, directory.resolve("output.xlsx"))
+    }.bracket { case (directory, out) =>
       Main
         .runWithOutput(Some(out), inPlace = false, Path.of("input.xlsx")) { (outOpt, _) =>
           IO.blocking(Files.writeString(outOpt.get, "complete")) *>
@@ -134,7 +175,8 @@ class InPlaceSpec extends CatsEffectSuite:
         .flatMap { code =>
           IO.blocking {
             assertEquals(code, ExitCode(1))
-            assertEquals(Files.readString(out), "complete")
+            assert(!Files.exists(out), "a withheld -o must not create the destination")
+            assertEquals(entries(directory), Nil)
           }
         }
     } { case (directory, out) =>

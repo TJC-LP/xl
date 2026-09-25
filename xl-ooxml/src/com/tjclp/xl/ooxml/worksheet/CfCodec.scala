@@ -59,15 +59,11 @@ object CfCodec:
   /**
    * The derived `<formula>` for a text rule against top-left cell `tl` (relative form). Quotes in
    * the text are doubled per formula string-literal rules. Derived at emission, verified at parse —
-   * never stored, so it auto-corrects under structural shifts.
+   * never stored, so it auto-corrects under structural shifts. The derivation is
+   * [[CfTextOp.formula]], which the render path's evaluator shares (GH-497).
    */
   private[ooxml] def textFormula(op: CfTextOp, text: String, tl: String): String =
-    val q = text.replace("\"", "\"\"")
-    op match
-      case CfTextOp.Contains => s"""NOT(ISERROR(SEARCH("$q",$tl)))"""
-      case CfTextOp.NotContains => s"""ISERROR(SEARCH("$q",$tl))"""
-      case CfTextOp.BeginsWith => s"""LEFT($tl,LEN("$q"))="$q""""
-      case CfTextOp.EndsWith => s"""RIGHT($tl,LEN("$q"))="$q""""
+    CfTextOp.formula(op, text, tl)
 
   // ===== parse =====
 
