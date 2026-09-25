@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-09-08
+**Last Updated**: 2026-09-25
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -22,6 +22,29 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### Unreleased — the Weaver wave: five findings from the 0.23.1 dogfood
+
+Weaver dogfooded 0.23.1 on 2026-09-25 and filed five CLI findings. They ran as seven
+worktree-isolated TDD clusters (a design panel per open question, an adversarial reviewer per
+cluster with up to two rework rounds; the evaluator and render halves each split into two
+serialized clusters):
+
+| Cluster | Finding | Outcome |
+|---|---|---|
+| eval-core | `view --eval` exit 3 `INTERNAL` on one unevaluable cell | type-sound array arguments, a guarded evaluation boundary ([#681](https://github.com/TJC-LP/xl/issues/681) item 5), per-cell degradation |
+| eval-lifting | the same cell's value | Excel array lifting for 74 scalar functions; CSE/dynamic-array anchors evaluate as arrays; Weaver's cell is 5 |
+| strict-withhold | `--strict` still writes `-o` ([#677](https://github.com/TJC-LP/xl/issues/677)) | a file is published only by a run that exits 0 (breaking) |
+| render-layout | PNG: no overflow into styled empty neighbours, no row autofit | value-based spill in every direction, per-cell fills under spills, row autofit |
+| render-cf | PNG skips conditional formats ([#497](https://github.com/TJC-LP/xl/issues/497)) | `CfOverlay` in xl-core, `CfEvaluator` in xl-evaluator, painted by default, `CF_NOT_RENDERED` |
+| diff-structure | `diff -g` blind to a row-height change | rows/columns, sheet properties, CF/DV blocks, sheet order, defined names; `--cells-only` |
+| deps-collapse | `deps` lists 18,714 precedents for a whole-column SUMIFS | one node per range with counts; `--expand`; `cell` shares it (breaking contract) |
+
+Follow-ups worth filing: grouping filled-down point references into runs at `deps --depth 2`;
+case-folding a missing sheet's qualifier in the dependency index; an Excel-authored diff fixture
+(column spans, DV, freeze pane, outlines, hidden sheet); per-family row-autofit metrics beyond the
+four calibrated Calibri sizes; the O(n²) cost of uncached running sums under a whole-column CF
+rule; MATCH/VLOOKUP over uncached formula precedents on the library path.
 
 ### v0.23.1 — wave 30: the 0.23.0 dogfood (Released 2026-09-15)
 
@@ -64,8 +87,7 @@ code.
 | json-shape | [#618](https://github.com/TJC-LP/xl/issues/618) | the `--json` envelope's `data` | `data` is always an object; `sheets`/`names`/`functions` key their arrays by the noun (breaking) |
 
 **Deferred, each with a design brief from the same exploration pass**: [#497](https://github.com/TJC-LP/xl/issues/497)
-(CF in the render path — a precomputed `CfOverlay` in xl-core, a `CfEvaluator` in xl-evaluator,
-wired by the CLI; its own wave), [#634](https://github.com/TJC-LP/xl/issues/634) (streaming as the
+(CF in the render path — shipped in the Weaver wave, above), [#634](https://github.com/TJC-LP/xl/issues/634) (streaming as the
 default read engine — a pure `Engine.choose` rule once `Hidden` is a streaming capability),
 [#526](https://github.com/TJC-LP/xl/issues/526) (`Workbook.adopt(sheet, from, Refuse | BreakLinks)`
 with the `[N]` scanner promoted to xl-core; `Merge` later), the ADR-017 Wave 2b stack

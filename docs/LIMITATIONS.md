@@ -324,7 +324,7 @@ the emitted indices — formatted 100k+ row files no longer require the in-memor
 **Scope fence (v1 OUT — all ride `Preserved` byte-faithfully)**:
 - No typed iconSet, timePeriod, aboveAverage, duplicate/uniqueValues, containsBlanks/Errors, autoMin/autoMax data bars, or any x14 extension content (gradient/negative/axis data bars, custom icon sets); worksheet-level `extLst` untouched.
 - No dxf alignment/protection/gradient fills/font name/size; double-underline degrades to Preserved. `NumFmt.Currency` in a dxf emits but reads back as `Custom` (no distinct format-code retraction).
-- **No evaluation or rendering anywhere**: rules do not participate in `SheetEvaluator`/`DependencyGraph`; HTML/SVG/PNG export and `view --eval` ignore conditional formatting.
+- **Rendering only, no recalculation role** (#497): the HTML/SVG renders and every raster built from SVG (`view --format html|svg|png|jpeg|webp|pdf`, `sheet.toSvg(range, sheet.conditionalFormatOverlay(range))`) paint cellIs, expression, text, top10, colour-scale and 2007-style data-bar rules, plus the blanks/errors/time-period rules through a render-only lift; icon sets, above/below average, duplicate/unique values and x14 data bars are not painted and are named in `CF_NOT_RENDERED`. Rules do not participate in `SheetEvaluator`/`DependencyGraph`, and the table outputs (`view --format markdown|csv|json`, `cell`) show base styles only.
 
 **Behavioral limitations (by design)**:
 - **Preserved staleness under structural edits**: `CfRule.Preserved` payload formulas and `ConditionalFormat.Preserved` sqref do NOT shift (the `Drawing.Preserved` precedent); typed envelopes around Preserved rules DO shift.

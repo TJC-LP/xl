@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of wave 30 (2026-09-15), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; the subprocess smokes ran successfully in this verification.
+As of the 2026-09-25 Weaver wave, from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; the subprocess smokes ran successfully in this verification.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 2610 |
-| xl-core | 1719 |
-| xl-ooxml | 1283 |
-| xl-cli | 1524 |
+| xl-evaluator | 2770 |
+| xl-core | 1790 |
+| xl-ooxml | 1290 |
+| xl-cli | 1615 |
 | xl-cats-effect | 183 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 58 |
-| **Total** | **7,524** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 61 |
+| **Total** | **7,856** |
 
 ## Test Quality Metrics
 

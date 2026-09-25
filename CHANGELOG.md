@@ -7,6 +7,189 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+The 2026-09-25 Weaver dogfood of 0.23.1 filed five findings against the CLI — `view --eval` exiting
+`INTERNAL` on one unevaluable cell, `--strict` still writing `-o` (#677), three gaps in the PNG
+render (text overflow, row height, conditional formats — #497), `diff` blind to sheet structure,
+and `deps` expanding a whole-column range cell by cell. Each was designed by independent panels,
+implemented test-first in its own worktree and adversarially reviewed (mutation checks, headless
+Chromium for the HTML render, the LibreOffice oracle for the evaluator) before integration.
+
+### Added
+
+- **Conditional formatting in the pictures** (#497): `xl view --format html|svg|png|jpeg|webp|pdf`
+  paints a sheet's conditional formatting as Excel does, with no flag — cell-value rules (all eight
+  operators), formula rules, the four text rules, top/bottom N and N%, 2- and 3-point colour
+  scales, Excel 2007 data bars, and Excel's blanks, errors and dates-occurring rules. Rules compose
+  in Excel's precedence: the lower priority wins each property, non-conflicting formats combine,
+  and Stop If True stops lower rules, scales and bars included. Relative references anchor at the
+  block's top-left cell and shift per cell. Rules see the values the picture draws — cached, or live
+  under `--eval`; an uncached formula (as openpyxl writes them) is computed, and top/bottom, scale
+  and bar statistics follow a chain filled down or across whatever its length (a formula rule, or
+  a chain read from its far end, stops at the 100-level recursion guard and is reported: run
+  `xl recalc` first). The new informational `CF_NOT_RENDERED` warning names every rule not painted
+  — a kind xl does not paint yet (icon sets, above/below average, duplicate/unique values, Excel
+  2010+ data bars), a rule whose formula fails (naming the first cell), or a numeric rule over a
+  cell xl cannot compute, which is never painted from partial statistics nor affects another rule —
+  and never gates, `--strict` included. An engine failure degrades to an unpainted picture with
+  that warning, never `INTERNAL`.
+- **Conditional-formatting library API**: `sheet.conditionalFormatOverlay(range)` and
+  `sheet.evaluateConditionalFormats(range, workbook, clock)` produce a `CfOverlay` (engine:
+  xl-evaluator's `CfEvaluator`, reporting unpainted rules as `CfUnevaluated`); the new overloads
+  `sheet.toSvg(range, overlay)` / `sheet.toHtml(range, overlay)` (plus full-option and
+  `SvgRenderer`/`HtmlRenderer` object forms) paint it, while the existing `toSvg`/`toHtml` stay
+  CF-blind and byte-identical. Also new: `Dxf.orElse` (a monoid), `Dxf.applyTo` (a homomorphism
+  onto `CellStyle`), the shared `CfTextOp.formula`, and xl-ooxml's render-only `CfRenderLift.lift`.
+- **Excel array lifting for scalar functions**: a scalar function handed an array evaluates once
+  per element, as in Excel 365 — `=ABS(C2:C4+D2:D4)` is `{2;2;3}` under `evala`,
+  `=SUMPRODUCT(--ISNUMBER(r))` counts, `=SUMPRODUCT(1/COUNTIF(r,r))` counts the distinct values of
+  a bounded range without blanks. 74 functions lift: math, text, the IS* family,
+  DATE/YEAR/MONTH/DAY/DATEDIF, PMT/PV/FV/NPER/RATE/RRI, VLOOKUP/HLOOKUP/MATCH/INDEX, the criteria of
+  SUMIF(S)/COUNTIF(S)/AVERAGEIF(S)/MAXIFS/MINIFS, the k of LARGE/SMALL/PERCENTILE/QUARTILE, RANK's
+  number and NPV's rate; IFERROR, IFNA and XLOOKUP lift their first argument only
+  (`IFERROR(5,A1:A3)` is 5); the Analysis ToolPak functions (EDATE, EOMONTH, WORKDAY, NETWORKDAYS,
+  YEARFRAC, MROUND) lift an array but answer `#VALUE!` for a multi-cell range reference, as Excel
+  does (pass `+A2:A10`). Arrays broadcast like the operators, each lifted argument is evaluated
+  once, an element that fails to coerce is `#VALUE!` and a host failure fails the call. The lift is
+  implemented once, at the call node (`FunctionFlags.lift` = `ArrayLift.Off | On(slots,
+  rangeRefs)`, `ArgSpec.scalarSlots`/`replaceScalarSlots`, `ExprCoercer.liftSlot`, `LiftSlot`);
+  the policy is not yet published in `xl functions --json`. `docs/LIMITATIONS.md` lists the
+  exclusions and the known divergences (whole-column trimming, numeric-text and cached-formula
+  single references, IF branches under a scalar condition).
+- **`sheet.evaluateForRangePerCell(range[, clock, workbook])`** returns
+  `RangeEvalResult(values, failures, blocked)` — the total, per-cell range evaluation behind
+  `view --eval`, with `isClean` and a one-line `summary`; exported through `com.tjclp.xl.{*, given}`
+  and the scripting prelude. `evaluateForRange` / `evaluateWithDependencyCheck` keep their
+  fail-fast semantics (and no longer throw).
+- **`QualifiedGraph` declared view**: `declaredPrecedentsOf(q)`, `declaredPrecedents(q, depth)`,
+  `occupiedIn(range)`, `QualifiedGraph.DeclaredRange` (Excel display spelling via `a1`; build with
+  the anchor-stripping `DeclaredRange.of`), `enum QualifiedGraph.Node { Cell, Range }` and
+  `nodeOrder`, also through the scripting prelude.
+- **`xl diff --cells-only`** restores the cell-only comparison and exit code.
+- **`xl deps --expand`** lists a range precedent's occupied cells one by one (the pre-0.24 shape).
+
+### Changed
+
+- **Breaking: a failed `--strict` gate writes nothing, with `-o` as with `-i`** (#677): a write
+  whose recalculation reports formula-evaluation errors, iterative non-convergence, data-table seed
+  warnings or an off-grid `#REF!` still exits 1 (`RECALC_GATE`) with its full summary, but the
+  staged output is now discarded under `-o` too: the target is not created, and a file already at
+  that path (the input itself when `-o` names `-f`) is left byte-identical. The summary reads
+  `NOT saved (--strict failure): nothing written to <out>` (`-i`, and `-o` naming `-f`, keep
+  `<file> left untouched`) and `--json` reports `saved: null`, `written: false`. Before, `-o`
+  committed the gated workbook, so a pipeline that checked for the file instead of the exit code
+  shipped formulas left uncached. One rule now governs every write — a staged file is published
+  only by a run that exits 0 (`Outcome.publishesOutput`) — and the exit table (`xl --help`,
+  `xl schema --json`, `generated/exit-codes.md`) says exit 1 writes nothing. It covers `put`,
+  `putf`, `fill`, `copy`, `batch`, `recalc`, the structural verbs and `name add|rm`, including their
+  backend-loading `--stream` runs; `--stream --strict` on the O(1) writes is still refused. A file
+  left at the `-o` path by an earlier run is not replaced, so branch on the exit code or
+  `data.written`. **Remedy**: to keep the file for inspection, drop `--strict` — the flag decides
+  only the verdict, so the advisory run writes the identical bytes, exits 0 and prints the same
+  summary.
+- **Breaking (CLI contract): `deps` lists a range precedent as ONE node**: `deps` on
+  `=SUMIFS(Data!B:B,Data!A:A,A1)` printed every occupied cell of both columns (18,714 lines on
+  Weaver's book) and `cell` printed them all on one `Dependencies:` line. A range the formula
+  reads is now one node, as Excel's Trace Precedents draws one box, carrying its counts in plain
+  digits: `1  Data!A:A  range, 401 occupied cells`, plus `(N formulas)` when any of its cells are
+  formulas. Ranges are spelled as Excel displays them, anchors dropped (`A:A`, `3:5`, `1:1048576`
+  for the whole sheet, `B2:B9`); a one-cell range slot is a cell node; a SUMIF sum range shows at
+  the size Excel reads it. Depth still counts formula hops: the walk continues through the formulas
+  inside a range, a cell an earlier layer listed or covered is not listed again, and a range
+  reached later is still listed once. A range with no occupied cell — even over a sheet the book
+  lacks — is listed with `0 occupied cells` (it explains a zero). JSON: every node gains `kind`
+  (`"cell"` | `"range"`) after `ref`; a range node is `{ref, kind, depth, formula: null,
+  value: null, occupied, formulas}`; `data` gains `expand`. Dependents change only by
+  `kind: "cell"`. `cell`'s `Dependencies` names each range once the same way (`=SUM(B1:B3)` gives
+  `B1:B3`), still pasteable, `--json` still an array of strings. `QualifiedGraph` gains a fourth
+  case-class field, `rangeCells` (no default): build graphs with `QualifiedGraph.of`.
+- **`xl diff` compares sheet structure, not only cells** (a row-height-only change printed "Files
+  are identical."). Besides cells, merges, comments and hyperlinks it reports rows and columns
+  (effective `height`/`width` at 2 decimals — explicit, else the sheet default, else Excel's stock
+  15pt / 9.140625 — `hidden`, `outlineLevel`, `collapsed`, default style), collapsed into Excel
+  whole-row/column runs (`5:200`, `K:XFD`); sheet properties (`defaultRowHeight`,
+  `defaultColumnWidth`, the `freezePanes` anchor, `visibility`); conditional formats and data
+  validations as blocks keyed by sqref (token order, renumbered priorities, dxf ids and `xr:uid`s
+  ignored); the relative order of shared sheets; and defined names by scope and case-insensitive
+  name (`_xlnm.*` skipped). View state, tab colour, print setup, tables, autofilter, drawings,
+  `calcPr`, theme and document properties are not compared. **Behaviour change:** a
+  structure-only difference is now `DIFFERENCES_FOUND` (exit 1); `--cells-only` restores the old
+  scope. The JSON gains typed keys (every existing field unchanged); markdown is byte-identical
+  when nothing structural changed.
+- **A plain formula cell intersects a range in a lifted argument with its own row or column**,
+  as Excel shows the legacy formula (`=ABS(C2:C4)` in row 3 is `=ABS(@C2:C4)`, i.e. C3; outside
+  the range `#VALUE!`), where it was a "must be used within a function" error; `xl eval` without a
+  cell position reports the same loud error as `@`. A computed array in a plain cell keeps the
+  top-left value (GH-302).
+- **Cached values move where formulas relied on the old array collapse**: recalculated books
+  change for array contexts (SUMPRODUCT and aggregate arguments, IF conditions, LET, CSE records),
+  and a defined name bound to a single blank cell now reads as that cell (LEN 0, YEAR 1900) instead
+  of as 0. An uncached precedent evaluated on demand now runs at its own cell position and in its
+  own mode (array mode for an ArrayFormula record), whether a reference or an aggregate, criteria or
+  SUMPRODUCT range walk reads it.
+- **`FunctionFlags` gains a field (`lift`)**: source-compatible, binary-incompatible for positional
+  construction (the `volatile` precedent, #597).
+- **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
+  coercer, so a mistyped branch is a `Left` rather than a mistyped value.
+- **A contained evaluator defect in `xl eval` / `evala` is `FORMULA_ERROR`** (still exit 3) with
+  the defect wording, where it was `INTERNAL`.
+
+### Fixed
+
+- **`view --eval` no longer crashes on a cell xl cannot evaluate, and degrades cell by cell**:
+  a sheet holding `=SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))` made `view --eval` exit 3 `INTERNAL`
+  ("stack trace is imprecise" in the native image, a `ClassCastException` on the JVM), `evala`
+  crashed on the same shapes and `recalc` left them uncached. It is now Excel's 5 in
+  `view --eval`, `recalc` and `batch` (array lifting, above). When a formula does fail, every
+  other formula in the window still shows its live value; the failing cell and the formulas that
+  depend on it (not evaluated, so no stale cache is mixed in — dynamic `INDIRECT` readers included)
+  show what the file holds, and one `EVAL_FAILED` warning names them. Under `--strict` the
+  markdown/csv/json/html/svg renders gate with `RECALC_GATE` (nothing rendered); raster formats
+  warn. A cycle outside the window's closure no longer fails the view.
+- **Array arguments are type-sound**: an array-valued expression reaching a numeric, integer,
+  text, boolean or date argument (in `SUMPRODUCT`/`SUM` arguments, `IF` branches, `evala`) used to
+  reach the function body as a raw cell value and throw a `ClassCastException` (ABS, ROUND, MOD,
+  RANK, RANDBETWEEN, DATE…). Every typed position now receives its type or a clean `Left`
+  (`TExpr.scalarKind` drives one typed collapse). `&` broadcasts element-wise instead of
+  returning the text `ArrayResult(Vector(…))x`; `DateToSerial`/`DateTimeToSerial` are total.
+- **A throwable escaping the evaluator is contained per cell** (#681): every `Evaluator` factory
+  returns a guarded evaluator. A `NonFatal` throw becomes the per-cell failure `Evaluation threw
+  <class>: <message> at <cell> — an internal evaluator defect, not an Excel error value; please
+  report it with the formula`; a `StackOverflowError` becomes `Evaluation exhausted the stack at
+  <cell>: …` (it used to escape `recalculate`). IFERROR and ISERROR cannot swallow a defect;
+  `OutOfMemoryError` (the `RESOURCE_LIMIT` contract), `InterruptedException` and `boundary.Break`
+  still propagate.
+- **Rendered text spills as Excel spills it** (`view --format png|svg|html`, `toSvg`/`toHtml`):
+  text wider than its cell now overflows into neighbours that hold no value, whatever their fill,
+  border, font or number format — before, an empty neighbour that only carried a fill stopped it.
+  A value (`""` and a formula cached as `""` included) or a merge still blocks it, and the rendered
+  range's edge bounds it. Right-aligned text spills left and centred text both ways, clipped on a
+  blocked side; hidden-column, wrapped and merged cells never spill. Every cell under spilled text
+  keeps its own fill and borders: SVG no longer stretches the source's background over the span,
+  and HTML keeps one `<td>` per cell, drawing the text in a box laid over its neighbours, pinning
+  the table width (so browsers honour `table-layout: fixed` instead of widening the column) and
+  clipping a merged cell's text to its merge. `RenderUtils.overflowSpan` (`OverflowSpan(left,
+  right)`) is the one decision point; `calculateOverflowColspan` is its rightward extent.
+- **Rendered rows autofit to their content**: a row with no explicit height gets the height
+  Excel's autofit gives it — the line height of its largest font, rich-text runs included (Calibri
+  11pt → 15pt, 14pt → 18.75pt, 18pt → 23.25pt, 24pt → 31.5pt), times the line count for wrapped
+  text — never below the sheet's default. Explicit heights, hidden rows and merged cells are left
+  alone. Before, an 18pt title was clipped in a 20px row. The formula needs no installed font, so
+  a headless render matches a desktop one; sizes other than the four calibration points may differ
+  from Excel by a pixel.
+- **A style-only cell is no longer an occupied precedent**: a formatted blank inside a read range
+  was listed by `cell` and `deps` and counted by `QualifiedGraph.precedentsOf`. Occupied now means
+  the cell holds a value, the rule `search`, `view` and the streaming reader already use.
+- **Array contexts that silently took the top-left element now answer Excel's array**:
+  `=SUMPRODUCT(--ISNUMBER(B2:B4))` was 0, `=SUMPRODUCT(ROUND(C2:C4/3,1))` was the first element,
+  `=IFERROR(1/(B2:B4-5),0)` spilled 1×1.
+- **CSE and dynamic-array anchors evaluate as arrays**: an `<f t="array">` record's anchor caches
+  element (0,0), Excel's anchor value, instead of evaluating scalar-wise — including an uncached
+  anchor read by another formula through a reference or an aggregate or criteria range.
+- **SUMPRODUCT's whole-column trimming (GH-192) reaches inside lifted arguments, `^` and `&`**:
+  `SUMPRODUCT(--(A:A>0),ABS(B:B))` no longer mismatches dimensions. Rows past the used extent are
+  dropped there too, so blanks beyond it are not counted (`SUMPRODUCT(--ISBLANK(A:A))`), as with
+  the operators' `SUMPRODUCT(--(A:A=""))`.
+
 ## [0.23.1] - 2026-09-15
 
 Wave 30 — the 2026-09-15 dogfood of 0.23.0 (103 probes across the CLI, the scripting library and
