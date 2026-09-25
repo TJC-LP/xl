@@ -231,13 +231,13 @@ As of Wave 31 (2026-09-25), from the full-suite JUnit reports; macros are part o
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 3262 |
-| xl-core | 1820 |
-| xl-ooxml | 1305 |
-| xl-cli | 1683 |
+| xl-core | 1826 |
+| xl-ooxml | 1313 |
+| xl-cli | 1689 |
 | xl-cats-effect | 195 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 64 |
-| **Total** | **8,476** |
+| **Total** | **8,496** |
 
 ## Test Quality Metrics
 
