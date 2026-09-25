@@ -350,7 +350,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           .withActiveTab(clampActiveTab(wb.activeSheetIndex, wb.sheets.size))
           .copy(
             workbookPr = reconcileDate1904(p.workbookPr, wb.metadata.date1904),
-            definedNames = reconcileDefinedNames(p.definedNames, PrintNames.effective(wb)),
+            definedNames = reconcileDefinedNames(p.definedNames, wb.effectiveDefinedNames),
             calcPr = reconcileCalcPr(p.calcPr, wb.metadata.calcPr)
           )
       case None =>
@@ -372,7 +372,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           workbookPr = workbookPr,
           // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
           bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
-          definedNames = buildDefinedNames(PrintNames.effective(wb)),
+          definedNames = buildDefinedNames(wb.effectiveDefinedNames),
           // GH-373/GH-400: scratch builds emit all authored calcPr settings — the iterate triple
           // plus calcMode/fullCalcOnLoad/calcId (no calcId unless authored, the LO precedent)
           calcPr = reconcileCalcPr(None, wb.metadata.calcPr)

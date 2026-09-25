@@ -8,7 +8,6 @@ import com.tjclp.xl.cli.{Depth, Direction}
 import com.tjclp.xl.cli.contract.{CliError, CliException, CliSignal, ErrorCode, OutputMode, Payload}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver}
 import com.tjclp.xl.cli.output.RendererCommon
-import com.tjclp.xl.ooxml.PrintNames
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.FreezePane
 import com.tjclp.xl.styles.color.Color
@@ -54,15 +53,16 @@ object InspectCommands:
         Payload.text(describeText(lines, meta.definedNames, scope, meta.date1904, None))
 
   /**
-   * `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. The
-   * defined names are the book's effective table ([[PrintNames.effective]]): the read lifted each
-   * sheet's modelable `_xlnm.Print_Area` / `_xlnm.Print_Titles` out of `metadata.definedNames` into
-   * its PageSetup (GH-259), so the loaded table alone omits the sheet-scoped names the light card
-   * and `names` read verbatim from workbook.xml (GH-667).
+   * `describe --full`: the loaded book's [[WorkbookSummary]] — the light card plus every count. Its
+   * defined names are the book's effective table (`Workbook.effectiveDefinedNames`, GH-674): the
+   * read lifted each sheet's modelable `_xlnm.Print_Area` / `_xlnm.Print_Titles` out of
+   * `metadata.definedNames` into its PageSetup (GH-259), and the summary re-derives them, so
+   * `--full` lists the sheet-scoped names the light card and `names` read verbatim from
+   * workbook.xml (GH-667).
    */
   def describe(wb: Workbook, mode: OutputMode): Payload =
     val summary = WorkbookSummary.of(wb)
-    val definedNames = PrintNames.effective(wb)
+    val definedNames = summary.definedNames
     val scope: Int => Option[String] = idx => wb.sheets.lift(idx).map(_.name.value)
     mode match
       case OutputMode.Json =>

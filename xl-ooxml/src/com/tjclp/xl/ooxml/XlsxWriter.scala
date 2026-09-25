@@ -2267,7 +2267,7 @@ object XlsxWriter:
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
         updated.copy(definedNames =
           OoxmlWorkbook
-            .reconcileDefinedNames(updated.definedNames, PrintNames.effective(workbook))
+            .reconcileDefinedNames(updated.definedNames, workbook.effectiveDefinedNames)
         )
       case None =>
         // Fallback for programmatically created workbooks OR when metadata was modified — fresh

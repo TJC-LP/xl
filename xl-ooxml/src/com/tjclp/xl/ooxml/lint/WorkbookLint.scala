@@ -321,16 +321,21 @@ object WorkbookLint:
    * GH-663: the formula-syntax oracle behind [[LintCategory.FormulaUnparseable]] — given a cell
    * `<f>`'s stored text (file form, any leading '=' already removed), the diagnostic when the text
    * does not parse, `None` when it does. xl-ooxml has no formula parser (that is xl-evaluator's),
-   * so the caller supplies one; the CLI passes the evaluator's. [[noFormulaCheck]] disables the
-   * rule, and the oracle is never shown an empty `<f>` (a shared-formula dependent) or a data-table
-   * record's text.
+   * so the caller supplies one; the CLI and the aggregate module's `Excel.lint` pass the
+   * evaluator's (`UnparseableFormula.check`, GH-674). [[noFormulaCheck]] disables the rule, and the
+   * oracle is never shown an empty `<f>` (a shared-formula dependent) or a data-table record's
+   * text.
    */
   type FormulaCheck = String => Option[String]
 
   /** The oracle that accepts every formula: the rule is off (the default). */
   val noFormulaCheck: FormulaCheck = _ => None
 
-  /** Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). */
+  /**
+   * Lint an XLSX file on disk. Only the structural parts are read (workbook, worksheets, rels). The
+   * `formula-unparseable` rule is off: pass an oracle to the two-argument form, or use `Excel.lint`
+   * from the aggregate `xl` module (GH-674), which supplies the parser the CLI uses.
+   */
   def lint(path: Path): XLResult[Vector[Finding]] = lint(path, noFormulaCheck)
 
   /** [[lint]] with a formula oracle for the `formula-unparseable` rule (GH-663). */

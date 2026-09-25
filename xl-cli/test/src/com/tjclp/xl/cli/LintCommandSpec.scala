@@ -14,6 +14,7 @@ import munit.CatsEffectSuite
 import com.tjclp.xl.{CellRange, Sheet, Workbook, given}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.LintCommands
+import com.tjclp.xl.formula.parser.UnparseableFormula
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.lint.{LintCategory, WorkbookLint}
@@ -737,8 +738,12 @@ class LintCommandSpec extends CatsEffectSuite:
       "SUM((A1,A2))",
       "(A1:B2 B1:C2)"
     )
-    truncated.foreach(t => assert(LintCommands.certainTruncation(t), s"should be truncated: $t"))
-    complete.foreach(t => assert(!LintCommands.certainTruncation(t), s"should be complete: $t"))
+    truncated.foreach(t =>
+      assert(UnparseableFormula.certainTruncation(t), s"should be truncated: $t")
+    )
+    complete.foreach(t =>
+      assert(!UnparseableFormula.certainTruncation(t), s"should be complete: $t")
+    )
   }
 
   test("PR #679 review: the #669 grammar gaps and error literals are never formula-unparseable") {
@@ -806,7 +811,7 @@ class LintCommandSpec extends CatsEffectSuite:
     corpus.foreach { t =>
       assertEquals(
         LintCommands.formulaCheck(t),
-        LintCommands.formulaCheckSlow(t),
+        UnparseableFormula.checkSlow(t),
         s"'${t.take(40)}'"
       )
     }

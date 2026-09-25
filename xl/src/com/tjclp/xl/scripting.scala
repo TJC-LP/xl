@@ -54,6 +54,12 @@ object scripting:
   // wildcard export puts them in scope here.
   export com.tjclp.xl.io.ExcelRecalc.*
 
+  // GH-674: the lint `xl lint` runs — every structural rule plus formula-unparseable, whose parser
+  // oracle only this aggregate module can supply — as extensions on Excel.type, with the finding
+  // types.
+  export com.tjclp.xl.io.ExcelLint.*
+  export com.tjclp.xl.ooxml.lint.{Finding, LintCategory, LintSeverity}
+
   // The one sanctioned unwrap: .unsafe / .getOrElse on XLResult
   export com.tjclp.xl.unsafe.*
 
