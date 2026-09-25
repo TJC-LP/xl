@@ -134,27 +134,16 @@ object ImageMagick extends Rasterizer:
    *
    * This catches delegate mechanism failures (temp file issues, permission problems) that aren't
    * detected by simply checking if the binary exists. The test converts a 1x1 red pixel SVG to PNG
-   * and verifies we get valid output.
+   * and verifies we get output. It runs through [[PipedBackend]] (GH-673): an fs2 stdin write to an
+   * ImageMagick that exits without reading printed a `Stream closed` stack trace ahead of the typed
+   * error.
    */
   private def testMinimalConversion(cmd: ImageMagickCommand): IO[Boolean] =
-    val args = List("-background", "white", "svg:-", "png:-")
-
-    Processes[IO]
-      .spawn(ProcessBuilder(cmd.command, args))
-      .use { process =>
-        val svgBytes = TestSvg.getBytes(StandardCharsets.UTF_8)
-
-        for
-          // Write test SVG to stdin
-          _ <- fs2.Stream.emits(svgBytes).through(process.stdin).compile.drain
-          // Read stdout to get PNG bytes (don't validate, just check we got something)
-          pngBytes <- process.stdout.compile.toVector
-          // Drain stderr
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0 && pngBytes.nonEmpty
-      }
-      .handleError(_ => false)
+    PipedBackend.succeeds(
+      cmd.command,
+      List("-background", "white", "svg:-", "png:-"),
+      TestSvg.getBytes(StandardCharsets.UTF_8)
+    )
 
   /**
    * Find the available ImageMagick command, preferring v7 over v6.

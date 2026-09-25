@@ -40,15 +40,34 @@ class RasterSubprocessSpec extends FunSuite:
        |exit 1
        |""".stripMargin
 
-  /** A directory holding a failing shim for each stdin-fed backend (and resvg, which is not). */
+  /**
+   * ImageMagick's availability probe runs `-version`/`--version` and `-list delegate`, then
+   * converts a 1x1 SVG on stdin; this shim passes the first two and exits on the conversion without
+   * reading.
+   */
+  private val magickShimScript =
+    s"""#!/bin/sh
+       |case "$$1" in
+       |  -version|--version|-list) echo "shim 1.0"; exit 0 ;;
+       |esac
+       |echo "$shimMessage" >&2
+       |exit 1
+       |""".stripMargin
+
+  /**
+   * A directory holding a failing shim for each stdin-fed backend (and resvg, which is not). Both
+   * ImageMagick commands are shimmed so a system `convert` on the fork's PATH cannot answer the
+   * probe instead.
+   */
   private val shims = FunFixture[Path](
     setup = _ =>
       val dir = Files.createTempDirectory("xl-raster-shims-")
-      Vector("rsvg-convert", "cairosvg", "resvg").foreach { name =>
+      def install(name: String, script: String): Unit =
         val shim = dir.resolve(name)
-        Files.writeString(shim, shimScript, StandardCharsets.UTF_8)
+        Files.writeString(shim, script, StandardCharsets.UTF_8)
         Files.setPosixFilePermissions(shim, PosixFilePermissions.fromString("rwxr-xr-x"))
-      }
+      Vector("rsvg-convert", "cairosvg", "resvg").foreach(install(_, shimScript))
+      Vector("magick", "convert").foreach(install(_, magickShimScript))
       dir
     ,
     teardown = dir =>
@@ -75,12 +94,22 @@ class RasterSubprocessSpec extends FunSuite:
 
   /** Run `mainClass args` in a fresh JVM whose PATH puts `shimDir` first. */
   private def fork(shimDir: Path, mainClass: String, args: String*): Forked =
+    forkWith(shimDir, Nil, mainClass, args*)
+
+  /** [[fork]], with extra flags for the forked JVM. */
+  private def forkWith(
+    shimDir: Path,
+    jvmFlags: List[String],
+    mainClass: String,
+    args: String*
+  ): Forked =
     val java = Path.of(System.getProperty("java.home"), "bin", "java").toString
     val out = Files.createTempFile("xl-fork-", ".out")
     val err = Files.createTempFile("xl-fork-", ".err")
     try
       val builder = new ProcessBuilder(
-        (List(java, "-Djava.awt.headless=true", "-cp", classpath, mainClass) ++ args).asJava
+        (List(java, "-Djava.awt.headless=true") ++ jvmFlags ++
+          List("-cp", classpath, mainClass) ++ args).asJava
       )
       builder.environment().put("PATH", s"$shimDir${File.pathSeparator}/usr/bin:/bin")
       builder.redirectOutput(out.toFile).redirectError(err.toFile)
@@ -98,11 +127,18 @@ class RasterSubprocessSpec extends FunSuite:
       Files.deleteIfExists(err)
 
   /** `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. */
-  private def forcedView(shimDir: Path, backend: String, format: String, range: String): Forked =
+  private def forcedView(
+    shimDir: Path,
+    backend: String,
+    format: String,
+    range: String,
+    jvmFlags: List[String] = Nil
+  ): Forked =
     val fixtures = TestFixtures.materialize.unsafeRunSync()
     try
-      fork(
+      forkWith(
         shimDir,
+        jvmFlags,
         "com.tjclp.xl.cli.Main",
         "-f",
         fixtures.resolve("simple.xlsx").toString,
@@ -140,6 +176,23 @@ class RasterSubprocessSpec extends FunSuite:
     shims.test(s"forced cairosvg that exits early ($size): its stderr and exit, not INTERNAL") {
       dir => assertExitedEarly(forcedView(dir, "cairosvg", "png", range), "cairosvg")
     }
+
+  shims.test(
+    "forced imagemagick whose probe conversion exits early: RASTERIZER_UNAVAILABLE, no trace"
+  ) { dir =>
+    // The probe's 1x1 SVG fits the stdin buffer, so the old fs2 write failed only when the shim
+    // exited before fs2 closed stdin — a race the JIT usually won. An interpreted JVM (-Xint) loses
+    // it every time (measured 4/4 against the fs2 probe, 1/16 with the JIT under load); the repeats
+    // keep the case honest if a faster machine narrows the window again.
+    (1 to 3).foreach { attempt =>
+      val run = forcedView(dir, "imagemagick", "png", "A1:B2", List("-Xint"))
+      val clue = s"attempt $attempt: ${run.stderr}"
+      assertEquals(run.exit, 3, clue)
+      assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), clue)
+      assert(!run.stderr.contains("Stream closed"), clue)
+      assert(!run.stderr.contains("\tat "), s"no stack trace, $clue")
+    }
+  }
 
   shims.test("forced rsvg-convert asked for jpeg: a typed code, not INTERNAL") { dir =>
     val run = forcedView(dir, "rsvg-convert", "jpeg", "A1:Z1000")

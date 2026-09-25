@@ -32,7 +32,43 @@ private[raster] object PipedBackend:
    * failure too, since the output cannot be trusted.
    */
   def run(name: String, command: String, args: List[String], input: Array[Byte]): IO[Unit] =
-    spawn(command :: args).use { process =>
+    exchange(command :: args, input).flatMap { outcome =>
+      (outcome.exit, outcome.unread) match
+        case (0, None) => IO.unit
+        case (exit @ 0, Some(closed)) =>
+          val reason = Option(closed.getMessage).getOrElse(closed.toString)
+          val detail = if outcome.stderr.isBlank then "" else s"; ${outcome.stderr}"
+          IO.raiseError(
+            RasterError.ConversionFailed(
+              name,
+              s"exited before reading the whole SVG ($reason)$detail",
+              exit
+            )
+          )
+        case (exit, _) => IO.raiseError(RasterError.ConversionFailed(name, outcome.stderr, exit))
+    }
+
+  /**
+   * A probe conversion: true when `command args` read all of `input`, exited 0 and wrote something
+   * to stdout. Any failure — a missing binary, an early exit, a closed pipe — is false, never an
+   * error or a stack trace (ImageMagick's delegate check, GH-673).
+   */
+  def succeeds(command: String, args: List[String], input: Array[Byte]): IO[Boolean] =
+    exchange(command :: args, input)
+      .map(o => o.exit == 0 && o.unread.isEmpty && o.stdoutBytes > 0)
+      .handleError(_ => false)
+
+  /** What a child did with its input: exit code, the write's failure, stderr, stdout's size. */
+  private final case class Outcome(
+    exit: Int,
+    unread: Option[IOException],
+    stderr: String,
+    stdoutBytes: Long
+  )
+
+  /** Spawn `command`, write `input` while draining stderr and stdout, and wait for the exit. */
+  private def exchange(command: List[String], input: Array[Byte]): IO[Outcome] =
+    spawn(command).use { process =>
       val destroy = IO.blocking(process.destroy())
       val write = IO.blocking(writeAndClose(process.getOutputStream, input)).cancelable(destroy)
       val stderr = IO
@@ -41,22 +77,8 @@ private[raster] object PipedBackend:
       val stdout =
         IO.blocking(process.getInputStream.transferTo(OutputStream.nullOutputStream()))
           .cancelable(destroy)
-      (write, stderr, stdout).parTupled.flatMap { (unread, err, _) =>
-        IO.interruptible(process.waitFor()).flatMap { exit =>
-          (exit, unread) match
-            case (0, None) => IO.unit
-            case (0, Some(closed)) =>
-              val reason = Option(closed.getMessage).getOrElse(closed.toString)
-              val detail = if err.isBlank then "" else s"; $err"
-              IO.raiseError(
-                RasterError.ConversionFailed(
-                  name,
-                  s"exited before reading the whole SVG ($reason)$detail",
-                  exit
-                )
-              )
-            case _ => IO.raiseError(RasterError.ConversionFailed(name, err, exit))
-        }
+      (write, stderr, stdout).parTupled.flatMap { (unread, err, bytes) =>
+        IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes))
       }
     }
 
