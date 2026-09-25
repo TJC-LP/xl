@@ -72,8 +72,8 @@ object ArrayLift:
 
 /**
  * How one element of a lifted array is handed to its slot — the conventions a cell reference gets
- * in that slot, so `f(range)[i]` equals `f(cell_i)` (except for numeric text and cached formula
- * cells, whose single-reference decoders predate lifting; ArrayLiftingLawsSpec pins both).
+ * in that slot, so `f(range)[i]` equals `f(cell_i)` (except for numeric text, whose
+ * single-reference numeric decoder predates lifting; ArrayLiftingLawsSpec pins it).
  */
 enum LiftSlot derives CanEqual:
   /** A typed slot: the element coerces to the target (`Coerced(Lit(element), target)`). */

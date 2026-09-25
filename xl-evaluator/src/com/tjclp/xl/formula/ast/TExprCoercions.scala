@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.ast
 
 import com.tjclp.xl.formula.functions.FunctionSpecs
-import com.tjclp.xl.formula.eval.{EvalError, ScalarCoercion}
+import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
 import com.tjclp.xl.cells.CellValue
@@ -98,17 +98,11 @@ trait TExprCoercions:
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time
     case BindingRef(name) => CoercedBindingRef[String](name, BindingCoercion.Text)
     case TExpr.Lit(value: String) => TExpr.Lit(value)
-    // GH-665: a numeric literal in a text position renders as Excel's General text at evaluation
-    // time (=2.50&"" is "2.5", =LEN(2.50) is 3) and SURVIVES in the AST, so the printer emits
-    // `=2.50&""` back rather than the folded `="2.50"&""`
-    case TExpr.Lit(_: BigDecimal) => coerced[String](expr, BindingCoercion.Text)
-    case TExpr.Lit(value: Boolean) => TExpr.Lit(if value then "TRUE" else "FALSE")
-    // GH-561: a date in a text position is its Excel serial, not ISO text
-    case TExpr.Lit(value: java.time.LocalDate) => TExpr.Lit(ScalarCoercion.dateSerialText(value))
-    case TExpr.Lit(value: java.time.LocalDateTime) =>
-      TExpr.Lit(ScalarCoercion.dateSerialText(value))
-    // Any other literal (a programmatic AST: a CellValue, an Int, an array) coerces at evaluation
-    // time rather than being cast to a String it is not
+    // GH-665/#671: a numeric, boolean or date literal in a text position renders at evaluation
+    // time (=2.50&"" is "2.5", =TRUE&"" is "TRUE", a date its serial per GH-561) and SURVIVES in
+    // the AST, so the printer emits `=TRUE&""` back rather than the folded `="TRUE"&""`. Any other
+    // literal (a programmatic AST: a CellValue, an Int, an array) coerces the same way rather
+    // than being cast to a String it is not
     case lit: TExpr.Lit[?] => coerced[String](lit, BindingCoercion.Text)
     // Concat is String by construction — the only statically text-typed operator
     case c: TExpr.Concat => c

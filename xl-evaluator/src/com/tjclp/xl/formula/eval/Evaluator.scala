@@ -1937,7 +1937,9 @@ private class EvaluatorImpl(
    * GH-302 policy. Two scalars join under the decodeAsString conventions (GH-193: operands are
    * statically String but erased casts can deliver other runtime values, so they are read as Any
    * and coerced totally); GH-344: a scalar operand carrying an Excel error VALUE propagates it
-   * instead of stringifying it.
+   * instead of stringifying it. #681: a non-finite Double operand (a programmatic AST's) reads as
+   * the `#NUM!` it is through `anyToCellValue` on both branches — the scalar guard below and the
+   * array's elements — so the text "NaN" never reaches a cell.
    */
   private def evalConcat(
     xExpr: TExpr[String],

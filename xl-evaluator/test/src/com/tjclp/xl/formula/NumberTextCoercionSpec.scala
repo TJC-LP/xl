@@ -6,11 +6,13 @@ import org.scalacheck.Prop.forAll
 import java.time.LocalDate
 
 import com.tjclp.xl.Generators.genWideBigDecimal
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * GH-665: every number → text conversion in the evaluator (`&`, CONCATENATE, text-typed arguments,
@@ -172,12 +174,13 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
   // ===== Three-arm parity law =====
 
   // Arms: decodeAsString (=A1&""), coerceText via LET binding and via the INDEX call result,
-  // CONCATENATE's TextList (asStringExpr → decodeAsString). A cached-formula cell in a text
-  // position is deliberately NOT an arm: decodeAsString's `Formula(text, _, _) => text` arm is
-  // pre-existing and outside GH-665.
+  // CONCATENATE's TextList (asStringExpr → decodeAsString), and (#671) a cached formula cell in a
+  // text position, which reads its cached value like any other reference.
   property("GH-665: every text-position arm agrees with NumFmtFormatter.generalText") {
     forAll(genWideBigDecimal) { (n: BigDecimal) =>
-      val s = Sheet("P").put(ref"A1", CellValue.Number(n))
+      val s = Sheet("P")
+        .put(ref"A1", CellValue.Number(n))
+        .put(ref"B1", CellValue.Formula("A1", Some(CellValue.Number(n))))
       val expected = Right(CellValue.Text(NumFmtFormatter.generalText(n)))
       val direct = s.evaluateFormula("=A1&\"\"")
       val viaBinding = s.evaluateFormula("=LET(x,A1,x&\"\")")
@@ -190,5 +193,90 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
       assertEquals(viaBinding, expected, s"LET arm for $n")
       assertEquals(viaConcatenate, expected, s"CONCATENATE arm for $n")
       assertEquals(viaCall, expected, s"INDEX arm for $n")
+      assertEquals(s.evaluateFormula("=B1&\"\""), expected, s"cached formula arm for $n")
     }
+  }
+
+  // ===== #671: a cached formula cell in a text position yields its value =====
+
+  // LibreOffice: ="" & C2 with C2 = =A1*2 over A1 = 10 reads "20"; Excel likewise reads the
+  // formula's value. These cells are never recalculated first: the cached value is what is read.
+  private val cached = Sheet("C")
+    .put(ref"B1", CellValue.Formula("A1", Some(CellValue.Number(BigDecimal(0)))))
+    .put(ref"B2", CellValue.Formula("\"x\"&\"y\"", Some(CellValue.Text("xy"))))
+    .put(ref"B3", CellValue.Formula("1=1", Some(CellValue.Bool(true))))
+    .put(
+      ref"B4",
+      CellValue
+        .Formula("DATE(2026,1,1)", Some(CellValue.DateTime(LocalDate.of(2026, 1, 1).atStartOfDay)))
+    )
+    .put(ref"B5", CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))))
+    .put(ref"B6", CellValue.Formula("A1*2", Some(CellValue.Number(BigDecimal("20.0")))))
+    .put(
+      ref"B7",
+      CellValue.Formula(
+        "TABLE(,A1)",
+        None,
+        FormulaKind.DataTable(CellRange(ref"B7", ref"B7"), false, false, Some(ref"A1"), None)
+      )
+    )
+
+  private def cachedCase(formula: String, expected: CellValue)(implicit loc: munit.Location): Unit =
+    assertEquals(cached.evaluateFormula(formula), Right(expected), formula)
+
+  test("#671: a cached formula cell in a text position reads its cached value, not its text") {
+    cachedCase("=\"\"&B1", text("0"))
+    cachedCase("=B2&\"!\"", text("xy!"))
+    cachedCase("=B3&\"\"", text("TRUE"))
+    cachedCase("=B4&\"\"", text("46023"))
+    cachedCase("=\"\"&B6", text("20"))
+  }
+
+  test("#671: text-typed function arguments read the cached value too") {
+    cachedCase("=LEN(B1)", num(1))
+    cachedCase("=UPPER(B2)", text("XY"))
+    cachedCase("=CONCATENATE(B1,B6)", text("020"))
+    cachedCase("=LEFT(B6,1)", text("2"))
+  }
+
+  test("#671: a cached error in a text position propagates the error") {
+    cachedCase("=B5&\"\"", CellValue.Error(CellError.Div0))
+    cachedCase("=LEN(B5)", CellValue.Error(CellError.Div0))
+  }
+
+  test("#671: an uncached data-table record reads as the empty text") {
+    cachedCase("=B7&\"|\"", text("|"))
+  }
+
+  test("#671: a cross-sheet cached formula cell reads its cached value") {
+    val main = Sheet("Main")
+    val wb = Workbook(Vector(main, cached))
+    assertEquals(
+      main.evaluateFormula("=C!B1&\"\"", workbook = Some(wb)),
+      Right(text("0"))
+    )
+    assertEquals(main.evaluateFormula("=LEN(C!B2)", workbook = Some(wb)), Right(num(2)))
+  }
+
+  // ===== #671: Boolean and date literals in text positions survive in the AST =====
+
+  test("#671: TRUE/FALSE in a text position render at evaluation time and re-print as written") {
+    List("=TRUE&\"\"", "=FALSE&1", "=LEN(TRUE)", "=UPPER(FALSE)").foreach { f =>
+      FormulaParser.parse(f) match
+        case Right(expr) =>
+          assertEquals(FormulaPrinter.print(expr), f)
+          assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr))
+        case Left(err) => fail(s"parse failed for $f: $err")
+    }
+    assertScalar("=TRUE&\"\"", text("TRUE"))
+    assertScalar("=FALSE&1", text("FALSE1"))
+    assertScalar("=LEN(TRUE)", num(4))
+  }
+
+  test("#671: a programmatic date literal in a text position renders its serial at evaluation") {
+    val date = TExpr.asStringExpr(TExpr.Lit(LocalDate.of(2026, 1, 1)))
+    val dateTime = TExpr.asStringExpr(TExpr.Lit(LocalDate.of(2026, 1, 1).atTime(12, 0)))
+    assert(!date.isInstanceOf[TExpr.Lit[?]], s"folded to $date")
+    assertEquals(Evaluator.instance.eval(date, sheet), Right("46023"))
+    assertEquals(Evaluator.instance.eval(dateTime, sheet), Right("46023.5"))
   }

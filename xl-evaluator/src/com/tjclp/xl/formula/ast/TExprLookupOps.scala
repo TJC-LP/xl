@@ -76,7 +76,7 @@ trait TExprLookupOps:
     Call(
       FunctionSpecs.xlookup,
       (
-        lookupValue.asInstanceOf[TExpr[Any]],
+        asCellValueExpr(lookupValue),
         RangeLocation.Local(lookupArray),
         RangeLocation.Local(returnArray),
         ifNotFound.map(_.asInstanceOf[TExpr[Any]]),
@@ -126,5 +126,5 @@ trait TExprLookupOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.matchFn,
-      (lookupValue.asInstanceOf[TExpr[Any]], RangeLocation.Local(lookupArray), Some(matchType))
+      (asCellValueExpr(lookupValue), RangeLocation.Local(lookupArray), Some(matchType))
     )

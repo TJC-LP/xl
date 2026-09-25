@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.formula.ast.BindingCoercion
 
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import scala.math.BigDecimal
 
@@ -115,7 +115,8 @@ private[formula] object ScalarCoercion:
     case i: Int => i.toString
     // anyToCellValue admits Long/Double runtime values into Any positions — render them as numbers
     case l: Long => numberText(BigDecimal(l))
-    // BigDecimal(NaN) and BigDecimal(±Infinity) throw; a non-finite Double falls to the catch-all
+    // #681: a non-finite Double never gets here — both callers first read the operand through
+    // ArrayArithmetic.anyToCellValue, which makes it #NUM!, and propagate that error
     case d: Double if d.isFinite => numberText(BigDecimal(d))
     // GH-561: `&` on a date yields its Excel serial ("46023"), never ISO text — dates are
     // numbers; only TEXT() formats them (the `">="&DATE(y,m,d)` criteria idiom depends on it)
@@ -185,6 +186,8 @@ private[formula] object ScalarCoercion:
     // the same table concatText keeps: Long/Double runtime values are numbers under the one rule
     case l: Long => Right(numberText(BigDecimal(l)))
     case d: Double if d.isFinite => Right(numberText(BigDecimal(d)))
+    // #681: NaN / ±Infinity have no Excel value — #NUM!, the answer `&` gives too
+    case _: Double => Left(EvalError.ErrorValue(CellError.Num, Some(label)))
     case b: Boolean => Right(if b then "TRUE" else "FALSE")
     // GH-561: dates render as their Excel serial in text positions
     case ld: java.time.LocalDate => Right(dateSerialText(ld))

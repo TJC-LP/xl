@@ -1843,7 +1843,10 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // GH-605 RRI (the CAGR idiom) and GH-604 SINGLE (the stored form of the `@` operator)
     assert(functions.contains("RRI"))
     assert(functions.contains("SINGLE"))
-    assertEquals(functions.length, 122)
+    // #670 LOOKUP and XMATCH
+    assert(functions.contains("LOOKUP"))
+    assert(functions.contains("XMATCH"))
+    assertEquals(functions.length, 124)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

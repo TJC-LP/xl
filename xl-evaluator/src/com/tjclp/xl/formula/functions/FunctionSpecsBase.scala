@@ -143,8 +143,11 @@ trait FunctionSpecsBase:
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
   // GH-197: Changed to accept both ranges AND array expressions
   type SumProductArgs = List[ArgSpec.SumProductArg]
+  // #670: every lookup_value slot is a CellValue slot (as VLOOKUP's always was), so a blank
+  // reference — read directly or as a lifted element — stays blank and matches nothing instead of
+  // reading 0 (LibreOffice: MATCH, XMATCH, XLOOKUP and LOOKUP of a blank are #N/A, lifted too)
   type XLookupArgs = (
-    AnyExpr,
+    TExpr[CellValue],
     TExpr.RangeLocation,
     TExpr.RangeLocation,
     Option[AnyExpr],
@@ -159,7 +162,11 @@ trait FunctionSpecsBase:
     Option[TExpr[BigDecimal]],
     Option[TExpr[BigDecimal]]
   )
-  type MatchArgs = (AnyExpr, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
+  type MatchArgs = (TExpr[CellValue], TExpr.RangeLocation, Option[TExpr[BigDecimal]])
+  // #670(d): LOOKUP(lookup_value, lookup_vector|array, [result_vector])
+  type LookupArgs = (TExpr[CellValue], TExpr.RangeLocation, Option[TExpr.RangeLocation])
+  // #670(d): XMATCH(lookup_value, lookup_array, [match_mode], [search_mode])
+  type XMatchArgs = (TExpr[CellValue], TExpr.RangeLocation, Option[TExpr[Int]], Option[TExpr[Int]])
   type AddressArgs = (
     TExpr[BigDecimal],
     TExpr[BigDecimal],
@@ -346,6 +353,30 @@ trait FunctionSpecsBase:
   ): Either[EvalError, Vector[Vector[CellValue]]] =
     ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
 
+  /**
+   * A lookup range's values (rows of cells), cut off where the sheet's used range ends: the cells
+   * past it are blank, which no lookup mode matches, so `LOOKUP(x,A:A,B:B)` costs the data rather
+   * than a million blanks. The range's start is kept, so positions within the result are the
+   * range's own.
+   */
+  protected def lookupRangeValues(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
+    targetSheet.usedRange match
+      case None => Right(Vector.empty)
+      case Some(used) =>
+        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
+        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
+        if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then Right(Vector.empty)
+        else
+          extractRangeAsMatrixEval(
+            CellRange(range.start, ARef.from0(colEnd, rowEnd)),
+            targetSheet,
+            ctx
+          )
+
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match
     case arr: ArrayResult => arr
@@ -353,7 +384,6 @@ trait FunctionSpecsBase:
 
   protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
     evalAny(ctx, expr).map(ExprValue.from)
-
   protected def toCellValue(value: ExprValue): CellValue =
     value match
       case ExprValue.Cell(cv) => cv
@@ -426,21 +456,105 @@ trait FunctionSpecsBase:
    * GH-662: the typed `#N/A` a lookup raises when nothing matches. Left channel per the GH-344
    * charter (RANK's not-found precedent), so IFNA/ISNA/ERROR.TYPE see the code and an unguarded
    * miss promotes to a cached `#N/A` at the CellValue boundary; the context is the human diagnostic
-   * and is dropped, by design, at that boundary. LOOKUP/XMATCH must raise through this when added.
+   * and is dropped, by design, at that boundary. LOOKUP and XMATCH (#670) raise through this too.
    */
   protected def lookupNotFound(context: String): EvalError =
     EvalError.ErrorValue(CellError.NA, Some(context))
 
-  /** One rendering of a lookup value for text matching and diagnostics (VLOOKUP/HLOOKUP/MATCH). */
+  /**
+   * One rendering of a lookup value for the lookup diagnostics (the call echoed in the context).
+   */
   protected def renderLookupValue(value: ExprValue): String = value match
     case ExprValue.Text(s) => s
     // #665: the one number → text rule, so a diagnostic never says `999.0` where `&` says `999`
-    case ExprValue.Number(n) => com.tjclp.xl.formula.eval.ScalarCoercion.numberText(n)
-    case ExprValue.Bool(b) => b.toString
-    case ExprValue.Date(d) => d.toString
-    case ExprValue.DateTime(dt) => dt.toString
-    case ExprValue.Cell(cv) => cv.toString
+    case ExprValue.Number(n) => ScalarCoercion.numberText(n)
+    case ExprValue.Bool(b) => renderBoolean(b)
+    // unreachable after normalizeLookupValue (dates become serials); rendered as `&` would
+    case ExprValue.Date(d) => ScalarCoercion.dateSerialText(d)
+    case ExprValue.DateTime(dt) => ScalarCoercion.dateSerialText(dt)
+    // a blank renders empty and an error as its code, never the case-class toString ("Empty")
+    case ExprValue.Cell(cv) => com.tjclp.xl.display.NumFmtFormatter.generalText(cv)
     case ExprValue.Opaque(other) => other.toString
+
+  /** Excel's spelling of a logical in the lookup diagnostics (range_lookup, a boolean key). */
+  protected def renderBoolean(b: Boolean): String = if b then "TRUE" else "FALSE"
+
+  /**
+   * #670(a): an error-typed lookup_value is the lookup's answer — `VLOOKUP(1/0,…)` is `#DIV/0!`,
+   * whatever the table holds and whatever XLOOKUP's if_not_found says (LibreOffice agrees). Takes a
+   * value already passed through [[normalizeLookupValue]], so a cached error is seen too.
+   */
+  protected def lookupValueError(fn: String, lookup: ExprValue): Either[EvalError, Unit] =
+    lookup match
+      case ExprValue.Cell(CellValue.Error(err)) =>
+        Left(EvalError.ErrorValue(err, Some(s"$fn: lookup_value is ${err.toExcel}")))
+      case _ => Right(())
+
+  /**
+   * A key as the lookup planes compare it: a cached formula's value, a date as its serial, rich
+   * text as its plain text.
+   */
+  private def lookupKey(cv: CellValue): CellValue = cv match
+    case CellValue.Formula(_, Some(cached), _) => lookupKey(cached)
+    case CellValue.DateTime(dt) => CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+    case CellValue.RichText(rt) => CellValue.Text(rt.toPlainText)
+    case other => other
+
+  /** The comparison plane of a key or lookup value: numbers, text and logicals never cross. */
+  private def lookupPlane(cv: CellValue): Option[Int] = cv match
+    case CellValue.Number(_) => Some(0)
+    case CellValue.Text(_) => Some(1)
+    case CellValue.Bool(_) => Some(2)
+    case _ => None
+
+  /**
+   * #670(g): how a key compares with the lookup value in the approximate modes — numbers with
+   * numbers (dates as serials), text with text case-insensitively (the ordering `<` uses), logicals
+   * with logicals. A key of another plane — blank, error, numeric text against a number — is None
+   * and skipped, as Excel's approximate modes skip it (`VLOOKUP("25",A1:B5,2,TRUE)` over numbers is
+   * `#N/A` in LibreOffice too).
+   */
+  private def compareLookupKey(cv: CellValue, lookup: ExprValue): Option[Int] =
+    val lookupCell = lookup match
+      case ExprValue.Number(n) => Some(CellValue.Number(n))
+      case ExprValue.Text(s) => Some(CellValue.Text(s))
+      case ExprValue.Bool(b) => Some(CellValue.Bool(b))
+      case _ => None
+    val key = lookupKey(cv)
+    lookupCell
+      .filter(l => lookupPlane(l).isDefined && lookupPlane(l) == lookupPlane(key))
+      .flatMap(l => ArrayArithmetic.compareCellValues(key, l).toOption)
+      .map(Integer.signum)
+
+  /**
+   * #670(g): the approximate search every lookup shares, over `keys` in search order (position,
+   * value): the key closest to the lookup value on the side `direction` allows (-1: the largest key
+   * ≤ it; 1: the smallest key ≥ it), an equal key being the closest. `lastOnTie` picks among equal
+   * keys: the binary-search family (VLOOKUP/HLOOKUP/MATCH/LOOKUP over sorted data) lands on the
+   * last of a run of duplicates, the linear XLOOKUP/XMATCH on the first in search order
+   * (LibreOffice: `MATCH(20,{10,20,20,30},1)` is 3, `XMATCH(20,{10,20,20,30},-1)` 2).
+   */
+  protected def approximateMatch(
+    keys: Seq[(Int, CellValue)],
+    lookup: ExprValue,
+    direction: Int,
+    lastOnTie: Boolean
+  ): Option[Int] =
+    keys
+      .flatMap { case (pos, cv) =>
+        compareLookupKey(cv, lookup)
+          .filter(c => c == 0 || c == direction)
+          .map(_ => (pos, lookupKey(cv)))
+      }
+      .foldLeft(Option.empty[(Int, CellValue)]) { (best, candidate) =>
+        best match
+          case None => Some(candidate)
+          case Some((_, bestKey)) =>
+            val order = ArrayArithmetic.compareCellValues(candidate._2, bestKey).getOrElse(0)
+            val closer = if direction < 0 then order > 0 else order < 0
+            if closer || (order == 0 && lastOnTie) then Some(candidate) else best
+      }
+      .map(_._1)
 
   /**
    * GH-467: normalize a lookup value for MATCH/XLOOKUP comparison. Cell-ref lookup values arrive as
@@ -453,6 +567,7 @@ trait FunctionSpecsBase:
     value match
       case ExprValue.Cell(CellValue.Number(n)) => ExprValue.Number(n)
       case ExprValue.Cell(CellValue.Text(s)) => ExprValue.Text(s)
+      case ExprValue.Cell(CellValue.RichText(rt)) => ExprValue.Text(rt.toPlainText)
       case ExprValue.Cell(CellValue.Bool(b)) => ExprValue.Bool(b)
       case ExprValue.Cell(CellValue.DateTime(dt)) =>
         ExprValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
@@ -478,7 +593,6 @@ trait FunctionSpecsBase:
         BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == v
       case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
       case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
-      case (CellValue.Error(e1), ExprValue.Cell(CellValue.Error(e2))) => e1 == e2
       case (CellValue.Formula(_, Some(cached), _), v) => matchesLookupExact(cached, v)
       case _ => false
 

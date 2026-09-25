@@ -117,7 +117,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertEquals((result - expected).abs < BigDecimal("0.01"), true)
   }
 
-  test("NPV: rate = -1 causes division by zero error") {
+  test("NPV: rate = -1 is the #NUM! error value (#670(h), LibreOffice #NUM!)") {
     val sheet = sheetWith(
       ARef.from0(0, 0) -> CellValue.Number(BigDecimal("100"))
     )
@@ -129,8 +129,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
     val err = evalErr(expr, sheet)
     err match
-      case EvalError.EvalFailed(reason, _) => assert(reason.contains("division by zero"))
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
+        assert(ctx.contains("division by zero"), ctx)
+      case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   test("NPV: parse and print round-trip") {
@@ -202,10 +203,11 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val expr = TExpr.irr(CellRange.parse("A1:A3").getOrElse(fail("Invalid range")))
 
     val err = evalErr(expr, sheet)
+    // #670(h): Excel's #NUM!, a cached error value rather than a host failure
     err match
-      case EvalError.EvalFailed(reason, _) =>
-        assert(reason.contains("at least one positive and one negative"))
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
+        assert(ctx.contains("at least one positive and one negative"), ctx)
+      case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   test("IRR: ignores non-numeric cells") {
@@ -261,9 +263,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
   test("IRR: Newton divergence returns contained error, never throws (GH-388)") {
     val expr = TExpr.irr(CellRange.parse("A1:A6").getOrElse(fail("Invalid range")))
     evalErr(expr, divergingStrip) match
-      case EvalError.EvalFailed(reason, _) =>
-        assert(reason.contains("IRR"), s"unexpected reason: $reason")
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
+        assert(ctx.contains("IRR"), s"unexpected context: $ctx")
+      case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   test("IRR: Newton divergence inside recalculate() is a per-cell error, never throws (GH-388)") {
@@ -273,12 +275,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     // Documented contract (see also LetFunctionSpec): recalculate is total — per-cell
     // error reporting, never a thrown exception.
     val result = Workbook(Vector(s)).recalculate()
-    assert(
-      result.errors.exists(e => e.ref == ARef.from0(1, 0)),
-      s"expected a per-cell error for B1, got: ${result.errors}"
-    )
     val evaluated = result.evaluated.getOrElse(SheetName.unsafe("Test"), Map.empty)
-    assert(evaluated.get(ARef.from0(1, 0)).isEmpty, "diverging IRR must not cache a value")
+    // #670(h): the divergence is Excel's #NUM!, cached like any error value
+    assertEquals(evaluated.get(ARef.from0(1, 0)), Some(CellValue.Error(CellError.Num)))
     assertEquals(
       evaluated.get(ARef.from0(1, 1)),
       Some(CellValue.Number(BigDecimal("-227.9999")))
@@ -333,9 +332,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
     val sheet = xSchedule(BigDecimal("-228"), BigDecimal("0.0001"), LocalDate.of(2025, 1, 1))
     evalErr(expr, sheet) match
-      case EvalError.EvalFailed(reason, _) =>
-        assert(reason.contains("XIRR"), s"unexpected reason: $reason")
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
+        assert(ctx.contains("XIRR"), s"unexpected context: $ctx")
+      case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   test("XNPV: non-finite discount factor is a contained error, never throws (GH-388)") {
@@ -348,9 +347,9 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
     val sheet = xSchedule(BigDecimal("-1000"), BigDecimal("1200"), LocalDate.of(2025, 1, 1))
     evalErr(expr, sheet) match
-      case EvalError.EvalFailed(reason, _) =>
-        assert(reason.contains("XNPV"), s"unexpected reason: $reason")
-      case other => fail(s"Expected EvalFailed, got $other")
+      case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
+        assert(ctx.contains("XNPV"), s"unexpected context: $ctx")
+      case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   // ==================== GH-405: serial-number dates in XIRR/XNPV ranges ====================
@@ -586,7 +585,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     err match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
         assert(ctx.contains("exact match not found"), ctx)
-        assert(ctx.contains("VLOOKUP(999, A1:B1, 2, false)"), ctx)
+        assert(ctx.contains("VLOOKUP(999, A1:B1, 2, FALSE)"), ctx)
       case other => fail(s"Expected ErrorValue(NA, ctx), got $other")
   }
 
@@ -608,7 +607,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     err match
       case EvalError.ErrorValue(CellError.NA, Some(ctx)) =>
         assert(ctx.contains("approximate match not found"), ctx)
-        assert(ctx.contains("VLOOKUP(50, A1:B1, 2, true)"), ctx)
+        assert(ctx.contains("VLOOKUP(50, A1:B1, 2, TRUE)"), ctx)
       case other => fail(s"Expected ErrorValue(NA, ctx), got $other")
   }
 
@@ -980,12 +979,10 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
   /**
    * Expect a contained failure naming the function — the eval must never throw. GH-344: a
    * non-convergence now classifies as the #NUM! error VALUE (still contained, still Left on the
-   * direct-eval channel); NumericGuard blowups stay EvalFailed.
+   * direct-eval channel); #670(h): a NumericGuard blowup is #NUM! too.
    */
   private def assertContained(expr: TExpr[BigDecimal], fn: String): Unit =
     evalErr(expr, sheetWith()) match
-      case EvalError.EvalFailed(reason, _) =>
-        assert(reason.contains(fn), s"unexpected reason: $reason")
       case EvalError.ErrorValue(com.tjclp.xl.cells.CellError.Num, Some(ctx)) =>
         assert(ctx.contains(fn), s"unexpected context: $ctx")
       case other => fail(s"Expected contained failure, got $other")
@@ -1046,4 +1043,64 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
       TExpr.Lit(BigDecimal(10000))
     )
     assertContained(expr, "RATE")
+  }
+
+  // ==================== #670(h): numeric failures are cached #NUM! ====================
+
+  // LibreOffice 25.8 on the same flows: XIRR/XNPV argument failures Err:502, IRR/RATE
+  // non-convergence Err:523, NPER(0,0,100) #NUM!; Excel documents #NUM! for every one of them
+  // (sign change, differing counts, non-convergence), which is what a cell caches.
+  private val cashflows: Sheet = sheetWith(
+    ARef.from0(0, 0) -> CellValue.Number(BigDecimal(100)),
+    ARef.from0(0, 1) -> CellValue.Number(BigDecimal(200)),
+    ARef.from0(0, 2) -> CellValue.Number(BigDecimal(300)),
+    ARef.from0(1, 0) -> CellValue.DateTime(LocalDate.of(2024, 1, 1).atStartOfDay),
+    ARef.from0(1, 1) -> CellValue.DateTime(LocalDate.of(2024, 6, 1).atStartOfDay),
+    ARef.from0(1, 2) -> CellValue.DateTime(LocalDate.of(2025, 1, 1).atStartOfDay)
+  )
+
+  private def numError(formula: String)(implicit loc: munit.Location): Unit =
+    assertEquals(
+      cashflows.evaluateFormula(formula),
+      Right(CellValue.Error(CellError.Num)),
+      formula
+    )
+
+  test("#670(h): XIRR/IRR over all-positive flows are #NUM!") {
+    numError("=XIRR(A1:A3,B1:B3)")
+    numError("=IRR(A1:A3)")
+  }
+
+  test("#670(h): XIRR/XNPV over values and dates of different lengths are #NUM!") {
+    numError("=XIRR(A1:A3,B1:B2)")
+    numError("=XNPV(0.1,A1:A3,B1:B2)")
+  }
+
+  test("#670(h): XIRR/XNPV over empty ranges are #NUM!") {
+    numError("=XIRR(D1:D3,E1:E3)")
+    numError("=XNPV(0.1,D1:D3,E1:E3)")
+  }
+
+  test("#670(h): NumericGuard blowups and RATE non-convergence are #NUM!") {
+    numError("=NPER(0,0,100)")
+    numError("=RATE(10,0,100,100)")
+    numError("=NPV(-1,A1:A3)")
+  }
+
+  test("#670(h): the #NUM! is visible to ERROR.TYPE and IFERROR") {
+    assertEquals(
+      cashflows.evaluateFormula("=ERROR.TYPE(XIRR(A1:A3,B1:B3))"),
+      Right(CellValue.Number(BigDecimal(6)))
+    )
+    assertEquals(
+      cashflows.evaluateFormula("=IFERROR(XIRR(A1:A3,B1:B3),\"err\")"),
+      Right(CellValue.Text("err"))
+    )
+  }
+
+  test("#670(h): recalculate caches #NUM! for an all-positive XIRR (the dogfood's D6)") {
+    val s = cashflows.put(ARef.from0(3, 5), CellValue.Formula("XIRR(A1:A3,B1:B3)", None))
+    val result = Workbook(Vector(s)).recalculate()
+    val evaluated = result.evaluated.getOrElse(SheetName.unsafe("Test"), Map.empty)
+    assertEquals(evaluated.get(ARef.from0(3, 5)), Some(CellValue.Error(CellError.Num)))
   }

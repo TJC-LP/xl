@@ -693,7 +693,11 @@ class TypeCoercionSpec extends FunSuite:
       // GH-665: numeric literals in text positions are Coerced, not folded to quoted strings
       "=2.50&\"\"",
       "=2&3",
-      "=A1&2.50"
+      "=A1&2.50",
+      // #671: boolean literals likewise (they folded to `="TRUE"&""`)
+      "=TRUE&\"\"",
+      "=FALSE&A1",
+      "=LEN(TRUE)"
     )
     formulas.foreach { f =>
       FormulaParser.parse(f) match
