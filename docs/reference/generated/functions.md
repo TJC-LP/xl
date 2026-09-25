@@ -3,7 +3,7 @@
 
 # Formula functions
 
-122 functions in the evaluator's registry, plus `LET` — a parser-level special form
+124 functions in the evaluator's registry, plus `LET` — a parser-level special form
 (lexical bindings) that the registry does not hold. `args` is the accepted argument count
 (`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it
 (`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date
@@ -67,8 +67,9 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `LEN` | 1 | text | — |
 | `LN` | 1 | number | — |
 | `LOG` | 1–2 | number, optional number | — |
+| `LOOKUP` | 2–3 | cell, range, optional range | — |
 | `LOWER` | 1 | text | — |
-| `MATCH` | 2–3 | value, range, optional number | — |
+| `MATCH` | 2–3 | cell, range, optional number | — |
 | `MAX` | 1+ | number or range... | — |
 | `MAXIFS` | 3+ | range, range, value... | — |
 | `MEDIAN` | 1+ | number or range... | — |
@@ -133,7 +134,8 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `VLOOKUP` | 3–4 | cell, range, integer, optional boolean | — |
 | `WORKDAY` | 2–3 | date, integer, optional range | date |
 | `XIRR` | 2–3 | range, range, optional number | — |
-| `XLOOKUP` | 3–6 | value, range, range, optional value, optional integer, optional integer | — |
+| `XLOOKUP` | 3–6 | cell, range, range, optional value, optional integer, optional integer | — |
+| `XMATCH` | 2–4 | cell, range, optional integer, optional integer | — |
 | `XNPV` | 3 | number, range, range | — |
 | `YEAR` | 1 | date | — |
 | `YEARFRAC` | 2–3 | date, date, optional integer | — |
