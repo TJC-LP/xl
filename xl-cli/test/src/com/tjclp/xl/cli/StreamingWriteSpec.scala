@@ -669,7 +669,7 @@ class StreamingWriteSpec extends FunSuite:
         )
         .unsafeRunSync()
 
-      assert(result.contains("Streamed:") || result.contains("Imported:"))
+      assert(result.contains("Streamed:"), result) // the O(1) path, not the in-memory fallback
       assert(result.contains("Data"))
 
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -746,6 +746,40 @@ class StreamingWriteSpec extends FunSuite:
       assertEquals(cells.get(0), Some(CellValue.Number(BigDecimal("100"))))
       assertEquals(cells.get(1), Some(CellValue.Bool(true)))
       assertEquals(cells.get(2), Some(CellValue.Text("hello")))
+    finally Files.deleteIfExists(csvPath)
+  }
+
+  test("GH-675: streaming CSV parser styles exactly the date cells, with the Date table entry") {
+    val csvPath =
+      tempCsv("when,amount,flag,name,blank\n2026-01-15,12.5,true,Alpha,\n2026-02-01,,false,,x")
+    try
+      val rows = StreamingCsvParser
+        .streamCsv(csvPath, StreamingCsvParser.Options(skipHeader = true))
+        .compile
+        .toList
+        .unsafeRunSync()
+      assertEquals(rows.map(_.cellStyles), List(Map(0 -> 0), Map(0 -> 0)))
+      assertEquals(
+        StreamingCsvParser.Styles.lift(0).map(_.numFmt),
+        Some(NumFmt.Date),
+        "table entry 0 is the date style"
+      )
+      assertEquals(
+        rows.headOption.flatMap(_.cells.get(0)),
+        Some(CellValue.DateTime(java.time.LocalDate.of(2026, 1, 15).atStartOfDay()))
+      )
+      assertEquals(
+        rows.headOption.flatMap(_.cells.get(1)),
+        Some(CellValue.Number(BigDecimal("12.5")))
+      )
+
+      val untyped = StreamingCsvParser
+        .streamCsv(csvPath, StreamingCsvParser.Options(skipHeader = true, inferTypes = false))
+        .compile
+        .toList
+        .unsafeRunSync()
+      assertEquals(untyped.map(_.cellStyles), List(Map.empty[Int, Int], Map.empty[Int, Int]))
+      assertEquals(untyped.headOption.flatMap(_.cells.get(0)), Some(CellValue.Text("2026-01-15")))
     finally Files.deleteIfExists(csvPath)
   }
 

@@ -726,6 +726,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * while rows stream, and xl/sharedStrings.xml is emitted after the worksheet. Memory cost is
    * O(distinct strings). `SstPolicy.Never` keeps the previous inline-string dialect.
    *
+   * `RowData.cellStyles` is ignored (it holds source-workbook xf indices); to style cells use
+   * [[writeStreamStyled]] / [[writeStreamStyledWithAutoDetect]] with [[StyledRowData]].
+   *
    * @param path
    *   Output file path
    * @param sheetName
@@ -776,11 +779,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   ): Pipe[F, StyledRowData, Unit] =
     rows =>
       val (ooxmlStyles, remap) = StreamingXmlWriter.buildStyleTable(styles)
-      val remapped = rows.map { row =>
-        row.copy(cellStyles = row.cellStyles.flatMap { case (col, sid) =>
-          remap.get(sid).map(col -> _)
-        })
-      }
+      val remapped = rows.map(remapStyles(remap))
       writeStreamImpl(
         path,
         sheetName,
@@ -790,6 +789,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         ooxmlStyles,
         sst => StreamingXmlWriter.worksheetBodyStyled(remapped, config.formulaInjectionPolicy, sst)
       )
+
+  /**
+   * A row's caller-table style indices as emitted cellXf indices (GH-223): an index outside the
+   * table has no entry in `remap` and is dropped, so the cell falls back to the default style.
+   */
+  private def remapStyles(remap: Map[Int, Int])(row: StyledRowData): StyledRowData =
+    row.copy(cellStyles = row.cellStyles.flatMap((col, sid) => remap.get(sid).map(col -> _)))
 
   /** GH-223: SST accumulation policy for streaming writes — Auto/Always dedup, Never inline. */
   private def sstAccumulatorFor(config: com.tjclp.xl.ooxml.WriterConfig): Option[SstAccumulator] =
@@ -842,6 +848,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                   Sync[F].delay {
                     val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
                     entry.setMethod(ZipEntry.DEFLATED)
+                    entry.setTime(0L) // deterministic archive (XlsxWriter's convention)
                     zip.putNextEntry(entry)
                     // Write header with optional dimension
                     writeWorksheetHeader(zip, dimension)
@@ -872,6 +879,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * with accurate dimension element. This enables instant metadata queries but costs 2x I/O.
    *
    * For better performance when bounds are known, use `writeStream` with explicit `dimension`.
+   * `RowData.cellStyles` is ignored (it holds source-workbook xf indices); to style cells use
+   * [[writeStreamStyled]] / [[writeStreamStyledWithAutoDetect]] with [[StyledRowData]].
    */
   def writeStreamWithAutoDetect(
     path: Path,
@@ -880,59 +889,122 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): Pipe[F, RowData, Unit] =
     rows =>
-      if sheetIndex < 1 then
-        Stream.raiseError[F](
-          new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
-        )
-      else
-        Stream
-          .bracket(
-            Sync[F].delay {
-              val tempFile = createSpillFile("xl-stream-")
-              val bounds = new BoundsAccumulator()
-              (tempFile, bounds)
-            }
-          ) { case (tempFile, _) =>
-            Sync[F].delay(JFiles.deleteIfExists(tempFile)).void
-          }
-          .flatMap { case (tempFile, bounds) =>
-            // GH-223: SST indices are assigned during phase 1 (first occurrence), so the temp-file
-            // body already carries final t="s" references; phase 2 just emits the table.
-            val sst = sstAccumulatorFor(config)
+      writeStreamAutoDetectImpl[RowData](
+        rows,
+        path,
+        sheetName,
+        sheetIndex,
+        config,
+        OoxmlStyles.minimal,
+        identity,
+        (body, sst) => StreamingXmlWriter.worksheetBody(body, config.formulaInjectionPolicy, sst)
+      )
 
-            // Phase 1: Stream rows to temp file, track bounds
-            val writeTemp = rows
-              .evalTap(row => Sync[F].delay(bounds.update(row)))
-              .through(rowsToTempXml(tempFile, config, sst))
-
-            // Phase 2: Assemble final ZIP with dimension
-            val assembleZip = Stream.eval(
-              assembleWorksheetZip(path, tempFile, bounds, sheetName, sheetIndex, config, sst)
-            )
-
-            writeTemp ++ assembleZip
-          }
-          .drain
-
-  // Helper: Stream rows to temp XML file (body only, no header/footer)
-  private def rowsToTempXml(
-    tempFile: Path,
-    config: com.tjclp.xl.ooxml.WriterConfig,
-    sst: Option[SstAccumulator]
-  ): Pipe[F, RowData, Unit] =
+  /**
+   * [[writeStreamStyled]] with automatic dimension detection (GH-675): the two-phase write of
+   * [[writeStreamWithAutoDetect]] — body to a spill file while the bounds are tracked, then the
+   * archive with an accurate `<dimension>` — carrying a style table.
+   *
+   * The table semantics are [[writeStreamStyled]]'s: `styles(i)` is the CellStyle a
+   * `StyledRowData.cellStyles` value `i` refers to; the table is declared up front in xl/styles.xml
+   * (cellXf 0 is always `CellStyle.default`, duplicates collapse by canonical key, emitted order is
+   * the default then first occurrence) and each row's indices are remapped before `s="N"` is
+   * written. An index that is negative, past the table, or resolves to the default emits no `s`
+   * attribute (the cell takes the default style). Every declared style is emitted whether or not a
+   * row uses it — valid OOXML (a streamed CSV with no dates carries one unused Date xf). Memory
+   * stays O(1) in the row count plus O(distinct strings) for the shared strings table.
+   */
+  def writeStreamStyledWithAutoDetect(
+    path: Path,
+    sheetName: String,
+    styles: Vector[com.tjclp.xl.styles.CellStyle],
+    sheetIndex: Int = 1,
+    config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
+  ): Pipe[F, StyledRowData, Unit] =
     rows =>
+      val (ooxmlStyles, remap) = StreamingXmlWriter.buildStyleTable(styles)
+      writeStreamAutoDetectImpl[StyledRowData](
+        rows,
+        path,
+        sheetName,
+        sheetIndex,
+        config,
+        ooxmlStyles,
+        _.toRowData,
+        (body, sst) =>
+          StreamingXmlWriter.worksheetBodyStyled(
+            body.map(remapStyles(remap)),
+            config.formulaInjectionPolicy,
+            sst
+          )
+      )
+
+  /**
+   * The two-phase write behind both public auto-detect writers, which never call each other (a
+   * subclass may override either — the CLI's MemoryGuard gates and classifies each — and one
+   * delegating to the other would run such an override twice). Phase 1 streams `body` of the rows
+   * to a spill file while `toBoundsRow` feeds the bounds; phase 2 assembles the archive with
+   * `styles` and the tracked dimension.
+   */
+  private def writeStreamAutoDetectImpl[A](
+    rows: Stream[F, A],
+    path: Path,
+    sheetName: String,
+    sheetIndex: Int,
+    config: com.tjclp.xl.ooxml.WriterConfig,
+    styles: OoxmlStyles,
+    toBoundsRow: A => RowData,
+    body: (Stream[F, A], Option[SstAccumulator]) => Stream[F, fs2.data.xml.XmlEvent]
+  ): Stream[F, Unit] =
+    if sheetIndex < 1 then
+      Stream.raiseError[F](
+        new IllegalArgumentException(s"Sheet index must be >= 1, got: $sheetIndex")
+      )
+    else
       Stream
         .bracket(
-          Sync[F].delay(new BufferedOutputStream(new FileOutputStream(tempFile.toFile)))
-        )(os => Sync[F].delay(os.close()))
-        .flatMap { os =>
-          StreamingXmlWriter
-            .worksheetBody(rows, config.formulaInjectionPolicy, sst)
-            .through(xml.render.raw())
-            .through(fs2.text.utf8.encode)
-            .chunks
-            .evalMap(chunk => Sync[F].delay(os.write(chunk.toArray)))
+          Sync[F].delay {
+            val tempFile = createSpillFile("xl-stream-")
+            val bounds = new BoundsAccumulator()
+            (tempFile, bounds)
+          }
+        ) { case (tempFile, _) =>
+          Sync[F].delay(JFiles.deleteIfExists(tempFile)).void
         }
+        .flatMap { case (tempFile, bounds) =>
+          // GH-223: SST indices are assigned during phase 1 (first occurrence), so the temp-file
+          // body already carries final t="s" references; phase 2 just emits the table.
+          val sst = sstAccumulatorFor(config)
+
+          // Phase 1: Stream rows to temp file, track bounds
+          val tracked = rows.evalTap(row => Sync[F].delay(bounds.update(toBoundsRow(row))))
+          val writeTemp = rowsToTempXml(tempFile, body(tracked, sst))
+
+          // Phase 2: Assemble final ZIP with dimension
+          val assembleZip = Stream.eval(
+            assembleWorksheetZip(path, tempFile, bounds, sheetName, sheetIndex, config, sst, styles)
+          )
+
+          writeTemp ++ assembleZip
+        }
+        .drain
+
+  // Helper: Stream worksheet body events to temp XML file (body only, no header/footer)
+  private def rowsToTempXml(
+    tempFile: Path,
+    events: Stream[F, fs2.data.xml.XmlEvent]
+  ): Stream[F, Unit] =
+    Stream
+      .bracket(
+        Sync[F].delay(new BufferedOutputStream(new FileOutputStream(tempFile.toFile)))
+      )(os => Sync[F].delay(os.close()))
+      .flatMap { os =>
+        events
+          .through(xml.render.raw())
+          .through(fs2.text.utf8.encode)
+          .chunks
+          .evalMap(chunk => Sync[F].delay(os.write(chunk.toArray)))
+      }
 
   // Helper: Assemble final ZIP with dimension element
   private def assembleWorksheetZip(
@@ -942,17 +1014,19 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetName: String,
     sheetIndex: Int,
     config: com.tjclp.xl.ooxml.WriterConfig,
-    sst: Option[SstAccumulator]
+    sst: Option[SstAccumulator],
+    styles: OoxmlStyles
   ): F[Unit] =
     Sync[F].delay {
       val zip = new ZipOutputStream(new FileOutputStream(path.toFile))
       try
         // 1. Write static parts
-        writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, OoxmlStyles.minimal)
+        writeStaticPartsSync(zip, sheetName, sheetIndex, config, sst.isDefined, styles)
 
         // 2. Write worksheet with dimension
         val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
         wsEntry.setMethod(ZipEntry.DEFLATED)
+        wsEntry.setTime(0L) // deterministic archive (XlsxWriter's convention)
         zip.putNextEntry(wsEntry)
 
         // Header with dimension (from tracked bounds)
@@ -1042,6 +1116,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
     val entry = new ZipEntry(entryName)
     entry.setMethod(config.compression.zipMethod)
+    entry.setTime(0L) // deterministic archive (XlsxWriter's convention)
 
     config.compression match
       case Compression.Stored =>
@@ -1156,6 +1231,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                       Sync[F].delay {
                         val entry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
                         entry.setMethod(ZipEntry.DEFLATED)
+                        entry.setTime(0L) // deterministic archive (XlsxWriter's convention)
                         zip.putNextEntry(entry)
                         writeWorksheetHeader(zip, dimension)
                       }
@@ -1252,9 +1328,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
           val writePhase = Stream
             .emits(sheetsWithIndices.zip(resources))
             .flatMap { case ((_, _, rows), (_, _, tempFile, bounds)) =>
-              rows
-                .evalTap(row => Sync[F].delay(bounds.update(row)))
-                .through(rowsToTempXml(tempFile, config, sst))
+              val tracked = rows.evalTap(row => Sync[F].delay(bounds.update(row)))
+              rowsToTempXml(
+                tempFile,
+                StreamingXmlWriter.worksheetBody(tracked, config.formulaInjectionPolicy, sst)
+              )
             }
 
           // Phase 2: Assemble final ZIP with all worksheets
@@ -1311,6 +1389,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         resources.foreach { case (_, sheetIndex, tempBodyFile, bounds) =>
           val wsEntry = new ZipEntry(s"xl/worksheets/sheet$sheetIndex.xml")
           wsEntry.setMethod(ZipEntry.DEFLATED)
+          wsEntry.setTime(0L) // deterministic archive (XlsxWriter's convention)
           zip.putNextEntry(wsEntry)
 
           // Header with dimension

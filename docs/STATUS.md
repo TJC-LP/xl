@@ -334,8 +334,8 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 **Row-stream write path** (✅ Working):
 - ✅ True constant-memory row streaming with `writeStream` / `writeStreamsSeq`
 - ✅ O(1) memory regardless of file size
-- ⚠️  No SST support (inline strings only - larger files)
-- ⚠️  Minimal styles (default only - no rich formatting)
+- ✅ Shared strings table by default (GH-223; `SstPolicy.Never` keeps inline strings)
+- ✅ Per-cell styles from a declared table: `writeStreamStyled` / `writeStreamStyledWithAutoDetect` (GH-223, GH-675); the unstyled writers emit the default style only
 - ⚠️  No row-stream API for workbook metadata such as merged ranges, comments, tables, and freeze panes
 
 **In-memory workbook SAX/StAX write path** (✅ Working):

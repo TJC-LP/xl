@@ -6,10 +6,14 @@ import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.addressing.ARef
+import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cli.commands.ImportCommands
 import com.tjclp.xl.cli.contract.{CliHarness, TestFixtures}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.WriterConfig
 import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * `import` through the in-process harness (GH-667): a CSV column typed as dates carries the date
@@ -123,4 +127,114 @@ class ImportCsvSpec extends CatsEffectSuite:
       assertEquals(run.exit, 0, run.stderr)
       assertEquals(when, None)
       assert(cell.stdout.contains("2026-01-15"), cell.stdout)
+  }
+
+  // ===== GH-675: the O(1) path — `import --stream --new-sheet` into a NEW workbook =====
+  //
+  // `importCsv` takes the true streaming branch only for an EMPTY workbook (no sheets to
+  // preserve). The `xl` verb always loads `-f` (a write verb requires it, and every readable book
+  // has a sheet), so these call the command directly, as StreamingWriteSpec does.
+
+  /** `import <csv> --new-sheet <name>` into a workbook with no sheets; the command's message. */
+  private def importFresh(
+    csv: Path,
+    out: String,
+    sheet: String,
+    stream: Boolean,
+    noTypeInference: Boolean = false
+  ): IO[String] =
+    ImportCommands.importCsv(
+      Workbook(Vector.empty),
+      None,
+      csv.toString,
+      None,
+      delimiter = ',',
+      skipHeader = false,
+      encoding = "UTF-8",
+      newSheetName = Some(sheet),
+      noTypeInference = noTypeInference,
+      Path.of(out),
+      WriterConfig.default,
+      stream = stream
+    )
+
+  /** Every cell of `sheetName` → (value, resolved numFmt): what the reader hands a consumer. */
+  private def cellsOf(path: String, sheetName: String) =
+    ExcelIO.instance[IO].read(Path.of(path)).map { wb =>
+      wb.sheets.find(_.name.value == sheetName).fold(Map.empty) { sheet =>
+        sheet.cells.map { (ref, cell) =>
+          ref -> (cell.value, cell.styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt))
+        }
+      }
+    }
+
+  test("GH-675: import --stream --new-sheet into a new workbook formats the date column") {
+    val out = file("import-stream-new.xlsx")
+    val viaPut = file("put-date-stream.xlsx")
+    for
+      csv <- writeCsv("d-stream.csv")
+      message <- importFresh(csv, out, "Ledger", stream = true)
+      when <- numFmtAt(out, "Ledger", ref"C2")
+      lastWhen <- numFmtAt(out, "Ledger", ref"C5")
+      header <- numFmtAt(out, "Ledger", ref"C1")
+      amount <- numFmtAt(out, "Ledger", ref"B2")
+      view <- CliHarness.run("-f", out, "view", "C1:C5")
+      put <- CliHarness.run("-f", file("single.xlsx"), "-o", viaPut, "put", "C2", "2026-01-15")
+      putView <- CliHarness.run("-f", viaPut, "view", "C2:C2")
+    yield
+      assert(message.contains("Streamed:"), s"the O(1) path must run:\n$message")
+      assertEquals(when, Some(NumFmt.Date), "the `when` column carries the date format")
+      assertEquals(lastWhen, Some(NumFmt.Date), "every date in the column is formatted")
+      assertEquals(header, None, "the text header is written unstyled")
+      assertEquals(amount, None, "a plain number is written unstyled")
+      assertEquals(view.exit, 0, view.stderr)
+      assert(!view.stdout.contains("46037"), s"the date's serial must not show:\n${view.stdout}")
+      assertEquals(put.exit, 0, put.stderr)
+      val expected = dateText.findFirstIn(putView.stdout).getOrElse(fail(putView.stdout))
+      assert(view.stdout.contains(expected), s"expected $expected in:\n${view.stdout}")
+  }
+
+  test("GH-675: stream and in-memory import of the same CSV agree on every value's format") {
+    val streamed = file("import-parity-stream.xlsx")
+    val inMemory = file("import-parity-memory.xlsx")
+    for
+      csv <- writeCsv("d-parity.csv")
+      s <- importFresh(csv, streamed, "L", stream = true)
+      m <- importFresh(csv, inMemory, "L", stream = false)
+      streamedCells <- cellsOf(streamed, "L")
+      memoryCells <- cellsOf(inMemory, "L")
+      streamedView <- CliHarness.run("-f", streamed, "view", "C1:C5")
+      memoryView <- CliHarness.run("-f", inMemory, "view", "C1:C5")
+    yield
+      assert(s.contains("Streamed:"), s)
+      assert(m.contains("Imported:"), m)
+      val refs = (streamedCells.keySet ++ memoryCells.keySet).toVector.sortBy(r =>
+        (r.row.index0, r.col.index0)
+      )
+      refs.foreach { ref =>
+        assertEquals(
+          streamedCells.get(ref).flatMap(_._2),
+          memoryCells.get(ref).flatMap(_._2),
+          s"numFmt at ${ref.toA1}"
+        )
+      }
+      val dates = memoryCells.collect { case (ref, (_, Some(NumFmt.Date))) => ref }
+      assertEquals(dates.size, 4, "the four dates are the date-formatted cells")
+      dates.foreach(ref =>
+        assertEquals(streamedCells.get(ref).map(_._1), memoryCells.get(ref).map(_._1), ref.toA1)
+      )
+      assertEquals(streamedView.exit, 0, streamedView.stderr)
+      assertEquals(streamedView.stdout, memoryView.stdout, "the displayed dates are the same")
+  }
+
+  test("GH-675: --stream --no-type-inference keeps the dates as text with no style") {
+    val out = file("import-stream-text.xlsx")
+    for
+      csv <- writeCsv("d-stream-text.csv")
+      message <- importFresh(csv, out, "Ledger", stream = true, noTypeInference = true)
+      cells <- cellsOf(out, "Ledger")
+    yield
+      assert(message.contains("Streamed:"), message)
+      assertEquals(cells.get(ref"C2").map(_._1), Some(CellValue.Text("2026-01-15")))
+      assertEquals(cells.values.flatMap(_._2).toVector, Vector.empty, "no cell is styled")
   }

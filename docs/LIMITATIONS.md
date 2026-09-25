@@ -306,12 +306,22 @@ written after the worksheets with correct `count` (references) / `uniqueCount` (
 - Pass 2: after the worksheet entries, the accumulated table is emitted as `sharedStrings.xml`
 
 Applies to `writeStream`, `writeStreamWithAutoDetect`, `writeStreamsSeq` (one workbook-global SST
-shared across sheets), `writeStreamsSeqWithAutoDetect`, and the new `writeStreamStyled`.
+shared across sheets), `writeStreamsSeqWithAutoDetect`, `writeStreamStyled` and
+`writeStreamStyledWithAutoDetect`.
 
-**Styles** (GH-223 phase 2): `ExcelIO.writeStreamStyled(path, sheet, styles)` takes a
-`Vector[CellStyle]` table; `StyledRowData.cellStyles` values index into it. The table is
-deduplicated into `xl/styles.xml` (cellXf 0 = default) and cell `s=` attributes are remapped to
-the emitted indices — formatted 100k+ row files no longer require the in-memory path.
+**Styles** (GH-223 phase 2, GH-675): `ExcelIO.writeStreamStyled(path, sheet, styles)` and its
+two-pass sibling `ExcelIO.writeStreamStyledWithAutoDetect(path, sheet, styles)` (which also computes
+the `<dimension>`) take a `Vector[CellStyle]` table; `StyledRowData.cellStyles` values index into
+it. The table is deduplicated into `xl/styles.xml` up front (cellXf 0 = default, then first
+occurrence) and cell `s=` attributes are remapped to the emitted indices; an index that is
+negative, past the table, or names a default-equal style emits no `s=` (the cell takes the
+default). Every declared style is emitted whether or not a row uses it (valid OOXML — a streamed
+CSV with no dates carries one unused Date xf). The component tables come from the in-memory
+writer's builder, so custom formats are declared at 164+ and a stale source `numFmtId` is
+re-pointed at its declaration (GH-471 parity). Formatted 100k+ row files no longer require the
+in-memory path. The unstyled writers ignore `RowData.cellStyles` (source-workbook xf indices, as
+readers produce them). `xl import --stream --new-sheet` into a new workbook goes through the
+styled two-pass writer, so a detected ISO date column displays as dates.
 
 **Remaining envelope / limitations**:
 - Memory is O(distinct strings) for the accumulator — the accepted envelope per the design doc
