@@ -348,10 +348,8 @@ object InspectCommands:
       if entries.isEmpty then Vector.empty
       else s"$title (${entries.size}):" +: entries.flatten.map(line => s"  $line")
     def one(text: String): Vector[String] = Vector(text)
-    // the cell on its own line, the parser's diagnostic (formula, caret, message) indented under it
-    val unparseable = audit.unparseable.map { (q, message) =>
-      q.toString +: message.linesIterator.map(line => s"  $line").toVector
-    }
+    // #676: one line per cell — the formula (capped) and the parser's reason, as lint prints it
+    val unparseable = audit.unparseable.map((q, message) => one(s"$q  $message"))
     val sections =
       section("Error values", audit.errorCells.map((q, e) => one(s"$q  ${e.toExcel}"))) ++
         section("Uncached formulas", audit.uncachedFormulas.map(q => one(q.toString))) ++

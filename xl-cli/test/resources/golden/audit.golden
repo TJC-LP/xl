@@ -12,10 +12,7 @@ Uncached formulas (2):
   Calc!B1
   Notes!A1
 Unparseable formulas (1):
-  Calc!H1
-    UNSUPPORTED(1)
-    ^
-    Unknown function 'UNSUPPORTED' at position 0
+  Calc!H1  UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0
 Unresolved names (1):
   Calc!I1
 Cycles (iterative calculation on, not a finding) (1):

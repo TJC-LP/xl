@@ -327,6 +327,12 @@ class InspectCommandsSpec extends CatsEffectSuite:
       positions.foreach((s, i) => assert(i >= 0, s"missing section '$s' in:\n$out"))
       assertEquals(positions.map(_._2), positions.map(_._2).sorted, "sections in a fixed order")
       assert(out.contains("Calc!A1  #DIV/0!"), out)
+      // #676: one line per unparseable cell, in lint's form — never the multi-line caret
+      assert(
+        out.contains("  Calc!H1  UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0\n"),
+        out
+      )
+      assert(!out.contains("\n    ^"), out)
       assert(out.contains("Calc!E1, Calc!F1"), out)
       assert(out.contains("iterative"), out)
     }

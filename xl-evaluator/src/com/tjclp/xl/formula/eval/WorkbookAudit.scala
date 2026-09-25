@@ -16,7 +16,7 @@ import com.tjclp.xl.workbooks.{CalcPr, Workbook}
  * Findings (they make [[isClean]] false):
  *   - `errorCells` — a cached Excel error on a formula, or a bare error value
  *   - `uncachedFormulas` — formulas with no cached value (`xl recalc` fills them)
- *   - `unparseable` — formulas this evaluator cannot parse, with the parser's diagnostic in context
+ *   - `unparseable` — formulas this evaluator cannot parse, each with the parser's one-line reason
  *   - `cycles` — the cyclic strongly connected components of the formula graph, when the file's
  *     `calcPr` does NOT enable iterative calculation (Excel shows such a book with a circular
  *     reference warning and zeros)
@@ -146,13 +146,30 @@ object WorkbookAudit:
     case CellValue.Formula(_, cached, _: FormulaKind.DataTable) => cacheFindings(q, cached)
     case CellValue.Formula(text, cached, _) =>
       val parsed = FormulaParser.parse(text) match
-        case Left(err) => List(Finding.Unparseable(q, ParseError.formatWithContext(err, text)))
+        case Left(err) => List(Finding.Unparseable(q, unparseableMessage(text, err)))
         case Right(expr) =>
           val volatile = if callsVolatile(expr) then List(Finding.Volatile(q)) else Nil
           val external = if TExpr.containsExternalRef(expr) then List(Finding.External(q)) else Nil
           volatile ++ external
       cacheFindings(q, cached) ++ parsed
     case _ => Nil
+
+  /**
+   * Cap on the formula text quoted into an unparseable entry — the same 80 characters `xl lint`'s
+   * `formula-unparseable` finding quotes, so the two tools print one formula the same way.
+   */
+  private val UnparseableTextSample = 80
+
+  /**
+   * #676: `SUM(A1:A2: Unexpected end of formula at position 10` — the formula (capped at
+   * [[UnparseableTextSample]] characters) and the parser's one-line reason, the form lint uses. The
+   * multi-line caret rendering stays the parser's own (`ParseError.formatWithContext`): a report
+   * listing many cells reads one line per cell, and an 8193-character formula is never echoed.
+   */
+  private def unparseableMessage(text: String, err: ParseError): String =
+    val shown =
+      if text.length > UnparseableTextSample then text.take(UnparseableTextSample) + "…" else text
+    s"$shown: ${ParseError.describe(err)}"
 
   private def cacheFindings(q: QualifiedRef, cached: Option[CellValue]): List[Finding] =
     cached match

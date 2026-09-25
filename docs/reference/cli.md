@@ -740,7 +740,8 @@ Every reason a number can be wrong, bucketed in one pass over the loaded workboo
 
 **Findings** (they make the book dirty): `Error values` — a cached Excel error on a formula or a
 bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
-formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
+formulas` — this evaluator cannot parse them, one line per cell: the formula (quoted to 80
+characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
 workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
 `cycles` holds only findings); `Unresolved names` — formulas
@@ -770,10 +771,7 @@ Uncached formulas (2):
   Calc!B1
   Notes!A1
 Unparseable formulas (1):
-  Calc!H1
-    UNSUPPORTED(1)
-    ^
-    Formula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0
+  Calc!H1  UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0
 Cycles (1):
   Calc!E1, Calc!F1
 Unresolved names (1):

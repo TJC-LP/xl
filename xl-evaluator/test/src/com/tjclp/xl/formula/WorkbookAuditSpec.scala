@@ -107,12 +107,20 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(off.iterativeCycles, Vector.empty)
   }
 
-  test("an unparseable formula carries the parser's diagnostic with context") {
+  test("an unparseable formula carries the parser's diagnostic on one line, as lint does (#676)") {
     val audit = WorkbookAudit.of(dirty)
     val message = audit.unparseable.headOption.map(_._2).getOrElse(fail("no unparseable entry"))
-    assert(message.startsWith("UNSUPPORTED(1)"), message)
-    assert(message.contains("UNSUPPORTED"), message)
-    assert(message.linesIterator.size >= 2, s"expected the formula and a diagnostic line: $message")
+    assertEquals(message, "UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0")
+  }
+
+  test("#676: a long unparseable formula is quoted to 80 characters, never echoed whole") {
+    val long = "NOSUCHFN(" + (1 to 60).map(i => s"A$i").mkString("+") + ")"
+    val book = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula(long, 0))))
+    val message =
+      WorkbookAudit.of(book).unparseable.headOption.map(_._2).getOrElse(fail("no entry"))
+    assert(message.startsWith(long.take(80) + "…: "), message)
+    assert(!message.contains(long), message)
+    assertEquals(message.linesIterator.size, 1, message)
   }
 
   test("a clean book is clean: every bucket empty, calcPr None") {
