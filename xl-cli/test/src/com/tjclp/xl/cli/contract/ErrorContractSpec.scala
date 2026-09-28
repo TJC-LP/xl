@@ -231,7 +231,24 @@ class ErrorContractSpec extends CatsEffectSuite:
   }
 
   test("a missing input file is IO_READ (exit 3) on every verb: sheets, names, view, cell, lint") {
-    val missing = file("missing.xlsx")
+    // #678: this case flaked once under the forked full xl-cli.test and passed alone. It shared
+    // its paths with the suite (`missing.xlsx`, also the lint case's; the staged `--stream put`
+    // output in the suite directory every other case writes into), so it now works in a
+    // directory of its own that nothing else names or cleans.
+    Resource
+      .make(IO.blocking(Files.createTempDirectory("xl-error-contract-missing-")))(dir =>
+        IO.blocking {
+          val entries = Files.list(dir)
+          try entries.forEach(p => Files.deleteIfExists(p))
+          finally entries.close()
+          Files.deleteIfExists(dir)
+        }.void
+      )
+      .use(missingInputOnEveryVerb)
+  }
+
+  private def missingInputOnEveryVerb(dir: Path): IO[Unit] =
+    val missing = dir.resolve("missing-input.xlsx").toString
     for
       sheets <- CliHarness.run("-f", missing, "sheets")
       names <- CliHarness.run("-f", missing, "names")
@@ -247,7 +264,7 @@ class ErrorContractSpec extends CatsEffectSuite:
         "-s",
         "Data",
         "-o",
-        fixtures().resolve("stream-missing-out.xlsx").toString,
+        dir.resolve("stream-missing-out.xlsx").toString,
         "put",
         "A1",
         "1"
@@ -280,7 +297,6 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(error("message"), ujson.Str(s"No such file: $missing"))
       assertEquals(error("hint"), ujson.Str("check the path; the previous write may have failed"))
       assertEquals(error("location")("file"), ujson.Str(missing))
-  }
 
   test("GH-617: a refused argument is INVALID_ARGUMENT (exit 3) on the verbs and in batch") {
     val out = (tag: String) => fixtures().resolve(s"invalid-arg-$tag.xlsx").toString
@@ -544,13 +560,51 @@ class ErrorContractSpec extends CatsEffectSuite:
         )
       eval <- CliHarness.run("eval", "=SUM(")
     yield
-      assertFailure(putf, 3, "=SUM(", "FORMULA_ERROR")
-      // the caret block: formula, pointer, the parser's diagnostic — the formula is not repeated
-      assert(putf.stderr.contains("=SUM(\n    ^\n"), putf.stderr)
+      assertFailure(putf, 3, "the formula does not parse", "FORMULA_ERROR")
+      // the caret block: formula, pointer, the parser's diagnostic — the formula is not repeated;
+      // GH-681: the caret of a truncation sits one past the text, where the missing part belongs.
+      // The formula starts its own line, so the caret's column is the formula's
+      assert(putf.stderr.contains("\n=SUM(\n     ^\n"), putf.stderr)
       assert(!putf.stderr.contains("Formula error in '=SUM(':"), putf.stderr)
       assert(putf.stderr.contains("  hint: check the formula with `xl eval`"), putf.stderr)
       assertEquals(eval.exit, 3, eval.stderr)
       assert(eval.stderr.contains("  code: FORMULA_ERROR"), eval.stderr)
+  }
+
+  test(
+    "GH-681: putf puts the caret under the unknown function's first letter, in memory and --stream"
+  ) {
+    def putf(extra: String*) =
+      CliHarness.run(
+        List("-f", file("simple.xlsx"), "-s", "Data", "-o", file("bad-fn.xlsx")) ++ extra ++
+          List("putf", "A1", "=FOOBAR(1)"),
+        ""
+      )
+    for
+      memory <- putf()
+      stream <- putf("--stream")
+    yield for run <- List(memory, stream) do
+      assertFailure(run, 3, "the formula does not parse", "FORMULA_ERROR")
+      assert(run.stderr.contains("\n=FOOBAR(1)\n ^\nUnknown function 'FOOBAR'"), run.stderr)
+  }
+
+  test(
+    "GH-669: a 2700-term intersection chain is a clean error on putf and batch, never a stack trace"
+  ) {
+    val chain = "=" + List.fill(2700)("A1").mkString(" ")
+    val batch = s"""[{"op":"putf","ref":"B1","value":"$chain"}]"""
+    val common = List("-f", file("simple.xlsx"), "-s", "Data", "-o", file("deep-x.xlsx"))
+    for
+      putf <- CliHarness.run(common ++ List("putf", "B1", chain), "")
+      streamed <- CliHarness.run(common ++ List("--stream", "putf", "B1", chain), "")
+      batched <- CliHarness.run(common ++ List("batch", "-"), batch)
+    yield
+      assertFailure(putf, 3, "the formula does not parse", "FORMULA_ERROR")
+      assertFailure(streamed, 3, "the formula does not parse", "FORMULA_ERROR")
+      assertFailure(batched, 2, "Object 1 (putf): the formula does not parse", "BATCH_OP_INVALID")
+      for run <- List(putf, streamed, batched) do
+        assert(run.stderr.contains("Formula nesting too deep"), run.stderr.take(2000))
+        assert(!run.stderr.contains("StackOverflowError"), run.stderr.take(2000))
   }
 
   test("a range where one cell is needed is INVALID_REFERENCE: cell, in memory and --stream") {
@@ -731,14 +785,66 @@ class ErrorContractSpec extends CatsEffectSuite:
       // …and it is the verb's own parser text, exit code aside (FORMULA_ERROR is the verb's),
       // verbatim under the op heading — never indented, so the caret keeps its column (PR #679)
       assertEquals(verb.exit, 3, verb.stdout)
-      val verbMessage = error(verb)("message").str
-      val underHeading = error(memory)("message").str.split("\n", -1).toList match
-        case heading :: rest =>
-          assertEquals(heading, "Object 2 (putf): the formula does not parse")
-          rest.mkString("\n")
-        case other => other.mkString("\n")
-      assertEquals(underHeading, verbMessage)
+      // GH-681: the verb heads its block the same way, so both carets keep the formula's column
+      def underHeading(message: String, expected: String): String =
+        message.split("\n", -1).toList match
+          case heading :: rest =>
+            assertEquals(heading, expected)
+            rest.mkString("\n")
+          case other => other.mkString("\n")
+      assertEquals(
+        underHeading(error(memory)("message").str, "Object 2 (putf): the formula does not parse"),
+        underHeading(error(verb)("message").str, "the formula does not parse")
+      )
       assert(!Files.exists(out("memory")), "the in-memory batch must not write on a refusal")
       assert(!Files.exists(out("stream")), "the streaming batch must not write on a refusal")
       assert(!Files.exists(out("verb")), "the verb must not write on a refusal")
+  }
+
+  test(
+    "GH-681: every putf gate caps the formula echo at 80 characters and drops the caret for FormulaTooLong"
+  ) {
+    val formula = "=SUM(" + ("A1," * 2800) + "A1)"
+    val ops = s"""[{"op":"putf","ref":"A3","value":"$formula"}]"""
+    val out = (tag: String) => fixtures().resolve(s"putf-cap-$tag.xlsx")
+    val base = List("-f", file("simple.xlsx"), "-s", "Data", "--json")
+    def putf(tag: String, extra: String*) =
+      CliHarness.run(
+        base ++ List("-o", out(tag).toString) ++ extra ++ List("putf", "A3", formula),
+        ""
+      )
+    for
+      memory <- CliHarness.run(base ++ List("-o", out("memory").toString, "batch", "-"), ops)
+      stream <- CliHarness.run(
+        base ++ List("-o", out("stream").toString, "--stream", "batch", "-"),
+        ops
+      )
+      dry <- CliHarness.run(List("--json", "batch", "--dry-run", "-"), ops)
+      verb <- putf("verb")
+      verbStream <- putf("verb-stream", "--stream")
+    yield
+      val sample = formula.take(80) + "…"
+      // the parser counts the expression, without its leading `=`
+      val reason = s"Formula too long: ${formula.length - 1} characters (max 8192)"
+      for run <- List(memory, stream, dry, verb, verbStream) do
+        val message = ujson.read(run.stdout)("error")("message").str
+        val lines = message.split("\n", -1).toList
+        assert(message.length < 400, s"${message.length} chars: ${message.take(200)}")
+        assert(lines.contains(sample), message)
+        assertEquals(lines.lastOption, Some(reason), message)
+        assert(!lines.exists(_.trim == "^"), s"no caret for FormulaTooLong: $message")
+      for run <- List(memory, stream, dry) do
+        assertEquals(run.exit, 2, run.stdout)
+        assertEquals(
+          ujson.read(run.stdout)("error")("message").str,
+          s"Object 1 (putf): the formula does not parse\n$sample\n$reason"
+        )
+      for run <- List(verb, verbStream) do
+        assertEquals(run.exit, 3, run.stdout)
+        assertEquals(
+          ujson.read(run.stdout)("error")("message").str,
+          s"the formula does not parse\n$sample\n$reason"
+        )
+        // stderr's Error: echo carries the same capped text
+        assert(run.stderr.length < 400, run.stderr.take(200))
   }

@@ -645,3 +645,17 @@ class SheetEvaluatorSpec extends FunSuite:
       assertEquals(results.get(ref"C1"), Some(CellValue.Number(BigDecimal(60))))
     }
   }
+
+  // ===== Parse failures read as the diagnostic, never a case class =====
+
+  test("a parse failure reads as ParseError.describe on every SheetEvaluator surface") {
+    val reason = "Parse error: Unknown function 'FOOBAR' at position 0. Did you mean: FLOOR?"
+    def check(result: Either[com.tjclp.xl.error.XLError, ?]): Unit = result match
+      case Left(err) =>
+        assert(err.message.contains(reason), err.message)
+        assert(!err.message.contains("UnknownFunction("), err.message)
+      case Right(other) => fail(s"expected a parse failure, got $other")
+    check(emptySheet.evaluateFormula("=FOOBAR(1)"))
+    check(emptySheet.evaluateArrayFormula("=FOOBAR(1)", ref"A1"))
+    check(emptySheet.putFormulaInheriting(ref"A1", "=FOOBAR(1)"))
+  }

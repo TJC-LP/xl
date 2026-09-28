@@ -350,7 +350,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           .withActiveTab(clampActiveTab(wb.activeSheetIndex, wb.sheets.size))
           .copy(
             workbookPr = reconcileDate1904(p.workbookPr, wb.metadata.date1904),
-            definedNames = reconcileDefinedNames(p.definedNames, PrintNames.effective(wb)),
+            definedNames = reconcileDefinedNames(p.definedNames, wb.effectiveDefinedNames),
             calcPr = reconcileCalcPr(p.calcPr, wb.metadata.calcPr)
           )
       case None =>
@@ -372,7 +372,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
           workbookPr = workbookPr,
           // GH-294: fresh workbooks always ship bookViews/activeTab (Excel always writes bookViews)
           bookViews = buildBookViews(None, clampActiveTab(wb.activeSheetIndex, wb.sheets.size)),
-          definedNames = buildDefinedNames(PrintNames.effective(wb)),
+          definedNames = buildDefinedNames(wb.effectiveDefinedNames),
           // GH-373/GH-400: scratch builds emit all authored calcPr settings — the iterate triple
           // plus calcMode/fullCalcOnLoad/calcId (no calcId unless authored, the LO precedent)
           calcPr = reconcileCalcPr(None, wb.metadata.calcPr)
@@ -397,10 +397,12 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   /**
    * GH-593: does any `<definedName>` body in the raw element still lack its storage prefix
    * ([[FormulaStorage.bareFutureCalls]] non-empty — exactly the text [[buildDefinedNames]] would
-   * spell differently)? Total; false on every Excel-authored table.
+   * spell differently)? GH-687: or carry xl 0.23.x's `_xlfn.ANCHORARRAY(Sheet!)REF!`, which the
+   * reader heals to `Sheet!#REF!` — the model then agrees, so only this check regenerates the
+   * element ([[FormulaStorage.storageNeedsHealing]]). Total; false on every Excel-authored table.
    */
   def definedNamesNeedHealing(elem: Elem): Boolean =
-    (elem \ "definedName").exists(dn => FormulaStorage.bareFutureCalls(dn.text).nonEmpty)
+    (elem \ "definedName").exists(dn => FormulaStorage.storageNeedsHealing(dn.text))
 
   /**
    * Reconcile the date1904 declaration with the model (model wins, GH-243) while every other

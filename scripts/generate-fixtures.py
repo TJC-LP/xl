@@ -380,6 +380,58 @@ def gen_condformat() -> Path:
     return save(wb, "condformat.xlsx")
 
 
+def gen_reference_operators(workdir: Path) -> Path:
+    """GH-669: union, intersection, array constants and TRUE() for LibreOffice to recalculate.
+
+    Only the -lo conversion is committed (reference-operators-lo.xlsx): it carries LibreOffice's
+    own spelling of a union (`SUM((A1~A2))`) and its cached values, the oracle the evaluator's
+    ReferenceOperatorsSpec recalculates against. The openpyxl source is written to `workdir`.
+    """
+    wb = new_workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+    for i in range(1, 11):
+        ws[f"A{i}"] = i
+    for i, v in enumerate([10, 20, 30, 40, 50], start=1):
+        ws[f"B{i}"] = v
+    ws["C1"] = "x"
+    ws["C3"] = "y"
+    ws["C5"] = "z"
+    ws["D1"], ws["E1"], ws["D2"], ws["E2"] = 100, 200, 300, 400
+    formulas = [
+        "=SUM((A1,A2))",
+        "=SUM((A1:A3,A2:A4))",
+        "=COUNTA((A1,C1:C3))",
+        "=MAX((A1:A3,B1:B2))",
+        "=SUM((A1,A1))",
+        "=INDEX((A1:B2,D1:E2),2,2,2)",
+        "=INDEX((A1:B2,D1:E2),1,1,3)",
+        "=AREAS(((A1,B1),C1))",
+        "=AREAS(A1 C1)",
+        "=SUM(A1:B3 B2:C5)",
+        "=SUM(A:A 3:3)",
+        "=A1:A3 C1:C3",
+        "=ERROR.TYPE(A1:A3 C1:C3)",
+        "=A1:C1 B1:B5",
+        "=(A1,A2)",
+        "=TRUE()",
+        "=IF(FALSE(),1,2)",
+        "=SUM({1,2;3,4})",
+        "=INDEX({1,2;3,4},2,1)",
+        "=SUM(ABS({-1,-2}))",
+        "=SUM(COUNTIF(A1:A10,{1,2,3}))",
+        "=SUM(Sheet1!B1:Sheet1!B5)",
+    ]
+    for row, formula in enumerate(formulas, start=1):
+        ws[f"H{row}"] = formula
+    ws["I5"] = "=A1:C10 B1:B10"
+    ws["I12"] = "=A1:C10 B1:B10"
+    out = workdir / "reference-operators.xlsx"
+    wb.save(out)
+    normalize_zip(out)
+    return out
+
+
 def convert_with_libreoffice(sources: list[Path]) -> None:
     """Convert fixtures through LibreOffice headless -> *-lo.xlsx variants."""
     soffice = shutil.which("soffice") or "/usr/local/bin/soffice"
@@ -435,7 +487,9 @@ def main() -> int:
     if args.skip_lo:
         print("  --skip-lo: keeping committed *-lo.xlsx files")
     else:
-        convert_with_libreoffice([small, styled, formulas, condformat])
+        with tempfile.TemporaryDirectory(prefix="xl-fixtures-src-") as src_dir:
+            reference_operators = gen_reference_operators(Path(src_dir))
+            convert_with_libreoffice([small, styled, formulas, condformat, reference_operators])
 
     total = sum(f.stat().st_size for f in FIXTURES_DIR.glob("*.xlsx"))
     print(f"total corpus size: {total} bytes")

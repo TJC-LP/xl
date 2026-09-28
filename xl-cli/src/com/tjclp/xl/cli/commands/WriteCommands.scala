@@ -13,6 +13,7 @@ import com.tjclp.xl.cli.helpers.{
   CfRuleParser,
   ColumnAutoFit,
   CopyOps,
+  FormulaEcho,
   GroupingOps,
   Resolve,
   SheetResolver,
@@ -102,10 +103,13 @@ object WriteCommands:
     )
 
   /**
-   * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) keeping the message
-   * the CLI has always printed — the formula, a caret under the offending position, the reason.
+   * A formula that does not parse: `FORMULA_ERROR` (with the evaluator's hint) — a heading line,
+   * then the formula, a caret under the offending position and the reason. GH-681: the formula
+   * block starts its own line because the renderer prefixes the first line with `Error: `, which
+   * would put the caret that many columns left of the character it names. The formula is capped at
+   * 80 characters ([[FormulaEcho]], GH-681).
    */
-  private def formulaError(
+  private[cli] def formulaError(
     error: ParseError,
     fullFormula: String,
     prefix: String = ""
@@ -113,8 +117,16 @@ object WriteCommands:
     CliException(
       CliError
         .fromXLError(ParseError.toXLError(error, fullFormula), None)
-        .copy(message = prefix + ParseError.formatWithContext(error, fullFormula))
+        .copy(message = unparseableFormula(error, fullFormula, prefix))
     )
+
+  /** The heading line and the caret block of a formula that does not parse (GH-681). */
+  private[cli] def unparseableFormula(
+    error: ParseError,
+    fullFormula: String,
+    prefix: String
+  ): String =
+    s"${prefix}the formula does not parse\n${FormulaEcho.diagnostic(error, fullFormula)}"
 
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.
@@ -1573,6 +1585,23 @@ object WriteCommands:
     parallel: Option[Int] = None,
     warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
+    recalcReport(wb, outputPath, config, stream, seedTables, policy, parallel, warn).map(_._1)
+
+  /**
+   * [[recalc]] with the typed facts its `--json` payload adds after `{text, saved, written}`:
+   * `errorValuedCycles` (#678), each converged cycle that settled on an Excel error, as its member
+   * refs — always present, `[]` when there is none. A `--strict` failure carries the same facts.
+   */
+  def recalcReport(
+    wb: Workbook,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    seedTables: Boolean,
+    policy: WritePolicy,
+    parallel: Option[Int],
+    warn: Warning => IO[Unit]
+  ): IO[(String, Vector[(String, ujson.Value)])] =
     // Keep the expensive pure recalculation inside the returned IO. In particular, constructing an
     // IO value must not print the iterative fallback advisory or start consuming CPU. Under the
     // memory guard (GH-636): a heap the whole-book recalculation exhausts is RESOURCE_LIMIT.
@@ -1594,10 +1623,24 @@ object WriteCommands:
           val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
           val rendered =
             s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
+          val facts = recalcFacts(result)
           strictGate(policy, rendered, Some(result), warnings, warn)
+            .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
+            .map(_ -> facts)
         }
       }
     }
+
+  private def recalcFacts(result: RecalcResult): Vector[(String, ujson.Value)] =
+    Vector(
+      "errorValuedCycles" -> ujson.Arr.from(result.errorValuedCycles.map { scc =>
+        ujson.Arr.from(
+          scc.members.map((sheet, ref) =>
+            ujson.Str(DependencyGraph.QualifiedRef(sheet, ref).toString)
+          )
+        )
+      })
+    )
 
   /** GH-453: one summary line per seeding warning (reported, never thrown — exit stays 0). */
   private def renderSeedWarning(warning: SeedTableWarning): String = warning match
@@ -1926,7 +1969,9 @@ object WriteCommands:
       updatedSheet <- IO.fromEither(
         AppearanceOps.applyAutoFilter(sheet, rangeOpt, clear).left.map(domain)
       )
-      _ <- writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+      placed = wb.put(updatedSheet)
+      updated = rangeOpt.fold(placed)(AppearanceOps.syncFilterDatabase(placed, sheet.name, _))
+      _ <- writeWorkbook(updated, outputPath, config, stream)
       message = rangeOpt match
         case Some(r) => s"Set autoFilter on '${sheet.name.value}' to ${r.toA1}"
         case None => s"Removed autoFilter from sheet '${sheet.name.value}'"

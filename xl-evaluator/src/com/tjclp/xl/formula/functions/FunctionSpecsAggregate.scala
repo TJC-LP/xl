@@ -338,6 +338,30 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             .flatMap { case (targetSheet, _) =>
               triageCellForAggregate(agg, targetSheet, at, ctx, acc)
             }
+        // GH-669: a union or intersection folds every area it denotes, each like a written range,
+        // in either mode — resolved as one argument, so its first error is triaged once (GH-630).
+        // COUNTBLANK takes one range: several areas are #VALUE!, as in Excel
+        case (Right(acc), Right(ReferenceOperators.OperatorCall(call))) =>
+          ReferenceOperators
+            .areas(Right(call.asInstanceOf[TExpr[Any]]), ctx)
+            .fold(
+              triageErrorArgument(agg, acc, _),
+              areas =>
+                if agg.countsEmpty && areas.size > 1 then
+                  Left(
+                    EvalError.ErrorValue(
+                      CellError.Value,
+                      Some(s"${agg.name} takes one range, not a multi-area reference")
+                    )
+                  )
+                else
+                  areas.foldLeft[Either[EvalError, A]](Right(acc)) {
+                    case (Left(err), _) => Left(err)
+                    case (Right(current), RangeOperand(targetSheet, range)) =>
+                      val bounds = computeBounds(List((range, targetSheet)))
+                      foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, current)
+                  }
+            )
         case (Right(acc), Right(expr)) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
           // aggregate exactly like a literal range would; scalars keep their existing behavior.

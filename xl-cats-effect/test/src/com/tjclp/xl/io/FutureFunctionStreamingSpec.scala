@@ -84,3 +84,23 @@ class FutureFunctionStreamingSpec extends CatsEffectSuite:
       }
     }
   }
+
+  tempDir.test("GH-687: the streaming writer keeps Sheet!#REF! as spelled") { dir =>
+    val path = dir.resolve("gh687-stream-write.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val rows = fs2.Stream.emit(
+      RowData(1, Map(0 -> CellValue.Formula("=Sheet1!#REF!+1", None)))
+    )
+    rows.through(excel.writeStream(path, "Data")).compile.drain.flatMap { _ =>
+      IO {
+        val zip = new java.util.zip.ZipFile(path.toFile)
+        try
+          val entry = Option(zip.getEntry("xl/worksheets/sheet1.xml"))
+            .getOrElse(fail("sheet1.xml missing"))
+          val xml = new String(zip.getInputStream(entry).readAllBytes(), "UTF-8")
+          assert(xml.contains("<f>Sheet1!#REF!+1</f>"), xml)
+          assert(!xml.contains("ANCHORARRAY"), xml)
+        finally zip.close()
+      }
+    }
+  }

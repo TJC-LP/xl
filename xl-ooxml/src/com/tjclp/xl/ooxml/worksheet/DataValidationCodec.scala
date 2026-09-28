@@ -112,14 +112,15 @@ object DataValidationCodec:
   /**
    * GH-593: does any `<formula1>` / `<formula2>` in the source container still lack its storage
    * prefix? The storage-form half of the writer's CLEAN gate (the CfCodec contract), built on the
-   * lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint agree by construction. Total;
-   * false on every Excel-authored container.
+   * lint's rule ([[FormulaStorage.bareFutureCalls]]) so gate and lint agree by construction;
+   * GH-687: or an xl 0.23.x `_xlfn.ANCHORARRAY(Sheet!)REF!` the reader heals
+   * ([[FormulaStorage.storageNeedsHealing]]). Total; false on every Excel-authored container.
    */
   def needsStorageHealing(container: Elem): Boolean =
     container.child.collect { case e: Elem => e }.exists { entry =>
       entry.child.collect { case e: Elem => e }.exists { child =>
         (child.label == "formula1" || child.label == "formula2") &&
-        FormulaStorage.bareFutureCalls(XmlUtil.getTextPreservingWhitespace(child)).nonEmpty
+        FormulaStorage.storageNeedsHealing(XmlUtil.getTextPreservingWhitespace(child))
       }
     }
 

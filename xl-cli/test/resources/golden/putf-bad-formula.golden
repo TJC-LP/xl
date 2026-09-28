@@ -12,8 +12,9 @@ A5
 3
 ## stdout
 ## stderr
-Error: =SUM(
-    ^
+Error: the formula does not parse
+=SUM(
+     ^
 Unexpected end of formula at position 4: expected expression
   code: FORMULA_ERROR
   hint: check the formula with `xl eval`

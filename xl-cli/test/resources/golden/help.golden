@@ -213,6 +213,14 @@ Subcommands:
             (#REF!); xl never prunes a preserved table, so a text-replacing edit of
             a foreign shared-string book reports the orphan until the table is
             rebuilt
+          - a sheet's hidden _xlnm._FilterDatabase name naming another range, sheet
+            or #REF! than its <autoFilter ref> (a stale name; Excel opens the filter
+            intact and keeps the name) [hygiene]
+          - _xlfn.ANCHORARRAY(Sheet!)REF! in <f>, a CF <formula>, a DV <formula1>/
+            <formula2> or a <definedName>: xl 0.23.0-0.23.1's rewrite of Excel's
+            Sheet!#REF! (text Excel cannot parse). Any in-memory xl edit restores
+            Sheet!#REF! in workbook.xml and in each worksheet it edits; an unedited
+            worksheet, a write that changes nothing and --stream writes keep it
 
         USAGE:
           xl lint report.xlsx
@@ -226,13 +234,14 @@ Subcommands:
           data-table-unseeded | formula-leading-equals | formula-unparseable |
           external-ref-dangling | defined-name-invalid | calc-chain-stale |
           xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
-          dxf-id-out-of-range | unreferenced-part | shared-string-orphan
+          dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
+          autofilter-name-mismatch | anchorarray-qualifier-corrupt
 
         SEVERITY (every finding carries one; --format json: "severity"):
           repair  = Excel repairs or refuses the file, or a reader misreads a value
           hygiene = the file is valid and opens intact; dead weight or a privacy
                     hazard the package still carries (unreferenced-part, the orphan
-                    half of shared-string-orphan)
+                    half of shared-string-orphan, autofilter-name-mismatch)
 
         EXIT CODES:
           0 = no repair findings (hygiene findings, if any, are still listed)

@@ -262,17 +262,17 @@
 
 ### Test Coverage
 
-**8,255 test cases** (verified via `./mill __.test`, 2026-09-25, the Weaver wave): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
+**8,496 test cases** (verified via `./mill __.test`, 2026-09-25, Wave 31): zero failures; the existing style-performance comparison is skipped; the LibreOffice oracle ran (soffice present).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3151 | parser, evaluator, 119-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1794 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1290 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1629 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 183 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-evaluator | 3262 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1826 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1313 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1689 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 195 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 61 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 64 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
@@ -334,8 +334,8 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
 **Row-stream write path** (✅ Working):
 - ✅ True constant-memory row streaming with `writeStream` / `writeStreamsSeq`
 - ✅ O(1) memory regardless of file size
-- ⚠️  No SST support (inline strings only - larger files)
-- ⚠️  Minimal styles (default only - no rich formatting)
+- ✅ Shared strings table by default (GH-223; `SstPolicy.Never` keeps inline strings)
+- ✅ Per-cell styles from a declared table: `writeStreamStyled` / `writeStreamStyledWithAutoDetect` (GH-223, GH-675); the unstyled writers emit the default style only
 - ⚠️  No row-stream API for workbook metadata such as merged ranges, comments, tables, and freeze panes
 
 **In-memory workbook SAX/StAX write path** (✅ Working):

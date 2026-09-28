@@ -648,6 +648,53 @@ class BatchPutSpec extends FunSuite:
     assertEquals(error.candidates, Vector("FLOOR"))
   }
 
+  test("GH-669: the grammar the gate refused in 0.23 — unions, intersections, arrays — passes") {
+    val formulas = List(
+      "=SUM((A1,A2))",
+      "=SUM((A1:A2,B1:B2))",
+      "=INDEX((A1:B2,A1:C2),1,1,2)",
+      "=AREAS((A1,B1))",
+      "=SUM((A1:B2 B1:C2))",
+      "=(A1:B2 B1:C2)",
+      "=SUM((A1~A2))",
+      "=TRUE()",
+      "=FALSE()",
+      "={1,2;3,4}",
+      "=SUM({1,2;3,4})",
+      "=Sheet1!A1:Sheet1!B2",
+      "=NOT"
+    )
+    val ops = formulas.zipWithIndex
+      .map((f, i) => s"""{"op":"putf","ref":"C${i + 1}","value":"$f"}""")
+      .mkString("[", ",", "]")
+    assertEquals(parseOk(ops).ops.size, formulas.size)
+  }
+
+  test(
+    "GH-681: a drag's re-parse is total — a code-built op fails with a typed FORMULA_ERROR cause"
+  ) {
+    // parseBatchJson refuses this text (BATCH_OP_INVALID); an op built in code skips that gate
+    val wb = Workbook(Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1))))
+    val ops = Vector(BatchOp.PutFormulaDragging("B1:B2", unterminated, "B1", None))
+    val failure = BatchParser
+      .applyBatchOperations(wb, wb.sheets.headOption, ops)
+      .attempt
+      .unsafeRunSync()
+      .swap
+      .getOrElse(fail("an unparseable drag must fail"))
+    // the op-indexed BATCH_OP_FAILED every apply-time failure is, carrying the typed domain cause
+    // and its hint rather than an unclassified message
+    val error = CliError.fromThrowable(failure)
+    assertEquals(error.code, ErrorCode.BATCH_OP_FAILED)
+    assertEquals(error.cause.map(_.code), Some("FORMULA_ERROR"))
+    assertEquals(error.hint, Some("check the formula with `xl eval`"))
+    assert(error.message.startsWith("Object 1 (putf): Formula error in"), error.message)
+    assert(error.message.contains("Unexpected end of formula"), error.message)
+    // the shared expression both batch appliers (in memory and --stream) shift
+    assertEquals(BatchParser.dragExpression(unterminated).left.map(_.code), Left("FORMULA_ERROR"))
+    assert(BatchParser.dragExpression(" =A1*3 ").isRight)
+  }
+
   test("GH-663: a parseable putf in every shape still passes, leading '=' optional") {
     val ok = parseOk(
       """[{"op":"putf","ref":"A3","value":"SUM(A1:A2)"},

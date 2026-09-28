@@ -575,6 +575,29 @@ final case class Workbook(
     )
 
   /**
+   * The workbook's defined-name table as Excel sees it and the writer emits it (GH-674): the
+   * metadata names, then the print names each sheet's PageSetup denotes — a sheet-scoped
+   * `_xlnm.Print_Area` for `printArea`, `_xlnm.Print_Titles` for `repeatRows`, in sheet order. A
+   * read lifts a modelable print name out of `metadata.definedNames` into the sheet's PageSetup
+   * (GH-259), so the metadata table alone omits it; this is the table to report. A PageSetup field
+   * overrides the same sheet's metadata entry of that identifier, matched case-insensitively
+   * (GH-538), so each (identifier, sheet) appears once, as Excel requires. Without print setups it
+   * is `metadata.definedNames` itself.
+   */
+  def effectiveDefinedNames: Vector[DefinedName] =
+    val names = metadata.definedNames
+    val derived = DefinedName.fromPageSetups(sheets)
+    if derived.isEmpty then names
+    else
+      def overridden(dn: DefinedName): Boolean =
+        dn.localSheetId.flatMap(sheets.lift).flatMap(_.pageSetup).exists { setup =>
+          (DefinedName.sameName(dn.name, DefinedName.PrintArea) && setup.printArea.isDefined) ||
+          (DefinedName.sameName(dn.name, DefinedName.PrintTitles) && setup.repeatRows.isDefined)
+        }
+      // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
+      names.filterNot(overridden) ++ derived
+
+  /**
    * The `localSheetId` a name scoped to `scope` carries: the sheet's position, the sheet matched
    * case-insensitively (the [[hasSheetNamed]] rule). The one scope lookup of every defined-name
    * mutation path — the Edit algebra and the CLI resolve a name's scope through it.

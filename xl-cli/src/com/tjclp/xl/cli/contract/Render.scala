@@ -46,7 +46,7 @@ object Render:
 
   def text(outcome: Outcome): Rendered =
     val stdout = outcome.payload.fold("") {
-      case Payload.Text(text, _, _) => text
+      case Payload.Text(text, _, _, _) => text
       case Payload.Json(value) => ujson.write(value, indent = 2)
       case Payload.Raw(json) => json
       // The rows are not in hand: [[stream]] writes them; nothing else may ask for this text
@@ -69,6 +69,10 @@ object Render:
    * The stderr of a run in `mode`, which never depends on the payload's text — only on whether
    * there is one: text mode prints the diagnostics block of a failure without a payload, then the
    * warnings; `--json` the one-line `Error:` of such a failure and nothing else.
+   *
+   * The `--json` echo is deliberate (GH-676 kept it): a program reads the envelope on stdout and
+   * never has to look at stderr, while a human tailing a log, or a CI step that shows only stderr,
+   * still sees why the run failed. Dropping it would make a `--json` failure silent to both.
    */
   def stderr(mode: OutputMode)(outcome: Outcome): String = mode match
     case OutputMode.Text =>

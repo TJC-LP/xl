@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
@@ -150,18 +150,11 @@ object FormulaFormatting:
             }
 
         // Binary operators: left before right
-        case TExpr.Add(l, r) => loop(l) ++ loop(r)
-        case TExpr.Sub(l, r) => loop(l) ++ loop(r)
-        case TExpr.Mul(l, r) => loop(l) ++ loop(r)
-        case TExpr.Div(l, r) => loop(l) ++ loop(r)
-        case TExpr.Pow(l, r) => loop(l) ++ loop(r)
-        case TExpr.Concat(l, r) => loop(l) ++ loop(r)
-        case TExpr.Eq(l, r) => loop(l) ++ loop(r)
-        case TExpr.Neq(l, r) => loop(l) ++ loop(r)
-        case TExpr.Lt(l, r) => loop(l) ++ loop(r)
-        case TExpr.Lte(l, r) => loop(l) ++ loop(r)
-        case TExpr.Gt(l, r) => loop(l) ++ loop(r)
-        case TExpr.Gte(l, r) => loop(l) ++ loop(r)
+        // GH-680: a chain's left spine in one loop, not one recursion per operator
+        case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+            _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+            _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+          BinarySpine.operandList(chain).foldLeft(Vector.empty[(Sheet, ARef)])(_ ++ loop(_))
 
         // Unary wrappers
         case TExpr.ToInt(inner) => loop(inner)

@@ -217,7 +217,7 @@ Stream.range(1, 1_000_001)
 
 **Memory**: ~10MB constant (even for 10M rows!)
 
-**Limitations**: Pure row-stream writers use inline strings and minimal styles, and do not accept workbook metadata such as merges. Use in-memory writes or `writeWorkbookStream` when you need full workbook metadata.
+**Limitations**: Pure row-stream writers take cell styles only from a table declared up front (`writeStreamStyled` / `writeStreamStyledWithAutoDetect`; the unstyled ones write the default style), and do not accept workbook metadata such as merges. Use in-memory writes or `writeWorkbookStream` when you need full workbook metadata.
 
 ---
 

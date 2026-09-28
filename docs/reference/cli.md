@@ -581,7 +581,7 @@ apt install librsvg2-bin      # rsvg-convert (Debian/Ubuntu); brew install librs
 cargo install resvg           # or a prebuilt binary: github.com/linebender/resvg/releases
 ```
 
-When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed).
+When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed). A backend forced with `--rasterizer` that cannot write the format (`--rasterizer rsvg-convert --format jpeg`), or that runs and fails, is `RASTERIZER_UNAVAILABLE` (exit 3) too; a failure's message carries the backend's exit code and stderr (`rsvg-convert conversion failed (exit 1): …`), so retry with another backend and report that message.
 
 ---
 
@@ -740,13 +740,19 @@ Every reason a number can be wrong, bucketed in one pass over the loaded workboo
 
 **Findings** (they make the book dirty): `Error values` — a cached Excel error on a formula or a
 bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them); `Unparseable
-formulas` — this evaluator cannot parse them, with the parser's diagnostic in context; `Cycles` —
+formulas` — this evaluator cannot parse them, one line per cell: the formula (quoted to 80
+characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
 workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
 `cycles` holds only findings); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
-(other-workbook refs, whose caches are pinned), `Calculation` (the file's calcPr, when it has one).
+(other-workbook refs, whose caches are pinned), `Stale data tables` (#678: a data table whose
+interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
+evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in
+the note; what an edit leaves behind on a book Excel never recomputes tables in; `dataTableStale`
+in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs),
+`Calculation` (the file's calcPr, when it has one).
 
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
 list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a
@@ -770,10 +776,7 @@ Uncached formulas (2):
   Calc!B1
   Notes!A1
 Unparseable formulas (1):
-  Calc!H1
-    UNSUPPORTED(1)
-    ^
-    Formula error in 'UNSUPPORTED(1)': Unknown function 'UNSUPPORTED' at position 0
+  Calc!H1  UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0
 Cycles (1):
   Calc!E1, Calc!F1
 Unresolved names (1):
@@ -1553,6 +1556,8 @@ xl -f f.xlsx -o o.xlsx import data.csv --new-sheet "Imported"
 
 **Limitations**: entire CSV is loaded into memory (recommended <50k rows); dates must be ISO 8601 (`YYYY-MM-DD`).
 
+**Type inference is per column**: `import` samples the first 10 data rows and types a column Number, Boolean or Date when 80% of its non-blank samples parse as one (plain numbers, `true`/`false`, ISO dates — no currency or percent), else Text; a value that fails its column's type stays text (`true` in a numeric column is the text `true`). `--stream` changes only the writer, never the model. `import-md` and batch `put` instead detect each value on its own, currency and percent included, so the same data can type differently through `import` and `import-md`.
+
 ---
 
 ### `xl import-md <md-file|-> [--start ref] [options]`
@@ -2053,9 +2058,10 @@ identical (pinned by the lint parity suite).
 `.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
 `repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
 a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
-dead weight or a privacy hazard: `unreferenced-part`, and the orphan half of
-`shared-string-orphan`. Hygiene findings are reported (with a `LINT_HYGIENE` warning) but exit `0`
-unless `--strict` (the global flag, accepted before or after the verb) promotes them to the gate.
+dead weight, stale metadata or a privacy hazard: `unreferenced-part`, the orphan half of
+`shared-string-orphan`, and `autofilter-name-mismatch`. Hygiene findings are reported (with a
+`LINT_HYGIENE` warning) but exit `0` unless `--strict` (the global flag, accepted before or after
+the verb) promotes them to the gate.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
@@ -2085,15 +2091,15 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   not Excel's 64-level rule; the parser side is #680). One finding per part
   with the first five cells, the total count, and the first cell's text (first 80 characters)
   with the parser's reason. The rule is deliberately narrower than "the evaluator cannot parse
-  it": an unknown function name (an add-in's `BDP(…)`, LibreOffice's `TRUE()`) or an argument
-  count the registry's arity model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those
-  stay `xl audit`'s to list under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`)
-  and a wrong closer after a complete expression (`SUM(A1:A2]`), which the parser reports as an
-  unexpected character even though Excel repairs both, and a `,` or space inside parentheses
-  (`SUM((A1,A2))`, `(A1:B2 B1:C2)`: Excel's union and intersection reference operators, which the
-  parser does not implement — valid Excel, evaluated by LibreOffice, never a repair), and a
-  complete text the parser cannot finish (`NOT`, a legal defined name the parser reads as its
-  prefix operator): truncation is judged from the text, never from the diagnostic class alone.
+  it": an unknown function name (an add-in's `BDP(…)`) or an argument count the registry's arity
+  model refuses opens intact (`#NAME?` / `#VALUE!` at worst), so those stay `xl audit`'s to list
+  under "Unparseable formulas" — as do an extra closer (`SUM(A1:A2))`) and a wrong closer after a
+  complete expression (`SUM(A1:A2]`), which the parser reports as an unexpected character even
+  though Excel repairs both, and the grammar the parser does not implement yet (structured and
+  3-D references, LAMBDA calls — valid Excel, never a repair); a complete text the parser cannot
+  finish is not a repair either: truncation is judged from the text, never from the diagnostic
+  class alone. (Unions, intersections, array constants, `TRUE()` and a bare `NOT` name parse
+  since GH-669.)
   Shared-formula dependents (empty `<f>`) and data-table records are never judged. xl's own
   writers cannot produce the class: `putf` (in memory and under `--stream`) and every batch
   `putf` shape (`value`, `values`, `from`) parse the formula before writing, `--dry-run` included
@@ -2174,6 +2180,33 @@ unless `--strict` (the global flag, accepted before or after the verb) promotes 
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
   `xlMacrosheet`) count as references like any worksheet's
+- **`autofilter-name-mismatch`** — a sheet's hidden `_xlnm._FilterDatabase` name (scoped by
+  `localSheetId` to the sheet's position in `<sheets>`) names a different range, another sheet or
+  `#REF!` instead of the sheet's own `<autoFilter ref>`: the stale name a range edit leaves
+  behind. Severity `hygiene` — Excel opens such a file with the filter intact and re-saves the
+  stale name verbatim, LibreOffice re-derives the name from the autoFilter (both verified on
+  probes of plain and actively filtered sheets), so it misleads only tools that locate the
+  filtered range by the name. A missing name (Excel itself re-saves the book without one) and a
+  name left behind on a sheet with no autoFilter (Excel's own output after a filter is cleared)
+  are not findings. xl's structural edits (`insert-rows`, `delete-cols`, …) move the name with the
+  filter, and `autofilter <range>` (verb or batch op) rewrites an existing name to the new range as
+  Excel does; `autofilter --clear` leaves the name, which is Excel's own behaviour and not a finding
+- **`anchorarray-qualifier-corrupt`** — `_xlfn.ANCHORARRAY(<qualifier>!)` (a spill of a bare
+  sheet qualifier: `_xlfn.ANCHORARRAY(Support!)REF!`, `_xlfn.SINGLE(_xlfn.ANCHORARRAY(Sheet1!))REF!`)
+  in a cell `<f>`, a CF `<formula>`, a DV `<formula1>`/`<formula2>` or a `<definedName>`: xl
+  0.23.0–0.23.1 rewrote Excel's `Sheet!#REF!` (a deleted target — `_xlnm._FilterDatabase`, a print
+  area, a user name) into that text on every in-memory write (#687). `ANCHORARRAY` takes a
+  reference and a bare qualifier is none, so the text is not a formula Excel can parse; severity
+  `repair`, inferred from Excel's handling of unparseable formula text (removed on open with the
+  repair prompt) and not verified in Excel itself — LibreOffice keeps it as an unparsed formula and
+  shows `#VALUE!` (verified). ONE finding per part (qualifiers, first-5 site sample, total count).
+  Since #687 the reader heals the text to `Sheet!#REF!`, so any in-memory edit (`xl -f f.xlsx -s
+  <sheet> -o f.xlsx put …`, a batch, a `recalc` that refreshes a cache on the sheet) restores
+  Excel's spelling in `xl/workbook.xml` and in each worksheet it edits. Three writes keep the
+  corruption, and the finding names them: a worksheet the write does not edit (copied verbatim), a
+  write that changes nothing (the clean-book verbatim copy — e.g. `recalc` with every cache already
+  current) and any `--stream` write (untouched parts are copied verbatim, and the transformed sheet's
+  other cells pass through as read)
 
 **Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
 warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
@@ -2249,7 +2282,7 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 |---|---|---|---|
 | `0` | ok | | as requested |
 | `1` | completed with findings or a failed gate — **never a failure** | `diff` differs, `lint` findings, `--strict` gate | no (a `--strict` gate: `-o` not written, an existing file and `-i`'s input left byte-identical) |
-| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
+| `2` | usage — the command line is wrong | unknown verb, a verb's own flag before the verb, `-o` missing, `-i` with `-o`, a global the verb cannot take (`-o` on a read-only verb or on `new`, whose output is its positional; `-s` on `names`, `sheets`, `lint`, `new` or an info verb — the error names the flag, unless another mistake rides along, which is reported first), `--limit` below 0, `--stream` with a verb or flag that refuses it (`UNSUPPORTED_IN_STREAM`; `xl schema --json` publishes each verb's `stream`) | no |
 | `3` | failed — the operation could not complete | sheet not found, invalid ref, formula parse error, value-count mismatch, unreadable or corrupt file, security limit, a workbook that does not fit in memory (`RESOURCE_LIMIT`) | no |
 
 Two rows worth spelling out:

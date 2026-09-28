@@ -16,9 +16,10 @@ import scala.util.control.NonFatal
  *
  * Newton–Raphson divergence can push BigDecimal scales past `Int.MaxValue`
  * (`java.lang.ArithmeticException` from `checkScale`), and NaN/Infinity doubles explode in
- * `BigDecimal.apply` (`NumberFormatException`). Totality requires those to surface as the same
- * contained per-cell `EvalFailed` the non-convergence path produces — never as an exception
- * unwinding `recalculate()`. Same precedent as the `ArrayArithmetic.pow` guard.
+ * `BigDecimal.apply` (`NumberFormatException`). Totality requires those to surface as a contained
+ * per-cell result — never as an exception unwinding `recalculate()`. Same precedent as the
+ * `ArrayArithmetic.pow` guard. #670(h): the result is Excel's `#NUM!` (what it caches for an
+ * overflowing or undefined financial result), like the non-convergence path.
  */
 private[functions] object NumericGuard:
   def contained[A](fn: String, usage: String)(
@@ -27,7 +28,15 @@ private[functions] object NumericGuard:
     try body
     catch
       case NonFatal(_) =>
-        Left(EvalError.EvalFailed(s"$fn diverged (numeric overflow)", Some(usage)))
+        Left(EvalError.ErrorValue(CellError.Num, Some(s"$fn diverged (numeric overflow): $usage")))
+
+/**
+ * #670(h): a financial function's argument failure as Excel's `#NUM!` — XIRR/XNPV over values and
+ * dates of different counts, IRR/XIRR without a sign change, a Newton step with no slope — so the
+ * cell caches the error value (visible to IFERROR and ERROR.TYPE) instead of reading as uncached.
+ */
+private[functions] def numError(detail: String, usage: String): EvalError =
+  EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   private def rangeValues(
@@ -80,15 +89,18 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     datesLocation: TExpr.RangeLocation,
     ctx: EvalContext
   ): Either[EvalError, (List[BigDecimal], List[LocalDate])] =
+    // Excel: differing counts are #NUM!, a value or date it cannot read #VALUE!
+    def mismatched(message: String): EvalError =
+      EvalError.ErrorValue(CellError.Num, Some(s"$function: $message"))
     def invalid(message: String): EvalError =
-      EvalError.EvalFailed(s"$function: $message", None)
+      EvalError.ErrorValue(CellError.Value, Some(s"$function: $message"))
 
     for
       values <- rangeValues(valuesLocation, ctx)
       dates <- rangeValues(datesLocation, ctx)
       pairs <-
         if values.size != dates.size then
-          Left(invalid("values and dates must have the same length"))
+          Left(mismatched("values and dates must have the same length"))
         else
           values
             .zip(dates)
@@ -100,7 +112,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                   else if valueCell.value == CellValue.Empty || dateCell.value == CellValue.Empty
                   then
                     Left(
-                      invalid(
+                      mismatched(
                         "values and dates must have the same length and aligned positions " +
                           s"(${valueCell.ref.toA1}, ${dateCell.ref.toA1})"
                       )
@@ -139,12 +151,8 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       ctx.evalExpr(rateExpr).flatMap { rate =>
         val onePlusR = BigDecimal(1) + rate
         if onePlusR == BigDecimal(0) then
-          Left(
-            EvalError.EvalFailed(
-              "NPV: rate = -1 would require division by zero",
-              Some("NPV(rate, values)")
-            )
-          )
+          // #670(h): #NUM!, a cached error value (LibreOffice: NPV(-1,…) is #NUM!)
+          Left(numError("NPV: rate = -1 would require division by zero", "NPV(rate, values)"))
         else
           NumericGuard.contained("NPV", "NPV(rate, values)") {
             numericValues("NPV", range, ctx).map { cashFlows =>
@@ -167,9 +175,9 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       numericValues("IRR", range, ctx).flatMap { cashFlows =>
         if cashFlows.isEmpty || !cashFlows.exists(_ < 0) || !cashFlows.exists(_ > 0) then
           Left(
-            EvalError.EvalFailed(
+            numError(
               "IRR requires at least one positive and one negative cash flow",
-              Some("IRR(values[, guess])")
+              "IRR(values[, guess])"
             )
           )
         else
@@ -212,9 +220,9 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                 val df = dNpvAt(r)
                 if df == BigDecimal(0) then
                   Left(
-                    EvalError.EvalFailed(
+                    numError(
                       "IRR derivative is zero; cannot continue iteration",
-                      Some("IRR(values[, guess])")
+                      "IRR(values[, guess])"
                     )
                   )
                 else
@@ -241,16 +249,16 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
         result <- {
           if values.isEmpty || dates.isEmpty then
             Left(
-              EvalError.EvalFailed(
+              numError(
                 "XNPV requires non-empty values and dates ranges",
-                Some("XNPV(rate, values, dates)")
+                "XNPV(rate, values, dates)"
               )
             )
           else if values.length != dates.length then
             Left(
-              EvalError.EvalFailed(
+              numError(
                 s"XNPV: values (${values.length}) and dates (${dates.length}) must have same length",
-                Some("XNPV(rate, values, dates)")
+                "XNPV(rate, values, dates)"
               )
             )
           else
@@ -268,7 +276,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                   Right(npv)
                 }
               case Nil =>
-                Left(EvalError.EvalFailed("XNPV: dates cannot be empty", None))
+                Left(numError("XNPV: dates cannot be empty", "XNPV(rate, values, dates)"))
         }
       yield result
     }
@@ -286,23 +294,23 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
         result <- {
           if values.isEmpty || dates.isEmpty then
             Left(
-              EvalError.EvalFailed(
+              numError(
                 "XIRR requires non-empty values and dates ranges",
-                Some("XIRR(values, dates[, guess])")
+                "XIRR(values, dates[, guess])"
               )
             )
           else if values.length != dates.length then
             Left(
-              EvalError.EvalFailed(
+              numError(
                 s"XIRR: values (${values.length}) and dates (${dates.length}) must have same length",
-                Some("XIRR(values, dates[, guess])")
+                "XIRR(values, dates[, guess])"
               )
             )
           else if !values.exists(_ < 0) || !values.exists(_ > 0) then
             Left(
-              EvalError.EvalFailed(
+              numError(
                 "XIRR requires at least one positive and one negative cash flow",
-                Some("XIRR(values, dates[, guess])")
+                "XIRR(values, dates[, guess])"
               )
             )
           else
@@ -350,9 +358,9 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                       val df = dXnpvAt(r)
                       if df.abs < BigDecimal("1e-10") then
                         Left(
-                          EvalError.EvalFailed(
+                          numError(
                             "XIRR derivative is near zero; cannot continue iteration",
-                            Some("XIRR(values, dates[, guess])")
+                            "XIRR(values, dates[, guess])"
                           )
                         )
                       else
@@ -362,7 +370,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
 
                   NumericGuard.contained("XIRR", "XIRR(values, dates[, guess])")(loop(0, guess0))
                 case Nil =>
-                  Left(EvalError.EvalFailed("XIRR: dates cannot be empty", None))
+                  Left(numError("XIRR: dates cannot be empty", "XIRR(values, dates[, guess])"))
             }
         }
       yield result

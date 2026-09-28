@@ -93,7 +93,13 @@ object formulaExports:
   // buckets behind `audit`, the summary behind `describe --full`. `wb.describe` / `wb.audit` come
   // from WorkbookInspect's extension block, which carries no default arguments (wildcard-safe).
   export formula.graph.QualifiedGraph
-  export formula.eval.{SheetSummary, WorkbookAudit, WorkbookInspect, WorkbookSummary}
+  export formula.eval.{
+    SheetSummary,
+    StaleDataTable,
+    WorkbookAudit,
+    WorkbookInspect,
+    WorkbookSummary
+  }
   export formula.eval.WorkbookInspect.*
 
   // GH-497: conditional formatting evaluated for the renderers — `sheet.conditionalFormatOverlay`

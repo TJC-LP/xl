@@ -210,13 +210,20 @@ object IterativeCalc:
  *   `maxIter`: below it whenever the replay arrives before the budget runs out, equal when the
  *   first replay lands on the last budgeted round. Exhaustion proper (values still moving at
  *   `maxIter`) reports `stalled = false`.
+ * @param errorValued
+ *   #678: true iff some member's final value is an Excel error (#DIV/0!, #N/A, ...). Excel treats
+ *   an error as a stable value, so a cycle can CONVERGE onto one — `A1 = 1/B1`, `B1 = 1/A1` from a
+ *   zero seed settles on `#DIV/0!` in two rounds — and [[RecalcResult.certified]] deliberately
+ *   stays true there (it certifies the fixpoint, not the data). This flag is how a caller tells a
+ *   healthy fixpoint from an error-valued one without scanning [[RecalcResult.excelErrors]].
  */
 final case class SccReport(
   members: Vector[(SheetName, ARef)],
   converged: Boolean,
   rounds: Int,
   maxDelta: Option[BigDecimal],
-  stalled: Boolean = false
+  stalled: Boolean = false,
+  errorValued: Boolean = false
 ) derives CanEqual:
 
   /**
@@ -234,11 +241,13 @@ final case class SccReport(
 
   /**
    * THIS component's verdict with ITS rounds — `converged in 7 round(s)`, `stalled after 2
-   * round(s): a member fails every round`, `exhausted 400 round(s)`. GH-537: a stalled component
-   * reports the round its replay was detected on, never another component's count.
+   * round(s): a member fails every round`, `exhausted 400 round(s)` — and #678's `converged in 2
+   * round(s) onto error values` for a fixpoint some member holds an error at. GH-537: a stalled
+   * component reports the round its replay was detected on, never another component's count.
    */
   def verdict: String =
-    if converged then s"converged in $rounds round(s)"
+    if converged && errorValued then s"converged in $rounds round(s) onto error values"
+    else if converged then s"converged in $rounds round(s)"
     else if stalled then s"stalled after $rounds round(s): a member fails every round"
     else s"exhausted $rounds round(s)"
 
@@ -347,8 +356,15 @@ final case class RecalcResult(
   /**
    * GH-492: no cell failed to evaluate AND every cyclic component reached its fixpoint — the single
    * gate a caller can trust to mean "this workbook is at its global fixpoint".
+   *
+   * #678: a fixpoint whose members hold Excel error VALUES is still a fixpoint (Excel keeps the
+   * error as a stable value), so it certifies; [[errorValuedCycles]] names those components and the
+   * summary says so. Gate on [[excelErrors]] too when error values must fail a check.
    */
   def certified: Boolean = errors.isEmpty && converged
+
+  /** #678: the converged cyclic components that settled with an Excel error on some member. */
+  def errorValuedCycles: Vector[SccReport] = cycles.filter(c => c.converged && c.errorValued)
 
   /**
    * True when every formula in the workbook COMPUTED a value — possibly an Excel error value
@@ -370,10 +386,8 @@ final case class RecalcResult(
     yield (sheet, ref, err)).sortBy((sheet, ref, _) => (sheet.value, ref.toA1))
 
   /** The Excel error a computed value carries, if any (cached formula values included). */
-  private def carriedCellError(value: CellValue): Option[CellError] = value match
-    case CellValue.Error(err) => Some(err)
-    case CellValue.Formula(_, Some(cached), _) => carriedCellError(cached)
-    case _ => None
+  private def carriedCellError(value: CellValue): Option[CellError] =
+    RecalcResult.carriedCellError(value)
 
   /**
    * Right(workbook) when clean, Left(errors) otherwise — for scripts that must not proceed on
@@ -396,6 +410,7 @@ final case class RecalcResult(
    * Recalculated 12 formulas (1 error value)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
+   * Recalculated 2 formulas (2 error values); converged in 2 iterative round(s), 1 cycle settled on error values
    * Recalculated 40 formulas; 2 errors (...); WARNING: iterative calculation stalled after 2 round(s): a cyclic member fails every round
    * }}}
    *
@@ -412,9 +427,14 @@ final case class RecalcResult(
     val errorValues =
       if errorValueCount == 0 then ""
       else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
+    val settledOnErrors = errorValuedCycles.size match
+      case 0 => ""
+      case 1 => ", 1 cycle settled on error values"
+      case k => s", $k cycles settled on error values"
     val convergence = unconvergedVerdict match
-      case Some(verdict) => s"; WARNING: iterative calculation $verdict"
-      case None if iterationsUsed > 0 => s"; converged in $iterationsUsed iterative round(s)"
+      case Some(verdict) => s"; WARNING: iterative calculation $verdict$settledOnErrors"
+      case None if iterationsUsed > 0 =>
+        s"; converged in $iterationsUsed iterative round(s)$settledOnErrors"
       case None => ""
     if isClean then s"Recalculated $formulaCount $formulasLabel$errorValues$convergence"
     else
@@ -425,6 +445,13 @@ final case class RecalcResult(
       s"Recalculated $formulaCount $formulasLabel$errorValues; ${errors.size} $errorsLabel ($shown$ellipsis)$convergence"
 
 object RecalcResult:
+
+  /** The Excel error a computed value carries, if any (cached formula values included). */
+  private[eval] def carriedCellError(value: CellValue): Option[CellError] = value match
+    case CellValue.Error(err) => Some(err)
+    case CellValue.Formula(_, Some(cached), _) => carriedCellError(cached)
+    case _ => None
+
   /** One cache/diagnostic contract for whole-workbook and targeted recalculation. */
   private[eval] def cacheResults(
     wb: Workbook,

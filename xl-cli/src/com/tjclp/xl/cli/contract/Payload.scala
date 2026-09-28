@@ -13,9 +13,15 @@ enum Payload derives CanEqual:
    * every write knows — the path the run committed to (the user-visible one, never the staging
    * temp) and whether it committed at all. `saved = None`, `written = false` when nothing was
    * committed: a read verb, or a run whose `--strict` gate withheld the staged output (`-o` or
-   * `-i`).
+   * `-i`). `facts` are typed fields a prose verb also knows (recalc's `errorValuedCycles`, #678),
+   * added to `data` after the three, in order; text mode never prints them.
    */
-  case Text(text: String, saved: Option[String], written: Boolean)
+  case Text(
+    text: String,
+    saved: Option[String],
+    written: Boolean,
+    facts: Vector[(String, ujson.Value)] = Vector.empty
+  )
 
   /**
    * Typed verbs whose data holds only strings, booleans and small integers (`sheets`, `names`,
@@ -105,11 +111,13 @@ object Payload:
    * [[Render]] never asks for one: reaching this with one is a defect, reported as such.
    */
   def toJson(payload: Payload): ujson.Value = payload match
-    case Text(text, saved, written) =>
-      ujson.Obj(
-        "text" -> ujson.Str(text),
-        "saved" -> saved.fold[ujson.Value](ujson.Null)(ujson.Str.apply),
-        "written" -> ujson.Bool(written)
+    case Text(text, saved, written, facts) =>
+      ujson.Obj.from(
+        Vector(
+          "text" -> ujson.Str(text),
+          "saved" -> saved.fold[ujson.Value](ujson.Null)(ujson.Str.apply),
+          "written" -> ujson.Bool(written)
+        ) ++ facts
       )
     case Json(value) => value
     case Raw(json) => ujson.read(json)
@@ -124,7 +132,7 @@ object Payload:
    * and a streamed table is a read's.
    */
   def committed(payload: Payload, target: Option[String]): Payload = payload match
-    case Text(text, _, _) => Text(text, target, target.isDefined)
+    case Text(text, _, _, facts) => Text(text, target, target.isDefined, facts)
     case json: Json => json
     case raw: Raw => raw
     case streamed: Streamed => streamed

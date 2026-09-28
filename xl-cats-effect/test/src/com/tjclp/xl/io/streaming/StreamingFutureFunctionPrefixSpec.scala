@@ -40,3 +40,15 @@ class StreamingFutureFunctionPrefixSpec extends FunSuite:
     assert(xml.contains("<f>_xlfn.XLOOKUP(C1,A1:A3,B1:B3)</f>"), xml)
     assert(!xml.contains("_xlfn._xlfn."), xml)
   }
+
+  test("GH-687: Sheet!#REF! is an error literal, never _xlfn.ANCHORARRAY(Sheet!)") {
+    Vector("Sheet1!#REF!+1", "SUM(Sheet1!#REF!,A1)", "[1]Sheet1!#REF!").foreach { f =>
+      val xml = cellXml(CellValue.Formula(s"=$f", None))
+      assert(xml.contains(s"<f>$f</f>"), xml)
+    }
+    val quoted = cellXml(CellValue.Formula("SUM('My Sheet'!#REF!,A1)", None))
+    assert(!quoted.contains("ANCHORARRAY"), quoted)
+    // a real spill beside it still wraps
+    val spill = cellXml(CellValue.Formula("SUM(A1#,Sheet1!#REF!)", None))
+    assert(spill.contains("<f>SUM(_xlfn.ANCHORARRAY(A1),Sheet1!#REF!)</f>"), spill)
+  }

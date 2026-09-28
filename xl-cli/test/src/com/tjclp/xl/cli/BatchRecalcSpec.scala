@@ -1803,27 +1803,28 @@ class BatchRecalcSpec extends FunSuite:
     Files.deleteIfExists(out)
   }
 
-  test("GH-507: --no-recalc refuses an intersection-name rewrite it cannot preserve") {
+  test("GH-669: --no-recalc rewrites an intersection name with the edit, both operands shifted") {
+    // GH-507 refused this rewrite while the parser could not read the intersection operator; it
+    // parses now, so the name follows the deleted row like any reference
     val wb = blindNameWorkbook("Data!$A$1:$A$8 Data!$A$5:$A$10", 26)
     val out = tempXlsx()
     try
-      val error = intercept[Exception] {
-        WriteCommands
-          .deleteRows(
-            wb,
-            wb.sheets.find(_.name.value == "Data"),
-            2,
-            1,
-            out,
-            config,
-            false,
-            preserveCaches
-          )
-          .unsafeRunSync()
-      }
-      assert(error.getMessage.contains("Blind"), error.getMessage)
-      assert(error.getMessage.contains("Cannot safely rewrite"), error.getMessage)
-      assertEquals(Files.size(out), 0L)
+      WriteCommands
+        .deleteRows(
+          wb,
+          wb.sheets.find(_.name.value == "Data"),
+          2,
+          1,
+          out,
+          config,
+          false,
+          preserveCaches
+        )
+        .unsafeRunSync()
+      assertEquals(
+        readBack(out).metadata.definedNames.find(_.name == "Blind").map(_.formula),
+        Some("Data!$A$1:$A$7 Data!$A$4:$A$9")
+      )
     finally Files.deleteIfExists(out)
   }
 

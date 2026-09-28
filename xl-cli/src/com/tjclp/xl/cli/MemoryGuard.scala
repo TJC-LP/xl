@@ -14,9 +14,10 @@ import fs2.{Pipe, Stream}
 
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.error.{XLError, XLException, XLResult}
-import com.tjclp.xl.io.{ExcelIO, RowData}
+import com.tjclp.xl.io.{ExcelIO, RowData, StyledRowData}
 import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
+import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -353,7 +354,7 @@ object MemoryGuard:
       // directory; the spilling writes below refuse it before they consult this.
       override def spillDir: Option[Path] = spill.getOrElse(None)
 
-      // The two spilling writers, and only they, answer for the setting: a malformed value is the
+      // The spilling writers, and only they, answer for the setting: a malformed value is the
       // usage error before a row is pulled or a byte written; a failure of the write itself — the
       // scratch file, the archive — is IO_WRITE naming the target (the library's message names the
       // configured directory); a failure of the caller's own rows keeps its classification.
@@ -369,6 +370,21 @@ object MemoryGuard:
           Stream.exec(gate) ++
             super
               .writeStreamWithAutoDetect(path, sheetName, sheetIndex, config)(
+                SourceFailure.tag(rows)
+              )
+              .handleErrorWith(e => Stream.raiseError[IO](writeFailure(path, spillDir, e)))
+
+      override def writeStreamStyledWithAutoDetect(
+        path: Path,
+        sheetName: String,
+        styles: Vector[CellStyle],
+        sheetIndex: Int,
+        config: WriterConfig
+      ): Pipe[IO, StyledRowData, Unit] =
+        rows =>
+          Stream.exec(gate) ++
+            super
+              .writeStreamStyledWithAutoDetect(path, sheetName, styles, sheetIndex, config)(
                 SourceFailure.tag(rows)
               )
               .handleErrorWith(e => Stream.raiseError[IO](writeFailure(path, spillDir, e)))
@@ -396,7 +412,7 @@ object MemoryGuard:
   private final class SourceFailure(val cause: Throwable) extends Exception(cause) with NoStackTrace
 
   private object SourceFailure:
-    def tag(rows: Stream[IO, RowData]): Stream[IO, RowData] =
+    def tag[A](rows: Stream[IO, A]): Stream[IO, A] =
       rows.handleErrorWith(e => Stream.raiseError[IO](new SourceFailure(e)))
 
   /**

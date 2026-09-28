@@ -1,5 +1,8 @@
 package com.tjclp.xl.workbooks
 
+import com.tjclp.xl.addressing.{CellRange, SheetName}
+import com.tjclp.xl.sheets.Sheet
+
 /**
  * Represents an Excel named range (defined name).
  *
@@ -47,6 +50,31 @@ object DefinedName:
    * the lint's NFKC/kana fold: mutation is aligned with resolution, not with the linter.
    */
   def sameName(a: String, b: String): Boolean = a.equalsIgnoreCase(b)
+
+  /** A Print_Area formula, e.g. `Sheet1!$A$1:$D$20` or `'Q1 Report'!$A$1:$D$20` (GH-259). */
+  private[xl] def printAreaFormula(sheet: SheetName, area: CellRange): String =
+    val s = area.start
+    val e = area.end
+    s"${SheetName.quoteForFormula(sheet.value)}!$$${s.col.toLetter}$$${s.row.index1}:$$${e.col.toLetter}$$${e.row.index1}"
+
+  /** A row-span Print_Titles formula, e.g. `Sheet1!$1:$3` (GH-259). */
+  private[xl] def printTitlesFormula(sheet: SheetName, rows: (Int, Int)): String =
+    s"${SheetName.quoteForFormula(sheet.value)}!$$${rows._1}:$$${rows._2}"
+
+  /**
+   * The sheet-scoped print names each sheet's PageSetup denotes (GH-259), in sheet order and, per
+   * sheet, Print_Area before Print_Titles; `localSheetId` is the sheet's position.
+   */
+  private[xl] def fromPageSetups(sheets: Vector[Sheet]): Vector[DefinedName] =
+    sheets.zipWithIndex.flatMap { (sheet, idx) =>
+      val area = sheet.pageSetup.flatMap(_.printArea).map { range =>
+        DefinedName(PrintArea, printAreaFormula(sheet.name, range), localSheetId = Some(idx))
+      }
+      val titles = sheet.pageSetup.flatMap(_.repeatRows).map { rows =>
+        DefinedName(PrintTitles, printTitlesFormula(sheet.name, rows), localSheetId = Some(idx))
+      }
+      area.toList ++ titles.toList
+    }
 
   extension (dn: DefinedName)
     /** Whether `dn` is the entry `name` denotes in `scope` (a `localSheetId`; None = workbook). */

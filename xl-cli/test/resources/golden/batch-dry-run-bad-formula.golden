@@ -10,7 +10,7 @@ batch
 ## stderr
 Error: Object 1 (putf): the formula does not parse
 =FOOBAR(1)
-^
+ ^
 Unknown function 'FOOBAR' at position 0. Did you mean: FLOOR?
   code: BATCH_OP_INVALID
   did you mean: FLOOR

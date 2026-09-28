@@ -592,7 +592,10 @@ object StreamingXmlWriter:
    * `styles(i)` is the CellStyle a `StyledRowData.cellStyles` value `i` refers to. Returns the
    * serializable [[OoxmlStyles]] (cellXf 0 is always CellStyle.default; duplicates collapse by
    * canonicalKey) plus the caller-index → emitted-cellXf-index remap to apply to each row's
-   * `cellStyles` before emission. Deterministic: emitted order is default + first occurrence.
+   * `cellStyles` before emission. Deterministic: emitted order is default + first occurrence. The
+   * component tables come from the in-memory writer's own builder (`StyleIndex.fromStyles`,
+   * GH-675), so a style carrying a stale source `numFmtId` is re-declared at 164+ exactly as there
+   * (GH-471).
    */
   def buildStyleTable(styles: Vector[CellStyle]): (OoxmlStyles, Map[Int, Int]) =
     import scala.collection.mutable
@@ -605,30 +608,5 @@ object StreamingXmlWriter:
       callerIdx -> idx
     }.toMap
     val unified = emitted.valuesIterator.map(_._2).toVector
-
-    // Component dedup in first-occurrence order (mirrors StyleIndex.fromWorkbookWithoutSource)
-    val fonts = mutable.LinkedHashSet.empty[Font]
-    val fills = mutable.LinkedHashSet.empty[Fill]
-    val borders = mutable.LinkedHashSet.empty[Border]
-    val customCodes = mutable.LinkedHashSet.empty[String]
-    unified.foreach { style =>
-      fonts += style.font
-      fills += style.fill
-      borders += style.border
-      style.numFmt match
-        case NumFmt.Custom(code) => customCodes += code
-        case _ => ()
-    }
-    val customNumFmts = customCodes.toVector.zipWithIndex.map { case (code, idx) =>
-      (164 + idx, NumFmt.Custom(code): NumFmt)
-    }
-
-    val index = StyleIndex(
-      fonts = fonts.toVector,
-      fills = fills.toVector,
-      borders = borders.toVector,
-      numFmts = customNumFmts,
-      cellStyles = unified,
-      styleToIndex = emitted.view.map { case (key, (idx, _)) => key -> StyleId(idx) }.toMap
-    )
-    (OoxmlStyles(index), remap)
+    val styleToIndex = emitted.view.map { case (key, (idx, _)) => key -> StyleId(idx) }.toMap
+    (OoxmlStyles(StyleIndex.fromStyles(unified, styleToIndex, Font.default)), remap)

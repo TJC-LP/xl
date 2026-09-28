@@ -84,7 +84,7 @@ object ReadTestKit:
   /** The payload's text, failing the test on a failed outcome. */
   def text(outcome: Outcome): String =
     outcome.payload match
-      case Some(Payload.Text(text, _, _)) => text
+      case Some(Payload.Text(text, _, _, _)) => text
       case Some(Payload.Raw(json)) => json
       case Some(Payload.Json(value)) => ujson.write(value, indent = 2)
       case Some(Payload.Streamed(_)) =>

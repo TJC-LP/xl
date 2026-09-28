@@ -280,6 +280,43 @@ class GlobalFixpointSpec extends FunSuite:
     assert(clean.certified)
   }
 
+  // ================= #678: a fixpoint that settled on an error value =================
+
+  /** A1 = 1/B1, B1 = 1/A1: from a zero seed both members are #DIV/0! — a stable error fixpoint. */
+  private val errorCycle: Workbook = Workbook(
+    Sheet(SheetName.unsafe("S"))
+      .put(aref("A1"), formula("=1/B1"))
+      .put(aref("B1"), formula("=1/A1"))
+  )
+
+  test("#678: a cycle converging onto error values stays certified but reports errorValued") {
+    // Excel treats the error as a stable value, so `certified` keeps meaning "at a fixpoint with
+    // no host errors" — the decision recorded on #678; the error-valued fixpoint is SURFACED instead
+    val r = errorCycle.recalculate(IterativeCalc(50, BigDecimal("1E-6")))
+    assert(r.converged && r.certified, s"converged=${r.converged} errors=${r.errors}")
+    assertEquals(r.excelErrors.size, 2)
+    assertEquals(r.cycles.map(_.errorValued), Vector(true))
+    assert(r.cycles.head.verdict.contains("onto error values"), r.cycles.head.verdict)
+    assert(r.summary.contains("1 cycle settled on error values"), r.summary)
+    // a healthy cycle carries no such flag, and its summary line is unchanged
+    val clean = interleaved(BigDecimal(1000)).recalculate(Tight)
+    assert(clean.cycles.nonEmpty && clean.cycles.forall(!_.errorValued))
+    assert(!clean.summary.contains("error values"), clean.summary)
+  }
+
+  test("#678: errorValued looks at every member — one error-valued member is enough") {
+    // C1 joins the cycle through an IFERROR guard, so it computes a number while A1/B1 are errors
+    val mixed = Workbook(
+      Sheet(SheetName.unsafe("S"))
+        .put(aref("A1"), formula("=1/B1"))
+        .put(aref("B1"), formula("=1/A1+C1*0"))
+        .put(aref("C1"), formula("=IFERROR(A1,7)"))
+    )
+    val r = mixed.recalculate(IterativeCalc(50, BigDecimal("1E-6")))
+    assertEquals(r.cycles.map(_.errorValued), Vector(true), r.summary)
+    assertEquals(n(r.workbook, "S", "C1"), BigDecimal(7))
+  }
+
   test("GH-492: non-iterative and acyclic runs report no cycles at all") {
     assertEquals(interleaved(BigDecimal(1000)).recalculate().cycles, Vector.empty)
     val acyclic = Workbook(

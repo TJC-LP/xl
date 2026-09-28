@@ -41,6 +41,24 @@ object NumFmtFormatter:
     ).flatMap(fmt => FormatCodeParser.parse(NumFmt.formatCode(fmt)).toOption.map(fmt -> _)).toMap
 
   /**
+   * Which General rule a number takes where a format says General — the whole code, the `General`
+   * keyword inside a section, a text-only code or an unparseable one (#672).
+   *   - CellDisplay: what a cell shows on screen, Excel's 11-character rule ([[formatGeneral]])
+   *   - Text: the width-independent text conversion ([[generalText]]); TEXT(x, fmt) renders through
+   *     it, so `TEXT(x,"General;-General")` agrees with `TEXT(x,"General")`
+   */
+  enum GeneralRule derives CanEqual:
+    case CellDisplay, Text
+
+  private def general(n: BigDecimal, rule: GeneralRule): String =
+    rule match
+      case GeneralRule.CellDisplay => formatGeneral(n)
+      case GeneralRule.Text => generalText(n)
+
+  /** The `General` keyword token inside a custom section under `rule`, on the unsigned value. */
+  private[display] def generalKeyword(n: BigDecimal, rule: GeneralRule): String = general(n, rule)
+
+  /**
    * Format a cell value according to its number format.
    *
    * @param value
@@ -51,11 +69,15 @@ object NumFmtFormatter:
    *   Formatted string matching Excel display conventions
    */
   def formatValue(value: CellValue, numFmt: NumFmt): String =
+    formatValue(value, numFmt, GeneralRule.CellDisplay)
+
+  /** [[formatValue]] with General rendered under `rule` (#672: TEXT passes GeneralRule.Text). */
+  def formatValue(value: CellValue, numFmt: NumFmt, rule: GeneralRule): String =
     value match
-      case CellValue.Number(n) => formatNumber(n, numFmt)
+      case CellValue.Number(n) => formatNumber(n, numFmt, rule)
       case CellValue.Text(s) => s
       case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
-      case CellValue.DateTime(dt) => formatDateTime(dt, numFmt)
+      case CellValue.DateTime(dt) => formatDateTime(dt, numFmt, rule)
       case CellValue.Empty => ""
       case CellValue.Error(err) => formatError(err)
       case CellValue.Formula(expr, _, _) =>
@@ -73,26 +95,30 @@ object NumFmtFormatter:
    *   Formatted number string
    */
   def formatNumber(n: BigDecimal, numFmt: NumFmt): String =
+    formatNumber(n, numFmt, GeneralRule.CellDisplay)
+
+  /** [[formatNumber]] with General rendered under `rule` (#672). */
+  def formatNumber(n: BigDecimal, numFmt: NumFmt, rule: GeneralRule): String =
     numFmt match
-      case NumFmt.General => formatGeneral(n)
+      case NumFmt.General => general(n, rule)
 
       case NumFmt.Custom(code) if isGeneralCode(code) =>
         // The literal code "General" (ECMA-376 §18.8.30, case-insensitive) means General
         // rendering, not the literal characters. Reached since GH-404: file-declared
         // <numFmt formatCode="General"/> entries (LibreOffice writes them) stay Custom.
-        formatGeneral(n)
+        general(n, rule)
 
       case NumFmt.Custom(code) =>
         FormatCodeParser.parse(code) match
-          case Right(fmt) => formatCustom(n, serialToDateTime(n), fmt)
-          case Left(_) => formatGeneral(n) // Fallback for unparseable formats
+          case Right(fmt) => formatCustom(n, serialToDateTime(n), fmt, rule)
+          case Left(_) => general(n, rule) // Fallback for unparseable formats
 
       case builtin =>
         // Built-in arms render through FormatCodeParser on their canonical format code, so
         // the programmatic enum and a file-declared equal code display identically (GH-410).
         builtInFormats.get(builtin) match
-          case Some(fmt) => formatCustom(n, serialToDateTime(n), fmt)
-          case None => formatGeneral(n) // unreachable: the map covers every such variant
+          case Some(fmt) => formatCustom(n, serialToDateTime(n), fmt, rule)
+          case None => general(n, rule) // unreachable: the map covers every such variant
 
   /** ECMA-376 §18.8.30: the whole-code "General" keyword, matched case-insensitively. */
   def isGeneralCode(code: String): Boolean = code.equalsIgnoreCase("General")
@@ -174,45 +200,81 @@ object NumFmtFormatter:
       case CellValue.Formula(_, Some(cached), _) => generalText(cached)
       case CellValue.Formula(_, None, _) => ""
 
-  /**
-   * The `General` keyword token inside a custom section (GH-666) renders through the CELL DISPLAY
-   * General ([[formatGeneral]]), so `General"A"` and the whole-code path share one definition. Not
-   * [[generalText]], which is the text-conversion rule (`&`, CONCATENATE).
-   */
-  private[display] def generalDisplay(n: BigDecimal): String = formatGeneral(n)
+  /** Characters a General cell shows, the sign uncounted (GH-672). */
+  val GeneralDisplayWidth: Int = 11
 
   /**
-   * Format in General style for CELL DISPLAY (Excel's default number format as a column-width
-   * approximation). Width-dependent: this is what a cell shows on screen, not what a number becomes
-   * as text — text conversion (`&`, CONCATENATE, TEXT(x,"General")) is [[generalText]].
+   * Format in General style for CELL DISPLAY: what a General cell shows on screen, not what a
+   * number becomes as text — text conversion (`&`, CONCATENATE, TEXT(x,"General")) is
+   * [[generalText]].
    *
-   * Rules:
-   *   - Integers: No decimal point
-   *   - Decimals: Up to 11 significant digits
-   *   - Scientific: For very large/small numbers (>= 1e12 or < 1e-4)
+   * Excel's 11-character rule (GH-672), the sign uncounted:
+   *   - plain while the adjusted exponent is in [-4, 10]: rounded HALF_UP to the decimals left
+   *     after the integer digits and the point (`12345678.901` → `12345678.9`, `1/3` →
+   *     `0.333333333`), trailing zeros stripped
+   *   - E notation otherwise (`123456789012` → `1.23457E+11`, `0.00001` → `1E-05`), and when the
+   *     plain rounding carries past 11 digits (`99999999999.5` → `1E+11`): as many significant
+   *     digits as fit in 11 characters (6 with a two-digit exponent, 5 with three), trailing zeros
+   *     and a bare point dropped, exponent signed and at least two digits
+   *   - like %G, the switch reads the exponent after rounding: `0.0000999999999999` is `0.0001`
+   *
+   * Pure BigDecimal/BigInteger arithmetic with Long exponents: no Double, no Locale, and bounded
+   * output for any stored exponent (`1E+2147483647` renders as itself). The column-width shrinking
+   * Excel applies to narrow columns is not modelled.
    */
   private def formatGeneral(n: BigDecimal): String =
-    if n.isWhole then n.toBigInt.toString
+    if n.signum == 0 then "0"
     else
-      val plain = n.underlying.stripTrailingZeros.toPlainString
-      val sigDigits = countSignificantDigits(plain)
-      if sigDigits > 11 then
-        val mc = new java.math.MathContext(11)
-        val rounded = n.underlying.round(mc)
-        val roundedPlain = rounded.stripTrailingZeros.toPlainString
-        val abs = n.abs
-        if abs >= BigDecimal("1E12") || abs < BigDecimal("1E-4") then f"${rounded.doubleValue}%.6E"
-        else roundedPlain
-      else plain
+      val body = generalDisplayUnsigned(n.bigDecimal.abs)
+      if n.signum < 0 then "-" + body else body
 
-  private def countSignificantDigits(plain: String): Int =
-    val s = if plain.startsWith("-") then plain.substring(1) else plain
-    if s.contains('.') then
-      val stripped = s.stripPrefix("0.").dropWhile(_ == '0')
-      stripped.replace(".", "").length
+  private def generalDisplayUnsigned(a: java.math.BigDecimal): String =
+    // adjusted exponent in Long: a scale near either end of the Int range overflows Int
+    val exp: Long = a.precision.toLong - a.scale.toLong - 1L
+    val plain =
+      if exp >= -4L && exp <= 10L then
+        val decimals = if exp >= 0L then math.max(0, 9 - exp.toInt) else GeneralDisplayWidth - 2
+        val text =
+          a.setScale(decimals, java.math.RoundingMode.HALF_UP).stripTrailingZeros.toPlainString
+        Option.when(text.length <= GeneralDisplayWidth)(text)
+      else None
+    plain.getOrElse(generalDisplayScientific(a, exp))
+
+  /**
+   * The E form of [[formatGeneral]]. Rounds the unscaled digits as a BigInteger rather than the
+   * BigDecimal, whose scale would overflow Int at the extremes.
+   */
+  private def generalDisplayScientific(a: java.math.BigDecimal, exp: Long): String =
+    def exponentDigits(e: Long): Int = math.max(2, math.abs(e).toString.length)
+    // mantissa `d.dddd` + `E±` + exponent within the width; one digit (no point) at the least
+    def significantFor(e: Long): Int = math.max(1, GeneralDisplayWidth - 3 - exponentDigits(e))
+    val digits = a.unscaledValue
+    val precision = a.precision
+    def roundTo(sig: Int): (java.math.BigInteger, Long) =
+      if precision <= sig then (digits, exp)
+      else
+        val divisor = java.math.BigInteger.TEN.pow(precision - sig)
+        val q = digits.add(divisor.shiftRight(1)).divide(divisor)
+        if q.toString.length > sig then (q.divide(java.math.BigInteger.TEN), exp + 1L)
+        else (q, exp)
+    val first = roundTo(significantFor(exp))
+    // a carry into a longer exponent (9.999999E+99 → 1E+100) leaves room for one digit fewer
+    val (mantissa, e) =
+      if significantFor(first._2) < significantFor(exp) then roundTo(significantFor(first._2))
+      else first
+    val sig = mantissa.toString.reverse.dropWhile(_ == '0').reverse
+    if e >= -4L && e <= 10L then
+      // a carry back into the plain range (0.0000999999999999 → 0.0001); e is small here
+      new java.math.BigDecimal(
+        new java.math.BigInteger(sig),
+        sig.length - 1 - e.toInt
+      ).toPlainString
     else
-      val trimmed = s.reverse.dropWhile(_ == '0')
-      if trimmed.isEmpty then 1 else trimmed.length
+      val mantissaText =
+        if sig.length == 1 then sig else s"${sig.substring(0, 1)}.${sig.substring(1)}"
+      val absExp = math.abs(e)
+      val expText = if absExp < 10L then s"0$absExp" else absExp.toString
+      s"${mantissaText}E${if e < 0L then "-" else "+"}$expText"
 
   /**
    * Format a date/time value.
@@ -225,6 +287,10 @@ object NumFmtFormatter:
    *   Formatted date/time string
    */
   def formatDateTime(dt: LocalDateTime, numFmt: NumFmt): String =
+    formatDateTime(dt, numFmt, GeneralRule.CellDisplay)
+
+  /** [[formatDateTime]] with General rendered under `rule` (#672). */
+  def formatDateTime(dt: LocalDateTime, numFmt: NumFmt, rule: GeneralRule): String =
     numFmt match
       case NumFmt.Date | NumFmt.DateTime | NumFmt.Time =>
         // The calendar variants render straight off the LocalDateTime through their parsed
@@ -236,19 +302,19 @@ object NumFmtFormatter:
 
       case NumFmt.Custom(code) if isGeneralCode(code) =>
         // "General" keyword code: dates ARE numbers in Excel, so render the serial (GH-283)
-        formatNumber(dateTimeSerial(dt), NumFmt.General)
+        formatNumber(dateTimeSerial(dt), NumFmt.General, rule)
 
       case NumFmt.Custom(code) =>
         // Route through section selection on the serial (GH-283): ';;;' hides dates,
         // numeric sections render the serial, conditional codes pick sections by serial
         FormatCodeParser.parse(code) match
-          case Right(fmt) => formatCustom(dateTimeSerial(dt), Some(dt), fmt)
+          case Right(fmt) => formatCustom(dateTimeSerial(dt), Some(dt), fmt, rule)
           case Left(_) => dt.toString // Fallback for parse errors
 
       case other =>
         // Dates ARE numbers in Excel: any numeric format (General included) displays
         // the underlying serial number, never ISO text (GH-283)
-        formatNumber(dateTimeSerial(dt), other)
+        formatNumber(dateTimeSerial(dt), other, rule)
 
   /**
    * Render a numeric value through a parsed custom code with full section routing (GH-283/285): the
@@ -266,15 +332,16 @@ object NumFmtFormatter:
   private def formatCustom(
     n: BigDecimal,
     dt: => Option[LocalDateTime],
-    fmt: FormatCodeParser.FormatCode
+    fmt: FormatCodeParser.FormatCode,
+    rule: GeneralRule
   ): String =
     FormatCodeParser.selectSection(n, fmt) match
-      case None => formatGeneral(n)
+      case None => general(n, rule)
       case Some(section) if FormatCodeParser.hasDateTokens(section) =>
         dt match
           case Some(d) => FormatCodeParser.applyDateFormat(d, section)
           case None => "######"
-      case Some(_) => FormatCodeParser.applyFormat(n, fmt)._1
+      case Some(_) => FormatCodeParser.applyFormat(n, fmt, rule)._1
 
   /** Exclusive upper bound of Excel's displayable date serials (9999-12-31 is 2958465). */
   private val maxDateSerialExclusive = BigDecimal(2958466)

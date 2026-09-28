@@ -108,6 +108,7 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     "VLOOKUP",
     "HLOOKUP",
     "MATCH",
+    "XMATCH",
     "INDEX",
     "SUMIF",
     "COUNTIF",
@@ -126,7 +127,7 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
   )
   private val liftedArraysOnly =
     Set("MROUND", "EDATE", "EOMONTH", "WORKDAY", "NETWORKDAYS", "YEARFRAC")
-  private val liftedFirstSlot = Set("IFERROR", "IFNA", "XLOOKUP")
+  private val liftedFirstSlot = Set("IFERROR", "IFNA", "XLOOKUP", "LOOKUP")
 
   /** Functions with their own array semantics, array/reference results, or nothing to lift. */
   private val excluded = Set(
@@ -177,12 +178,12 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     "PI"
   )
 
-  test("the lifted roster is pinned: 74 functions with their slot policies") {
+  test("the lifted roster is pinned: 76 functions with their slot policies") {
     val byPolicy = lifted.groupMap(_.flags.lift)(_.name.toUpperCase).view.mapValues(_.toSet).toMap
     assertEquals(byPolicy.getOrElse(ArrayLift.all, Set.empty), liftedAll)
     assertEquals(byPolicy.getOrElse(ArrayLift.arraysOnly, Set.empty), liftedArraysOnly)
     assertEquals(byPolicy.getOrElse(ArrayLift.slots(0), Set.empty), liftedFirstSlot)
-    assertEquals(lifted.size, 74)
+    assertEquals(lifted.size, 76)
   }
 
   test("the excluded functions do not lift") {
@@ -223,7 +224,7 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     case "text" => "\"a\""
     case "boolean" => "TRUE"
     case "date" => "DATE(2026,1,1)"
-    case "range" | "array or range" | "number or range" => "C2:D4"
+    case "range" | "reference" | "array or range" | "number or range" => "C2:D4"
     case _ => "1"
 
   private def sampleCalls(spec: FunctionSpec[?]): List[(Int, List[String])] =
@@ -264,7 +265,11 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
         _.stripPrefix("optional ").stripSuffix("...").split(", ")
       )
       parts.foreach(kind =>
-        assert(scalarKinds(kind) || kind == "range", s"${spec.name} has a '$kind' slot")
+        // GH-669: INDEX's array is a reference slot (a range, a union or an array constant)
+        assert(
+          scalarKinds(kind) || kind == "range" || kind == "reference",
+          s"${spec.name} has a '$kind' slot"
+        )
       )
       if !referenceResults(spec.name) then
         sampleCalls(spec).foreach { (_, kinds) =>
@@ -384,11 +389,11 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     }
   }
 
-  test("lifting-law carve-outs: numeric text and cached formula cells through one reference") {
-    // Both divergences are the scalar reference decoders', and the lifted element is Excel's:
-    // a numeric-text cell coerces to its number element-wise, while one reference to it in a
-    // numeric slot is a type mismatch (as `=B2+0` is); one reference to a cached formula cell in a
-    // text slot reads the formula's text (TExprDecoders.decodeAsString), the element its cached value
+  test("lifting-law carve-out: numeric text through one reference; cached formulas agree (#671)") {
+    // The divergence is the scalar reference decoder's, and the lifted element is Excel's: a
+    // numeric-text cell coerces to its number element-wise, while one reference to it in a numeric
+    // slot is a type mismatch (as `=B2+0` is). #671: one reference to a cached formula cell in a
+    // text slot reads its cached value, as the lifted element does — no longer a carve-out
     val sheet = base
       .put(ref"B2", CellValue.Text("5"))
       .put(ref"B3", CellValue.Text("5"))
@@ -409,5 +414,5 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
       case other => fail(s"=ABS(B2) over the text 5: expected a type mismatch, got $other")
 
     assertEquals(eval("=LEN(E2:E3)"), Right(column(1, 2)))
-    assertEquals(eval("=LEN(E2)"), Right(BigDecimal(3)), "the formula text 1+1")
+    assertEquals(eval("=LEN(E2)"), Right(BigDecimal(1)), "the cached value 2, not the text 1+1")
   }

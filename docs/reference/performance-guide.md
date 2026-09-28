@@ -58,12 +58,13 @@ excel.read(path).map { wb =>
 
 ### Row-Stream Write Mode
 
-**Use For**: Large data generation (100k+ rows) when you can live with minimal styling and inline strings.
+**Use For**: Large data generation (100k+ rows) — values, shared strings and a declared style table.
 
 **Characteristics**:
-- O(1) constant memory for worksheet data (~10MB regardless of row count).
+- O(1) constant memory for worksheet data (~10MB regardless of row count), plus O(distinct strings) for the shared strings table.
 - fs2‑data‑xml event streaming; no intermediate XML trees.
-- **Limitations**: No SST support (inline strings only), minimal styles, and no API for workbook metadata such as merged cells.
+- Styles: `writeStream` / `writeStreamWithAutoDetect` write the minimal (default-only) table; `writeStreamStyled` / `writeStreamStyledWithAutoDetect` take a `Vector[CellStyle]` that `StyledRowData.cellStyles` indexes (GH-223, GH-675).
+- **Limitations**: no API for workbook metadata such as merged cells.
 - For an already-materialized workbook that needs metadata preservation with lower writer allocation, use `ExcelIO.writeWorkbookStream`.
 
 **API**:
@@ -101,11 +102,11 @@ Stream.range(1, 1_000_001)
 **Tradeoffs**:
 - ✅ Constant memory for worksheet data.
 - ✅ Excellent throughput at high row counts.
-- ❌ No SST (larger files if many duplicate strings).
-- ❌ Minimal styles only (no rich formatting at scale).
+- ✅ Shared strings by default (`SstPolicy.Never` keeps inline strings).
+- ✅ Per-cell styles from a table declared up front (`writeStreamStyled`, `writeStreamStyledWithAutoDetect`).
 
 **Where the scratch file goes**: the auto-detect variants (`writeStreamWithAutoDetect`,
-`writeStreamsSeqWithAutoDetect`) buy their up-front `<dimension>` with a two-pass write, spilling
+`writeStreamStyledWithAutoDetect`, `writeStreamsSeqWithAutoDetect`) buy their up-front `<dimension>` with a two-pass write, spilling
 the worksheet body to a scratch file — one per sheet — and deleting it when the write ends, success
 or failure. It lands in `java.io.tmpdir` by default. Redirect it when that directory is small,
 read-only, or slower than the output volume:
@@ -453,7 +454,7 @@ val sheet = Sheet("Data").put(cells*)
 ExcelIO.instance[IO].write(Workbook(Vector(sheet)), path).unsafeRunSync()
 ```
 
-### Large Workbooks (100k+ rows, minimal styling)
+### Large Workbooks (100k+ rows)
 ```scala
 // Use streaming write
 import com.tjclp.xl.io.Excel
@@ -462,6 +463,14 @@ import fs2.Stream
 Stream.range(1, 1_000_001)
   .map(i => RowData(i, Map(0 -> CellValue.Text(s"Row $i"))))
   .through(Excel.forIO.writeStream(path, "Data"))
+  .compile.drain
+  .unsafeRunSync()
+
+// Styled: StyledRowData.cellStyles index the table; the auto-detect variant adds <dimension>
+val dateStyle = CellStyle.default.withNumFmt(NumFmt.Date)
+Stream.range(1, 1_000_001)
+  .map(i => StyledRowData(i, Map(0 -> CellValue.DateTime(start.plusDays(i).atStartOfDay())), Map(0 -> 0)))
+  .through(ExcelIO.instance[IO].writeStreamStyledWithAutoDetect(path, "Data", Vector(dateStyle)))
   .compile.drain
   .unsafeRunSync()
 ```

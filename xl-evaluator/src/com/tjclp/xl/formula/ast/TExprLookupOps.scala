@@ -76,7 +76,7 @@ trait TExprLookupOps:
     Call(
       FunctionSpecs.xlookup,
       (
-        lookupValue.asInstanceOf[TExpr[Any]],
+        asCellValueExpr(lookupValue),
         RangeLocation.Local(lookupArray),
         RangeLocation.Local(returnArray),
         ifNotFound.map(_.asInstanceOf[TExpr[Any]]),
@@ -105,7 +105,7 @@ trait TExprLookupOps:
     rowNum: TExpr[BigDecimal],
     colNum: Option[TExpr[BigDecimal]] = None
   ): TExpr[ArrayResult] =
-    Call(FunctionSpecs.index, (RangeLocation.Local(array), rowNum, colNum))
+    Call(FunctionSpecs.index, (Left(RangeLocation.Local(array)), rowNum, colNum, None))
 
   /**
    * MATCH: find position of value in array.
@@ -126,5 +126,5 @@ trait TExprLookupOps:
   ): TExpr[BigDecimal] =
     Call(
       FunctionSpecs.matchFn,
-      (lookupValue.asInstanceOf[TExpr[Any]], RangeLocation.Local(lookupArray), Some(matchType))
+      (asCellValueExpr(lookupValue), RangeLocation.Local(lookupArray), Some(matchType))
     )

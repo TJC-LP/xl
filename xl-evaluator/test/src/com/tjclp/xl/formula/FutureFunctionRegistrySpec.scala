@@ -31,7 +31,8 @@ class FutureFunctionRegistrySpec extends FunSuite:
         "SORT",
         "SWITCH",
         "UNIQUE",
-        "XLOOKUP"
+        "XLOOKUP",
+        "XMATCH"
       )
     )
     // LET is a parser special form, not a registry entry, and is still stored as _xlfn.LET

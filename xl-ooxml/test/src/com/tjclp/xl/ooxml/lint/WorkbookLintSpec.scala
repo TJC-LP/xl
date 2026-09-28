@@ -1665,6 +1665,116 @@ class WorkbookLintSpec extends FunSuite:
     }
   }
 
+  // ===== GH-687: xl 0.23.x's _xlfn.ANCHORARRAY(Sheet!)REF! (anchorarray-qualifier-corrupt) =====
+
+  /**
+   * B1, C1, the cfRule `<formula>` and the dataValidation `<formula1>` carry the corruption; A1 is
+   * Excel's own `Sheet1!#REF!`, D1 a genuine spill, E1 a genuine qualified spill, F1 the corrupt
+   * text inside a string literal only.
+   */
+  private val corruptSpillSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="A1" t="e"><f>Sheet1!#REF!+1</f><v>#REF!</v></c>
+      <c r="B1" t="e"><f>_xlfn.ANCHORARRAY(Sheet1!)REF!+1</f><v>#REF!</v></c>
+      <c r="C1" t="e"><f>_xlfn.SINGLE(_xlfn.ANCHORARRAY('My Sheet'!))N/A</f><v>#N/A</v></c>
+      <c r="D1"><f>SUM(_xlfn.ANCHORARRAY(A1))</f><v>1</v></c>
+      <c r="E1"><f>SUM(_xlfn.ANCHORARRAY(Sheet1!A1))</f><v>1</v></c>
+      <c r="F1" t="str"><f>"_xlfn.ANCHORARRAY(Sheet1!)REF!"</f><v>x</v></c>
+    </row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>_xlfn.ANCHORARRAY([1]Sheet1!)REF!=1</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>ISERROR(_xlfn.ANCHORARRAY(Sheet1!)REF!)</formula1></dataValidation></dataValidations>"""
+  )
+
+  /** The same slots in the spelling Excel writes (and xl restores). */
+  private val healedSpillSheetXml = worksheetWith(
+    """<sheetData>
+    <row r="1">
+      <c r="B1" t="e"><f>Sheet1!#REF!+1</f><v>#REF!</v></c>
+      <c r="C1" t="e"><f>_xlfn.SINGLE('My Sheet'!#N/A)</f><v>#N/A</v></c>
+      <c r="D1"><f>SUM(_xlfn.ANCHORARRAY(A1))</f><v>1</v></c>
+    </row>
+  </sheetData>
+  <conditionalFormatting sqref="A1:A3"><cfRule type="expression" priority="1"><formula>[1]Sheet1!#REF!=1</formula></cfRule></conditionalFormatting>
+  <dataValidations count="1"><dataValidation type="custom" sqref="D1:D3"><formula1>ISERROR(Sheet1!#REF!)</formula1></dataValidation></dataValidations>"""
+  )
+
+  private val corruptSpillWorkbookXml = workbookWithNames(
+    filterNameXml("_xlfn.ANCHORARRAY(Sheet1!)REF!") +
+      """<definedName name="Old">_xlfn.ANCHORARRAY(Sheet1!)REF!</definedName>""" +
+      """<definedName name="Fine">Sheet1!#REF!</definedName>"""
+  )
+
+  private def corruptCategory(findings: Vector[Finding]): Vector[Finding] =
+    findings.filter(_.category == LintCategory.AnchorArrayQualifierCorrupt)
+
+  test("GH-687: the 0.23.x corruption in <f>, <formula> and <formula1> is ONE repair finding") {
+    val findings = lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml))
+    assertEquals(findings.map(_.category), Vector(LintCategory.AnchorArrayQualifierCorrupt))
+    val f = findings.head
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.locator, """<c r="B1"><f>""")
+    assert(f.message.contains("4 formula(s)"), f.toString)
+    assert(f.message.contains("B1, C1, <cfRule><formula>, <dataValidation><formula1>"), f.toString)
+    // the qualifiers found, distinct and sorted
+    assert(f.message.contains("'My Sheet'!, Sheet1!, [1]Sheet1!"), f.toString)
+    assert(f.message.contains("_xlfn.ANCHORARRAY(Sheet!)"), f.toString)
+    assert(f.message.contains("Sheet!#REF!"), f.toString)
+    assert(f.message.contains("xl 0.23.0–0.23.1"), f.toString)
+    // the remedy, and the three writes that do not heal (AnchorArrayQualifierHealCliSpec pins each)
+    assert(f.message.contains("xl -f f.xlsx -s <sheet> -o f.xlsx put"), f.toString)
+    assert(f.message.contains("unedited worksheet"), f.toString)
+    assert(f.message.contains("xl recalc"), f.toString)
+    assert(f.message.contains("--stream"), f.toString)
+    assertEquals(LintCategory.AnchorArrayQualifierCorrupt.slug, "anchorarray-qualifier-corrupt")
+  }
+
+  test("GH-687: the corruption in <definedName> bodies is a repair finding on workbook.xml") {
+    val findings = lintOf(baseParts + ("xl/workbook.xml" -> corruptSpillWorkbookXml))
+    val corrupt = corruptCategory(findings)
+    assertEquals(corrupt.size, 1, findings.toString)
+    val f = corrupt.head
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.part, "xl/workbook.xml")
+    assertEquals(f.locator, """<definedName name="_xlnm._FilterDatabase">""")
+    assert(f.message.contains("2 defined name(s)"), f.toString)
+    assert(f.message.contains(""""_xlnm._FilterDatabase", "Old""""), f.toString)
+    assert(!f.message.contains("Fine"), f.toString)
+    // not a bare post-2007 call: xlfn-missing stays silent
+    assert(!findings.exists(_.category == LintCategory.XlfnMissing), findings.toString)
+  }
+
+  test("GH-687: Excel's own Sheet!#REF!, genuine spills and string literals are clean") {
+    assertEquals(
+      lintOf(baseParts + ("xl/worksheets/sheet1.xml" -> healedSpillSheetXml)),
+      Vector.empty[Finding]
+    )
+    assertEquals(
+      corruptCategory(
+        lintOf(
+          baseParts + ("xl/workbook.xml" -> workbookWithNames(
+            """<definedName name="Fine">Sheet1!#REF!</definedName>""" +
+              """<definedName name="Spill">_xlfn.ANCHORARRAY(Sheet1!$A$1)</definedName>"""
+          ))
+        )
+      ),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("GH-687: streaming mode reports the corruption identically (cells, CF, DV, names)") {
+    val parts = baseParts +
+      ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml) +
+      ("xl/workbook.xml" -> corruptSpillWorkbookXml)
+    assertEquals(lintStreamOf(parts), lintOf(parts))
+    assertEquals(
+      corruptCategory(lintStreamOf(parts)).map(_.part),
+      Vector("xl/workbook.xml", "xl/worksheets/sheet1.xml")
+    )
+  }
+
   // ===== GH-460: empty inline strings (openpyxl's serialization of value="") =====
 
   private val emptyInlineSheetXml = worksheetWith(
@@ -2238,7 +2348,8 @@ class WorkbookLintSpec extends FunSuite:
     LintCategory.IgnorableUndeclared,
     LintCategory.DxfIdOutOfRange,
     LintCategory.UnreferencedPart,
-    LintCategory.SharedStringOrphan
+    LintCategory.SharedStringOrphan,
+    LintCategory.AutoFilterNameMismatch
   )
 
   test("GH-460/567: over the committed corpus, only named-styles-excel trips a new rule") {
@@ -2300,6 +2411,136 @@ class WorkbookLintSpec extends FunSuite:
     // a Finding built without a tier is a repair — the conservative default for every rule that
     // does not say otherwise
     assertEquals(Finding("p", LintCategory.ChildOrder, "<x>", "m").severity, LintSeverity.Repair)
+  }
+
+  // ===== #460 item 5: <autoFilter ref> vs the sheet-scoped _xlnm._FilterDatabase name =====
+  //
+  // Evidence behind the tier (Excel for Mac 16.113.2 and LibreOffice 25.8, driven over probes of
+  // the committed autofilter.xlsx fixture, plain and with an active filterColumn): a name naming
+  // another range, another sheet or #REF!, a missing name, and a name with no autoFilter all open
+  // with no repair prompt and the filter intact. Excel re-saves a stale name VERBATIM (and writes
+  // no name where none was), LibreOffice re-derives it from the autoFilter. So a stale name is
+  // misleading metadata, never a repair; a missing one is what Excel itself re-saves, and a
+  // leftover name without a filter is what Excel leaves behind after a filter is cleared (62 of
+  // the Excel-authored books in a local corpus of ~260 carry one) — neither is a finding.
+
+  private def filteredSheetXml(ref: String): String = worksheetWith(
+    s"""<sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Region</t></is></c></row></sheetData>
+  <autoFilter ref="$ref"/>"""
+  )
+
+  private def filterNameXml(body: String, localSheetId: Int = 0): String =
+    s"""<definedName name="_xlnm._FilterDatabase" localSheetId="$localSheetId" hidden="1">$body</definedName>"""
+
+  private def autoFilterParts(ref: Option[String], names: String): Map[String, String] =
+    baseParts ++ Map(
+      "xl/workbook.xml" -> workbookWithNames(names),
+      "xl/worksheets/sheet1.xml" -> ref.fold(worksheetXml)(filteredSheetXml)
+    )
+
+  private val staleFilterNameParts =
+    autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$3"))
+
+  test("#460: an autoFilter whose _xlnm._FilterDatabase names the same range is clean") {
+    val clean = Vector(
+      autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$6")),
+      autoFilterParts(Some("A1:C6"), filterNameXml("'Sheet1'!$A$1:$C$6")),
+      autoFilterParts(Some("A1:C6"), filterNameXml("sheet1!A1:C6")),
+      // Excel writes a one-cell filter's name as a degenerate range (LibreOffice's corpus)
+      autoFilterParts(Some("B2"), filterNameXml("Sheet1!$B$2:$B$2")),
+      // the name's own spelling is case-insensitive, as Excel matches built-in names
+      autoFilterParts(
+        Some("A1:C6"),
+        filterNameXml("Sheet1!$A$1:$C$6").replace("_xlnm._FilterDatabase", "_XLNM._FILTERDATABASE")
+      )
+    )
+    clean.foreach { parts =>
+      assertEquals(lintOf(parts), Vector.empty[Finding])
+      assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+    }
+  }
+
+  test("#460: a _FilterDatabase naming another range is a hygiene autofilter-name-mismatch") {
+    val findings = lintOf(staleFilterNameParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    val f = findings.head
+    assertEquals(f.severity, LintSeverity.Hygiene)
+    assertEquals(f.part, "xl/workbook.xml")
+    assertEquals(f.locator, """<definedName name="_xlnm._FilterDatabase" localSheetId="0">""")
+    assert(f.message.contains("\"Sheet1\""), f.message)
+    assert(f.message.contains("A1:C3"), f.message)
+    assert(f.message.contains("A1:C6"), f.message)
+    assertEquals(LintCategory.AutoFilterNameMismatch.slug, "autofilter-name-mismatch")
+  }
+
+  test("#460: a _FilterDatabase naming another sheet or #REF! is the same hygiene finding") {
+    val otherSheet = lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Other!$A$1:$C$6")))
+    assertEquals(otherSheet.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assert(otherSheet.head.message.contains("\"Other\""), otherSheet.head.message)
+    // (only this rule's findings: the xlfn rule reads `Sheet1!#` as a bare spill operator — a
+    // separate defect of FormulaStorage's spill scanner, not this rule's)
+    val broken = lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!#REF!")))
+      .filter(_.category == LintCategory.AutoFilterNameMismatch)
+    assertEquals(broken.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assert(broken.head.message.contains("#REF!"), broken.head.message)
+    assertEquals(broken.map(_.severity), Vector(LintSeverity.Hygiene))
+  }
+
+  test("#460: a missing name, or a name with no autoFilter, is not a finding (Excel evidence)") {
+    // an autoFilter with no _FilterDatabase: Excel opens it intact and re-saves it without one
+    assertEquals(lintOf(autoFilterParts(Some("A1:C6"), "")), Vector.empty[Finding])
+    // a leftover name after the filter was cleared: Excel's own output
+    assertEquals(
+      lintOf(autoFilterParts(None, filterNameXml("Sheet1!$A$1:$C$6"))),
+      Vector.empty[Finding]
+    )
+    // a name scoped to ANOTHER sheet position says nothing about this sheet's filter
+    assertEquals(
+      lintOf(autoFilterParts(Some("A1:C6"), filterNameXml("Sheet1!$A$1:$C$3", localSheetId = 1))),
+      Vector.empty[Finding]
+    )
+  }
+
+  test("#460: localSheetId is the sheet's position in <sheets>, not its sheetId") {
+    val parts = withSecondSheet(
+      "worksheet",
+      "worksheets/sheet2.xml",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml",
+      filteredSheetXml("A1:C6")
+    )
+    val named = (body: String) =>
+      parts + ("xl/workbook.xml" -> parts("xl/workbook.xml").replace(
+        "<definedNames><definedName name=\"MyName\">Sheet1!$A$1</definedName></definedNames>",
+        s"<definedNames>${filterNameXml(body, localSheetId = 1)}</definedNames>"
+      ))
+    assertEquals(lintOf(named("Extra!$A$1:$C$6")), Vector.empty[Finding])
+    val stale = lintOf(named("Extra!$A$1:$C$9"))
+    assertEquals(stale.map(_.category), Vector(LintCategory.AutoFilterNameMismatch))
+    assertEquals(
+      stale.head.locator,
+      """<definedName name="_xlnm._FilterDatabase" localSheetId="1">"""
+    )
+    assertEquals(lintStreamOf(named("Extra!$A$1:$C$9")), stale)
+  }
+
+  test("#460: a table part's own autoFilter is not the sheet's filter") {
+    // the name is compared with the worksheet's direct-child <autoFilter> only
+    val parts = overMaxTableParts ++ Map(
+      "xl/workbook.xml" -> workbookWithNames(filterNameXml("Sheet1!$A$1:$C$3")),
+      "xl/tables/table1.xml" ->
+        s"""<table xmlns="$nsMain" id="1" name="T1" displayName="T1" ref="A1:C6"><autoFilter ref="A1:C6"/></table>"""
+    )
+    assertEquals(lintOf(parts), Vector.empty[Finding])
+    assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+  }
+
+  test("#460: over the Excel/LibreOffice-authored autofilter fixture the rule is silent") {
+    val path = TestFixtures.copyToTemp("autofilter.xlsx")
+    val findings = WorkbookLint.lint(path).fold(err => fail(err.message), identity)
+    assertEquals(
+      findings.filter(_.category == LintCategory.AutoFilterNameMismatch),
+      Vector.empty[Finding]
+    )
   }
 
   // ===== Macro sheets (Excel 4.0 XLM, PR #659 review): a sheet kind of their own =====
@@ -2492,6 +2733,13 @@ class WorkbookLintSpec extends FunSuite:
     "bare xlfn defined name" -> (baseParts + ("xl/workbook.xml" -> bareNameWorkbookXml)),
     "half-prefixed LET cell" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> halfPrefixedLetSheetXml)),
+    // GH-687: the 0.23.x ANCHORARRAY(Sheet!) corruption rides the same formula-text sites
+    "corrupt anchorarray qualifiers" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> corruptSpillSheetXml)),
+    "healed anchorarray qualifiers" ->
+      (baseParts + ("xl/worksheets/sheet1.xml" -> healedSpillSheetXml)),
+    "corrupt anchorarray defined names" ->
+      (baseParts + ("xl/workbook.xml" -> corruptSpillWorkbookXml)),
     // the root element is never a formula-text site, in either scanner
     "root-level formula element" ->
       (baseParts + ("xl/worksheets/sheet1.xml" -> rootFormulaSheetXml)),
@@ -2537,7 +2785,12 @@ class WorkbookLintSpec extends FunSuite:
     "unioned shared strings" -> unionSstParts,
     "past-table shared-string index" -> pastTableSstParts,
     "t=s without a shared-string part" -> noSstPartParts,
-    "malformed shared strings" -> malformedSstParts
+    "malformed shared strings" -> malformedSstParts,
+    // #460 item 5: the sheet's direct-child <autoFilter ref> capture (SAX depth 1 vs DOM children)
+    "stale _FilterDatabase name" -> staleFilterNameParts,
+    "matching _FilterDatabase name" ->
+      autoFilterParts(Some("A1:C6"), filterNameXml("'Sheet1'!$A$1:$C$6")),
+    "autoFilter without a name" -> autoFilterParts(Some("A1:C6"), "")
   )
 
   test("GH-413: lintStreamBytes agrees with lintBytes on every fixture (SAX/DOM parity)") {
@@ -2754,6 +3007,27 @@ class WorkbookLintSpec extends FunSuite:
       .head
     assert(shortF.message.contains(s"<f>$short</f>"), s"short text is quoted whole: $shortF")
     assert(!shortF.message.contains("…</f>"), s"no ellipsis under the cap: $shortF")
+  }
+
+  test(
+    "#676: an Alt+Enter formula is quoted on ONE line — line breaks and tabs flatten to spaces"
+  ) {
+    // the same flattening the audit's unparseable entry applies, so the two print it identically
+    val parts = baseParts + ("xl/worksheets/sheet1.xml" -> worksheetWith(
+      """<sheetData>
+    <row r="1"><c r="A1"><f>SUM(A2,&#13;&#10;A3,&#10;&#9;A4</f><v>1</v></c></row>
+  </sheetData>"""
+    ))
+    val bytes = zipBytes(parts)
+    val unbalanced: WorkbookLint.FormulaCheck =
+      text => Option.when(text.count(_ == '(') != text.count(_ == ')'))("unbalanced parentheses")
+    val dom = WorkbookLint.lintBytes(bytes, unbalanced).fold(e => fail(s"$e"), identity)
+    val sax = WorkbookLint.lintStreamBytes(bytes, unbalanced).fold(e => fail(s"$e"), identity)
+    assertEquals(sax, dom)
+    assertEquals(dom.map(_.category), Vector(LintCategory.FormulaUnparseable))
+    val f = dom.head
+    assert(f.message.contains("<f>SUM(A2, A3,  A4</f>"), s"flattened quote: $f")
+    assert(!f.message.exists(c => c == '\n' || c == '\r' || c == '\t'), s"one line: $f")
   }
 
   test("GH-663: the slug is formula-unparseable") {

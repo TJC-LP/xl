@@ -10,25 +10,36 @@ import com.tjclp.xl.ooxml.style.WorkbookStyles
 import fs2.Stream
 import java.nio.file.Path
 
-/** Row-level streaming data for efficient processing */
-case class RowData(
-  rowIndex: Int, // 1-based row number
-  cells: Map[Int, CellValue], // 0-based column index → value
-  cellStyles: Map[Int, Int] = Map.empty // 0-based column index → style index from styles.xml
-)
-
 /**
- * Row data with style information for streaming writes with style preservation.
- *
- * Used by writeWorkbookStream to emit s="N" attributes on cells. Style IDs reference the
- * OoxmlStyles index passed to the writer.
+ * Row-level streaming data for efficient processing.
  *
  * @param rowIndex
  *   1-based row number
  * @param cells
  *   0-based column index → value
  * @param cellStyles
- *   0-based column index → style ID (from StyleIndex)
+ *   0-based column index → index into the SOURCE workbook's cellXfs, as readers produce it; ignored
+ *   by the unstyled writers (`writeStream`, `writeStreamWithAutoDetect`), which emit no style table
+ *   it could index. To style cells, write [[StyledRowData]] through `writeStreamStyled` /
+ *   `writeStreamStyledWithAutoDetect`.
+ */
+case class RowData(
+  rowIndex: Int,
+  cells: Map[Int, CellValue],
+  cellStyles: Map[Int, Int] = Map.empty
+)
+
+/**
+ * Row data with style information for the styled streaming writers (`writeStreamStyled`,
+ * `writeStreamStyledWithAutoDetect`), which emit `s="N"` attributes on cells.
+ *
+ * @param rowIndex
+ *   1-based row number
+ * @param cells
+ *   0-based column index → value
+ * @param cellStyles
+ *   0-based column index → index into the `styles` table passed to the Styled writer; the writer
+ *   remaps it to the emitted cellXf, and an index outside the table leaves the cell unstyled
  */
 case class StyledRowData(
   rowIndex: Int,
@@ -39,7 +50,11 @@ case class StyledRowData(
   def toRowData: RowData = RowData(rowIndex, cells, cellStyles)
 
 object StyledRowData:
-  /** Create from RowData (preserves style info) */
+  /**
+   * Create from RowData, copying its `cellStyles` as they are. A reader's RowData carries SOURCE
+   * cellXf indices, not indices into a Styled writer's `styles` table: remap them (or clear them)
+   * before writing, or the cells take whatever table entry the numbers happen to name.
+   */
   def fromRowData(row: RowData): StyledRowData =
     StyledRowData(row.rowIndex, row.cells, row.cellStyles)
 

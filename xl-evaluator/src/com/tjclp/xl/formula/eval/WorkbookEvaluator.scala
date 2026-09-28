@@ -873,7 +873,10 @@ object WorkbookEvaluator:
             converged = outcome.converged,
             rounds = outcome.rounds,
             maxDelta = outcome.maxDelta,
-            stalled = outcome.stalled
+            stalled = outcome.stalled,
+            errorValued = members.exists((q, _, _) =>
+              outcome.results.get(q).exists(_.exists(RecalcResult.carriedCellError(_).isDefined))
+            )
           )
           (folded, report)
 

@@ -375,6 +375,35 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
   }
 
+  test("--stream putf of several formulas names the cell whose formula does not parse") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val source = Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+      val streamed = StreamingWriteCommands
+        .putFormula(sourcePath, outputPath, Some("Test"), "B2:B3", List("=1", "=FOOBAR(1)"))
+        .attempt
+        .unsafeRunSync()
+      // the in-memory verb's heading, so both paths name the offending cell the same way
+      val wb = Workbook(source)
+      val inMemory = WriteCommands
+        .putFormula(wb, wb.sheets.headOption, "B2:B3", List("=1", "=FOOBAR(1)"), outputPath, config)
+        .attempt
+        .unsafeRunSync()
+      (streamed, inMemory) match
+        case (Left(s), Left(m)) =>
+          assert(
+            s.getMessage.startsWith("Formula for B3: the formula does not parse"),
+            s.getMessage
+          )
+          assertEquals(s.getMessage, m.getMessage)
+        case other => fail(s"expected both paths to refuse the formula, got $other")
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
   // ========== Style Preservation in Streaming Mode ==========
 
   test("streaming put: style preserved") {
@@ -669,7 +698,7 @@ class StreamingWriteSpec extends FunSuite:
         )
         .unsafeRunSync()
 
-      assert(result.contains("Streamed:") || result.contains("Imported:"))
+      assert(result.contains("Streamed:"), result) // the O(1) path, not the in-memory fallback
       assert(result.contains("Data"))
 
       val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
@@ -746,6 +775,40 @@ class StreamingWriteSpec extends FunSuite:
       assertEquals(cells.get(0), Some(CellValue.Number(BigDecimal("100"))))
       assertEquals(cells.get(1), Some(CellValue.Bool(true)))
       assertEquals(cells.get(2), Some(CellValue.Text("hello")))
+    finally Files.deleteIfExists(csvPath)
+  }
+
+  test("GH-675: streaming CSV parser styles exactly the date cells, with the Date table entry") {
+    val csvPath =
+      tempCsv("when,amount,flag,name,blank\n2026-01-15,12.5,true,Alpha,\n2026-02-01,,false,,x")
+    try
+      val rows = StreamingCsvParser
+        .streamCsv(csvPath, StreamingCsvParser.Options(skipHeader = true))
+        .compile
+        .toList
+        .unsafeRunSync()
+      assertEquals(rows.map(_.cellStyles), List(Map(0 -> 0), Map(0 -> 0)))
+      assertEquals(
+        StreamingCsvParser.Styles.lift(0).map(_.numFmt),
+        Some(NumFmt.Date),
+        "table entry 0 is the date style"
+      )
+      assertEquals(
+        rows.headOption.flatMap(_.cells.get(0)),
+        Some(CellValue.DateTime(java.time.LocalDate.of(2026, 1, 15).atStartOfDay()))
+      )
+      assertEquals(
+        rows.headOption.flatMap(_.cells.get(1)),
+        Some(CellValue.Number(BigDecimal("12.5")))
+      )
+
+      val untyped = StreamingCsvParser
+        .streamCsv(csvPath, StreamingCsvParser.Options(skipHeader = true, inferTypes = false))
+        .compile
+        .toList
+        .unsafeRunSync()
+      assertEquals(untyped.map(_.cellStyles), List(Map.empty[Int, Int], Map.empty[Int, Int]))
+      assertEquals(untyped.headOption.flatMap(_.cells.get(0)), Some(CellValue.Text("2026-01-15")))
     finally Files.deleteIfExists(csvPath)
   }
 

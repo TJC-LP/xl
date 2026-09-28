@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
-import com.tjclp.xl.api.{Sheet, Workbook}
+import com.tjclp.xl.api.Sheet
 import com.tjclp.xl.sheets.PageSetup
 import com.tjclp.xl.workbooks.DefinedName
 
@@ -18,10 +18,11 @@ import com.tjclp.xl.workbooks.DefinedName
  * Multi-range areas, column-only titles, and hidden/commented names stay in
  * `WorkbookMetadata.definedNames` verbatim, so nothing is lost on rewrite.
  *
- * Library-internal, but visible beyond xl-ooxml: [[effective]] is also the defined-name table
- * `xl describe --full` lists (GH-667), so a loaded book reports the print names its read lifted.
+ * The write side — the PageSetup → defined-name derivation — lives in xl-core as
+ * `Workbook.effectiveDefinedNames` (GH-674), so every consumer of the table (the writer here, the
+ * evaluator's `WorkbookSummary`, `xl describe --full`) reports the print names a read lifted.
  */
-private[xl] object PrintNames:
+private[ooxml] object PrintNames:
 
   /** Defined name Excel uses for a sheet's print area (the core constant, GH-462). */
   val PrintArea: String = DefinedName.PrintArea
@@ -43,13 +44,11 @@ private[xl] object PrintNames:
 
   /** Format a Print_Area formula, e.g. `Sheet1!$A$1:$D$20` or `'Q1 Report'!$A$1:$D$20`. */
   def printAreaFormula(sheet: SheetName, area: CellRange): String =
-    val s = area.start
-    val e = area.end
-    s"${quoteSheetName(sheet.value)}!$$${s.col.toLetter}$$${s.row.index1}:$$${e.col.toLetter}$$${e.row.index1}"
+    DefinedName.printAreaFormula(sheet, area)
 
   /** Format a row-span Print_Titles formula, e.g. `Sheet1!$1:$3`. */
   def printTitlesFormula(sheet: SheetName, rows: (Int, Int)): String =
-    s"${quoteSheetName(sheet.value)}!$$${rows._1}:$$${rows._2}"
+    DefinedName.printTitlesFormula(sheet, rows)
 
   /**
    * Split a `Sheet!rest` or `'Quoted Sheet'!rest` formula prefix, unescaping `''` to `'`. Returns
@@ -102,38 +101,6 @@ private[xl] object PrintNames:
           yield (start, end)
         case _ => None
     }
-
-  /** Defined names derived from each sheet's PageSetup (write side), in sheet order. */
-  def fromSheets(sheets: Vector[Sheet]): Vector[DefinedName] =
-    sheets.zipWithIndex.flatMap { case (sheet, idx) =>
-      val area = sheet.pageSetup.flatMap(_.printArea).map { range =>
-        DefinedName(PrintArea, printAreaFormula(sheet.name, range), localSheetId = Some(idx))
-      }
-      val titles = sheet.pageSetup.flatMap(_.repeatRows).map { rows =>
-        DefinedName(PrintTitles, printTitlesFormula(sheet.name, rows), localSheetId = Some(idx))
-      }
-      area.toList ++ titles.toList
-    }
-
-  /**
-   * Defined names to serialize for a workbook: the metadata names followed by the PageSetup-derived
-   * print names, one entry per (identifier, sheet) as Excel requires. A PageSetup field overrides
-   * the same sheet's metadata name, matched case-insensitively (GH-538). `withDefinedName` clears
-   * the corresponding PageSetup field, so a later name edit wins too; when both are present, a
-   * later `withPageSetup` restored the field. Formula shape cannot determine edit order (GH-462).
-   */
-  def effective(wb: Workbook): Vector[DefinedName] =
-    val names = wb.metadata.definedNames
-    val derived = fromSheets(wb.sheets)
-    if derived.isEmpty then names
-    else
-      def overridden(dn: DefinedName): Boolean =
-        dn.localSheetId.flatMap(wb.sheets.lift).flatMap(_.pageSetup).exists { setup =>
-          (DefinedName.sameName(dn.name, PrintArea) && setup.printArea.isDefined) ||
-          (DefinedName.sameName(dn.name, PrintTitles) && setup.repeatRows.isDefined)
-        }
-      // One pass over the table (10^5 entries on bank-authored books), not one per derived name.
-      names.filterNot(overridden) ++ derived
 
   /**
    * Read side: lift modelable sheet-scoped print names into each Sheet's PageSetup and drop them

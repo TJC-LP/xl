@@ -272,10 +272,20 @@ class DisplaySpec extends ScalaCheckSuite:
     assertEquals(result, "0")
   }
 
-  test("formatValue - General format (9 sig digits stays plain)") {
-    val value = CellValue.Number(BigDecimal("0.000123456789"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assertEquals(result, "0.000123456789")
+  // ========== Cell-display General: Excel's 11-character rule (GH-672) ==========
+  // A General cell shows at most 11 characters, the sign uncounted: plain while the number fits
+  // (decimals rounded HALF_UP to the room left, trailing zeros stripped), E notation when the
+  // integer part needs 12+ digits or the exponent is -5 or below (the %G small-number switch:
+  // 0.0001 plain, 0.00001 is 1E-05). The E form keeps the significant digits that fit in 11
+  // characters — 6 with a two-digit exponent (1.23457E+11), 5 with three (1.2346E+100). As in %G
+  // the switch is decided on the rounded value: 0.0000999999999999 rounds to 0.0001, plain.
+  // NOT the text-conversion rule (generalText: 15 digits / 20 characters, GH-665).
+
+  private def general(s: String): String =
+    NumFmtFormatter.formatValue(CellValue.Number(BigDecimal(s)), NumFmt.General)
+
+  test("formatValue - General format (0.000123456789 rounds to 11 characters)") {
+    assertEquals(general("0.000123456789"), "0.000123457")
   }
 
   test("formatValue - General format (10 sig digits negative stays plain)") {
@@ -284,40 +294,170 @@ class DisplaySpec extends ScalaCheckSuite:
     assertEquals(result, "-99999999.99")
   }
 
-  test("formatValue - General format (exactly 11 sig digits stays plain)") {
-    val value = CellValue.Number(BigDecimal("12345678.901"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assertEquals(result, "12345678.901")
+  test("formatValue - General format (12 characters round to 11: 12345678.901)") {
+    assertEquals(general("12345678.901"), "12345678.9")
   }
 
-  test("formatValue - General format (12 sig digits medium rounds to plain)") {
-    val value = CellValue.Number(BigDecimal("123456789.012"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assertEquals(result, "123456789.01")
+  test("formatValue - General format (123456789.012 rounds to the integer, zeros stripped)") {
+    assertEquals(general("123456789.012"), "123456789")
   }
 
   test("formatValue - General format (13 sig digits very small triggers scientific)") {
-    val value = CellValue.Number(BigDecimal("0.0000123456789012"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+    assertEquals(general("0.0000123456789012"), "1.23457E-05")
   }
 
   test("formatValue - General format (15 sig digits very large triggers scientific)") {
-    val value = CellValue.Number(BigDecimal("9999999999999.12"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+    assertEquals(general("9999999999999.12"), "1E+13")
   }
 
   test("formatValue - General format (0.0001 at threshold stays plain)") {
-    val value = CellValue.Number(BigDecimal("0.0001"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assertEquals(result, "0.0001")
+    assertEquals(general("0.0001"), "0.0001")
   }
 
-  test("formatValue - General format (below 1e-4 with >11 sig digits triggers scientific)") {
-    val value = CellValue.Number(BigDecimal("0.0000999999999999"))
-    val result = NumFmtFormatter.formatValue(value, NumFmt.General)
-    assert(result.contains("E"), s"Expected scientific notation, got: $result")
+  test("formatValue - General format (below 1e-4 decides on the rounded value, like %G)") {
+    // 9.99999999999E-05 rounds to six significant digits as 1.00000E-04, back in the plain range
+    assertEquals(general("0.0000999999999999"), "0.0001")
+    assertEquals(general("0.0000999994"), "9.99994E-05")
+  }
+
+  test("General cell display: the issue rows (GH-672)") {
+    // Dogfood E3: 0.000012345 showed its full expansion, 123456789012 all twelve digits
+    assertEquals(general("0.000012345"), "1.2345E-05")
+    assertEquals(general("123456789012"), "1.23457E+11")
+    assertEquals(general("-123456789012"), "-1.23457E+11")
+    assertEquals(general("1234567890"), "1234567890")
+    assertEquals(general("12345678901"), "12345678901")
+    assertEquals(general("-12345678901"), "-12345678901")
+  }
+
+  test("General cell display: the 11-character boundary, both magnitudes (GH-672)") {
+    List(
+      "99999999999" -> "99999999999",
+      "100000000000" -> "1E+11",
+      "99999999999.4" -> "99999999999",
+      "99999999999.5" -> "1E+11",
+      "12345678901.5" -> "12345678902",
+      "9999999999.5" -> "10000000000",
+      "1234567890.12" -> "1234567890",
+      "0.00001" -> "1E-05",
+      "0.00005" -> "5E-05",
+      "0.0001234567" -> "0.000123457",
+      "0.3333333333333333" -> "0.333333333",
+      "-0.3333333333333333" -> "-0.333333333",
+      "0.6666666666666666" -> "0.666666667",
+      "333.3333333333333" -> "333.3333333",
+      "0.9999999999" -> "1",
+      "0.5" -> "0.5",
+      "2021" -> "2021",
+      "45982.5" -> "45982.5",
+      "1.50" -> "1.5",
+      "1E+3" -> "1000",
+      "1.5E+15" -> "1.5E+15",
+      "1.234565E+20" -> "1.23457E+20",
+      "1.23456789E+100" -> "1.2346E+100",
+      "1.23456789E-100" -> "1.2346E-100",
+      "9.999999E+99" -> "1E+100",
+      "0" -> "0",
+      "0.000" -> "0",
+      "-0.0" -> "0"
+    ).foreach { case (in, out) => assertEquals(general(in), out, s"General($in)") }
+  }
+
+  test("General cell display: extreme stored exponents stay bounded (GH-672)") {
+    // A file can carry <v>1E+2147483647</v>: the integer branch asked for two billion digits
+    assertEquals(general("1E+2147483647"), "1E+2147483647")
+    assertEquals(general("-1E+2147483647"), "-1E+2147483647")
+    assertEquals(general("1E-2147483647"), "1E-2147483647")
+    // a ten-digit exponent leaves room for one significant digit (4.5 rounds HALF_UP to 5)
+    assertEquals(general("4.5E-2147483646"), "5E-2147483646")
+    assertEquals(general("4.5E+999999"), "4.5E+999999")
+    // Scale Int.MinValue: the exponent (2147483656) is past Int, and rounding nine digits to one
+    // must not push the scale past Int either
+    val beyondInt =
+      BigDecimal(new java.math.BigDecimal(java.math.BigInteger.valueOf(123456789L), Int.MinValue))
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(beyondInt), NumFmt.General),
+      "1E+2147483656"
+    )
+    val nines =
+      BigDecimal(new java.math.BigDecimal(java.math.BigInteger.valueOf(999999999L), Int.MaxValue))
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(nines), NumFmt.General),
+      "1E-2147483638"
+    )
+  }
+
+  test("General cell display: independent of the default Locale (GH-672)") {
+    // The old E branch formatted a Double through f"%.6E": 1,234570E+11 under de_DE
+    val saved = java.util.Locale.getDefault
+    try
+      java.util.Locale.setDefault(java.util.Locale.GERMANY)
+      assertEquals(general("123456789012"), "1.23457E+11")
+      assertEquals(general("0.3333333333333333"), "0.333333333")
+    finally java.util.Locale.setDefault(saved)
+  }
+
+  test("General keyword inside a section shares the 11-character rule (GH-672)") {
+    val units = NumFmt.Custom("General\" units\"")
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(BigDecimal("123456789012")), units),
+      "1.23457E+11 units"
+    )
+  }
+
+  /** Magnitudes across the whole Int scale range, both signs, up to 40 significant digits. */
+  private val genGeneralDisplay: Gen[BigDecimal] =
+    for
+      digits <- Gen.choose(1, 40)
+      unscaled <- Gen.listOfN(digits, Gen.choose(0, 9)).map(ds => BigInt(ds.mkString))
+      scale <- Gen.oneOf(
+        Gen.choose(-30, 30),
+        Gen.choose(-400, 400),
+        Gen.choose(Int.MinValue, Int.MinValue + 1000),
+        Gen.choose(Int.MaxValue - 1000, Int.MaxValue)
+      )
+      negative <- Gen.oneOf(true, false)
+    yield
+      val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
+      if negative then -magnitude else magnitude
+
+  property("General cell display: grammar, the 11-character bound and the sign law (GH-672)") {
+    val grammar = "-?[0-9]+(\\.[0-9]+)?(E[+-][0-9]{2,})?".r
+    forAll(genGeneralDisplay) { (n: BigDecimal) =>
+      val text = NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.General)
+      assert(grammar.matches(text), s"'$text' for $n")
+      val unsigned = text.stripPrefix("-")
+      val expDigits = unsigned.dropWhile(_ != 'E').drop(2).length
+      // "E+" and up to seven exponent digits leave room for a one-digit mantissa within 11
+      if expDigits <= 7 then assert(unsigned.length <= 11, s"'$text' (${unsigned.length}) for $n")
+      else assertEquals(unsigned.length, 1 + 2 + expDigits, s"'$text' for $n")
+      if n.signum == 0 then assertEquals(text, "0")
+      else
+        assertEquals(text.startsWith("-"), n.signum < 0, s"'$text' for $n")
+        assertEquals(
+          NumFmtFormatter.formatValue(CellValue.Number(-n), NumFmt.General),
+          if n.signum < 0 then unsigned else "-" + text,
+          s"$n"
+        )
+    }
+  }
+
+  property("General cell display: a plain rendering reads back within half a displayed unit") {
+    // |x| in [1E-4, 1E11): the text is x rounded to the decimals the integer digits leave
+    forAll(Gen.choose(-4, 10), Gen.choose(1L, 999999999999999L), Gen.oneOf(true, false)) {
+      (exp: Int, unscaled: Long, negative: Boolean) =>
+        val digits = unscaled.toString.length
+        val magnitude = BigDecimal(java.math.BigDecimal.valueOf(unscaled, digits - 1 - exp))
+        val n = if negative then -magnitude else magnitude
+        val text = NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.General)
+        if !text.contains('E') then
+          val decimals = if exp >= 0 then math.max(0, 9 - exp) else 9
+          val back = BigDecimal(text)
+          assert(
+            (back - n).abs <= BigDecimal(s"5E-${decimals + 1}"),
+            s"'$text' for $n"
+          )
+    }
   }
 
   test("formatValue - Text value") {

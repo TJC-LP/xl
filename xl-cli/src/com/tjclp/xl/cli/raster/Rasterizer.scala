@@ -140,7 +140,7 @@ object RasterError:
   case class ConversionFailed(rasterizer: String, stderr: String, exitCode: Int)
       extends RasterError:
     def message: String =
-      s"$rasterizer conversion failed (exit $exitCode): $stderr"
+      s"$rasterizer conversion failed (exit $exitCode): ${stderr.stripTrailing}"
 
   /**
    * A backend that takes file paths only (resvg) could not create its scratch SVG: in `spillDir`

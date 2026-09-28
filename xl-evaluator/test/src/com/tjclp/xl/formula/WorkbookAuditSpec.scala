@@ -107,12 +107,31 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(off.iterativeCycles, Vector.empty)
   }
 
-  test("an unparseable formula carries the parser's diagnostic with context") {
+  test("an unparseable formula carries the parser's diagnostic on one line, as lint does (#676)") {
     val audit = WorkbookAudit.of(dirty)
     val message = audit.unparseable.headOption.map(_._2).getOrElse(fail("no unparseable entry"))
-    assert(message.startsWith("UNSUPPORTED(1)"), message)
-    assert(message.contains("UNSUPPORTED"), message)
-    assert(message.linesIterator.size >= 2, s"expected the formula and a diagnostic line: $message")
+    assertEquals(message, "UNSUPPORTED(1): Unknown function 'UNSUPPORTED' at position 0")
+  }
+
+  test("#676: a long unparseable formula is quoted to 80 characters, never echoed whole") {
+    val long = "NOSUCHFN(" + (1 to 60).map(i => s"A$i").mkString("+") + ")"
+    val book = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula(long, 0))))
+    val message =
+      WorkbookAudit.of(book).unparseable.headOption.map(_._2).getOrElse(fail("no entry"))
+    assert(message.startsWith(long.take(80) + "…: "), message)
+    assert(!message.contains(long), message)
+    assertEquals(message.linesIterator.size, 1, message)
+  }
+
+  test("#676: a formula with line breaks or tabs is still ONE line in the audit") {
+    // Alt+Enter in Excel's formula bar is stored as a newline inside <f>
+    val broken = "SUM(A1,\nNOSUCHFN(1)\r\n)\t+"
+    val book = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula(broken, 0))))
+    val message =
+      WorkbookAudit.of(book).unparseable.headOption.map(_._2).getOrElse(fail("no entry"))
+    assertEquals(message.linesIterator.size, 1, message)
+    assert(!message.exists(c => c == '\n' || c == '\r' || c == '\t'), message)
+    assert(message.startsWith("SUM(A1, NOSUCHFN(1) ) +: "), message)
   }
 
   test("a clean book is clean: every bucket empty, calcPr None") {
@@ -172,6 +191,227 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(audit.uncachedFormulas, Vector(q("DT", "F2")))
     assertEquals(audit.unparseable, Vector.empty)
     assertEquals(audit.unresolvedReaders, Vector.empty)
+  }
+
+  // ===== #678: data-table interiors stale against their corner formula =====
+
+  private def columnTable(interior: String, input: String): FormulaKind.DataTable =
+    FormulaKind.DataTable(
+      CellRange.parse(interior).fold(err => fail(err), identity),
+      dt2D = false,
+      dtr = false,
+      r1 = Some(a1(input)),
+      r2 = None
+    )
+
+  /**
+   * A2 is the input, F9 the corner (`A2*factor`), E10:E12 the axis 1..3, F10:F12 the interior with
+   * caches `cached(i)` — a record at F10, plain values below, as Excel writes a column table.
+   */
+  private def tableBook(factor: Int, cached: Int => Int): Workbook =
+    val kind = columnTable("F10:F12", "A2")
+    Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          "A2" -> num(4),
+          "F9" -> cachedFormula(s"A2*$factor", 4 * factor),
+          "E10" -> num(1),
+          "E11" -> num(2),
+          "E12" -> num(3),
+          "F10" -> CellValue.dataTable(kind, Some(num(cached(1)))),
+          "F11" -> num(cached(2)),
+          "F12" -> num(cached(3))
+        )
+      )
+    )
+
+  test("#678: interiors that match the corner re-evaluated at their inputs carry no note") {
+    val audit = WorkbookAudit.of(tableBook(2, i => i * 2))
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
+  test("#678: an interior left behind by a model change is a data-table-stale NOTE") {
+    // the corner now triples, but the interior still holds the ×2 results — what
+    // `xl put` leaves on an iterative book (parity with Excel under autoNoTable)
+    val audit = WorkbookAudit.of(tableBook(3, i => i * 2))
+    val stale = audit.staleDataTables
+    assertEquals(stale.map(t => (t.sheet.value, t.ref.toA1)), Vector(("S", "F10:F12")))
+    val table = stale.head
+    assertEquals(table.sampled.map(_.toA1), Vector("F10", "F11", "F12"))
+    assertEquals(
+      table.stale.map((r, c, n) => (r.toA1, c, n)),
+      Vector(
+        ("F10", num(2), num(3)),
+        ("F11", num(4), num(6)),
+        ("F12", num(6), num(9))
+      )
+    )
+    assert(table.render.contains("xl recalc --tables"), table.render)
+    assert(table.render.contains("3 of 3 sampled"), table.render)
+    // a note, never a finding: the file is valid
+    assert(audit.isClean, s"stale interiors must not make the book dirty: $audit")
+    assertEquals(audit.findings, 0)
+    assertEquals(audit.restrictTo(SheetName.unsafe("S")).staleDataTables, stale)
+    assertEquals(audit.restrictTo(SheetName.unsafe("Other")).staleDataTables, Vector.empty)
+  }
+
+  test("#678: the check is SAMPLED — a bounded, named set of interior cells per table") {
+    val kind = columnTable("F10:F1009", "A2")
+    val axis = (0 until 1000).map(i => s"E${10 + i}" -> num(i))
+    val interior = (1 until 1000).map(i => s"F${10 + i}" -> num(-1))
+    val book = Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          (Vector("A2" -> num(4), "F9" -> cachedFormula("A2*2", 8)) ++ axis ++ interior ++
+            Vector("F10" -> CellValue.dataTable(kind, Some(num(-1)))))*
+        )
+      )
+    )
+    val table = WorkbookAudit.of(book).staleDataTables.headOption.getOrElse(fail("no note"))
+    assertEquals(table.sampled.size, WorkbookAudit.DataTableSampleSize)
+    assertEquals(table.sampled.headOption.map(_.toA1), Some("F10"))
+    assertEquals(table.sampled.lastOption.map(_.toA1), Some("F1009"))
+    assertEquals(table.sampled.distinct, table.sampled)
+    assertEquals(table.stale.size, table.sampled.size)
+  }
+
+  test("#678: floating-point noise between Excel's cache and xl's re-evaluation is not stale") {
+    val kind = columnTable("F10:F10", "A2")
+    val book = Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          "A2" -> num(0),
+          "F9" -> cachedFormula("A2+0.2", 0),
+          "E10" -> CellValue.Number(BigDecimal("0.1")),
+          "F10" -> CellValue.dataTable(
+            kind,
+            Some(CellValue.Number(BigDecimal("0.30000000000000004")))
+          )
+        )
+      )
+    )
+    assertEquals(WorkbookAudit.of(book).staleDataTables, Vector.empty)
+  }
+
+  test("#678: Excel-authored data tables (all three shapes) re-evaluate to their own caches") {
+    val wb = com.tjclp.xl.ooxml.XlsxReader
+      .read(com.tjclp.xl.ooxml.TestFixtures.copyToTemp("datatable-excel.xlsx"))
+      .fold(err => fail(err.message), identity)
+    assertEquals(WorkbookAudit.of(wb).staleDataTables, Vector.empty)
+  }
+
+  /** [[tableBook]] with the corner (and optionally a cone cell B2) given verbatim. */
+  private def volatileTableBook(
+    corner: String,
+    cone: Option[String],
+    input: CellValue = num(4)
+  ): Workbook =
+    val kind = columnTable("F10:F12", "A2")
+    Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          (Vector(
+            "A2" -> input,
+            "F9" -> cachedFormula(corner, 400),
+            "E10" -> num(1),
+            "E11" -> num(2),
+            "E12" -> num(3),
+            "F10" -> CellValue.dataTable(kind, Some(num(-1))),
+            "F11" -> num(-1),
+            "F12" -> num(-1)
+          ) ++ cone.map(f => "B2" -> cachedFormula(f, 4)))*
+        )
+      )
+    )
+
+  test("#678: a table whose corner is volatile is never stale — the note stays deterministic") {
+    val seeded = volatileTableBook("A2*100+RAND()", None)
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    // the volatile bucket still names the corner, so the table is not silently trusted
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+  }
+
+  test("#678: a volatile call anywhere in the corner's cone exempts the table too") {
+    val book = volatileTableBook("B2*100", Some("A2+RAND()"))
+    val seeded = book.seedDataTables().fold(err => fail(err.message), identity)
+    assertEquals(WorkbookAudit.of(seeded).staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), WorkbookAudit.of(seeded))
+    // the same shape without the volatile call is still checked (the caches are -1: stale)
+    assertEquals(
+      WorkbookAudit.of(volatileTableBook("B2*100", Some("A2+1"))).staleDataTables.map(_.ref.toA1),
+      Vector("F10:F12")
+    )
+  }
+
+  test("#678: a corner reaching RAND through a defined name is volatile, and never stale") {
+    // the Monte Carlo shape: the draw lives in a name, not in the corner's text
+    val seeded = volatileTableBook("A2*100+Rnd", None)
+      .withDefinedName("Rnd", "RAND()")
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    // the volatile bucket names the corner: volatility follows the name
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+  }
+
+  test("#678: volatility follows a chain of defined names, and a cyclic chain terminates") {
+    val seeded = volatileTableBook("A2*100+Shock", None)
+      .withDefinedName("Shock", "(Draw-0.5)*Vol")
+      .withDefinedName("Draw", "RAND()")
+      .withDefinedName("Vol", "0.2")
+      .seedDataTables()
+      .fold(err => fail(err.message), identity)
+    val first = WorkbookAudit.of(seeded)
+    assertEquals(first.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(seeded), first)
+    assertEquals(first.volatile, Vector(q("S", "F9")))
+
+    // a name chain with no volatile call is NOT volatile: the stale table is still reported
+    val steady = volatileTableBook("A2*100+Rate", None)
+      .withDefinedName("Rate", "Base")
+      .withDefinedName("Base", "0.05")
+    val audit = WorkbookAudit.of(steady)
+    assertEquals(audit.volatile, Vector.empty)
+    assertEquals(audit.staleDataTables.map(_.ref.toA1), Vector("F10:F12"))
+
+    // cyclic definitions: the walk is guarded, and a cycle with no volatile call is not volatile
+    val loop = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula("Loop1+1", 0))))
+      .withDefinedName("Loop1", "Loop2")
+      .withDefinedName("Loop2", "Loop1")
+    assertEquals(WorkbookAudit.of(loop).volatile, Vector.empty)
+    val loopRand = Workbook(Vector(sheetWith("S", "A1" -> cachedFormula("Loop1+1", 0))))
+      .withDefinedName("Loop1", "Loop2")
+      .withDefinedName("Loop2", "Loop1+RAND()")
+    assertEquals(WorkbookAudit.of(loopRand).volatile, Vector(q("S", "A1")))
+
+    // a name body this evaluator cannot parse (NORM.INV is not implemented) hides its calls, but
+    // the corner is an unresolved reader (a finding) and cannot be re-evaluated, so the note is
+    // still deterministic: nothing is stale
+    val opaque = volatileTableBook("A2*100+Shock", None)
+      .withDefinedName("Shock", "NORM.INV(RAND(),0,1)")
+    val opaqueAudit = WorkbookAudit.of(opaque)
+    assertEquals(opaqueAudit.unresolvedReaders, Vector(q("S", "F9")))
+    assertEquals(opaqueAudit.staleDataTables, Vector.empty)
+    assertEquals(WorkbookAudit.of(opaque), opaqueAudit)
+  }
+
+  test("#678: a volatile INPUT cell does not exempt the table — substitution replaces it") {
+    // what-if evaluation overwrites A2 with each row input, so RAND() in A2 is never drawn
+    val book = volatileTableBook("A2*100", None, input = cachedFormula("RAND()", 0))
+    val audit = WorkbookAudit.of(book)
+    assertEquals(audit.volatile, Vector(q("S", "A2")))
+    assertEquals(audit.staleDataTables.map(_.ref.toA1), Vector("F10:F12"))
+    assertEquals(WorkbookAudit.of(book), audit)
   }
 
   test("buckets are in workbook order, then row, then column") {

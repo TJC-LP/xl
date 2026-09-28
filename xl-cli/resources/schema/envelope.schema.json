@@ -26,7 +26,7 @@
     },
     "data": {
       "type": ["object", "null"],
-      "description": "The verb's payload: always a JSON object, null on failure. Prose verbs yield {\"text\": string, \"saved\": string|null, \"written\": boolean}; `--format json` verbs and typed verbs yield their JSON object directly; a listing verb keys its array by the noun (`sheets` -> {\"sheets\": [...]}, `names` -> {\"names\": [...]}, `functions` -> {\"functions\": [...]}), so `data` is never a bare array."
+      "description": "The verb's payload: always a JSON object, null on failure. Prose verbs yield {\"text\": string, \"saved\": string|null, \"written\": boolean}, and `recalc` adds \"errorValuedCycles\": an array of the converged cycles that settled on Excel error values, each an array of qualified refs; `--format json` verbs and typed verbs yield their JSON object directly; a listing verb keys its array by the noun (`sheets` -> {\"sheets\": [...]}, `names` -> {\"names\": [...]}, `functions` -> {\"functions\": [...]}), so `data` is never a bare array."
     },
     "warnings": {
       "type": "array",

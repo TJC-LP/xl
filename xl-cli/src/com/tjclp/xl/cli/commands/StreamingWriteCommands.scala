@@ -10,7 +10,7 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, ParseError}
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
@@ -197,21 +197,15 @@ object StreamingWriteCommands:
    * GH-663: the `putf` verb's parser gate under `--stream` — the canonical (bare) formula text when
    * it parses, else the same `FORMULA_ERROR` (exit 3, caret diagnostic, `xl eval` hint) the
    * in-memory verb raises, so a `<f>` the parser rejects is never patched into the sheet (PR #679
-   * review: this arm was the one xl writer without the gate).
+   * review: this arm was the one xl writer without the gate). `prefix` heads the diagnostic as the
+   * in-memory verb's does: `Formula for B3: ` when several formulas go to a range.
    */
-  private def parsedFormulaText(text: String): IO[String] =
+  private def parsedFormulaText(text: String, prefix: String = ""): IO[String] =
     val formula = CellValue.canonicalFormulaText(text)
     val fullFormula = s"=$formula"
     FormulaParser.parse(fullFormula) match
       case Right(_) => IO.pure(formula)
-      case Left(e) =>
-        IO.raiseError(
-          CliException(
-            CliError
-              .fromXLError(ParseError.toXLError(e, fullFormula), None)
-              .copy(message = ParseError.formatWithContext(e, fullFormula))
-          )
-        )
+      case Left(e) => IO.raiseError(WriteCommands.formulaError(e, fullFormula, prefix))
 
   /**
    * Streaming putf: write formulas to cells with O(1) memory.
@@ -270,12 +264,14 @@ object StreamingWriteCommands:
 
         case (Right(range), multipleFormulas) if multipleFormulas.length == range.cellCount.toInt =>
           // Batch formulas
-          multipleFormulas.traverse(parsedFormulaText).map { texts =>
-            range.cellsRowMajor
-              .zip(texts.iterator)
-              .map((ref, formula) => ref -> CellValue.Formula(formula, None))
-              .toMap
-          }
+          range.cellsRowMajor
+            .zip(multipleFormulas.iterator)
+            .toList
+            .traverse { (ref, text) =>
+              parsedFormulaText(text, s"Formula for ${ref.toA1}: ")
+                .map(formula => ref -> CellValue.Formula(formula, None))
+            }
+            .map(_.toMap)
 
         case (Right(range), multipleFormulas) =>
           IO.raiseError(
@@ -762,16 +758,10 @@ object StreamingWriteCommands:
             val range = CellRange.parse(rangeStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            val formulaText = CellValue.canonicalFormulaText(formula)
-            val fullFormula = s"=$formulaText"
-
-            // Parse formula for shifting
-            val parsedExpr = FormulaParser.parse(fullFormula) match
+            // The TExpr the shift needs (BatchParser.dragExpression: total, typed FORMULA_ERROR)
+            val parsedExpr = BatchParser.dragExpression(formula) match
               case Right(expr) => expr
-              case Left(e) =>
-                throw new Exception(
-                  s"Invalid formula '$fullFormula': ${ParseError.formatWithContext(e, fullFormula)}"
-                )
+              case Left(err) => throw CliException(CliError.fromXLError(err, None))
 
             // Apply formula with shifting; GH-356: the explicit format lands on each cell's own xf
             val startCol = Column.index0(fromARef.col)

@@ -251,39 +251,45 @@ object Cli:
     // are tried in order and the first clean help wins; a positional workbook path gets the -f hint
     def parse(verb: Option[String]): IO[ExitCode] =
       val attempt = (args: List[String]) => command(io).parse(args, sys.env)
-      val parsed =
-        if argv.takeWhile(_ != "--").contains("--help") then
-          val attempts = Argv.helpCandidates(argv).map(attempt)
+      def parseLine(line: List[String]) =
+        if line.takeWhile(_ != "--").contains("--help") then
+          val attempts = Argv.helpCandidates(line).map(attempt)
           attempts
             .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
-            .getOrElse(attempts.headOption.getOrElse(attempt(argv)))
-        else attempt(argv)
-      IO(parsed)
+            .getOrElse(attempts.headOption.getOrElse(attempt(line)))
+        else attempt(line)
+      // decline's first error, with the -f hint when a workbook path sat in a positional slot
+      def declineUsage(line: List[String], errors: List[String]): CliError =
+        val hint = Argv.misplacedFile(line, errors) match
+          case Some(path) =>
+            s"did you mean -f $path? xl takes the file as -f/--file; " +
+              "the positional argument is the range or verb argument"
+          case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
+        CliError.usage(
+          errors.headOption.fold("invalid command line") { first =>
+            if verb.isEmpty then compact(first) else first
+          },
+          Some(hint)
+        )
+      IO(parseLine(argv))
         .flatMap {
           case Right(handler) => handler
           case Left(help) if help.errors.nonEmpty =>
-            // GH-667: an output flag on a verb that never writes is the one mistake decline
-            // cannot name (its first error is the verb, not the flag — Argv.outputOnReadOnlyVerb);
-            // everything else is decline's first error, with the -f hint when a workbook path sat
-            // in a positional slot
-            val error = Argv.outputOnReadOnlyVerb(argv) match
-              case Some((word, flag)) =>
-                CliError.usage(
-                  s"$word is read-only and does not take $flag",
-                  Some(s"drop $flag; $word writes no file. Run `xl $word --help` for the usage")
-                )
-              case None =>
-                val hint = Argv.misplacedFile(argv, help.errors) match
-                  case Some(path) =>
-                    s"did you mean -f $path? xl takes the file as -f/--file; " +
-                      "the positional argument is the range or verb argument"
-                  case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
-                CliError.usage(
-                  help.errors.headOption.fold("invalid command line") { first =>
-                    if verb.isEmpty then compact(first) else first
-                  },
-                  Some(hint)
-                )
+            // GH-667/GH-676: a global the verb cannot take is the one mistake decline cannot name
+            // (its first error is the verb, not the flag — Argv.misuses). It is reported when the
+            // line without it parses; otherwise another mistake rides along (`view --bogus -o x`)
+            // and decline's error for the repaired line names that one first (GH-681)
+            val misuses = Argv.misuses(argv)
+            val error = (misuses.headOption, misuses.lastOption) match
+              case (Some(first), Some(last)) =>
+                val errors = (last.repaired :: last.fallback.toList).map { line =>
+                  parseLine(line).fold(_.errors, _ => Nil)
+                }
+                errors match
+                  case repairedErrors :: _ if errors.forall(_.nonEmpty) =>
+                    declineUsage(last.repaired, repairedErrors)
+                  case _ => CliError.usage(first.message, Some(first.hint))
+              case _ => declineUsage(argv, help.errors)
             usageFailure(verb.getOrElse(""), error, mode, io)
           case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
         }

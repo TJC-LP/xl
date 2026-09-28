@@ -631,6 +631,18 @@ class ScriptingPreludeTest extends FunSuite:
       SccReport(Vector.empty, converged = false, rounds = 2, maxDelta = None, stalled = true)
     assert(stalled.render.contains("stalled after 2 round(s)"))
 
+  test("#678: SccReport.errorValued, errorValuedCycles and StaleDataTable resolve"):
+    // a cycle converging ONTO #DIV/0! stays certified; the flag and the summary say so
+    val wb = Workbook(Sheet("S").put(ref"A1", fx"=1/B1").put(ref"B1", fx"=1/A1"))
+    val result: RecalcResult = wb.recalculate(IterativeCalc(50, BigDecimal("1E-6")))
+    assert(result.certified)
+    val errorValued: Vector[SccReport] = result.errorValuedCycles
+    assertEquals(errorValued.map(_.errorValued), Vector(true))
+    assert(result.summary.contains("1 cycle settled on error values"), result.summary)
+    // the audit's stale-interior note is a typed bucket, empty on a book without data tables
+    val stale: Vector[StaleDataTable] = wb.audit.staleDataTables
+    assertEquals(stale, Vector.empty)
+
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
   ):
@@ -918,3 +930,66 @@ class ScriptingPreludeTest extends FunSuite:
     assert(!reopened.getColumnProperties(Column.from0(4)).hidden)
     assert(!reopened.getColumnProperties(Column.from0(6)).collapsed)
     assertEquals(reopened.expandRows(rows).expandCols(cols), reopened)
+
+  /**
+   * A minimal package whose one `<f>` is `text` — the GH-663 shape (`SUM(A1:A2` opens with Excel's
+   * repair prompt). Written by hand: xl's own writer never produces it.
+   */
+  private def formulaBook(text: String): java.nio.file.Path =
+    val main = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+    val rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+    val pkg = "http://schemas.openxmlformats.org/package/2006"
+    val parts = Vector(
+      "[Content_Types].xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?><Types xmlns="$pkg/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>""",
+      "_rels/.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="$pkg/relationships"><Relationship Id="rId1" Type="$rel/officeDocument" Target="xl/workbook.xml"/></Relationships>""",
+      "xl/workbook.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?><workbook xmlns="$main" xmlns:r="$rel"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>""",
+      "xl/_rels/workbook.xml.rels" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="$pkg/relationships"><Relationship Id="rId1" Type="$rel/worksheet" Target="worksheets/sheet1.xml"/></Relationships>""",
+      "xl/worksheets/sheet1.xml" ->
+        s"""<?xml version="1.0" encoding="UTF-8"?><worksheet xmlns="$main"><sheetData><row r="1"><c r="A1"><v>1</v></c><c r="A2"><f>$text</f><v>1</v></c></row></sheetData></worksheet>"""
+    )
+    val path = tempDir("xl-prelude-lint").resolve("formula.xlsx")
+    val zip = java.util.zip.ZipOutputStream(java.nio.file.Files.newOutputStream(path))
+    try
+      parts.foreach { (name, body) =>
+        zip.putNextEntry(java.util.zip.ZipEntry(name))
+        zip.write(body.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+        zip.closeEntry()
+      }
+    finally zip.close()
+    path
+
+  test("GH-674: Excel.lint runs the formula-unparseable rule the CLI runs"):
+    val broken = formulaBook("SUM(A1:A2")
+    def unparseable(findings: Vector[Finding]): Vector[Finding] =
+      findings.filter(_.category == LintCategory.FormulaUnparseable)
+    val findings: Vector[Finding] = Excel.lint(broken.toString).unsafe
+    val flagged = unparseable(findings)
+    assertEquals(flagged.size, 1, findings.mkString("\n"))
+    assertEquals(flagged.map(_.severity), Vector(LintSeverity.Repair))
+    assert(flagged.exists(_.locator.contains("A2")), flagged.mkString("\n"))
+    // the Path overload and the streaming lint agree
+    assertEquals(unparseable(Excel.lint(broken).unsafe), flagged)
+    assertEquals(unparseable(Excel.lintStream(broken.toString).unsafe), flagged)
+    // a complete formula is not a finding; neither is a function the registry lacks (#NAME?)
+    assertEquals(unparseable(Excel.lint(formulaBook("SUM(A1:A1)").toString).unsafe), Vector.empty)
+    assertEquals(unparseable(Excel.lint(formulaBook("FOOBAR(1)").toString).unsafe), Vector.empty)
+    // a book xl writes lints clean end to end
+    val clean = tempDir("xl-prelude-lint-clean").resolve("clean.xlsx")
+    Excel.write(Workbook(Sheet("S").put(ref"A1", 1).put(ref"A2", fx"=A1*2")), clean.toString)
+    assertEquals(Excel.lint(clean.toString).unsafe, Vector.empty)
+
+  test("GH-674: wb.describe lists the print names a read lifts into PageSetup"):
+    val authored = Workbook(Sheet("Data").put(ref"A1", 1))
+      .withDefinedName("TotalRev", "Data!$B$4")
+      .withDefinedName("_xlnm.Print_Area", "Data!$A$1:$B$4", SheetName.unsafe("Data"))
+      .unsafe
+    val path = tempDir("xl-prelude-describe").resolve("names.xlsx")
+    Excel.write(authored, path.toString)
+    val loaded = Excel.read(path.toString)
+    val names: Vector[DefinedName] = loaded.describe.definedNames
+    assertEquals(names.map(_.name), Vector("TotalRev", DefinedName.PrintArea))
+    assertEquals(loaded.effectiveDefinedNames, names)

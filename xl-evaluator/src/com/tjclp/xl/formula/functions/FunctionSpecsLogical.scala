@@ -152,6 +152,17 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
       foldLogical("OR", args, ctx, seed = false, _ || _)
     }
 
+  /**
+   * GH-669: `TRUE()` and `FALSE()`, Excel's zero-argument spellings of the logical constants
+   * (LibreOffice writes them this way). A call, not the literal, so the text prints back as
+   * written; the bare word `TRUE` stays the literal.
+   */
+  val trueFn: FunctionSpec[Boolean] { type Args = NoArgs } =
+    FunctionSpec.simple[Boolean, NoArgs]("TRUE", Arity.none)((_, _) => Right(true))
+
+  val falseFn: FunctionSpec[Boolean] { type Args = NoArgs } =
+    FunctionSpec.simple[Boolean, NoArgs]("FALSE", Arity.none)((_, _) => Right(false))
+
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   val not: FunctionSpec[Boolean] { type Args = UnaryBoolean } =
     FunctionSpec.simple[Boolean, UnaryBoolean]("NOT", Arity.one) { (expr, ctx) =>

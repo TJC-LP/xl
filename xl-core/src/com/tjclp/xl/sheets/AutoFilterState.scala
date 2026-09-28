@@ -17,7 +17,9 @@ import com.tjclp.xl.addressing.CellRange
  *
  * Documented limitations: interior column edits misalign `filterColumn@colId` (colId is
  * range-relative, so row edits and left-of-range column edits are safe — the dominant field cases);
- * `sortState` and `_xlnm._FilterDatabase` ride stale (Excel-tolerated).
+ * `sortState` rides stale (Excel-tolerated). The sheet's `_xlnm._FilterDatabase` name is a workbook
+ * name: structural edits shift it like any name, and the CLI's `autofilter` verb and batch op
+ * rewrite it to the new range as Excel does (#460).
  */
 enum AutoFilterState derives CanEqual:
   /** The filter covers `ref`; structural edits shift it like every other sqref-shaped range. */

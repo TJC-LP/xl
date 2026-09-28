@@ -43,7 +43,8 @@ class CellRecordSpec extends FunSuite:
     )
     assertEquals(
       record(CellValue.Number(BigDecimal("12345678901234567"))).toJson(legacyKeys = true),
-      """{"ref": "A1", "type": "number", "value": 12345678901234567, "formatted": "12345678901234567"}"""
+      // value keeps every digit; formatted is what the General cell shows (11 characters, #672)
+      """{"ref": "A1", "type": "number", "value": 12345678901234567, "formatted": "1.23457E+16"}"""
     )
     assertEquals(
       record(CellValue.Number(BigDecimal("12.5")), NumFmt.Decimal).toJson(legacyKeys = true),

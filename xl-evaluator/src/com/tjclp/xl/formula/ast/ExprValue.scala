@@ -4,7 +4,7 @@ import com.tjclp.xl.formula.functions.FunctionSpecs
 import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.functions.EvalContext
 
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.{LocalDate, LocalDateTime}
 
 sealed trait ExprValue derives CanEqual
@@ -25,7 +25,9 @@ object ExprValue:
     case number: BigDecimal => Number(number)
     case number: Int => Number(BigDecimal(number))
     case number: Long => Number(BigDecimal(number))
-    case number: Double => Number(BigDecimal(number))
+    case number: Double if number.isFinite => Number(BigDecimal(number))
+    // #681: NaN and ±Infinity have no Excel value (BigDecimal(Double) throws on them) — #NUM!
+    case _: Double => Cell(CellValue.Error(CellError.Num))
     case bool: Boolean => Bool(bool)
     case date: LocalDate => Date(date)
     case dateTime: LocalDateTime => DateTime(dateTime)

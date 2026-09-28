@@ -323,9 +323,15 @@ trait FunctionSpecsText extends FunctionSpecsBase:
           val cv = exprValueForTextFn(exprValue)
           // GH-665: TEXT(x,"General") is the width-independent text conversion (15 significant
           // digits, the 20-character plain/E switch) — the rule `&` applies — not the
-          // column-width cell-display General that formatValue renders for a General numFmt
+          // column-width cell-display General that formatValue renders for a General numFmt.
+          // #672: the General keyword inside a custom code takes the same text rule.
           if NumFmtFormatter.isGeneralCode(formatStr) then NumFmtFormatter.generalText(cv)
-          else NumFmtFormatter.formatValue(cv, NumFmt.Custom(formatStr))
+          else
+            NumFmtFormatter.formatValue(
+              cv,
+              NumFmt.Custom(formatStr),
+              NumFmtFormatter.GeneralRule.Text
+            )
     }
 
   /**
