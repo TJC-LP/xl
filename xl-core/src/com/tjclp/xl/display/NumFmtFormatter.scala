@@ -308,7 +308,8 @@ object NumFmtFormatter:
         // Route through section selection on the serial (GH-283): ';;;' hides dates,
         // numeric sections render the serial, conditional codes pick sections by serial
         FormatCodeParser.parse(code) match
-          case Right(fmt) => formatCustom(dateTimeSerial(dt), Some(dt), fmt, rule)
+          case Right(fmt) =>
+            formatCustom(dateTimeSerial(dt), Some(FormatCodeParser.ExcelCalendar.of(dt)), fmt, rule)
           case Left(_) => dt.toString // Fallback for parse errors
 
       case other =>
@@ -331,7 +332,7 @@ object NumFmtFormatter:
    */
   private def formatCustom(
     n: BigDecimal,
-    dt: => Option[LocalDateTime],
+    dt: => Option[FormatCodeParser.ExcelCalendar],
     fmt: FormatCodeParser.FormatCode,
     rule: GeneralRule
   ): String =
@@ -350,37 +351,38 @@ object NumFmtFormatter:
    * Calendar view of a date serial, or None when the serial lies outside Excel's displayable range
    * (negative or on/after 10000-01-01) — Excel fills such cells with `#` (GH-283).
    */
-  private def serialToDateTime(serial: BigDecimal): Option[LocalDateTime] =
+  private def serialToDateTime(serial: BigDecimal): Option[FormatCodeParser.ExcelCalendar] =
     if serial < 0 || serial >= maxDateSerialExclusive then None
-    else Some(excelSerialToDateTime(serial))
+    else Some(excelSerialToCalendar(serial))
 
   /** Excel serial number (days since 1899-12-30 + day fraction) of a LocalDateTime. */
   private def dateTimeSerial(dt: LocalDateTime): BigDecimal =
     BigDecimal(CellValue.dateTimeToExcelSerial(dt))
 
+  /** Excel's phantom 1900-02-29 in the 1900 date system. */
+  private val PhantomLeapDaySerial = 60L
+
   /**
-   * Convert Excel date serial number to LocalDateTime.
+   * The calendar Excel displays for a date serial in the 1900 date system (#688): the day comes
+   * from [[CellValue.excelSerialToDateTime]], which carries the leap-year offset for serials below
+   * 60, so 1 is 1900-01-01 and 59 is 1900-02-28. Serial 0 shows as `1/0/1900` and serial 60 as
+   * `2/29/1900`, the day Excel counts and LibreOffice does not (LibreOffice shows 2/28/1900).
    *
    * @param serial
-   *   Excel date serial number (days since 1899-12-30)
-   * @return
-   *   LocalDateTime
+   *   Excel date serial number, in [0, 2958466)
    */
-  private def excelSerialToDateTime(serial: BigDecimal): LocalDateTime =
-    import java.time.LocalDate
-    // Excel serial date: 1 = 1900-01-01 (with 1900 leap year bug)
-    val baseDate = LocalDate.of(1899, 12, 30) // Adjusted for Excel's bug
+  private def excelSerialToCalendar(serial: BigDecimal): FormatCodeParser.ExcelCalendar =
     val days = serial.toLong
-    val date = baseDate.plusDays(days)
-
-    // Handle time component if present
+    // Time of day from the fraction
     val timeFraction = (serial % 1).toDouble
-    if timeFraction > 0 then
-      val hours = (timeFraction * 24).toInt
-      val minutes = ((timeFraction * 24 * 60) % 60).toInt
-      val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
-      date.atTime(hours, minutes, seconds)
-    else date.atStartOfDay()
+    val hours = (timeFraction * 24).toInt
+    val minutes = ((timeFraction * 24 * 60) % 60).toInt
+    val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
+    if days == PhantomLeapDaySerial then
+      FormatCodeParser.ExcelCalendar.phantomLeapDay(hours, minutes, seconds)
+    else
+      val date = CellValue.excelSerialToDateTime(days.toDouble).toLocalDate
+      FormatCodeParser.ExcelCalendar.of(date.atTime(hours, minutes, seconds))
 
   /**
    * Format error values in Excel style.
