@@ -296,7 +296,9 @@ object NumFmtFormatter:
         // The calendar variants render straight off the LocalDateTime through their parsed
         // canonical codes (GH-410) — no serial round-trip, which truncates seconds. Bare 'h'
         // is the 24-hour clock (no AM/PM in these codes, ECMA-376 §18.8.31).
+        // A date outside Excel's displayable range fills with `#`, as its serial does (#688).
         builtInFormats.get(numFmt) match
+          case Some(_) if !isDisplayableSerial(dateTimeSerial(dt)) => "######"
           case Some(fmt) => FormatCodeParser.applyDateFormat(dt, fmt)
           case None => dt.toString // unreachable: the map covers the three variants
 
@@ -309,7 +311,10 @@ object NumFmtFormatter:
         // numeric sections render the serial, conditional codes pick sections by serial
         FormatCodeParser.parse(code) match
           case Right(fmt) =>
-            formatCustom(dateTimeSerial(dt), Some(FormatCodeParser.ExcelCalendar.of(dt)), fmt, rule)
+            val serial = dateTimeSerial(dt)
+            val calendar =
+              Option.when(isDisplayableSerial(serial))(FormatCodeParser.ExcelCalendar.of(dt))
+            formatCustom(serial, calendar, fmt, rule)
           case Left(_) => dt.toString // Fallback for parse errors
 
       case other =>
@@ -352,8 +357,11 @@ object NumFmtFormatter:
    * (negative or on/after 10000-01-01) — Excel fills such cells with `#` (GH-283).
    */
   private def serialToDateTime(serial: BigDecimal): Option[FormatCodeParser.ExcelCalendar] =
-    if serial < 0 || serial >= maxDateSerialExclusive then None
-    else Some(excelSerialToCalendar(serial))
+    Option.when(isDisplayableSerial(serial))(excelSerialToCalendar(serial))
+
+  /** Whether a date serial lies in Excel's displayable range, [0, 10000-01-01). */
+  private def isDisplayableSerial(serial: BigDecimal): Boolean =
+    serial >= 0 && serial < maxDateSerialExclusive
 
   /** Excel serial number (days since 1899-12-30 + day fraction) of a LocalDateTime. */
   private def dateTimeSerial(dt: LocalDateTime): BigDecimal =

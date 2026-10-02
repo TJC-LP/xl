@@ -628,6 +628,18 @@ class FormatCodeParserSpec extends FunSuite:
     )
   }
 
+  test("#688: a DateTime outside Excel's date range fills with # like its serial") {
+    import java.time.LocalDateTime
+    val early = LocalDateTime.of(1899, 12, 30, 0, 0) // serial -1
+    val late = LocalDateTime.of(10000, 1, 1, 0, 0) // serial 2958466
+    for
+      dt <- List(early, late)
+      fmt <- List(NumFmt.Date, NumFmt.DateTime, NumFmt.Time, NumFmt.Custom("m/d/yyyy"))
+    do assertEquals(NumFmtFormatter.formatDateTime(dt, fmt), "######", s"$dt under $fmt")
+    // numeric codes still render the serial itself
+    assertEquals(NumFmtFormatter.formatDateTime(early, NumFmt.General), "-1")
+  }
+
   test("#688: every serial 0-1000 displays the date its date-to-serial inverse names") {
     import com.tjclp.xl.cells.CellValue
     (0 to 1000).filterNot(_ == 60).foreach { serial =>

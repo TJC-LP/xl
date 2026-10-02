@@ -1099,7 +1099,7 @@ object FormatCodeParser:
    * @param weekday
    *   ISO day of week, 1 = Monday to 7 = Sunday
    */
-  final case class ExcelCalendar(
+  private[xl] final case class ExcelCalendar(
     year: Int,
     month: Int,
     day: Int,
@@ -1109,7 +1109,7 @@ object FormatCodeParser:
     second: Int
   ) derives CanEqual
 
-  object ExcelCalendar:
+  private[xl] object ExcelCalendar:
     private val serialZero = java.time.LocalDate.of(1899, 12, 31)
     private val phantomLeapDayEnd = java.time.LocalDate.of(1900, 3, 1)
 
@@ -1140,7 +1140,7 @@ object FormatCodeParser:
       ExcelCalendar(1900, 2, 29, 3, hour, minute, second)
 
   /** [[applyDateFormat]] on Excel calendar fields (#688: the days a LocalDateTime cannot hold). */
-  def applyDateFormat(dt: ExcelCalendar, section: FormatSection): String =
+  private[xl] def applyDateFormat(dt: ExcelCalendar, section: FormatSection): String =
     val tokens = section.pattern.tokens
     val minutePositions = findMinutePositions(tokens)
     // ECMA-376 §18.8.31: the hour uses the 12-hour clock only when the code contains an

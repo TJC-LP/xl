@@ -277,7 +277,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render
   1/1/1900 and 2/28/1900, the phantom serial 60 renders `2/29/1900` as Excel does (LibreOffice
   shows 2/28/1900), serial 0 renders Excel's `1/0/1900`, and weekdays before 1900-03-01 follow
-  Excel's serial count (serial 1 is a Sunday). The date → serial direction was already right and
+  Excel's serial count (serial 1 is a Sunday), and a date-typed cell outside Excel's range (before
+  1899-12-31 or from year 10000) fills with `######` like its serial. The date → serial direction was already right and
   is now pinned over the whole range; `ImportParityLawSpec`'s date domain starts at 1900-01-01.
   Pre-existing; found by the Wave 31 library review.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
