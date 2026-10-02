@@ -1086,6 +1086,10 @@ object FormatCodeParser:
   /**
    * Apply a single format section to a LocalDateTime value (GH-283: the section is chosen by
    * [[selectSection]] on the date's serial number).
+   *
+   * The date renders in Excel's 1900 calendar (#688), as the cell would show it: 1899-12-31 is
+   * `1900-01-00` (serial 0), and dates before 1900-03-01 take Excel's weekday, one before the real
+   * one. Other dates render their own fields.
    */
   def applyDateFormat(dt: LocalDateTime, section: FormatSection): String =
     applyDateFormat(ExcelCalendar.of(dt), section)
@@ -1095,6 +1099,8 @@ object FormatCodeParser:
    * LocalDateTime can hold: serial 0 shows as `1/0/1900` and the phantom serial 60 as `2/29/1900`.
    * Its weekdays also run off the serial (serial 1 is a Sunday), so before 1900-03-01 every day
    * shows the weekday before the real one.
+   *
+   * 1900 date system only: the formatter has no 1904 context, and none of these quirks exist there.
    *
    * @param weekday
    *   ISO day of week, 1 = Monday to 7 = Sunday
@@ -1135,9 +1141,29 @@ object FormatCodeParser:
         val shifted = real.copy(weekday = if real.weekday == 1 then 7 else real.weekday - 1)
         if date == serialZero then shifted.copy(year = 1900, month = 1, day = 0) else shifted
 
-    /** Excel's phantom 1900-02-29 (serial 60), a Wednesday, at the given time of day. */
-    def phantomLeapDay(hour: Int, minute: Int, second: Int): ExcelCalendar =
-      ExcelCalendar(1900, 2, 29, 3, hour, minute, second)
+    /** Excel's phantom 1900-02-29 in the 1900 date system. */
+    private val PhantomLeapDaySerial = 60L
+
+    /**
+     * The calendar Excel displays for a date serial (#688): the day comes from
+     * [[com.tjclp.xl.cells.CellValue.excelSerialToDateTime]], which carries the leap-year offset
+     * for serials below 60, so 1 is 1900-01-01 and 59 is 1900-02-28. Serial 0 shows as `1/0/1900`
+     * and serial 60 as `2/29/1900` (a Wednesday), the day Excel counts and LibreOffice does not
+     * (LibreOffice shows 2/28/1900). The time of day is the fraction truncated to the second.
+     *
+     * @param serial
+     *   Excel date serial number, in Excel's displayable range [0, 2958466)
+     */
+    def fromSerial(serial: BigDecimal): ExcelCalendar =
+      val days = serial.toLong
+      val timeFraction = (serial % 1).toDouble
+      val hours = (timeFraction * 24).toInt
+      val minutes = ((timeFraction * 24 * 60) % 60).toInt
+      val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
+      if days == PhantomLeapDaySerial then ExcelCalendar(1900, 2, 29, 3, hours, minutes, seconds)
+      else
+        val date = com.tjclp.xl.cells.CellValue.excelSerialToDateTime(days.toDouble).toLocalDate
+        of(date.atTime(hours, minutes, seconds))
 
   /** [[applyDateFormat]] on Excel calendar fields (#688: the days a LocalDateTime cannot hold). */
   private[xl] def applyDateFormat(dt: ExcelCalendar, section: FormatSection): String =

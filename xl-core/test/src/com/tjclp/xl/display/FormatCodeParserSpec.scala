@@ -628,6 +628,29 @@ class FormatCodeParserSpec extends FunSuite:
     )
   }
 
+  test("#688: applyDateFormat passes dates outside Jan-Feb 1900 through unshifted") {
+    import java.time.LocalDateTime
+    val code = FormatCodeParser.parse("dddd yyyy-mm-dd").toOption.get
+    // 1899-12-30 (a Saturday) is just before serial 0; 1800-01-01 was a Wednesday
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1899, 12, 30, 0, 0), code),
+      "Saturday 1899-12-30"
+    )
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1800, 1, 1, 0, 0), code),
+      "Wednesday 1800-01-01"
+    )
+    // the window's edges: 1899-12-31 is Excel's 1900-01-00, 1900-03-01 is real again
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1899, 12, 31, 0, 0), code),
+      "Saturday 1900-01-00"
+    )
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1900, 3, 1, 0, 0), code),
+      "Thursday 1900-03-01"
+    )
+  }
+
   test("#688: a DateTime outside Excel's date range fills with # like its serial") {
     import java.time.LocalDateTime
     val early = LocalDateTime.of(1899, 12, 30, 0, 0) // serial -1

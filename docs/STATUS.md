@@ -262,12 +262,12 @@
 
 ### Test Coverage
 
-**8,508 test cases** (verified via `./mill __.test`, 2026-10-02, #688): zero failures; the existing style-performance comparison is skipped, and the LibreOffice-oracle tests skip where soffice is absent.
+**8,509 test cases** (verified via `./mill __.test`, 2026-10-02, #688): zero failures; the existing style-performance comparison is skipped, and the LibreOffice-oracle tests skip where soffice is absent.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 3263 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1835 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-core | 1836 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1313 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1691 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 195 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |

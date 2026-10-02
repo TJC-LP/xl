@@ -357,7 +357,7 @@ object NumFmtFormatter:
    * (negative or on/after 10000-01-01) — Excel fills such cells with `#` (GH-283).
    */
   private def serialToDateTime(serial: BigDecimal): Option[FormatCodeParser.ExcelCalendar] =
-    Option.when(isDisplayableSerial(serial))(excelSerialToCalendar(serial))
+    Option.when(isDisplayableSerial(serial))(FormatCodeParser.ExcelCalendar.fromSerial(serial))
 
   /** Whether a date serial lies in Excel's displayable range, [0, 10000-01-01). */
   private def isDisplayableSerial(serial: BigDecimal): Boolean =
@@ -366,31 +366,6 @@ object NumFmtFormatter:
   /** Excel serial number (days since 1899-12-30 + day fraction) of a LocalDateTime. */
   private def dateTimeSerial(dt: LocalDateTime): BigDecimal =
     BigDecimal(CellValue.dateTimeToExcelSerial(dt))
-
-  /** Excel's phantom 1900-02-29 in the 1900 date system. */
-  private val PhantomLeapDaySerial = 60L
-
-  /**
-   * The calendar Excel displays for a date serial in the 1900 date system (#688): the day comes
-   * from [[CellValue.excelSerialToDateTime]], which carries the leap-year offset for serials below
-   * 60, so 1 is 1900-01-01 and 59 is 1900-02-28. Serial 0 shows as `1/0/1900` and serial 60 as
-   * `2/29/1900`, the day Excel counts and LibreOffice does not (LibreOffice shows 2/28/1900).
-   *
-   * @param serial
-   *   Excel date serial number, in [0, 2958466)
-   */
-  private def excelSerialToCalendar(serial: BigDecimal): FormatCodeParser.ExcelCalendar =
-    val days = serial.toLong
-    // Time of day from the fraction
-    val timeFraction = (serial % 1).toDouble
-    val hours = (timeFraction * 24).toInt
-    val minutes = ((timeFraction * 24 * 60) % 60).toInt
-    val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
-    if days == PhantomLeapDaySerial then
-      FormatCodeParser.ExcelCalendar.phantomLeapDay(hours, minutes, seconds)
-    else
-      val date = CellValue.excelSerialToDateTime(days.toDouble).toLocalDate
-      FormatCodeParser.ExcelCalendar.of(date.atTime(hours, minutes, seconds))
 
   /**
    * Format error values in Excel style.

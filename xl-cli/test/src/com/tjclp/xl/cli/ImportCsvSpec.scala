@@ -309,12 +309,12 @@ class ImportCsvSpec extends CatsEffectSuite:
         List("1", "59", "61")
       )
       List("1/1/00", "2/28/00", "3/1/00").foreach { shown =>
-        assert(plainView.stdout.contains(shown), plainView.stdout)
+        assert(plainView.stdout.contains(s"| $shown "), plainView.stdout)
       }
       assertEquals(streamedView.stdout, plainView.stdout)
       assert(!plainView.stdout.contains("12/31/99"), plainView.stdout)
       assertEquals(put.exit, 0, put.stderr)
-      assert(putView.stdout.contains("1/1/00"), putView.stdout)
+      assert(putView.stdout.contains("| 1/1/00 "), putView.stdout)
   }
 
   test("#688: serial 60 views as Excel's phantom 2/29/00") {
@@ -327,5 +327,5 @@ class ImportCsvSpec extends CatsEffectSuite:
     yield
       assertEquals(put.exit, 0, put.stderr)
       assertEquals(style.exit, 0, style.stderr)
-      assert(view.stdout.contains("2/29/00"), view.stdout)
+      assert(view.stdout.contains("| 2/29/00 "), view.stdout)
   }
