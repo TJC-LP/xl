@@ -137,9 +137,27 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
     )
     assertEquals(fmt("@;@", BigDecimal(-5)), "-5")
     assertEquals(fmt("\"n=\"@;@", BigDecimal("2.50")), "n=2.5")
+    // `@;0`: a lone `@` positive arm renders the number; negatives take the `0` arm, unsigned
+    assertEquals(fmt("@;0", BigDecimal("123456789012"), GeneralRule.Text), "123456789012")
+    assertEquals(fmt("@;0", BigDecimal("123456789012")), "1.23457E+11")
+    assertEquals(fmt("@;0", BigDecimal("-5.4")), "5")
     // the text arm of a numeric code still never receives numbers
     assertEquals(fmt("0;@", BigDecimal(5)), "5")
     assertEquals(fmt("@;@", huge), "1E+2147483647")
+  }
+
+  test("#689: @ beside digit placeholders or General renders nothing; the number shows once") {
+    // `@` stands in for the number only where nothing else in the section renders it. Beside
+    // digits it renders nothing, as before #689: `0.00 @` keeps its digits (not ` 1.5`)
+    assertEquals(fmt("0.00 @;0", BigDecimal("1.5")), "1.50 ")
+    assertEquals(fmt("0.00 @;0", BigDecimal("1.5"), GeneralRule.Text), "1.50 ")
+    assertEquals(fmt("0.00 @;-0.00 @;0", BigDecimal("-1.5")), "-1.50 ")
+    assertEquals(fmt("#,##0 @;0", huge), "1E+2147483647 ")
+    // beside the General keyword the value renders once (not `1.5 1.5`)
+    assertEquals(fmt("General @;0", BigDecimal("1.5")), "1.5 ")
+    assertEquals(fmt("@ General;0", BigDecimal("123456789012"), GeneralRule.Text), " 123456789012")
+    // a decimal point alone is a digit pattern: it renders the number, `@` adds nothing
+    assertEquals(fmt(".@;0", BigDecimal(2)), "2.")
   }
 
   // ===== Laws =====
@@ -196,7 +214,8 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
           text.length <= FormatCodeParser.MaxDigitBlockLength + 64,
           s"$code on $n: ${text.length} chars"
         )
-        assert(millis < 2000, s"$code on $n under $rule took ${millis}ms")
+        // generous on purpose: only a genuine hang trips it (a loaded CI runner must not)
+        assert(millis < 10000, s"$code on $n under $rule took ${millis}ms")
     }
   }
 

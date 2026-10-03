@@ -749,16 +749,22 @@ object FormatCodeParser:
 
     // The General rendering of |adjusted value|: the General keyword, `@`, and the digit block
     // past MaxDigitBlockLength
-    lazy val general = NumFmtFormatter.generalKeyword(value, pow10, rule)
+    lazy val general = NumFmtFormatter.generalKeyword(magnitude, scale, rule)
 
     // Build result: prefix + number + suffix. A section with the General keyword renders the number
     // through it alone; placeholders beside it emit nothing (#681: `General0` printed the number
-    // twice; Excel leaves such codes undefined, LibreOffice shows the General value alone). `@` in
-    // a numeric section is the same General rendering: SSF emits the value for it (#689:
-    // `TEXT(123456789012,"@;@")` was empty; Excel unverified)
+    // twice; Excel leaves such codes undefined, LibreOffice shows the General value alone). An `@`
+    // renders the number in General form only where nothing else in the section does — no digit
+    // placeholder, decimal point or General keyword (`@;@`, `@;0`): SSF emits the value for it
+    // (#689: `TEXT(123456789012,"@;@")` was empty; Excel unverified). Beside them it renders
+    // nothing, so `0.00 @` keeps its digits and `General @` shows the value once
+    val atRendersNumber =
+      tokens.contains(FormatToken.TextPlaceholder) && !tokens.exists {
+        case FormatToken.Digit(_) | FormatToken.Decimal | FormatToken.General => true
+        case _ => false
+      }
     val result = new StringBuilder
-    var numberEmitted =
-      tokens.exists(t => t == FormatToken.General || t == FormatToken.TextPlaceholder)
+    var numberEmitted = tokens.contains(FormatToken.General)
 
     for token <- tokens do
       token match
@@ -776,10 +782,14 @@ object FormatCodeParser:
             numberEmitted = true
           // Skip additional digit/decimal tokens
 
-        case FormatToken.General | FormatToken.TextPlaceholder =>
+        case FormatToken.General =>
           // The keyword renders |x| in General style in place; applyFormat owns the sign, as
           // for digit patterns (GH-666)
           result ++= general
+
+        case FormatToken.TextPlaceholder =>
+          // `@` stands in for the number only in a section with no other way to render it (#689)
+          if atRendersNumber then result ++= general
 
         case FormatToken.Percent =>
           result += '%'
@@ -958,15 +968,11 @@ object FormatCodeParser:
         // A whole part past MaxDigitBlockLength renders in General form with no fractional part
         // (#689: `?/8` on `1E+2147483647` asked for two billion digits)
         val den = frac.fixedDenominator.getOrElse(1L)
-        val improper =
-          BigDecimal(
-            new java.math.BigDecimal(magnitude.multiply(BigInteger.valueOf(den)), value.scale)
-          )
         (
-          NumFmtFormatter.generalKeyword(value, 0L, rule),
+          NumFmtFormatter.generalKeyword(magnitude, scale, rule),
           BigInt(0),
           den,
-          NumFmtFormatter.generalKeyword(improper, 0L, rule)
+          NumFmtFormatter.generalKeyword(magnitude.multiply(BigInteger.valueOf(den)), scale, rule)
         )
       else
         val (whole, num, den) = frac.fixedDenominator match

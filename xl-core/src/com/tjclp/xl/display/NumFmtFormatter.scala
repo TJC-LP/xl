@@ -56,18 +56,21 @@ object NumFmtFormatter:
       case GeneralRule.Text => generalText(n)
 
   /**
-   * The `General` keyword token inside a custom section under `rule`: |n| × 10^pow10, unsigned (the
-   * section owns the sign). The power of ten carries a section's percent and scaling commas as a
-   * Long, so it never has to fit a BigDecimal scale (#689: `General%` on `1E+2147483647`).
+   * The `General` keyword token inside a custom section under `rule`, on the magnitude `unscaled ×
+   * 10^-scale` (unscaled ≥ 0; the section owns the sign). The scale is a Long, so a section's
+   * percent and scaling commas never have to fit a BigDecimal scale (#689: `General%` on
+   * `1E+2147483647`).
    */
-  private[display] def generalKeyword(n: BigDecimal, pow10: Long, rule: GeneralRule): String =
-    if n.signum == 0 then "0"
+  private[display] def generalKeyword(
+    unscaled: java.math.BigInteger,
+    scale: Long,
+    rule: GeneralRule
+  ): String =
+    if unscaled.signum == 0 then "0"
     else
-      val magnitude = n.bigDecimal.unscaledValue.abs
-      val scale = n.scale.toLong - pow10
       rule match
-        case GeneralRule.CellDisplay => generalDisplayUnsigned(magnitude, scale)
-        case GeneralRule.Text => generalTextUnsigned(magnitude, scale)
+        case GeneralRule.CellDisplay => generalDisplayUnsigned(unscaled, scale)
+        case GeneralRule.Text => generalTextUnsigned(unscaled, scale)
 
   /**
    * Format a cell value according to its number format.
