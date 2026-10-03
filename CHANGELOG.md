@@ -272,6 +272,19 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
+  a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
+  `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
+  purity charter and `TEXT` returned an internal evaluator defect. Digit, percent, scaling-comma,
+  `General`-keyword, scientific and fraction patterns now round through `BigInteger` with `Long`
+  exponents: tiny values render as zero, scientific exponents print in full (the engineering
+  exponent no longer wraps at scale `Int.MinValue`), and an integer part longer than Excel's
+  32,767-character cell text (`FormatCodeParser.MaxDigitBlockLength`) renders in General form
+  instead of building billions of digits. `TEXT(x,"General")` on a 16+ digit value at scale
+  `Int.MinValue` no longer throws either. Pre-existing.
+- **`@` in a numeric section renders the number** (#689): `TEXT(123456789012,"@;@")` was the empty
+  string; a text placeholder that numbers reach now renders them in General form, like a lone `@`
+  (SheetJS/SSF's behaviour; Excel unverified).
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

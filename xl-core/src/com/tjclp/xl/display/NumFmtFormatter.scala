@@ -55,8 +55,19 @@ object NumFmtFormatter:
       case GeneralRule.CellDisplay => formatGeneral(n)
       case GeneralRule.Text => generalText(n)
 
-  /** The `General` keyword token inside a custom section under `rule`, on the unsigned value. */
-  private[display] def generalKeyword(n: BigDecimal, rule: GeneralRule): String = general(n, rule)
+  /**
+   * The `General` keyword token inside a custom section under `rule`: |n| × 10^pow10, unsigned (the
+   * section owns the sign). The power of ten carries a section's percent and scaling commas as a
+   * Long, so it never has to fit a BigDecimal scale (#689: `General%` on `1E+2147483647`).
+   */
+  private[display] def generalKeyword(n: BigDecimal, pow10: Long, rule: GeneralRule): String =
+    if n.signum == 0 then "0"
+    else
+      val magnitude = n.bigDecimal.unscaledValue.abs
+      val scale = n.scale.toLong - pow10
+      rule match
+        case GeneralRule.CellDisplay => generalDisplayUnsigned(magnitude, scale)
+        case GeneralRule.Text => generalTextUnsigned(magnitude, scale)
 
   /**
    * Format a cell value according to its number format.
@@ -150,37 +161,67 @@ object NumFmtFormatter:
    *     signed and zero-padded to at least two digits (`1E+20`, `9.5367431640625E-07`, `1E-100`)
    *
    * Output grammar: `-?[0-9]+(\.[0-9]+)?(E[+-][0-9]{2,})?`, bounded length (`1E+1000000` renders as
-   * itself, never as a million zeros). Pure BigDecimal arithmetic: no Double, no Locale. Note that
-   * LibreOffice's `&` conversion diverges (three-digit exponents, E notation from about 1E16), so
-   * it is an oracle only for the plain range.
+   * itself, never as a million zeros). Pure BigDecimal/BigInteger arithmetic with Long exponents:
+   * no Double, no Locale, and no stored exponent throws. Note that LibreOffice's `&` conversion
+   * diverges (three-digit exponents, E notation from about 1E16), so it is an oracle only for the
+   * plain range.
    */
   def generalText(n: BigDecimal): String =
     if n.signum == 0 then "0"
     else
-      val rounded = n.bigDecimal
-        .round(new java.math.MathContext(GeneralTextDigits, java.math.RoundingMode.HALF_UP))
-        .stripTrailingZeros
-      val a = rounded.abs
-      val digits = a.unscaledValue.toString
-      val sig = digits.length
-      // adjusted exponent: 1234.5 → 3, 0.0012 → -3. In Long: a scale near Int.MaxValue
-      // (`1E-2147483647`) overflowed the Int length sum below to a negative, chose the plain form
-      // and asked toPlainString for two billion zeros (PR #679 review) — every step is Long and
-      // toPlainString is reached only once the length is proven to fit.
-      val exp: Long = a.precision.toLong - a.scale.toLong - 1L
-      val plain =
-        if exp >= 0 then exp <= GeneralTextMaxLength - 1L
-        else 2L + (-exp - 1L) + sig.toLong <= GeneralTextMaxLength.toLong
-      val body =
-        if plain then a.toPlainString
-        else
-          val mantissa =
-            if sig == 1 then digits else digits.substring(0, 1) + "." + digits.substring(1)
-          val absExp = math.abs(exp)
-          val expDigits = if absExp < 10L then s"0$absExp" else absExp.toString
-          val expSign = if exp < 0 then "-" else "+"
-          s"${mantissa}E$expSign$expDigits"
-      if rounded.signum < 0 then "-" + body else body
+      val body = generalTextUnsigned(n.bigDecimal.unscaledValue.abs, n.scale.toLong)
+      if n.signum < 0 then "-" + body else body
+
+  /** [[generalText]] of the positive magnitude `unscaled × 10^-scale`. */
+  private def generalTextUnsigned(unscaled: java.math.BigInteger, scale: Long): String =
+    // Rounded as a BigInteger, not through BigDecimal.round: dropping digits lowers the scale,
+    // which threw past Int.MinValue for a 16-digit value near `1E+2147483648` (#689)
+    val (digits, roundedScale) = roundSignificant(unscaled, scale, GeneralTextDigits)
+    val sig = digits.length
+    // adjusted exponent: 1234.5 → 3, 0.0012 → -3. In Long: a scale near Int.MaxValue
+    // (`1E-2147483647`) overflowed the Int length sum below to a negative, chose the plain form
+    // and asked toPlainString for two billion zeros (PR #679 review) — every step is Long and
+    // toPlainString is reached only once the length is proven to fit.
+    val exp: Long = sig.toLong - roundedScale - 1L
+    val plain =
+      if exp >= 0 then exp <= GeneralTextMaxLength - 1L
+      else 2L + (-exp - 1L) + sig.toLong <= GeneralTextMaxLength.toLong
+    if plain then
+      // the plain form bounds the scale to [-19, 18]
+      new java.math.BigDecimal(new java.math.BigInteger(digits), roundedScale.toInt).toPlainString
+    else
+      val mantissa =
+        if sig == 1 then digits else digits.substring(0, 1) + "." + digits.substring(1)
+      val absExp = math.abs(exp)
+      val expDigits = if absExp < 10L then s"0$absExp" else absExp.toString
+      val expSign = if exp < 0 then "-" else "+"
+      s"${mantissa}E$expSign$expDigits"
+
+  /**
+   * `unscaled × 10^-scale` (positive) rounded HALF_UP to `significant` digits, trailing zeros
+   * stripped: the digit string and its scale. The divisor is a power of ten no longer than the
+   * value's own digits, and the scale is a Long, so no stored exponent overflows it (#689).
+   */
+  private def roundSignificant(
+    unscaled: java.math.BigInteger,
+    scale: Long,
+    significant: Int
+  ): (String, Long) =
+    val precision = digitCount(unscaled)
+    val (rounded, roundedScale) =
+      if precision <= significant then (unscaled, scale)
+      else
+        val drop = precision - significant
+        val divisor = java.math.BigInteger.TEN.pow(drop)
+        (unscaled.add(divisor.shiftRight(1)).divide(divisor), scale - drop)
+    // a carry (999… → 1000…) only adds trailing zeros, which the strip removes
+    val text = rounded.toString
+    val stripped = text.reverse.dropWhile(_ == '0').reverse
+    (stripped, roundedScale - (text.length - stripped.length))
+
+  /** Decimal digits of a non-negative BigInteger (1 for zero). */
+  private[display] def digitCount(n: java.math.BigInteger): Int =
+    if n.signum == 0 then 1 else new java.math.BigDecimal(n).precision
 
   /**
    * Whole-value form of [[generalText]] (GH-665): Number → the rule; DateTime → its Excel serial
@@ -225,31 +266,38 @@ object NumFmtFormatter:
   private def formatGeneral(n: BigDecimal): String =
     if n.signum == 0 then "0"
     else
-      val body = generalDisplayUnsigned(n.bigDecimal.abs)
+      val body = generalDisplayUnsigned(n.bigDecimal.unscaledValue.abs, n.scale.toLong)
       if n.signum < 0 then "-" + body else body
 
-  private def generalDisplayUnsigned(a: java.math.BigDecimal): String =
+  /** [[formatGeneral]] of the positive magnitude `digits × 10^-scale`. */
+  private def generalDisplayUnsigned(digits: java.math.BigInteger, scale: Long): String =
+    val precision = digitCount(digits)
     // adjusted exponent in Long: a scale near either end of the Int range overflows Int
-    val exp: Long = a.precision.toLong - a.scale.toLong - 1L
+    val exp: Long = precision.toLong - scale - 1L
     val plain =
-      if exp >= -4L && exp <= 10L then
+      // exp in [-4, 10] puts the scale within the value's own digit count (+3), an Int
+      if exp >= -4L && exp <= 10L && scale.isValidInt then
         val decimals = if exp >= 0L then math.max(0, 9 - exp.toInt) else GeneralDisplayWidth - 2
-        val text =
-          a.setScale(decimals, java.math.RoundingMode.HALF_UP).stripTrailingZeros.toPlainString
+        val text = new java.math.BigDecimal(digits, scale.toInt)
+          .setScale(decimals, java.math.RoundingMode.HALF_UP)
+          .stripTrailingZeros
+          .toPlainString
         Option.when(text.length <= GeneralDisplayWidth)(text)
       else None
-    plain.getOrElse(generalDisplayScientific(a, exp))
+    plain.getOrElse(generalDisplayScientific(digits, precision, exp))
 
   /**
    * The E form of [[formatGeneral]]. Rounds the unscaled digits as a BigInteger rather than the
    * BigDecimal, whose scale would overflow Int at the extremes.
    */
-  private def generalDisplayScientific(a: java.math.BigDecimal, exp: Long): String =
+  private def generalDisplayScientific(
+    digits: java.math.BigInteger,
+    precision: Int,
+    exp: Long
+  ): String =
     def exponentDigits(e: Long): Int = math.max(2, math.abs(e).toString.length)
     // mantissa `d.dddd` + `E±` + exponent within the width; one digit (no point) at the least
     def significantFor(e: Long): Int = math.max(1, GeneralDisplayWidth - 3 - exponentDigits(e))
-    val digits = a.unscaledValue
-    val precision = a.precision
     def roundTo(sig: Int): (java.math.BigInteger, Long) =
       if precision <= sig then (digits, exp)
       else

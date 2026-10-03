@@ -141,6 +141,28 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
     assertScalar("=TEXT(1/3,\"General;-General\")", text("0.333333333333333"))
     // a text-only code renders a number as General too
     assertScalar("=TEXT(123456789012,\"@\")", text("123456789012"))
+    // #689: so does an `@` numeric section (`@;@` keeps one, the trailing `@` is the text arm);
+    // it rendered the empty string
+    assertScalar("=TEXT(123456789012,\"@;@\")", text("123456789012"))
+  }
+
+  test("#689: TEXT on an extreme stored exponent renders, never an internal evaluator defect") {
+    val extreme = Sheet("Test")
+      .put(ref"A1", CellValue.Number(BigDecimal("1E-2147483647")))
+      .put(ref"A2", CellValue.Number(BigDecimal("1E+2147483647")))
+    List(
+      "=TEXT(A1,\"0.00\")" -> "0.00",
+      "=TEXT(A1,\"#,##0\")" -> "0",
+      "=TEXT(A1,\"0%\")" -> "0%",
+      "=TEXT(A2,\"0\")" -> "1E+2147483647",
+      "=TEXT(A2,\"General;-General\")" -> "1E+2147483647",
+      "=TEXT(A1,\"General;-General\")" -> "1E-2147483647",
+      "=TEXT(A2,\"General%\")" -> "1E+2147483649%",
+      "=TEXT(A2,\"0.00E+00\")" -> "1.00E+2147483647",
+      "=TEXT(A2,\"# ?/?\")" -> "1E+2147483647    "
+    ).foreach { case (formula, expected) =>
+      assertEquals(extreme.evaluateFormula(formula), Right(text(expected)), formula)
+    }
   }
 
   test("GH-665: TEXT with an explicit format is unchanged") {

@@ -1,5 +1,6 @@
 package com.tjclp.xl.display
 
+import java.math.BigInteger
 import java.time.LocalDateTime
 
 import scala.collection.mutable.ArrayBuffer
@@ -645,7 +646,8 @@ object FormatCodeParser:
       case _ => false
     }
     pattern.tokens.lift(fracIdx) match
-      case Some(f: FormatToken.Fraction) => applyFractionPattern(value, pattern.tokens, fracIdx, f)
+      case Some(f: FormatToken.Fraction) =>
+        applyFractionPattern(value, pattern.tokens, fracIdx, f, rule)
       case _ =>
         val expIdx = pattern.tokens.indexWhere {
           case _: FormatToken.Exponent => true
@@ -656,6 +658,37 @@ object FormatCodeParser:
             applyScientificPattern(value, pattern, expIdx, e)
           case _ => applyNumericPattern(value, pattern, rule)
 
+  /**
+   * Longest integer part, grouping commas included, that a digit pattern spells out in full (#689):
+   * Excel's 32,767-character limit on a cell's text. Every number Excel can store (|x| < 1.8E308)
+   * renders far inside it. A larger magnitude — only a corrupt or hostile file, or exact BigDecimal
+   * arithmetic, carries one — renders its digit block in General form instead (`0` on
+   * `1E+2147483647` is `1E+2147483647`), never materializing billions of digits.
+   */
+  val MaxDigitBlockLength: Int = 32767
+
+  /**
+   * Integer digits of `unscaled × 10^-scale` (unscaled ≥ 0) before rounding: at least 1. A Long,
+   * because a percent or scaling comma moves the scale past the Int range at the extremes.
+   */
+  private def integerDigits(unscaled: BigInteger, scale: Long): Long =
+    if unscaled.signum == 0 then 1L
+    else math.max(1L, NumFmtFormatter.digitCount(unscaled).toLong - scale)
+
+  /**
+   * `unscaled × 10^-scale` (unscaled ≥ 0) rounded HALF_UP to an integer (#689). A division never
+   * builds a power of ten longer than the value's own digits — anything below 0.1 is zero outright,
+   * where BigDecimal.setScale asked for 10^2147483645 on `1E-2147483647`. A multiplication is as
+   * long as the result, which callers bound first through [[integerDigits]].
+   */
+  private def roundToInteger(unscaled: BigInteger, scale: Long): BigInteger =
+    if unscaled.signum == 0 then BigInteger.ZERO
+    else if scale <= 0L then unscaled.multiply(BigInteger.TEN.pow((-scale).toInt))
+    else if scale > NumFmtFormatter.digitCount(unscaled) then BigInteger.ZERO
+    else
+      val divisor = BigInteger.TEN.pow(scale.toInt)
+      unscaled.add(divisor.shiftRight(1)).divide(divisor)
+
   private def applyNumericPattern(
     value: BigDecimal,
     pattern: FormatPattern,
@@ -663,12 +696,13 @@ object FormatCodeParser:
   ): String =
     val tokens = pattern.tokens
     // Percent multiplies by 100; each scaling comma divides by 1000 (exact: a decimal-point
-    // move, so the rounding below sees the true scaled value, GH-666)
-    val percentValue = if pattern.hasPercent then value * 100 else value
-    val scaleCommas = tokens.count(_ == FormatToken.Scale)
-    val adjustedValue =
-      if scaleCommas > 0 then BigDecimal(percentValue.underlying.movePointLeft(3 * scaleCommas))
-      else percentValue
+    // move, so the rounding below sees the true scaled value, GH-666). The move is a Long power
+    // of ten: a BigDecimal scale overflows Int at `1E±2147483647` (#689)
+    val pow10 =
+      (if pattern.hasPercent then 2L else 0L) - 3L * tokens.count(_ == FormatToken.Scale)
+    val magnitude = value.bigDecimal.unscaledValue.abs
+    // |adjusted value| = magnitude × 10^-scale
+    val scale = value.scale.toLong - pow10
 
     // Count decimal places from pattern
     val decimalIdx = tokens.indexWhere(_ == FormatToken.Decimal)
@@ -688,38 +722,43 @@ object FormatCodeParser:
       case _ => false
     } - decimalDigits
 
-    // Round to decimal places
-    val rounded = adjustedValue.setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP)
-    val absValue = rounded.abs
-    val intPart = absValue.toBigInt
-    val decPart =
-      if decimalDigits > 0 then
-        ((absValue - BigDecimal(intPart)) * BigDecimal(10).pow(decimalDigits))
-          .setScale(0, BigDecimal.RoundingMode.HALF_UP)
-          .toBigInt
-      else BigInt(0)
+    def groupedLength(digits: Long): Long =
+      if pattern.hasThousands then digits + (digits - 1) / 3 else digits
 
-    // Format integer part with thousands grouping
-    val intStr =
-      if pattern.hasThousands then formatWithThousands(intPart.toString)
-      else intPart.toString
+    // The integer part (grouped, zero-padded) and the decimals, rounded HALF_UP; None when the
+    // integer part would pass MaxDigitBlockLength. Bounded before anything is built (#689)
+    lazy val digitBlock: Option[(String, String)] =
+      if groupedLength(integerDigits(magnitude, scale)) > MaxDigitBlockLength then None
+      else
+        val rounded = roundToInteger(magnitude, scale - decimalDigits)
+        val unit = BigInteger.TEN.pow(decimalDigits)
+        val digits = rounded.divide(unit).toString
+        // a rounding carry can add the one digit the bound above did not count
+        Option.when(groupedLength(digits.length.toLong) <= MaxDigitBlockLength) {
+          val intStr = if pattern.hasThousands then formatWithThousands(digits) else digits
+          val paddedInt =
+            if minIntDigits > 0 && intStr.length < minIntDigits then
+              "0" * (minIntDigits - intStr.length) + intStr
+            else intStr
+          val decimals = rounded.remainder(unit).toString
+          val decStr =
+            if decimalDigits > 0 then "0" * (decimalDigits - decimals.length) + decimals
+            else ""
+          (paddedInt, decStr)
+        }
 
-    // Pad integer with leading zeros if needed
-    val paddedInt =
-      if minIntDigits > 0 && intStr.length < minIntDigits then
-        "0" * (minIntDigits - intStr.length) + intStr
-      else intStr
-
-    // Format decimal part with trailing zeros
-    val decStr =
-      if decimalDigits > 0 then decPart.toString.reverse.padTo(decimalDigits, '0').reverse
-      else ""
+    // The General rendering of |adjusted value|: the General keyword, `@`, and the digit block
+    // past MaxDigitBlockLength
+    lazy val general = NumFmtFormatter.generalKeyword(value, pow10, rule)
 
     // Build result: prefix + number + suffix. A section with the General keyword renders the number
     // through it alone; placeholders beside it emit nothing (#681: `General0` printed the number
-    // twice; Excel leaves such codes undefined, LibreOffice shows the General value alone)
+    // twice; Excel leaves such codes undefined, LibreOffice shows the General value alone). `@` in
+    // a numeric section is the same General rendering: SSF emits the value for it (#689:
+    // `TEXT(123456789012,"@;@")` was empty; Excel unverified)
     val result = new StringBuilder
-    var numberEmitted = tokens.contains(FormatToken.General)
+    var numberEmitted =
+      tokens.exists(t => t == FormatToken.General || t == FormatToken.TextPlaceholder)
 
     for token <- tokens do
       token match
@@ -727,17 +766,20 @@ object FormatCodeParser:
             FormatToken.Scale =>
           if !numberEmitted then
             // Emit the formatted number
-            result ++= paddedInt
-            if hasDecimal then
-              result += '.'
-              result ++= decStr
+            digitBlock match
+              case Some((paddedInt, decStr)) =>
+                result ++= paddedInt
+                if hasDecimal then
+                  result += '.'
+                  result ++= decStr
+              case None => result ++= general
             numberEmitted = true
           // Skip additional digit/decimal tokens
 
-        case FormatToken.General =>
+        case FormatToken.General | FormatToken.TextPlaceholder =>
           // The keyword renders |x| in General style in place; applyFormat owns the sign, as
           // for digit patterns (GH-666)
-          result ++= NumFmtFormatter.generalKeyword(adjustedValue.abs, rule)
+          result ++= general
 
         case FormatToken.Percent =>
           result += '%'
@@ -750,10 +792,6 @@ object FormatCodeParser:
 
         case FormatToken.Fill(_) =>
           // Skip fill characters
-          ()
-
-        case FormatToken.TextPlaceholder =>
-          // @ not applicable for numbers
           ()
 
         case _ =>
@@ -783,7 +821,10 @@ object FormatCodeParser:
     exp: FormatToken.Exponent
   ): String =
     val tokens = pattern.tokens
-    val adjusted = (if pattern.hasPercent then value * 100 else value).abs
+    // |x| (× 100 under a percent) = magnitude × 10^-scale; the scale is a Long, as in the plain
+    // renderer (#689)
+    val magnitude = value.bigDecimal.unscaledValue.abs
+    val scale = value.scale.toLong - (if pattern.hasPercent then 2L else 0L)
 
     def digitCount(ts: Vector[FormatToken]): Int = ts.count {
       case FormatToken.Digit(_) => true
@@ -803,29 +844,28 @@ object FormatCodeParser:
       case _ => false
     }
 
+    // The mantissa in units of 10^-decimalDigits, and the exponent. Long exponent arithmetic: the
+    // Int one wrapped at scale Int.MinValue (`1E+2147483648` printed E+2147483647, #689)
     val (mantissa, exponent) =
-      if adjusted.signum == 0 then
-        (BigDecimal(0).setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP), 0)
+      if magnitude.signum == 0 then (BigInteger.ZERO, 0L)
       else
         // floor(log10 |x|), exact from the decimal representation (no Double detour)
-        val e10 = adjusted.precision - adjusted.scale - 1
-        val e = Math.floorDiv(e10, intPlaceholders) * intPlaceholders
-        val rounded = BigDecimal(adjusted.underlying.movePointLeft(e))
-          .setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP)
-        val limit = BigDecimal(10).pow(intPlaceholders)
-        if rounded >= limit then
-          (
-            BigDecimal(rounded.underlying.movePointLeft(intPlaceholders))
-              .setScale(decimalDigits, BigDecimal.RoundingMode.HALF_UP),
-            e + intPlaceholders
-          )
+        val e10 = NumFmtFormatter.digitCount(magnitude).toLong - scale - 1L
+        val e = Math.floorDiv(e10, intPlaceholders.toLong) * intPlaceholders
+        // |x| / 10^e to decimalDigits places: a shift within the mantissa's own few digits
+        val rounded = roundToInteger(magnitude, scale + e - decimalDigits)
+        // rounding can reach 10^placeholders exactly, never pass it
+        if rounded.compareTo(BigInteger.TEN.pow(intPlaceholders + decimalDigits)) >= 0 then
+          (rounded.divide(BigInteger.TEN.pow(intPlaceholders)), e + intPlaceholders)
         else (rounded, e)
 
-    // mantissa is non-negative with scale == decimalDigits, so toPlainString is "int[.dec]"
-    val plain = mantissa.underlying.toPlainString
-    val dotIdx = plain.indexOf('.')
-    val rawInt = if dotIdx >= 0 then plain.substring(0, dotIdx) else plain
-    val decStr = if dotIdx >= 0 then plain.substring(dotIdx + 1) else ""
+    // "int" ++ "dec", zero-padded so the integer part has at least one digit
+    val digits = mantissa.toString
+    val plain =
+      if digits.length <= decimalDigits then "0" * (decimalDigits + 1 - digits.length) + digits
+      else digits
+    val rawInt = plain.dropRight(decimalDigits)
+    val decStr = plain.takeRight(decimalDigits)
     val paddedInt =
       if rawInt.length < minIntDigits then "0" * (minIntDigits - rawInt.length) + rawInt
       else rawInt
@@ -867,13 +907,13 @@ object FormatCodeParser:
    * Format number string with thousands separators.
    */
   private def formatWithThousands(s: String): String =
-    val chars = s.toVector
-    val len = chars.length
-    chars.zipWithIndex.map { case (c, i) =>
-      val posFromEnd = len - 1 - i
-      if posFromEnd > 0 && posFromEnd % 3 == 0 then s"$c,"
-      else c.toString
-    }.mkString
+    val result = new StringBuilder(s.length + s.length / 3)
+    s.indices.foreach { i =>
+      result += s(i)
+      val posFromEnd = s.length - 1 - i
+      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += ','
+    }
+    result.toString
 
   /**
    * Render a fraction pattern (GH-243).
@@ -899,53 +939,73 @@ object FormatCodeParser:
     value: BigDecimal,
     tokens: Vector[FormatToken],
     fracIdx: Int,
-    frac: FormatToken.Fraction
+    frac: FormatToken.Fraction,
+    rule: NumFmtFormatter.GeneralRule
   ): String =
     val abs = value.abs
+    // |value| = magnitude × 10^-scale, rounded through roundToInteger (#689)
+    val magnitude = value.bigDecimal.unscaledValue.abs
+    val scale = value.scale.toLong
     val wholePlaceholders = tokens
       .take(fracIdx)
       .collect { case FormatToken.Digit(ch) => ch }
       .mkString
     val mixed = wholePlaceholders.nonEmpty
 
-    val (whole, num, den) = frac.fixedDenominator match
-      case Some(d) =>
-        val rr = (abs * d).setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt
-        (rr / d, rr % d, d)
-      case None =>
-        val digits = math.min(math.max(frac.numerator.length, frac.denominator.length), 7)
-        val maxDen = math.pow(10, digits.toDouble) - 1
-        // Excel stores values as IEEE-754 doubles and runs the search on the FULL value:
-        // the whole part's binary noise is observable (12.3 → 12 1/3, but 0.3 → 2/7).
-        val d = abs.toDouble
-        if d.isInfinite then
-          // |value| overflows Double (BigDecimal admits > ~1.8E308): the convergent search
-          // cannot run, and no fractional part is representable at that magnitude anyway —
-          // render the whole-number form (num == 0 blanks the fraction area), staying total.
-          (abs.setScale(0, BigDecimal.RoundingMode.HALF_UP).toBigInt, BigInt(0), 1L)
-        else
-          val (p, q) = nearestFraction(d, maxDen)
-          val wholeD = math.floor(p / q)
-          // p/q are exact-integer doubles for all values below 2^53 (Excel's own precision);
-          // the max(0, _) keeps the numerator total for astronomically large inputs.
-          (BigDecimal(wholeD).toBigInt, BigInt(math.max(0.0, p - wholeD * q).toLong), q.toLong)
-
-    val improperNumerator = whole * den + num
+    // The whole part's digits, numerator, denominator and the improper numerator's digits
+    val (wholeText, num, den, improperText) =
+      if integerDigits(magnitude, scale) > MaxDigitBlockLength then
+        // A whole part past MaxDigitBlockLength renders in General form with no fractional part
+        // (#689: `?/8` on `1E+2147483647` asked for two billion digits)
+        val den = frac.fixedDenominator.getOrElse(1L)
+        val improper =
+          BigDecimal(
+            new java.math.BigDecimal(magnitude.multiply(BigInteger.valueOf(den)), value.scale)
+          )
+        (
+          NumFmtFormatter.generalKeyword(value, 0L, rule),
+          BigInt(0),
+          den,
+          NumFmtFormatter.generalKeyword(improper, 0L, rule)
+        )
+      else
+        val (whole, num, den) = frac.fixedDenominator match
+          case Some(d) =>
+            val rr = BigInt(roundToInteger(magnitude.multiply(BigInteger.valueOf(d)), scale))
+            (rr / d, rr % d, d)
+          case None =>
+            val digits = math.min(math.max(frac.numerator.length, frac.denominator.length), 7)
+            val maxDen = math.pow(10, digits.toDouble) - 1
+            // Excel stores values as IEEE-754 doubles and runs the search on the FULL value:
+            // the whole part's binary noise is observable (12.3 → 12 1/3, but 0.3 → 2/7).
+            val d = abs.toDouble
+            if d.isInfinite then
+              // |value| overflows Double (BigDecimal admits > ~1.8E308): the convergent search
+              // cannot run, and no fractional part is representable at that magnitude anyway —
+              // render the whole-number form (num == 0 blanks the fraction area), staying total.
+              (BigInt(roundToInteger(magnitude, scale)), BigInt(0), 1L)
+            else
+              val (p, q) = nearestFraction(d, maxDen)
+              val wholeD = math.floor(p / q)
+              // p/q are exact-integer doubles for all values below 2^53 (Excel's own precision);
+              // the max(0, _) keeps the numerator total for astronomically large inputs.
+              (BigDecimal(wholeD).toBigInt, BigInt(math.max(0.0, p - wholeD * q).toLong), q.toLong)
+        (whole.toString, num, den, (whole * den + num).toString)
 
     val denWidth = frac.fixedDenominator
       .fold(visibleWidth(frac.denominator))(_.toString.length)
     val fractionPart =
       if num == 0 && mixed then " " * (visibleWidth(frac.numerator) + 1 + denWidth)
       else
-        val numerator = if mixed then num else improperNumerator
+        val numerator = if mixed then num.toString else improperText
         val denStr = frac.fixedDenominator match
           case Some(d) => d.toString
           case None => padPlaceholders(den.toString, frac.denominator, alignRight = false)
-        padPlaceholders(numerator.toString, frac.numerator, alignRight = true) + "/" + denStr
+        padPlaceholders(numerator, frac.numerator, alignRight = true) + "/" + denStr
 
     val wholeStr =
       if !mixed then ""
-      else if whole != 0 then padPlaceholders(whole.toString, wholePlaceholders, alignRight = true)
+      else if wholeText != "0" then padPlaceholders(wholeText, wholePlaceholders, alignRight = true)
       else if num == 0 then "0"
       else padPlaceholders("", wholePlaceholders, alignRight = true)
 
