@@ -289,7 +289,7 @@ object SheetEvaluator:
                           val nextResults =
                             if rangeFormulaCells.contains(ref) then results + (ref -> value)
                             else results
-                          scala.util.Right((tempSheet.put(ref, value), nextResults))
+                          scala.util.Right((threadComputed(tempSheet, ref, value), nextResults))
                         case scala.util.Left(error) =>
                           scala.util.Left(error)
                     case (left, _) => left
@@ -520,7 +520,7 @@ object SheetEvaluator:
                   case scala.util.Right(value) =>
                     val next =
                       if rangeFormulaCells.contains(ref) then results + (ref -> value) else results
-                    (current.put(ref, value), next, failedNow, blockedNow)
+                    (threadComputed(current, ref, value), next, failedNow, blockedNow)
                   case scala.util.Left(error) =>
                     val newlyBlocked = dependentsOf(Set(ref)) -- blockedNow
                     (
@@ -746,7 +746,9 @@ object SheetEvaluator:
                   case None => tempSheet.evaluateCell(ref, clock, currentWorkbook)
                 evaluated match
                   case scala.util.Right(value) =>
-                    scala.util.Right((tempSheet.put(ref, value), results + (ref -> value)))
+                    scala.util.Right(
+                      (threadComputed(tempSheet, ref, value), results + (ref -> value))
+                    )
                   case scala.util.Left(error) =>
                     scala.util.Left(error)
               case (left, _) => left
@@ -800,6 +802,21 @@ object SheetEvaluator:
 
   /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
   private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
+
+  /**
+   * GH-695: write a computed value back into a threaded evaluation sheet. A spill anchor (an
+   * ArrayFormula record) keeps its formula with the value as its cache, so a later `x#` read in the
+   * same fold still finds the `<f t="array" ref>` extent instead of a constant (which is `#REF!`).
+   * Every other cell becomes the plain value, as before. Readers see the same value either way: a
+   * cached formula reads as its cache.
+   */
+  private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
+    sheet.cells.get(ref).map(_.value) match
+      case Some(f @ CellValue.Formula(_, _, _: FormulaKind.ArrayFormula)) =>
+        value match
+          case _: CellValue.Formula => sheet.put(ref, value)
+          case computed => sheet.put(ref, f.copy(cachedValue = Some(computed)))
+      case _ => sheet.put(ref, value)
 
   /**
    * GH-274: strip stale formula caches from the given cells.

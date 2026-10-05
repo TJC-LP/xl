@@ -182,7 +182,7 @@ object ReadCommands:
               IO.fromEither(
                 SheetEvaluator
                   .evaluateCell(s)(ref, workbook = Some(wb))
-                  .map(value => s.put(ref, value))
+                  .map(value => SheetEvaluator.threadComputed(s, ref, value))
                   .left
                   .map(XLException(_))
               )
@@ -244,7 +244,7 @@ object ReadCommands:
               IO.fromEither(
                 SheetEvaluator
                   .evaluateCell(s)(ref, workbook = Some(wb))
-                  .map(value => s.put(ref, value))
+                  .map(value => SheetEvaluator.threadComputed(s, ref, value))
                   .left
                   .map(XLException(_))
               )
@@ -361,7 +361,7 @@ object ReadCommands:
             IO.fromEither(
               SheetEvaluator
                 .evaluateCell(s)(ref, workbook = Some(wb))
-                .map(value => s.put(ref, value))
+                .map(value => SheetEvaluator.threadComputed(s, ref, value))
                 .left
                 .map(XLException(_))
             )

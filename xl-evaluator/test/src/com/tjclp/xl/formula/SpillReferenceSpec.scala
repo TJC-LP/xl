@@ -1,9 +1,11 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.XLResult
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.formula.eval.RecalcOptions
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
+import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.formula.functions.FunctionSpecs
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
@@ -177,4 +179,80 @@ class SpillReferenceSpec extends FunSuite:
     circular.evaluateFormula("=SUM(A1#)", Clock.system, None, Some(ref"B1")) match
       case Left(_) => ()
       case Right(v) => fail(s"a circular spill reference should not evaluate, got $v")
+  }
+
+  /**
+   * GH-695: Excel's shape — B1 a cached dynamic-array anchor spilling SORT(A1:A5) into B2:B5, C1
+   * `SUM(B1#)` cached as 15. A threaded evaluation fold writes B1's computed value back before C1
+   * reads it; that write must keep B1 an anchor, else `B1#` sees a constant and is `#REF!`.
+   */
+  private def excelSpillBook(c1: String): Workbook =
+    Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1", n(5))
+        .put(ref"A2", n(3))
+        .put(ref"A3", n(1))
+        .put(ref"A4", n(4))
+        .put(ref"A5", n(2))
+        .put(
+          ref"B1",
+          CellValue.Formula(
+            "SORT(A1:A5)",
+            Some(n(1)),
+            FormulaKind.ArrayFormula(CellRange(ref"B1", ref"B5"))
+          )
+        )
+        .put(ref"B2", n(2))
+        .put(ref"B3", n(3))
+        .put(ref"B4", n(4))
+        .put(ref"B5", n(5))
+        .put(ref"C1", CellValue.Formula(c1, Some(n(15))))
+        .put(ref"D1", n(0))
+    )
+
+  private val spillReaders = List("SUM(B1#)", "SUM(Sheet1!B1#)", "SUM(ANCHORARRAY(B1))")
+
+  private def c1(wb: Workbook): CellValue =
+    wb.sheets.headOption.getOrElse(fail("no sheet"))(ref"C1").value
+
+  test("GH-695: a whole-workbook recalculation keeps the spill reader's value") {
+    spillReaders.foreach { reader =>
+      val book = excelSpillBook(reader)
+      val sequential = book.recalculate(Clock.system)
+      assertEquals(sequential.errors, Vector.empty, reader)
+      assertEquals(c1(sequential.workbook), CellValue.Formula(reader, Some(n(15))), reader)
+      val parallel = book.recalculate(RecalcOptions(parallelism = 4))
+      assertEquals(c1(parallel.workbook), CellValue.Formula(reader, Some(n(15))), s"$reader ∥")
+    }
+  }
+
+  test("GH-695: a targeted recalculation that re-evaluates the anchor keeps the reader's value") {
+    spillReaders.foreach { reader =>
+      // A1 rewritten with its own value: B1 (its dependent) and the reader both re-evaluate
+      val result = excelSpillBook(reader)
+        .recalculateAfterEdit(SheetName.unsafe("Sheet1"), Set(ref"A1"), RecalcOptions())
+      assertEquals(c1(result.workbook), CellValue.Formula(reader, Some(n(15))), reader)
+    }
+  }
+
+  test("GH-695: the sheet-level dependency folds read the anchor's spill") {
+    spillReaders.foreach { reader =>
+      val book = excelSpillBook(reader)
+      val sheet = book.sheets.head
+      assertEquals(
+        sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+        Right(Some(n(15))),
+        reader
+      )
+      assertEquals(
+        sheet.evaluateForRange(CellRange(ref"C1", ref"C1"), Clock.system, Some(book)),
+        Right(Map(ref"C1" -> n(15))),
+        reader
+      )
+      assertEquals(
+        sheet.evaluateForRangePerCell(CellRange(ref"C1", ref"C1"), Clock.system, Some(book)).values,
+        Map(ref"C1" -> n(15)),
+        reader
+      )
+    }
   }

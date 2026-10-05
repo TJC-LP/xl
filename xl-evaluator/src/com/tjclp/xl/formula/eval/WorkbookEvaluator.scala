@@ -402,7 +402,10 @@ object WorkbookEvaluator:
                   result match
                     case Right(value) =>
                       (
-                        sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                        sheets.updated(
+                          idx,
+                          SheetEvaluator.threadComputed(sheets(idx), q.ref, value)
+                        ),
                         evaluated.updated(
                           q.sheet,
                           evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
@@ -603,7 +606,7 @@ object WorkbookEvaluator:
               result match
                 case Right(value) =>
                   (
-                    sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                    sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, value)),
                     acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
                     errs
                   )
@@ -859,7 +862,7 @@ object WorkbookEvaluator:
               outcome.results.get(q) match
                 case Some(Right(value)) =>
                   (
-                    sheets.updated(idx, sheets(idx).put(q.ref, value)),
+                    sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, value)),
                     acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
                     errs
                   )

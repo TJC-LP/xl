@@ -272,6 +272,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Spill references read their anchor during recalculation** (#695): every evaluation fold
+  (`recalc`, the targeted recalculation behind `put`, the sheet-level dependency folds and the
+  `eval` precedent pass) wrote each computed value back as a plain constant before later cells
+  read it, so a dynamic-array anchor stopped being an anchor and an `x#` reader evaluated after it
+  got `#REF!`. On an Excel book with `C1 = SUM(B1#)` cached as 15, `recalc` and any `put` that
+  re-evaluated B1 overwrote the correct 15 with `#REF!`, and `eval "=SUM(B1#)"` disagreed with
+  `eval "=SUM(Sheet1!B1#)"`. An ArrayFormula anchor now keeps its record with the computed value
+  as its cache, so both spellings read the spill.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

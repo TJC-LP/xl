@@ -117,7 +117,10 @@ object DependentRecalculation:
                   result match
                     case Right(value) =>
                       (
-                        sheets.updated(position, sheets(position).put(q.ref, value)),
+                        sheets.updated(
+                          position,
+                          SheetEvaluator.threadComputed(sheets(position), q.ref, value)
+                        ),
                         evaluated.updated(
                           q.sheet,
                           evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
