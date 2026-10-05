@@ -278,8 +278,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   read it, so a dynamic-array anchor stopped being an anchor and an `x#` reader evaluated after it
   got `#REF!`. On an Excel book with `C1 = SUM(B1#)` cached as 15, `recalc` and any `put` that
   re-evaluated B1 overwrote the correct 15 with `#REF!`, and `eval "=SUM(B1#)"` disagreed with
-  `eval "=SUM(Sheet1!B1#)"`. An ArrayFormula anchor now keeps its record with the computed value
-  as its cache, so both spellings read the spill.
+  `eval "=SUM(Sheet1!B1#)"`. An ArrayFormula anchor now keeps its record, uncached, so a reader
+  re-evaluates its array: both spellings read the spill, an uncached record with no spill cells
+  reads its whole array, and an edited input reaches readers (`SORT` over a changed A1 gives the
+  new sum, not the previous generation's spill cells).
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

@@ -256,3 +256,43 @@ class SpillReferenceSpec extends FunSuite:
       )
     }
   }
+
+  test("GH-695: a changed input re-spills the anchor for its readers, not its stale spill cells") {
+    // A1 5 → 0: SORT gives {0;1;2;3;4}, but B2:B5 still hold the old 2,3,4,5 (xl writes no spill)
+    spillReaders.foreach { reader =>
+      val book = excelSpillBook(reader)
+      val edited = book.put(
+        book.sheets.head.put(ref"A1", n(0)).put(ref"D1", CellValue.Formula("B1+0"))
+      )
+      val full = edited.recalculate(Clock.system).workbook
+      assertEquals(c1(full), CellValue.Formula(reader, Some(n(10))), reader)
+      assertEquals(
+        full.sheets.head(ref"D1").value,
+        CellValue.Formula("B1+0", Some(n(0))),
+        s"$reader: a plain read of the anchor is its new top-left"
+      )
+      val targeted =
+        edited.recalculateAfterEdit(SheetName.unsafe("Sheet1"), Set(ref"A1"), RecalcOptions())
+      assertEquals(c1(targeted.workbook), CellValue.Formula(reader, Some(n(10))), s"$reader →")
+    }
+  }
+
+  test("GH-695: an uncached array record with no spill cells evaluates its whole array") {
+    val book = Workbook(
+      Sheet("Sheet1")
+        .put(
+          ref"A1",
+          CellValue
+            .Formula("SEQUENCE(3)", None, FormulaKind.ArrayFormula(CellRange(ref"A1", ref"A3")))
+        )
+        .put(ref"C1", CellValue.Formula("SUM(A1#)"))
+    )
+    val sum = CellValue.Formula("SUM(A1#)", Some(n(6)))
+    assertEquals(c1(book.recalculate(Clock.system).workbook), sum)
+    assertEquals(c1(book.recalculate(RecalcOptions(parallelism = 4)).workbook), sum, "∥")
+    val sheet = book.sheets.head
+    assertEquals(
+      sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+      Right(Some(n(6)))
+    )
+  }

@@ -96,11 +96,11 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
     yield assert(!run.stdout.contains("error value"), run.stdout)
   }
 
-  test("a put that re-evaluates the anchor keeps C1's correct value") {
+  test("a put that changes the anchor's input re-spills it for C1") {
     for
       src <- excelShapedSource()
       out <- outPath()
-      // A1 rewritten with its own value: B1 (its dependent) re-evaluates before C1 reads B1#
+      // A1 5 → 0: SORT(A1:A5) is {0;1;2;3;4}, so Excel's C1 is 10
       run <- CliHarness.run(
         "-f",
         src.toString,
@@ -110,8 +110,11 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
         out.toString,
         "put",
         "A1",
-        "5"
+        "0"
       )
-      _ <- assertC1Is15(run, out)
-    yield ()
+      _ = assertEquals(run.exit, 0, run.toString)
+      value <- c1(out)
+    yield value match
+      case CellValue.Formula(_, Some(CellValue.Number(v)), _) => assertEquals(v, BigDecimal(10))
+      case other => fail(s"C1 should be 10, got $other")
   }

@@ -805,17 +805,19 @@ object SheetEvaluator:
 
   /**
    * GH-695: write a computed value back into a threaded evaluation sheet. A spill anchor (an
-   * ArrayFormula record) keeps its formula with the value as its cache, so a later `x#` read in the
-   * same fold still finds the `<f t="array" ref>` extent instead of a constant (which is `#REF!`).
-   * Every other cell becomes the plain value, as before. Readers see the same value either way: a
-   * cached formula reads as its cache.
+   * ArrayFormula record) keeps its formula, uncached, so a later `x#` read in the same fold still
+   * finds an anchor (a constant is `#REF!`) and evaluates the array afresh. Caching the computed
+   * value would not do: it is only the top-left element, and a cached record makes `x#` trust the
+   * recorded extent's cells, which hold the previous generation's spill (or nothing, for a record
+   * that never had a cache). A plain read of the anchor evaluates it on demand, as for any uncached
+   * formula. Every other cell becomes the plain value, as before.
    */
   private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
     sheet.cells.get(ref).map(_.value) match
       case Some(f @ CellValue.Formula(_, _, _: FormulaKind.ArrayFormula)) =>
         value match
           case _: CellValue.Formula => sheet.put(ref, value)
-          case computed => sheet.put(ref, f.copy(cachedValue = Some(computed)))
+          case _ => sheet.put(ref, f.copy(cachedValue = None))
       case _ => sheet.put(ref, value)
 
   /**
