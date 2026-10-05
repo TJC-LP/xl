@@ -725,6 +725,12 @@ object SheetEvaluator:
   ): XLResult[CellValue] =
     cellResult(formulaText, evaluator.eval(expr, sheet, clock, workbook, currentCell))
 
+  /** A cached formula record's value (nested caches unwrapped); any other value as it is. */
+  @annotation.tailrec
+  private def effectiveValue(value: CellValue): CellValue = value match
+    case CellValue.Formula(_, Some(cached), _) => effectiveValue(cached)
+    case other => other
+
   /** A formula's raw evaluation as the cell value it stores (the GH-344 boundary promotion). */
   private def cellResult(formulaText: String, raw: Either[EvalError, Any]): XLResult[CellValue] =
     raw match
@@ -732,7 +738,10 @@ object SheetEvaluator:
         // A formula cell is never blank in Excel: a result that is a reference to an empty cell
         // (INDEX, INDIRECT, OFFSET, CHOOSE, a lookup) reads 0, as `=Z1` already does. Only the
         // cell's final value changes — inside a formula the reference stays blank (ISBLANK, COUNTA).
-        EvalResult.toCellValue(value) match
+        // GH-695: a function that returns a referenced cell itself (IFERROR, IFNA, the lookups)
+        // can hand back a cached formula record — a threaded spill anchor, or a precedent this
+        // pass did not re-evaluate; the cell stores that record's value, never the record.
+        effectiveValue(EvalResult.toCellValue(value)) match
           case CellValue.Empty => scala.util.Right(CellValue.Number(BigDecimal(0)))
           case other => scala.util.Right(other)
       case scala.util.Left(evalError) =>

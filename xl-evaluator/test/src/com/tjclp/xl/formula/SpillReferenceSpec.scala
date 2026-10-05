@@ -366,3 +366,34 @@ class SpillReferenceSpec extends FunSuite:
 
   private def c1Of(wb: Workbook, at: ARef): CellValue =
     wb.sheets.headOption.getOrElse(fail("no sheet"))(at).value
+
+  test("GH-695: a function returning a referenced anchor or cached formula stores its value") {
+    // IFERROR/IFNA/lookups hand back the referenced cell itself: a threaded anchor's record, or
+    // (targeted) a cached precedent the pass did not re-evaluate — the cell stores the value
+    List("IFERROR(B1,0)", "IFNA(B1,0)", "VLOOKUP(7,B1:B1,1,FALSE)", "XLOOKUP(7,B1:B1,B1:B1)")
+      .foreach { f =>
+        val anchored = Workbook(
+          Sheet("Sheet1")
+            .put(
+              ref"B1",
+              CellValue.Formula(
+                "SEQUENCE(2,1,7)",
+                None,
+                FormulaKind.ArrayFormula(CellRange(ref"B1", ref"B2"))
+              )
+            )
+            .put(ref"C1", CellValue.Formula(f))
+            .put(ref"D1", CellValue.Formula("C1+1"))
+        ).recalculate(Clock.system)
+        assertEquals(anchored.errors, Vector.empty, f)
+        assertEquals(c1Of(anchored.workbook, ref"C1"), CellValue.Formula(f, Some(n(7))), f)
+        assertEquals(c1Of(anchored.workbook, ref"D1"), CellValue.Formula("C1+1", Some(n(8))), f)
+
+        val targeted = Workbook(
+          Sheet("Sheet1")
+            .put(ref"B1", CellValue.Formula("7", Some(n(7))))
+            .put(ref"C1", CellValue.Formula(f))
+        ).recalculateAfterEdit(SheetName.unsafe("Sheet1"), Set(ref"C1"), RecalcOptions())
+        assertEquals(c1Of(targeted.workbook, ref"C1"), CellValue.Formula(f, Some(n(7))), s"$f →")
+      }
+  }

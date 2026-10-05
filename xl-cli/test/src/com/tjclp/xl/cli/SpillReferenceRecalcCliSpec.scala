@@ -153,3 +153,26 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
       // SORT over {0;3;1;4;2} is {0;1;2;3;4}: the last element is 40, not the stale 50
       assert(run.stdout.contains("40") && !run.stdout.contains("50"), run.stdout)
   }
+
+  test("a function returning the anchor writes the anchor's value as its cache") {
+    for
+      src <- excelShapedSource()
+      out <- outPath()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-s",
+        "Sheet1",
+        "-o",
+        out.toString,
+        "putf",
+        "D1",
+        "=IFERROR(B1,0)"
+      )
+      wb <- ExcelIO.instance[IO].read(out)
+    yield
+      assertEquals(run.exit, 0, run.toString)
+      wb.sheets.headOption.getOrElse(fail("no sheet"))(ref"D1").value match
+        case CellValue.Formula(_, Some(CellValue.Number(v)), _) => assertEquals(v, BigDecimal(1))
+        case other => fail(s"D1 should cache the anchor's value 1, got $other")
+  }

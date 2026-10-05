@@ -285,6 +285,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   previous spill cells), and plain and spill readers share one evaluation (one `RAND()` draw;
   pinned external caches and iterative fixpoints read as before). `eval`/`evala` evaluate their
   precedents and the target formula with one evaluator, so `--with` overrides re-spill too.
+  A function that returns a referenced cell itself (`IFERROR`, `IFNA`, the lookups) now stores
+  that cell's value when the cell is a cached formula, not the formula record (pre-existing for a
+  precedent a targeted recalculation did not re-evaluate).
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a
