@@ -177,11 +177,12 @@ object ReadCommands:
           )
 
           // 5. Evaluate only formulas in the closure
+          evaluator = SheetEvaluator.spillTrackingEvaluator()
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
             sheetIO.flatMap { s =>
               IO.fromEither(
                 SheetEvaluator
-                  .evaluateCell(s)(ref, workbook = Some(wb))
+                  .evaluateCellUsing(s, ref, evaluator, Some(wb))
                   .map(value => SheetEvaluator.threadComputed(s, ref, value))
                   .left
                   .map(XLException(_))
@@ -191,7 +192,7 @@ object ReadCommands:
 
           result <- IO.fromEither(
             SheetEvaluator
-              .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
+              .evaluateFormulaUsing(evalSheet, formula, evaluator, Some(wb))
               .left
               .map(XLException(_))
           )
@@ -239,11 +240,13 @@ object ReadCommands:
                 .map(cyclic(_, formula))
           )
 
+          evaluator = SheetEvaluator.spillTrackingEvaluator()
+
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
             sheetIO.flatMap { s =>
               IO.fromEither(
                 SheetEvaluator
-                  .evaluateCell(s)(ref, workbook = Some(wb))
+                  .evaluateCellUsing(s, ref, evaluator, Some(wb))
                   .map(value => SheetEvaluator.threadComputed(s, ref, value))
                   .left
                   .map(XLException(_))
@@ -253,7 +256,7 @@ object ReadCommands:
 
           result <- IO.fromEither(
             SheetEvaluator
-              .evaluateFormula(evalSheet)(formula, workbook = Some(wb))
+              .evaluateFormulaUsing(evalSheet, formula, evaluator, Some(wb))
               .left
               .map(XLException(_))
           )
@@ -356,11 +359,12 @@ object ReadCommands:
               .left
               .map(cyclic(_, formula))
         )
+        evaluator = SheetEvaluator.spillTrackingEvaluator()
         evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
           sheetIO.flatMap { s =>
             IO.fromEither(
               SheetEvaluator
-                .evaluateCell(s)(ref, workbook = Some(wb))
+                .evaluateCellUsing(s, ref, evaluator, Some(wb))
                 .map(value => SheetEvaluator.threadComputed(s, ref, value))
                 .left
                 .map(XLException(_))
@@ -373,7 +377,7 @@ object ReadCommands:
           .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
-            .evaluateArrayFormula(evalSheet)(formula, originRef, workbook = Some(wb))
+            .evaluateArrayFormulaUsing(evalSheet, formula, originRef, evaluator, Some(wb))
             .left
             .map(XLException(_))
         )

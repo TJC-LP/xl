@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.XLResult
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
-import com.tjclp.xl.formula.eval.RecalcOptions
+import com.tjclp.xl.formula.eval.{IterativeCalc, IterativeMode, RecalcOptions}
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.formula.functions.FunctionSpecs
@@ -296,3 +296,73 @@ class SpillReferenceSpec extends FunSuite:
       Right(Some(n(6)))
     )
   }
+
+  private def arrayRecord(at: ARef, formula: String, cache: Option[CellValue] = None): CellValue =
+    CellValue.Formula(formula, cache, FormulaKind.ArrayFormula(CellRange(at, at)))
+
+  test("GH-695: plain and spill readers reuse the anchor's one computation in the generation") {
+    val book = Workbook(
+      Sheet("Sheet1")
+        .put(
+          ref"A1",
+          CellValue.Formula(
+            "SEQUENCE(2,1,RAND(),0)",
+            None,
+            FormulaKind.ArrayFormula(CellRange(ref"A1", ref"A2"))
+          )
+        )
+        .put(ref"B1", CellValue.Formula("A1+0"))
+        .put(ref"C1", CellValue.Formula("A1+0"))
+        .put(ref"D1", CellValue.Formula("SUM(A1#)"))
+    )
+    val sheet = book.recalculate(RecalcOptions(rng = Rng.seeded(42))).workbook.sheets.head
+    def cached(at: ARef): BigDecimal = sheet(at).value match
+      case CellValue.Formula(_, Some(CellValue.Number(v)), _) => v
+      case other => fail(s"${at.toA1}: $other")
+    assertEquals(cached(ref"B1"), cached(ref"A1"))
+    assertEquals(cached(ref"C1"), cached(ref"A1"))
+    assertEquals(cached(ref"D1"), cached(ref"A1") * 2, "the spill is the same draw")
+  }
+
+  test("GH-695: a long acyclic chain of array records evaluates in order, never recursively") {
+    val chain = (1 to 105).foldLeft(Sheet("Sheet1")) { (s, i) =>
+      val at = ARef.from0(0, i - 1)
+      s.put(at, arrayRecord(at, if i == 1 then "1" else s"A${i - 1}+1"))
+    }
+    val result = Workbook(chain).recalculate(Clock.system)
+    assertEquals(result.errors, Vector.empty)
+    assertEquals(
+      result.workbook.sheets.head(ARef.from0(0, 104)).value,
+      arrayRecord(ARef.from0(0, 104), "A104+1", Some(n(105)))
+    )
+  }
+
+  test("GH-695: a pinned external array record keeps its cache for its readers") {
+    val book = Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1", arrayRecord(ref"A1", "[1]Book1!A1", Some(n(7))))
+        .put(ref"B1", CellValue.Formula("A1+1"))
+    )
+    val result = book.recalculate(Clock.system)
+    assertEquals(result.errors, Vector.empty)
+    assertEquals(c1Of(result.workbook, ref"B1"), CellValue.Formula("A1+1", Some(n(8))))
+  }
+
+  test("GH-695: an iterative array member's settled value is what its dependents read") {
+    val book = Workbook(
+      Sheet("Sheet1")
+        .put(ref"A1", arrayRecord(ref"A1", "A1*0.5+1"))
+        .put(ref"B1", CellValue.Formula("A1+0"))
+    )
+    val result = book.recalculate(
+      RecalcOptions(iterative = IterativeMode.Force(IterativeCalc(3, BigDecimal("0.001"))))
+    )
+    assertEquals(result.errors, Vector.empty)
+    val settled = c1Of(result.workbook, ref"A1") match
+      case CellValue.Formula(_, Some(v), _) => v
+      case other => fail(s"A1: $other")
+    assertEquals(c1Of(result.workbook, ref"B1"), CellValue.Formula("A1+0", Some(settled)))
+  }
+
+  private def c1Of(wb: Workbook, at: ARef): CellValue =
+    wb.sheets.headOption.getOrElse(fail("no sheet"))(at).value

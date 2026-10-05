@@ -90,6 +90,12 @@ trait Evaluator:
    */
   private[formula] def withArrayResults: Evaluator = this
 
+  /**
+   * GH-695: the generation memo this evaluator carries, if any — where an evaluation fold records
+   * each spill anchor's computed array for the generation's `x#` readers.
+   */
+  private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = None
+
 object Evaluator:
   /**
    * Default evaluator instance.
@@ -126,6 +132,19 @@ object Evaluator:
     aggregateMemo: AggregateMemo
   ): Evaluator =
     TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
+
+  /**
+   * GH-695: [[instance]] plus a generation memo that records spill anchors' arrays and caches no
+   * aggregates — for the sheet-level evaluation folds, which thread computed values like a
+   * recalculation but never had the aggregate memo.
+   */
+  private[formula] def spillTrackingInstance(rng: Rng): Evaluator =
+    TotalEvaluator(
+      new EvaluatorImpl(
+        rng = rng,
+        aggregateMemo = Some(new AggregateMemo(cachesAggregates = false))
+      )
+    )
 
   /**
    * Evaluator instance that allows array results to propagate.
@@ -729,8 +748,21 @@ object Evaluator:
    * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
    * like successes.
    */
-  private[formula] final class AggregateMemo:
+  private[formula] final class AggregateMemo(cachesAggregates: Boolean = true):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
+
+    /**
+     * GH-695: each spill anchor's array as this generation's fold computed it. The threaded sheet
+     * caches only the anchor's top-left element, and the recorded extent's cells hold the previous
+     * generation's spill (or nothing), so an `x#` reader reads the anchor's array here first.
+     */
+    private val spills = TrieMap.empty[(SheetName, ARef), ArrayResult]
+
+    def recordSpill(sheet: SheetName, anchor: ARef, array: ArrayResult): Unit =
+      spills.update((sheet, anchor), array)
+
+    def recordedSpill(sheet: SheetName, anchor: ARef): Option[ArrayResult] =
+      spills.get((sheet, anchor))
     private val hitCount = new AtomicLong(0L)
     private val fillCount = new AtomicLong(0L)
     private val bypassCount = new AtomicLong(0L)
@@ -743,18 +775,20 @@ object Evaluator:
     )(
       compute: => Either[EvalError, BigDecimal]
     ): Either[EvalError, BigDecimal] =
-      val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
-      val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
-      entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
-        case AggregateMemoLookup.Hit(value) =>
-          hitCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Filled(value) =>
-          fillCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Bypass =>
-          bypassCount.incrementAndGet()
-          compute
+      if !cachesAggregates then compute
+      else
+        val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
+        val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
+        entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
+          case AggregateMemoLookup.Hit(value) =>
+            hitCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Filled(value) =>
+            fillCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Bypass =>
+            bypassCount.incrementAndGet()
+            compute
 
     def stats: AggregateMemoStats =
       AggregateMemoStats(
@@ -862,6 +896,9 @@ private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
   override private[formula] def withArrayResults: Evaluator =
     TotalEvaluator(underlying.withArrayResults)
 
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] =
+    underlying.generationMemo
+
 /**
  * Private implementation of Evaluator.
  *
@@ -903,6 +940,8 @@ private class EvaluatorImpl(
 
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
+
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = aggregateMemo
 
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorImpl(

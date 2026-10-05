@@ -118,3 +118,38 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
       case CellValue.Formula(_, Some(CellValue.Number(v)), _) => assertEquals(v, BigDecimal(10))
       case other => fail(s"C1 should be 10, got $other")
   }
+
+  test("eval --with re-spills the anchor over the override") {
+    for
+      src <- excelShapedSource()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-s",
+        "Sheet1",
+        "eval",
+        "=SUM(B1#)",
+        "--with",
+        "A1=0"
+      )
+    yield assert(run.stdout.contains("Result: 10 (number)"), run.toString)
+  }
+
+  test("evala spills the anchor's recomputed array") {
+    for
+      src <- excelShapedSource()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-s",
+        "Sheet1",
+        "evala",
+        "=B1#*10",
+        "--with",
+        "A1=0"
+      )
+    yield
+      assertEquals(run.exit, 0, run.toString)
+      // SORT over {0;3;1;4;2} is {0;1;2;3;4}: the last element is 40, not the stale 50
+      assert(run.stdout.contains("40") && !run.stdout.contains("50"), run.stdout)
+  }

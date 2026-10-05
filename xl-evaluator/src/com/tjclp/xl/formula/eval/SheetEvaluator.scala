@@ -279,12 +279,19 @@ object SheetEvaluator:
 
                   // Evaluate in dependency order, threading the partially evaluated sheet.
                   // Fail-fast on first error; only cells in the original range are reported.
+                  val evaluator = Evaluator.spillTrackingInstance(Rng.system)
                   val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
                     scala.util.Right((initial, Map.empty))
                   ) {
                     case (scala.util.Right((tempSheet, results)), ref) =>
                       val currentWorkbook = workbook.map(_.put(tempSheet))
-                      tempSheet.evaluateCell(ref, clock, currentWorkbook) match
+                      evaluateCellWithEvaluator(
+                        tempSheet,
+                        ref,
+                        evaluator,
+                        clock,
+                        currentWorkbook
+                      ) match
                         case scala.util.Right(value) =>
                           val nextResults =
                             if rangeFormulaCells.contains(ref) then results + (ref -> value)
@@ -503,6 +510,7 @@ object SheetEvaluator:
             cyclic.toVector.map(failure(_, "Circular reference")),
             cycleBlocked
           )
+        val evaluator = Evaluator.spillTrackingInstance(Rng.system)
         val (_, values, failures, blocked) = DependencyGraph.topologicalSort(liveGraph) match
           // Unreachable by the argument above; kept total rather than trusted.
           case scala.util.Left(circular) =>
@@ -516,7 +524,13 @@ object SheetEvaluator:
             evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
               case (state @ (_, _, _, blockedNow), ref) if blockedNow(ref) => state
               case ((current, results, failedNow, blockedNow), ref) =>
-                current.evaluateCell(ref, clock, workbook.map(_.put(current))) match
+                evaluateCellWithEvaluator(
+                  current,
+                  ref,
+                  evaluator,
+                  clock,
+                  workbook.map(_.put(current))
+                ) match
                   case scala.util.Right(value) =>
                     val next =
                       if rangeFormulaCells.contains(ref) then results + (ref -> value) else results
@@ -559,11 +573,27 @@ object SheetEvaluator:
           case None =>
             // an ArrayFormula record (CSE or dynamic-array anchor) evaluates as an array and the
             // anchor holds element (0,0); a plain formula evaluates as a scalar cell
-            val cellEvaluator = kind match
-              case _: FormulaKind.ArrayFormula => evaluator.withArrayResults
-              case _ => evaluator
-            // Pass the current cell ref for ROW()/COLUMN() without arguments
-            evaluateFormulaWith(sheet, expr, cellEvaluator, clock, workbook, Some(ref))
+            kind match
+              case _: FormulaKind.ArrayFormula =>
+                val arrayEvaluator = evaluator.withArrayResults
+                parseFormula(expr).flatMap { parsed =>
+                  val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
+                  val result = cellResult(expr, raw)
+                  // GH-695: the whole spill goes to the generation memo for this generation's
+                  // `x#` readers (a scalar or error result spills as itself); the threaded sheet
+                  // keeps only element (0,0) as the anchor's cache
+                  for
+                    memo <- arrayEvaluator.generationMemo
+                    value <- result.toOption
+                  do
+                    val spill = raw match
+                      case scala.util.Right(array: ArrayResult) => array
+                      case _ => ArrayResult.single(value)
+                    memo.recordSpill(sheet.name, ref, spill)
+                  result
+                }
+              // Pass the current cell ref for ROW()/COLUMN() without arguments
+              case _ => evaluateFormulaWith(sheet, expr, evaluator, clock, workbook, Some(ref))
       case other => scala.util.Right(other)
 
   private def evaluateArrayFormulaImpl(
@@ -693,7 +723,11 @@ object SheetEvaluator:
     workbook: Option[Workbook],
     currentCell: Option[ARef]
   ): XLResult[CellValue] =
-    evaluator.eval(expr, sheet, clock, workbook, currentCell) match
+    cellResult(formulaText, evaluator.eval(expr, sheet, clock, workbook, currentCell))
+
+  /** A formula's raw evaluation as the cell value it stores (the GH-344 boundary promotion). */
+  private def cellResult(formulaText: String, raw: Either[EvalError, Any]): XLResult[CellValue] =
+    raw match
       case scala.util.Right(value) =>
         // A formula cell is never blank in Excel: a result that is a reference to an empty cell
         // (INDEX, INDIRECT, OFFSET, CHOOSE, a lookup) reads 0, as `=Z1` already does. Only the
@@ -736,15 +770,13 @@ object SheetEvaluator:
               deferDynamicWithStrip(sheet, graph, evalOrder, dynamicCellsFor(sheet, workbook))
             // Evaluate in dependency order, threading the partially evaluated sheet so
             // dependent formulas see previously computed values. Fail-fast on first error.
+            val evaluator = Evaluator.spillTrackingInstance(rngOpt.getOrElse(Rng.system))
             val evalResult = ordered.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
               scala.util.Right((initial, Map.empty))
             ) {
               case (scala.util.Right((tempSheet, results)), ref) =>
                 val currentWorkbook = workbook.map(_.put(tempSheet))
-                val evaluated = rngOpt match
-                  case Some(rng) => tempSheet.evaluateCell(ref, clock, rng, currentWorkbook)
-                  case None => tempSheet.evaluateCell(ref, clock, currentWorkbook)
-                evaluated match
+                evaluateCellWithEvaluator(tempSheet, ref, evaluator, clock, currentWorkbook) match
                   case scala.util.Right(value) =>
                     scala.util.Right(
                       (threadComputed(tempSheet, ref, value), results + (ref -> value))
@@ -804,20 +836,59 @@ object SheetEvaluator:
   private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
 
   /**
+   * GH-695: one evaluator for a fold a caller runs itself and the formula it evaluates after it
+   * (the CLI's `eval`/`evala` precedent pass), so `x#` in that formula reads the arrays the fold
+   * computed. Use it with [[evaluateCellUsing]], [[evaluateFormulaUsing]] and
+   * [[evaluateArrayFormulaUsing]], which match the public entry points.
+   */
+  private[xl] def spillTrackingEvaluator(): Evaluator = Evaluator.spillTrackingInstance(Rng.system)
+
+  private[xl] def evaluateCellUsing(
+    sheet: Sheet,
+    ref: ARef,
+    evaluator: Evaluator,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    evaluateCellWithEvaluator(sheet, ref, evaluator, Clock.system, workbook)
+
+  private[xl] def evaluateFormulaUsing(
+    sheet: Sheet,
+    formula: String,
+    evaluator: Evaluator,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    evaluateFormulaWith(sheet, formula, evaluator, Clock.system, workbook, None)
+
+  private[xl] def evaluateArrayFormulaUsing(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    workbook: Option[Workbook]
+  ): XLResult[(Sheet, CellRange)] =
+    evaluateArrayFormulaImpl(
+      sheet,
+      formula,
+      originRef,
+      evaluator.withArrayResults,
+      Clock.system,
+      workbook
+    )
+
+  /**
    * GH-695: write a computed value back into a threaded evaluation sheet. A spill anchor (an
-   * ArrayFormula record) keeps its formula, uncached, so a later `x#` read in the same fold still
-   * finds an anchor (a constant is `#REF!`) and evaluates the array afresh. Caching the computed
-   * value would not do: it is only the top-left element, and a cached record makes `x#` trust the
-   * recorded extent's cells, which hold the previous generation's spill (or nothing, for a record
-   * that never had a cache). A plain read of the anchor evaluates it on demand, as for any uncached
-   * formula. Every other cell becomes the plain value, as before.
+   * ArrayFormula record) keeps its formula with the value — its top-left element — as its cache, so
+   * a later `x#` read in the same fold still finds an anchor (a constant is `#REF!`) and a plain
+   * read reuses the one computation. The anchor's whole array is in the fold's generation memo
+   * (recorded by [[evaluateCellWithEvaluator]]), which `x#` reads before the recorded extent's
+   * cells. Every other cell becomes the plain value, as before.
    */
   private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
     sheet.cells.get(ref).map(_.value) match
       case Some(f @ CellValue.Formula(_, _, _: FormulaKind.ArrayFormula)) =>
         value match
           case _: CellValue.Formula => sheet.put(ref, value)
-          case _ => sheet.put(ref, f.copy(cachedValue = None))
+          case computed => sheet.put(ref, f.copy(cachedValue = Some(computed)))
       case _ => sheet.put(ref, value)
 
   /**

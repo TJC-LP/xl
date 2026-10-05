@@ -480,8 +480,14 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
         }
     anchorSheet(anchor).value match
       case CellValue.Formula(text, cached, FormulaKind.ArrayFormula(ref, _, _)) =>
-        if cached.isDefined then extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
-        else evaluated(text)
+        // GH-695: an evaluation fold that computed this anchor in the current generation recorded
+        // its array; the recorded extent's cells are then the previous generation's spill
+        ctx.aggregateMemo.flatMap(_.recordedSpill(anchorSheet.name, anchor)) match
+          case Some(array) => Right(array)
+          case None =>
+            if cached.isDefined then
+              extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
+            else evaluated(text)
       case CellValue.Formula(text, _, _: FormulaKind.Normal) => evaluated(text)
       case _ => notAnchor
 
