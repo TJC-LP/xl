@@ -279,7 +279,8 @@ object SheetEvaluator:
 
                   // Evaluate in dependency order, threading the partially evaluated sheet.
                   // Fail-fast on first error; only cells in the original range are reported.
-                  val evaluator = Evaluator.spillTrackingInstance(Rng.system)
+                  val evaluator =
+                    Evaluator.spillTrackingInstance(Rng.system, readsSpills(sheet, workbook))
                   val evalResult = evalOrder.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
                     scala.util.Right((initial, Map.empty))
                   ) {
@@ -510,7 +511,7 @@ object SheetEvaluator:
             cyclic.toVector.map(failure(_, "Circular reference")),
             cycleBlocked
           )
-        val evaluator = Evaluator.spillTrackingInstance(Rng.system)
+        val evaluator = Evaluator.spillTrackingInstance(Rng.system, readsSpills(sheet, workbook))
         val (_, values, failures, blocked) = DependencyGraph.topologicalSort(liveGraph) match
           // Unreachable by the argument above; kept total rather than trusted.
           case scala.util.Left(circular) =>
@@ -579,17 +580,11 @@ object SheetEvaluator:
                 parseFormula(expr).flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
                   val result = cellResult(expr, raw)
-                  // GH-695: the whole spill goes to the generation memo for this generation's
-                  // `x#` readers (a scalar or error result spills as itself); the threaded sheet
-                  // keeps only element (0,0) as the anchor's cache
-                  for
-                    memo <- arrayEvaluator.generationMemo
-                    value <- result.toOption
-                  do
-                    val spill = raw match
-                      case scala.util.Right(array: ArrayResult) => array
-                      case _ => ArrayResult.single(value)
-                    memo.recordSpill(sheet.name, ref, spill)
+                  // GH-695: the raw result goes to the generation memo for this generation's `x#`
+                  // readers, which read it as they read an anchor they evaluate themselves; the
+                  // threaded sheet keeps only element (0,0) as the anchor's cache
+                  if result.isRight then
+                    arrayEvaluator.generationMemo.foreach(_.recordSpill(sheet.name, ref, raw))
                   result
                 }
               // Pass the current cell ref for ROW()/COLUMN() without arguments
@@ -779,7 +774,10 @@ object SheetEvaluator:
               deferDynamicWithStrip(sheet, graph, evalOrder, dynamicCellsFor(sheet, workbook))
             // Evaluate in dependency order, threading the partially evaluated sheet so
             // dependent formulas see previously computed values. Fail-fast on first error.
-            val evaluator = Evaluator.spillTrackingInstance(rngOpt.getOrElse(Rng.system))
+            val evaluator = Evaluator.spillTrackingInstance(
+              rngOpt.getOrElse(Rng.system),
+              readsSpills(sheet, workbook)
+            )
             val evalResult = ordered.foldLeft[XLResult[(Sheet, Map[ARef, CellValue])]](
               scala.util.Right((initial, Map.empty))
             ) {
@@ -850,53 +848,60 @@ object SheetEvaluator:
    * computed. Use it with [[evaluateCellUsing]], [[evaluateFormulaUsing]] and
    * [[evaluateArrayFormulaUsing]], which match the public entry points.
    */
-  private[xl] def spillTrackingEvaluator(): Evaluator = Evaluator.spillTrackingInstance(Rng.system)
+  private[xl] def spillTrackingEvaluator(formula: String, workbook: Workbook): Evaluator =
+    Evaluator.spillTrackingInstance(
+      Rng.system,
+      Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook)
+    )
+
+  /** GH-695: whether a sheet-level fold should record anchors' results for `x#` readers. */
+  private def readsSpills(sheet: Sheet, workbook: Option[Workbook]): Boolean =
+    workbook.fold(Evaluator.mayReadSpills(sheet))(Evaluator.mayReadSpills)
 
   private[xl] def evaluateCellUsing(
     sheet: Sheet,
     ref: ARef,
     evaluator: Evaluator,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    clock: Clock = Clock.system
   ): XLResult[CellValue] =
-    evaluateCellWithEvaluator(sheet, ref, evaluator, Clock.system, workbook)
+    evaluateCellWithEvaluator(sheet, ref, evaluator, clock, workbook)
 
   private[xl] def evaluateFormulaUsing(
     sheet: Sheet,
     formula: String,
     evaluator: Evaluator,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    clock: Clock = Clock.system
   ): XLResult[CellValue] =
-    evaluateFormulaWith(sheet, formula, evaluator, Clock.system, workbook, None)
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, None)
 
   private[xl] def evaluateArrayFormulaUsing(
     sheet: Sheet,
     formula: String,
     originRef: ARef,
     evaluator: Evaluator,
-    workbook: Option[Workbook]
+    workbook: Option[Workbook],
+    clock: Clock = Clock.system
   ): XLResult[(Sheet, CellRange)] =
-    evaluateArrayFormulaImpl(
-      sheet,
-      formula,
-      originRef,
-      evaluator.withArrayResults,
-      Clock.system,
-      workbook
-    )
+    evaluateArrayFormulaImpl(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
 
   /**
-   * GH-695: write a computed value back into a threaded evaluation sheet. A spill anchor (an
-   * ArrayFormula record) keeps its formula with the value — its top-left element — as its cache, so
-   * a later `x#` read in the same fold still finds an anchor (a constant is `#REF!`) and a plain
-   * read reuses the one computation. The anchor's whole array is in the fold's generation memo
-   * (recorded by [[evaluateCellWithEvaluator]]), which `x#` reads before the recorded extent's
-   * cells. Every other cell becomes the plain value, as before.
+   * GH-695: write a computed value back into a threaded evaluation sheet. A formula cell keeps its
+   * record with the value as its cache, so a later `x#` read in the same fold still finds a spill
+   * anchor (a constant is `#REF!`) — an ArrayFormula record, whose result the fold recorded in its
+   * generation memo (see [[evaluateCellWithEvaluator]]), or a Normal one, which `x#` evaluates as
+   * an array — and a plain read reuses the one computation (a cached formula reads as its cache).
+   * Every other cell becomes the plain value, as before.
    */
   private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
     sheet.cells.get(ref).map(_.value) match
-      case Some(f @ CellValue.Formula(_, _, _: FormulaKind.ArrayFormula)) =>
+      case Some(f: CellValue.Formula) =>
         value match
-          case _: CellValue.Formula => sheet.put(ref, value)
+          // only an uncached record handed back by reference (`IFERROR(X1,0)` over an X1 not yet
+          // evaluated; `cellResult` unwraps cached ones): the value is unknown, so the cell stays
+          // uncached and a reader evaluates it on demand
+          case _: CellValue.Formula => sheet.put(ref, f.copy(cachedValue = None))
           case computed => sheet.put(ref, f.copy(cachedValue = Some(computed)))
       case _ => sheet.put(ref, value)
 

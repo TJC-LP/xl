@@ -150,8 +150,32 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
       )
     yield
       assertEquals(run.exit, 0, run.toString)
-      // SORT over {0;3;1;4;2} is {0;1;2;3;4}: the last element is 40, not the stale 50
-      assert(run.stdout.contains("40") && !run.stdout.contains("50"), run.stdout)
+      // SORT over {0;3;1;4;2} is {0;1;2;3;4}: the grid's column, not the stale {10;…;50}
+      val column = run.stdout.linesIterator.collect {
+        case s"| $row | $value |" if row.trim.nonEmpty && row.trim.forall(_.isDigit) => value.trim
+      }.toVector
+      assert(run.stdout.contains("Spill Range: Z1000:Z1004 (5×1)"), run.stdout)
+      assertEquals(column, Vector("0", "10", "20", "30", "40"), run.stdout)
+  }
+
+  test("recalc over unchanged inputs leaves the worksheet XML byte-identical") {
+    def sheetXml(path: Path): String =
+      val zip = new java.util.zip.ZipFile(path.toFile)
+      try
+        new String(
+          zip.getInputStream(zip.getEntry("xl/worksheets/sheet1.xml")).readAllBytes(),
+          StandardCharsets.UTF_8
+        )
+      finally zip.close()
+    for
+      src <- excelShapedSource()
+      out <- outPath()
+      run <- CliHarness.run("-f", src.toString, "-s", "Sheet1", "-o", out.toString, "recalc")
+    yield
+      assertEquals(run.exit, 0, run.toString)
+      // every recomputed cache equals the file's, so B1's record (t="array", ref, cm) and the
+      // spill cells are carried verbatim
+      assertEquals(sheetXml(out), sheetXml(src))
   }
 
   test("a function returning the anchor writes the anchor's value as its cache") {

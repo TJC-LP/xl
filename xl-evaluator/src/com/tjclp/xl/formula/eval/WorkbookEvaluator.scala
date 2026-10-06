@@ -457,12 +457,16 @@ object WorkbookEvaluator:
     // workers. GH-537: it also serves every acyclic Straight segment of the iterative condensation
     // walk — the one-pass invariant holds there because a reader of a range touching cyclic cell C
     // has a graph edge to C and is ordered after C's component has finalized; successful members
-    // are written as plain values (cacheable and final), failed members are stripped to uncached
+    // are written as plain values or, for formula cells, as their records cached with the value
+    // (GH-695; `cacheable` only refuses uncached formulas, so both are cacheable and final), failed
+    // members are stripped to uncached
     // formulas (`cacheable` refuses the range), and the deferred dynamic bucket's caches are
     // stripped up front so a range over a not-yet-evaluated bucket cell bypasses too. The rounds
     // INSIDE a fixpoint change the same ranges repeatedly and never see this memo: fixpointStep
     // hands the engine a fresh one per round. As with wave placement (GH-520), a dependence the
     // graph cannot see (GH-468's blind-name class) is invisible to this argument as well.
+    // GH-695: record spill anchors' arrays only for a book that has `x#` readers
+    if Evaluator.mayReadSpills(wb) then generationMemo.trackSpills()
     val generationEvaluator =
       Evaluator.recalculationInstance(rngOpt.getOrElse(Rng.system), generationMemo)
     // Whole-book ordering needs only formula-to-formula edges. Constant cells are read during

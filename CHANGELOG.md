@@ -278,9 +278,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   read it, so a dynamic-array anchor stopped being an anchor and an `x#` reader evaluated after it
   got `#REF!`. On an Excel book with `C1 = SUM(B1#)` cached as 15, `recalc` and any `put` that
   re-evaluated B1 overwrote the correct 15 with `#REF!`, and `eval "=SUM(B1#)"` disagreed with
-  `eval "=SUM(Sheet1!B1#)"`. An ArrayFormula anchor now keeps its record, cached with its
-  top-left element, and the fold records its whole computed array in the generation memo, which
-  `x#` reads before the recorded extent's cells: an uncached record with no spill cells reads its
+  `eval "=SUM(Sheet1!B1#)"`. A formula cell now keeps its record in the fold, cached with its
+  value, so a Normal-kind anchor (an xl-authored `SORT(...)`) stays one too; for an ArrayFormula
+  anchor the fold records its result in the generation memo (only for a book with `x#` readers),
+  which `x#` reads before the recorded extent's cells, under the same rule as an anchor it
+  evaluates itself (a scalar result is `#REF!`, an error is that error): an uncached record with no spill cells reads its
   whole array, an edited input reaches readers (`SORT` over a changed A1 gives the new sum, not the
   previous spill cells), and plain and spill readers share one evaluation (one `RAND()` draw;
   pinned external caches and iterative fixpoints read as before). `eval`/`evala` evaluate their
@@ -288,6 +290,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   A function that returns a referenced cell itself (`IFERROR`, `IFNA`, the lookups) now stores
   that cell's value when the cell is a cached formula, not the formula record (pre-existing for a
   precedent a targeted recalculation did not re-evaluate).
+  A bare reference to a formula cell cached with an error (`=Y1` over `Y1 = X1+1` cached as
+  `#DIV/0!`) is that error, not 0 (pre-existing; the folds now thread such records).
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

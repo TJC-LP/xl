@@ -397,3 +397,54 @@ class SpillReferenceSpec extends FunSuite:
         assertEquals(c1Of(targeted.workbook, ref"C1"), CellValue.Formula(f, Some(n(7))), s"$f →")
       }
   }
+
+  test("GH-695: a Normal-kind anchor stays an anchor in every evaluation fold") {
+    // an xl-authored dynamic formula is a plain <f>; `x#` evaluates its formula as an array
+    val sheet = Sheet("Sheet1")
+      .put(ref"B1", n(3))
+      .put(ref"B2", n(1))
+      .put(ref"B3", n(2))
+      .put(ref"A1", CellValue.Formula("SORT(B1:B3)"))
+      .put(ref"C1", CellValue.Formula("SUM(A1#)"))
+    val book = Workbook(sheet)
+    val sum = CellValue.Formula("SUM(A1#)", Some(n(6)))
+    assertEquals(c1(book.recalculate(Clock.system).workbook), sum)
+    assertEquals(c1(book.recalculate(RecalcOptions(parallelism = 4)).workbook), sum, "∥")
+    val targeted =
+      book.recalculateAfterEdit(SheetName.unsafe("Sheet1"), Set(ref"B1"), RecalcOptions())
+    assertEquals(c1(targeted.workbook), sum, "targeted")
+    assertEquals(
+      sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+      Right(Some(n(6)))
+    )
+  }
+
+  test("GH-695: a fold reads a scalar or erroring anchor as x# does when it evaluates it itself") {
+    // a scalar result is not a spill anchor (#REF!); an error result is that error
+    List("1+1" -> CellError.Ref, "1/0" -> CellError.Div0).foreach { (formula, expected) =>
+      List("SUM(A1#)", "ROWS(A1#)").foreach { reader =>
+        val sheet = Sheet("Sheet1")
+          .put(ref"A1", arrayRecord(ref"A1", formula))
+          .put(ref"C1", CellValue.Formula(reader))
+        val book = Workbook(sheet)
+        val direct = sheet.evaluateFormula(s"=$reader", Clock.system, Some(book), Some(ref"C1"))
+        assert(
+          direct.isLeft || direct == Right(CellValue.Error(expected)),
+          s"$formula $reader: $direct"
+        )
+        assertEquals(
+          c1(book.recalculate(Clock.system).workbook),
+          CellValue.Formula(reader, Some(CellValue.Error(expected))),
+          s"$formula $reader"
+        )
+      }
+    }
+  }
+
+  test("GH-695: a bare reference to a formula cached with an error is that error") {
+    // folds now thread formula records cached with their value, so `=Y1` over an erroring Y1
+    // reads the record — it must read as the error cell it replaced, not as 0
+    val sheet = Sheet("Sheet1")
+      .put(ref"Y1", CellValue.Formula("X1+1", Some(CellValue.Error(CellError.Div0))))
+    assertEquals(sheet.evaluateFormula("=Y1"), Right(CellValue.Error(CellError.Div0)))
+  }

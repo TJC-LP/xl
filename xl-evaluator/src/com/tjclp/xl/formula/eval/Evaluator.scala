@@ -134,17 +134,32 @@ object Evaluator:
     TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
 
   /**
-   * GH-695: [[instance]] plus a generation memo that records spill anchors' arrays and caches no
-   * aggregates — for the sheet-level evaluation folds, which thread computed values like a
-   * recalculation but never had the aggregate memo.
+   * GH-695: [[instance]] plus a generation memo that records spill anchors' results (when
+   * `trackSpills`) and caches no aggregates — for the sheet-level evaluation folds, which thread
+   * computed values like a recalculation but never had the aggregate memo.
    */
-  private[formula] def spillTrackingInstance(rng: Rng): Evaluator =
-    TotalEvaluator(
-      new EvaluatorImpl(
-        rng = rng,
-        aggregateMemo = Some(new AggregateMemo(cachesAggregates = false))
-      )
+  private[formula] def spillTrackingInstance(rng: Rng, trackSpills: Boolean): Evaluator =
+    val memo = new AggregateMemo(cachesAggregates = false)
+    if trackSpills then memo.trackSpills()
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(memo)))
+
+  /**
+   * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
+   * stored `ANCHORARRAY` spelling. A cheap textual over-approximation (`#REF!` matches too): it
+   * only decides whether an evaluation fold records anchors' results for `x#` readers.
+   */
+  private[formula] def mayReadSpills(wb: Workbook): Boolean =
+    wb.sheets.exists(mayReadSpills) || wb.metadata.definedNames.exists(n =>
+      mayReadSpills(n.formula)
     )
+
+  private[formula] def mayReadSpills(sheet: Sheet): Boolean =
+    sheet.cells.valuesIterator.exists(_.value match
+      case CellValue.Formula(text, _, _) => mayReadSpills(text)
+      case _ => false)
+
+  private[formula] def mayReadSpills(formula: String): Boolean =
+    formula.indexOf('#') >= 0 || formula.toUpperCase(java.util.Locale.ROOT).contains("ANCHORARRAY")
 
   /**
    * Evaluator instance that allows array results to propagate.
@@ -752,16 +767,22 @@ object Evaluator:
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /**
-     * GH-695: each spill anchor's array as this generation's fold computed it. The threaded sheet
-     * caches only the anchor's top-left element, and the recorded extent's cells hold the previous
-     * generation's spill (or nothing), so an `x#` reader reads the anchor's array here first.
+     * GH-695: each spill anchor's raw evaluation as this generation's fold computed it — an array
+     * is its spill, a scalar is not a spill anchor, an error is that error, exactly as `x#` reads
+     * an anchor it evaluates itself. The threaded sheet caches only the anchor's top-left element,
+     * and the recorded extent's cells hold the previous generation's spill (or nothing), so an `x#`
+     * reader looks here first. Off until [[trackSpills]]: a book without `x#` readers keeps no
+     * arrays.
      */
-    private val spills = TrieMap.empty[(SheetName, ARef), ArrayResult]
+    private val spills = TrieMap.empty[(SheetName, ARef), Either[EvalError, Any]]
+    private val tracksSpills = new java.util.concurrent.atomic.AtomicBoolean(false)
 
-    def recordSpill(sheet: SheetName, anchor: ARef, array: ArrayResult): Unit =
-      spills.update((sheet, anchor), array)
+    def trackSpills(): Unit = tracksSpills.set(true)
 
-    def recordedSpill(sheet: SheetName, anchor: ARef): Option[ArrayResult] =
+    def recordSpill(sheet: SheetName, anchor: ARef, raw: Either[EvalError, Any]): Unit =
+      if tracksSpills.get() then spills.update((sheet, anchor), raw)
+
+    def recordedSpill(sheet: SheetName, anchor: ARef): Option[Either[EvalError, Any]] =
       spills.get((sheet, anchor))
     private val hitCount = new AtomicLong(0L)
     private val fillCount = new AtomicLong(0L)

@@ -177,7 +177,7 @@ object ReadCommands:
           )
 
           // 5. Evaluate only formulas in the closure
-          evaluator = SheetEvaluator.spillTrackingEvaluator()
+          evaluator = SheetEvaluator.spillTrackingEvaluator(formula, wb)
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
             sheetIO.flatMap { s =>
               IO.fromEither(
@@ -240,7 +240,7 @@ object ReadCommands:
                 .map(cyclic(_, formula))
           )
 
-          evaluator = SheetEvaluator.spillTrackingEvaluator()
+          evaluator = SheetEvaluator.spillTrackingEvaluator(formula, wb)
 
           evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
             sheetIO.flatMap { s =>
@@ -359,7 +359,7 @@ object ReadCommands:
               .left
               .map(cyclic(_, formula))
         )
-        evaluator = SheetEvaluator.spillTrackingEvaluator()
+        evaluator = SheetEvaluator.spillTrackingEvaluator(formula, wb)
         evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
           sheetIO.flatMap { s =>
             IO.fromEither(
