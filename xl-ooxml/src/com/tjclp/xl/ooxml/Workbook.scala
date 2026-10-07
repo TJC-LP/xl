@@ -632,11 +632,13 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
    */
   def parseDefinedName(e: Elem): DefinedName =
     def text(key: String): Option[String] = Option(e \@ key).filter(_.nonEmpty)
-    def flag(key: String): Boolean = text(key).exists(v => v == "1" || v == "true")
+    // xsd:boolean and xsd:unsignedInt collapse whitespace (` true ` is true); xsd:string keeps it
+    def token(key: String): Option[String] = text(key).map(_.trim).filter(_.nonEmpty)
+    def flag(key: String): Boolean = token(key).exists(v => v == "1" || v == "true")
     DefinedName(
       name = e \@ "name",
       formula = FormulaStorage.fromStored(e.text.trim),
-      localSheetId = text("localSheetId").flatMap(_.toIntOption),
+      localSheetId = token("localSheetId").flatMap(_.toIntOption),
       hidden = flag("hidden"),
       comment = text("comment"),
       customMenu = text("customMenu"),
@@ -647,7 +649,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       vbProcedure = flag("vbProcedure"),
       xlm = flag("xlm"),
       // xsd:unsignedInt: the whole 0..4294967295 range, past Int's (GH-696)
-      functionGroupId = text("functionGroupId")
+      functionGroupId = token("functionGroupId")
         .flatMap(_.toLongOption)
         .filter(id => id >= 0 && id <= MaxUnsignedInt),
       shortcutKey = text("shortcutKey"),

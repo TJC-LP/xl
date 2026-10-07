@@ -405,3 +405,22 @@ class DefinedNameRoundTripSpec extends FunSuite:
     )
     assert(built.exists(_.toString.contains("""functionGroupId="4294967295"""")), built.toString)
   }
+
+  test("GH-696: boolean and numeric attributes collapse XSD whitespace; text keeps it") {
+    val elem =
+      <definedNames><definedName name="W" function=" true " vbProcedure="&#10;1&#9;" hidden=" 0 " localSheetId=" 2 " functionGroupId=" 14 " description=" padded ">1</definedName></definedNames>
+    assertEquals(
+      OoxmlWorkbook.parseDefinedNames(Some(elem)),
+      Vector(
+        DefinedName(
+          "W",
+          "1",
+          localSheetId = Some(2),
+          function = true,
+          vbProcedure = true,
+          functionGroupId = Some(14L),
+          description = Some(" padded ")
+        )
+      )
+    )
+  }
