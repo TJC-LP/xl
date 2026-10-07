@@ -414,6 +414,43 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(WorkbookAudit.of(book), audit)
   }
 
+  /** `Deep_from … Deep_101`, each the next plus one, `Deep_101` defined as `leaf`. */
+  private def deepChain(wb: Workbook, from: Int, leaf: String): Workbook =
+    (from to 101).foldLeft(wb)((acc, i) =>
+      acc.withDefinedName(s"Deep_$i", if i == 101 then leaf else s"Deep_${i + 1}+1")
+    )
+
+  test("#691: a too-deep name chain exempts its table and retains known volatility") {
+    // the corner reads Deep_1 only when A2 <= 0, so its evaluation at the axis inputs succeeds
+    // (100, 200, 300 against caches of -1): checked, the table would be stale
+    val corner = "IF(A2>0, A2*100, Deep_1)"
+    val steady = deepChain(volatileTableBook(corner, None), 1, "1")
+    // (IF evaluates only the branch it takes: the chain past the cap is never reached)
+    assertEquals(steady.evaluateFormula("=IF(A2>0, A2*100, Deep_1)", "S"), Right(num(400)))
+    assert(steady.evaluateFormula("=Deep_1", "S").isLeft)
+    val steadyAudit = WorkbookAudit.of(steady)
+    // 101 names: one past the cap — unresolvable, its volatility unknown. The corner is an
+    // unresolved reader, never listed volatile, and its table is not checked, over a constant too
+    assertEquals(steadyAudit.volatile, Vector.empty)
+    assertEquals(steadyAudit.unresolvedReaders, Vector(q("S", "F9")))
+    assertEquals(steadyAudit.staleDataTables, Vector.empty)
+    val draw = WorkbookAudit.of(deepChain(volatileTableBook(corner, None), 1, "RAND()"))
+    assertEquals(draw.volatile, Vector(q("S", "F9")))
+    assertEquals(draw.unresolvedReaders, Vector(q("S", "F9")))
+    assertEquals(draw.staleDataTables, Vector.empty)
+
+    // one name shorter the chain resolves: over RAND the corner is volatile (and exempt) …
+    val near = "IF(A2>0, A2*100, Deep_2)"
+    val within = WorkbookAudit.of(deepChain(volatileTableBook(near, None), 2, "RAND()"))
+    assertEquals(within.volatile, Vector(q("S", "F9")))
+    assertEquals(within.unresolvedReaders, Vector.empty)
+    assertEquals(within.staleDataTables, Vector.empty)
+    // … and over a constant it is checked, and stale
+    val checked = WorkbookAudit.of(deepChain(volatileTableBook(near, None), 2, "1"))
+    assertEquals(checked.volatile, Vector.empty)
+    assertEquals(checked.staleDataTables.map(_.ref.toA1), Vector("F10:F12"))
+  }
+
   test("buckets are in workbook order, then row, then column") {
     val wb = Workbook(
       Vector(

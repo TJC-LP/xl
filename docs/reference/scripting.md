@@ -634,7 +634,8 @@ its own poison, since arithmetic propagates both shapes unchanged).
 Also since 0.13.0, **defined names resolve** in formulas: `=IF(case=2,…)`,
 `=entry_mult*ltm_ebitda`, and `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names
 (sheet-scoped shadows global), contribute dependency edges so `recalculate()` orders name-gated
-families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors.
+families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors
+(an undefined name, a cycle of names, or a chain more than 100 names deep — #691).
 
 When the very next step is a write, `Excel.writeChecked(wb, path)` (since 0.21.0) fills in only
 the uncached formulas (`recalculateUncached`) and writes, and `Excel.writeRecalculated(wb, path)`

@@ -278,6 +278,34 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Defined-name walks are stack-safe, linear and keyed on the resolved name** (#691): a
+  1,000-deep chain of names (`N1 = N2+1`, `N2 = N3+1`, …) killed `xl audit` and `xl recalc` with a
+  raw `StackOverflowError` (exit 1), and the graph behind `deps` overflowed at 500–1,000. A
+  "diamond", where each name reads the next twice, was walked once per path, so a depth-22 audit
+  took 9.3 s, and the evaluator, recalc included, was exponential the same way. The cycle guard was
+  keyed on the name's text, so a sheet-local `X` on S defined as `T!X` beside T's own `X` read as a
+  cycle: `S!A1 = X+1` failed to evaluate, had no graph edge and was not seen as volatile.
+  - Every name walk now follows the same rules. Guards and memos key on the resolved definition
+    plus the sheet its body resolves from. A chain resolves at most 100 names deep, the bound
+    `unresolvedReaders` already used, and the evaluator refuses the 101st name on any chain it
+    follows. Following a longer chain produces a per-cell `Defined name chain too deep` error;
+    its readers are unresolved in `audit`, and the graph adds no edge past the cap. Dynamic and
+    volatile classification remains conservative when a call is found: `IF` can skip a deep
+    branch, and `IFERROR` can recover from its refusal. Keeping those dynamic readers deferred
+    prevents successful formulas from reading stale caches during full and targeted recalculation.
+  - The audit's volatility check, `dynamicCells`, `unresolvedReaders` and the name-change readers
+    walk the names once with an iterative Tarjan pass: every name gets one step, however many
+    formulas and paths reach it. The graph expands names from a breadth-first queue. Neither
+    recurses per name, so the stack holds one expression at a time. On a 40-sheet book with 4,500
+    chained names, `dynamicCells` and `unresolvedReaders` run faster than before.
+  - The evaluator memoises name values inside the outermost name it evaluates, so a depth-30
+    diamond recalculates in milliseconds. A reused value is the one evaluating again would give.
+    A value that drew from `RAND` is never stored, so each reference to a name over `RAND()` still
+    draws anew (`Rnd-Rnd` is not 0). After a cycle or the cap refuses a name, nothing is stored or
+    reused for the rest of that evaluation.
+  - A data table whose corner reads a chain too deep to resolve is exempt from the stale-table note,
+    even when no volatile call has been found and its reader is not listed as volatile.
+  - Pre-existing; found by the Wave 31 lint-audit review.
 - **Excel's `Sheet1!#REF!` parses** (#694): the parser refused the spelling Excel writes after a
   formula's or a name's target is deleted ("missing cell reference after !"). So `insert-rows` /
   `delete-cols` exited 3 on any sheet with a deleted-target `_xlnm._FilterDatabase` or print area,

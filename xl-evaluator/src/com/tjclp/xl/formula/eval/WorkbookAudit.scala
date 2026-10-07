@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.sheets.Sheet
-import com.tjclp.xl.workbooks.{CalcPr, DefinedName, Workbook}
+import com.tjclp.xl.workbooks.{CalcPr, Workbook}
 
 import scala.collection.mutable
 
@@ -75,7 +75,8 @@ object StaleDataTable:
  * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
  * and `iterativeCycles`), `volatile` (a call to a function flagged `FunctionFlags.volatile` —
  * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588, directly or through defined
- * names whose bodies make one, #678), `dynamic` (INDIRECT/OFFSET readers,
+ * names whose bodies make one, #678 — conservatively even when another name chain exceeds
+ * [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
  * caches are pinned) and the file's `calcPr`.
  *
@@ -199,7 +200,11 @@ object WorkbookAudit:
         wb,
         clock,
         graph.dependencies,
-        scanned.iterator.collect { case Finding.Volatile(q) => q }.toSet
+        // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
+        scanned.iterator.collect {
+          case Finding.Volatile(q) => q
+          case Finding.MaybeVolatile(q) => q
+        }.toSet
       )
     )
 
@@ -212,7 +217,8 @@ object WorkbookAudit:
    * A table whose corner reads a volatile function (RAND, NOW, …), directly, through a defined
    * name, or anywhere in its cone, is never checked: every re-evaluation draws new values, so a
    * note would differ run to run and `recalc --tables` could never clear it. The `volatile` bucket
-   * already names that cell.
+   * already names that cell. A too-deep name chain without a known volatile call (#691) also
+   * exempts the table, without being listed as volatile.
    */
   private def staleDataTablesOf(
     wb: Workbook,
@@ -303,16 +309,23 @@ object WorkbookAudit:
     case Uncached(ref: QualifiedRef)
     case Unparseable(ref: QualifiedRef, message: String)
     case Volatile(ref: QualifiedRef)
+
+    /**
+     * #691: no volatile call found directly or through names, but a chain is too deep to resolve,
+     * so whether it is volatile is unknown — never listed (the cell is an unresolved reader), only
+     * exempting a data table from the stale check.
+     */
+    case MaybeVolatile(ref: QualifiedRef)
     case External(ref: QualifiedRef)
 
   /**
    * `viaName(qualifier, name)`: whether the defined name a formula on the cell's sheet references
-   * (sheet-qualified or not) is volatile — see [[volatileNames]].
+   * (sheet-qualified or not) reaches a volatile call — see [[volatileNames]].
    */
   private def classify(
     q: QualifiedRef,
     value: CellValue,
-    viaName: (Option[SheetName], String) => Boolean
+    viaName: (Option[SheetName], String) => NameWalk.Reach
   ): List[Finding] = value match
     case CellValue.Error(e) => List(Finding.ErrorValue(q, e))
     // A data-table record is a pinned value source: its cache is audited, its text never parsed
@@ -321,7 +334,12 @@ object WorkbookAudit:
       val parsed = FormulaParser.parse(text) match
         case Left(err) => List(Finding.Unparseable(q, unparseableMessage(text, err)))
         case Right(expr) =>
-          val volatile = if callsVolatile(expr, viaName) then List(Finding.Volatile(q)) else Nil
+          val volatile =
+            if callsVolatile(expr, viaName(_, _) == NameWalk.Reach.Found) then
+              List(Finding.Volatile(q))
+            else if callsVolatile(expr, viaName(_, _) == NameWalk.Reach.TooDeep) then
+              List(Finding.MaybeVolatile(q))
+            else Nil
           val external = if TExpr.containsExternalRef(expr) then List(Finding.External(q)) else Nil
           volatile ++ external
       cacheFindings(q, cached) ++ parsed
@@ -393,30 +411,31 @@ object WorkbookAudit:
    * #678: whether a defined name, referenced from a formula on `from` (looked up from `qualifier`
    * when the reference is sheet-qualified), is volatile — its parsed body calls a volatile
    * function, directly or through further names. Resolution is the dependency graph's: the scoped
-   * lookup, a name's own references resolved from its defining sheet, and the same cycle guard
-   * (UPPERCASED names on the current path contribute nothing). An unresolvable or unparseable name
-   * is not volatile. Answers for a top-level reference are memoised per (name, sheet it resolves
-   * from); answers computed under the cycle guard are not, since the guard may have cut them short.
+   * lookup, and a name's own references resolved from its defining sheet. An unknown or unparseable
+   * name provides no positive evidence of volatility.
+   *
+   * #691: the walk is a [[NameWalk.Walk]] over resolved (definition, sheet) nodes, so a sheet-local
+   * `X` defined as `T!X` reaches T's `X` instead of reading as a cycle, every name is visited once
+   * however many formulas and paths reach it. A name reaching a volatile call remains volatile even
+   * if another chain exceeds [[NameWalk.MaxDepth]]: lazy evaluation can skip or recover from that
+   * branch. A too-deep chain without a known volatile call answers `TooDeep`. Each node's body is
+   * parsed and scanned once, without recursing per name.
    */
-  private def volatileNames(wb: Workbook): (SheetName, Option[SheetName], String) => Boolean =
-    if wb.metadata.definedNames.isEmpty then (_, _, _) => false
+  private def volatileNames(
+    wb: Workbook
+  ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
+    if wb.metadata.definedNames.isEmpty then (_, _, _) => NameWalk.Reach.Absent
     else
-      val canonical = DependencyGraph.sheetCanonicaliser(wb)
-      val memo = mutable.HashMap.empty[(DefinedName, SheetName), Boolean]
-      def walk(
-        from: SheetName,
-        qualifier: Option[SheetName],
-        name: String,
-        visiting: Set[String]
-      ): Boolean =
-        val key = name.toUpperCase
-        !visiting.contains(key) &&
-        Evaluator.lookupDefinedName(wb, qualifier.fold(from)(canonical), name).exists { dn =>
-          val defining = Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(from)
-          def body: Boolean = FormulaParser
-            .parse(dn.formula)
-            .toOption
-            .exists(callsVolatile(_, (q, n) => walk(defining, q, n, visiting + key)))
-          if visiting.isEmpty then memo.getOrElseUpdate((dn, defining), body) else body
-        }
-      (from, qualifier, name) => walk(from, qualifier, name, Set.empty)
+      val resolve = NameWalk.resolver(wb, DependencyGraph.sheetCanonicaliser(wb))
+      val parsed = mutable.HashMap.empty[String, Option[TExpr[?]]]
+      // stepped once per node by the walk
+      def step(node: NameWalk.Node): NameWalk.Step[NameWalk.Node] =
+        parsed
+          .getOrElseUpdate(
+            node.definition.formula,
+            FormulaParser.parse(node.definition.formula).toOption
+          )
+          .fold(NameWalk.Step.empty)(NameWalk.Step.of(_, node.sheet, resolve, callsVolatile))
+      val walk = NameWalk.Walk(step)
+      (from, qualifier, name) =>
+        resolve(qualifier, name, from).fold(NameWalk.Reach.Absent)(walk(_).reach)
