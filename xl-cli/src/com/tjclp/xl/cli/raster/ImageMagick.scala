@@ -51,6 +51,7 @@ object ImageMagick extends Rasterizer:
           exitCode <- process.exitValue
         yield exitCode == 0
       }
+      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
   /**
@@ -66,6 +67,7 @@ object ImageMagick extends Rasterizer:
           exitCode <- process.exitValue
         yield exitCode == 0
       }
+      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
   /**
@@ -98,6 +100,7 @@ object ImageMagick extends Rasterizer:
                 delegatePattern.findFirstMatchIn(line).map(_.group(1))
               }
       }
+      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(None))
       .handleError(_ => None)
 
   /**
@@ -248,6 +251,7 @@ object ImageMagick extends Rasterizer:
               _ <- process.stderr.compile.drain
             yield versionOutput.linesIterator.nextOption()
           }
+          .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(None))
           .handleError(_ => None)
     }
 

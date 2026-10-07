@@ -1,8 +1,12 @@
 package com.tjclp.xl.cli.raster
 
-import java.nio.file.Path
+import java.io.IOException
+import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
+import java.util.UUID
 
-import cats.effect.IO
+import scala.concurrent.duration.FiniteDuration
+
+import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 
 /**
@@ -136,11 +140,26 @@ object RasterError:
   case class FormatNotSupported(rasterizer: String, format: RasterFormat) extends RasterError:
     def message: String = s"$rasterizer does not support ${format.extension} format"
 
-  /** Conversion failed */
+  /** Conversion failed; an empty stderr ends the message at the exit code (GH-690). */
   case class ConversionFailed(rasterizer: String, stderr: String, exitCode: Int)
       extends RasterError:
     def message: String =
-      s"$rasterizer conversion failed (exit $exitCode): ${stderr.stripTrailing}"
+      val detail = stderr.strip
+      val base = s"$rasterizer conversion failed (exit $exitCode)"
+      if detail.isEmpty then base else s"$base: $detail"
+
+  /** GH-690: the backend ran past its deadline and was stopped. */
+  case class TimedOut(rasterizer: String, after: FiniteDuration) extends RasterError:
+    def message: String =
+      s"$rasterizer did not finish within ${after.toSeconds} s and was stopped"
+
+  /**
+   * GH-690: the converted image could not be moved onto the output path (a read-only directory, a
+   * path that is a directory). The CLI classifies it as `IO_WRITE`.
+   */
+  case class OutputFailed(path: Path, cause: Throwable) extends RasterError:
+    def message: String =
+      s"cannot write $path: ${Option(cause.getMessage).getOrElse(cause.toString)}"
 
   /**
    * A backend that takes file paths only (resvg) could not create its scratch SVG: in `spillDir`
@@ -227,9 +246,7 @@ object RasterizerChain:
           case Some(rasterizer) =>
             rasterizer.isAvailable.flatMap {
               case true =>
-                rasterizer
-                  .convertSvgToRaster(scaledSvg, outputPath, format, dpi)
-                  .as(rasterizer.name)
+                attempt(rasterizer, scaledSvg, outputPath, format, dpi).as(rasterizer.name)
               case false =>
                 IO.raiseError(
                   RasterError.RasterizerNotFound(
@@ -273,8 +290,7 @@ object RasterizerChain:
 
           case true =>
             // Available, try to convert
-            rasterizer
-              .convertSvgToRaster(svg, outputPath, format, dpi)
+            attempt(rasterizer, svg, outputPath, format, dpi)
               .map { _ =>
                 // Log if we fell back from the default
                 if tried.nonEmpty then
@@ -304,10 +320,61 @@ object RasterizerChain:
                       format,
                       dpi,
                       rest,
-                      tried :+ s"${rasterizer.name} (${error.getMessage.take(50)})"
+                      // the whole message: ConversionFailed already keeps only stderr's tail
+                      tried :+ s"${rasterizer.name} (${error.getMessage})"
                     )
               }
         }
+
+  /**
+   * One backend's conversion, trusted only by its result (GH-690): the backend writes a hidden file
+   * beside `outputPath`, which must exist and be non-empty before it replaces `outputPath`. A
+   * backend that exits 0 without writing is [[RasterError.ConversionFailed]] (the chain then tries
+   * the next one); a file left at `outputPath` by an earlier run cannot pass for this run's output,
+   * and a failed run leaves it untouched. The hidden file is removed on every path out.
+   */
+  private def attempt(
+    rasterizer: Rasterizer,
+    svg: String,
+    outputPath: Path,
+    format: RasterFormat,
+    dpi: Int
+  ): IO[Unit] =
+    val target = outputPath.toAbsolutePath
+    val staged = IO {
+      val fileName = target.getFileName.toString
+      val ext = fileName.lastIndexOf('.') match
+        case -1 => format.extension
+        case i => fileName.substring(i + 1)
+      target.resolveSibling(s".$fileName.xl-${UUID.randomUUID()}.$ext")
+    }
+    Resource.make(staged)(p => IO.blocking(Files.deleteIfExists(p)).void).use { staging =>
+      rasterizer.convertSvgToRaster(svg, staging, format, dpi) >>
+        IO.blocking(Files.isRegularFile(staging) && Files.size(staging) > 0).flatMap {
+          case true =>
+            IO.blocking(moveIntoPlace(staging, target)).adaptError { case e: IOException =>
+              RasterError.OutputFailed(target, e)
+            }
+          case false =>
+            IO.raiseError(
+              RasterError
+                .ConversionFailed(rasterizer.name, "exited 0 without writing any output", 0)
+            )
+        }
+    }
+
+  /** Replace `target` with `staging` atomically where the file system can. */
+  private def moveIntoPlace(staging: Path, target: Path): Unit =
+    try
+      Files.move(
+        staging,
+        target,
+        StandardCopyOption.REPLACE_EXISTING,
+        StandardCopyOption.ATOMIC_MOVE
+      ): Unit
+    catch
+      case _: AtomicMoveNotSupportedException =>
+        Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
 
   private def installHintFor(name: String): String = name match
     case "batik" =>

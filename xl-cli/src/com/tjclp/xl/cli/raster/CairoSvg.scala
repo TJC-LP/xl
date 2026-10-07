@@ -47,6 +47,7 @@ object CairoSvg extends Rasterizer:
           exitCode <- process.exitValue
         yield exitCode == 0
       }
+      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
   /**
@@ -62,6 +63,7 @@ object CairoSvg extends Rasterizer:
           exitCode <- process.exitValue
         yield exitCode == 0
       }
+      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
   /**

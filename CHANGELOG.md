@@ -272,6 +272,18 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **A raster backend's exit code no longer counts as success on its own** (#690): an
+  rsvg-convert, cairosvg or ImageMagick that exited 0 without writing was reported as
+  `Exported: out.png` with exit 0 and no file. Every backend now writes beside the output path, and
+  the image replaces it only when it exists and is non-empty: otherwise the backend failed (the
+  default chain tries the next), and an earlier run's file at the path can neither pass for this
+  run's output nor be lost to a failed one. Also: the message keeps the last 4 KiB of stderr (2 MB
+  of stderr was a 2 MB message) and drops the JDK's `(Stream closed)`/`(Broken pipe)`; the default
+  chain no longer cuts each backend's message to 50 characters; an empty stderr no longer leaves a
+  dangling colon; a backend that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`;
+  conversions stop after 5 minutes and availability probes after 30 seconds instead of hanging the
+  CLI; resvg runs through the same subprocess layer as the others; an output path the image cannot
+  replace is `IO_WRITE`.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a
