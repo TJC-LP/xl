@@ -587,10 +587,20 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
         text("shortcutKey", dn.shortcutKey)
         flag("publishToServer", dn.publishToServer)
         flag("workbookParameter", dn.workbookParameter)
-        attrs ++= dn.otherAttributes
+        attrs ++= passthroughAttributes(dn.otherAttributes)
         elemOrdered("definedName", attrs.result()*)(Text(FormulaStorage.toStored(dn.formula)))
       }
       Some(elem("definedNames")(children*))
+
+  /**
+   * The `otherAttributes` that can be written: a typed key would repeat an attribute and a prefixed
+   * one has no namespace declaration to bind to (either is malformed XML), and a repeated key keeps
+   * its first value. The reader never produces any of the three; a hand-built name can.
+   */
+  private def passthroughAttributes(attrs: Vector[(String, String)]): Vector[(String, String)] =
+    attrs
+      .filterNot((key, _) => typedDefinedNameAttributes.contains(key) || key.contains(':'))
+      .distinctBy(_._1)
 
   /** The CT_DefinedName attributes [[DefinedName]] types (ECMA-376 §18.2.5). */
   private val typedDefinedNameAttributes: Set[String] = Set(

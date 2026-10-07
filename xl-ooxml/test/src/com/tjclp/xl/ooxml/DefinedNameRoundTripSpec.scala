@@ -355,3 +355,34 @@ class DefinedNameRoundTripSpec extends FunSuite:
     val parsed = OoxmlWorkbook.parseDefinedNames(Some(elem))
     assertEquals(parsed.map(dn => (dn.hidden, dn.function)), Vector((true, true)))
   }
+
+  test("GH-696: a \"0\" flag reads as unset and is not written back") {
+    val elem =
+      <definedNames><definedName name="Z" hidden="0" function="false">1</definedName></definedNames>
+    val parsed = OoxmlWorkbook.parseDefinedNames(Some(elem))
+    assertEquals(parsed, Vector(DefinedName("Z", "1")))
+    assertEquals(
+      OoxmlWorkbook.buildDefinedNames(parsed).map(_.toString),
+      Some("""<definedNames><definedName name="Z">1</definedName></definedNames>""")
+    )
+  }
+
+  test("GH-696: hand-built otherAttributes never repeat a typed key, bind no prefix, dedupe") {
+    val dn = DefinedName(
+      "H",
+      "1",
+      hidden = true,
+      otherAttributes =
+        Vector("hidden" -> "0", "x:foo" -> "1", "extra" -> "a", "extra" -> "b", "name" -> "Other")
+    )
+    val built = OoxmlWorkbook.buildDefinedNames(Vector(dn)).getOrElse(fail("no element"))
+    assertEquals(
+      built.toString,
+      """<definedNames><definedName name="H" hidden="1" extra="a">1</definedName></definedNames>"""
+    )
+    // and it is well-formed XML that reads back to the typed fields plus the one passthrough
+    assertEquals(
+      OoxmlWorkbook.parseDefinedNames(Some(scala.xml.XML.loadString(built.toString))),
+      Vector(DefinedName("H", "1", hidden = true, otherAttributes = Vector("extra" -> "a")))
+    )
+  }

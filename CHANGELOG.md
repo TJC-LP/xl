@@ -278,7 +278,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   name and dropped `description`, `shortcutKey` and the rest. `DefinedName` now carries every
   ECMA-376 §18.2.5 attribute, plus unknown unprefixed ones in source order; both readers fill it
   and the writer emits them in Excel's order. A print name with any such attribute stays in the
-  table instead of being lifted into `PageSetup`, which would have dropped it.
+  table instead of being lifted into `PageSetup`, which would have dropped it. `DefinedName` gains
+  12 defaulted fields: source-compatible, not binary-compatible with 0.23.x (code compiled against
+  0.23.x that calls `DefinedName.apply`/`.copy` must be recompiled).
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

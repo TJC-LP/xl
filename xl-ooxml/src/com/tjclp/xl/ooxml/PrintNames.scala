@@ -15,8 +15,9 @@ import com.tjclp.xl.workbooks.DefinedName
  *
  * Only modelable formula shapes are lifted into the model on read: a single absolute range for
  * Print_Area (`Sheet1!$A$1:$D$20`) and a pure row span for Print_Titles (`Sheet1!$1:$3`).
- * Multi-range areas, column-only titles, and hidden/commented names stay in
- * `WorkbookMetadata.definedNames` verbatim, so nothing is lost on rewrite.
+ * Multi-range areas, column-only titles, and any name carrying an attribute beyond name, formula
+ * and scope (hidden, a comment, a description, …, GH-696) stay in `WorkbookMetadata.definedNames`
+ * verbatim, so nothing is lost on rewrite.
  *
  * The write side — the PageSetup → defined-name derivation — lives in xl-core as
  * `Workbook.effectiveDefinedNames` (GH-674), so every consumer of the table (the writer here, the
@@ -118,7 +119,8 @@ private[ooxml] object PrintNames:
     else
       // Case-insensitive, as Excel reads the identifier: a foreign writer's `_XLNM.PRINT_AREA` IS
       // the sheet's print area, and re-deriving it spells it canonically. Only a name with no
-      // attribute past its scope lifts: the re-derived name carries none (GH-696).
+      // attribute past its scope lifts: the re-derived name carries none (GH-696). The whole-value
+      // comparison is deliberate, so a field added to DefinedName blocks the lift unedited.
       def candidate(name: String, idx: Int): Option[DefinedName] =
         names.find(dn =>
           dn.matches(name, Some(idx)) && dn == DefinedName(dn.name, dn.formula, dn.localSheetId)

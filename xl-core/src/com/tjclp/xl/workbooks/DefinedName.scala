@@ -44,7 +44,8 @@ import com.tjclp.xl.sheets.Sheet
  *   Whether the name is a workbook parameter on Excel Services (`workbookParameter`)
  * @param otherAttributes
  *   Unprefixed attributes outside ECMA-376 §18.2.5, in source order, written back verbatim so a
- *   regenerated `<definedNames>` drops nothing (GH-696)
+ *   regenerated `<definedNames>` drops nothing (GH-696). The writer skips a key that is one of the
+ *   typed attributes above or carries a namespace prefix, and keeps the first of a repeated key.
  */
 final case class DefinedName(
   name: String,
