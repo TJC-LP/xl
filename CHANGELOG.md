@@ -282,8 +282,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   chain no longer cuts each backend's message to 50 characters; an empty stderr no longer leaves a
   dangling colon; a backend that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`;
   conversions stop after 5 minutes and availability probes after 30 seconds instead of hanging the
-  CLI; resvg runs through the same subprocess layer as the others; an output path the image cannot
-  replace is `IO_WRITE`.
+  CLI (a backend that ignores SIGTERM is killed after a short grace period); resvg and every
+  availability probe run through the same subprocess layer as the conversions; an output path the
+  image cannot replace is `IO_WRITE`, without retrying other backends; a replaced output keeps its
+  permissions.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

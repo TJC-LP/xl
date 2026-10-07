@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
 import cats.effect.IO
-import fs2.io.process.{ProcessBuilder, Processes}
 
 /**
  * ImageMagick integration for converting SVG to raster formats.
@@ -18,9 +17,6 @@ import fs2.io.process.{ProcessBuilder, Processes}
 object ImageMagick extends Rasterizer:
 
   val name: String = "ImageMagick"
-
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
 
   /** Which ImageMagick command to use */
   private sealed trait ImageMagickCommand:
@@ -42,33 +38,13 @@ object ImageMagick extends Rasterizer:
    * Check if a specific ImageMagick command is available.
    */
   private def isCommandAvailable(cmd: ImageMagickCommand): IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
-      .handleError(_ => false)
+    PipedBackend.probe(cmd.command, cmd.versionArgs)
 
   /**
    * Check if a binary is available in PATH.
    */
   private def isBinaryInPath(binary: String): IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("which", List(binary)))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
-      .handleError(_ => false)
+    PipedBackend.probe("which", List(binary))
 
   /**
    * Get the SVG delegate configuration from ImageMagick.
@@ -78,30 +54,21 @@ object ImageMagick extends Rasterizer:
    * rendering.
    */
   private def getSvgDelegate(cmd: ImageMagickCommand): IO[Option[String]] =
-    Processes[IO]
-      .spawn(ProcessBuilder(cmd.command, List("-list", "delegate")))
-      .use { process =>
-        for
-          output <- process.stdout.through(fs2.text.utf8.decode).compile.string
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield
-          if exitCode != 0 then None
-          else
-            // Parse delegate list for SVG entry
-            // Format: "        svg =>          "rsvg-convert' --dpi-x %x ..."
-            // Note: Leading whitespace varies, and we need to match "svg =>" specifically
-            output.linesIterator
-              .find(line => line.trim.startsWith("svg") && line.contains("=>"))
-              .flatMap { line =>
-                // Extract binary name from delegate command
-                // The delegate line format is: [whitespace]svg => "binary' args..."
-                val delegatePattern = """\bsvg\s*=>\s*"([^']+)'""".r
-                delegatePattern.findFirstMatchIn(line).map(_.group(1))
-              }
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(None))
-      .handleError(_ => None)
+    PipedBackend
+      .capture(cmd.command, List("-list", "delegate"))
+      .map(_.flatMap { output =>
+        // Parse delegate list for SVG entry
+        // Format: "        svg =>          "rsvg-convert' --dpi-x %x ..."
+        // Note: Leading whitespace varies, and we need to match "svg =>" specifically
+        output.linesIterator
+          .find(line => line.trim.startsWith("svg") && line.contains("=>"))
+          .flatMap { line =>
+            // Extract binary name from delegate command
+            // The delegate line format is: [whitespace]svg => "binary' args..."
+            val delegatePattern = """\bsvg\s*=>\s*"([^']+)'""".r
+            delegatePattern.findFirstMatchIn(line).map(_.group(1))
+          }
+      })
 
   /**
    * Check if ImageMagick's SVG delegate is functional.
@@ -243,16 +210,9 @@ object ImageMagick extends Rasterizer:
     findCommand.flatMap {
       case None => IO.pure(None)
       case Some(cmd) =>
-        Processes[IO]
-          .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
-          .use { process =>
-            for
-              versionOutput <- process.stdout.through(fs2.text.utf8.decode).compile.string
-              _ <- process.stderr.compile.drain
-            yield versionOutput.linesIterator.nextOption()
-          }
-          .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(None))
-          .handleError(_ => None)
+        PipedBackend
+          .capture(cmd.command, cmd.versionArgs)
+          .map(_.flatMap(_.linesIterator.nextOption()))
     }
 
   /**

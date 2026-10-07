@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import cats.effect.{IO, Resource}
-import fs2.io.process.{ProcessBuilder, Processes}
 
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.contract.CliException
@@ -26,24 +25,11 @@ object Resvg extends Rasterizer:
 
   val name: String = "resvg"
 
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
-
   /**
    * Check if resvg is available.
    */
   def isAvailable: IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("resvg", List("--help")))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
-      .handleError(_ => false)
+    PipedBackend.probe("resvg", List("--help"))
 
   /**
    * Convert SVG to raster format using resvg.

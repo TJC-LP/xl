@@ -29,7 +29,8 @@ import cats.syntax.all.*
  *
  * GH-690: the message keeps only the tail of stderr ([[StderrLimit]]), a child that cannot be
  * started is [[RasterError.RasterizerNotFound]] rather than a raw `IOException`, and every exchange
- * has a deadline after which the child and its descendants are killed.
+ * — conversions and availability probes alike — has a deadline after which the child and its
+ * descendants are killed with a bounded escalation ([[kill]]).
  */
 private[raster] object PipedBackend:
 
@@ -41,6 +42,12 @@ private[raster] object PipedBackend:
 
   /** The stderr kept for a failure's message: its last bytes, where backends put the error. */
   val StderrLimit: Int = 4096
+
+  /** The stdout a [[capture]] keeps: its first bytes (a version line, a delegate list). */
+  private val CaptureLimit: Int = 1 << 20
+
+  /** How long a child gets to exit after the polite signal before it is killed outright. */
+  private val GraceMillis: Long = 2000
 
   /**
    * Run `command args` with `input` on stdin. A non-zero exit is `ConversionFailed(name, stderr,
@@ -55,7 +62,7 @@ private[raster] object PipedBackend:
     input: Array[Byte],
     timeout: FiniteDuration = ConversionTimeout
   ): IO[Unit] =
-    exchange(name, command :: args, input)
+    exchange(name, command :: args, input, keepStdout = false)
       .timeoutTo(timeout, IO.raiseError(RasterError.TimedOut(name, timeout)))
       .flatMap { outcome =>
         (outcome.exit, outcome.unread) match
@@ -83,39 +90,72 @@ private[raster] object PipedBackend:
    * GH-673).
    */
   def succeeds(command: String, args: List[String], input: Array[Byte]): IO[Boolean] =
-    exchange(command, command :: args, input)
+    exchange(command, command :: args, input, keepStdout = false)
       .map(o => o.exit == 0 && o.unread.isEmpty && o.stdoutBytes > 0)
       .timeoutTo(ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
   /**
-   * What a child did with its input: exit code, the write's failure, stderr's tail, stdout's size.
+   * An availability probe (`rsvg-convert --version`): true when `command args` exits 0 within
+   * `timeout`. A missing binary, a failure or a hang is false; a hung probe is killed (GH-690).
+   */
+  def probe(
+    command: String,
+    args: List[String],
+    timeout: FiniteDuration = ProbeTimeout
+  ): IO[Boolean] =
+    capture(command, args, timeout).map(_.isDefined)
+
+  /**
+   * `command args`'s stdout (its first [[CaptureLimit]] bytes) when it exits 0 within `timeout`;
+   * None for a missing binary, a failure or a hang, which is killed (GH-690).
+   */
+  def capture(
+    command: String,
+    args: List[String],
+    timeout: FiniteDuration = ProbeTimeout
+  ): IO[Option[String]] =
+    exchange(command, command :: args, Array.emptyByteArray, keepStdout = true)
+      .map(o => Option.when(o.exit == 0)(o.stdout))
+      .timeoutTo(timeout, IO.pure(None))
+      .handleError(_ => None)
+
+  /**
+   * What a child did with its input: exit code, the write's failure, stderr's tail, stdout's size
+   * and (when kept) its head.
    */
   private final case class Outcome(
     exit: Int,
     unread: Option[IOException],
     stderr: String,
-    stdoutBytes: Long
+    stdoutBytes: Long,
+    stdout: String
   )
 
   /** Spawn `command`, write `input` while draining stderr and stdout, and wait for the exit. */
-  private def exchange(name: String, command: List[String], input: Array[Byte]): IO[Outcome] =
+  private def exchange(
+    name: String,
+    command: List[String],
+    input: Array[Byte],
+    keepStdout: Boolean
+  ): IO[Outcome] =
     spawn(name, command).use { process =>
       val stop = IO.blocking(kill(process))
       val write = IO.blocking(writeAndClose(process.getOutputStream, input)).cancelable(stop)
       val stderr = IO.blocking(tail(process.getErrorStream, StderrLimit)).cancelable(stop)
       val stdout =
-        IO.blocking(process.getInputStream.transferTo(OutputStream.nullOutputStream()))
+        IO.blocking(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
           .cancelable(stop)
-      (write, stderr, stdout).parTupled.flatMap { (unread, err, bytes) =>
-        IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes))
+      (write, stderr, stdout).parTupled.flatMap { case (unread, err, (bytes, out)) =>
+        IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes, out))
       }
     }
 
   /**
-   * The child, killed on release if it is still running (cancellation, a timeout, a failed drain).
-   * A command that cannot be started — not installed, gone since the availability probe, not
-   * executable — is [[RasterError.RasterizerNotFound]], the code the probe itself would have given.
+   * The child, killed on release if it is still running (cancellation, a timeout, a failed drain),
+   * its streams closed once it is gone. A command that cannot be started — not installed, gone
+   * since the availability probe, not executable — is [[RasterError.RasterizerNotFound]], the code
+   * the probe itself would have given.
    */
   private def spawn(name: String, command: List[String]): Resource[IO, Process] =
     Resource.make(
@@ -125,19 +165,57 @@ private[raster] object PipedBackend:
           val reason = Option(e.getMessage).getOrElse(e.toString)
           RasterError.RasterizerNotFound(name, s"`$program` could not be started: $reason.")
       }
-    )(process => IO.blocking(kill(process)))
+    )(process =>
+      IO.blocking {
+        kill(process)
+        closeQuietly(process)
+      }
+    )
+
+  /** Best-effort discovery of a child's descendants: a sandbox may refuse the enumeration. */
+  private def descendantsOf(process: Process): List[ProcessHandle] =
+    try process.descendants().iterator().asScala.toList
+    catch case _: RuntimeException => Nil
 
   /**
    * Stop `process` and the processes it started (`python3 -m cairosvg`, ImageMagick's delegates): a
-   * polite destroy, then a forcible one for whatever outlives a short grace period.
+   * polite signal, a bounded wait, then a forcible kill. Every step signals through
+   * [[ProcessHandle]], which closes none of the child's streams: `Process.destroy` closes stdin
+   * first, and that close waits on the lock a stdin write blocked on an unread pipe holds, so the
+   * escalation would never be reached (GH-690). Descendant discovery is best-effort and cannot keep
+   * the child itself from being stopped.
    */
-  private def kill(process: Process): Unit =
+  private[raster] def kill(
+    process: Process,
+    discover: Process => List[ProcessHandle] = descendantsOf
+  ): Unit =
     if process.isAlive then
-      val descendants = process.descendants().iterator().asScala.toList
+      val descendants =
+        try discover(process)
+        catch case _: RuntimeException => Nil
+      val handle = process.toHandle
       descendants.foreach(_.destroy())
-      process.destroy()
-      if !process.waitFor(2, TimeUnit.SECONDS) then process.destroyForcibly().waitFor()
+      handle.destroy(): Unit
+      if !process.waitFor(GraceMillis, TimeUnit.MILLISECONDS) then
+        handle.destroyForcibly(): Unit
+        process.waitFor(GraceMillis, TimeUnit.MILLISECONDS): Unit
       descendants.foreach(_.destroyForcibly())
+
+  /** Close the child's three streams, ignoring the errors a dead child's pipes may raise. */
+  private def closeQuietly(process: Process): Unit =
+    List[java.io.Closeable](process.getOutputStream, process.getInputStream, process.getErrorStream)
+      .foreach(stream =>
+        try stream.close()
+        catch case _: IOException => ()
+      )
+
+  /** Read `in` to its end: its size, and its first `keep` bytes as UTF-8. */
+  private def drain(in: InputStream, keep: Int): (Long, String) =
+    if keep <= 0 then (in.transferTo(OutputStream.nullOutputStream()), "")
+    else
+      val head = in.readNBytes(keep)
+      val rest = in.transferTo(OutputStream.nullOutputStream())
+      (head.length + rest, new String(head, StandardCharsets.UTF_8))
 
   /**
    * The last `limit` bytes of `in`, read to its end, as UTF-8; a cut tail starts with `…` and drops

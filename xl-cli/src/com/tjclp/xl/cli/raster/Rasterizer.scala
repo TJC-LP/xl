@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.raster
 
 import java.io.IOException
 import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 
 import scala.concurrent.duration.FiniteDuration
@@ -302,6 +303,9 @@ object RasterizerChain:
               .handleErrorWith { error =>
                 // Conversion failed, try next (unless it's a format error)
                 error match
+                  // GH-690: a backend rendered but the image could not replace the output path;
+                  // another backend cannot repair the destination
+                  case output: RasterError.OutputFailed => IO.raiseError(output)
                   case _: RasterError.FormatNotSupported =>
                     // Format not supported by this rasterizer, try next
                     tryChain(
@@ -332,6 +336,11 @@ object RasterizerChain:
    * backend that exits 0 without writing is [[RasterError.ConversionFailed]] (the chain then tries
    * the next one); a file left at `outputPath` by an earlier run cannot pass for this run's output,
    * and a failed run leaves it untouched. The hidden file is removed on every path out.
+   *
+   * The staging name is short and fixed-length (`.xl-raster-<uuid>.<ext>`), so any output name the
+   * file system accepts still fits. Replacing an existing output keeps its permissions: the staging
+   * file is created owner-only and takes the destination's permissions before the move, as the
+   * direct write it replaces did; a new output is created by the backend as before.
    */
   private def attempt(
     rasterizer: Rasterizer,
@@ -341,14 +350,21 @@ object RasterizerChain:
     dpi: Int
   ): IO[Unit] =
     val target = outputPath.toAbsolutePath
-    val staged = IO {
-      val fileName = target.getFileName.toString
-      val ext = fileName.lastIndexOf('.') match
-        case -1 => format.extension
-        case i => fileName.substring(i + 1)
-      target.resolveSibling(s".$fileName.xl-${UUID.randomUUID()}.$ext")
-    }
-    Resource.make(staged)(p => IO.blocking(Files.deleteIfExists(p)).void).use { staging =>
+    val staged = IO
+      .blocking {
+        val fileName = target.getFileName.toString
+        val ext = fileName.lastIndexOf('.') match
+          case i if i >= 0 && (1 to 16).contains(fileName.length - i - 1) =>
+            fileName.substring(i + 1)
+          case _ => format.extension
+        val staging = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
+        if Files.exists(target) then createPrivate(staging)
+        staging
+      }
+      .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
+    // removal is best-effort: a failed clean-up must not replace the conversion's outcome
+    def remove(p: Path): IO[Unit] = IO.blocking(Files.deleteIfExists(p)).void.handleError(_ => ())
+    Resource.make(staged)(remove).use { staging =>
       rasterizer.convertSvgToRaster(svg, staging, format, dpi) >>
         IO.blocking(Files.isRegularFile(staging) && Files.size(staging) > 0).flatMap {
           case true =>
@@ -363,8 +379,23 @@ object RasterizerChain:
         }
     }
 
-  /** Replace `target` with `staging` atomically where the file system can. */
+  /** An empty owner-only file where the file system has POSIX permissions, else a plain one. */
+  private def createPrivate(path: Path): Unit =
+    try
+      Files.createFile(
+        path,
+        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      ): Unit
+    catch case _: UnsupportedOperationException => Files.createFile(path): Unit
+
+  /**
+   * Replace `target` with `staging` atomically where the file system can, carrying `target`'s
+   * permissions over first so a private image stays private.
+   */
   private def moveIntoPlace(staging: Path, target: Path): Unit =
+    if Files.exists(target) then
+      try Files.setPosixFilePermissions(staging, Files.getPosixFilePermissions(target)): Unit
+      catch case _: UnsupportedOperationException => ()
     try
       Files.move(
         staging,

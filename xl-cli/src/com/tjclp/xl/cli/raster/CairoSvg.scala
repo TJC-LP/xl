@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
 import cats.effect.IO
-import fs2.io.process.{ProcessBuilder, Processes}
 
 /**
  * CairoSvg integration for converting SVG to raster formats.
@@ -19,9 +18,6 @@ import fs2.io.process.{ProcessBuilder, Processes}
 object CairoSvg extends Rasterizer:
 
   val name: String = "cairosvg"
-
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
 
   /**
    * Check if cairosvg is available.
@@ -38,33 +34,13 @@ object CairoSvg extends Rasterizer:
    * Check if `cairosvg` command is available.
    */
   private def isCommandAvailable: IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("cairosvg", List("--version")))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
-      .handleError(_ => false)
+    PipedBackend.probe("cairosvg", List("--version"))
 
   /**
    * Check if cairosvg is available as a Python module.
    */
   private def isPythonModuleAvailable: IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("python3", List("-c", "import cairosvg; print('ok')")))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .timeoutTo(PipedBackend.ProbeTimeout, IO.pure(false))
-      .handleError(_ => false)
+    PipedBackend.probe("python3", List("-c", "import cairosvg; print('ok')"))
 
   /**
    * Determine how to invoke cairosvg.
