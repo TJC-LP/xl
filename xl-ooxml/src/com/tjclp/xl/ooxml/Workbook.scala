@@ -568,14 +568,80 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     if names.isEmpty then None
     else
       val children = names.map { dn =>
+        // GH-696: every CT_DefinedName attribute, in the schema's order (the order Excel writes)
         val attrs = Seq.newBuilder[(String, String)]
+        def text(key: String, value: Option[String]): Unit = value.foreach(v => attrs += (key -> v))
+        def flag(key: String, on: Boolean): Unit = if on then attrs += (key -> "1")
         attrs += ("name" -> dn.name)
-        dn.comment.foreach(c => attrs += ("comment" -> c))
-        dn.localSheetId.foreach(id => attrs += ("localSheetId" -> id.toString))
-        if dn.hidden then attrs += ("hidden" -> "1")
+        text("comment", dn.comment)
+        text("customMenu", dn.customMenu)
+        text("description", dn.description)
+        text("help", dn.help)
+        text("statusBar", dn.statusBar)
+        text("localSheetId", dn.localSheetId.map(_.toString))
+        flag("hidden", dn.hidden)
+        flag("function", dn.function)
+        flag("vbProcedure", dn.vbProcedure)
+        flag("xlm", dn.xlm)
+        text("functionGroupId", dn.functionGroupId.map(_.toString))
+        text("shortcutKey", dn.shortcutKey)
+        flag("publishToServer", dn.publishToServer)
+        flag("workbookParameter", dn.workbookParameter)
+        attrs ++= dn.otherAttributes
         elemOrdered("definedName", attrs.result()*)(Text(FormulaStorage.toStored(dn.formula)))
       }
       Some(elem("definedNames")(children*))
+
+  /** The CT_DefinedName attributes [[DefinedName]] types (ECMA-376 §18.2.5). */
+  private val typedDefinedNameAttributes: Set[String] = Set(
+    "name",
+    "comment",
+    "customMenu",
+    "description",
+    "help",
+    "statusBar",
+    "localSheetId",
+    "hidden",
+    "function",
+    "vbProcedure",
+    "xlm",
+    "functionGroupId",
+    "shortcutKey",
+    "publishToServer",
+    "workbookParameter"
+  )
+
+  /**
+   * One `<definedName>` into the model (GH-696: the full attribute set). Shared by the full reader
+   * and the metadata reader. Booleans are xsd:boolean ("1" or "true"). Prefixed (extension
+   * namespace) attributes are not modelled: the preserved branch keeps them, a regeneration has no
+   * declaration to bind their prefix to.
+   */
+  def parseDefinedName(e: Elem): DefinedName =
+    def text(key: String): Option[String] = Option(e \@ key).filter(_.nonEmpty)
+    def flag(key: String): Boolean = text(key).exists(v => v == "1" || v == "true")
+    DefinedName(
+      name = e \@ "name",
+      formula = FormulaStorage.fromStored(e.text.trim),
+      localSheetId = text("localSheetId").flatMap(_.toIntOption),
+      hidden = flag("hidden"),
+      comment = text("comment"),
+      customMenu = text("customMenu"),
+      description = text("description"),
+      help = text("help"),
+      statusBar = text("statusBar"),
+      function = flag("function"),
+      vbProcedure = flag("vbProcedure"),
+      xlm = flag("xlm"),
+      functionGroupId = text("functionGroupId").flatMap(_.toIntOption),
+      shortcutKey = text("shortcutKey"),
+      publishToServer = flag("publishToServer"),
+      workbookParameter = flag("workbookParameter"),
+      otherAttributes = e.attributes.iterator.collect {
+        case a: UnprefixedAttribute if !typedDefinedNameAttributes.contains(a.key) =>
+          a.key -> a.value.text
+      }.toVector
+    )
 
   /**
    * Parse the `date1904` attribute of a raw `<workbookPr>` element (GH-243). Single source of truth
@@ -599,15 +665,7 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     rawElem match
       case None => Vector.empty
       case Some(dnsElem) =>
-        (dnsElem \ "definedName").collect { case e: Elem =>
-          DefinedName(
-            name = e \@ "name",
-            formula = FormulaStorage.fromStored(e.text.trim),
-            localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption),
-            hidden = (e \@ "hidden") == "1",
-            comment = Option(e \@ "comment").filter(_.nonEmpty)
-          )
-        }.toVector
+        (dnsElem \ "definedName").collect { case e: Elem => parseDefinedName(e) }.toVector
 
   def fromXml(elem: Elem): Either[String, OoxmlWorkbook] =
     for

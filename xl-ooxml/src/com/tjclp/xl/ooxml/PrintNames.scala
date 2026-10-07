@@ -117,9 +117,12 @@ private[ooxml] object PrintNames:
     if names.isEmpty then (sheets, names)
     else
       // Case-insensitive, as Excel reads the identifier: a foreign writer's `_XLNM.PRINT_AREA` IS
-      // the sheet's print area, and re-deriving it spells it canonically.
+      // the sheet's print area, and re-deriving it spells it canonically. Only a name with no
+      // attribute past its scope lifts: the re-derived name carries none (GH-696).
       def candidate(name: String, idx: Int): Option[DefinedName] =
-        names.find(dn => dn.matches(name, Some(idx)) && !dn.hidden && dn.comment.isEmpty)
+        names.find(dn =>
+          dn.matches(name, Some(idx)) && dn == DefinedName(dn.name, dn.formula, dn.localSheetId)
+        )
 
       val parsed = sheets.zipWithIndex.map { case (sheet, idx) =>
         val area = candidate(PrintArea, idx)

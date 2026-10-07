@@ -9,7 +9,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
-import com.tjclp.xl.ooxml.{FormulaStorage, Relationships, XmlSecurity}
+import com.tjclp.xl.ooxml.{OoxmlWorkbook, Relationships, XmlSecurity}
 import com.tjclp.xl.workbooks.DefinedName
 
 /**
@@ -280,25 +280,12 @@ object WorkbookMetadataReader:
         refs.traverse(identity)
       case _ => Left(XLError.ParseError("xl/workbook.xml", "Invalid <sheets> element"))
 
+  // GH-577: the model form, as the full reader hands it out (storage prefixes stripped);
+  // GH-696: the full attribute set, through the full reader's own parser
   private def parseDefinedNames(wbElem: Elem): Vector[DefinedName] =
-    (wbElem \ "definedNames").headOption match
-      case None => Vector.empty
-      case Some(elem) =>
-        (elem \ "definedName").collect { case e: Elem =>
-          val name = e \@ "name"
-          // GH-577: the model form, as the full reader hands it out (storage prefixes stripped)
-          val formula = FormulaStorage.fromStored(e.text.trim)
-          val localSheetId = Option(e \@ "localSheetId").filter(_.nonEmpty).flatMap(_.toIntOption)
-          val hidden = (e \@ "hidden") == "1"
-          val comment = Option(e \@ "comment").filter(_.nonEmpty)
-          DefinedName(
-            name = name,
-            formula = formula,
-            localSheetId = localSheetId,
-            hidden = hidden,
-            comment = comment
-          )
-        }.toVector
+    OoxmlWorkbook.parseDefinedNames((wbElem \ "definedNames").headOption.collect { case e: Elem =>
+      e
+    })
 
   /**
    * Read <dimension ref="..."> from worksheet XML.

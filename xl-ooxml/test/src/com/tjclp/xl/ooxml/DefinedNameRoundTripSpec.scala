@@ -184,3 +184,174 @@ class DefinedNameRoundTripSpec extends FunSuite:
       "the name must follow Data from index 1 to index 0 across the reorder"
     )
   }
+
+  // ===== GH-696: a regenerated <definedNames> keeps every attribute =====
+
+  /** Excel's spelling of names carrying every CT_DefinedName attribute, plus an unknown one. */
+  private val attributeRichNames = Vector(
+    """<definedName name="Macro1" function="1" vbProcedure="1" shortcutKey="m">Module1.Macro1</definedName>""",
+    """<definedName name="Xlm1" comment="note" customMenu="Run it" description="An XLM macro" help="Help topic" statusBar="Running" hidden="1" function="1" xlm="1" functionGroupId="14">Macro1!$A$1</definedName>""",
+    """<definedName name="Param" publishToServer="1" workbookParameter="1">Sheet1!$A$1</definedName>""",
+    """<definedName name="_xlnm.Print_Area" description="kept, not lifted" localSheetId="0">Sheet1!$A$1:$B$2</definedName>""",
+    """<definedName name="Odd" futureAttr="x">0.5</definedName>"""
+  )
+
+  /** A workbook xl wrote, its `<definedNames>` swapped for [[attributeRichNames]]. */
+  private def attributeRichSource(): java.nio.file.Path =
+    import java.util.zip.{ZipEntry, ZipFile, ZipOutputStream}
+    val seed = Files.createTempFile("named-attrs-seed", ".xlsx")
+    seed.toFile.deleteOnExit()
+    val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1)).withDefinedName("Placeholder", "1")
+    XlsxWriter.write(wb, seed).fold(e => fail(s"seed write failed: $e"), identity)
+    val src = Files.createTempFile("named-attrs-src", ".xlsx")
+    src.toFile.deleteOnExit()
+    val zin = new ZipFile(seed.toFile)
+    val zos = new ZipOutputStream(Files.newOutputStream(src))
+    try
+      zin.entries().asIterator().forEachRemaining { entry =>
+        val bytes = zin.getInputStream(entry).readAllBytes()
+        val out =
+          if entry.getName != "xl/workbook.xml" then bytes
+          else
+            val xml = new String(bytes, "UTF-8")
+            val swapped = xml.replaceFirst(
+              "(?s)<definedNames>.*</definedNames>",
+              java.util.regex.Matcher.quoteReplacement(
+                attributeRichNames.mkString("<definedNames>", "", "</definedNames>")
+              )
+            )
+            assert(swapped != xml, "fixture sanity: the seed carries a <definedNames>")
+            swapped.getBytes("UTF-8")
+        zos.putNextEntry(new ZipEntry(entry.getName))
+        zos.write(out)
+        zos.closeEntry()
+      }
+    finally
+      zos.close()
+      zin.close()
+    src
+
+  private def workbookXml(path: java.nio.file.Path): String =
+    val zip = new java.util.zip.ZipFile(path.toFile)
+    try
+      new String(zip.getInputStream(zip.getEntry("xl/workbook.xml")).readAllBytes(), "UTF-8")
+    finally zip.close()
+
+  private val expectedRichModel = Vector(
+    DefinedName(
+      "Macro1",
+      "Module1.Macro1",
+      function = true,
+      vbProcedure = true,
+      shortcutKey = Some("m")
+    ),
+    DefinedName(
+      "Xlm1",
+      "Macro1!$A$1",
+      hidden = true,
+      comment = Some("note"),
+      customMenu = Some("Run it"),
+      description = Some("An XLM macro"),
+      help = Some("Help topic"),
+      statusBar = Some("Running"),
+      function = true,
+      xlm = true,
+      functionGroupId = Some(14)
+    ),
+    DefinedName("Param", "Sheet1!$A$1", publishToServer = true, workbookParameter = true),
+    DefinedName(
+      "_xlnm.Print_Area",
+      "Sheet1!$A$1:$B$2",
+      localSheetId = Some(0),
+      description = Some("kept, not lifted")
+    ),
+    DefinedName("Odd", "0.5", otherAttributes = Vector("futureAttr" -> "x"))
+  )
+
+  test("GH-696: both readers carry every <definedName> attribute") {
+    val src = attributeRichSource()
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    assertEquals(wb.metadata.definedNames, expectedRichModel)
+    val sheet = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(
+      sheet.pageSetup.flatMap(_.printArea),
+      None,
+      "an attributed print area stays a name"
+    )
+    assertEquals(
+      metadata.WorkbookMetadataReader.readDefinedNames(src).fold(e => fail(e.message), identity),
+      expectedRichModel
+    )
+  }
+
+  /** Each `<definedName>`'s attributes (as a map) and text, in document order. */
+  private def definedNameShapes(xml: String): Vector[(Map[String, String], String)] =
+    (scala.xml.XML.loadString(xml) \\ "definedName").collect { case e: scala.xml.Elem =>
+      (e.attributes.asAttrMap, e.text)
+    }.toVector
+
+  test("GH-696: an unrelated name edit keeps every other <definedName> intact on both backends") {
+    val src = attributeRichSource()
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val edited = wb.withDefinedName("Added", "Sheet1!$A$1")
+    val added = """<definedName name="Added">Sheet1!$A$1</definedName>"""
+    List(
+      "dom" -> com.tjclp.xl.ooxml.writer.WriterConfig.scalaXml,
+      "sax" -> com.tjclp.xl.ooxml.writer.WriterConfig.saxStax
+    ).foreach { case (label, config) =>
+      val out = Files.createTempFile(s"named-attrs-$label", ".xlsx")
+      out.toFile.deleteOnExit()
+      XlsxWriter
+        .writeWith(edited, out, config)
+        .fold(e => fail(s"$label write failed: $e"), identity)
+      val xml = workbookXml(out)
+      // the SAX backend sorts every element's attributes alphabetically (SaxSupport), so it keeps
+      // each name's attributes and text; the DOM backend also keeps Excel's bytes
+      assertEquals(
+        definedNameShapes(xml),
+        definedNameShapes(
+          (attributeRichNames :+ added).mkString("<definedNames>", "", "</definedNames>")
+        ),
+        label
+      )
+      if label == "dom" then
+        (attributeRichNames :+ added).foreach(dn => assert(xml.contains(dn), s"lost $dn in:\n$xml"))
+      val reread = XlsxReader.read(out).fold(e => fail(s"$label reread failed: $e"), identity)
+      assertEquals(
+        reread.metadata.definedNames,
+        expectedRichModel :+ DefinedName("Added", "Sheet1!$A$1"),
+        label
+      )
+    }
+  }
+
+  test("GH-696: parse(build(names)) is the identity on a fully attributed name") {
+    val full = DefinedName(
+      "Full",
+      "SUM(Sheet1!$A$1:$A$3)",
+      localSheetId = Some(2),
+      hidden = true,
+      comment = Some("c"),
+      customMenu = Some("m"),
+      description = Some("d"),
+      help = Some("h"),
+      statusBar = Some("s"),
+      function = true,
+      vbProcedure = true,
+      xlm = true,
+      functionGroupId = Some(3),
+      shortcutKey = Some("K"),
+      publishToServer = true,
+      workbookParameter = true,
+      otherAttributes = Vector("zeta" -> "1", "alpha" -> "2")
+    )
+    val names = Vector(full, DefinedName("Plain", "1"))
+    assertEquals(OoxmlWorkbook.parseDefinedNames(OoxmlWorkbook.buildDefinedNames(names)), names)
+  }
+
+  test("GH-696: xsd:boolean \"true\" reads as set") {
+    val elem =
+      <definedNames><definedName name="T" hidden="true" function="true">1</definedName></definedNames>
+    val parsed = OoxmlWorkbook.parseDefinedNames(Some(elem))
+    assertEquals(parsed.map(dn => (dn.hidden, dn.function)), Vector((true, true)))
+  }
