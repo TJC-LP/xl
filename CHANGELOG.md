@@ -286,6 +286,15 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   availability probe run through the same subprocess layer as the conversions; an output path the
   image cannot replace is `IO_WRITE`, without retrying other backends; a replaced output keeps its
   permissions.
+- **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
+  serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,
+  both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render
+  1/1/1900 and 2/28/1900. The phantom serial 60 renders `2/29/1900`, as Excel does (LibreOffice
+  shows 2/28/1900). Serial 0 renders Excel's `1/0/1900`. Weekdays before 1900-03-01 follow Excel's
+  serial count, where serial 1 is a Sunday. A date-typed cell outside Excel's range (before
+  1899-12-31, or from year 10000) fills with `######`, as its serial does. The date → serial
+  direction was already right and is now pinned over the whole range, and `ImportParityLawSpec`'s
+  date domain starts at 1900-01-01. Pre-existing; found by the Wave 31 library review.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

@@ -554,6 +554,128 @@ class FormatCodeParserSpec extends FunSuite:
     )
   }
 
+  // ========== Excel 1900 leap-year display (#688) ==========
+  // Excel's 1900 date system counts the phantom 1900-02-29 as serial 60, so serials 1–59 are the
+  // day after the 1899-12-30 epoch arithmetic. Serial 0 is Excel's `1/0/1900`; serial 60 renders
+  // `2/29/1900`, an Excel-vs-LibreOffice divergence (LibreOffice shows 2/28/1900). Weekdays run off
+  // the serial (serial 1 is a Sunday), one behind the real calendar before 1900-03-01.
+
+  private def displaySerial(serial: Int, code: String): String =
+    NumFmtFormatter.formatNumber(BigDecimal(serial), NumFmt.Custom(code))
+
+  test("#688: serials 1-59 display the dates Excel shows") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(1), NumFmt.Date), "1/1/00")
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(59), NumFmt.Date), "2/28/00")
+    assertEquals(displaySerial(1, "m/d/yyyy"), "1/1/1900")
+    assertEquals(displaySerial(31, "m/d/yyyy"), "1/31/1900")
+    assertEquals(displaySerial(32, "m/d/yyyy"), "2/1/1900")
+    assertEquals(displaySerial(59, "m/d/yyyy"), "2/28/1900")
+    assertEquals(displaySerial(61, "m/d/yyyy"), "3/1/1900")
+  }
+
+  test("#688: serial 60 displays Excel's phantom 2/29/1900 (LibreOffice shows 2/28/1900)") {
+    assertEquals(NumFmtFormatter.formatNumber(BigDecimal(60), NumFmt.Date), "2/29/00")
+    assertEquals(displaySerial(60, "m/d/yyyy"), "2/29/1900")
+    assertEquals(displaySerial(60, "yyyy-mm-dd"), "1900-02-29")
+    assertEquals(displaySerial(60, "mmmm d, yyyy"), "February 29, 1900")
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("60.75"), NumFmt.DateTime),
+      "2/29/00 18:00"
+    )
+  }
+
+  test("#688: serial 0 displays Excel's 1/0/1900, and a fraction of it is a bare time") {
+    assertEquals(displaySerial(0, "m/d/yyyy"), "1/0/1900")
+    assertEquals(displaySerial(0, "dd-mmm-yy"), "00-Jan-00")
+    assertEquals(
+      NumFmtFormatter.formatNumber(BigDecimal("0.25"), NumFmt.Custom("h:mm")),
+      "6:00"
+    )
+  }
+
+  test("#688: weekdays follow Excel's serial count (serial 1 is a Sunday)") {
+    assertEquals(displaySerial(0, "dddd"), "Saturday")
+    assertEquals(displaySerial(1, "dddd"), "Sunday")
+    assertEquals(displaySerial(59, "ddd"), "Tue")
+    assertEquals(displaySerial(60, "dddd"), "Wednesday")
+    assertEquals(displaySerial(61, "dddd"), "Thursday")
+    assertEquals(displaySerial(45982, "dddd"), "Friday") // 2025-11-21
+  }
+
+  test("#688: a DateTime before 1900-03-01 displays like its serial") {
+    import java.time.LocalDateTime
+    import com.tjclp.xl.cells.CellValue
+    val dates = List(
+      LocalDateTime.of(1899, 12, 31, 0, 0),
+      LocalDateTime.of(1900, 1, 1, 0, 0),
+      LocalDateTime.of(1900, 2, 28, 6, 30),
+      LocalDateTime.of(1900, 3, 1, 0, 0),
+      LocalDateTime.of(2025, 11, 21, 12, 0)
+    )
+    for
+      dt <- dates
+      fmt <- List(NumFmt.Date, NumFmt.DateTime, NumFmt.Custom("dddd m/d/yyyy h:mm"))
+    do
+      val serial = BigDecimal(CellValue.dateTimeToExcelSerial(dt))
+      assertEquals(
+        NumFmtFormatter.formatDateTime(dt, fmt),
+        NumFmtFormatter.formatNumber(serial, fmt),
+        s"$dt under $fmt"
+      )
+    assertEquals(
+      NumFmtFormatter.formatDateTime(LocalDateTime.of(1899, 12, 31, 0, 0), NumFmt.Date),
+      "1/0/00"
+    )
+  }
+
+  test("#688: applyDateFormat passes dates outside Jan-Feb 1900 through unshifted") {
+    import java.time.LocalDateTime
+    val code = FormatCodeParser.parse("dddd yyyy-mm-dd").toOption.get
+    // 1899-12-30 (a Saturday) is just before serial 0; 1800-01-01 was a Wednesday
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1899, 12, 30, 0, 0), code),
+      "Saturday 1899-12-30"
+    )
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1800, 1, 1, 0, 0), code),
+      "Wednesday 1800-01-01"
+    )
+    // the window's edges: 1899-12-31 is Excel's 1900-01-00, 1900-03-01 is real again
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1899, 12, 31, 0, 0), code),
+      "Saturday 1900-01-00"
+    )
+    assertEquals(
+      FormatCodeParser.applyDateFormat(LocalDateTime.of(1900, 3, 1, 0, 0), code),
+      "Thursday 1900-03-01"
+    )
+  }
+
+  test("#688: a DateTime outside Excel's date range fills with # like its serial") {
+    import java.time.LocalDateTime
+    val early = LocalDateTime.of(1899, 12, 30, 0, 0) // serial -1
+    val late = LocalDateTime.of(10000, 1, 1, 0, 0) // serial 2958466
+    for
+      dt <- List(early, late)
+      fmt <- List(NumFmt.Date, NumFmt.DateTime, NumFmt.Time, NumFmt.Custom("m/d/yyyy"))
+    do assertEquals(NumFmtFormatter.formatDateTime(dt, fmt), "######", s"$dt under $fmt")
+    // numeric codes still render the serial itself
+    assertEquals(NumFmtFormatter.formatDateTime(early, NumFmt.General), "-1")
+  }
+
+  test("#688: every serial 0-1000 displays the date its date-to-serial inverse names") {
+    import com.tjclp.xl.cells.CellValue
+    (0 to 1000).filterNot(_ == 60).foreach { serial =>
+      val dt = CellValue.excelSerialToDateTime(serial.toDouble)
+      assertEquals(CellValue.dateTimeToExcelSerial(dt), serial.toDouble, s"serial $serial")
+      assertEquals(
+        displaySerial(serial, "yyyy-mm-dd"),
+        if serial == 0 then "1900-01-00" else dt.toLocalDate.toString,
+        s"serial $serial"
+      )
+    }
+  }
+
   // ========== Date/Time Formatting Tests ==========
 
   test("applyDateFormat: simple date m/d/yy") {
