@@ -370,6 +370,7 @@ object RasterizerChain:
         val fileName = Option(target.getFileName)
           .map(_.toString)
           .getOrElse(throw new IOException("not a file path"))
+        requireFileTarget(target)
         val ext = fileName.lastIndexOf('.') match
           case i if i >= 0 && (1 to 16).contains(fileName.length - i - 1) =>
             fileName.substring(i + 1)
@@ -421,6 +422,15 @@ object RasterizerChain:
           view.setAcl(java.util.List.of(ownerOnly))
         }
 
+  /**
+   * Refuse an existing output that is not a regular file: a FIFO, a device or a directory cannot be
+   * backed up and written in place like an image (a FIFO's reader would block the publish, past
+   * every deadline), so it fails before the conversion starts.
+   */
+  private def requireFileTarget(target: Path): Unit =
+    if Files.exists(target) && !Files.isRegularFile(target) then
+      throw new IOException("not a regular file")
+
   /** Delete `path` when the JVM exits, where the security policy allows. */
   private def deleteOnExit(path: Path): Unit =
     try path.toFile.deleteOnExit()
@@ -442,8 +452,9 @@ object RasterizerChain:
    * be opened (read-only) was never truncated, so its failure is reported with the backup removed.
    * If the write-back fails too, the sibling is the only intact copy: it is kept where it is and
    * the error names it. It is never registered for deletion at exit either, since a JVM stopped
-   * mid-overwrite leaves the same situation. `copy` is the write itself, a parameter so tests can
-   * make it fail.
+   * mid-overwrite leaves the same situation. An output that cannot be read (write-only) cannot be
+   * backed up, so it is overwritten without a write-back. `copy` is the write itself, a parameter
+   * so tests can make it fail.
    */
   private[raster] def publish(
     staging: Path,
@@ -458,7 +469,11 @@ object RasterizerChain:
         StandardOpenOption.TRUNCATE_EXISTING
       )
     def overwrite(from: Path, to: Path): Unit = Using.resource(open(to))(out => copy(from, out))
-    if Files.exists(target) then
+    requireFileTarget(target)
+    if Files.exists(target) && !Files.isReadable(target) then
+      // write-only: there is nothing to back up, so it is overwritten as a backend would
+      overwrite(staging, target)
+    else if Files.exists(target) then
       val backup = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.orig")
       createPrivate(backup)
       try

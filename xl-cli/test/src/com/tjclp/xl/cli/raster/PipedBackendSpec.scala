@@ -318,6 +318,32 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
+  test("a write-only output is overwritten: publishing needs no read access") {
+    withDir { dir =>
+      val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
+      Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("-w-------"))
+      RasterizerChain.convert(tinySvg, target, RasterFormat.Png, 96, Some("batik")).map { _ =>
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("rw-------"))
+        assert(Files.size(target) > 14, "replaced with the image")
+        assertEquals(listing(dir), List(target), "no staging or backup left behind")
+      }
+    }
+  }
+
+  test("a FIFO output is IO_WRITE before any conversion, not a hang") {
+    withDir { dir =>
+      val fifo = dir.resolve("out.png")
+      IO.blocking(new java.lang.ProcessBuilder("mkfifo", fifo.toString).start().waitFor()) >>
+        failure(
+          RasterizerChain.convert(tinySvg, fifo, RasterFormat.Png, 96, Some("batik")).void
+        ).timeout(10.seconds).map { error =>
+          assert(error.isInstanceOf[RasterError.OutputFailed], error.toString)
+          assert(error.getMessage.contains("not a regular file"), error.getMessage)
+          assertEquals(listing(dir), List(fifo), "no staging file left behind")
+        }
+    }
+  }
+
   test("a dangling output symlink is written through: the link stays, its referent is created") {
     withDir { dir =>
       val referent = dir.resolve("made.png")
