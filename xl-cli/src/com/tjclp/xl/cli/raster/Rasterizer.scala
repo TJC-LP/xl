@@ -1,6 +1,6 @@
 package com.tjclp.xl.cli.raster
 
-import java.io.IOException
+import java.io.{IOException, OutputStream}
 import java.nio.file.{
   AtomicMoveNotSupportedException,
   Files,
@@ -360,7 +360,10 @@ object RasterizerChain:
     val target = outputPath.toAbsolutePath
     val staged = IO
       .blocking {
-        val fileName = target.getFileName.toString
+        // a root (`/`) names no file to write
+        val fileName = Option(target.getFileName)
+          .map(_.toString)
+          .getOrElse(throw new IOException("not a file path"))
         val ext = fileName.lastIndexOf('.') match
           case i if i >= 0 && (1 to 16).contains(fileName.length - i - 1) =>
             fileName.substring(i + 1)
@@ -368,8 +371,7 @@ object RasterizerChain:
         val staging = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
         if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then createPrivate(staging)
         // a JVM stopped mid-conversion (SIGTERM) skips the release below; this still runs
-        try staging.toFile.deleteOnExit()
-        catch case _: SecurityException => ()
+        deleteOnExit(staging)
         staging
       }
       .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
@@ -399,21 +401,60 @@ object RasterizerChain:
       ): Unit
     catch case _: UnsupportedOperationException => Files.createFile(path): Unit
 
+  /** Delete `path` when the JVM exits, where the security policy allows. */
+  private def deleteOnExit(path: Path): Unit =
+    try path.toFile.deleteOnExit()
+    catch case _: SecurityException => ()
+
   /**
    * Publish the verified `staging` file as `target`. An output that already exists is overwritten
    * in place — same file, so its owner, group, ACLs, hard links and symlink are all kept (GH-690) —
    * and a new one is moved into place, atomically where the file system can.
+   *
+   * The overwrite truncates first, so the old contents are copied to a private sibling beforehand:
+   * a copy that then fails (a full disk, a quota) writes them back. If that fails too, the copy is
+   * renamed to a visible name the error reports — renamed, since a JVM exit deletes the hidden one.
+   * `copy` is the write itself, a parameter so tests can make it fail.
    */
-  private def publish(staging: Path, target: Path): Unit =
-    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
+  private[raster] def publish(
+    staging: Path,
+    target: Path,
+    copy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
+  ): Unit =
+    def overwrite(from: Path, to: Path): Unit =
       Using.resource(
         Files.newOutputStream(
-          target,
+          to,
           StandardOpenOption.WRITE,
           StandardOpenOption.CREATE,
           StandardOpenOption.TRUNCATE_EXISTING
         )
-      )(out => Files.copy(staging, out): Unit)
+      )(out => copy(from, out))
+    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
+      val backup = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.orig")
+      createPrivate(backup)
+      deleteOnExit(backup)
+      try
+        Using.resource(Files.newOutputStream(backup, StandardOpenOption.WRITE))(out =>
+          Files.copy(target, out): Unit
+        )
+        try overwrite(staging, target)
+        catch
+          case failed: IOException =>
+            try overwrite(backup, target)
+            catch
+              case restoreFailed: IOException =>
+                val kept =
+                  target.resolveSibling(s"${target.getFileName}.xl-backup-${UUID.randomUUID()}")
+                Files.move(backup, kept)
+                val error = new IOException(
+                  s"${failed.getMessage}; its previous contents are kept in $kept",
+                  failed
+                )
+                error.addSuppressed(restoreFailed)
+                throw error
+            throw failed
+      finally Files.deleteIfExists(backup): Unit
     else
       try
         Files.move(

@@ -51,6 +51,9 @@ private[raster] object PipedBackend:
   /** How long a child gets to exit after the polite signal before it is killed outright. */
   private val GraceMillis: Long = 2000
 
+  /** How often [[kill]] looks for new descendants during the grace period. */
+  private val PollMillis: Long = 10
+
   /**
    * Run `command args` with `input` on stdin. A non-zero exit is `ConversionFailed(name, stderr,
    * exit)` whether or not the backend read its input; a zero exit that left the input unread is a
@@ -203,9 +206,12 @@ private[raster] object PipedBackend:
    * polite signal, a bounded wait, then a forcible kill. Every step signals through
    * [[ProcessHandle]], which closes none of the child's streams: `Process.destroy` closes stdin
    * first, and that close waits on the lock a stdin write blocked on an unread pipe holds, so the
-   * escalation would never be reached (GH-690). The descendants are found again before the forcible
-   * kill, while the child still parents them, so a helper its SIGTERM handler started goes too.
-   * Discovery is best-effort and cannot keep the child itself from being stopped.
+   * escalation would never be reached (GH-690). The descendants are looked up every [[PollMillis]]
+   * through the grace period, so a helper the child's SIGTERM handler starts is stopped too, even
+   * when the child then exits: a child that has exited no longer parents its helpers, so one
+   * started in the last poll interval before the child exits can still escape (the JDK cannot start
+   * a child in its own process group). Discovery is best-effort and cannot keep the child itself
+   * from being stopped.
    */
   private[raster] def kill(
     process: Process,
@@ -219,9 +225,17 @@ private[raster] object PipedBackend:
       val first = found()
       first.foreach(_.destroy())
       handle.destroy(): Unit
-      if process.waitFor(GraceMillis, TimeUnit.MILLISECONDS) then first.foreach(_.destroyForcibly())
-      else
-        (first ++ found()).distinct.foreach(_.destroyForcibly())
+      val deadline = System.nanoTime() + GraceMillis * 1000000L
+      // every descendant seen through the grace period, and whether the child exited within it
+      @tailrec
+      def watch(seen: List[ProcessHandle]): (List[ProcessHandle], Boolean) =
+        val now = (seen ++ found()).distinct
+        if process.waitFor(PollMillis, TimeUnit.MILLISECONDS) then (now, true)
+        else if System.nanoTime() >= deadline then (now, false)
+        else watch(now)
+      val (seen, exited) = watch(first)
+      seen.foreach(_.destroyForcibly())
+      if !exited then
         handle.destroyForcibly(): Unit
         process.waitFor(GraceMillis, TimeUnit.MILLISECONDS): Unit
 

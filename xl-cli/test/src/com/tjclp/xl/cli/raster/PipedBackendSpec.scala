@@ -211,30 +211,105 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(missing, None)
   }
 
+  /** The pids of the processes whose command line contains `pattern`, or "" for none. */
+  private def pgrep(pattern: String): String =
+    val process = new java.lang.ProcessBuilder("pgrep", "-f", pattern).start()
+    new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8).strip
+
   test("kill also stops a helper the child's SIGTERM handler starts during the grace period") {
     val marker = "31.6901"
     val script = s"trap 'sleep $marker & while :; do :; done' TERM; while :; do :; done"
-    def helpers(): String =
-      new String(
-        new java.lang.ProcessBuilder("pgrep", "-f", s"sleep $marker")
-          .start()
-          .getInputStream
-          .readAllBytes(),
-        StandardCharsets.UTF_8
-      ).strip
     IO.blocking {
       val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
       Thread.sleep(300) // let the shell install its trap
       PipedBackend.kill(process)
       assert(!process.isAlive, "the child must be stopped")
-      assertEquals(helpers(), "", "the grace-period helper outlived the kill")
+      assertEquals(pgrep(s"sleep $marker"), "", "the grace-period helper outlived the kill")
     }
   }
 
   test("a descendant that keeps the pipes open after the child exits cannot stall a deadline") {
     val started = System.nanoTime()
-    PipedBackend.probe("sh", List("-c", "sleep 8 & exit 0"), 1.second).map { ok =>
-      assert(!ok)
-      assert((System.nanoTime() - started).nanos < 5.seconds, "teardown waited on the orphan")
+    // the child outlives the start of the pipe reads: a child gone before they start has its pipes
+    // drained and closed by the JDK, and the orphan would hold nothing
+    PipedBackend.probe("sh", List("-c", "sleep 10 & sleep 0.5; exit 0"), 2.seconds).map { ok =>
+      assert(!ok, "the orphan holds the pipes, so the probe must reach its deadline")
+      assert((System.nanoTime() - started).nanos < 6.seconds, "teardown waited on the orphan")
+    }
+  }
+
+  test("kill stops a helper a SIGTERM handler starts even when the child then exits") {
+    val marker = "31.6902"
+    val script = s"trap 'sleep $marker & sleep 0.3; exit 0' TERM; while :; do :; done"
+    IO.blocking {
+      val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
+      Thread.sleep(300) // let the shell install its trap
+      PipedBackend.kill(process)
+      assert(!process.isAlive, "the child must be stopped")
+      assertEquals(pgrep(s"sleep $marker"), "", "the helper outlived the kill")
+    }
+  }
+
+  private def bytes(text: String): Array[Byte] = text.getBytes(StandardCharsets.UTF_8)
+
+  private def text(p: Path): String = new String(Files.readAllBytes(p), StandardCharsets.UTF_8)
+
+  private def listing(dir: Path): List[Path] =
+    Files.list(dir).toArray.toList.collect { case p: Path => p }
+
+  test("publish: a copy that fails partway writes the previous output back") {
+    withDir { dir =>
+      IO.blocking {
+        val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
+        val staging = Files.write(dir.resolve(".xl-raster-staged.png"), bytes("new, larger image"))
+        val error = intercept[java.io.IOException] {
+          RasterizerChain.publish(
+            staging,
+            target,
+            (from, out) =>
+              if from == staging then
+                out.write(bytes("new"))
+                throw new java.io.IOException("No space left on device")
+              else Files.copy(from, out): Unit
+          )
+        }
+        assertEquals(error.getMessage, "No space left on device")
+        assertEquals(text(target), "previous image")
+        assertEquals(listing(dir).toSet, Set(target, staging), "the backup is removed")
+      }
+    }
+  }
+
+  test(
+    "publish: when the write-back fails too, the previous output is kept under a reported name"
+  ) {
+    withDir { dir =>
+      IO.blocking {
+        val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
+        val staging = Files.write(dir.resolve(".xl-raster-staged.png"), bytes("new image"))
+        val error = intercept[java.io.IOException] {
+          RasterizerChain.publish(
+            staging,
+            target,
+            (_, _) => throw new java.io.IOException("No space left on device")
+          )
+        }
+        val kept = listing(dir).filter(_.getFileName.toString.startsWith("out.png.xl-backup-"))
+        assertEquals(kept.size, 1, listing(dir).toString)
+        kept.foreach { backup =>
+          assert(error.getMessage.contains(backup.toString), error.getMessage)
+          assertEquals(text(backup), "previous image")
+        }
+        assert(!listing(dir).exists(_.toString.endsWith(".orig")), "the hidden copy was renamed")
+      }
+    }
+  }
+
+  test("a root output path is IO_WRITE, not an internal error") {
+    failure(
+      RasterizerChain.convert(tinySvg, Path.of("/"), RasterFormat.Png, 96, Some("batik")).void
+    ).map { error =>
+      assert(error.isInstanceOf[RasterError.OutputFailed], error.toString)
+      assertEquals(CliError.fromThrowable(error).code, ErrorCode.IO_WRITE)
     }
   }
