@@ -112,6 +112,30 @@ object CliError:
             "(`xl rasterizers` lists them) and report the backend's message"
         )
       )
+    case t: RasterError.TimedOut =>
+      CliError(
+        ErrorCode.RASTERIZER_UNAVAILABLE,
+        t.message,
+        hint = Some(
+          s"${t.rasterizer} hung or is too slow for this render; retry with another --rasterizer " +
+            "(`xl rasterizers` lists them) or render a smaller range"
+        )
+      )
+    case o: RasterError.OutputFailed =>
+      CliError(
+        ErrorCode.IO_WRITE,
+        o.message,
+        hint = Some("check that the --raster-output directory exists and is writable")
+      )
+    case u: RasterError.UnsupportedOutput =>
+      CliError(
+        ErrorCode.IO_WRITE,
+        u.message,
+        hint = Some(
+          "--raster-output must name a regular file; devices and pipes such as /dev/stdout are " +
+            "not supported (write to a file, then cat it)"
+        )
+      )
     case s: RasterError.ScratchFileFailed =>
       CliError(
         ErrorCode.IO_WRITE,

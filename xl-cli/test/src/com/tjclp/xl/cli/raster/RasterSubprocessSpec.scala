@@ -29,6 +29,9 @@ import com.tjclp.xl.cli.contract.{CliError, ErrorCode, TestFixtures}
  */
 class RasterSubprocessSpec extends FunSuite:
 
+  // the shim backends are /bin/sh scripts
+  override def munitIgnore: Boolean = scala.util.Properties.isWin
+
   private val shimMessage = "shim: refusing to render"
 
   private val shimScript =
@@ -59,15 +62,18 @@ class RasterSubprocessSpec extends FunSuite:
    * ImageMagick commands are shimmed so a system `convert` on the fork's PATH cannot answer the
    * probe instead.
    */
-  private val shims = FunFixture[Path](
+  private val shims = shimsWith(shimScript, magickShimScript)
+
+  /** A shim directory: `script` for rsvg-convert, cairosvg and resvg, `magick` for ImageMagick. */
+  private def shimsWith(script: String, magick: String): FunFixture[Path] = FunFixture[Path](
     setup = _ =>
       val dir = Files.createTempDirectory("xl-raster-shims-")
-      def install(name: String, script: String): Unit =
+      def install(name: String, body: String): Unit =
         val shim = dir.resolve(name)
-        Files.writeString(shim, script, StandardCharsets.UTF_8)
+        Files.writeString(shim, body, StandardCharsets.UTF_8)
         Files.setPosixFilePermissions(shim, PosixFilePermissions.fromString("rwxr-xr-x"))
-      Vector("rsvg-convert", "cairosvg", "resvg").foreach(install(_, shimScript))
-      Vector("magick", "convert").foreach(install(_, magickShimScript))
+      Vector("rsvg-convert", "cairosvg", "resvg").foreach(install(_, script))
+      Vector("magick", "convert").foreach(install(_, magick))
       dir
     ,
     teardown = dir =>
@@ -132,7 +138,8 @@ class RasterSubprocessSpec extends FunSuite:
     backend: String,
     format: String,
     range: String,
-    jvmFlags: List[String] = Nil
+    jvmFlags: List[String] = Nil,
+    output: Option[Path] = None
   ): Forked =
     val fixtures = TestFixtures.materialize.unsafeRunSync()
     try
@@ -149,7 +156,7 @@ class RasterSubprocessSpec extends FunSuite:
         "--format",
         format,
         "--raster-output",
-        fixtures.resolve(s"out.$format").toString,
+        output.getOrElse(fixtures.resolve(s"out.$format")).toString,
         "--rasterizer",
         backend
       )
@@ -234,4 +241,237 @@ class RasterSubprocessSpec extends FunSuite:
     val err = CliError.fromThrowable(RasterError.ConversionFailed("resvg", "bad svg", 2))
     assertEquals(err.code, ErrorCode.RASTERIZER_UNAVAILABLE)
     assertEquals(err.message, "resvg conversion failed (exit 2): bad svg")
+  }
+
+  // ===== GH-690: what a backend's exit cannot prove, the output file must =====
+
+  /**
+   * Answers every probe; a conversion reads the whole SVG, then exits 0 writing nothing. Reading it
+   * all keeps the outcome off the stdin write's race with the exit: a shim that exits first is
+   * [[earlyExitScript]]'s case, a different message.
+   */
+  private val silentZeroScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |cat >/dev/null
+      |exit 0
+      |""".stripMargin
+
+  /** Answers every probe; a conversion exits 0 at once, reading nothing and writing nothing. */
+  private val earlyExitScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |exit 0
+      |""".stripMargin
+
+  /** Writes a partial file without reading SVG; its helper holds stdout/stderr past the exit. */
+  private val heldPipesEarlyExitScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |out=""; prev=""
+      |for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+      |exec 0<&-
+      |sleep 31.6908 &
+      |printf partial > "$out"
+      |sleep 0.5
+      |exit 0
+      |""".stripMargin
+
+  /**
+   * ImageMagick's probe converts to stdout (`png:-`) and must see bytes; the real run gets none.
+   */
+  private val magickSilentZeroScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  -version|--version|-list) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |for a in "$@"; do [ "$a" = "png:-" ] && { cat >/dev/null; echo PNG; exit 0; }; done
+      |cat >/dev/null
+      |exit 0
+      |""".stripMargin
+
+  /** Writes stdin to the `-o` argument: a backend that works. */
+  private val writingScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |out=""; prev=""
+      |for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+      |cat > "$out"
+      |exit 0
+      |""".stripMargin
+
+  /** Exits 1 with nothing on stderr. */
+  private val muteFailureScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help|-version|-list) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |exit 1
+      |""".stripMargin
+
+  /** Exits 1 with a 200-character stderr message, past the chain's old 50-character cut. */
+  private val longMessage = "shim: " + ("detail-" * 28) + "END"
+  private val longFailureScript =
+    s"""#!/bin/sh
+       |case "$$1" in
+       |  --version|--help) echo "shim 1.0"; exit 0 ;;
+       |esac
+       |echo "$longMessage" >&2
+       |exit 1
+       |""".stripMargin
+
+  private val silentZero = shimsWith(silentZeroScript, magickSilentZeroScript)
+  private val earlyExit = shimsWith(earlyExitScript, magickSilentZeroScript)
+  private val heldPipesEarlyExit = shimsWith(heldPipesEarlyExitScript, magickSilentZeroScript)
+  private val writing = shimsWith(writingScript, magickSilentZeroScript)
+  private val mute = shimsWith(muteFailureScript, muteFailureScript)
+  private val chatty = shimsWith(longFailureScript, magickShimScript)
+
+  /** A scratch directory for an output path, emptied and removed afterwards. */
+  private def withOutputDir[A](body: Path => A): A =
+    val dir = Files.createTempDirectory("xl-raster-out-")
+    try body(dir)
+    finally
+      val entries = Files.list(dir)
+      try entries.forEach(p => Files.deleteIfExists(p))
+      finally entries.close()
+      Files.deleteIfExists(dir)
+
+  private def listing(dir: Path): List[String] =
+    val entries = Files.list(dir)
+    try entries.iterator().asScala.map(_.getFileName.toString).toList.sorted
+    finally entries.close()
+
+  for (backend, format) <- Vector(
+      "rsvg-convert" -> "png",
+      "cairosvg" -> "png",
+      "imagemagick" -> "png"
+    )
+  do
+    silentZero.test(s"GH-690: forced $backend that exits 0 without output fails, no file") { dir =>
+      withOutputDir { outDir =>
+        val out = outDir.resolve(s"out.$format")
+        val run = forcedView(dir, backend, format, "A1:B2", output = Some(out))
+        assertEquals(run.exit, 3, run.stderr)
+        val name = if backend == "imagemagick" then "ImageMagick" else backend
+        assert(
+          run.stderr.startsWith(
+            s"Error: $name conversion failed (exit 0): wrote no output"
+          ),
+          run.stderr
+        )
+        assert(!run.stdout.contains("Exported"), run.stdout)
+        assertEquals(listing(outDir), Nil, "no output and no staging file left behind")
+      }
+    }
+
+  silentZero.test("GH-690: an earlier run's output cannot pass for this run's, and survives") {
+    dir =>
+      withOutputDir { outDir =>
+        val out = outDir.resolve("out.png")
+        Files.writeString(out, "OLD", StandardCharsets.UTF_8)
+        val run = forcedView(dir, "rsvg-convert", "png", "A1:B2", output = Some(out))
+        assertEquals(run.exit, 3, run.stderr)
+        assertEquals(Files.readString(out, StandardCharsets.UTF_8), "OLD")
+        assertEquals(listing(outDir), List("out.png"))
+      }
+  }
+
+  earlyExit.test("GH-690: exit 0 before reading a large SVG: no JDK wording in the message") {
+    dir =>
+      val run = forcedView(dir, "rsvg-convert", "png", "A1:Z1000")
+      assertEquals(run.exit, 3, run.stderr)
+      assert(
+        run.stderr.startsWith(
+          "Error: rsvg-convert conversion failed (exit 0): exited before reading the whole SVG"
+        ),
+        run.stderr
+      )
+      assert(!run.stderr.contains("Stream closed"), run.stderr)
+      assert(!run.stderr.contains("Broken pipe"), run.stderr)
+  }
+
+  heldPipesEarlyExit.test(
+    "held pipes cannot publish partial output after an incomplete SVG write"
+  ) { dir =>
+    withOutputDir { outDir =>
+      val out = outDir.resolve("out.png")
+      Files.writeString(out, "OLD", StandardCharsets.UTF_8)
+      val run = forcedView(dir, "rsvg-convert", "png", "A1:Z1000", output = Some(out))
+      assertEquals(run.exit, 3, run.stderr)
+      assert(run.stderr.contains("exited before reading the whole SVG"), run.stderr)
+      assert(run.stderr.contains("held open by a process it started"), run.stderr)
+      assert(!run.stdout.contains("Exported"), run.stdout)
+      assertEquals(Files.readString(out, StandardCharsets.UTF_8), "OLD")
+      assertEquals(listing(outDir), List("out.png"))
+    }
+  }
+
+  writing.test("GH-690: a backend that writes replaces the old output and leaves no staging file") {
+    dir =>
+      withOutputDir { outDir =>
+        val out = outDir.resolve("out.png")
+        Files.writeString(out, "OLD", StandardCharsets.UTF_8)
+        val run = forcedView(dir, "rsvg-convert", "png", "A1:B2", output = Some(out))
+        assertEquals(run.exit, 0, run.stderr)
+        assert(run.stdout.contains(s"Exported: $out"), run.stdout)
+        assert(Files.readString(out, StandardCharsets.UTF_8).startsWith("<svg"))
+        assertEquals(listing(outDir), List("out.png"))
+      }
+  }
+
+  mute.test("GH-690: an empty stderr ends the message at the exit code, no dangling colon") { dir =>
+    val run = forcedView(dir, "rsvg-convert", "png", "A1:B2")
+    assertEquals(run.exit, 3, run.stderr)
+    assertEquals(
+      run.stderr.linesIterator.nextOption(),
+      Some("Error: rsvg-convert conversion failed (exit 1)")
+    )
+  }
+
+  chatty.test("GH-690: the default chain keeps each backend's whole message") { dir =>
+    val out = Files.createTempFile("xl-probe-", ".png")
+    try
+      val run = fork(dir, "com.tjclp.xl.cli.raster.RasterShimProbe", out.toString, "small")
+      assertEquals(run.exit, 0, run.stderr)
+      val message = run.stdout.linesIterator.drop(1).mkString("\n")
+      assert(
+        message.contains(s"cairosvg (cairosvg conversion failed (exit 1): $longMessage)"),
+        message
+      )
+      assert(
+        message.contains(s"rsvg-convert (rsvg-convert conversion failed (exit 1): $longMessage)"),
+        message
+      )
+    finally Files.deleteIfExists(out)
+  }
+
+  silentZero.test("GH-690: the default chain does not report Exported when no backend wrote") {
+    dir =>
+      val out = Files.createTempFile("xl-probe-", ".png")
+      Files.delete(out)
+      try
+        val run = fork(dir, "com.tjclp.xl.cli.raster.RasterShimProbe", out.toString, "small")
+        assertEquals(run.exit, 0, run.stderr)
+        val lines = run.stdout.linesIterator.toVector
+        assertEquals(lines.headOption, Some(ErrorCode.RASTERIZER_UNAVAILABLE), run.stdout)
+        val message = lines.drop(1).mkString("\n")
+        Vector("cairosvg", "rsvg-convert", "resvg").foreach { backend =>
+          assert(
+            message.contains(
+              s"$backend ($backend conversion failed (exit 0): wrote no output)"
+            ),
+            message
+          )
+        }
+        assert(!Files.exists(out))
+      finally Files.deleteIfExists(out)
   }

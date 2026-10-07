@@ -581,7 +581,12 @@ apt install librsvg2-bin      # rsvg-convert (Debian/Ubuntu); brew install librs
 cargo install resvg           # or a prebuilt binary: github.com/linebender/resvg/releases
 ```
 
-When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed). A backend forced with `--rasterizer` that cannot write the format (`--rasterizer rsvg-convert --format jpeg`), or that runs and fails, is `RASTERIZER_UNAVAILABLE` (exit 3) too; a failure's message carries the backend's exit code and stderr (`rsvg-convert conversion failed (exit 1): …`), so retry with another backend and report that message.
+When no backend is available, raster exports fail with an error naming the probed chain and pointing back at `xl rasterizers`. `--format svg` always works (pure vector, no backend needed). A backend forced with `--rasterizer` that cannot write the format (`--rasterizer rsvg-convert --format jpeg`), or that runs and fails, is `RASTERIZER_UNAVAILABLE` (exit 3) too; a failure's message carries the backend's exit code and the last 4 KiB of its stderr (`rsvg-convert conversion failed (exit 1): …`), so retry with another backend and report that message.
+
+- **Success is the output file, not the exit code.** The image is written beside the output path and published only when it exists and is non-empty. A backend that exits 0 without writing fails (`… (exit 0): wrote no output`) and the default chain moves on to the next backend. A failed export leaves an existing file at the path untouched.
+- **An existing output is overwritten in place**, so it keeps its owner, group, permissions, ACLs, hard links and symlink; a new one is moved into place. An overwrite that fails partway (a full disk) writes the previous contents back; if even that fails, the error names the file that still holds them. A symlink output stays a symlink, its target created if it does not exist yet. A writable output in a read-only directory is still overwritten (its staging file goes to `XL_SPILL_DIR`, else the temp directory).
+- **Timeouts.** A conversion still running after 5 minutes is stopped (`… did not finish within 300 s and was stopped`, `RASTERIZER_UNAVAILABLE`), and the default chain stops there rather than spending as long on each remaining backend (force another with `--rasterizer`). An availability probe still running after 30 seconds counts the backend as unavailable.
+- **Unwritable outputs are `IO_WRITE` before any backend runs**: a missing or read-only directory for a new output, a directory, a FIFO or a device such as `/dev/stdout` (write to a file, then `cat` it). The default chain stops there rather than trying other backends.
 
 ---
 
@@ -745,8 +750,10 @@ characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
 workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
 `cycles` holds only findings); `Unresolved names` — formulas
-reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
-(TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
+reading a defined name the graph cannot resolve (undefined, unparseable, a cycle of names, or a
+chain more than 100 names deep, #691). **Notes** (reported, never findings): `Volatile`
+(TODAY/NOW/RAND/RANDBETWEEN cells, directly or through defined names), `Dynamic` (INDIRECT/OFFSET
+readers), `External references`
 (other-workbook refs, whose caches are pinned), `Stale data tables` (#678: a data table whose
 interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
 evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in

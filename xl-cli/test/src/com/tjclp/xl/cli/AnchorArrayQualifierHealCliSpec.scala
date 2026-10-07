@@ -10,7 +10,7 @@ import cats.effect.IO
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.cli.contract.{CliHarness, CliRun}
 import com.tjclp.xl.macros.ref
@@ -71,7 +71,9 @@ class AnchorArrayQualifierHealCliSpec extends CatsEffectSuite:
   private def corruptedSource(liveFormula: Boolean): IO[Path] = IO.blocking {
     val corrupt = Sheet("Support")
       .put(ref"A1" -> 1)
-      .put(ref"B1", CellValue.Formula(corruption(2)._1, None))
+      // cached as Excel caches it: since GH-694 the healed `Sheet1!#REF!+1` evaluates, and an
+      // uncached B1 would give every recalc a cache to fill
+      .put(ref"B1", CellValue.Formula(corruption(2)._1, Some(CellValue.Error(CellError.Ref))))
       .conditionalFormat(ref"A1:A3", CfRule.Expression(corruption(3)._1, None, 1))
       .withDataValidation(ref"D1:D3", customDv(corruption(4)._1))
     val support =

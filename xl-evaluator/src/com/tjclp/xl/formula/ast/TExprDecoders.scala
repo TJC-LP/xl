@@ -164,7 +164,7 @@ trait TExprDecoders:
    * Used for standalone cell references (e.g., =A1, =Sheet1!B2) where the formula returns the
    * cell's "effective" value:
    *   - Number, Text, Bool, DateTime, RichText -> returned as-is
-   *   - Formula -> returns cached value if present, or Number(0) if no cache
+   *   - Formula -> returns cached value (an error included) if present, or Number(0) if no cache
    *   - Empty -> returns Number(0) (Excel treats empty as 0 in numeric contexts)
    *   - Error -> returns the error
    *
@@ -191,6 +191,8 @@ trait TExprDecoders:
           case Some(CellValue.Bool(b)) => CellValue.Bool(b)
           case Some(CellValue.DateTime(dt)) => CellValue.DateTime(dt)
           case Some(CellValue.RichText(rt)) => CellValue.Text(rt.toPlainText)
+          // a cached error is that error, as an error cell is (it read as 0 before GH-695)
+          case Some(CellValue.Error(err)) => CellValue.Error(err)
           case _ => CellValue.Number(BigDecimal(0))
       case CellValue.Error(err) => CellValue.Error(err)
       case CellValue.Empty => CellValue.Number(BigDecimal(0))

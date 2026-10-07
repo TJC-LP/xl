@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.{BinarySpine, RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, ErrorQualifier, RangeForm, TExpr}
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 
 import scala.annotation.nowarn
@@ -353,7 +353,7 @@ object FormulaShifter:
       // (its refersTo text lives in workbook metadata, not in this formula)
       case name @ RangeLocation.Name(_, _) => name
       // GH-612: an error has no coordinates
-      case error @ RangeLocation.Error(_) => error
+      case error @ RangeLocation.Error(_, _) => error
 
   // ============================================================================
   // GH-128 / GH-129: structural shifting for row/column insert & delete.
@@ -388,7 +388,7 @@ object FormulaShifter:
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.CrossSheet(sheet, _, _) => matches(sheet)
       case RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, _) | RangeLocation.Error(_) =>
+          RangeLocation.Name(_, _) | RangeLocation.Error(_, _) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetRef(sheet, _, _, _) => matches(sheet)
@@ -414,7 +414,7 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | ErrorLit(_) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
+      case Lit(_) | ErrorLit(_, _) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
           ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
           SheetNameRef(_, _) | CoercedBindingRef(_, _) =>
         false
@@ -431,19 +431,29 @@ object FormulaShifter:
   def mentionsSheet(expr: TExpr[?], sheet: String): Boolean =
     referencesSheet(expr, sheet) || mentionsSheetName(expr, sheet)
 
-  /** The `SheetNameRef` half of [[mentionsSheet]]: does any sheet-qualified NAME target `sheet`? */
+  /**
+   * The `SheetNameRef` half of [[mentionsSheet]]: does any sheet-qualified NAME target `sheet`?
+   * GH-694: or a qualified error literal (`Sheet1!#REF!`), whose qualifier a rename also follows.
+   * Removing a sheet voids no reference today (`Support!A1` dangles too); if it ever does, a
+   * qualified error naming the removed sheet should lose its qualifier, as Excel writes a bare
+   * `#REF!` then.
+   */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def mentionsSheetName(expr: TExpr[?], sheet: String): Boolean =
     import TExpr.*
+    def names(qualifier: Option[ErrorQualifier]): Boolean = qualifier match
+      case Some(ErrorQualifier.Sheet(s)) => s.value.equalsIgnoreCase(sheet)
+      case Some(ErrorQualifier.External(_, _)) | None => false
     // GH-394: a sheet-qualified name can also sit in a range slot (`SUMIF(Model!rev_range, …)`)
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
+      case RangeLocation.Error(_, qualifier) => names(qualifier)
       case RangeLocation.Name(_, None) | RangeLocation.Local(_, _) |
-          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Error(_) =>
+          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetNameRef(qualifier, _) => qualifier.value.equalsIgnoreCase(sheet)
+      case ErrorLit(_, qualifier) => names(qualifier)
       case Aggregate(_, location) => goLoc(location)
       case call: Call[?] =>
         var found = false
@@ -464,10 +474,9 @@ object FormulaShifter:
       case DateTimeToSerial(inner) => go(inner)
       case Coerced(inner, _) => go(inner)
       case Let(bindings, body) => bindings.exists((_, value) => go(value)) || go(body)
-      case Lit(_) | ErrorLit(_) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) |
-          SheetRef(_, _, _, _) | SheetPolyRef(_, _, _) | SheetRange(_, _, _) |
-          ExternalRef(_, _, _, _) | ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) |
-          CoercedBindingRef(_, _) =>
+      case Lit(_) | Missing | Ref(_, _, _) | PolyRef(_, _) | RangeRef(_, _) | SheetRef(_, _, _, _) |
+          SheetPolyRef(_, _, _) | SheetRange(_, _, _) | ExternalRef(_, _, _, _) |
+          ExternalRange(_, _, _, _) | BindingRef(_) | NameRef(_) | CoercedBindingRef(_, _) =>
         false
     go(expr)
 
@@ -491,14 +500,20 @@ object FormulaShifter:
     import TExpr.*
     def target(sheet: SheetName): SheetName =
       if sheet.value.equalsIgnoreCase(from) then to else sheet
+    def targetQualifier(qualifier: ErrorQualifier): ErrorQualifier = qualifier match
+      case ErrorQualifier.Sheet(sheet) => ErrorQualifier.Sheet(target(sheet))
+      case external: ErrorQualifier.External => external
     def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
     def goLocation(location: RangeLocation): RangeLocation = location match
       case RangeLocation.CrossSheet(sheet, range, form) =>
         RangeLocation.CrossSheet(target(sheet), range, form)
       // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
       case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(target(scope)))
+      // GH-694: `SUM(Old!#REF!)` keeps naming its sheet, as Excel renames it
+      case RangeLocation.Error(error, qualifier) =>
+        RangeLocation.Error(error, qualifier.map(targetQualifier))
       case other @ (RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, None) | RangeLocation.Error(_)) =>
+          RangeLocation.Name(_, None)) =>
         other
 
     expr match
@@ -508,9 +523,12 @@ object FormulaShifter:
       case SheetRange(sheet, range, form) =>
         SheetRange(target(sheet), range, form).asInstanceOf[TExpr[A]]
       case SheetNameRef(sheet, name) => SheetNameRef(target(sheet), name).asInstanceOf[TExpr[A]]
+      // GH-694: `Old!#REF!` follows the rename like a reference's qualifier
+      case ErrorLit(error, Some(qualifier)) =>
+        ErrorLit(error, Some(targetQualifier(qualifier))).asInstanceOf[TExpr[A]]
       // Nothing to rename: local refs, literals, identifiers, external-workbook refs
       case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
-          _: ErrorLit | Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
+          ErrorLit(_, None) | Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
         expr
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
@@ -689,7 +707,7 @@ object FormulaShifter:
       // (its refersTo text lives in workbook metadata, not in this formula)
       case RangeLocation.Name(_, _) => location
       // GH-612: an error has no coordinates
-      case RangeLocation.Error(_) => location
+      case RangeLocation.Error(_, _) => location
 
   @SuppressWarnings(
     Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")

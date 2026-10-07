@@ -1152,8 +1152,87 @@ object FormatCodeParser:
   /**
    * Apply a single format section to a LocalDateTime value (GH-283: the section is chosen by
    * [[selectSection]] on the date's serial number).
+   *
+   * The date renders in Excel's 1900 calendar (#688), as the cell would show it: 1899-12-31 is
+   * `1900-01-00` (serial 0), and dates before 1900-03-01 take Excel's weekday, one before the real
+   * one. Other dates render their own fields.
    */
   def applyDateFormat(dt: LocalDateTime, section: FormatSection): String =
+    applyDateFormat(ExcelCalendar.of(dt), section)
+
+  /**
+   * The calendar fields an Excel date displays (#688). Excel's 1900 date system has two days no
+   * LocalDateTime can hold: serial 0 shows as `1/0/1900` and the phantom serial 60 as `2/29/1900`.
+   * Its weekdays also run off the serial (serial 1 is a Sunday), so before 1900-03-01 every day
+   * shows the weekday before the real one.
+   *
+   * 1900 date system only: the formatter has no 1904 context, and none of these quirks exist there.
+   *
+   * @param weekday
+   *   ISO day of week, 1 = Monday to 7 = Sunday
+   */
+  private[xl] final case class ExcelCalendar(
+    year: Int,
+    month: Int,
+    day: Int,
+    weekday: Int,
+    hour: Int,
+    minute: Int,
+    second: Int
+  ) derives CanEqual
+
+  private[xl] object ExcelCalendar:
+    private val serialZero = java.time.LocalDate.of(1899, 12, 31)
+    private val phantomLeapDayEnd = java.time.LocalDate.of(1900, 3, 1)
+
+    /**
+     * The view of a LocalDateTime in Excel's 1900 date system: 1899-12-31 (serial 0) is
+     * `1900-01-00`, and dates before 1900-03-01 take the weekday Excel's serial count gives them.
+     * Other dates are their own calendar fields.
+     */
+    def of(dt: LocalDateTime): ExcelCalendar =
+      val date = dt.toLocalDate
+      val real = ExcelCalendar(
+        dt.getYear,
+        dt.getMonthValue,
+        dt.getDayOfMonth,
+        dt.getDayOfWeek.getValue,
+        dt.getHour,
+        dt.getMinute,
+        dt.getSecond
+      )
+      if date.isBefore(serialZero) || !date.isBefore(phantomLeapDayEnd) then real
+      else
+        // Excel counts 1900-02-29, so its weekdays before the phantom day run one behind
+        val shifted = real.copy(weekday = if real.weekday == 1 then 7 else real.weekday - 1)
+        if date == serialZero then shifted.copy(year = 1900, month = 1, day = 0) else shifted
+
+    /** Excel's phantom 1900-02-29 in the 1900 date system. */
+    private val PhantomLeapDaySerial = 60L
+
+    /**
+     * The calendar Excel displays for a date serial (#688): the day comes from
+     * [[com.tjclp.xl.cells.CellValue.excelSerialToDateTime]], which carries the leap-year offset
+     * for serials below 60, so 1 is 1900-01-01 and 59 is 1900-02-28. Serial 0 shows as `1/0/1900`
+     * and serial 60 as `2/29/1900` (a Wednesday), the day Excel counts and LibreOffice does not
+     * (LibreOffice shows 2/28/1900). The time of day is the fraction truncated to the second.
+     *
+     * @param serial
+     *   Excel date serial number, in Excel's displayable range [0, 2958466)
+     */
+    def fromSerial(serial: BigDecimal): ExcelCalendar =
+      val days = serial.toLong
+      val timeFraction = (serial % 1).toDouble
+      val hours = (timeFraction * 24).toInt
+      val minutes = ((timeFraction * 24 * 60) % 60).toInt
+      val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
+      if days == PhantomLeapDaySerial then ExcelCalendar(1900, 2, 29, 3, hours, minutes, seconds)
+      else
+        val date = com.tjclp.xl.cells.CellValue.excelSerialToDateTime(days.toDouble).toLocalDate
+        of(date.atTime(hours, minutes, seconds))
+
+  /** [[applyDateFormat]] on Excel calendar fields (#688: the days a LocalDateTime cannot hold). */
+  private[xl] def applyDateFormat(dt: ExcelCalendar, section: FormatSection): String =
     val tokens = section.pattern.tokens
     val minutePositions = findMinutePositions(tokens)
     // ECMA-376 §18.8.31: the hour uses the 12-hour clock only when the code contains an
@@ -1239,7 +1318,7 @@ object FormatCodeParser:
    *   Whether 'h'/'hh' use the 12-hour clock (the section has an AM/PM marker, GH-410)
    */
   private def renderDateToken(
-    dt: LocalDateTime,
+    dt: ExcelCalendar,
     token: FormatToken,
     isMinute: Boolean,
     twelveHour: Boolean
@@ -1247,70 +1326,70 @@ object FormatCodeParser:
     token match
       // Year
       case FormatToken.DatePart("y") =>
-        (dt.getYear % 100).toString
+        (dt.year % 100).toString
       case FormatToken.DatePart("yy") =>
-        f"${dt.getYear % 100}%02d"
+        f"${dt.year % 100}%02d"
       case FormatToken.DatePart("yyy" | "yyyy") =>
-        dt.getYear.toString
+        dt.year.toString
 
       // Month (or minute if isMinute)
       case FormatToken.DatePart("m") =>
-        if isMinute then dt.getMinute.toString
-        else dt.getMonthValue.toString
+        if isMinute then dt.minute.toString
+        else dt.month.toString
       case FormatToken.DatePart("mm") =>
-        if isMinute then f"${dt.getMinute}%02d"
-        else f"${dt.getMonthValue}%02d"
+        if isMinute then f"${dt.minute}%02d"
+        else f"${dt.month}%02d"
       case FormatToken.DatePart("mmm") =>
-        MonthsShort(dt.getMonthValue - 1)
+        MonthsShort(dt.month - 1)
       case FormatToken.DatePart("mmmm") =>
-        MonthsFull(dt.getMonthValue - 1)
+        MonthsFull(dt.month - 1)
       case FormatToken.DatePart("mmmmm") =>
         // First letter only (J, F, M, A, ...)
-        MonthsNarrow(dt.getMonthValue - 1)
+        MonthsNarrow(dt.month - 1)
 
       // Day
       case FormatToken.DatePart("d") =>
-        dt.getDayOfMonth.toString
+        dt.day.toString
       case FormatToken.DatePart("dd") =>
-        f"${dt.getDayOfMonth}%02d"
+        f"${dt.day}%02d"
       case FormatToken.DatePart("ddd") =>
-        WeekdaysShort(dt.getDayOfWeek.getValue - 1)
+        WeekdaysShort(dt.weekday - 1)
       case FormatToken.DatePart("dddd") =>
-        WeekdaysFull(dt.getDayOfWeek.getValue - 1)
+        WeekdaysFull(dt.weekday - 1)
 
       // Hour: 12-hour clock only when the section carries AM/PM (ECMA-376 §18.8.31)
       case FormatToken.DatePart("h") =>
         if twelveHour then
-          val hour = dt.getHour % 12
+          val hour = dt.hour % 12
           (if hour == 0 then 12 else hour).toString
-        else dt.getHour.toString
+        else dt.hour.toString
       case FormatToken.DatePart("hh") =>
         if twelveHour then
-          val hour = dt.getHour % 12
+          val hour = dt.hour % 12
           f"${if hour == 0 then 12 else hour}%02d"
-        else f"${dt.getHour}%02d"
+        else f"${dt.hour}%02d"
 
       // Second
       case FormatToken.DatePart("s") =>
-        dt.getSecond.toString
+        dt.second.toString
       case FormatToken.DatePart("ss") =>
-        f"${dt.getSecond}%02d"
+        f"${dt.second}%02d"
 
       // AM/PM
       case FormatToken.AmPm("AM/PM") =>
-        if dt.getHour < 12 then "AM" else "PM"
+        if dt.hour < 12 then "AM" else "PM"
       case FormatToken.AmPm("A/P") =>
-        if dt.getHour < 12 then "A" else "P"
+        if dt.hour < 12 then "A" else "P"
       case FormatToken.AmPm(_) =>
-        if dt.getHour < 12 then "AM" else "PM"
+        if dt.hour < 12 then "AM" else "PM"
 
       // Elapsed time (for duration formatting - just show value for now)
       case FormatToken.Elapsed('h') =>
-        dt.getHour.toString
+        dt.hour.toString
       case FormatToken.Elapsed('m') =>
-        dt.getMinute.toString
+        dt.minute.toString
       case FormatToken.Elapsed('s') =>
-        dt.getSecond.toString
+        dt.second.toString
 
       // Literals and other tokens
       case FormatToken.Literal(text) =>

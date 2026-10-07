@@ -105,7 +105,8 @@ enum TExpr[A] derives CanEqual:
   case RangeRef(range: CellRange, form: RangeForm = RangeForm.Cells) extends TExpr[Nothing]
   case SheetRange(sheet: SheetName, range: CellRange, form: RangeForm = RangeForm.Cells)
       extends TExpr[Nothing]
-  case ErrorLit(error: CellError) extends TExpr[Nothing]   // #REF!, #N/A, …
+  case ErrorLit(error: CellError, qualifier: Option[ErrorQualifier] = None)
+      extends TExpr[Nothing]   // #REF!, #N/A, …; Sheet1!#REF! keeps its qualifier
 
   // Arithmetic (TExpr[BigDecimal])
   case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]

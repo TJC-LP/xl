@@ -173,8 +173,11 @@ enum TExpr[A] derives CanEqual:
    * back verbatim, evaluates to the error VALUE it names (`EvalError.ErrorValue`, promoted to
    * `CellValue.Error` at the cell boundary), and contributes no dependency edges. Typed `Nothing`
    * like [[PolyRef]]: it can stand in any argument position.
+   *
+   * GH-694: `qualifier` is the sheet Excel keeps in front of it (`Sheet1!#REF!`), printed back and
+   * renamed with the sheet; the value is the same error either way.
    */
-  case ErrorLit(error: CellError) extends TExpr[Nothing]
+  case ErrorLit(error: CellError, qualifier: Option[ErrorQualifier] = None) extends TExpr[Nothing]
 
   /**
    * GH-603: an omitted argument — the empty slot in `RATE(nper,,pv,fv,)`, `IF(cond,,x)`,

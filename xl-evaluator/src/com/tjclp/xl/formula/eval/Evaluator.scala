@@ -90,6 +90,12 @@ trait Evaluator:
    */
   private[formula] def withArrayResults: Evaluator = this
 
+  /**
+   * GH-695: the generation memo this evaluator carries, if any — where an evaluation fold records
+   * each spill anchor's computed array for the generation's `x#` readers.
+   */
+  private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = None
+
 object Evaluator:
   /**
    * Default evaluator instance.
@@ -126,6 +132,34 @@ object Evaluator:
     aggregateMemo: AggregateMemo
   ): Evaluator =
     TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
+
+  /**
+   * GH-695: [[instance]] plus a generation memo that records spill anchors' results (when
+   * `trackSpills`) and caches no aggregates — for the sheet-level evaluation folds, which thread
+   * computed values like a recalculation but never had the aggregate memo.
+   */
+  private[formula] def spillTrackingInstance(rng: Rng, trackSpills: Boolean): Evaluator =
+    val memo = new AggregateMemo(cachesAggregates = false)
+    if trackSpills then memo.trackSpills()
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(memo)))
+
+  /**
+   * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
+   * stored `ANCHORARRAY` spelling. A cheap textual over-approximation (`#REF!` matches too): it
+   * only decides whether an evaluation fold records anchors' results for `x#` readers.
+   */
+  private[formula] def mayReadSpills(wb: Workbook): Boolean =
+    wb.sheets.exists(mayReadSpills) || wb.metadata.definedNames.exists(n =>
+      mayReadSpills(n.formula)
+    )
+
+  private[formula] def mayReadSpills(sheet: Sheet): Boolean =
+    sheet.cells.valuesIterator.exists(_.value match
+      case CellValue.Formula(text, _, _) => mayReadSpills(text)
+      case _ => false)
+
+  private[formula] def mayReadSpills(formula: String): Boolean =
+    formula.indexOf('#') >= 0 || formula.toUpperCase(java.util.Locale.ROOT).contains("ANCHORARRAY")
 
   /**
    * Evaluator instance that allows array results to propagate.
@@ -193,19 +227,20 @@ object Evaluator:
    * seen from its qualifier), its refersTo text parses, and range/cell-shaped targets yield the
    * resolved pair (a single-cell target acts as a 1×1 range, like Excel). Name→name chains follow
    * hop by hop like expression-position NameRef (GH-411), guarded by `resolvingNames` — a chain
-   * that revisits a member is a clean cycle error. Other non-range targets (constants, formulas)
-   * are a clean per-cell #VALUE! error — never a MatchError.
+   * that revisits a member is a clean cycle error, one deeper than [[NameWalk.MaxDepth]] names a
+   * clean too-deep error (#691). Other non-range targets (constants, formulas) are a clean per-cell
+   * #VALUE! error — never a MatchError.
    *
    * @param resolvingNames
-   *   the GH-384 name-cycle guard (UPPERCASED names on the current resolution path); callers inside
-   *   the evaluator pass their ambient guard so a name's refersTo cannot re-enter itself through a
-   *   range slot.
+   *   the GH-384 name-cycle guard (the resolved names on the current resolution path, #691);
+   *   callers inside the evaluator pass their ambient guard so a name's refersTo cannot re-enter
+   *   itself through a range slot.
    */
   private[formula] def resolveRangeLocation(
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: Set[String] = Set.empty
+    resolvingNames: NameTrail = NameTrail.empty
   ): Either[EvalError, (Sheet, CellRange)] =
     location match
       case TExpr.RangeLocation.Local(range, _) =>
@@ -229,7 +264,7 @@ object Evaluator:
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
       // GH-612: an error in a range slot (SUM(#REF!)) IS the error value it names
-      case TExpr.RangeLocation.Error(error) => Left(EvalError.ErrorValue(error))
+      case TExpr.RangeLocation.Error(error, _) => Left(EvalError.ErrorValue(error))
 
   /**
    * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).
@@ -248,7 +283,7 @@ object Evaluator:
     scope: Option[SheetName],
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: Set[String]
+    resolvingNames: NameTrail
   ): Either[EvalError, (Sheet, CellRange)] =
     workbook match
       case None =>
@@ -258,77 +293,75 @@ object Evaluator:
             None
           )
         )
-      case Some(_) if resolvingNames.contains(name.toUpperCase) =>
-        Left(
-          EvalError.EvalFailed(
-            s"Defined name cycle detected while resolving '$name'.",
-            None
-          )
-        )
       case Some(wb) =>
-        val guard = resolvingNames + name.toUpperCase
         val lookupFrom = scope.getOrElse(currentSheet.name)
         lookupDefinedName(wb, lookupFrom, name) match
           case None =>
             Left(EvalError.EvalFailed(s"Name '$name' is not defined in this workbook.", None))
           case Some(dn) =>
-            FormulaParser.parse(dn.formula) match
-              case Left(parseErr) =>
-                Left(
-                  EvalError.EvalFailed(
-                    s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
-                      s"${ParseError.toXLError(parseErr, dn.formula).message}",
-                    None
+            val definingSheet = definedNameScope(wb, dn).getOrElse(currentSheet)
+            val node = NameWalk.Node(dn, definingSheet.name)
+            val guard = resolvingNames.enter(node)
+            resolvingNames.refusal(name, node).toLeft(()).flatMap { _ =>
+              FormulaParser.parse(dn.formula) match
+                case Left(parseErr) =>
+                  Left(
+                    EvalError.EvalFailed(
+                      s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
+                        s"${ParseError.toXLError(parseErr, dn.formula).message}",
+                      None
+                    )
                   )
-                )
-              case Right(target) =>
-                val definingSheet = definedNameScope(wb, dn).getOrElse(currentSheet)
-                target match
-                  case TExpr.RangeRef(range, _) => Right((definingSheet, range))
-                  case TExpr.SheetRange(sheetName, range, _) =>
-                    resolveRangeLocation(
-                      TExpr.RangeLocation.CrossSheet(sheetName, range),
-                      definingSheet,
-                      workbook,
-                      guard
-                    )
-                  // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
-                  // A standalone ref at the top of a parsed formula surfaces as the TYPED
-                  // Ref/SheetRef (the resolved-value rewrite); Poly forms are kept for safety.
-                  case TExpr.Ref(at, _, _) => Right((definingSheet, CellRange(at, at)))
-                  case TExpr.PolyRef(at, _) => Right((definingSheet, CellRange(at, at)))
-                  case TExpr.SheetRef(sheetName, at, _, _) =>
-                    resolveRangeLocation(
-                      TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
-                      definingSheet,
-                      workbook,
-                      guard
-                    )
-                  case TExpr.SheetPolyRef(sheetName, at, _) =>
-                    resolveRangeLocation(
-                      TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
-                      definingSheet,
-                      workbook,
-                      guard
-                    )
-                  // GH-411: name→name chains follow like expression position, each hop as seen
-                  // from its predecessor's defining sheet, under the shared cycle guard
-                  case TExpr.NameRef(next) =>
-                    resolveNameToRange(next, None, definingSheet, workbook, guard)
-                  case TExpr.SheetNameRef(qualifier, next) =>
-                    resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
-                  // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
-                  // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
-                  case TExpr.ErrorLit(err) =>
-                    Left(EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}")))
-                  case _ =>
-                    // Excel: a non-reference name in a range position is #VALUE!
-                    Left(
-                      EvalError.ErrorValue(
-                        com.tjclp.xl.cells.CellError.Value,
-                        Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
+                case Right(target) =>
+                  target match
+                    case TExpr.RangeRef(range, _) => Right((definingSheet, range))
+                    case TExpr.SheetRange(sheetName, range, _) =>
+                      resolveRangeLocation(
+                        TExpr.RangeLocation.CrossSheet(sheetName, range),
+                        definingSheet,
+                        workbook,
+                        guard
                       )
-                    )
+                    // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
+                    // A standalone ref at the top of a parsed formula surfaces as the TYPED
+                    // Ref/SheetRef (the resolved-value rewrite); Poly forms are kept for safety.
+                    case TExpr.Ref(at, _, _) => Right((definingSheet, CellRange(at, at)))
+                    case TExpr.PolyRef(at, _) => Right((definingSheet, CellRange(at, at)))
+                    case TExpr.SheetRef(sheetName, at, _, _) =>
+                      resolveRangeLocation(
+                        TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                        definingSheet,
+                        workbook,
+                        guard
+                      )
+                    case TExpr.SheetPolyRef(sheetName, at, _) =>
+                      resolveRangeLocation(
+                        TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                        definingSheet,
+                        workbook,
+                        guard
+                      )
+                    // GH-411: name→name chains follow like expression position, each hop as seen
+                    // from its predecessor's defining sheet, under the shared cycle guard
+                    case TExpr.NameRef(next) =>
+                      resolveNameToRange(next, None, definingSheet, workbook, guard)
+                    case TExpr.SheetNameRef(qualifier, next) =>
+                      resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
+                    // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
+                    // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
+                    case TExpr.ErrorLit(err, _) =>
+                      Left(
+                        EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}"))
+                      )
+                    case _ =>
+                      // Excel: a non-reference name in a range position is #VALUE!
+                      Left(
+                        EvalError.ErrorValue(
+                          com.tjclp.xl.cells.CellError.Value,
+                          Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
+                        )
+                      )
+            }
 
   // ===== GH-384: defined-name resolution =====
 
@@ -373,6 +406,123 @@ object Evaluator:
    */
   private[formula] def definedNameScope(wb: Workbook, dn: DefinedName): Option[Sheet] =
     dn.localSheetId.flatMap(idx => wb.sheets.lift(idx))
+
+  /**
+   * #691: the defined names resolving on the current evaluation path — the cycle guard and the
+   * depth cap — and the [[NameMemo]] of the outermost name being evaluated, once one is open.
+   *
+   * The guard keys on resolved nodes ([[NameWalk.Node]]: the definition and the sheet its body
+   * evaluates against), never on the name's text: a sheet-local `X` defined as `T!X` reaches T's
+   * own `X`, a different node, and evaluates it.
+   */
+  private[formula] final case class NameTrail(path: Set[NameWalk.Node], memo: Option[NameMemo]):
+    def enter(node: NameWalk.Node): NameTrail = copy(path = path + node)
+
+    /**
+     * Why `node`, what the reference `name` resolves to, cannot resolve on this path: it is on the
+     * path already (a cycle), or the path holds [[NameWalk.MaxDepth]] names (a chain too deep —
+     * unresolvable, as every static name walk treats it). A refusal answers for this path only, so
+     * it taints the open memo ([[NameMemo.taint]]).
+     */
+    def refusal(name: String, node: NameWalk.Node): Option[EvalError] =
+      val refused =
+        if path.contains(node) then
+          Some(EvalError.EvalFailed(s"Defined name cycle detected while resolving '$name'.", None))
+        else if path.sizeIs >= NameWalk.MaxDepth then
+          Some(
+            EvalError.EvalFailed(
+              s"Defined name chain too deep while resolving '$name': more than " +
+                s"${NameWalk.MaxDepth} names, each referring to the next.",
+              None
+            )
+          )
+        else None
+      if refused.isDefined then memo.foreach(_.taint())
+      refused
+
+  private[formula] object NameTrail:
+    val empty: NameTrail = NameTrail(Set.empty, None)
+
+  /**
+   * #691: the values of the defined names one outermost name evaluation reaches, so a name its
+   * definition reaches along several paths — a diamond, each name reading the next twice — is
+   * evaluated once per reading context instead of once per path (2^depth).
+   *
+   * A memo opens at the outermost name (an empty [[NameTrail]]) and threads, inside the trail,
+   * through every evaluator derived within that name's evaluation; it never outlives it. Keys: the
+   * resolved node, the read (`asReference`), the evaluator's array mode and the formula's cell
+   * (implicit intersection), with the defining sheet and the workbook compared by identity.
+   *
+   * Reuse gives exactly what evaluating again would, the path-guarded evaluation without the memo:
+   *   - A value that drew from the RNG is never stored: each reference to a name over RAND draws
+   *     anew (`Rnd-Rnd` is not 0). The outermost name's evaluator draws through [[counting]].
+   *   - The trail's refusals (a cycle, a chain past [[NameWalk.MaxDepth]]) are the only way the
+   *     path reaches a value, so the first one [[taint]]s the memo: nothing is stored or served
+   *     after it. Before it, a value is the same on any path where evaluating it again would refuse
+   *     nothing — a name body evaluates in array mode with fresh bindings whatever reads it, so it
+   *     takes the same branches — and a hit is served only where its chain still fits under the
+   *     cap: each entry carries its height, the names its evaluation went below it.
+   *
+   * Not thread-safe, like [[EvalMemo]]: an evaluation is single-threaded and the memo never escapes
+   * it.
+   */
+  private[formula] final class NameMemo:
+    private val values = scala.collection.mutable.HashMap.empty[NameMemo.Key, NameMemo.Entry]
+    private val draws = new AtomicLong(0L)
+    private val tainted = new java.util.concurrent.atomic.AtomicBoolean(false)
+    // the deepest name (its path size, itself included) entered by the computation in progress
+    private val deepest = new java.util.concurrent.atomic.AtomicInteger(0)
+
+    /** `rng`, counting its draws for this memo. */
+    def counting(rng: Rng): Rng =
+      val underlying = rng
+      new Rng:
+        def nextDouble(): Double =
+          draws.incrementAndGet()
+          underlying.nextDouble()
+
+    /** A refusal happened on some path: from now on nothing is stored or served. */
+    def taint(): Unit = tainted.set(true)
+
+    /**
+     * The value of `key`, evaluated by `compute` at `depth` (the path's size with the name on it)
+     * unless an entry may be served there.
+     */
+    def getOrCompute(key: NameMemo.Key, definingSheet: Sheet, workbook: Workbook, depth: Int)(
+      compute: => Either[EvalError, Any]
+    ): Either[EvalError, Any] =
+      values.get(key) match
+        case Some(hit)
+            if !tainted.get() && (hit.definingSheet eq definingSheet) &&
+              (hit.workbook eq workbook) && depth + hit.height <= NameWalk.MaxDepth =>
+          deepest.accumulateAndGet(depth + hit.height, (a, b) => a.max(b))
+          hit.value
+        case _ =>
+          // Compute BEFORE storing: the computation recurses into this memo for other names.
+          val outer = deepest.getAndSet(depth)
+          val before = draws.get()
+          val computed = compute
+          val height = deepest.get() - depth
+          deepest.accumulateAndGet(outer, (a, b) => a.max(b))
+          if !tainted.get() && draws.get() == before then
+            values.update(key, NameMemo.Entry(definingSheet, workbook, height, computed))
+          computed
+
+  private[formula] object NameMemo:
+    final case class Key(
+      node: NameWalk.Node,
+      asReference: Boolean,
+      arrayMode: Boolean,
+      cell: Option[ARef]
+    )
+
+    /** `height`: the most names below the entry's own on a chain its evaluation followed. */
+    final case class Entry(
+      definingSheet: Sheet,
+      workbook: Workbook,
+      height: Int,
+      value: Either[EvalError, Any]
+    )
 
   /**
    * Excel's implicit intersection of `range` with the formula's own cell — the `@` operator
@@ -445,7 +595,7 @@ object Evaluator:
     // None: not such an operation; Some(sawArray)
     def scan(e: TExpr[?]): Option[Boolean] = e match
       case TExpr.Lit(_: ArrayResult) => Some(true)
-      case TExpr.Lit(_) | TExpr.ErrorLit(_) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) |
+      case TExpr.Lit(_) | TExpr.ErrorLit(_, _) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) |
           TExpr.SheetRef(_, _, _, _) | TExpr.SheetPolyRef(_, _, _) =>
         Some(false)
       case TExpr.Coerced(inner, _) => scan(inner)
@@ -729,8 +879,27 @@ object Evaluator:
    * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
    * like successes.
    */
-  private[formula] final class AggregateMemo:
+  private[formula] final class AggregateMemo(cachesAggregates: Boolean = true):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
+
+    /**
+     * GH-695: each spill anchor's raw evaluation as this generation's fold computed it — an array
+     * is its spill, a scalar is not a spill anchor, an error is that error, exactly as `x#` reads
+     * an anchor it evaluates itself. The threaded sheet caches only the anchor's top-left element,
+     * and the recorded extent's cells hold the previous generation's spill (or nothing), so an `x#`
+     * reader looks here first. Off until [[trackSpills]]: a book without `x#` readers keeps no
+     * arrays.
+     */
+    private val spills = TrieMap.empty[(SheetName, ARef), Either[EvalError, Any]]
+    private val tracksSpills = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+    def trackSpills(): Unit = tracksSpills.set(true)
+
+    def recordSpill(sheet: SheetName, anchor: ARef, raw: Either[EvalError, Any]): Unit =
+      if tracksSpills.get() then spills.update((sheet, anchor), raw)
+
+    def recordedSpill(sheet: SheetName, anchor: ARef): Option[Either[EvalError, Any]] =
+      spills.get((sheet, anchor))
     private val hitCount = new AtomicLong(0L)
     private val fillCount = new AtomicLong(0L)
     private val bypassCount = new AtomicLong(0L)
@@ -743,18 +912,20 @@ object Evaluator:
     )(
       compute: => Either[EvalError, BigDecimal]
     ): Either[EvalError, BigDecimal] =
-      val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
-      val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
-      entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
-        case AggregateMemoLookup.Hit(value) =>
-          hitCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Filled(value) =>
-          fillCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Bypass =>
-          bypassCount.incrementAndGet()
-          compute
+      if !cachesAggregates then compute
+      else
+        val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
+        val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
+        entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
+          case AggregateMemoLookup.Hit(value) =>
+            hitCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Filled(value) =>
+            fillCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Bypass =>
+            bypassCount.incrementAndGet()
+            compute
 
     def stats: AggregateMemoStats =
       AggregateMemoStats(
@@ -862,6 +1033,9 @@ private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
   override private[formula] def withArrayResults: Evaluator =
     TotalEvaluator(underlying.withArrayResults)
 
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] =
+    underlying.generationMemo
+
 /**
  * Private implementation of Evaluator.
  *
@@ -875,10 +1049,12 @@ private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
  *   GH-115: randomness capability for RAND/RANDBETWEEN, threaded like bindings so derived
  *   evaluators (array args, cross-sheet recursion, LET bodies) draw from the same source.
  * @param resolvingNames
- *   GH-384: UPPERCASED defined names currently being resolved on this evaluation path — the
- *   name→name cycle guard. A refersTo chain that revisits a member (aa → bb → aa) is a clean
- *   per-cell error instead of unbounded recursion. Cell-mediated cycles (name → cell → name) are
- *   covered separately by the depth-guarded cross-sheet recursion.
+ *   GH-384: the defined names currently being resolved on this evaluation path — the name→name
+ *   cycle guard, keyed on the resolved name (#691, [[Evaluator.NameTrail]]). A refersTo chain that
+ *   revisits a member (aa → bb → aa) is a clean per-cell error instead of unbounded recursion, and
+ *   so is one deeper than [[NameWalk.MaxDepth]] names. It carries the outermost name's value memo
+ *   ([[Evaluator.NameMemo]]). Cell-mediated cycles (name → cell → name) are covered separately by
+ *   the depth-guarded cross-sheet recursion.
  * @param workbookPath
  *   GH-424: the workbook's saved location if the embedder knows one, surfaced to functions via
  *   EvalContext (CELL("filename")). None reproduces Excel's pre-save behavior.
@@ -887,7 +1063,7 @@ private class EvaluatorImpl(
   allowArrayResults: Boolean = false,
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
-  resolvingNames: Set[String] = Set.empty,
+  resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None
 ) extends Evaluator:
@@ -903,6 +1079,8 @@ private class EvaluatorImpl(
 
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
+
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = aggregateMemo
 
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorImpl(
@@ -1037,7 +1215,7 @@ private class EvaluatorImpl(
 
       // GH-612: an error literal IS the error value it names — it travels the Left channel like
       // any other Excel error value and promotes to CellValue.Error at the cell boundary
-      case TExpr.ErrorLit(error) =>
+      case TExpr.ErrorLit(error, _) =>
         Left(EvalError.ErrorValue(error))
 
       // GH-603: an omitted argument is a blank — every argument slot that holds a value wraps it
@@ -1726,12 +1904,14 @@ private class EvaluatorImpl(
    * read — a reference as an unread [[RangeOperand]].
    *
    * Every failure mode is a clean Left: no workbook context (the SheetRef posture), unknown name,
-   * unparseable refersTo, and name→name cycles (via `resolvingNames`). The environment for the
-   * refersTo body is fresh (no LET bindings leak into a name's definition), and the result unwraps
-   * CellValue wrappers to primitives exactly like LET binding values so names compose with
-   * arithmetic/comparison/text machinery.
+   * unparseable refersTo, name→name cycles (via `resolvingNames`, keyed on the resolved name) and
+   * chains deeper than [[NameWalk.MaxDepth]] names (#691). The environment for the refersTo body is
+   * fresh (no LET bindings leak into a name's definition), and the result unwraps CellValue
+   * wrappers to primitives exactly like LET binding values so names compose with
+   * arithmetic/comparison/text machinery. #691: values are memoised inside the outermost name's
+   * evaluation ([[Evaluator.NameMemo]]), so a diamond of names evaluates each once, not once per
+   * path.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalNameRef(
     name: String,
     scope: Option[SheetName],
@@ -1750,84 +1930,115 @@ private class EvaluatorImpl(
           )
         )
       case Some(wb) =>
-        val key = name.toUpperCase
-        if resolvingNames.contains(key) then
-          Left(
-            EvalError.EvalFailed(
-              s"Defined name cycle detected while resolving '$name'.",
-              None
-            )
-          )
-        else
-          // GH-394: a sheet-qualified name (=Model!case) looks up AS SEEN FROM its qualifier
-          Evaluator.lookupDefinedName(wb, scope.getOrElse(sheet.name), name) match
-            case None =>
-              Left(
-                EvalError.EvalFailed(
-                  s"Name '$name' is not defined in this workbook.",
-                  None
-                )
+        // GH-394: a sheet-qualified name (=Model!case) looks up AS SEEN FROM its qualifier
+        Evaluator.lookupDefinedName(wb, scope.getOrElse(sheet.name), name) match
+          case None =>
+            Left(
+              EvalError.EvalFailed(
+                s"Name '$name' is not defined in this workbook.",
+                None
               )
-            case Some(dn) =>
-              FormulaParser.parse(dn.formula) match
-                case Left(parseErr) =>
-                  Left(
-                    EvalError.EvalFailed(
-                      s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
-                        s"${ParseError.toXLError(parseErr, dn.formula).message}",
-                      None
-                    )
+            )
+          case Some(dn) =>
+            val definingSheet = Evaluator.definedNameScope(wb, dn).getOrElse(sheet)
+            val node = NameWalk.Node(dn, definingSheet.name)
+            resolvingNames.refusal(name, node) match
+              case Some(refused) => Left(refused)
+              case None =>
+                // #691: the outermost name opens the memo its whole evaluation shares, and
+                // counts the draws made under it so a value that drew from the RNG is not reused
+                val memo = resolvingNames.memo.getOrElse(new Evaluator.NameMemo)
+                val trail = Evaluator.NameTrail(resolvingNames.path + node, Some(memo))
+                val bodyRng = if resolvingNames.memo.isEmpty then memo.counting(rng) else rng
+                val key = Evaluator.NameMemo.Key(node, asReference, allowArrayResults, currentCell)
+                memo.getOrCompute(key, definingSheet, wb, trail.path.size) {
+                  evalNameBody(
+                    name,
+                    dn,
+                    definingSheet,
+                    trail,
+                    bodyRng,
+                    clock,
+                    workbook,
+                    currentCell,
+                    asReference
                   )
-                case Right(target) =>
-                  val definingSheet = Evaluator.definedNameScope(wb, dn).getOrElse(sheet)
-                  // a reference, read by the position: whole in a reference position, else as a
-                  // value (derefRange: its values in array mode, its intersected cell in a plain cell)
-                  def read(target: Sheet, range: CellRange): Either[EvalError, Any] =
-                    if asReference then Right(RangeOperand(target, range))
-                    else derefRange(range, target, clock, workbook, currentCell)
-                  target match
-                    case TExpr.RangeRef(range, _) => read(definingSheet, range)
-                    case TExpr.SheetRange(sheetName, range, _) =>
-                      Evaluator
-                        .resolveRangeLocation(
-                          TExpr.RangeLocation.CrossSheet(sheetName, range),
-                          definingSheet,
-                          workbook,
-                          resolvingNames + key
-                        )
-                        .flatMap { case (targetSheet, _) => read(targetSheet, range) }
-                    case other =>
-                      // Bare refs resolve to the cell's effective value (cached formula
-                      // extracted, Empty → 0) like top-level refs; the derived evaluator
-                      // carries the cycle guard and a FRESH binding environment (LET
-                      // bindings never leak into a name's definition). A named formula is an
-                      // array context, as in Excel; one that computes a reference keeps it.
-                      val resolved = TExpr.asResolvedValueExpr(other)
-                      val derived: EvaluatorImpl = new EvaluatorWithDepth(
-                        currentDepth,
-                        allowArrayResults = true,
-                        Map.empty,
-                        rng,
-                        memoOpt,
-                        resolvingNames + key,
-                        workbookPath,
-                        aggregateMemoOpt
-                      )
-                      // Keep references through name aliases and LET bodies too. Materializing
-                      // an alias here loses its position, so a plain consumer would read the
-                      // top-left value instead of intersecting the reference at its own row.
-                      derived
-                        .referenceArgument(
-                          resolved.asInstanceOf[TExpr[Any]],
-                          definingSheet,
-                          clock,
-                          workbook,
-                          currentCell
-                        )
-                        .flatMap {
-                          case RangeOperand(targetSheet, range) => read(targetSheet, range)
-                          case value => Right(unwrapBindingValue(value))
-                        }
+                }
+
+  /**
+   * The value of `dn`, the definition a reference to `name` resolved to, evaluated against
+   * `definingSheet` under `trail` (the path with `dn` on it) — [[evalNameRef]] after the guard.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalNameBody(
+    name: String,
+    dn: DefinedName,
+    definingSheet: Sheet,
+    trail: Evaluator.NameTrail,
+    bodyRng: Rng,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef],
+    asReference: Boolean
+  ): Either[EvalError, Any] =
+    FormulaParser.parse(dn.formula) match
+      case Left(parseErr) =>
+        Left(
+          EvalError.EvalFailed(
+            s"Defined name '$name' has an unparseable definition '${dn.formula}': " +
+              s"${ParseError.toXLError(parseErr, dn.formula).message}",
+            None
+          )
+        )
+      case Right(target) =>
+        // a reference, read by the position: whole in a reference position, else as a
+        // value (derefRange: its values in array mode, its intersected cell in a plain cell)
+        def read(target: Sheet, range: CellRange): Either[EvalError, Any] =
+          if asReference then Right(RangeOperand(target, range))
+          else derefRange(range, target, clock, workbook, currentCell)
+        target match
+          case TExpr.RangeRef(range, _) => read(definingSheet, range)
+          case TExpr.SheetRange(sheetName, range, _) =>
+            Evaluator
+              .resolveRangeLocation(
+                TExpr.RangeLocation.CrossSheet(sheetName, range),
+                definingSheet,
+                workbook,
+                trail
+              )
+              .flatMap { case (targetSheet, _) => read(targetSheet, range) }
+          case other =>
+            // Bare refs resolve to the cell's effective value (cached formula
+            // extracted, Empty → 0) like top-level refs; the derived evaluator
+            // carries the cycle guard and a FRESH binding environment (LET
+            // bindings never leak into a name's definition). A named formula is an
+            // array context, as in Excel; one that computes a reference keeps it.
+            val resolved = TExpr.asResolvedValueExpr(other)
+            val derived: EvaluatorImpl = new EvaluatorWithDepth(
+              currentDepth,
+              allowArrayResults = true,
+              Map.empty,
+              bodyRng,
+              memoOpt,
+              trail,
+              workbookPath,
+              aggregateMemoOpt
+            )
+            // Keep references through name aliases and LET bodies too. Materializing
+            // an alias here loses its position, so a plain consumer would read the
+            // top-left value instead of intersecting the reference at its own row.
+            derived
+              .referenceArgument(
+                resolved.asInstanceOf[TExpr[Any]],
+                definingSheet,
+                clock,
+                workbook,
+                currentCell
+              )
+              .flatMap {
+                case RangeOperand(targetSheet, range) => read(targetSheet, range)
+                case value => Right(unwrapBindingValue(value))
+              }
 
   /**
    * Fold one raw range for the [[TExpr.Aggregate]] node. Mirrors the FunctionSpec variadic
@@ -2389,7 +2600,7 @@ private class EvaluatorWithDepth(
   bindings: Map[String, Any] = Map.empty,
   rng: Rng = Rng.system,
   memo: Option[Evaluator.EvalMemo] = None,
-  resolvingNames: Set[String] = Set.empty,
+  resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None
 ) extends EvaluatorImpl(

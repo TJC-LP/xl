@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.functions.{
   ReferenceOperators
 }
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, NameWalk}
 
 import com.tjclp.xl.workbooks.Workbook
 
@@ -214,7 +214,7 @@ object DependencyGraph:
       // Literals and constants
       case TExpr.Lit(_) => false
 
-      case TExpr.ErrorLit(_) => false
+      case TExpr.ErrorLit(_, _) => false
       case TExpr.Missing => false
 
   /**
@@ -274,52 +274,62 @@ object DependencyGraph:
    * GH-507: readers whose dependencies cannot be proved by the static graph. Name resolution is
    * scoped exactly as evaluation, and only names actually reached by formulas are inspected. The
    * local memos avoid repeating definition parsing and name-chain walks across readers.
+   *
+   * A name reference is unknown when its qualifier names no sheet, the name is not defined, or the
+   * names it reaches include an unparseable definition, an unknown reference or a cycle. #691: the
+   * walk is a [[NameWalk.Walk]] over resolved nodes, so a name with a chain more than
+   * [[NameWalk.MaxDepth]] names long is unknown (`tooDeep`) whichever reader reaches it first — the
+   * verdict is the node's own, never one computed partway down another reader's path — and every
+   * name costs one step however many readers and paths reach it.
    */
   private[xl] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
-    type NameKey = (SheetName, SheetName, String)
     val positions =
       workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
+    val resolve = NameWalk.resolver(workbook)
     val parsed = scala.collection.mutable.HashMap.empty[String, Option[TExpr[?]]]
-    val names = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
 
     def parse(text: String): Option[TExpr[?]] =
       parsed.getOrElseUpdate(text, FormulaParser.parse(text).toOption)
 
-    def expressionUnknown(expr: TExpr[?], current: SheetName, visiting: Set[NameKey]): Boolean =
+    // The node a reference resolves to; None when its qualifier names no sheet or no such name.
+    def target(qualifier: Option[SheetName], name: String, current: SheetName) =
+      if qualifier.exists(!positions.contains(_)) then None else resolve(qualifier, name, current)
+
+    // A node's hit: an unparseable definition, or a reference that resolves to nothing. Stepped
+    // once per node by the walk.
+    def step(node: NameWalk.Node): NameWalk.Step[NameWalk.Node] =
+      parse(node.definition.formula) match
+        case None => NameWalk.Step(hit = true, Vector.empty)
+        case Some(expr) =>
+          val refs = Vector.newBuilder[NameWalk.Node]
+          val hit = referencesMatching(
+            expr,
+            (name, scope) =>
+              target(scope, name, node.sheet) match
+                case None => true
+                case Some(child) =>
+                  refs += child
+                  false
+            ,
+            includeDynamicCalls = false
+          )
+          val next = refs.result()
+          NameWalk.Step(hit, if next.sizeIs > 1 then next.distinct else next)
+
+    val walk = NameWalk.Walk(step)
+
+    def nameUnknown(qualifier: Option[SheetName], name: String, current: SheetName): Boolean =
+      target(qualifier, name, current).fold(true) { node =>
+        val verdict = walk(node)
+        verdict.found || verdict.cyclic || verdict.tooDeep
+      }
+
+    def expressionUnknown(expr: TExpr[?], current: SheetName): Boolean =
       referencesMatching(
         expr,
-        (name, scope) => nameUnknown(name, scope.getOrElse(current), current, visiting),
+        (name, scope) => nameUnknown(scope, name, current),
         includeDynamicCalls = false
       )
-
-    def nameUnknown(
-      name: String,
-      lookupFrom: SheetName,
-      fallback: SheetName,
-      visiting: Set[NameKey]
-    ): Boolean =
-      // Exact spelling is safe for the memo; the index applies Excel's case-fold relation.
-      val key = (lookupFrom, fallback, name)
-      names.get(key) match
-        case Some(unknown) => unknown
-        case None if visiting.contains(key) || visiting.size >= 100 => true
-        case None =>
-          val unknown =
-            if !positions.contains(lookupFrom) then true
-            else
-              Evaluator.lookupDefinedNameAt(workbook, positions.get(lookupFrom), name) match
-                case None => true
-                case Some(defined) =>
-                  parse(defined.formula) match
-                    case None => true
-                    case Some(expr) =>
-                      val current = Evaluator
-                        .definedNameScope(workbook, defined)
-                        .map(_.name)
-                        .getOrElse(fallback)
-                      expressionUnknown(expr, current, visiting + key)
-          names(key) = unknown
-          unknown
 
     workbook.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
@@ -329,9 +339,7 @@ object DependencyGraph:
                 // Closed-workbook external caches are pinned by the explicit evaluation contract.
                 val external = text.contains('[') &&
                   com.tjclp.xl.formula.eval.SheetEvaluator.pinnedExternalCache(cell.value).isDefined
-                !external && parse(text).fold(true)(expr =>
-                  expressionUnknown(expr, sheet.name, Set.empty)
-                )
+                !external && parse(text).fold(true)(expressionUnknown(_, sheet.name))
               case _ => false
             ) =>
           QualifiedRef(sheet.name, ref)
@@ -418,11 +426,15 @@ object DependencyGraph:
   /**
    * GH-520: workbook-aware dynamic classification, including parseable defined-name chains.
    *
-   * A name is resolved with the same case-insensitive, sheet-scoped-shadowing rules as evaluation.
-   * The lookup sheet and the formula's ambient sheet both belong to the memo key: for
-   * `Other!GlobalName`, lookup occurs as seen from `Other`, while an unqualified name inside a
-   * workbook-scoped definition still resolves from the original formula's sheet. Name cycles stop
-   * cleanly, matching dependency extraction's total posture.
+   * A name is resolved with the same case-insensitive, sheet-scoped-shadowing rules as evaluation:
+   * for `Other!GlobalName`, lookup occurs as seen from `Other`, while an unqualified name inside a
+   * workbook-scoped definition still resolves from the original formula's sheet. #691: a name's
+   * verdict is a [[NameWalk.Walk]] from the node it resolves to (the definition and the sheet its
+   * body resolves from), so a name cycle stops cleanly, every node costs one step however many
+   * names reach it, and chains of any length leave the stack alone. A name reaching a dynamic call
+   * remains dynamic even when another chain is too deep: lazy evaluation can skip the deep branch
+   * or recover from its error. Its readers may also be `unresolvedReaders`; that does not replace
+   * the dynamic scheduling which keeps their otherwise invisible targets' caches fresh.
    *
    * Ordinary names do not make their users dynamic. Definitions are parsed and memoized first; only
    * names whose parseable chains actually reach a dynamic function join the cheap substring
@@ -446,8 +458,9 @@ object DependencyGraph:
    * @param parses
    *   `FormulaParser.parse` calls: one per distinct definition or candidate cell text (memo misses)
    * @param classifications
-   *   defined-name classifications (`classify`): one per sheet-independent name, one per (sheet,
-   *   name) for names that nest another name
+   *   defined-name classifications (a node's own verdict, stepped once by the [[NameWalk.Walk]]):
+   *   one per sheet-independent name, one per resolved node (definition × the sheet its body
+   *   resolves from) for names that nest another name
    */
   private[formula] final case class DynamicCellsTrace(
     cells: Set[QualifiedRef],
@@ -457,7 +470,6 @@ object DependencyGraph:
 
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private[formula] def dynamicCellsTraced(workbook: Workbook): DynamicCellsTrace =
-    type NameKey = (SheetName, SheetName, String)
     var parses = 0
     var classifications = 0
 
@@ -485,11 +497,10 @@ object DependencyGraph:
           FormulaParser.parse(text).toOption
         }
       )
-    // Positions computed once: this function makes sheets × names lookups, so the per-lookup
-    // O(sheets) indexWhere inside lookupDefinedName would add an O(sheets² × names) term.
-    // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
-    val sheetPosition: Map[SheetName, Int] =
-      workbook.sheets.zipWithIndex.reverseIterator.map((s, i) => s.name -> i).toMap
+    // Positions computed once (inside the resolver): this function makes sheets × names lookups,
+    // so the per-lookup O(sheets) indexWhere inside lookupDefinedName would add an
+    // O(sheets² × names) term.
+    val resolve = NameWalk.resolver(workbook)
 
     // GH-537: one classification per resolution key — `case` and `CASE` are one name to every
     // reader — under the first-declared spelling.
@@ -519,66 +530,40 @@ object DependencyGraph:
       distinctNames.partition((key, name) => sheetIndependent(key, name))
     val independentKeys: Set[String] = independentNames.iterator.map(_._1).toSet
     val globalVerdict = scala.collection.mutable.HashMap.empty[String, Boolean]
-    val memo = scala.collection.mutable.HashMap.empty[NameKey, Boolean]
+    val keys = scala.collection.mutable.HashMap.empty[String, String]
 
-    def expressionIsDynamic(
-      expr: TExpr[?],
-      currentSheet: SheetName,
-      visiting: Set[NameKey]
-    ): Boolean =
-      containsDynamicReferenceResolved(
-        expr,
-        (name, scope) =>
-          nameIsDynamic(
-            name,
-            lookupFrom = scope.getOrElse(currentSheet),
-            fallbackSheet = currentSheet,
-            visiting = visiting
-          )
+    // A classification: one node's own verdict and references, stepped once by the walk.
+    def step(node: NameWalk.Node): NameWalk.Step[NameWalk.Node] =
+      classifications += 1
+      parse(node.definition.formula).fold(NameWalk.Step.empty)(
+        NameWalk.Step.of(
+          _,
+          node.sheet,
+          resolve,
+          (expr, viaName) =>
+            containsDynamicReferenceResolved(expr, (name, scope) => viaName(scope, name))
+        )
       )
 
-    def classify(
-      name: String,
-      lookupFrom: SheetName,
-      fallbackSheet: SheetName,
-      visiting: Set[NameKey]
-    ): Boolean =
-      classifications += 1
-      (for
-        definedName <- Evaluator.lookupDefinedNameAt(workbook, sheetPosition.get(lookupFrom), name)
-        target <- parse(definedName.formula)
-      yield
-        val definingSheet =
-          Evaluator
-            .definedNameScope(workbook, definedName)
-            .map(_.name)
-            .getOrElse(fallbackSheet)
-        expressionIsDynamic(target, definingSheet, visiting)
-      ).getOrElse(false)
+    val walk = NameWalk.Walk(step)
 
-    def nameIsDynamic(
-      name: String,
-      lookupFrom: SheetName,
-      fallbackSheet: SheetName,
-      visiting: Set[NameKey]
-    ): Boolean =
-      val nameKey = resolutionKey(name)
-      val key = (lookupFrom, fallbackSheet, nameKey)
-      if independentKeys.contains(nameKey) then
-        // Sheet-invariant by construction (see above); its definition nests no name, so the
-        // classification cannot re-enter and `visiting` is moot.
-        globalVerdict.getOrElseUpdate(
-          nameKey,
-          classify(name, lookupFrom, fallbackSheet, Set.empty)
-        )
-      else
-        memo.get(key) match
-          case Some(dynamic) => dynamic
-          case None if visiting.contains(key) => false
-          case None =>
-            val dynamic = classify(name, lookupFrom, fallbackSheet, visiting + key)
-            memo(key) = dynamic
-            dynamic
+    def classify(node: NameWalk.Node): Boolean = walk(node).reach == NameWalk.Reach.Found
+
+    def expressionIsDynamic(expr: TExpr[?], currentSheet: SheetName): Boolean =
+      containsDynamicReferenceResolved(
+        expr,
+        (name, scope) => nameIsDynamic(name, scope, currentSheet)
+      )
+
+    def nameIsDynamic(name: String, qualifier: Option[SheetName], current: SheetName): Boolean =
+      resolve(qualifier, name, current).exists { node =>
+        val nameKey = keys.getOrElseUpdate(name, resolutionKey(name))
+        // Sheet-invariant by construction (see above): its definition nests no name, so one
+        // verdict serves every reading sheet.
+        if independentKeys.contains(nameKey) then
+          globalVerdict.getOrElseUpdate(nameKey, classify(node))
+        else classify(node)
+      }
 
     // Sheet-independent names are classified once (from any sheet — the first will do);
     // dependent names once per sheet, as before. A group is dynamic when its verdict is true from
@@ -586,12 +571,12 @@ object DependencyGraph:
     val dynamicKeys: Set[String] =
       workbook.sheets.headOption.fold(Set.empty[String]) { first =>
         independentNames.iterator.collect {
-          case (key, name) if nameIsDynamic(name, first.name, first.name, Set.empty) => key
+          case (key, name) if nameIsDynamic(name, None, first.name) => key
         }.toSet
       } ++
         workbook.sheets.iterator.flatMap { sheet =>
           dependentNames.iterator.collect {
-            case (key, name) if nameIsDynamic(name, sheet.name, sheet.name, Set.empty) => key
+            case (key, name) if nameIsDynamic(name, None, sheet.name) => key
           }
         }
     // Tokens are the pre-filter's upper form of EVERY declared spelling of a dynamic group, not
@@ -614,7 +599,7 @@ object DependencyGraph:
               case CellValue.Formula(expression, _, _)
                   if candidateTokens.exists(upper(expression).contains) =>
                 parse(expression) match
-                  case Some(expr) if expressionIsDynamic(expr, sheet.name, Set.empty) =>
+                  case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
                     Some(QualifiedRef(sheet.name, ref))
                   case _ => None
               case _ => None
@@ -679,7 +664,7 @@ object DependencyGraph:
       // GH-394: an unqualified name's lookup depends on the ambient sheet (sheet-scoped names
       // shadow workbook-scoped ones); a sheet-qualified name carries its own context
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
-      case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_)) => false
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_, _)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -695,7 +680,7 @@ object DependencyGraph:
                 case TExpr.RangeLocation.External(_, _, _, _) => false
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
-                case TExpr.RangeLocation.Error(_) => false
+                case TExpr.RangeLocation.Error(_, _) => false
             case ArgValue.Cells(_) => true
           }
 
@@ -732,7 +717,7 @@ object DependencyGraph:
       // Literals and constants
       case TExpr.Lit(_) => false
 
-      case TExpr.ErrorLit(_) => false
+      case TExpr.ErrorLit(_, _) => false
       case TExpr.Missing => false
 
   /**
@@ -826,7 +811,7 @@ object DependencyGraph:
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
 
-      case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.ErrorLit(_, _) => Set.empty
       case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
@@ -935,7 +920,7 @@ object DependencyGraph:
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
 
-      case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.ErrorLit(_, _) => Set.empty
       case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => recurse(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => recurse(dtExpr)
@@ -1946,8 +1931,6 @@ object DependencyGraph:
    *   Expands a range on a named sheet to qualified cells (possibly bounded)
    * @param workbook
    *   GH-384: name table for defined-name resolution (None disables name edges)
-   * @param visitingNames
-   *   GH-384: UPPERCASED names on the current resolution path — the name→name cycle guard
    * @return
    *   Set of qualified cell references used in the expression
    */
@@ -1990,15 +1973,69 @@ object DependencyGraph:
     )
     (cells.collect { case QualifiedRef(`local`, ref) => ref }, ranges.result())
 
-  @nowarn("msg=Unreachable case")
   private[graph] def extractQualifiedDependencies[A](
     expr: TExpr[A],
     currentSheet: SheetName,
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
-    visitingNames: Set[String] = Set.empty,
     preciseLookups: Boolean = false,
     canonicalSheet: SheetName => SheetName = identity
+  ): Set[QualifiedRef] =
+    // #691: defined names expand from a queue, breadth-first, never by recursion: the formula is
+    // scanned, then each resolved name it reaches — keyed on the node (the definition and the sheet
+    // its body resolves from), never on the name's text — is expanded once, at its shallowest
+    // depth, and adds what its body reads. A diamond of names expands each once, a cycle stops, and
+    // the stack holds one expression at a time however long the chain. A name deeper than
+    // NameWalk.MaxDepth contributes no edges, like an unresolvable name (evaluation fails it too).
+    val names = new NameQueue
+    def extract(e: TExpr[?], sheet: SheetName, depth: Int): Set[QualifiedRef] =
+      extractAt(e, sheet, depth, names, cellsFor, workbook, preciseLookups, canonicalSheet)
+    @tailrec
+    def drain(acc: Set[QualifiedRef]): Set[QualifiedRef] =
+      names.next() match
+        case None => acc
+        case Some((node, depth)) =>
+          val body = FormulaParser.parse(node.definition.formula).toOption
+          drain(body.fold(acc)(target => union(acc, extract(target, node.sheet, depth))))
+    drain(extract(expr, currentSheet, 0))
+
+  /**
+   * #691: the defined names one [[extractQualifiedDependencies]] has reached and not yet expanded,
+   * first in first out, each with its depth (the names on its path, itself included). Starts as two
+   * empty immutable collections, so a formula reading no name allocates nothing more.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class NameQueue:
+    private var pending = scala.collection.immutable.Queue.empty[(NameWalk.Node, Int)]
+    private var seen = Set.empty[NameWalk.Node]
+
+    /** Queue `node`, unless it was reached before (no shallower: the queue is breadth-first). */
+    def reach(node: NameWalk.Node, depth: Int): Unit =
+      if depth <= NameWalk.MaxDepth && !seen.contains(node) then
+        seen += node
+        pending = pending.enqueue((node, depth))
+
+    def next(): Option[(NameWalk.Node, Int)] =
+      pending.dequeueOption.map { (head, rest) =>
+        pending = rest
+        head
+      }
+
+  /**
+   * One expression's references, as [[extractQualifiedDependencies]] reads them, at `depth` (the
+   * names on its path, 0 for the formula's own): a defined name is resolved and queued in `names`,
+   * never expanded here.
+   */
+  @nowarn("msg=Unreachable case")
+  private def extractAt(
+    expr: TExpr[?],
+    currentSheet: SheetName,
+    depth: Int,
+    names: NameQueue,
+    cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
+    workbook: Option[Workbook],
+    preciseLookups: Boolean,
+    canonicalSheet: SheetName => SheetName
   ): Set[QualifiedRef] =
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
@@ -2016,7 +2053,7 @@ object DependencyGraph:
             case None => go(TExpr.NameRef(name))
             case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
         // GH-612: an error in a range slot has no cells
-        case TExpr.RangeLocation.Error(_) => Set.empty
+        case TExpr.RangeLocation.Error(_, _) => Set.empty
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match
@@ -2070,6 +2107,18 @@ object DependencyGraph:
                     )
                 union(cellsFor(target.name, strip(0)), cellsFor(target.name, strip(index - 1)))
           case _ => None
+
+    // #691: a name's body is the caller's to expand (`names`); here it reads nothing
+    def expandName(qualifier: Option[SheetName], name: String): Set[QualifiedRef] =
+      for
+        wb <- workbook
+        dn <- Evaluator.lookupDefinedName(wb, qualifier.getOrElse(currentSheet), name)
+      do
+        names.reach(
+          NameWalk.Node(dn, Evaluator.definedNameScope(wb, dn).fold(currentSheet)(_.name)),
+          depth + 1
+        )
+      Set.empty
 
     def go(e: TExpr[?]): Set[QualifiedRef] =
       e match
@@ -2138,54 +2187,14 @@ object DependencyGraph:
         // GH-384: resolve the defined name and recurse into its refersTo, qualifying its
         // same-sheet refs to the DEFINING sheet — =IF(case=2, ...) contributes an edge to the
         // cells 'case' targets, so Kahn orders a computed toggle before its name-gated
-        // dependents and Tarjan sees cycles routed through names. Name→name chains carry a
-        // visited guard; unresolvable/unparseable names contribute no edges (evaluation
-        // reports the per-cell error).
-        case TExpr.NameRef(name) =>
-          val key = name.toUpperCase
-          if visitingNames.contains(key) then Set.empty
-          else
-            (for
-              wb <- workbook
-              dn <- Evaluator.lookupDefinedName(wb, currentSheet, name)
-              target <- FormulaParser.parse(dn.formula).toOption
-            yield
-              val definingSheet =
-                Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(currentSheet)
-              extractQualifiedDependencies(
-                target,
-                definingSheet,
-                cellsFor,
-                workbook,
-                visitingNames + key,
-                preciseLookups,
-                canonicalSheet
-              )
-            ).getOrElse(Set.empty)
+        // dependents and Tarjan sees cycles routed through names. Unresolvable/unparseable names
+        // contribute no edges (evaluation reports the per-cell error).
+        case TExpr.NameRef(name) => expandName(None, name)
 
         // GH-394: a sheet-qualified name resolves like NameRef, but the lookup runs as seen
         // from its QUALIFIER (sheet-scoped names on that sheet shadow workbook-scoped ones)
         case TExpr.SheetNameRef(qualifier, name) =>
-          val key = name.toUpperCase
-          if visitingNames.contains(key) then Set.empty
-          else
-            (for
-              wb <- workbook
-              dn <- Evaluator.lookupDefinedName(wb, canonicalSheet(qualifier), name)
-              target <- FormulaParser.parse(dn.formula).toOption
-            yield
-              val definingSheet =
-                Evaluator.definedNameScope(wb, dn).map(_.name).getOrElse(currentSheet)
-              extractQualifiedDependencies(
-                target,
-                definingSheet,
-                cellsFor,
-                workbook,
-                visitingNames + key,
-                preciseLookups,
-                canonicalSheet
-              )
-            ).getOrElse(Set.empty)
+          expandName(Some(canonicalSheet(qualifier)), name)
 
         // GH-306: runtime coercion wrapper — transparent for analysis
         case TExpr.Coerced(inner, _) => go(inner)
@@ -2193,7 +2202,7 @@ object DependencyGraph:
         // Literals and nullary functions (no dependencies)
         case TExpr.Lit(_) => Set.empty
 
-        case TExpr.ErrorLit(_) => Set.empty
+        case TExpr.ErrorLit(_, _) => Set.empty
         case TExpr.Missing => Set.empty
         case TExpr.DateToSerial(dateExpr) => go(dateExpr)
         case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
