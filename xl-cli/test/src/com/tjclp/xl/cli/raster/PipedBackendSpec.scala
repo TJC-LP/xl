@@ -3,7 +3,7 @@ package com.tjclp.xl.cli.raster
 import java.io.ByteArrayInputStream
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.{BasicFileAttributes, PosixFilePermissions}
 
 import scala.concurrent.duration.*
 
@@ -144,6 +144,23 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
+  test("replacing an existing output writes the same file: hard links and symlinks follow") {
+    withDir { dir =>
+      val existing = Files.write(dir.resolve("out.png"), "old".getBytes(StandardCharsets.UTF_8))
+      val link = Files.createLink(dir.resolve("hard.png"), existing)
+      val symlink = Files.createSymbolicLink(dir.resolve("sym.png"), existing)
+      def key(p: Path) = Files.readAttributes(p, classOf[BasicFileAttributes]).fileKey
+      val before = key(existing)
+      RasterizerChain.convert(tinySvg, symlink, RasterFormat.Png, 96, Some("batik")).map { _ =>
+        assert(Files.isSymbolicLink(symlink), "the symlink must stay a symlink")
+        assertEquals(key(existing), before)
+        assert(Files.size(existing) > 3, "replaced with the image")
+        assertEquals(Files.readAllBytes(link).toSeq, Files.readAllBytes(existing).toSeq)
+        assertEquals(Files.list(dir).toArray.count(_.toString.contains(".xl-raster-")), 0)
+      }
+    }
+  }
+
   test("a long output name still converts: the staging name does not copy it") {
     withDir { dir =>
       val out = dir.resolve(("n" * 220) + ".png")
@@ -192,4 +209,32 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(ok, Some("version-1\n"))
       assertEquals(failed, None)
       assertEquals(missing, None)
+  }
+
+  test("kill also stops a helper the child's SIGTERM handler starts during the grace period") {
+    val marker = "31.6901"
+    val script = s"trap 'sleep $marker & while :; do :; done' TERM; while :; do :; done"
+    def helpers(): String =
+      new String(
+        new java.lang.ProcessBuilder("pgrep", "-f", s"sleep $marker")
+          .start()
+          .getInputStream
+          .readAllBytes(),
+        StandardCharsets.UTF_8
+      ).strip
+    IO.blocking {
+      val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
+      Thread.sleep(300) // let the shell install its trap
+      PipedBackend.kill(process)
+      assert(!process.isAlive, "the child must be stopped")
+      assertEquals(helpers(), "", "the grace-period helper outlived the kill")
+    }
+  }
+
+  test("a descendant that keeps the pipes open after the child exits cannot stall a deadline") {
+    val started = System.nanoTime()
+    PipedBackend.probe("sh", List("-c", "sleep 8 & exit 0"), 1.second).map { ok =>
+      assert(!ok)
+      assert((System.nanoTime() - started).nanos < 5.seconds, "teardown waited on the orphan")
+    }
   }

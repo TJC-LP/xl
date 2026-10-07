@@ -2,7 +2,7 @@ package com.tjclp.xl.cli.raster
 
 import java.io.{IOException, InputStream, OutputStream}
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.TimeUnit
+import java.util.concurrent.{ExecutorService, Executors, TimeUnit}
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.*
@@ -30,7 +30,9 @@ import cats.syntax.all.*
  * GH-690: the message keeps only the tail of stderr ([[StderrLimit]]), a child that cannot be
  * started is [[RasterError.RasterizerNotFound]] rather than a raw `IOException`, and every exchange
  * — conversions and availability probes alike — has a deadline after which the child and its
- * descendants are killed with a bounded escalation ([[kill]]).
+ * descendants are killed with a bounded escalation ([[kill]]). The pipe I/O runs on daemon threads
+ * that a deadline abandons rather than joins ([[onPipeThread]]): a descendant that outlives the
+ * child keeps its pipes open, and no read, write or close on them may hold up the teardown.
  */
 private[raster] object PipedBackend:
 
@@ -140,22 +142,41 @@ private[raster] object PipedBackend:
     keepStdout: Boolean
   ): IO[Outcome] =
     spawn(name, command).use { process =>
-      val stop = IO.blocking(kill(process))
-      val write = IO.blocking(writeAndClose(process.getOutputStream, input)).cancelable(stop)
-      val stderr = IO.blocking(tail(process.getErrorStream, StderrLimit)).cancelable(stop)
+      val write = onPipeThread(writeAndClose(process.getOutputStream, input))
+      val stderr = onPipeThread(tail(process.getErrorStream, StderrLimit))
       val stdout =
-        IO.blocking(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
-          .cancelable(stop)
+        onPipeThread(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
       (write, stderr, stdout).parTupled.flatMap { case (unread, err, (bytes, out)) =>
         IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes, out))
       }
     }
 
+  /** Daemon threads for the pipe I/O, so an abandoned one never keeps the JVM alive. */
+  private lazy val pipeThreads: ExecutorService = Executors.newCachedThreadPool { runnable =>
+    val thread = new Thread(runnable, "xl-raster-pipe")
+    thread.setDaemon(true)
+    thread
+  }
+
+  /**
+   * `work` on a pipe thread. Canceling abandons it instead of waiting: a read or write on a pipe a
+   * descendant still holds open blocks until that descendant exits, and a deadline must not
+   * (GH-690). The thread ends on its own once the pipe closes.
+   */
+  private def onPipeThread[A](work: => A): IO[A] =
+    IO.async[A] { callback =>
+      IO {
+        pipeThreads.execute(() => callback(Either.catchNonFatal(work)))
+        Some(IO.unit)
+      }
+    }
+
   /**
    * The child, killed on release if it is still running (cancellation, a timeout, a failed drain),
-   * its streams closed once it is gone. A command that cannot be started — not installed, gone
-   * since the availability probe, not executable — is [[RasterError.RasterizerNotFound]], the code
-   * the probe itself would have given.
+   * its streams closed once it is gone — on a pipe thread, since closing a stream waits for a read
+   * still blocked on it. A command that cannot be started — not installed, gone since the
+   * availability probe, not executable — is [[RasterError.RasterizerNotFound]], the code the probe
+   * itself would have given.
    */
   private def spawn(name: String, command: List[String]): Resource[IO, Process] =
     Resource.make(
@@ -168,7 +189,7 @@ private[raster] object PipedBackend:
     )(process =>
       IO.blocking {
         kill(process)
-        closeQuietly(process)
+        pipeThreads.execute(() => closeQuietly(process))
       }
     )
 
@@ -182,24 +203,27 @@ private[raster] object PipedBackend:
    * polite signal, a bounded wait, then a forcible kill. Every step signals through
    * [[ProcessHandle]], which closes none of the child's streams: `Process.destroy` closes stdin
    * first, and that close waits on the lock a stdin write blocked on an unread pipe holds, so the
-   * escalation would never be reached (GH-690). Descendant discovery is best-effort and cannot keep
-   * the child itself from being stopped.
+   * escalation would never be reached (GH-690). The descendants are found again before the forcible
+   * kill, while the child still parents them, so a helper its SIGTERM handler started goes too.
+   * Discovery is best-effort and cannot keep the child itself from being stopped.
    */
   private[raster] def kill(
     process: Process,
     discover: Process => List[ProcessHandle] = descendantsOf
   ): Unit =
+    def found(): List[ProcessHandle] =
+      try discover(process)
+      catch case _: RuntimeException => Nil
     if process.isAlive then
-      val descendants =
-        try discover(process)
-        catch case _: RuntimeException => Nil
       val handle = process.toHandle
-      descendants.foreach(_.destroy())
+      val first = found()
+      first.foreach(_.destroy())
       handle.destroy(): Unit
-      if !process.waitFor(GraceMillis, TimeUnit.MILLISECONDS) then
+      if process.waitFor(GraceMillis, TimeUnit.MILLISECONDS) then first.foreach(_.destroyForcibly())
+      else
+        (first ++ found()).distinct.foreach(_.destroyForcibly())
         handle.destroyForcibly(): Unit
         process.waitFor(GraceMillis, TimeUnit.MILLISECONDS): Unit
-      descendants.foreach(_.destroyForcibly())
 
   /** Close the child's three streams, ignoring the errors a dead child's pipes may raise. */
   private def closeQuietly(process: Process): Unit =

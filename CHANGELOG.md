@@ -284,8 +284,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   conversions stop after 5 minutes and availability probes after 30 seconds instead of hanging the
   CLI (a backend that ignores SIGTERM is killed after a short grace period); resvg and every
   availability probe run through the same subprocess layer as the conversions; an output path the
-  image cannot replace is `IO_WRITE`, without retrying other backends; a replaced output keeps its
-  permissions.
+  image cannot replace is `IO_WRITE`, without retrying other backends; an existing output is
+  overwritten in place, keeping its owner, group, permissions, ACLs, hard links and symlink.
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
   serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,
   both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render

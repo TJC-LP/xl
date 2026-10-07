@@ -1,11 +1,19 @@
 package com.tjclp.xl.cli.raster
 
 import java.io.IOException
-import java.nio.file.{AtomicMoveNotSupportedException, Files, Path, StandardCopyOption}
+import java.nio.file.{
+  AtomicMoveNotSupportedException,
+  Files,
+  LinkOption,
+  Path,
+  StandardCopyOption,
+  StandardOpenOption
+}
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.UUID
 
 import scala.concurrent.duration.FiniteDuration
+import scala.util.Using
 
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
@@ -358,7 +366,10 @@ object RasterizerChain:
             fileName.substring(i + 1)
           case _ => format.extension
         val staging = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
-        if Files.exists(target) then createPrivate(staging)
+        if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then createPrivate(staging)
+        // a JVM stopped mid-conversion (SIGTERM) skips the release below; this still runs
+        try staging.toFile.deleteOnExit()
+        catch case _: SecurityException => ()
         staging
       }
       .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
@@ -368,7 +379,7 @@ object RasterizerChain:
       rasterizer.convertSvgToRaster(svg, staging, format, dpi) >>
         IO.blocking(Files.isRegularFile(staging) && Files.size(staging) > 0).flatMap {
           case true =>
-            IO.blocking(moveIntoPlace(staging, target)).adaptError { case e: IOException =>
+            IO.blocking(publish(staging, target)).adaptError { case e: IOException =>
               RasterError.OutputFailed(target, e)
             }
           case false =>
@@ -389,23 +400,31 @@ object RasterizerChain:
     catch case _: UnsupportedOperationException => Files.createFile(path): Unit
 
   /**
-   * Replace `target` with `staging` atomically where the file system can, carrying `target`'s
-   * permissions over first so a private image stays private.
+   * Publish the verified `staging` file as `target`. An output that already exists is overwritten
+   * in place — same file, so its owner, group, ACLs, hard links and symlink are all kept (GH-690) —
+   * and a new one is moved into place, atomically where the file system can.
    */
-  private def moveIntoPlace(staging: Path, target: Path): Unit =
-    if Files.exists(target) then
-      try Files.setPosixFilePermissions(staging, Files.getPosixFilePermissions(target)): Unit
-      catch case _: UnsupportedOperationException => ()
-    try
-      Files.move(
-        staging,
-        target,
-        StandardCopyOption.REPLACE_EXISTING,
-        StandardCopyOption.ATOMIC_MOVE
-      ): Unit
-    catch
-      case _: AtomicMoveNotSupportedException =>
-        Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
+  private def publish(staging: Path, target: Path): Unit =
+    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
+      Using.resource(
+        Files.newOutputStream(
+          target,
+          StandardOpenOption.WRITE,
+          StandardOpenOption.CREATE,
+          StandardOpenOption.TRUNCATE_EXISTING
+        )
+      )(out => Files.copy(staging, out): Unit)
+    else
+      try
+        Files.move(
+          staging,
+          target,
+          StandardCopyOption.REPLACE_EXISTING,
+          StandardCopyOption.ATOMIC_MOVE
+        ): Unit
+      catch
+        case _: AtomicMoveNotSupportedException =>
+          Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
 
   private def installHintFor(name: String): String = name match
     case "batik" =>
