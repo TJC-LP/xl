@@ -219,3 +219,40 @@ class ErrorLiteralSpec extends FunSuite:
     assertEquals(renamed("=Other!#REF!+Sheet1!A1"), "=Other!#REF!+'Q1 Data'!A1")
     assertEquals(renamed("=[1]Sheet1!#REF!"), "=[1]Sheet1!#REF!")
   }
+
+  test("GH-694: a qualified error code is case-insensitive on entry and keeps its qualifier") {
+    val expr = FormulaParser.parse("=Sheet1!#ref!").fold(e => fail(e.toString), identity)
+    assertEquals(
+      expr,
+      TExpr.ErrorLit(CellError.Ref, Some(ErrorQualifier.Sheet(SheetName.unsafe("Sheet1"))))
+    )
+    assertEquals("=" + FormulaPrinter.printFileForm(expr), "=Sheet1!#REF!")
+  }
+
+  test("GH-694: an apostrophe in the quoted sheet name survives parse, print and rename") {
+    val text = "='It''s'!#REF!+1"
+    val expr = FormulaParser.parse(text).fold(e => fail(e.toString), identity)
+    assertEquals("=" + FormulaPrinter.printFileForm(expr), text)
+    assertEquals(
+      FormulaOps
+        .renameSheet(text, SheetName.unsafe("It's"), SheetName.unsafe("Bob's"))
+        .fold(e => fail(e.message), identity),
+      "='Bob''s'!#REF!+1"
+    )
+  }
+
+  test("GH-694: rename matches the qualifier case-insensitively, as for references") {
+    assertEquals(
+      FormulaOps
+        .renameSheet("=sheet1!#REF!", SheetName.unsafe("Sheet1"), SheetName.unsafe("X"))
+        .fold(e => fail(e.message), identity),
+      "=X!#REF!"
+    )
+  }
+
+  test("GH-694: an error literal as one end of a range is refused, not read as a range") {
+    // Excel collapses a range with a deleted end to the whole `Sheet1!#REF!`; these never occur
+    List("=Sheet1!#REF!:A1", "=Sheet1!A1:#REF!", "=SUM(Sheet1!A1:#REF!)").foreach { text =>
+      assert(FormulaParser.parse(text).isLeft, s"$text parsed as ${FormulaParser.parse(text)}")
+    }
+  }

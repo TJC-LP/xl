@@ -462,14 +462,14 @@ object FormulaPrinter:
   /**
    * GH-694: the qualifier Excel keeps before an error literal, quoted as a reference's would be.
    */
-  private[formula] def formatErrorQualifier(qualifier: ErrorQualifier): String = qualifier match
+  private def formatErrorQualifier(qualifier: ErrorQualifier): String = qualifier match
     case ErrorQualifier.Sheet(sheet) => formatSheetName(sheet)
     case ErrorQualifier.External(index, name) => formatExternalSheet(index, name)
 
   /**
    * An error literal as Excel spells it: `#REF!`, or `Sheet1!#REF!` with its qualifier (GH-694).
    */
-  private def qualifiedError(error: CellError, qualifier: Option[ErrorQualifier]): String =
+  private[formula] def qualifiedError(error: CellError, qualifier: Option[ErrorQualifier]): String =
     qualifier.fold("")(q => s"${formatErrorQualifier(q)}!") + error.toExcel
 
   /**

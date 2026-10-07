@@ -129,8 +129,4 @@ trait TExprRangeLocation:
           scope match
             case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
             case None => n
-        case Error(e, q) =>
-          q.fold("")(qualifier =>
-            s"${com.tjclp.xl.formula.printer.FormulaPrinter.formatErrorQualifier(qualifier)}!"
-          ) +
-            e.toExcel
+        case Error(e, q) => com.tjclp.xl.formula.printer.FormulaPrinter.qualifiedError(e, q)

@@ -281,7 +281,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   range arguments alike: it prints back as written, evaluates to the error, has no dependency edges,
   and follows a sheet rename as Excel's does. Structural edits carry such names verbatim. Library
   code that pattern-matches `TExpr.ErrorLit(e)` or `RangeLocation.Error(e)` now needs the second
-  field (`ErrorLit(e, _)`); constructing them is unchanged.
+  field (`ErrorLit(e, _)`); constructing them is source-compatible. Neither is binary-compatible
+  with 0.23.x: code compiled against 0.23.x that constructs, copies or matches either must be
+  recompiled.
 - **Excel's `Sheet!#REF!` names survive a write** (#687): the spill-operator scanner read the `Sheet1!`
   of `Sheet1!#REF!` as a reference and its `#` as the spill operator, so any in-memory write turned
   a defined name Excel leaves after a deleted target (a `_xlnm._FilterDatabase`, a print area, a

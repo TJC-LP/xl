@@ -434,6 +434,9 @@ object FormulaShifter:
   /**
    * The `SheetNameRef` half of [[mentionsSheet]]: does any sheet-qualified NAME target `sheet`?
    * GH-694: or a qualified error literal (`Sheet1!#REF!`), whose qualifier a rename also follows.
+   * Removing a sheet voids no reference today (`Support!A1` dangles too); if it ever does, a
+   * qualified error naming the removed sheet should lose its qualifier, as Excel writes a bare
+   * `#REF!` then.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private def mentionsSheetName(expr: TExpr[?], sheet: String): Boolean =
