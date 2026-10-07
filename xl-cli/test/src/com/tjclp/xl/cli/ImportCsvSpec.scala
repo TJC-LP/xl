@@ -269,3 +269,63 @@ class ImportCsvSpec extends CatsEffectSuite:
         Some(com.tjclp.xl.cells.CellValue.Text("true"))
       )
   }
+
+  test("#688: imported and put dates before 1900-03-01 view as Excel shows them") {
+    val csv = "when\n1900-01-01\n1900-02-28\n1900-03-01\n"
+    for
+      path <- IO.blocking(Files.writeString(fixtures().resolve("early.csv"), csv))
+      base = List("-f", file("simple.xlsx"), "import", path.toString, "--new-sheet", "Early")
+      plain <- CliHarness.run(base ++ List("-o", file("import-early.xlsx"))*)
+      streamed <- CliHarness.run(base ++ List("-o", file("import-early-stream.xlsx"), "--stream")*)
+      plainView <- CliHarness.run("-f", file("import-early.xlsx"), "-s", "Early", "view", "A2:A4")
+      streamedView <- CliHarness.run(
+        "-f",
+        file("import-early-stream.xlsx"),
+        "-s",
+        "Early",
+        "view",
+        "A2:A4"
+      )
+      serials <- ExcelIO.instance[IO].read(Path.of(file("import-early.xlsx"))).map { wb =>
+        wb.sheets.find(_.name.value == "Early").toList.flatMap { sheet =>
+          (1 to 3).toList.flatMap(r => sheet.cells.get(ARef.from0(0, r)).map(_.value))
+        }
+      }
+      put <- CliHarness.run(
+        "-f",
+        file("single.xlsx"),
+        "-o",
+        file("put-early.xlsx"),
+        "put",
+        "A1",
+        "1900-01-01"
+      )
+      putView <- CliHarness.run("-f", file("put-early.xlsx"), "view", "A1:A1")
+    yield
+      assertEquals(plain.exit, 0, plain.stderr)
+      assertEquals(streamed.exit, 0, streamed.stderr)
+      assertEquals(
+        serials.map(com.tjclp.xl.display.NumFmtFormatter.generalText),
+        List("1", "59", "61")
+      )
+      List("1/1/00", "2/28/00", "3/1/00").foreach { shown =>
+        assert(plainView.stdout.contains(s"| $shown "), plainView.stdout)
+      }
+      assertEquals(streamedView.stdout, plainView.stdout)
+      assert(!plainView.stdout.contains("12/31/99"), plainView.stdout)
+      assertEquals(put.exit, 0, put.stderr)
+      assert(putView.stdout.contains("| 1/1/00 "), putView.stdout)
+  }
+
+  test("#688: serial 60 views as Excel's phantom 2/29/00") {
+    val number = file("serial-60-number.xlsx")
+    val dated = file("serial-60.xlsx")
+    for
+      put <- CliHarness.run("-f", file("single.xlsx"), "-o", number, "put", "A1", "60")
+      style <- CliHarness.run("-f", number, "-o", dated, "style", "A1", "--format", "date")
+      view <- CliHarness.run("-f", dated, "view", "A1:A1")
+    yield
+      assertEquals(put.exit, 0, put.stderr)
+      assertEquals(style.exit, 0, style.stderr)
+      assert(view.stdout.contains("| 2/29/00 "), view.stdout)
+  }

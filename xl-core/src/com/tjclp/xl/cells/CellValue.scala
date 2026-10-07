@@ -229,7 +229,8 @@ object CellValue:
     if date1904 then epoch1904.plusDays(wholeDays).plusSeconds(seconds)
     else
       // Inverse of the 1900 leap-year adjustment: serials below 60 are shifted one day forward;
-      // serial 60 is Excel's phantom 1900-02-29, mapped here to 1900-02-28. Serials >= 61 are exact.
+      // serial 60 is Excel's phantom 1900-02-29, mapped here to 1900-02-28 (a LocalDateTime cannot
+      // hold it; the display formatter renders it 2/29/1900, #688). Serials >= 61 are exact.
       val dayShift = if wholeDays < 60 then 1L else 0L
       epoch1900.plusDays(wholeDays + dayShift).plusSeconds(seconds)
 
