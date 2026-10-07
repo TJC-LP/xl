@@ -96,7 +96,9 @@ object DependentRecalculation:
             SheetEvaluator.stripFormulaCaches(sheet, stripBySheet.getOrElse(sheet.name, Set.empty))
           }
           val positions = wb.sheets.zipWithIndex.map((sheet, i) => sheet.name -> i).toMap
-          val evaluator = Evaluator.recalculationInstance(Rng.system, new Evaluator.AggregateMemo)
+          val memo = new Evaluator.AggregateMemo
+          if Evaluator.mayReadSpills(wb) then memo.trackSpills()
+          val evaluator = Evaluator.recalculationInstance(Rng.system, memo)
           val initial: WorkbookEvaluator.PassState =
             (initialSheets, Map.empty, cycleErrors)
           val (_, values, errors) = ordered.foldLeft(initial) {
@@ -117,7 +119,10 @@ object DependentRecalculation:
                   result match
                     case Right(value) =>
                       (
-                        sheets.updated(position, sheets(position).put(q.ref, value)),
+                        sheets.updated(
+                          position,
+                          SheetEvaluator.threadComputed(sheets(position), q.ref, value)
+                        ),
                         evaluated.updated(
                           q.sheet,
                           evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
