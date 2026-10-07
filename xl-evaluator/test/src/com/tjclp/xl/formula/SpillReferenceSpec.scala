@@ -398,6 +398,119 @@ class SpillReferenceSpec extends FunSuite:
       }
   }
 
+  test("GH-695: nested IFERROR/IFNA consumers read selected values in every recalculation fold") {
+    val cases = List(
+      ("1", n(1), "TEXT(%s,\"0\")", CellValue.Text("1")),
+      ("TRUE", CellValue.Bool(true), "SUM(%s,1)", n(2)),
+      ("\"7\"", CellValue.Text("7"), "SUM(%s,1)", n(8)),
+      ("\"bad\"", CellValue.Text("bad"), "SUM(%s,1)", CellValue.Error(CellError.Value)),
+      ("\"\"", CellValue.Text(""), "TEXT(%s,\"0\")", CellValue.Text(""))
+    )
+    for
+      guard <- List("IFERROR", "IFNA")
+      selected <- List(s"$guard(A1,0)", s"$guard(B1,A1)")
+      (source, sourceValue, consumer, expected) <- cases
+    do
+      val formula = consumer.format(selected)
+      val label = s"$source -> $formula"
+      val sheet = Sheet("Sheet1")
+        .put(ref"A1", CellValue.Formula(source, Some(sourceValue)))
+        .put(ref"B1", CellValue.Formula("NA()", Some(CellValue.Error(CellError.NA))))
+        .put(ref"C1", CellValue.Formula(formula))
+      val book = Workbook(sheet)
+      val recalculated = List(
+        "full" -> book.recalculate(RecalcOptions()),
+        "parallel" -> book.recalculate(RecalcOptions(parallelism = 4)),
+        "edited precedent" -> book.recalculateAfterEdit(sheet.name, Set(ref"A1"), RecalcOptions()),
+        "cached precedent" -> book.recalculateAfterEdit(sheet.name, Set(ref"C1"), RecalcOptions())
+      )
+      recalculated.foreach { (mode, result) =>
+        assertEquals(result.errors, Vector.empty, s"$label ($mode)")
+        assertEquals(
+          c1(result.workbook),
+          CellValue.Formula(formula, Some(expected)),
+          s"$label ($mode)"
+        )
+      }
+      assertEquals(
+        sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+        Right(Some(expected)),
+        s"$label (sheet fold)"
+      )
+      // The direct scalar entry point can keep a coercion refusal on the Left channel; the
+      // dependency folds above promote that nonnumeric SUM case to its cached #VALUE!.
+      if expected != CellValue.Error(CellError.Value) then
+        assertEquals(sheet.evaluateFormula(s"=$formula"), Right(expected), s"$label (direct cache)")
+        val uncached = sheet
+          .put(ref"A1", CellValue.Formula(source))
+          .put(ref"B1", CellValue.Formula("NA()"))
+        assertEquals(
+          uncached.evaluateFormula(s"=$formula"),
+          Right(expected),
+          s"$label (direct uncached)"
+        )
+  }
+
+  test("GH-695: nested value and reference selectors do not expose threaded formula records") {
+    val selectors = List(
+      "IFERROR(A1,0)",
+      "IFNA(A1,0)",
+      "IFERROR(IFNA(A1,0),0)",
+      "IF(TRUE,A1,0)",
+      "IFS(TRUE,A1)",
+      "CHOOSE(1,A1,0)",
+      "SWITCH(1,1,A1,0)",
+      "INDEX(A1:A2,1)",
+      "VLOOKUP(1,A1:A2,1,FALSE)",
+      "HLOOKUP(1,A1:B1,1,FALSE)",
+      "XLOOKUP(1,A1:A2,A1:A2)",
+      "XLOOKUP(3,A1:A2,A1:A2,A1)"
+    )
+    selectors.foreach { selector =>
+      val formula = s"TEXT($selector,\"0\")"
+      val book = Workbook(
+        Sheet("Sheet1")
+          .put(ref"A1", CellValue.Formula("1"))
+          .put(ref"A2", n(2))
+          .put(ref"B1", n(2))
+          .put(ref"C1", CellValue.Formula(formula))
+      )
+      val result = book.recalculate(RecalcOptions())
+      assertEquals(result.errors, Vector.empty, formula)
+      assertEquals(
+        c1(result.workbook),
+        CellValue.Formula(formula, Some(CellValue.Text("1"))),
+        formula
+      )
+    }
+  }
+
+  test("GH-695: lookup values feed aggregates without retaining their formula records") {
+    val selectors = List(
+      "VLOOKUP(1,A1:B1,2,FALSE)",
+      "HLOOKUP(1,A1:A2,2,FALSE)",
+      "XLOOKUP(1,A1:A1,B1:B1)",
+      "XLOOKUP(2,A1:A1,B1:B1,B1)"
+    )
+    selectors.foreach { selector =>
+      val formula = s"SUM($selector,1)"
+      val sheet = Sheet("Sheet1")
+        .put(ref"A1", n(1))
+        .put(ref"A2", CellValue.Formula("TRUE", Some(CellValue.Bool(true))))
+        .put(ref"B1", CellValue.Formula("TRUE", Some(CellValue.Bool(true))))
+        .put(ref"C1", CellValue.Formula(formula))
+      val book = Workbook(sheet)
+      val results = List(
+        book.recalculate(RecalcOptions()),
+        book.recalculateAfterEdit(sheet.name, Set(ref"C1"), RecalcOptions())
+      )
+      results.foreach { result =>
+        assertEquals(result.errors, Vector.empty, formula)
+        assertEquals(c1(result.workbook), CellValue.Formula(formula, Some(n(2))), formula)
+      }
+    }
+  }
+
   test("GH-695: a Normal-kind anchor stays an anchor in every evaluation fold") {
     // an xl-authored dynamic formula is a plain <f>; `x#` evaluates its formula as an array
     val sheet = Sheet("Sheet1")

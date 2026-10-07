@@ -68,7 +68,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       case _ => None
 
     matchedIndexOpt match
-      case Some(idx) => Right(returnSheet(returnCells(idx)).value)
+      case Some(idx) => Right(unwrapCachedValue(returnSheet(returnCells(idx)).value))
       case None =>
         ifNotFoundOpt match
           case Some(expr) => evalValue(ctx, expr).map(toCellValue)
@@ -146,7 +146,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             }
             legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
               case Some(rowIndex) =>
-                Right(targetSheet(ARef.from0(resultCol0, rowStart0 + rowIndex)).value)
+                Right(
+                  unwrapCachedValue(targetSheet(ARef.from0(resultCol0, rowStart0 + rowIndex)).value)
+                )
               case None =>
                 // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
                 // with the diagnostic kept as the error's context for putf/eval error text
@@ -209,7 +211,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             }
             legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
               case Some(colIdx) =>
-                Right(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
+                Right(
+                  unwrapCachedValue(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
+                )
               case None =>
                 // GH-662: the typed #N/A, as VLOOKUP above
                 val mode = if rangeMatch then "approximate" else "exact"

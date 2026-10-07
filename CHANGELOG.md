@@ -290,6 +290,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   A function that returns a referenced cell itself (`IFERROR`, `IFNA`, the lookups) now stores
   that cell's value when the cell is a cached formula, not the formula record (pre-existing for a
   precedent a targeted recalculation did not re-evaluate).
+  `IFERROR`, `IFNA` and the lookups unwrap the selected cached value before a nested function
+  consumes it, including fallback branches: `TEXT(IFERROR(A1,0),"0")` formats A1's value, and
+  `SUM(IFERROR(A1,0),1)` counts a TRUE result as 1 instead of dropping it.
   A bare reference to a formula cell cached with an error (`=Y1` over `Y1 = X1+1` cached as
   `#DIV/0!`) is that error, not 0 (pre-existing; the folds now thread such records).
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
