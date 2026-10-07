@@ -348,7 +348,7 @@ class RasterSubprocessSpec extends FunSuite:
         val name = if backend == "imagemagick" then "ImageMagick" else backend
         assert(
           run.stderr.startsWith(
-            s"Error: $name conversion failed (exit 0): exited 0 without writing any output"
+            s"Error: $name conversion failed (exit 0): wrote no output"
           ),
           run.stderr
         )
@@ -435,7 +435,7 @@ class RasterSubprocessSpec extends FunSuite:
         Vector("cairosvg", "rsvg-convert", "resvg").foreach { backend =>
           assert(
             message.contains(
-              s"$backend ($backend conversion failed (exit 0): exited 0 without writing any output)"
+              s"$backend ($backend conversion failed (exit 0): wrote no output)"
             ),
             message
           )

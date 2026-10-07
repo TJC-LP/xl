@@ -432,7 +432,7 @@ object RasterizerChain:
           case false =>
             IO.raiseError(
               RasterError
-                .ConversionFailed(rasterizer.name, "exited 0 without writing any output", 0)
+                .ConversionFailed(rasterizer.name, "wrote no output", 0)
             )
         }
     }
@@ -466,7 +466,10 @@ object RasterizerChain:
   private def sibling(target: Path, ext: String): Path =
     target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
 
-  /** Delete `path` when the JVM exits, where the security policy allows. */
+  /**
+   * Delete `path` when the JVM exits, where the security policy allows. The JVM keeps every path
+   * registered until it exits, which suits the one-command CLI; a long-lived caller would grow it.
+   */
   private def deleteOnExit(path: Path): Unit =
     try path.toFile.deleteOnExit()
     catch case _: SecurityException => ()
@@ -486,13 +489,16 @@ object RasterizerChain:
    *
    * The in-place overwrite is the trade-off for keeping the output's identity: it is not atomic (a
    * reader watching the file can see it truncated mid-copy), and it briefly needs about three times
-   * the image's size on disk (staging, backup, output). `copy` is the write itself, a parameter so
-   * tests can make it fail.
+   * the image's size on disk (staging, backup, output). An output created at the path after
+   * [[attempt]] looked (a concurrent export) is still overwritten in place, but one created between
+   * this method's check and the move is replaced by it, losing its identity: a narrow window, left
+   * open. `copy` is the write and `restore` the write-back, parameters so tests can make each fail.
    */
   private[raster] def publish(
     staging: Path,
     target: Path,
-    copy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
+    copy: (Path, OutputStream) => Unit = plainCopy,
+    restore: (Path, OutputStream) => Unit = plainCopy
   ): Unit =
     // attempt refused these up front; checked again, since a FIFO made since would hang the backup
     if Files.exists(target) && !Files.isRegularFile(target) then
@@ -500,7 +506,7 @@ object RasterizerChain:
     if Files.exists(target) && !Files.isReadable(target) then
       // write-only: there is nothing to back up, so it is overwritten as a backend would
       overwrite(staging, target, copy)
-    else if Files.exists(target) then overwriteWithBackup(staging, target, copy)
+    else if Files.exists(target) then overwriteWithBackup(staging, target, copy, restore)
     else if Files.isSymbolicLink(target) then
       // a dangling symlink: a failed write removes the referent it started, never the link
       try overwrite(staging, target, copy)
@@ -520,6 +526,8 @@ object RasterizerChain:
       catch
         case _: AtomicMoveNotSupportedException =>
           Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
+
+  private val plainCopy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
 
   /** `to` opened for writing from its start, created if absent. */
   private def openTruncating(to: Path): OutputStream =
@@ -548,7 +556,8 @@ object RasterizerChain:
   private def overwriteWithBackup(
     staging: Path,
     target: Path,
-    copy: (Path, OutputStream) => Unit
+    copy: (Path, OutputStream) => Unit,
+    restore: (Path, OutputStream) => Unit
   ): Unit =
     val backup = sibling(staging, "orig")
     createPrivate(backup)
@@ -569,11 +578,12 @@ object RasterizerChain:
     try Using.resource(out)(copy(staging, _))
     catch
       case failed: IOException =>
-        try overwrite(backup, target, copy)
+        try overwrite(backup, target, restore)
         catch
           case restoreFailed: IOException =>
             val error = new IOException(
-              s"${failed.getMessage}; its previous contents are kept in $backup",
+              s"${failed.getMessage}; its previous contents are kept in $backup: copy them " +
+                "back before anything cleans that directory",
               failed
             )
             error.addSuppressed(restoreFailed)

@@ -122,8 +122,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
-- **`--raster-output` must name a regular file** (#690): raster exports now write beside the
-  output path and publish only a verified image, so a device or pipe (`--raster-output
+- **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
+  the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
   used to write to it directly. Write to a file, then `cat` it. A new output in a missing or
   read-only directory is `IO_WRITE` too, instead of every backend failing into "No SVG rasterizer
@@ -278,21 +278,21 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
-- **A raster backend's exit code no longer counts as success on its own** (#690): an
-  rsvg-convert, cairosvg or ImageMagick that exited 0 without writing was reported as
-  `Exported: out.png` with exit 0 and no file. Every backend now writes beside the output path, and
-  the image replaces it only when it exists and is non-empty: otherwise the backend failed (the
-  default chain tries the next), and an earlier run's file at the path can neither pass for this
-  run's output nor be lost to a failed one. Also: the message keeps the last 4 KiB of stderr (2 MB
-  of stderr was a 2 MB message) and drops the JDK's `(Stream closed)`/`(Broken pipe)`; the default
-  chain no longer cuts each backend's message to 50 characters; an empty stderr no longer leaves a
-  dangling colon; a backend that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`;
-  conversions stop after 5 minutes (a timed-out backend ends the default chain) and availability
-  probes after 30 seconds instead of hanging the CLI (a backend that ignores SIGTERM is killed after a short grace period); resvg and every
-  availability probe run through the same subprocess layer as the conversions; an output path the
-  image cannot replace is `IO_WRITE`, without retrying other backends; an existing output is
-  overwritten in place, keeping its owner, group, permissions, ACLs, hard links and symlink, and
-  restored if the overwrite fails partway.
+- **A raster backend's exit code no longer counts as success on its own** (#690): an rsvg-convert,
+  cairosvg or ImageMagick that exited 0 without writing was reported as `Exported: out.png` with
+  exit 0 and no file. Every backend now writes beside the output path, and the image replaces it
+  only when it exists and is non-empty: otherwise the backend failed (the default chain tries the
+  next), and an earlier run's file at the path can neither pass for this run's output nor be lost to
+  a failed one. Also: the message keeps the last 4 KiB of stderr (2 MB of stderr was a 2 MB message)
+  and drops the JDK's `(Stream closed)`/`(Broken pipe)`; the default chain no longer cuts each
+  backend's message to 50 characters; an empty stderr no longer leaves a dangling colon; a backend
+  that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`; conversions stop after 5
+  minutes (a timed-out backend ends the default chain) and availability probes after 30 seconds
+  instead of hanging the CLI (a backend that ignores SIGTERM is killed after a short grace period);
+  resvg and every availability probe run through the same subprocess layer as the conversions; an
+  output path the image cannot replace is `IO_WRITE`, without retrying other backends; an existing
+  output is overwritten in place, keeping its owner, group, permissions, ACLs, hard links and
+  symlink, and restored if the overwrite fails partway.
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
   serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,
   both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render

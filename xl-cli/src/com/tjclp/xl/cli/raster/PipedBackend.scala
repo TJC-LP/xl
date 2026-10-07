@@ -48,16 +48,22 @@ private[raster] object PipedBackend:
   val StderrLimit: Int = 4096
 
   /** The stdout a [[capture]] keeps: its first bytes (a version line, a delegate list). */
-  private val CaptureLimit: Int = 1 << 20
+  private[raster] val CaptureLimit: Int = 1 << 20
 
   /** How long a child gets to exit after the polite signal before it is killed outright. */
   private val GraceMillis: Long = 2000
 
   /** How often a running child's descendants are recorded ([[recordDescendants]]). */
-  private val TrackMillis: Long = 50
+  private val TrackMillis: Long = 100
 
   /** How often [[kill]] looks for new descendants during the grace period. */
-  private val PollMillis: Long = 10
+  private val PollMillis: Long = 25
+
+  /**
+   * How long the pipes may stay open after the child exits before their reads are abandoned: a
+   * helper it started may hold them, and the child's exit (and its output file) is the outcome.
+   */
+  private val AfterExit: FiniteDuration = 1.second
 
   /**
    * Run `command args` with `input` on stdin. A non-zero exit is `ConversionFailed(name, stderr,
@@ -142,7 +148,11 @@ private[raster] object PipedBackend:
     stdout: String
   )
 
-  /** Spawn `command`, write `input` while draining stderr and stdout, and wait for the exit. */
+  /**
+   * Spawn `command`, write `input` while draining stderr and stdout, and wait for the exit. A child
+   * that exits while a helper it started still holds its pipes is not kept waiting on them: after
+   * [[AfterExit]] the reads are abandoned and the outcome is its exit code, without stderr's text.
+   */
   private def exchange(
     name: String,
     command: List[String],
@@ -154,10 +164,17 @@ private[raster] object PipedBackend:
       val stderr = onPipeThread(tail(process.getErrorStream, StderrLimit))
       val stdout =
         onPipeThread(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
-      (write, stderr, stdout).parTupled.flatMap { case (unread, err, (bytes, out)) =>
-        IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes, out))
+      val exited = IO.fromCompletableFuture(IO(process.onExit())) >> IO.sleep(AfterExit)
+      (write, stderr, stdout).parTupled.race(exited).flatMap {
+        case Left((unread, err, (bytes, out))) =>
+          IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes, out))
+        case Right(_) =>
+          IO(Outcome(process.exitValue, None, HeldPipes, 0, ""))
       }
     }
+
+  /** The stderr an [[Outcome]] carries when its pipes were abandoned after the exit. */
+  private val HeldPipes = "its output pipes were still held open by a process it started"
 
   /** Daemon threads for the pipe I/O, so an abandoned one never keeps the JVM alive. */
   private lazy val pipeThreads: ExecutorService = Executors.newCachedThreadPool { runnable =>
@@ -270,7 +287,7 @@ private[raster] object PipedBackend:
       )
 
   /** Read `in` to its end: its size, and its first `keep` bytes as UTF-8. */
-  private def drain(in: InputStream, keep: Int): (Long, String) =
+  private[raster] def drain(in: InputStream, keep: Int): (Long, String) =
     if keep <= 0 then (in.transferTo(OutputStream.nullOutputStream()), "")
     else
       val head = in.readNBytes(keep)

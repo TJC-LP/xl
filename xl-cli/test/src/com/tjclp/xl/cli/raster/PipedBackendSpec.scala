@@ -214,6 +214,14 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(missing, None)
   }
 
+  /** Whether a read-only file refuses this user's writes: false for root, which bypasses modes. */
+  private lazy val enforcesPermissions: Boolean =
+    val probe = Files.createTempFile("xl-raster-perm-", ".probe")
+    try
+      Files.setPosixFilePermissions(probe, PosixFilePermissions.fromString("r--------"))
+      !Files.isWritable(probe)
+    finally Files.deleteIfExists(probe): Unit
+
   /** Whether `command` is installed: the process tests need a few POSIX tools. */
   private def onPath(command: String): Boolean =
     new java.lang.ProcessBuilder("sh", "-c", s"command -v $command").start().waitFor() == 0
@@ -246,20 +254,37 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
-  test("a descendant that keeps the pipes open after the child exits cannot stall a deadline") {
+  test("a helper holding the pipes after the child exits does not hold up its outcome") {
     assume(onPath("pgrep"), "needs pgrep")
     val marker = "31.6903"
     val started = System.nanoTime()
     // the child outlives the start of the pipe reads: a child gone before they start has its pipes
     // drained and closed by the JDK, and the orphan would hold nothing
     PipedBackend
-      .probe("sh", List("-c", s"sleep $marker & sleep 0.5; exit 0"), 2.seconds)
+      .probe("sh", List("-c", s"sleep $marker & sleep 0.5; exit 0"), 30.seconds)
       .map { ok =>
-        assert(!ok, "the orphan holds the pipes, so the probe must reach its deadline")
-        assert((System.nanoTime() - started).nanos < 6.seconds, "teardown waited on the orphan")
+        assert(ok, "the child exited 0: the held pipes are abandoned, not waited out")
+        assert((System.nanoTime() - started).nanos < 6.seconds, "the outcome waited on the orphan")
         // recorded while the child ran, so killed at release though the child had exited
         assertEquals(pgrep(s"sleep $marker"), "", "the orphan outlived the probe")
       }
+  }
+
+  test("a failing child whose helper holds the pipes says so instead of an empty stderr") {
+    val script = "sleep 31.6904 & sleep 0.5; exit 3"
+    failure(PipedBackend.run("shim", "sh", List("-c", script), Array.emptyByteArray, 30.seconds))
+      .map {
+        case RasterError.ConversionFailed("shim", stderr, 3) =>
+          assert(stderr.contains("held open by a process it started"), stderr)
+        case other => fail(s"expected ConversionFailed, got $other")
+      }
+  }
+
+  test("drain keeps the first `keep` bytes and counts them all") {
+    val text = "v" * (PipedBackend.CaptureLimit + 5000)
+    val (count, kept) = PipedBackend.drain(new ByteArrayInputStream(bytes(text)), 10)
+    assertEquals(count, text.length.toLong)
+    assertEquals(kept, "v" * 10)
   }
 
   test("kill stops a helper a SIGTERM handler starts even when the child then exits") {
@@ -321,6 +346,7 @@ class PipedBackendSpec extends CatsEffectSuite:
           RasterizerChain.publish(
             staging,
             target,
+            (_, _) => throw new java.io.IOException("No space left on device"),
             (_, _) => throw new java.io.IOException("No space left on device")
           )
         }
@@ -335,6 +361,7 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test("publish: a read-only output is reported intact, with no backup left behind") {
+    assume(enforcesPermissions, "root bypasses permission checks")
     withDir { dir =>
       IO.blocking {
         val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
@@ -421,6 +448,7 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test("a new output in a missing or read-only directory is IO_WRITE before any backend runs") {
+    assume(enforcesPermissions, "root bypasses permission checks")
     withDir { dir =>
       val locked = Files.createDirectory(dir.resolve("locked"))
       Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("r-x------"))
