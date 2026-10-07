@@ -1,9 +1,32 @@
 package com.tjclp.xl.cli.raster
 
-import java.nio.file.Path
+import java.io.{IOException, OutputStream}
+import java.nio.file.{
+  AtomicMoveNotSupportedException,
+  Files,
+  LinkOption,
+  Path,
+  StandardCopyOption,
+  StandardOpenOption
+}
+import java.nio.file.attribute.{
+  AclEntry,
+  AclEntryPermission,
+  AclEntryType,
+  AclFileAttributeView,
+  PosixFilePermissions
+}
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
-import cats.effect.IO
+import scala.concurrent.duration.FiniteDuration
+import scala.util.Using
+
+import cats.effect.{IO, Resource}
 import cats.syntax.all.*
+
+import com.tjclp.xl.cli.MemoryGuard
+import com.tjclp.xl.cli.contract.CliException
 
 /**
  * Common interface for SVG-to-raster converters.
@@ -136,11 +159,34 @@ object RasterError:
   case class FormatNotSupported(rasterizer: String, format: RasterFormat) extends RasterError:
     def message: String = s"$rasterizer does not support ${format.extension} format"
 
-  /** Conversion failed */
+  /** Conversion failed; an empty stderr ends the message at the exit code (GH-690). */
   case class ConversionFailed(rasterizer: String, stderr: String, exitCode: Int)
       extends RasterError:
     def message: String =
-      s"$rasterizer conversion failed (exit $exitCode): ${stderr.stripTrailing}"
+      val detail = stderr.strip
+      val base = s"$rasterizer conversion failed (exit $exitCode)"
+      if detail.isEmpty then base else s"$base: $detail"
+
+  /** GH-690: the backend ran past its deadline and was stopped. */
+  case class TimedOut(rasterizer: String, after: FiniteDuration) extends RasterError:
+    def message: String =
+      s"$rasterizer did not finish within ${after.toSeconds} s and was stopped"
+
+  /**
+   * GH-690: the converted image could not be moved onto the output path (a read-only directory, a
+   * path that is a directory). The CLI classifies it as `IO_WRITE`.
+   */
+  case class OutputFailed(path: Path, cause: Throwable) extends RasterError:
+    def message: String =
+      s"cannot write $path: ${Option(cause.getMessage).getOrElse(cause.toString)}"
+
+  /**
+   * GH-690: the output path names no regular file to write an image to: a root (`/`), a directory,
+   * a FIFO or a device (`/dev/stdout`). Refused before any backend runs; the CLI classifies it as
+   * `IO_WRITE`.
+   */
+  case class UnsupportedOutput(path: Path, reason: String) extends RasterError:
+    def message: String = s"cannot write $path: $reason"
 
   /**
    * A backend that takes file paths only (resvg) could not create its scratch SVG: in `spillDir`
@@ -215,21 +261,20 @@ object RasterizerChain:
     outputPath: Path,
     format: RasterFormat,
     dpi: Int = 144,
-    preferredRasterizer: Option[String] = None
+    preferredRasterizer: Option[String] = None,
+    chain: List[Rasterizer] = defaultChain
   ): IO[String] =
     // Scale SVG dimensions based on DPI for consistent output across all rasterizers
     val scaledSvg = scaleSvgForDpi(svg, dpi)
 
-    preferredRasterizer match
+    preflight(outputPath) >> (preferredRasterizer match
       case Some(name) =>
         // User requested specific rasterizer
         byName.get(name.toLowerCase) match
           case Some(rasterizer) =>
             rasterizer.isAvailable.flatMap {
               case true =>
-                rasterizer
-                  .convertSvgToRaster(scaledSvg, outputPath, format, dpi)
-                  .as(rasterizer.name)
+                attempt(rasterizer, scaledSvg, outputPath, format, dpi).as(rasterizer.name)
               case false =>
                 IO.raiseError(
                   RasterError.RasterizerNotFound(
@@ -248,12 +293,34 @@ object RasterizerChain:
 
       case None =>
         // Try fallback chain
-        tryChain(scaledSvg, outputPath, format, dpi, defaultChain, Nil)
+        tryChain(scaledSvg, outputPath, format, dpi, chain, Nil))
+
+  /**
+   * The output path's own failures, checked once before any backend is chosen (GH-690), so they
+   * read the same whether or not a backend is available: a root, directory, FIFO or device is
+   * [[RasterError.UnsupportedOutput]]; a new output whose directory is missing or not writable is
+   * [[RasterError.OutputFailed]]. [[attempt]] still fails cleanly on whatever changes after this.
+   */
+  private def preflight(outputPath: Path): IO[Unit] =
+    val target = outputPath.toAbsolutePath
+    Option(target.getFileName).flatMap(_ => Option(target.getParent)) match
+      case None => IO.raiseError(RasterError.UnsupportedOutput(target, "not a file path"))
+      case Some(dir) =>
+        IO.blocking {
+          if Files.exists(target) && !Files.isRegularFile(target) then
+            Some(RasterError.UnsupportedOutput(target, "not a regular file"))
+          else if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then None
+          else if !Files.isDirectory(dir) then
+            Some(RasterError.OutputFailed(target, new IOException(s"$dir is not a directory")))
+          else if !Files.isWritable(dir) then
+            Some(RasterError.OutputFailed(target, new IOException(s"$dir is not writable")))
+          else None
+        }.flatMap(_.fold(IO.unit)(IO.raiseError))
 
   /**
    * Try each rasterizer in the chain until one succeeds.
    */
-  private def tryChain(
+  private[raster] def tryChain(
     svg: String,
     outputPath: Path,
     format: RasterFormat,
@@ -273,8 +340,7 @@ object RasterizerChain:
 
           case true =>
             // Available, try to convert
-            rasterizer
-              .convertSvgToRaster(svg, outputPath, format, dpi)
+            attempt(rasterizer, svg, outputPath, format, dpi)
               .map { _ =>
                 // Log if we fell back from the default
                 if tried.nonEmpty then
@@ -286,6 +352,15 @@ object RasterizerChain:
               .handleErrorWith { error =>
                 // Conversion failed, try next (unless it's a format error)
                 error match
+                  // GH-690: a backend rendered but the image could not replace the output path;
+                  // another backend cannot repair the destination
+                  case output: RasterError.OutputFailed => IO.raiseError(output)
+                  case output: RasterError.UnsupportedOutput => IO.raiseError(output)
+                  // a backend that ran out its deadline already cost minutes: report it rather
+                  // than spend as long again on each remaining backend
+                  case timedOut: RasterError.TimedOut => IO.raiseError(timedOut)
+                  // a usage error (a malformed XL_SPILL_DIR) is every backend's: report it once
+                  case usage: CliException => IO.raiseError(usage)
                   case _: RasterError.FormatNotSupported =>
                     // Format not supported by this rasterizer, try next
                     tryChain(
@@ -304,10 +379,260 @@ object RasterizerChain:
                       format,
                       dpi,
                       rest,
-                      tried :+ s"${rasterizer.name} (${error.getMessage.take(50)})"
+                      // the whole message: ConversionFailed already keeps only stderr's tail
+                      tried :+ s"${rasterizer.name} (${error.getMessage})"
                     )
               }
         }
+
+  /**
+   * One backend's conversion, trusted only by its result (GH-690): the backend writes a hidden file
+   * beside `outputPath`, which must exist and be non-empty before it replaces `outputPath`. A
+   * backend that exits 0 without writing is [[RasterError.ConversionFailed]] (the chain then tries
+   * the next one); a file left at `outputPath` by an earlier run cannot pass for this run's output,
+   * and a failed run leaves it untouched. The hidden file is removed on every path out.
+   *
+   * The staging name is short and fixed-length (`.xl-raster-<uuid>.<ext>`), so any output name the
+   * file system accepts still fits. It is created before the backend runs, so an output directory
+   * that is missing or read-only is [[RasterError.OutputFailed]] up front rather than every
+   * backend's failure; it is owner-only when an output already exists, since it will hold that
+   * output's next contents. An existing output is overwritten by copying, so when its directory
+   * refuses new files the staging file goes to the spill directory (`XL_SPILL_DIR`, else
+   * `java.io.tmpdir`) instead. An output path that names no regular file is
+   * [[RasterError.UnsupportedOutput]], also before any backend runs. [[publish]] says how the image
+   * then replaces the output.
+   */
+  private def attempt(
+    rasterizer: Rasterizer,
+    svg: String,
+    outputPath: Path,
+    format: RasterFormat,
+    dpi: Int
+  ): IO[Unit] =
+    val target = outputPath.toAbsolutePath
+    val fileName: IO[String] = Option(target.getFileName) match
+      case None => IO.raiseError(RasterError.UnsupportedOutput(target, "not a file path"))
+      case Some(name) =>
+        IO.blocking(Files.exists(target) && !Files.isRegularFile(target)).flatMap {
+          case true => IO.raiseError(RasterError.UnsupportedOutput(target, "not a regular file"))
+          case false => IO.pure(name.toString)
+        }
+    val staged = fileName.flatMap { name =>
+      val ext = name.lastIndexOf('.') match
+        case i if i >= 0 && (1 to 16).contains(name.length - i - 1) => name.substring(i + 1)
+        case _ => format.extension
+      IO.blocking(Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+        .flatMap {
+          // a new output is moved into place, so it must be staged beside it
+          case false => IO.blocking(Files.createFile(sibling(target, ext)))
+          case true =>
+            IO.blocking(sibling(target, ext))
+              .flatTap(p => IO.blocking(createPrivate(p)))
+              .recoverWith {
+                // an existing output is overwritten by copying, so a directory that refuses new
+                // files (a writable output in a read-only directory) stages in the spill directory
+                case _: IOException =>
+                  IO.fromEither(MemoryGuard.spill.left.map(CliException(_))).flatMap { spill =>
+                    IO.blocking {
+                      val dir = spill.getOrElse(Path.of(System.getProperty("java.io.tmpdir")))
+                      val staging = dir.resolve(s".xl-raster-${UUID.randomUUID()}.$ext")
+                      createPrivate(staging)
+                      staging
+                    }
+                  }
+              }
+        }
+        // a JVM stopped mid-conversion (SIGTERM) skips the release below; this still runs
+        .flatTap(staging => IO(LiveStaging.add(staging)))
+        .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
+    }
+    // removal is best-effort: a failed clean-up must not replace the conversion's outcome
+    def remove(p: Path): IO[Unit] =
+      IO.blocking(Files.deleteIfExists(p)).void.handleError(_ => ()) >> IO(LiveStaging.remove(p))
+    Resource.make(staged)(remove).use { staging =>
+      rasterizer.convertSvgToRaster(svg, staging, format, dpi) >>
+        IO.blocking(Files.isRegularFile(staging) && Files.size(staging) > 0).flatMap {
+          case true =>
+            IO.blocking(publish(staging, target)).adaptError { case e: IOException =>
+              RasterError.OutputFailed(target, e)
+            }
+          case false =>
+            IO.raiseError(
+              RasterError
+                .ConversionFailed(rasterizer.name, "wrote no output", 0)
+            )
+        }
+    }
+
+  /**
+   * An empty file only its owner can read: mode 0600 where the file system has POSIX permissions,
+   * else (NTFS) an ACL that grants its owner alone, set before anything is written to it.
+   */
+  private def createPrivate(path: Path): Unit =
+    try
+      Files.createFile(
+        path,
+        PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
+      ): Unit
+    catch
+      case _: UnsupportedOperationException =>
+        Files.createFile(path)
+        Option(Files.getFileAttributeView(path, classOf[AclFileAttributeView])).foreach { view =>
+          val ownerOnly = AclEntry
+            .newBuilder()
+            .setType(AclEntryType.ALLOW)
+            .setPrincipal(view.getOwner)
+            .setPermissions(AclEntryPermission.values*)
+            .build()
+          view.setAcl(java.util.List.of(ownerOnly))
+        }
+
+  /**
+   * A hidden sibling of `target` for this run: `.xl-raster-<uuid>.<ext>`, short whatever `target`.
+   */
+  private def sibling(target: Path, ext: String): Path =
+    target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
+
+  /**
+   * The staging files of exports in progress, deleted by one shutdown hook when the JVM exits
+   * mid-conversion (SIGTERM skips the Resource release). Unlike `File.deleteOnExit`, whose registry
+   * only grows, a path leaves the set when its export ends, so a long-lived JVM holds only live
+   * ones.
+   */
+  private object LiveStaging:
+    private val paths = ConcurrentHashMap.newKeySet[Path]()
+
+    private lazy val hook: Unit =
+      val cleanup = new Thread(
+        () => paths.forEach(path => discard(path)),
+        "xl-raster-staging-cleanup"
+      )
+      try Runtime.getRuntime.addShutdownHook(cleanup)
+      catch case _: IllegalStateException | _: SecurityException => () // already shutting down
+
+    def add(path: Path): Unit =
+      hook
+      paths.add(path): Unit
+
+    def remove(path: Path): Unit = paths.remove(path): Unit
+
+  /** Delete `path` if it exists; a failure to is not the caller's outcome. */
+  private def discard(path: Path): Unit =
+    try Files.deleteIfExists(path): Unit
+    catch case _: IOException => ()
+
+  /**
+   * Publish the verified `staging` file as `target`. An output that already exists is overwritten
+   * in place — same file, so its owner, group, ACLs, hard links and symlink are all kept (GH-690) —
+   * behind a backup that restores it if the write fails partway ([[overwriteWithBackup]]); one that
+   * cannot be read (write-only) cannot be backed up, so it is overwritten without one. A symlink
+   * whose referent does not exist yet is written through, creating the referent, and a new output
+   * is moved into place, atomically where the file system can.
+   *
+   * The in-place overwrite is the trade-off for keeping the output's identity: it is not atomic (a
+   * reader watching the file can see it truncated mid-copy), and it briefly needs about three times
+   * the image's size on disk (staging, backup, output). An output created at the path after
+   * [[attempt]] looked (a concurrent export) is still overwritten in place, but one created between
+   * this method's check and the move is replaced by it, losing its identity: a narrow window, left
+   * open. `copy` is the write and `restore` the write-back, parameters so tests can make each fail.
+   */
+  private[raster] def publish(
+    staging: Path,
+    target: Path,
+    copy: (Path, OutputStream) => Unit = plainCopy,
+    restore: (Path, OutputStream) => Unit = plainCopy
+  ): Unit =
+    // attempt refused these up front; checked again, since a FIFO made since would hang the backup
+    if Files.exists(target) && !Files.isRegularFile(target) then
+      throw new IOException("not a regular file")
+    if Files.exists(target) && !Files.isReadable(target) then
+      // write-only: there is nothing to back up, so it is overwritten as a backend would
+      overwrite(staging, target, copy)
+    else if Files.exists(target) then overwriteWithBackup(staging, target, copy, restore)
+    else if Files.isSymbolicLink(target) then
+      // a dangling symlink: a failed write removes the referent it started, never the link
+      try overwrite(staging, target, copy)
+      catch
+        case failed: IOException =>
+          try Files.deleteIfExists(target.toRealPath()): Unit
+          catch case _: IOException => ()
+          throw failed
+    else
+      try
+        Files.move(
+          staging,
+          target,
+          StandardCopyOption.REPLACE_EXISTING,
+          StandardCopyOption.ATOMIC_MOVE
+        ): Unit
+      catch
+        case _: AtomicMoveNotSupportedException =>
+          Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
+
+  private val plainCopy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
+
+  /** `to` opened for writing from its start, created if absent. */
+  private def openTruncating(to: Path): OutputStream =
+    Files.newOutputStream(
+      to,
+      StandardOpenOption.WRITE,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.TRUNCATE_EXISTING
+    )
+
+  /** Write `from`'s bytes over `to`, in place. */
+  private def overwrite(from: Path, to: Path, copy: (Path, OutputStream) => Unit): Unit =
+    Using.resource(openTruncating(to))(out => copy(from, out))
+
+  /**
+   * Overwrite the readable, existing `target` with `staging` in place, keeping a backup of its old
+   * contents beside `staging` (private, like it) until the write completes:
+   *   - the backup cannot be made: the error, `target` untouched;
+   *   - `target` cannot be opened (read-only): never truncated, so the error, backup removed;
+   *   - the copy fails after truncating (a full disk, a quota): the backup is written back,
+   *     removed, and the copy's error reported;
+   *   - the write-back fails too: the backup is the only intact copy, so it is kept and the error
+   *     names it. It is never registered for deletion at exit either, since a JVM stopped
+   *     mid-overwrite leaves the same situation.
+   */
+  private def overwriteWithBackup(
+    staging: Path,
+    target: Path,
+    copy: (Path, OutputStream) => Unit,
+    restore: (Path, OutputStream) => Unit
+  ): Unit =
+    val backup = sibling(staging, "orig")
+    createPrivate(backup)
+    try
+      Using.resource(Files.newOutputStream(backup, StandardOpenOption.WRITE))(out =>
+        Files.copy(target, out): Unit
+      )
+    catch
+      case e: IOException =>
+        discard(backup)
+        throw e
+    val out =
+      try openTruncating(target)
+      catch
+        case e: IOException =>
+          discard(backup)
+          throw e
+    try Using.resource(out)(copy(staging, _))
+    catch
+      case failed: IOException =>
+        try overwrite(backup, target, restore)
+        catch
+          case restoreFailed: IOException =>
+            val error = new IOException(
+              s"${failed.getMessage}; its previous contents are kept in $backup: copy them " +
+                "back before anything cleans that directory",
+              failed
+            )
+            error.addSuppressed(restoreFailed)
+            throw error
+        discard(backup)
+        throw failed
+    discard(backup)
 
   private def installHintFor(name: String): String = name match
     case "batik" =>
