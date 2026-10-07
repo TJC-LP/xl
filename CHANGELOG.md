@@ -122,6 +122,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
+  the output path and publish only a verified image, so a device or pipe (`--raster-output
+  /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
+  used to write to it directly. Write to a file, then `cat` it. A new output in a missing or
+  read-only directory is `IO_WRITE` too, instead of every backend failing into "No SVG rasterizer
+  available".
 - **Breaking: plain lookups follow Excel's error codes** (#670): an error-typed lookup_value is the
   answer (`VLOOKUP(1/0,…)` is `#DIV/0!`); `MATCH` reads match_type by sign (5 is 1, −3 is −1);
   approximate matching compares text case-insensitively over sorted text and never crosses text
@@ -284,6 +290,55 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   field (`ErrorLit(e, _)`); constructing them is source-compatible. Neither is binary-compatible
   with 0.23.x: code compiled against 0.23.x that constructs, copies or matches either must be
   recompiled.
+- **Spill references read their anchor during recalculation** (#695): every evaluation fold
+  (`recalc`, the targeted recalculation behind `put`, the sheet-level dependency folds and the
+  `eval` precedent pass) wrote each computed value back as a plain constant before later cells
+  read it, so a dynamic-array anchor stopped being an anchor and an `x#` reader evaluated after it
+  got `#REF!`. On an Excel book with `C1 = SUM(B1#)` cached as 15, `recalc` and any `put` that
+  re-evaluated B1 overwrote the correct 15 with `#REF!`, and `eval "=SUM(B1#)"` disagreed with
+  `eval "=SUM(Sheet1!B1#)"`. A formula cell now keeps its record in the fold, cached with its
+  value, so a Normal-kind anchor (an xl-authored `SORT(...)`) stays one too; for an ArrayFormula
+  anchor the fold records its result in the generation memo (only for a book with `x#` readers),
+  which `x#` reads before the recorded extent's cells, under the same rule as an anchor it
+  evaluates itself (a scalar result is `#REF!`, an error is that error): an uncached record with no spill cells reads its
+  whole array, an edited input reaches readers (`SORT` over a changed A1 gives the new sum, not the
+  previous spill cells), and plain and spill readers share one evaluation (one `RAND()` draw;
+  pinned external caches and iterative fixpoints read as before). `eval`/`evala` evaluate their
+  precedents and the target formula with one evaluator, so `--with` overrides re-spill too.
+  A function that returns a referenced cell itself (`IFERROR`, `IFNA`, the lookups) now stores
+  that cell's value when the cell is a cached formula, not the formula record (pre-existing for a
+  precedent a targeted recalculation did not re-evaluate).
+  `IFERROR`, `IFNA` and the lookups unwrap the selected cached value before a nested function
+  consumes it, including fallback branches: `TEXT(IFERROR(A1,0),"0")` formats A1's value, and
+  `SUM(IFERROR(A1,0),1)` counts a TRUE result as 1 instead of dropping it.
+  A bare reference to a formula cell cached with an error (`=Y1` over `Y1 = X1+1` cached as
+  `#DIV/0!`) is that error, not 0 (pre-existing; the folds now thread such records).
+- **A regenerated `<definedNames>` keeps every attribute** (#696): when xl rewrote the table (a
+  name edit, a GH-593 or #687 heal, a structural edit) it wrote back only `name`, `comment`,
+  `localSheetId` and `hidden`, so one unrelated name edit turned every macro name into a plain
+  name and dropped `description`, `shortcutKey` and the rest. `DefinedName` now carries every
+  ECMA-376 §18.2.5 attribute, plus unknown unprefixed ones in source order; both readers fill it
+  and the writer emits them in Excel's order. A print name with any such attribute stays in the
+  table instead of being lifted into `PageSetup`, which would have dropped it. `DefinedName` gains
+  12 defaulted fields: source-compatible, not binary-compatible with 0.23.x (code compiled against
+  0.23.x that calls `DefinedName.apply`/`.copy` must be recompiled).
+- **A raster backend's exit code no longer counts as success on its own** (#690): an rsvg-convert,
+  cairosvg or ImageMagick that exited 0 without writing was reported as `Exported: out.png` with
+  exit 0 and no file. Every backend now writes beside the output path, and the image replaces it
+  only when it exists and is non-empty: otherwise the backend failed (the default chain tries the
+  next), and an earlier run's file at the path can neither pass for this run's output nor be lost to
+  a failed one. Also: the message keeps the last 4 KiB of stderr (2 MB of stderr was a 2 MB message)
+  and drops the JDK's `(Stream closed)`/`(Broken pipe)`; the default chain no longer cuts each
+  backend's message to 50 characters; an empty stderr no longer leaves a dangling colon; a backend
+  that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`; conversions stop after 5
+  minutes (a timed-out backend ends the default chain) and availability probes after 30 seconds
+  instead of hanging the CLI (a backend that ignores SIGTERM is killed after a short grace period);
+  resvg and every availability probe run through the same subprocess layer as the conversions; an
+  output path the image cannot replace is `IO_WRITE`, without retrying other backends; an existing
+  output is overwritten in place, keeping its owner, group, permissions, ACLs, hard links and
+  symlink, and restored if the overwrite fails partway. If a helper holds the backend's pipes
+  open after exit, abandoning their drains still rejects a failed or unfinished SVG write;
+  partial output cannot become a successful export or replace the previous image.
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
   serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,
   both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render

@@ -5,7 +5,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path}
 
 import cats.effect.{IO, Resource}
-import fs2.io.process.{ProcessBuilder, Processes}
 
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.contract.CliException
@@ -26,23 +25,11 @@ object Resvg extends Rasterizer:
 
   val name: String = "resvg"
 
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
-
   /**
    * Check if resvg is available.
    */
   def isAvailable: IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("resvg", List("--help")))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .handleError(_ => false)
+    PipedBackend.probe("resvg", List("--help"))
 
   /**
    * Convert SVG to raster format using resvg.
@@ -95,7 +82,11 @@ object Resvg extends Rasterizer:
       }.adaptError { case e: IOException => RasterError.ScratchFileFailed(name, spill, e) }
     )(path => IO.blocking(Files.deleteIfExists(path)).void)
 
-  /** `resvg --dpi <dpi> <tempSvg> <outputPath>`, its stderr the failure's message. */
+  /**
+   * `resvg --dpi <dpi> <tempSvg> <outputPath>`, its stderr the failure's message. Through
+   * [[PipedBackend]] like every other subprocess backend (GH-690): stdin closed at once, stderr's
+   * tail, a typed spawn failure and a deadline.
+   */
   private def run(tempSvg: Path, outputPath: Path, dpi: Int): IO[Unit] =
     val args = List(
       "--dpi",
@@ -103,16 +94,4 @@ object Resvg extends Rasterizer:
       tempSvg.toAbsolutePath.toString,
       outputPath.toAbsolutePath.toString
     )
-    Processes[IO]
-      .spawn(ProcessBuilder("resvg", args))
-      .use { process =>
-        for
-          // Drain stdout and stderr
-          _ <- process.stdout.compile.drain
-          stderr <- process.stderr.through(fs2.text.utf8.decode).compile.string
-          exitCode <- process.exitValue
-          _ <-
-            if exitCode == 0 then IO.unit
-            else IO.raiseError(RasterError.ConversionFailed(name, stderr, exitCode))
-        yield ()
-      }
+    PipedBackend.run(name, "resvg", args, Array.emptyByteArray)

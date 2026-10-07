@@ -4,7 +4,6 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.Path
 
 import cats.effect.IO
-import fs2.io.process.{ProcessBuilder, Processes}
 
 /**
  * rsvg-convert integration for converting SVG to raster formats.
@@ -22,23 +21,11 @@ object RsvgConvert extends Rasterizer:
 
   val name: String = "rsvg-convert"
 
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
-
   /**
    * Check if rsvg-convert is available.
    */
   def isAvailable: IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("rsvg-convert", List("--version")))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .handleError(_ => false)
+    PipedBackend.probe("rsvg-convert", List("--version"))
 
   /**
    * Convert SVG to raster format using rsvg-convert.

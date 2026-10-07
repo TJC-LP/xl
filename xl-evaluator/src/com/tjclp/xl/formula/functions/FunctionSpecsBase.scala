@@ -384,9 +384,21 @@ trait FunctionSpecsBase:
 
   protected def evalValue(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, ExprValue] =
     evalAny(ctx, expr).map(ExprValue.from)
+
+  /**
+   * A value-returning function exposes a selected cell's cache, not its formula record.
+   * Recalculation keeps records so spill references can still find their anchors; nested consumers
+   * (TEXT, SUM, …) must receive the value before the final-cell boundary. Uncached records stay
+   * unknown, and blanks and errors keep their existing value semantics.
+   */
+  @annotation.tailrec
+  protected final def unwrapCachedValue(value: CellValue): CellValue = value match
+    case CellValue.Formula(_, Some(cached), _) => unwrapCachedValue(cached)
+    case other => other
+
   protected def toCellValue(value: ExprValue): CellValue =
     value match
-      case ExprValue.Cell(cv) => cv
+      case ExprValue.Cell(cv) => unwrapCachedValue(cv)
       case ExprValue.Text(s) => CellValue.Text(s)
       case ExprValue.Number(n) => CellValue.Number(n)
       case ExprValue.Bool(b) => CellValue.Bool(b)

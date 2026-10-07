@@ -15,7 +15,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       flags = FunctionFlags(lift = ArrayLift.slots(0))
     ) { (args, ctx) =>
       val (valueExpr, valueIfErrorExpr) = args
-      evalValue(ctx, valueExpr) match
+      val result = evalValue(ctx, valueExpr) match
         case Left(_) =>
           evalValue(ctx, valueIfErrorExpr).map(toCellValue)
         case Right(ExprValue.Cell(cv)) =>
@@ -28,6 +28,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
           else Right(cv)
         case Right(other) =>
           Right(toCellValue(other))
+      result.map(unwrapCachedValue)
     }
 
   /**
@@ -47,7 +48,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       flags = FunctionFlags(lift = ArrayLift.slots(0))
     ) { (args, ctx) =>
       val (valueExpr, valueIfNaExpr) = args
-      evalValue(ctx, valueExpr) match
+      val result = evalValue(ctx, valueExpr) match
         case Left(EvalError.ErrorValue(CellError.NA, _)) =>
           evalValue(ctx, valueIfNaExpr).map(toCellValue)
         case Left(other) => Left(other)
@@ -55,6 +56,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
           evalValue(ctx, valueIfNaExpr).map(toCellValue)
         case Right(ExprValue.Cell(cv)) => Right(cv)
         case Right(other) => Right(toCellValue(other))
+      result.map(unwrapCachedValue)
     }
 
   /**

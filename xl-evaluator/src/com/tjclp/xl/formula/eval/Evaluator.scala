@@ -90,6 +90,12 @@ trait Evaluator:
    */
   private[formula] def withArrayResults: Evaluator = this
 
+  /**
+   * GH-695: the generation memo this evaluator carries, if any — where an evaluation fold records
+   * each spill anchor's computed array for the generation's `x#` readers.
+   */
+  private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = None
+
 object Evaluator:
   /**
    * Default evaluator instance.
@@ -126,6 +132,34 @@ object Evaluator:
     aggregateMemo: AggregateMemo
   ): Evaluator =
     TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
+
+  /**
+   * GH-695: [[instance]] plus a generation memo that records spill anchors' results (when
+   * `trackSpills`) and caches no aggregates — for the sheet-level evaluation folds, which thread
+   * computed values like a recalculation but never had the aggregate memo.
+   */
+  private[formula] def spillTrackingInstance(rng: Rng, trackSpills: Boolean): Evaluator =
+    val memo = new AggregateMemo(cachesAggregates = false)
+    if trackSpills then memo.trackSpills()
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(memo)))
+
+  /**
+   * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
+   * stored `ANCHORARRAY` spelling. A cheap textual over-approximation (`#REF!` matches too): it
+   * only decides whether an evaluation fold records anchors' results for `x#` readers.
+   */
+  private[formula] def mayReadSpills(wb: Workbook): Boolean =
+    wb.sheets.exists(mayReadSpills) || wb.metadata.definedNames.exists(n =>
+      mayReadSpills(n.formula)
+    )
+
+  private[formula] def mayReadSpills(sheet: Sheet): Boolean =
+    sheet.cells.valuesIterator.exists(_.value match
+      case CellValue.Formula(text, _, _) => mayReadSpills(text)
+      case _ => false)
+
+  private[formula] def mayReadSpills(formula: String): Boolean =
+    formula.indexOf('#') >= 0 || formula.toUpperCase(java.util.Locale.ROOT).contains("ANCHORARRAY")
 
   /**
    * Evaluator instance that allows array results to propagate.
@@ -729,8 +763,27 @@ object Evaluator:
    * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
    * like successes.
    */
-  private[formula] final class AggregateMemo:
+  private[formula] final class AggregateMemo(cachesAggregates: Boolean = true):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
+
+    /**
+     * GH-695: each spill anchor's raw evaluation as this generation's fold computed it — an array
+     * is its spill, a scalar is not a spill anchor, an error is that error, exactly as `x#` reads
+     * an anchor it evaluates itself. The threaded sheet caches only the anchor's top-left element,
+     * and the recorded extent's cells hold the previous generation's spill (or nothing), so an `x#`
+     * reader looks here first. Off until [[trackSpills]]: a book without `x#` readers keeps no
+     * arrays.
+     */
+    private val spills = TrieMap.empty[(SheetName, ARef), Either[EvalError, Any]]
+    private val tracksSpills = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+    def trackSpills(): Unit = tracksSpills.set(true)
+
+    def recordSpill(sheet: SheetName, anchor: ARef, raw: Either[EvalError, Any]): Unit =
+      if tracksSpills.get() then spills.update((sheet, anchor), raw)
+
+    def recordedSpill(sheet: SheetName, anchor: ARef): Option[Either[EvalError, Any]] =
+      spills.get((sheet, anchor))
     private val hitCount = new AtomicLong(0L)
     private val fillCount = new AtomicLong(0L)
     private val bypassCount = new AtomicLong(0L)
@@ -743,18 +796,20 @@ object Evaluator:
     )(
       compute: => Either[EvalError, BigDecimal]
     ): Either[EvalError, BigDecimal] =
-      val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
-      val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
-      entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
-        case AggregateMemoLookup.Hit(value) =>
-          hitCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Filled(value) =>
-          fillCount.incrementAndGet()
-          value
-        case AggregateMemoLookup.Bypass =>
-          bypassCount.incrementAndGet()
-          compute
+      if !cachesAggregates then compute
+      else
+        val key = AggregateMemoKey(targetSheet.name, range.start, range.end, aggregatorId, mode)
+        val entry = entries.getOrElseUpdate(key, new AggregateMemoEntry)
+        entry.lookupOrCompute(cacheable(targetSheet, range))(compute) match
+          case AggregateMemoLookup.Hit(value) =>
+            hitCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Filled(value) =>
+            fillCount.incrementAndGet()
+            value
+          case AggregateMemoLookup.Bypass =>
+            bypassCount.incrementAndGet()
+            compute
 
     def stats: AggregateMemoStats =
       AggregateMemoStats(
@@ -862,6 +917,9 @@ private final class TotalEvaluator(underlying: Evaluator) extends Evaluator:
   override private[formula] def withArrayResults: Evaluator =
     TotalEvaluator(underlying.withArrayResults)
 
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] =
+    underlying.generationMemo
+
 /**
  * Private implementation of Evaluator.
  *
@@ -903,6 +961,8 @@ private class EvaluatorImpl(
 
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
+
+  override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = aggregateMemo
 
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorImpl(
