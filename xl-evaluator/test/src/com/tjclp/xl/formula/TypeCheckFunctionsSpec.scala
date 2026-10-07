@@ -4,6 +4,8 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.functions.FunctionSpecs
 import munit.FunSuite
 
 /**
@@ -32,6 +34,49 @@ class TypeCheckFunctionsSpec extends FunSuite:
           case Right(other) => Left(s"Expected Boolean, got: $other")
           case Left(err) => Left(s"Eval error: $err")
       case Left(err) => Left(s"Parse error: $err")
+
+  test(
+    "GH-695: error guards unwrap selected caches without changing unknown, blank or error values"
+  ) {
+    val unknown = CellValue.Formula("unsupported()")
+    val nested =
+      CellValue.Formula("outer", Some(CellValue.Formula("inner", Some(CellValue.Number(7)))))
+    val cases = List(
+      unknown -> unknown,
+      CellValue.Empty -> CellValue.Empty,
+      nested -> CellValue.Number(7),
+      CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))) -> CellValue.Error(
+        CellError.Div0
+      )
+    )
+    cases.foreach { (input, expected) =>
+      // Literal AST inputs expose the functions' result before SheetEvaluator's final-cell
+      // normalization. In particular an uncached record must never turn into a fabricated zero.
+      val selected = TExpr.Lit[CellValue](input)
+      val unused = TExpr.Lit[CellValue](CellValue.Number(99))
+      val ifna = TExpr.Call(FunctionSpecs.ifna, (selected, unused))
+      assertEquals(Evaluator.eval(ifna, emptySheet), Right(expected), s"IFNA($input)")
+      if expected != CellValue.Error(CellError.Div0) then
+        assertEquals(Evaluator.eval(TExpr.iferror(selected, unused), emptySheet), Right(expected))
+      val na = TExpr.Lit[CellValue](CellValue.Error(CellError.NA))
+      assertEquals(Evaluator.eval(TExpr.iferror(na, selected), emptySheet), Right(expected))
+      assertEquals(
+        Evaluator.eval(TExpr.Call(FunctionSpecs.ifna, (na, selected)), emptySheet),
+        Right(expected)
+      )
+    }
+  }
+
+  test("GH-695: IFNA keeps non-NA errors while IFERROR selects the cached fallback value") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))),
+      ref"B1" -> CellValue.Formula("1", Some(CellValue.Number(1)))
+    )
+    assertEquals(sheet.evaluateFormula("=IFNA(A1,B1)"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(sheet.evaluateFormula("=IFERROR(A1,B1)"), Right(CellValue.Number(1)))
+    assertEquals(sheet.evaluateFormula("=IFNA(B1,1/0)"), Right(CellValue.Number(1)))
+    assertEquals(sheet.evaluateFormula("=IFERROR(B1,1/0)"), Right(CellValue.Number(1)))
+  }
 
   // ===== ISNUMBER Tests =====
 

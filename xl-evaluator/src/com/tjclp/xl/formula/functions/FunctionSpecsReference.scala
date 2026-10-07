@@ -460,9 +460,15 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           Some(s"${anchor.toA1}#: not the anchor of a spilled array")
         )
       )
+    // an array is the spill; a scalar result means the cell is not a spill anchor
+    def asSpill(raw: Either[EvalError, Any]): Either[EvalError, ArrayResult] =
+      raw.flatMap {
+        case ar: ArrayResult => Right(ar)
+        case _ => notAnchor
+      }
     def evaluated(text: String): Either[EvalError, ArrayResult] =
-      Evaluator
-        .evalSpillFormula(
+      asSpill(
+        Evaluator.evalSpillFormula(
           text,
           anchorSheet,
           ctx.clock,
@@ -474,14 +480,17 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           ctx.aggregateMemo,
           anchor
         )
-        .flatMap {
-          case ar: ArrayResult => Right(ar)
-          case _ => notAnchor
-        }
+      )
     anchorSheet(anchor).value match
       case CellValue.Formula(text, cached, FormulaKind.ArrayFormula(ref, _, _)) =>
-        if cached.isDefined then extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
-        else evaluated(text)
+        // GH-695: an evaluation fold that computed this anchor in the current generation recorded
+        // its result; the recorded extent's cells are then the previous generation's spill
+        ctx.aggregateMemo.flatMap(_.recordedSpill(anchorSheet.name, anchor)) match
+          case Some(raw) => asSpill(raw)
+          case None =>
+            if cached.isDefined then
+              extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
+            else evaluated(text)
       case CellValue.Formula(text, _, _: FormulaKind.Normal) => evaluated(text)
       case _ => notAnchor
 

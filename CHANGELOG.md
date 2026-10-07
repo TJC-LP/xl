@@ -278,6 +278,29 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Spill references read their anchor during recalculation** (#695): every evaluation fold
+  (`recalc`, the targeted recalculation behind `put`, the sheet-level dependency folds and the
+  `eval` precedent pass) wrote each computed value back as a plain constant before later cells
+  read it, so a dynamic-array anchor stopped being an anchor and an `x#` reader evaluated after it
+  got `#REF!`. On an Excel book with `C1 = SUM(B1#)` cached as 15, `recalc` and any `put` that
+  re-evaluated B1 overwrote the correct 15 with `#REF!`, and `eval "=SUM(B1#)"` disagreed with
+  `eval "=SUM(Sheet1!B1#)"`. A formula cell now keeps its record in the fold, cached with its
+  value, so a Normal-kind anchor (an xl-authored `SORT(...)`) stays one too; for an ArrayFormula
+  anchor the fold records its result in the generation memo (only for a book with `x#` readers),
+  which `x#` reads before the recorded extent's cells, under the same rule as an anchor it
+  evaluates itself (a scalar result is `#REF!`, an error is that error): an uncached record with no spill cells reads its
+  whole array, an edited input reaches readers (`SORT` over a changed A1 gives the new sum, not the
+  previous spill cells), and plain and spill readers share one evaluation (one `RAND()` draw;
+  pinned external caches and iterative fixpoints read as before). `eval`/`evala` evaluate their
+  precedents and the target formula with one evaluator, so `--with` overrides re-spill too.
+  A function that returns a referenced cell itself (`IFERROR`, `IFNA`, the lookups) now stores
+  that cell's value when the cell is a cached formula, not the formula record (pre-existing for a
+  precedent a targeted recalculation did not re-evaluate).
+  `IFERROR`, `IFNA` and the lookups unwrap the selected cached value before a nested function
+  consumes it, including fallback branches: `TEXT(IFERROR(A1,0),"0")` formats A1's value, and
+  `SUM(IFERROR(A1,0),1)` counts a TRUE result as 1 instead of dropping it.
+  A bare reference to a formula cell cached with an error (`=Y1` over `Y1 = X1+1` cached as
+  `#DIV/0!`) is that error, not 0 (pre-existing; the folds now thread such records).
 - **A regenerated `<definedNames>` keeps every attribute** (#696): when xl rewrote the table (a
   name edit, a GH-593 or #687 heal, a structural edit) it wrote back only `name`, `comment`,
   `localSheetId` and `hidden`, so one unrelated name edit turned every macro name into a plain
