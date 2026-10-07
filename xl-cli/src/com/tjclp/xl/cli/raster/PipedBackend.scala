@@ -184,7 +184,8 @@ private[raster] object PipedBackend:
    * its streams closed once it is gone — on a pipe thread, since closing a stream waits for a read
    * still blocked on it. Its descendants are recorded while it runs ([[recordDescendants]]) and any
    * still alive at release are killed too: once the child exits they are no longer its descendants,
-   * and one holding the pipes would otherwise outlive the deadline (GH-690). A command that cannot
+   * and one holding the pipes would otherwise outlive the deadline (GH-690). That includes a helper
+   * a backend meant to leave running: none of the converters daemonizes one. A command that cannot
    * be started — not installed, gone since the availability probe, not executable — is
    * [[RasterError.RasterizerNotFound]], the code the probe itself would have given.
    */

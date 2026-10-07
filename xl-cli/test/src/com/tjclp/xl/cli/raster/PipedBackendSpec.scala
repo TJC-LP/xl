@@ -20,6 +20,9 @@ import com.tjclp.xl.cli.contract.{CliError, ErrorCode}
  */
 class PipedBackendSpec extends CatsEffectSuite:
 
+  // the process tests drive /bin/sh, trap and POSIX permissions
+  override def munitIgnore: Boolean = scala.util.Properties.isWin
+
   private def failure(io: IO[Unit]): IO[Throwable] =
     io.attempt.map(_.swap.getOrElse(fail("expected a failure")))
 
@@ -433,5 +436,46 @@ class PipedBackendSpec extends CatsEffectSuite:
         .guarantee(IO.blocking {
           Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"))
         }.void)
+    }
+  }
+
+  test("an existing writable output in a read-only directory is overwritten in place") {
+    withDir { dir =>
+      val locked = Files.createDirectory(dir.resolve("locked"))
+      val target = Files.write(locked.resolve("out.png"), bytes("previous image"))
+      Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("r-x------"))
+      RasterizerChain
+        .convert(tinySvg, target, RasterFormat.Png, 96, Some("batik"))
+        .map { _ =>
+          assert(Files.size(target) > 14, "replaced with the image")
+          assertEquals(listing(locked), List(target))
+        }
+        .guarantee(IO.blocking {
+          Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"))
+          Files.deleteIfExists(target)
+        }.void)
+    }
+  }
+
+  test("a backend that times out stops the default chain: the next one is not run") {
+    def backend(label: String, conversion: IO[Unit]): Rasterizer = new Rasterizer:
+      val name = label
+      def isAvailable = IO.pure(true)
+      def convertSvgToRaster(svg: String, out: Path, format: RasterFormat, dpi: Int) = conversion
+    withDir { dir =>
+      IO.ref(false).flatMap { ran =>
+        val chain = List(
+          backend("slow", IO.raiseError(RasterError.TimedOut("slow", 5.minutes))),
+          backend("next", ran.set(true))
+        )
+        failure(
+          RasterizerChain
+            .tryChain(tinySvg, dir.resolve("out.png"), RasterFormat.Png, 96, chain, Nil)
+            .void
+        ).flatMap { error =>
+          assertEquals(error, RasterError.TimedOut("slow", 5.minutes))
+          ran.get.map(next => assert(!next, "the chain went on past a timeout"))
+        }
+      }
     }
   }

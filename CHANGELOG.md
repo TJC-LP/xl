@@ -287,8 +287,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   of stderr was a 2 MB message) and drops the JDK's `(Stream closed)`/`(Broken pipe)`; the default
   chain no longer cuts each backend's message to 50 characters; an empty stderr no longer leaves a
   dangling colon; a backend that cannot be started is `RASTERIZER_UNAVAILABLE`, not `INTERNAL`;
-  conversions stop after 5 minutes and availability probes after 30 seconds instead of hanging the
-  CLI (a backend that ignores SIGTERM is killed after a short grace period); resvg and every
+  conversions stop after 5 minutes (a timed-out backend ends the default chain) and availability
+  probes after 30 seconds instead of hanging the CLI (a backend that ignores SIGTERM is killed after a short grace period); resvg and every
   availability probe run through the same subprocess layer as the conversions; an output path the
   image cannot replace is `IO_WRITE`, without retrying other backends; an existing output is
   overwritten in place, keeping its owner, group, permissions, ACLs, hard links and symlink, and

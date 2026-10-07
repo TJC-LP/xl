@@ -24,6 +24,9 @@ import scala.util.Using
 import cats.effect.{IO, Resource}
 import cats.syntax.all.*
 
+import com.tjclp.xl.cli.MemoryGuard
+import com.tjclp.xl.cli.contract.CliException
+
 /**
  * Common interface for SVG-to-raster converters.
  *
@@ -293,7 +296,7 @@ object RasterizerChain:
   /**
    * Try each rasterizer in the chain until one succeeds.
    */
-  private def tryChain(
+  private[raster] def tryChain(
     svg: String,
     outputPath: Path,
     format: RasterFormat,
@@ -329,6 +332,9 @@ object RasterizerChain:
                   // another backend cannot repair the destination
                   case output: RasterError.OutputFailed => IO.raiseError(output)
                   case output: RasterError.UnsupportedOutput => IO.raiseError(output)
+                  // a backend that ran out its deadline already cost minutes: report it rather
+                  // than spend as long again on each remaining backend
+                  case timedOut: RasterError.TimedOut => IO.raiseError(timedOut)
                   case _: RasterError.FormatNotSupported =>
                     // Format not supported by this rasterizer, try next
                     tryChain(
@@ -364,7 +370,9 @@ object RasterizerChain:
    * file system accepts still fits. It is created before the backend runs, so an output directory
    * that is missing or read-only is [[RasterError.OutputFailed]] up front rather than every
    * backend's failure; it is owner-only when an output already exists, since it will hold that
-   * output's next contents. An output path that names no regular file is
+   * output's next contents. An existing output is overwritten by copying, so when its directory
+   * refuses new files the staging file goes to the spill directory (`XL_SPILL_DIR`, else
+   * `java.io.tmpdir`) instead. An output path that names no regular file is
    * [[RasterError.UnsupportedOutput]], also before any backend runs. [[publish]] says how the image
    * then replaces the output.
    */
@@ -384,17 +392,33 @@ object RasterizerChain:
           case false => IO.pure(name.toString)
         }
     val staged = fileName.flatMap { name =>
-      IO.blocking {
-        val ext = name.lastIndexOf('.') match
-          case i if i >= 0 && (1 to 16).contains(name.length - i - 1) => name.substring(i + 1)
-          case _ => format.extension
-        val staging = sibling(target, ext)
-        if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then createPrivate(staging)
-        else Files.createFile(staging)
+      val ext = name.lastIndexOf('.') match
+        case i if i >= 0 && (1 to 16).contains(name.length - i - 1) => name.substring(i + 1)
+        case _ => format.extension
+      IO.blocking(Files.exists(target, LinkOption.NOFOLLOW_LINKS))
+        .flatMap {
+          // a new output is moved into place, so it must be staged beside it
+          case false => IO.blocking(Files.createFile(sibling(target, ext)))
+          case true =>
+            IO.blocking(sibling(target, ext))
+              .flatTap(p => IO.blocking(createPrivate(p)))
+              .recoverWith {
+                // an existing output is overwritten by copying, so a directory that refuses new
+                // files (a writable output in a read-only directory) stages in the spill directory
+                case _: IOException =>
+                  IO.fromEither(MemoryGuard.spill.left.map(CliException(_))).flatMap { spill =>
+                    IO.blocking {
+                      val dir = spill.getOrElse(Path.of(System.getProperty("java.io.tmpdir")))
+                      val staging = dir.resolve(s".xl-raster-${UUID.randomUUID()}.$ext")
+                      createPrivate(staging)
+                      staging
+                    }
+                  }
+              }
+        }
         // a JVM stopped mid-conversion (SIGTERM) skips the release below; this still runs
-        deleteOnExit(staging)
-        staging
-      }.adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
+        .flatTap(staging => IO.blocking(deleteOnExit(staging)))
+        .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
     }
     // removal is best-effort: a failed clean-up must not replace the conversion's outcome
     def remove(p: Path): IO[Unit] = IO.blocking(Files.deleteIfExists(p)).void.handleError(_ => ())
@@ -455,16 +479,10 @@ object RasterizerChain:
   /**
    * Publish the verified `staging` file as `target`. An output that already exists is overwritten
    * in place — same file, so its owner, group, ACLs, hard links and symlink are all kept (GH-690) —
-   * and a new one is moved into place, atomically where the file system can. A symlink whose
-   * referent does not exist yet is written through, creating the referent.
-   *
-   * The overwrite truncates first, so the old contents are copied to a private sibling beforehand,
-   * and a copy that then fails (a full disk, a quota) writes them back; an output that cannot even
-   * be opened (read-only) was never truncated, so its failure is reported with the backup removed.
-   * If the write-back fails too, the sibling is the only intact copy: it is kept where it is and
-   * the error names it. It is never registered for deletion at exit either, since a JVM stopped
-   * mid-overwrite leaves the same situation. An output that cannot be read (write-only) cannot be
-   * backed up, so it is overwritten without a write-back.
+   * behind a backup that restores it if the write fails partway ([[overwriteWithBackup]]); one that
+   * cannot be read (write-only) cannot be backed up, so it is overwritten without one. A symlink
+   * whose referent does not exist yet is written through, creating the referent, and a new output
+   * is moved into place, atomically where the file system can.
    *
    * The in-place overwrite is the trade-off for keeping the output's identity: it is not atomic (a
    * reader watching the file can see it truncated mid-copy), and it briefly needs about three times
@@ -476,56 +494,16 @@ object RasterizerChain:
     target: Path,
     copy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
   ): Unit =
-    def open(to: Path): OutputStream =
-      Files.newOutputStream(
-        to,
-        StandardOpenOption.WRITE,
-        StandardOpenOption.CREATE,
-        StandardOpenOption.TRUNCATE_EXISTING
-      )
-    def overwrite(from: Path, to: Path): Unit = Using.resource(open(to))(out => copy(from, out))
     // attempt refused these up front; checked again, since a FIFO made since would hang the backup
     if Files.exists(target) && !Files.isRegularFile(target) then
       throw new IOException("not a regular file")
     if Files.exists(target) && !Files.isReadable(target) then
       // write-only: there is nothing to back up, so it is overwritten as a backend would
-      overwrite(staging, target)
-    else if Files.exists(target) then
-      val backup = sibling(target, "orig")
-      createPrivate(backup)
-      try
-        Using.resource(Files.newOutputStream(backup, StandardOpenOption.WRITE))(out =>
-          Files.copy(target, out): Unit
-        )
-      catch
-        case e: IOException =>
-          discard(backup)
-          throw e
-      // an output that cannot be opened (read-only) was never truncated: nothing to write back
-      val out =
-        try open(target)
-        catch
-          case e: IOException =>
-            discard(backup)
-            throw e
-      try Using.resource(out)(copy(staging, _))
-      catch
-        case failed: IOException =>
-          try overwrite(backup, target)
-          catch
-            case restoreFailed: IOException =>
-              val error = new IOException(
-                s"${failed.getMessage}; its previous contents are kept in $backup",
-                failed
-              )
-              error.addSuppressed(restoreFailed)
-              throw error
-          discard(backup)
-          throw failed
-      discard(backup)
+      overwrite(staging, target, copy)
+    else if Files.exists(target) then overwriteWithBackup(staging, target, copy)
     else if Files.isSymbolicLink(target) then
       // a dangling symlink: a failed write removes the referent it started, never the link
-      try overwrite(staging, target)
+      try overwrite(staging, target, copy)
       catch
         case failed: IOException =>
           try Files.deleteIfExists(target.toRealPath()): Unit
@@ -542,6 +520,67 @@ object RasterizerChain:
       catch
         case _: AtomicMoveNotSupportedException =>
           Files.move(staging, target, StandardCopyOption.REPLACE_EXISTING): Unit
+
+  /** `to` opened for writing from its start, created if absent. */
+  private def openTruncating(to: Path): OutputStream =
+    Files.newOutputStream(
+      to,
+      StandardOpenOption.WRITE,
+      StandardOpenOption.CREATE,
+      StandardOpenOption.TRUNCATE_EXISTING
+    )
+
+  /** Write `from`'s bytes over `to`, in place. */
+  private def overwrite(from: Path, to: Path, copy: (Path, OutputStream) => Unit): Unit =
+    Using.resource(openTruncating(to))(out => copy(from, out))
+
+  /**
+   * Overwrite the readable, existing `target` with `staging` in place, keeping a backup of its old
+   * contents beside `staging` (private, like it) until the write completes:
+   *   - the backup cannot be made: the error, `target` untouched;
+   *   - `target` cannot be opened (read-only): never truncated, so the error, backup removed;
+   *   - the copy fails after truncating (a full disk, a quota): the backup is written back,
+   *     removed, and the copy's error reported;
+   *   - the write-back fails too: the backup is the only intact copy, so it is kept and the error
+   *     names it. It is never registered for deletion at exit either, since a JVM stopped
+   *     mid-overwrite leaves the same situation.
+   */
+  private def overwriteWithBackup(
+    staging: Path,
+    target: Path,
+    copy: (Path, OutputStream) => Unit
+  ): Unit =
+    val backup = sibling(staging, "orig")
+    createPrivate(backup)
+    try
+      Using.resource(Files.newOutputStream(backup, StandardOpenOption.WRITE))(out =>
+        Files.copy(target, out): Unit
+      )
+    catch
+      case e: IOException =>
+        discard(backup)
+        throw e
+    val out =
+      try openTruncating(target)
+      catch
+        case e: IOException =>
+          discard(backup)
+          throw e
+    try Using.resource(out)(copy(staging, _))
+    catch
+      case failed: IOException =>
+        try overwrite(backup, target, copy)
+        catch
+          case restoreFailed: IOException =>
+            val error = new IOException(
+              s"${failed.getMessage}; its previous contents are kept in $backup",
+              failed
+            )
+            error.addSuppressed(restoreFailed)
+            throw error
+        discard(backup)
+        throw failed
+    discard(backup)
 
   private def installHintFor(name: String): String = name match
     case "batik" =>

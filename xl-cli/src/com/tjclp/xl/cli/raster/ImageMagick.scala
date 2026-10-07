@@ -124,16 +124,17 @@ object ImageMagick extends Rasterizer:
    */
   private def findCommand: IO[Option[ImageMagickCommand]] =
     IO(resolved.get).flatMap {
-      case Some(command) => IO.pure(command)
-      case None => resolveCommand.flatTap(command => IO(resolved.set(Some(command))))
+      case found @ Some(_) => IO.pure(found)
+      case None =>
+        resolveCommand.flatTap(found => IO.whenA(found.isDefined)(IO(resolved.set(found))))
     }
 
   /**
    * [[resolveCommand]]'s answer, once known: the availability check and the conversion would each
-   * run its probes, every one up to [[PipedBackend.ProbeTimeout]] (GH-690). Kept for the process,
-   * which for the CLI is one command.
+   * run its probes, every one up to [[PipedBackend.ProbeTimeout]] (GH-690). Only a found command is
+   * kept, for the process: a missing one is probed again, so a long-lived JVM sees it installed.
    */
-  private val resolved = new AtomicReference[Option[Option[ImageMagickCommand]]](None)
+  private val resolved = new AtomicReference[Option[ImageMagickCommand]](None)
 
   private def resolveCommand: IO[Option[ImageMagickCommand]] =
     // Helper to check v6 availability and delegate

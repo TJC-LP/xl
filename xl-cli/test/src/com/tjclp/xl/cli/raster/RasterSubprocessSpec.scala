@@ -29,6 +29,9 @@ import com.tjclp.xl.cli.contract.{CliError, ErrorCode, TestFixtures}
  */
 class RasterSubprocessSpec extends FunSuite:
 
+  // the shim backends are /bin/sh scripts
+  override def munitIgnore: Boolean = scala.util.Properties.isWin
+
   private val shimMessage = "shim: refusing to render"
 
   private val shimScript =
