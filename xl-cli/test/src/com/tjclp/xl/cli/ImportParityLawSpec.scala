@@ -23,19 +23,19 @@ import com.tjclp.xl.workbooks.Workbook
  * same cells whether it streams (the O(1) branch, `writeStreamStyledWithAutoDetect`) or loads in
  * memory — every cell's value and resolved number format agree, and `view` prints the same table.
  *
- * The domain is well-formed columns: a header row, a column of ISO dates (1900-03-01 to 9999-12-31,
- * past the 1900 leap-year bug), and optionally an integer column and a plain-text column, in any
- * order. EXCLUDED: a column mixing dates with text, or holding an invalid date such as 2023-02-29.
- * Those diverge by design of the two inference strategies, not by this change — the in-memory path
- * samples the whole column (header included) and degrades it to text, while the streaming path
- * types each cell on its own.
+ * The domain is well-formed columns: a header row, a column of ISO dates (1900-01-01 to 9999-12-31,
+ * across the 1900 leap-year bug, #688), and optionally an integer column and a plain-text column,
+ * in any order. EXCLUDED: a column mixing dates with text, or holding an invalid date such as
+ * 2023-02-29. Those diverge by design of the two inference strategies, not by this change — the
+ * in-memory path samples the whole column (header included) and degrades it to text, while the
+ * streaming path types each cell on its own.
  */
 class ImportParityLawSpec extends FunSuite with ScalaCheckSuite:
 
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(15)
 
-  private val minDate = LocalDate.of(1900, 3, 1)
+  private val minDate = LocalDate.of(1900, 1, 1)
   private val maxDate = LocalDate.of(9999, 12, 31)
 
   private val genDate: Gen[String] =
@@ -43,7 +43,14 @@ class ImportParityLawSpec extends FunSuite with ScalaCheckSuite:
       .frequency(
         4 -> Gen.choose(LocalDate.of(1990, 1, 1).toEpochDay, LocalDate.of(2040, 12, 31).toEpochDay),
         1 -> Gen.choose(minDate.toEpochDay, maxDate.toEpochDay),
-        1 -> Gen.oneOf(minDate.toEpochDay, maxDate.toEpochDay, LocalDate.of(2024, 2, 29).toEpochDay)
+        1 -> Gen.choose(minDate.toEpochDay, LocalDate.of(1900, 3, 1).toEpochDay),
+        1 -> Gen.oneOf(
+          minDate.toEpochDay,
+          LocalDate.of(1900, 2, 28).toEpochDay,
+          LocalDate.of(1900, 3, 1).toEpochDay,
+          maxDate.toEpochDay,
+          LocalDate.of(2024, 2, 29).toEpochDay
+        )
       )
       .map(d => LocalDate.ofEpochDay(d).format(DateTimeFormatter.ISO_LOCAL_DATE))
 
