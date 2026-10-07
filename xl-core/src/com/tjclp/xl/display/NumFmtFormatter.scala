@@ -296,7 +296,9 @@ object NumFmtFormatter:
         // The calendar variants render straight off the LocalDateTime through their parsed
         // canonical codes (GH-410) — no serial round-trip, which truncates seconds. Bare 'h'
         // is the 24-hour clock (no AM/PM in these codes, ECMA-376 §18.8.31).
+        // A date outside Excel's displayable range fills with `#`, as its serial does (#688).
         builtInFormats.get(numFmt) match
+          case Some(_) if !isDisplayableSerial(dateTimeSerial(dt)) => "######"
           case Some(fmt) => FormatCodeParser.applyDateFormat(dt, fmt)
           case None => dt.toString // unreachable: the map covers the three variants
 
@@ -308,7 +310,11 @@ object NumFmtFormatter:
         // Route through section selection on the serial (GH-283): ';;;' hides dates,
         // numeric sections render the serial, conditional codes pick sections by serial
         FormatCodeParser.parse(code) match
-          case Right(fmt) => formatCustom(dateTimeSerial(dt), Some(dt), fmt, rule)
+          case Right(fmt) =>
+            val serial = dateTimeSerial(dt)
+            val calendar =
+              Option.when(isDisplayableSerial(serial))(FormatCodeParser.ExcelCalendar.of(dt))
+            formatCustom(serial, calendar, fmt, rule)
           case Left(_) => dt.toString // Fallback for parse errors
 
       case other =>
@@ -331,7 +337,7 @@ object NumFmtFormatter:
    */
   private def formatCustom(
     n: BigDecimal,
-    dt: => Option[LocalDateTime],
+    dt: => Option[FormatCodeParser.ExcelCalendar],
     fmt: FormatCodeParser.FormatCode,
     rule: GeneralRule
   ): String =
@@ -350,37 +356,16 @@ object NumFmtFormatter:
    * Calendar view of a date serial, or None when the serial lies outside Excel's displayable range
    * (negative or on/after 10000-01-01) — Excel fills such cells with `#` (GH-283).
    */
-  private def serialToDateTime(serial: BigDecimal): Option[LocalDateTime] =
-    if serial < 0 || serial >= maxDateSerialExclusive then None
-    else Some(excelSerialToDateTime(serial))
+  private def serialToDateTime(serial: BigDecimal): Option[FormatCodeParser.ExcelCalendar] =
+    Option.when(isDisplayableSerial(serial))(FormatCodeParser.ExcelCalendar.fromSerial(serial))
+
+  /** Whether a date serial lies in Excel's displayable range, [0, 10000-01-01). */
+  private def isDisplayableSerial(serial: BigDecimal): Boolean =
+    serial >= 0 && serial < maxDateSerialExclusive
 
   /** Excel serial number (days since 1899-12-30 + day fraction) of a LocalDateTime. */
   private def dateTimeSerial(dt: LocalDateTime): BigDecimal =
     BigDecimal(CellValue.dateTimeToExcelSerial(dt))
-
-  /**
-   * Convert Excel date serial number to LocalDateTime.
-   *
-   * @param serial
-   *   Excel date serial number (days since 1899-12-30)
-   * @return
-   *   LocalDateTime
-   */
-  private def excelSerialToDateTime(serial: BigDecimal): LocalDateTime =
-    import java.time.LocalDate
-    // Excel serial date: 1 = 1900-01-01 (with 1900 leap year bug)
-    val baseDate = LocalDate.of(1899, 12, 30) // Adjusted for Excel's bug
-    val days = serial.toLong
-    val date = baseDate.plusDays(days)
-
-    // Handle time component if present
-    val timeFraction = (serial % 1).toDouble
-    if timeFraction > 0 then
-      val hours = (timeFraction * 24).toInt
-      val minutes = ((timeFraction * 24 * 60) % 60).toInt
-      val seconds = (((timeFraction * 24 * 60 * 60) % 60)).toInt
-      date.atTime(hours, minutes, seconds)
-    else date.atStartOfDay()
 
   /**
    * Format error values in Excel style.

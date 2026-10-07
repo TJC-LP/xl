@@ -93,6 +93,20 @@ class DateTimeSpec extends FunSuite:
     }
   }
 
+  test("#688: every date 1900-01-01..1900-02-28 is serial 1..59 and converts back") {
+    (1 to 59).foreach { serial =>
+      val date = java.time.LocalDate.of(1900, 1, 1).plusDays(serial.toLong - 1)
+      assertEquals(CellValue.dateTimeToExcelSerial(date.atStartOfDay), serial.toDouble, s"$date")
+      assertEquals(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate, date, s"$serial")
+    }
+  }
+
+  test("#688: 1899-12-31 is serial 0 (Excel's 1/0/1900) and converts back") {
+    val dt = LocalDateTime.of(1899, 12, 31, 0, 0, 0)
+    assertEquals(CellValue.dateTimeToExcelSerial(dt), 0.0, 0.001)
+    assertEquals(CellValue.excelSerialToDateTime(0.0), dt)
+  }
+
   // GH-243: 1904 date system (legacy Mac Excel). Epoch is 1904-01-01 = serial 0; the 1900
   // system's phantom leap day (serial 60) does not exist in the 1904 system.
 
