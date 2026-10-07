@@ -122,6 +122,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **`--raster-output` must name a regular file** (#690): raster exports now write beside the
+  output path and publish only a verified image, so a device or pipe (`--raster-output
+  /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
+  used to write to it directly. Write to a file, then `cat` it. A new output in a missing or
+  read-only directory is `IO_WRITE` too, instead of every backend failing into "No SVG rasterizer
+  available".
 - **Breaking: plain lookups follow Excel's error codes** (#670): an error-typed lookup_value is the
   answer (`VLOOKUP(1/0,…)` is `#DIV/0!`); `MATCH` reads match_type by sign (5 is 1, −3 is −1);
   approximate matching compares text case-insensitively over sorted text and never crosses text

@@ -127,6 +127,15 @@ object CliError:
         o.message,
         hint = Some("check that the --raster-output directory exists and is writable")
       )
+    case u: RasterError.UnsupportedOutput =>
+      CliError(
+        ErrorCode.IO_WRITE,
+        u.message,
+        hint = Some(
+          "--raster-output must name a regular file; devices and pipes such as /dev/stdout are " +
+            "not supported (write to a file, then cat it)"
+        )
+      )
     case s: RasterError.ScratchFileFailed =>
       CliError(
         ErrorCode.IO_WRITE,

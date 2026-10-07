@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.raster
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicReference
 
 import cats.effect.IO
 
@@ -119,9 +120,22 @@ object ImageMagick extends Rasterizer:
    * Find the available ImageMagick command, preferring v7 over v6.
    *
    * Also verifies that the SVG delegate is functional (GH-160). If v7 is available but its delegate
-   * is broken, falls back to try v6.
+   * is broken, falls back to try v6. Resolved once per process ([[resolved]]).
    */
   private def findCommand: IO[Option[ImageMagickCommand]] =
+    IO(resolved.get).flatMap {
+      case Some(command) => IO.pure(command)
+      case None => resolveCommand.flatTap(command => IO(resolved.set(Some(command))))
+    }
+
+  /**
+   * [[resolveCommand]]'s answer, once known: the availability check and the conversion would each
+   * run its probes, every one up to [[PipedBackend.ProbeTimeout]] (GH-690). Kept for the process,
+   * which for the CLI is one command.
+   */
+  private val resolved = new AtomicReference[Option[Option[ImageMagickCommand]]](None)
+
+  private def resolveCommand: IO[Option[ImageMagickCommand]] =
     // Helper to check v6 availability and delegate
     def tryV6: IO[Option[ImageMagickCommand]] =
       isCommandAvailable(ImageMagickCommand.Convert6).flatMap {

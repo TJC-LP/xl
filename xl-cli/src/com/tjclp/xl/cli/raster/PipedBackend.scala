@@ -33,6 +33,8 @@ import cats.syntax.all.*
  * descendants are killed with a bounded escalation ([[kill]]). The pipe I/O runs on daemon threads
  * that a deadline abandons rather than joins ([[onPipeThread]]): a descendant that outlives the
  * child keeps its pipes open, and no read, write or close on them may hold up the teardown.
+ *
+ * Batik renders in this JVM, not through here, so no deadline bounds it.
  */
 private[raster] object PipedBackend:
 
@@ -228,12 +230,12 @@ private[raster] object PipedBackend:
       val deadline = System.nanoTime() + GraceMillis * 1000000L
       // every descendant seen through the grace period, and whether the child exited within it
       @tailrec
-      def watch(seen: List[ProcessHandle]): (List[ProcessHandle], Boolean) =
-        val now = (seen ++ found()).distinct
+      def watch(seen: Set[ProcessHandle]): (Set[ProcessHandle], Boolean) =
+        val now = seen ++ found()
         if process.waitFor(PollMillis, TimeUnit.MILLISECONDS) then (now, true)
         else if System.nanoTime() >= deadline then (now, false)
         else watch(now)
-      val (seen, exited) = watch(first)
+      val (seen, exited) = watch(first.toSet)
       seen.foreach(_.destroyForcibly())
       if !exited then
         handle.destroyForcibly(): Unit

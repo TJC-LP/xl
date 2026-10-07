@@ -96,7 +96,7 @@ class PipedBackendSpec extends CatsEffectSuite:
       .traverse_ { preferred =>
         failure(RasterizerChain.convert(svg, target, RasterFormat.Png, 96, preferred).void).map {
           error =>
-            assert(error.isInstanceOf[RasterError.OutputFailed], s"$preferred: $error")
+            assert(error.isInstanceOf[RasterError.UnsupportedOutput], s"$preferred: $error")
             assertEquals(CliError.fromThrowable(error).code, ErrorCode.IO_WRITE)
             assert(Files.exists(blocker))
             val left = Files.list(dir)
@@ -211,20 +211,35 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(missing, None)
   }
 
+  /** Whether `command` is installed: the process tests need a few POSIX tools. */
+  private def onPath(command: String): Boolean =
+    new java.lang.ProcessBuilder("sh", "-c", s"command -v $command").start().waitFor() == 0
+
+  /** Wait (up to 10 s) for `path` to appear: the script's signal that its trap is installed. */
+  private def awaitFile(path: Path): Unit =
+    val deadline = System.nanoTime() + 10.seconds.toNanos
+    while !Files.exists(path) && System.nanoTime() < deadline do Thread.sleep(10)
+    assert(Files.exists(path), s"$path never appeared")
+
   /** The pids of the processes whose command line contains `pattern`, or "" for none. */
   private def pgrep(pattern: String): String =
     val process = new java.lang.ProcessBuilder("pgrep", "-f", pattern).start()
     new String(process.getInputStream.readAllBytes(), StandardCharsets.UTF_8).strip
 
   test("kill also stops a helper the child's SIGTERM handler starts during the grace period") {
+    assume(onPath("pgrep"), "needs pgrep")
     val marker = "31.6901"
-    val script = s"trap 'sleep $marker & while :; do :; done' TERM; while :; do :; done"
-    IO.blocking {
-      val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
-      Thread.sleep(300) // let the shell install its trap
-      PipedBackend.kill(process)
-      assert(!process.isAlive, "the child must be stopped")
-      assertEquals(pgrep(s"sleep $marker"), "", "the grace-period helper outlived the kill")
+    withDir { dir =>
+      val ready = dir.resolve("ready")
+      val script =
+        s"trap 'sleep $marker & while :; do :; done' TERM; touch '$ready'; while :; do :; done"
+      IO.blocking {
+        val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
+        awaitFile(ready) // the trap is installed
+        PipedBackend.kill(process)
+        assert(!process.isAlive, "the child must be stopped")
+        assertEquals(pgrep(s"sleep $marker"), "", "the grace-period helper outlived the kill")
+      }
     }
   }
 
@@ -239,14 +254,19 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test("kill stops a helper a SIGTERM handler starts even when the child then exits") {
+    assume(onPath("pgrep"), "needs pgrep")
     val marker = "31.6902"
-    val script = s"trap 'sleep $marker & sleep 0.3; exit 0' TERM; while :; do :; done"
-    IO.blocking {
-      val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
-      Thread.sleep(300) // let the shell install its trap
-      PipedBackend.kill(process)
-      assert(!process.isAlive, "the child must be stopped")
-      assertEquals(pgrep(s"sleep $marker"), "", "the helper outlived the kill")
+    withDir { dir =>
+      val ready = dir.resolve("ready")
+      val script =
+        s"trap 'sleep $marker & sleep 0.3; exit 0' TERM; touch '$ready'; while :; do :; done"
+      IO.blocking {
+        val process = new java.lang.ProcessBuilder("sh", "-c", script).start()
+        awaitFile(ready) // the trap is installed
+        PipedBackend.kill(process)
+        assert(!process.isAlive, "the child must be stopped")
+        assertEquals(pgrep(s"sleep $marker"), "", "the helper outlived the kill")
+      }
     }
   }
 
@@ -331,14 +351,18 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test("a FIFO output is IO_WRITE before any conversion, not a hang") {
+    assume(onPath("mkfifo"), "needs mkfifo")
     withDir { dir =>
       val fifo = dir.resolve("out.png")
       IO.blocking(new java.lang.ProcessBuilder("mkfifo", fifo.toString).start().waitFor()) >>
         failure(
           RasterizerChain.convert(tinySvg, fifo, RasterFormat.Png, 96, Some("batik")).void
         ).timeout(10.seconds).map { error =>
-          assert(error.isInstanceOf[RasterError.OutputFailed], error.toString)
+          assert(error.isInstanceOf[RasterError.UnsupportedOutput], error.toString)
           assert(error.getMessage.contains("not a regular file"), error.getMessage)
+          val cli = CliError.fromThrowable(error)
+          assertEquals(cli.code, ErrorCode.IO_WRITE)
+          assert(cli.hint.exists(_.contains("/dev/stdout")), cli.hint.toString)
           assertEquals(listing(dir), List(fifo), "no staging file left behind")
         }
     }
@@ -382,7 +406,26 @@ class PipedBackendSpec extends CatsEffectSuite:
     failure(
       RasterizerChain.convert(tinySvg, Path.of("/"), RasterFormat.Png, 96, Some("batik")).void
     ).map { error =>
-      assert(error.isInstanceOf[RasterError.OutputFailed], error.toString)
+      assert(error.isInstanceOf[RasterError.UnsupportedOutput], error.toString)
       assertEquals(CliError.fromThrowable(error).code, ErrorCode.IO_WRITE)
+    }
+  }
+
+  test("a new output in a missing or read-only directory is IO_WRITE before any backend runs") {
+    withDir { dir =>
+      val locked = Files.createDirectory(dir.resolve("locked"))
+      Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("r-x------"))
+      // the default chain: each backend's own failure used to end in "no rasterizer available"
+      List(dir.resolve("missing").resolve("out.png"), locked.resolve("out.png"))
+        .traverse_ { out =>
+          failure(RasterizerChain.convert(tinySvg, out, RasterFormat.Png, 96, None).void).map {
+            error =>
+              assert(error.isInstanceOf[RasterError.OutputFailed], s"$out: $error")
+              assertEquals(CliError.fromThrowable(error).code, ErrorCode.IO_WRITE)
+          }
+        }
+        .guarantee(IO.blocking {
+          Files.setPosixFilePermissions(locked, PosixFilePermissions.fromString("rwx------"))
+        }.void)
     }
   }
