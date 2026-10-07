@@ -1,7 +1,9 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
+import com.tjclp.xl.formula.ast.ErrorQualifier
 import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.printer.{FormulaOps, FormulaPrinter}
 import munit.FunSuite
 
 /**
@@ -149,4 +151,71 @@ class ErrorLiteralSpec extends FunSuite:
     assertEquals(evalIn("=ERROR.TYPE(\"x\")"), CellValue.Error(CellError.NA))
     assertEquals(evalIn("=ERROR.TYPE(A9)"), CellValue.Error(CellError.NA))
     assertEquals(evalIn("=IF(ERROR.TYPE(A1)=2,\"div\",\"other\")"), CellValue.Text("div"))
+  }
+
+  // ===== GH-694: Excel's sheet-qualified error literal, `Sheet1!#REF!` =====
+
+  private val qualifiedSpellings = List(
+    "=Sheet1!#REF!",
+    "='My Sheet'!#REF!",
+    "=[1]Sheet1!#REF!",
+    "='[1]My Sheet'!#REF!",
+    "=Sheet1!#N/A",
+    "=Sheet1!#REF!+1",
+    "=SUM(Sheet1!#REF!)",
+    "=COUNTIF(Sheet1!#REF!,1)",
+    "=IFERROR(Sheet1!#REF!,0)",
+    "=SUM(Sheet1!#REF!,A1)"
+  )
+
+  test("GH-694: a qualified error literal parses and prints back exactly as written") {
+    qualifiedSpellings.foreach { text =>
+      val expr = FormulaParser.parse(text).fold(e => fail(s"$text: $e"), identity)
+      assertEquals("=" + FormulaPrinter.printFileForm(expr), text)
+    }
+  }
+
+  test("GH-694: the qualifier is kept on the AST, and a bare literal has none") {
+    assertEquals(
+      FormulaParser.parse("=Sheet1!#REF!"),
+      Right(TExpr.ErrorLit(CellError.Ref, Some(ErrorQualifier.Sheet(SheetName.unsafe("Sheet1")))))
+    )
+    assertEquals(
+      FormulaParser.parse("=[2]Book1!#REF!"),
+      Right(TExpr.ErrorLit(CellError.Ref, Some(ErrorQualifier.External(2, "Book1"))))
+    )
+    assertEquals(FormulaParser.parse("=#REF!"), Right(TExpr.ErrorLit(CellError.Ref, None)))
+  }
+
+  test("GH-694: a qualified error literal evaluates to its error, as Excel does") {
+    assertEquals(eval("=T!#REF!"), CellValue.Error(CellError.Ref))
+    assertEquals(eval("=Elsewhere!#REF!"), CellValue.Error(CellError.Ref))
+    assertEquals(eval("=T!#REF!+A1"), CellValue.Error(CellError.Ref))
+    assertEquals(eval("=SUM(T!#REF!)"), CellValue.Error(CellError.Ref))
+    assertEquals(eval("=COUNTIF(T!#REF!,1)"), CellValue.Error(CellError.Ref))
+    assertEquals(eval("=IFERROR(T!#REF!,0)"), CellValue.Number(BigDecimal(0)))
+    assertEquals(eval("=IFERROR(SUM('My Sheet'!#REF!),0)"), CellValue.Number(BigDecimal(0)))
+    assertEquals(eval("=ISERROR([1]Book1!#REF!)"), CellValue.Bool(true))
+  }
+
+  test("GH-694: a qualified error literal contributes no dependency edges") {
+    assertEquals(DependencyGraph.extractDependencies(parsed("=T!#REF!+A1")), Set(ref"A1"))
+    assertEquals(DependencyGraph.extractDependencies(parsed("=SUM(T!#REF!)")), Set.empty[ARef])
+  }
+
+  test("GH-694: anything but an error literal after `!#` is still refused") {
+    List("=Sheet1!#FOO", "=Sheet1!#", "=[1]Book1!#X").foreach { text =>
+      assert(FormulaParser.parse(text).isLeft, text)
+    }
+  }
+
+  test("GH-694: renaming the qualified sheet renames the qualifier, as Excel does") {
+    val from = SheetName.unsafe("Sheet1")
+    val to = SheetName.unsafe("Q1 Data")
+    def renamed(text: String): String =
+      FormulaOps.renameSheet(text, from, to).fold(e => fail(e.message), identity)
+    assertEquals(renamed("=Sheet1!#REF!"), "='Q1 Data'!#REF!")
+    assertEquals(renamed("=IFERROR(SUM(Sheet1!#REF!),0)"), "=IFERROR(SUM('Q1 Data'!#REF!),0)")
+    assertEquals(renamed("=Other!#REF!+Sheet1!A1"), "=Other!#REF!+'Q1 Data'!A1")
+    assertEquals(renamed("=[1]Sheet1!#REF!"), "=[1]Sheet1!#REF!")
   }

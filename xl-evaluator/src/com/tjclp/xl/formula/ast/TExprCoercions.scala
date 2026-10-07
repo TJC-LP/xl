@@ -75,7 +75,7 @@ trait TExprCoercions:
     case TExpr.Lit(_) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) | TExpr.SheetRef(_, _, _, _) |
         TExpr.SheetPolyRef(_, _, _) | TExpr.ExternalRef(_, _, _, _) |
         TExpr.ExternalRange(_, _, _, _) | TExpr.RangeRef(_, _) | TExpr.SheetRange(_, _, _) |
-        TExpr.ErrorLit(_) | TExpr.Missing | TExpr.Let(_, _) | TExpr.BindingRef(_) |
+        TExpr.ErrorLit(_, _) | TExpr.Missing | TExpr.Let(_, _) | TExpr.BindingRef(_) |
         TExpr.NameRef(_) | TExpr.SheetNameRef(_, _) =>
       None
 

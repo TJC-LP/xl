@@ -138,7 +138,8 @@ enum TExpr[A] derives CanEqual:
   case RangeRef(range: CellRange, form: RangeForm = RangeForm.Cells)   // Local ranges; form = Cells | Columns (A:A) | Rows (1:1)
   case SheetRange(sheet: SheetName, range: CellRange, form: RangeForm = RangeForm.Cells)
       extends TExpr[Nothing]                                            // Cross-sheet ranges
-  case ErrorLit(error: CellError) extends TExpr[Nothing]                 // #REF!, #N/A, … (GH-612)
+  case ErrorLit(error: CellError, qualifier: Option[ErrorQualifier] = None)
+      extends TExpr[Nothing]            // #REF!, #N/A, … (GH-612); Sheet1!#REF! (GH-694)
 
   // Arithmetic (TExpr[BigDecimal])
   case Add(x: TExpr[BigDecimal], y: TExpr[BigDecimal]) extends TExpr[BigDecimal]

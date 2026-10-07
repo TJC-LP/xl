@@ -2389,7 +2389,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     CellError.values.foreach { err =>
       val source = s"=${err.toExcel}"
       FormulaParser.parse(source) match
-        case Right(TExpr.ErrorLit(parsed)) => assertEquals(parsed, err)
+        case Right(TExpr.ErrorLit(parsed, None)) => assertEquals(parsed, err)
         case other => fail(s"$source should parse to ErrorLit, got $other")
       assertPreserved(source)
     }
@@ -2402,11 +2402,11 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assertPreserved("=VLOOKUP(A1, #REF!, 2, FALSE)")
     assertPreserved("=SUMPRODUCT(#REF!, B1:B3)")
     FormulaParser.parse("=COUNTIF(#REF!,1)") match
-      case Right(TExpr.Call(_, (TExpr.RangeLocation.Error(error), _))) =>
+      case Right(TExpr.Call(_, (TExpr.RangeLocation.Error(error, None), _))) =>
         assertEquals(error, CellError.Ref)
       case other => fail(s"expected COUNTIF over a RangeLocation.Error, got $other")
     FormulaParser.parse("=SUM(#N/A)") match
-      case Right(TExpr.Call(_, Left(TExpr.RangeLocation.Error(error)) :: Nil)) =>
+      case Right(TExpr.Call(_, Left(TExpr.RangeLocation.Error(error, None)) :: Nil)) =>
         assertEquals(error, CellError.NA)
       case other => fail(s"expected SUM over a RangeLocation.Error, got $other")
   }

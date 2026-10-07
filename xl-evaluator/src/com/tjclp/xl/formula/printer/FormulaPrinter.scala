@@ -1,12 +1,12 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.formula.ast.{BinarySpine, RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{BinarySpine, ErrorQualifier, RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs, ArgPrinter}
 
 import com.tjclp.xl.{ARef, Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.{Column, Row}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 
 /**
  * Printer for TExpr AST to Excel formula strings.
@@ -173,7 +173,7 @@ object FormulaPrinter:
         s"${formatExternalSheet(index, name)}!${formatRange(range, form)}"
 
       // GH-612: an error literal prints as its Excel code (#REF!, #N/A, …)
-      case TExpr.ErrorLit(error) => error.toExcel
+      case TExpr.ErrorLit(error, qualifier) => qualifiedError(error, qualifier)
 
       // GH-603: an omitted argument is the empty slot (FunctionSpec.joinSlots keeps its comma)
       case TExpr.Missing => ""
@@ -392,7 +392,7 @@ object FormulaPrinter:
           case Some(sheet) => s"${formatSheetName(sheet)}!$name"
           case None => name
       // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
-      case TExpr.RangeLocation.Error(error) => error.toExcel
+      case TExpr.RangeLocation.Error(error, qualifier) => qualifiedError(error, qualifier)
 
   /**
    * Format ARef to A1 notation with anchor support.
@@ -460,6 +460,19 @@ object FormulaPrinter:
     else s"[$index]$name"
 
   /**
+   * GH-694: the qualifier Excel keeps before an error literal, quoted as a reference's would be.
+   */
+  private[formula] def formatErrorQualifier(qualifier: ErrorQualifier): String = qualifier match
+    case ErrorQualifier.Sheet(sheet) => formatSheetName(sheet)
+    case ErrorQualifier.External(index, name) => formatExternalSheet(index, name)
+
+  /**
+   * An error literal as Excel spells it: `#REF!`, or `Sheet1!#REF!` with its qualifier (GH-694).
+   */
+  private def qualifiedError(error: CellError, qualifier: Option[ErrorQualifier]): String =
+    qualifier.fold("")(q => s"${formatErrorQualifier(q)}!") + error.toExcel
+
+  /**
    * Print with minimal whitespace (compact format).
    */
   def printCompact(expr: TExpr[?]): String =
@@ -523,7 +536,7 @@ object FormulaPrinter:
         s"ExternalRef([$index]$name, $at, $anchor)"
       case TExpr.ExternalRange(index, name, range, form) =>
         s"ExternalRange([$index]$name, ${formatRange(range, form)})"
-      case TExpr.ErrorLit(error) => s"ErrorLit(${error.toExcel})"
+      case TExpr.ErrorLit(error, qualifier) => s"ErrorLit(${qualifiedError(error, qualifier)})"
       case TExpr.Missing => "Missing"
       case TExpr.Add(x, y) =>
         s"Add(${printWithTypes(x)}, ${printWithTypes(y)})"
