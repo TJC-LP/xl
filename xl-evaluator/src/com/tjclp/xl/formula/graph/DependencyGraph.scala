@@ -431,8 +431,10 @@ object DependencyGraph:
    * workbook-scoped definition still resolves from the original formula's sheet. #691: a name's
    * verdict is a [[NameWalk.Walk]] from the node it resolves to (the definition and the sheet its
    * body resolves from), so a name cycle stops cleanly, every node costs one step however many
-   * names reach it, and a name with a chain more than [[NameWalk.MaxDepth]] names long is not
-   * dynamic (its readers are `unresolvedReaders`) instead of overflowing the stack.
+   * names reach it, and chains of any length leave the stack alone. A name reaching a dynamic call
+   * remains dynamic even when another chain is too deep: lazy evaluation can skip the deep branch
+   * or recover from its error. Its readers may also be `unresolvedReaders`; that does not replace
+   * the dynamic scheduling which keeps their otherwise invisible targets' caches fresh.
    *
    * Ordinary names do not make their users dynamic. Definitions are parsed and memoized first; only
    * names whose parseable chains actually reach a dynamic function join the cheap substring

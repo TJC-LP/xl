@@ -420,7 +420,7 @@ class WorkbookAuditSpec extends FunSuite:
       acc.withDefinedName(s"Deep_$i", if i == 101 then leaf else s"Deep_${i + 1}+1")
     )
 
-  test("#691: a name chain too deep to resolve is not listed volatile, yet exempts its table") {
+  test("#691: a too-deep name chain exempts its table and retains known volatility") {
     // the corner reads Deep_1 only when A2 <= 0, so its evaluation at the axis inputs succeeds
     // (100, 200, 300 against caches of -1): checked, the table would be stale
     val corner = "IF(A2>0, A2*100, Deep_1)"
@@ -435,7 +435,8 @@ class WorkbookAuditSpec extends FunSuite:
     assertEquals(steadyAudit.unresolvedReaders, Vector(q("S", "F9")))
     assertEquals(steadyAudit.staleDataTables, Vector.empty)
     val draw = WorkbookAudit.of(deepChain(volatileTableBook(corner, None), 1, "RAND()"))
-    assertEquals(draw.volatile, Vector.empty)
+    assertEquals(draw.volatile, Vector(q("S", "F9")))
+    assertEquals(draw.unresolvedReaders, Vector(q("S", "F9")))
     assertEquals(draw.staleDataTables, Vector.empty)
 
     // one name shorter the chain resolves: over RAND the corner is volatile (and exempt) …

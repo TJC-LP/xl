@@ -16,9 +16,10 @@ import scala.annotation.tailrec
  *     and memos key on the node, never on the name's text: a sheet-local `X` defined as `T!X`
  *     reaches T's own `X`, a different node, not itself.
  *   - A chain resolves at most [[NameWalk.MaxDepth]] names deep. The evaluator refuses the next
- *     name on any chain it follows — a per-cell error, never a thrown `StackOverflowError` — so a
- *     static walk treats a name with a longer chain as unresolvable ([[NameWalk.Reach.TooDeep]]),
- *     and the dependency graph adds no edge past the cap.
+ *     name on any chain it follows — a per-cell error, never a thrown `StackOverflowError` — so the
+ *     unresolved-reader walk marks a name with a longer chain as unknown, and the dependency graph
+ *     adds no edge past the cap. Dynamic and volatile classification keeps positive evidence even
+ *     past it: evaluation can skip a deep branch or catch its refusal and take another branch.
  *   - [[NameWalk.Walk]] answers what a name reaches with a loop, never recursion, each node once
  *     however many names ask: linear on a diamond (each name referencing the next twice) and on a
  *     chain of any length.
@@ -97,15 +98,15 @@ private[formula] object NameWalk:
       val next = refs.result()
       Step(hit, if next.sizeIs > 1 then next.distinct else next)
 
-  /** What a walk asks of a node: its verdict over every chain of names from it. */
+  /** Conservative predicate reachability, distinct from whether every name chain resolves. */
   enum Reach derives CanEqual:
-    /** A node the root reaches satisfies the predicate. */
+    /** A node the root reaches satisfies the predicate, even if another chain is too deep. */
     case Found
 
     /** None does, and no chain from the root is too deep to resolve. */
     case Absent
 
-    /** A chain from the root is more than [[MaxDepth]] names long: unresolvable, so unknown. */
+    /** No predicate hit was found, but a chain exceeds [[MaxDepth]]: resolution is unknown. */
     case TooDeep
 
   /**
@@ -126,9 +127,14 @@ private[formula] object NameWalk:
      */
     def tooDeep: Boolean = longest > MaxDepth
 
-    /** The walk's answer: too deep before found, so a chain past the cap is never resolved. */
+    /**
+     * Positive evidence survives an overlong chain. IF may skip that chain, and IFERROR may catch
+     * its refusal: neither proves that a dynamic or volatile call elsewhere cannot execute.
+     * Resolution checks use [[tooDeep]] independently; this answer never relaxes the evaluator's
+     * depth cap or the graph's edge cap.
+     */
     def reach: Reach =
-      if tooDeep then Reach.TooDeep else if found then Reach.Found else Reach.Absent
+      if found then Reach.Found else if tooDeep then Reach.TooDeep else Reach.Absent
 
   /**
    * Every node's [[Verdict]], each computed once however many roots ask: an iterative Tarjan over

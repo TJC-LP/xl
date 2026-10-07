@@ -125,7 +125,7 @@ class NameChainCliSpec extends CatsEffectSuite:
     yield
       assertEquals(audit.exit, 0, audit.stderr)
       val report = data(audit)
-      assertEquals(names(report("volatile")), Vector("S!A3"))
+      assertEquals(names(report("volatile")), Vector("S!A1", "S!A2", "S!A3"))
       assertEquals(names(report("unresolvedReaders")), Vector("S!A1", "S!A2"))
       assertEquals(deep.exit, 0, deep.stderr)
       assertEquals(refs(data(deep)("precedents")), Vector.empty)

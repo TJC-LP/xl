@@ -75,8 +75,8 @@ object StaleDataTable:
  * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
  * and `iterativeCycles`), `volatile` (a call to a function flagged `FunctionFlags.volatile` —
  * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588, directly or through defined
- * names whose bodies make one, #678 — a name with a chain longer than [[NameWalk.MaxDepth]] names
- * is unresolvable instead, #691), `dynamic` (INDIRECT/OFFSET readers,
+ * names whose bodies make one, #678 — conservatively even when another name chain exceeds
+ * [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
  * caches are pinned) and the file's `calcPr`.
  *
@@ -217,8 +217,8 @@ object WorkbookAudit:
    * A table whose corner reads a volatile function (RAND, NOW, …), directly, through a defined
    * name, or anywhere in its cone, is never checked: every re-evaluation draws new values, so a
    * note would differ run to run and `recalc --tables` could never clear it. The `volatile` bucket
-   * already names that cell. A cell reading a name chain too deep to resolve (#691) may be either:
-   * it exempts the table the same way, without being listed as volatile.
+   * already names that cell. A too-deep name chain without a known volatile call (#691) also
+   * exempts the table, without being listed as volatile.
    */
   private def staleDataTablesOf(
     wb: Workbook,
@@ -311,8 +311,8 @@ object WorkbookAudit:
     case Volatile(ref: QualifiedRef)
 
     /**
-     * #691: no volatile call of its own, but a name it reads has a chain too deep to resolve, so
-     * whether it is volatile is unknown — never listed (the cell is an unresolved reader), only
+     * #691: no volatile call found directly or through names, but a chain is too deep to resolve,
+     * so whether it is volatile is unknown — never listed (the cell is an unresolved reader), only
      * exempting a data table from the stale check.
      */
     case MaybeVolatile(ref: QualifiedRef)
@@ -411,14 +411,15 @@ object WorkbookAudit:
    * #678: whether a defined name, referenced from a formula on `from` (looked up from `qualifier`
    * when the reference is sheet-qualified), is volatile — its parsed body calls a volatile
    * function, directly or through further names. Resolution is the dependency graph's: the scoped
-   * lookup, and a name's own references resolved from its defining sheet. An unresolvable or
-   * unparseable name is not volatile.
+   * lookup, and a name's own references resolved from its defining sheet. An unknown or unparseable
+   * name provides no positive evidence of volatility.
    *
    * #691: the walk is a [[NameWalk.Walk]] over resolved (definition, sheet) nodes, so a sheet-local
    * `X` defined as `T!X` reaches T's `X` instead of reading as a cycle, every name is visited once
-   * however many formulas and paths reach it, and a name with a chain more than
-   * [[NameWalk.MaxDepth]] names long answers `TooDeep` instead of overflowing the stack. Each
-   * node's body is parsed and scanned once.
+   * however many formulas and paths reach it. A name reaching a volatile call remains volatile even
+   * if another chain exceeds [[NameWalk.MaxDepth]]: lazy evaluation can skip or recover from that
+   * branch. A too-deep chain without a known volatile call answers `TooDeep`. Each node's body is
+   * parsed and scanned once, without recursing per name.
    */
   private def volatileNames(
     wb: Workbook

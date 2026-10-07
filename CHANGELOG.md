@@ -282,9 +282,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   - Every name walk now follows the same rules. Guards and memos key on the resolved definition
     plus the sheet its body resolves from. A chain resolves at most 100 names deep, the bound
     `unresolvedReaders` already used, and the evaluator refuses the 101st name on any chain it
-    follows. A name with a longer chain is a per-cell `Defined name chain too deep` error in
-    evaluation and recalc, an unresolved reader in `audit`, and neither volatile nor dynamic; the
-    graph adds no edge past the cap.
+    follows. Following a longer chain produces a per-cell `Defined name chain too deep` error;
+    its readers are unresolved in `audit`, and the graph adds no edge past the cap. Dynamic and
+    volatile classification remains conservative when a call is found: `IF` can skip a deep
+    branch, and `IFERROR` can recover from its refusal. Keeping those dynamic readers deferred
+    prevents successful formulas from reading stale caches during full and targeted recalculation.
   - The audit's volatility check, `dynamicCells`, `unresolvedReaders` and the name-change readers
     walk the names once with an iterative Tarjan pass: every name gets one step, however many
     formulas and paths reach it. The graph expands names from a breadth-first queue. Neither
@@ -295,8 +297,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
     A value that drew from `RAND` is never stored, so each reference to a name over `RAND()` still
     draws anew (`Rnd-Rnd` is not 0). After a cycle or the cap refuses a name, nothing is stored or
     reused for the rest of that evaluation.
-  - A data table whose corner reads a chain too deep to resolve is exempt from the stale-table note
-    without being listed as volatile.
+  - A data table whose corner reads a chain too deep to resolve is exempt from the stale-table note,
+    even when no volatile call has been found and its reader is not listed as volatile.
   - Pre-existing; found by the Wave 31 lint-audit review.
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
   serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,

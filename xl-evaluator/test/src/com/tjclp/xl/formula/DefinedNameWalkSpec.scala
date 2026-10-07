@@ -5,7 +5,8 @@ import java.util.concurrent.atomic.AtomicReference
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.{NameWalk, WorkbookAudit}
+import com.tjclp.xl.formula.eval.{DependentRecalculation, NameWalk, WorkbookAudit}
+import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
 import com.tjclp.xl.formula.graph.{DependencyGraph, NameChanges, QualifiedGraph, ReferenceScan}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -20,7 +21,8 @@ import munit.FunSuite
  *
  *   - a 5,000-deep chain (`Lvl_1 = Lvl_2+1`, …) overflowed the stack. A chain resolves at most
  *     [[NameWalk.MaxDepth]] names deep; past that it is unresolvable — a per-cell error, an
- *     unresolved reader with no edges, never volatile or dynamic — and never a thrown error.
+ *     unresolved reader with no edges past the cap — and never a thrown error. Dynamic and volatile
+ *     classification stays conservative, independently of whether every branch resolves.
  *   - a depth-30 diamond (`Lvl_i = Lvl_{i+1}+Lvl_{i+1}`) has 2^29 paths, and every walk took each
  *     one: now each name is visited, and evaluated, once.
  *   - a sheet-local `X` on S defined as `T!X`, beside T's own `X`, read as a cycle because the
@@ -119,9 +121,9 @@ class DefinedNameWalkSpec extends FunSuite:
     val wb = chain(5000, "RAND()+S!$B$1", deepCells*)
     val (a1, a2, a3, b1) = (q(S, "A1"), q(S, "A2"), q(S, "A3"), q(S, "B1"))
     onSmallStack {
-      // audit: the 100-deep reader reaches RAND; the deeper ones are unresolved, never volatile
+      // audit: all readers reach RAND conservatively; the deeper ones are also unresolved
       val audit = WorkbookAudit.of(wb)
-      assertEquals(audit.volatile, Vector(a3))
+      assertEquals(audit.volatile, Vector(a1, a2, a3))
       assertEquals(audit.unresolvedReaders, Vector(a1, a2))
       assertEquals(audit.cycles, Vector.empty)
       assertEquals(audit.dynamic, Vector.empty)
@@ -167,15 +169,75 @@ class DefinedNameWalkSpec extends FunSuite:
     }
   }
 
-  test("#691: a dynamic call 5,000 names deep is not dynamic past the cap; within it, it is") {
+  test("#691: dynamic classification stays conservative past the evaluation depth cap") {
     val wb = chain(5000, "INDIRECT(\"S!B1\")", deepCells*)
     onSmallStack {
-      assertEquals(DependencyGraph.dynamicCells(wb), Set(q(S, "A3")))
-      assertEquals(WorkbookAudit.of(wb).dynamic, Vector(q(S, "A3")))
+      assertEquals(DependencyGraph.dynamicCells(wb), Set(q(S, "A1"), q(S, "A2"), q(S, "A3")))
+      assertEquals(WorkbookAudit.of(wb).dynamic, Vector(q(S, "A1"), q(S, "A2"), q(S, "A3")))
       val result = wb.recalculate()
       assertEquals(result.errors.map(_.ref).toSet, Set(at("A1"), at("A2")))
+      result.errors.foreach(e => assertTooDeep(Left(e.error)))
       assertEquals(cached(result.workbook, q(S, "A3")), Some(num(101)))
     }
+  }
+
+  /** A lazy named formula can succeed even though one of its branches exceeds the depth cap. */
+  private def lazyDeepName(body: String): Workbook =
+    val source = chain(NameWalk.MaxDepth + 1, "1")
+    val sheet = Sheet(S)
+      .put(at("A1"), CellValue.Formula("Choice", Some(num(10))))
+      .put(at("B1"), CellValue.Formula("1+1", Some(num(10))))
+      .put(at("C1"), CellValue.Formula("A1+1", Some(num(11))))
+    withNames(Workbook(sheet), source.metadata.definedNames :+ DefinedName("Choice", body))
+
+  for body <- Vector(
+      s"IF(FALSE,${lvl(1)},INDIRECT(\"B1\"))",
+      s"IFERROR(${lvl(1)},INDIRECT(\"B1\"))"
+    )
+  do
+    test(s"#691: a lazy deep branch preserves dynamic scheduling: $body") {
+      val wb = lazyDeepName(body)
+      val a1 = q(S, "A1")
+
+      // B1 still carries the preceding generation's 10. Dynamic deferral must compute B1
+      // before Choice follows its invisible reference, and carry C1 along with that reader.
+      val result = wb.recalculate()
+      assertEquals(result.errors, Vector.empty)
+      assertEquals(cached(result.workbook, a1), Some(num(2)))
+      assertEquals(cached(result.workbook, q(S, "B1")), Some(num(2)))
+      assertEquals(cached(result.workbook, q(S, "C1")), Some(num(3)))
+      assertEquals(DependencyGraph.dynamicCells(wb), Set(a1))
+      assertEquals(DependencyGraph.unresolvedReaders(wb), Set(a1))
+      assertEquals(QualifiedGraph.of(wb).precedentsOf(a1), Set.empty[QualifiedRef])
+    }
+
+    test(s"#691: a lazy deep branch retains dynamic readers after an edit: $body") {
+      val wb = lazyDeepName(body)
+      val sheet = wb(S).fold(err => fail(err.message), identity)
+      val edited = wb.put(sheet.put(at("B1"), num(7)))
+      val result = edited.recalculateDependents(S, Set(at("B1")))
+      assertEquals(cached(result, q(S, "A1")), Some(num(7)))
+      assertEquals(cached(result, q(S, "C1")), Some(num(8)))
+    }
+
+    test(s"#691: an edited formula evaluates before a lazy dynamic reader: $body") {
+      val wb = lazyDeepName(body)
+      val sheet = wb(S).fold(err => fail(err.message), identity)
+      val edited = wb.put(sheet.put(at("B1"), CellValue.Formula("3+4", Some(num(10)))))
+      val result =
+        DependentRecalculation.recalculateAfterEdit(edited, S, Set(at("B1")), Clock.system)
+      assertEquals(result.errors, Vector.empty)
+      assertEquals(cached(result.workbook, q(S, "A1")), Some(num(7)))
+      assertEquals(cached(result.workbook, q(S, "B1")), Some(num(7)))
+      assertEquals(cached(result.workbook, q(S, "C1")), Some(num(8)))
+    }
+
+  test("#691: a lazy deep branch does not hide a selected volatile call from audit") {
+    val wb = lazyDeepName(s"IF(FALSE,${lvl(1)},RAND())")
+    val audit = WorkbookAudit.of(wb)
+    assertEquals(audit.volatile, Vector(q(S, "A1")))
+    assertEquals(audit.unresolvedReaders, Vector(q(S, "A1")))
+    assertEquals(wb.recalculate().errors, Vector.empty)
   }
 
   test("#691: a depth-30 diamond of names costs one step per name in every walker") {
