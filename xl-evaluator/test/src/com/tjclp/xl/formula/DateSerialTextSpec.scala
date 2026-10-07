@@ -72,3 +72,12 @@ class DateSerialTextSpec extends FunSuite:
   test("GH-561: dates still compare as numbers (unchanged)") {
     assertScalar("=DATE(2026,1,1)=46023", CellValue.Bool(true))
   }
+
+  test("#688: TEXT renders serials 0-61 as the dates Excel shows, phantom 2/29/1900 included") {
+    assertScalar("=TEXT(0,\"m/d/yyyy\")", CellValue.Text("1/0/1900"))
+    assertScalar("=TEXT(1,\"m/d/yyyy\")", CellValue.Text("1/1/1900"))
+    assertScalar("=TEXT(59,\"m/d/yyyy\")", CellValue.Text("2/28/1900"))
+    assertScalar("=TEXT(60,\"m/d/yyyy\")", CellValue.Text("2/29/1900")) // LibreOffice: 2/28/1900
+    assertScalar("=TEXT(61,\"m/d/yyyy\")", CellValue.Text("3/1/1900"))
+    assertScalar("=TEXT(1,\"dddd\")", CellValue.Text("Sunday"))
+  }
