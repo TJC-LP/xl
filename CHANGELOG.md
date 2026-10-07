@@ -292,7 +292,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   resvg and every availability probe run through the same subprocess layer as the conversions; an
   output path the image cannot replace is `IO_WRITE`, without retrying other backends; an existing
   output is overwritten in place, keeping its owner, group, permissions, ACLs, hard links and
-  symlink, and restored if the overwrite fails partway.
+  symlink, and restored if the overwrite fails partway. If a helper holds the backend's pipes
+  open after exit, abandoning their drains still rejects a failed or unfinished SVG write;
+  partial output cannot become a successful export or replace the previous image.
 - **Date serials 1–59 display the day Excel shows** (#688): the display formatter converted a
   serial to a date without Excel's 1900 leap-year offset, so `view` (every format and surface,
   both import paths) showed serial 1 as `12/31/99` and serial 59 as `2/27/00`. They now render

@@ -280,6 +280,43 @@ class PipedBackendSpec extends CatsEffectSuite:
       }
   }
 
+  test("held output pipes cannot hide a failed stdin write after exit 0") {
+    // Closing stdin makes the oversized write fail before the child exits. The helper keeps
+    // stdout/stderr open past AfterExit, so abandoning their drains must retain that failure.
+    val script = "exec 0<&-; sleep 31.6905 & sleep 0.5; exit 0"
+    val input = Array.fill[Byte](4 << 20)('x')
+    failure(PipedBackend.run("shim", "sh", List("-c", script), input, 30.seconds))
+      .timeout(8.seconds)
+      .map {
+        case RasterError.ConversionFailed("shim", stderr, 0) =>
+          assert(stderr.startsWith("exited before reading the whole SVG"), stderr)
+          assert(stderr.contains("held open by a process it started"), stderr)
+        case other => fail(s"expected incomplete-input failure, got $other")
+      }
+  }
+
+  test("a helper retaining stdin cannot turn a pending write into success after exit 0") {
+    // fd 3 preserves stdin for the helper: unlike a failed write, this one cannot finish at all
+    // until teardown kills the helper. The post-exit deadline must reject it without joining it.
+    val script =
+      "exec 3<&0; sleep 31.6906 <&3 & exec 0<&-; exec 3<&-; sleep 0.5; exit 0"
+    val input = Array.fill[Byte](4 << 20)('x')
+    failure(PipedBackend.run("shim", "sh", List("-c", script), input, 30.seconds))
+      .timeout(8.seconds)
+      .map {
+        case RasterError.ConversionFailed("shim", stderr, 0) =>
+          assert(stderr.startsWith("exited before reading the whole SVG"), stderr)
+          assert(stderr.contains("held open by a process it started"), stderr)
+        case other => fail(s"expected incomplete-input failure, got $other")
+      }
+  }
+
+  test("a completed stdin write still succeeds when output pipes are held after exit 0") {
+    val script = "cat >/dev/null; sleep 31.6907 & sleep 0.5; exit 0"
+    val input = Array.fill[Byte](4 << 20)('x')
+    PipedBackend.run("shim", "sh", List("-c", script), input, 30.seconds).timeout(8.seconds)
+  }
+
   test("drain keeps the first `keep` bytes and counts them all") {
     val text = "v" * (PipedBackend.CaptureLimit + 5000)
     val (count, kept) = PipedBackend.drain(new ByteArrayInputStream(bytes(text)), 10)

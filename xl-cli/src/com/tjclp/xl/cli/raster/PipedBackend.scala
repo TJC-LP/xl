@@ -8,7 +8,7 @@ import scala.annotation.tailrec
 import scala.concurrent.duration.*
 import scala.jdk.CollectionConverters.*
 
-import cats.effect.{IO, Resource}
+import cats.effect.{Deferred, IO, Resource}
 import cats.syntax.all.*
 
 /**
@@ -81,9 +81,9 @@ private[raster] object PipedBackend:
     exchange(name, command :: args, input, keepStdout = false)
       .timeoutTo(timeout, IO.raiseError(RasterError.TimedOut(name, timeout)))
       .flatMap { outcome =>
-        (outcome.exit, outcome.unread) match
-          case (0, None) => IO.unit
-          case (exit @ 0, Some(_)) =>
+        (outcome.exit, outcome.inputWritten) match
+          case (0, true) => IO.unit
+          case (exit @ 0, false) =>
             // the JDK's own wording ("Stream closed", "Broken pipe") says nothing the user can act on
             val detail = if outcome.stderr.isBlank then "" else s"; ${outcome.stderr}"
             IO.raiseError(
@@ -107,7 +107,7 @@ private[raster] object PipedBackend:
    */
   def succeeds(command: String, args: List[String], input: Array[Byte]): IO[Boolean] =
     exchange(command, command :: args, input, keepStdout = false)
-      .map(o => o.exit == 0 && o.unread.isEmpty && o.stdoutBytes > 0)
+      .map(o => o.exit == 0 && o.inputWritten && o.stdoutBytes > 0)
       .timeoutTo(ProbeTimeout, IO.pure(false))
       .handleError(_ => false)
 
@@ -137,12 +137,13 @@ private[raster] object PipedBackend:
       .handleError(_ => None)
 
   /**
-   * What a child did with its input: exit code, the write's failure, stderr's tail, stdout's size
-   * and (when kept) its head.
+   * What a child did with its input: exit code, whether the input write completed successfully,
+   * stderr's tail, stdout's size and (when kept) its head. A failed or still-pending write cannot
+   * establish success, even when the child's output pipes must be abandoned.
    */
   private final case class Outcome(
     exit: Int,
-    unread: Option[IOException],
+    inputWritten: Boolean,
     stderr: String,
     stdoutBytes: Long,
     stdout: String
@@ -151,7 +152,8 @@ private[raster] object PipedBackend:
   /**
    * Spawn `command`, write `input` while draining stderr and stdout, and wait for the exit. A child
    * that exits while a helper it started still holds its pipes is not kept waiting on them: after
-   * [[AfterExit]] the reads are abandoned and the outcome is its exit code, without stderr's text.
+   * [[AfterExit]] the reads are abandoned and the outcome keeps its exit code and the input write's
+   * status, without stderr's text. Only a completed successful write can make exit 0 a success.
    */
   private def exchange(
     name: String,
@@ -160,16 +162,23 @@ private[raster] object PipedBackend:
     keepStdout: Boolean
   ): IO[Outcome] =
     spawn(name, command).use { process =>
-      val write = onPipeThread(writeAndClose(process.getOutputStream, input))
-      val stderr = onPipeThread(tail(process.getErrorStream, StderrLimit))
-      val stdout =
-        onPipeThread(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
-      val exited = IO.fromCompletableFuture(IO(process.onExit())) >> IO.sleep(AfterExit)
-      (write, stderr, stdout).parTupled.race(exited).flatMap {
-        case Left((unread, err, (bytes, out))) =>
-          IO.interruptible(process.waitFor()).map(exit => Outcome(exit, unread, err, bytes, out))
-        case Right(_) =>
-          IO(Outcome(process.exitValue, None, HeldPipes, 0, ""))
+      Deferred[IO, Boolean].flatMap { written =>
+        val write = onPipeThread(writeAndClose(process.getOutputStream, input))
+          .map(_.isEmpty)
+          .flatTap(written.complete(_).void)
+        val stderr = onPipeThread(tail(process.getErrorStream, StderrLimit))
+        val stdout =
+          onPipeThread(drain(process.getInputStream, if keepStdout then CaptureLimit else 0))
+        val exited = IO.fromCompletableFuture(IO(process.onExit())) >> IO.sleep(AfterExit)
+        (write, stderr, stdout).parTupled.race(exited).flatMap {
+          case Left((inputWritten, err, (bytes, out))) =>
+            IO.interruptible(process.waitFor())
+              .map(exit => Outcome(exit, inputWritten, err, bytes, out))
+          case Right(_) =>
+            written.tryGet.flatMap { inputWritten =>
+              IO(Outcome(process.exitValue, inputWritten.contains(true), HeldPipes, 0, ""))
+            }
+        }
       }
     }
 

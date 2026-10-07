@@ -268,6 +268,21 @@ class RasterSubprocessSpec extends FunSuite:
       |exit 0
       |""".stripMargin
 
+  /** Writes a partial file without reading SVG; its helper holds stdout/stderr past the exit. */
+  private val heldPipesEarlyExitScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |out=""; prev=""
+      |for a in "$@"; do [ "$prev" = "-o" ] && out="$a"; prev="$a"; done
+      |exec 0<&-
+      |sleep 31.6908 &
+      |printf partial > "$out"
+      |sleep 0.5
+      |exit 0
+      |""".stripMargin
+
   /**
    * ImageMagick's probe converts to stdout (`png:-`) and must see bytes; the real run gets none.
    */
@@ -315,6 +330,7 @@ class RasterSubprocessSpec extends FunSuite:
 
   private val silentZero = shimsWith(silentZeroScript, magickSilentZeroScript)
   private val earlyExit = shimsWith(earlyExitScript, magickSilentZeroScript)
+  private val heldPipesEarlyExit = shimsWith(heldPipesEarlyExitScript, magickSilentZeroScript)
   private val writing = shimsWith(writingScript, magickSilentZeroScript)
   private val mute = shimsWith(muteFailureScript, muteFailureScript)
   private val chatty = shimsWith(longFailureScript, magickShimScript)
@@ -381,6 +397,22 @@ class RasterSubprocessSpec extends FunSuite:
       )
       assert(!run.stderr.contains("Stream closed"), run.stderr)
       assert(!run.stderr.contains("Broken pipe"), run.stderr)
+  }
+
+  heldPipesEarlyExit.test(
+    "held pipes cannot publish partial output after an incomplete SVG write"
+  ) { dir =>
+    withOutputDir { outDir =>
+      val out = outDir.resolve("out.png")
+      Files.writeString(out, "OLD", StandardCharsets.UTF_8)
+      val run = forcedView(dir, "rsvg-convert", "png", "A1:Z1000", output = Some(out))
+      assertEquals(run.exit, 3, run.stderr)
+      assert(run.stderr.contains("exited before reading the whole SVG"), run.stderr)
+      assert(run.stderr.contains("held open by a process it started"), run.stderr)
+      assert(!run.stdout.contains("Exported"), run.stdout)
+      assertEquals(Files.readString(out, StandardCharsets.UTF_8), "OLD")
+      assertEquals(listing(outDir), List("out.png"))
+    }
   }
 
   writing.test("GH-690: a backend that writes replaces the old output and leaves no staging file") {
