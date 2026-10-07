@@ -9,7 +9,13 @@ import java.nio.file.{
   StandardCopyOption,
   StandardOpenOption
 }
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.{
+  AclEntry,
+  AclEntryPermission,
+  AclEntryType,
+  AclFileAttributeView,
+  PosixFilePermissions
+}
 import java.util.UUID
 
 import scala.concurrent.duration.FiniteDuration
@@ -392,29 +398,50 @@ object RasterizerChain:
         }
     }
 
-  /** An empty owner-only file where the file system has POSIX permissions, else a plain one. */
+  /**
+   * An empty file only its owner can read: mode 0600 where the file system has POSIX permissions,
+   * else (NTFS) an ACL that grants its owner alone, set before anything is written to it.
+   */
   private def createPrivate(path: Path): Unit =
     try
       Files.createFile(
         path,
         PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("rw-------"))
       ): Unit
-    catch case _: UnsupportedOperationException => Files.createFile(path): Unit
+    catch
+      case _: UnsupportedOperationException =>
+        Files.createFile(path)
+        Option(Files.getFileAttributeView(path, classOf[AclFileAttributeView])).foreach { view =>
+          val ownerOnly = AclEntry
+            .newBuilder()
+            .setType(AclEntryType.ALLOW)
+            .setPrincipal(view.getOwner)
+            .setPermissions(AclEntryPermission.values*)
+            .build()
+          view.setAcl(java.util.List.of(ownerOnly))
+        }
 
   /** Delete `path` when the JVM exits, where the security policy allows. */
   private def deleteOnExit(path: Path): Unit =
     try path.toFile.deleteOnExit()
     catch case _: SecurityException => ()
 
+  /** Delete `path` if it exists; a failure to is not the caller's outcome. */
+  private def discard(path: Path): Unit =
+    try Files.deleteIfExists(path): Unit
+    catch case _: IOException => ()
+
   /**
    * Publish the verified `staging` file as `target`. An output that already exists is overwritten
    * in place — same file, so its owner, group, ACLs, hard links and symlink are all kept (GH-690) —
-   * and a new one is moved into place, atomically where the file system can.
+   * and a new one is moved into place, atomically where the file system can. A symlink whose
+   * referent does not exist yet is written through, creating the referent.
    *
-   * The overwrite truncates first, so the old contents are copied to a private sibling beforehand:
-   * a copy that then fails (a full disk, a quota) writes them back. If that fails too, the copy is
-   * renamed to a visible name the error reports — renamed, since a JVM exit deletes the hidden one.
-   * `copy` is the write itself, a parameter so tests can make it fail.
+   * The overwrite truncates first, so the old contents are copied to a private sibling beforehand,
+   * and a copy that then fails (a full disk, a quota) writes them back. If that fails too, the
+   * sibling is the only intact copy: it is kept where it is and the error names it. It is never
+   * registered for deletion at exit either, since a JVM stopped mid-overwrite leaves the same
+   * situation. `copy` is the write itself, a parameter so tests can make it fail.
    */
   private[raster] def publish(
     staging: Path,
@@ -430,31 +457,40 @@ object RasterizerChain:
           StandardOpenOption.TRUNCATE_EXISTING
         )
       )(out => copy(from, out))
-    if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then
+    if Files.exists(target) then
       val backup = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.orig")
       createPrivate(backup)
-      deleteOnExit(backup)
       try
         Using.resource(Files.newOutputStream(backup, StandardOpenOption.WRITE))(out =>
           Files.copy(target, out): Unit
         )
-        try overwrite(staging, target)
-        catch
-          case failed: IOException =>
-            try overwrite(backup, target)
-            catch
-              case restoreFailed: IOException =>
-                val kept =
-                  target.resolveSibling(s"${target.getFileName}.xl-backup-${UUID.randomUUID()}")
-                Files.move(backup, kept)
-                val error = new IOException(
-                  s"${failed.getMessage}; its previous contents are kept in $kept",
-                  failed
-                )
-                error.addSuppressed(restoreFailed)
-                throw error
-            throw failed
-      finally Files.deleteIfExists(backup): Unit
+      catch
+        case e: IOException =>
+          discard(backup)
+          throw e
+      try overwrite(staging, target)
+      catch
+        case failed: IOException =>
+          try overwrite(backup, target)
+          catch
+            case restoreFailed: IOException =>
+              val error = new IOException(
+                s"${failed.getMessage}; its previous contents are kept in $backup",
+                failed
+              )
+              error.addSuppressed(restoreFailed)
+              throw error
+          discard(backup)
+          throw failed
+      discard(backup)
+    else if Files.isSymbolicLink(target) then
+      // a dangling symlink: a failed write removes the referent it started, never the link
+      try overwrite(staging, target)
+      catch
+        case failed: IOException =>
+          try Files.deleteIfExists(target.toRealPath()): Unit
+          catch case _: IOException => ()
+          throw failed
     else
       try
         Files.move(

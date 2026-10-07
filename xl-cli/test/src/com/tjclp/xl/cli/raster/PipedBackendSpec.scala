@@ -281,11 +281,12 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test(
-    "publish: when the write-back fails too, the previous output is kept under a reported name"
+    "publish: when the write-back fails too, the backup is kept and named, even for a long name"
   ) {
     withDir { dir =>
       IO.blocking {
-        val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
+        // 224 characters: a recovery name built from the output's would pass the 255-byte limit
+        val target = Files.write(dir.resolve(("n" * 220) + ".png"), bytes("previous image"))
         val staging = Files.write(dir.resolve(".xl-raster-staged.png"), bytes("new image"))
         val error = intercept[java.io.IOException] {
           RasterizerChain.publish(
@@ -294,13 +295,46 @@ class PipedBackendSpec extends CatsEffectSuite:
             (_, _) => throw new java.io.IOException("No space left on device")
           )
         }
-        val kept = listing(dir).filter(_.getFileName.toString.startsWith("out.png.xl-backup-"))
+        val kept = listing(dir).filter(_.getFileName.toString.endsWith(".orig"))
         assertEquals(kept.size, 1, listing(dir).toString)
         kept.foreach { backup =>
           assert(error.getMessage.contains(backup.toString), error.getMessage)
           assertEquals(text(backup), "previous image")
         }
-        assert(!listing(dir).exists(_.toString.endsWith(".orig")), "the hidden copy was renamed")
+      }
+    }
+  }
+
+  test("a dangling output symlink is written through: the link stays, its referent is created") {
+    withDir { dir =>
+      val referent = dir.resolve("made.png")
+      val link = Files.createSymbolicLink(dir.resolve("out.png"), referent)
+      RasterizerChain.convert(tinySvg, link, RasterFormat.Png, 96, Some("batik")).map { _ =>
+        assert(Files.isSymbolicLink(link), "the symlink must stay a symlink")
+        assert(Files.size(referent) > 0, "the referent holds the image")
+        assertEquals(listing(dir).toSet, Set(link, referent))
+      }
+    }
+  }
+
+  test("publish: a failed write through a dangling symlink removes the referent, keeps the link") {
+    withDir { dir =>
+      IO.blocking {
+        val referent = dir.resolve("made.png")
+        val link = Files.createSymbolicLink(dir.resolve("out.png"), referent)
+        val staging = Files.write(dir.resolve(".xl-raster-staged.png"), bytes("new image"))
+        intercept[java.io.IOException] {
+          RasterizerChain.publish(
+            staging,
+            link,
+            (_, out) =>
+              out.write(bytes("new"))
+              throw new java.io.IOException("No space left on device")
+          )
+        }
+        assert(Files.isSymbolicLink(link), "the symlink must stay a symlink")
+        assert(!Files.exists(referent), "the partial referent is removed")
+        assertEquals(listing(dir).toSet, Set(link, staging))
       }
     }
   }
