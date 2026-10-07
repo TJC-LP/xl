@@ -745,8 +745,10 @@ characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
 workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
 `cycles` holds only findings); `Unresolved names` — formulas
-reading a defined name the graph cannot resolve. **Notes** (reported, never findings): `Volatile`
-(TODAY/NOW/RAND/RANDBETWEEN cells), `Dynamic` (INDIRECT/OFFSET readers), `External references`
+reading a defined name the graph cannot resolve (undefined, unparseable, a cycle of names, or a
+chain more than 100 names deep, #691). **Notes** (reported, never findings): `Volatile`
+(TODAY/NOW/RAND/RANDBETWEEN cells, directly or through defined names), `Dynamic` (INDIRECT/OFFSET
+readers), `External references`
 (other-workbook refs, whose caches are pinned), `Stale data tables` (#678: a data table whose
 interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
 evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in

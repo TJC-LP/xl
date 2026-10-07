@@ -6,7 +6,7 @@ import scala.annotation.tailrec
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.formula.eval.Evaluator
+import com.tjclp.xl.formula.eval.{Evaluator, NameWalk}
 import com.tjclp.xl.formula.functions.FunctionRegistry
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -152,8 +152,8 @@ private[xl] object ReferenceScan:
       reader -> reach
     }.toMap
 
-  /** Name-chain depth guard, as in `DependencyGraph.unresolvedReaders`. */
-  private val MaxNameDepth = 100
+  /** Name-chain depth guard, every name walk's ([[NameWalk.MaxDepth]]). */
+  private val MaxNameDepth = NameWalk.MaxDepth
 
   /**
    * Excel's error literals as `CellError` spells them, longest first so `#NAME?`, `#NUM!` and
