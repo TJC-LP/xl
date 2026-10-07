@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of #691 (2026-10-07), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; the subprocess smokes ran successfully in this verification.
+As of #699 (2026-10-07, on top of #700–#704), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran without rsvg-convert, so its end-to-end smoke was skipped (it counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3272 |
-| xl-core | 1836 |
-| xl-ooxml | 1313 |
-| xl-cli | 1694 |
+| xl-evaluator | 3309 |
+| xl-core | 1850 |
+| xl-ooxml | 1321 |
+| xl-cli | 1750 |
 | xl-cats-effect | 195 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 64 |
-| **Total** | **8,521** |
+| **Total** | **8,636** |
 
 ## Test Quality Metrics
 

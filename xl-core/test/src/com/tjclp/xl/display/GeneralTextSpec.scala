@@ -6,7 +6,7 @@ import com.tjclp.xl.richtext.RichText
 
 import munit.ScalaCheckSuite
 import org.scalacheck.Gen
-import org.scalacheck.Prop.forAll
+import org.scalacheck.Prop.{forAll, forAllNoShrink}
 
 import java.time.LocalDate
 
@@ -120,6 +120,12 @@ class GeneralTextSpec extends ScalaCheckSuite:
     val minScale = BigDecimal(new java.math.BigDecimal(java.math.BigInteger.ONE, Int.MinValue))
     assertEquals(NumFmtFormatter.generalText(minScale), "1E+2147483648")
     assertEquals(NumFmtFormatter.generalText(-minScale), "-1E+2147483648")
+    // #689: rounding 16 digits to 15 lowered the scale past Int.MinValue (BigDecimal.round threw)
+    val sixteen = BigDecimal(
+      new java.math.BigDecimal(new java.math.BigInteger("1234567890123456"), Int.MinValue)
+    )
+    assertEquals(NumFmtFormatter.generalText(sixteen), "1.23456789012346E+2147483663")
+    assertEquals(NumFmtFormatter.generalText(-sixteen), "-1.23456789012346E+2147483663")
   }
 
   test("absurd magnitude stays bounded: E form, never a million zeros") {
@@ -153,19 +159,25 @@ class GeneralTextSpec extends ScalaCheckSuite:
     }
   }
 
-  /** Unscaled values of up to 15 digits at scales across the whole Int range, both signs. */
+  /** Unscaled values of up to 40 digits at scales across the whole Int range, both signs. */
   private val genExtremeScale: Gen[BigDecimal] =
     for
-      unscaled <- Gen.choose(1L, 999999999999999L)
+      unscaled <- Gen.oneOf(
+        Gen.choose(1L, 999999999999999L).map(BigInt(_)),
+        // past 15 digits the rounding drops digits and lowers the scale (#689)
+        Gen
+          .choose(16, 40)
+          .flatMap(n => Gen.listOfN(n, Gen.choose(1, 9)).map(ds => BigInt(ds.mkString)))
+      )
       scale <- Gen.oneOf(
-        Gen.choose(Int.MinValue + 64, Int.MinValue + 100000),
+        Gen.choose(Int.MinValue, Int.MinValue + 100000),
         Gen.choose(Int.MaxValue - 100000, Int.MaxValue),
         Gen.choose(-400, 400)
       )
       negative <- Gen.oneOf(true, false)
     yield
       val magnitude = BigDecimal(
-        new java.math.BigDecimal(java.math.BigInteger.valueOf(unscaled), scale)
+        new java.math.BigDecimal(unscaled.bigInteger, scale)
       )
       if negative then -magnitude else magnitude
 
@@ -175,7 +187,8 @@ class GeneralTextSpec extends ScalaCheckSuite:
     // PR #679 review: the `1E-2147483647` overflow was found by inspection; this pins the whole
     // scale range so it stays found
     val grammar = "-?[0-9]+(\\.[0-9]+)?(E[+-][0-9]{2,})?".r
-    forAll(genExtremeScale) { (n: BigDecimal) =>
+    // no shrinking: halving never moves the scale, and failures shrank for minutes (#689)
+    forAllNoShrink(genExtremeScale) { (n: BigDecimal) =>
       val text = NumFmtFormatter.generalText(n)
       assert(grammar.matches(text), s"'$text' for $n")
       assert(text.length <= 1 + 16 + 1 + 1 + 10, s"'$text' (${text.length} chars) for $n")

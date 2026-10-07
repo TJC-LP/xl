@@ -278,6 +278,20 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
+  a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
+  `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
+  purity charter and `TEXT` returned an internal evaluator defect. Digit, percent, scaling-comma,
+  `General`-keyword, scientific and fraction patterns now round through `BigInteger` with `Long`
+  exponents: tiny values render as zero, scientific exponents print in full (the engineering
+  exponent no longer wraps at scale `Int.MinValue`), and an integer part longer than Excel's
+  32,767-character cell text (`FormatCodeParser.MaxDigitBlockLength`) renders in General form
+  instead of building billions of digits. `TEXT(x,"General")` on a 16+ digit value at scale
+  `Int.MinValue` no longer throws either.
+- **`@` in a numeric section renders the number** (#689): `TEXT(123456789012,"@;@")` was the empty
+  string; a text placeholder that numbers reach now renders them in General form, like a lone `@`
+  (SheetJS/SSF's behaviour; Excel unverified), when nothing else in its section does. Beside a
+  digit placeholder, decimal point or `General` it still renders nothing (`0.00 @` → `1.50 `).
 - **Defined-name walks are stack-safe, linear and keyed on the resolved name** (#691): a
   1,000-deep chain of names (`N1 = N2+1`, `N2 = N3+1`, …) killed `xl audit` and `xl recalc` with a
   raw `StackOverflowError` (exit 1), and the graph behind `deps` overflowed at 500–1,000. A
