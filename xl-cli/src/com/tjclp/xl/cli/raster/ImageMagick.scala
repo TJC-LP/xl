@@ -2,9 +2,9 @@ package com.tjclp.xl.cli.raster
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.Path
+import java.util.concurrent.atomic.AtomicReference
 
 import cats.effect.IO
-import fs2.io.process.{ProcessBuilder, Processes}
 
 /**
  * ImageMagick integration for converting SVG to raster formats.
@@ -18,9 +18,6 @@ import fs2.io.process.{ProcessBuilder, Processes}
 object ImageMagick extends Rasterizer:
 
   val name: String = "ImageMagick"
-
-  // Get the Processes instance for IO
-  private given Processes[IO] = Processes.forAsync[IO]
 
   /** Which ImageMagick command to use */
   private sealed trait ImageMagickCommand:
@@ -42,31 +39,13 @@ object ImageMagick extends Rasterizer:
    * Check if a specific ImageMagick command is available.
    */
   private def isCommandAvailable(cmd: ImageMagickCommand): IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .handleError(_ => false)
+    PipedBackend.probe(cmd.command, cmd.versionArgs)
 
   /**
    * Check if a binary is available in PATH.
    */
   private def isBinaryInPath(binary: String): IO[Boolean] =
-    Processes[IO]
-      .spawn(ProcessBuilder("which", List(binary)))
-      .use { process =>
-        for
-          _ <- process.stdout.compile.drain
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield exitCode == 0
-      }
-      .handleError(_ => false)
+    PipedBackend.probe("which", List(binary))
 
   /**
    * Get the SVG delegate configuration from ImageMagick.
@@ -76,29 +55,21 @@ object ImageMagick extends Rasterizer:
    * rendering.
    */
   private def getSvgDelegate(cmd: ImageMagickCommand): IO[Option[String]] =
-    Processes[IO]
-      .spawn(ProcessBuilder(cmd.command, List("-list", "delegate")))
-      .use { process =>
-        for
-          output <- process.stdout.through(fs2.text.utf8.decode).compile.string
-          _ <- process.stderr.compile.drain
-          exitCode <- process.exitValue
-        yield
-          if exitCode != 0 then None
-          else
-            // Parse delegate list for SVG entry
-            // Format: "        svg =>          "rsvg-convert' --dpi-x %x ..."
-            // Note: Leading whitespace varies, and we need to match "svg =>" specifically
-            output.linesIterator
-              .find(line => line.trim.startsWith("svg") && line.contains("=>"))
-              .flatMap { line =>
-                // Extract binary name from delegate command
-                // The delegate line format is: [whitespace]svg => "binary' args..."
-                val delegatePattern = """\bsvg\s*=>\s*"([^']+)'""".r
-                delegatePattern.findFirstMatchIn(line).map(_.group(1))
-              }
-      }
-      .handleError(_ => None)
+    PipedBackend
+      .capture(cmd.command, List("-list", "delegate"))
+      .map(_.flatMap { output =>
+        // Parse delegate list for SVG entry
+        // Format: "        svg =>          "rsvg-convert' --dpi-x %x ..."
+        // Note: Leading whitespace varies, and we need to match "svg =>" specifically
+        output.linesIterator
+          .find(line => line.trim.startsWith("svg") && line.contains("=>"))
+          .flatMap { line =>
+            // Extract binary name from delegate command
+            // The delegate line format is: [whitespace]svg => "binary' args..."
+            val delegatePattern = """\bsvg\s*=>\s*"([^']+)'""".r
+            delegatePattern.findFirstMatchIn(line).map(_.group(1))
+          }
+      })
 
   /**
    * Check if ImageMagick's SVG delegate is functional.
@@ -149,9 +120,23 @@ object ImageMagick extends Rasterizer:
    * Find the available ImageMagick command, preferring v7 over v6.
    *
    * Also verifies that the SVG delegate is functional (GH-160). If v7 is available but its delegate
-   * is broken, falls back to try v6.
+   * is broken, falls back to try v6. Resolved once per process ([[resolved]]).
    */
   private def findCommand: IO[Option[ImageMagickCommand]] =
+    IO(resolved.get).flatMap {
+      case found @ Some(_) => IO.pure(found)
+      case None =>
+        resolveCommand.flatTap(found => IO.whenA(found.isDefined)(IO(resolved.set(found))))
+    }
+
+  /**
+   * [[resolveCommand]]'s answer, once known: the availability check and the conversion would each
+   * run its probes, every one up to [[PipedBackend.ProbeTimeout]] (GH-690). Only a found command is
+   * kept, for the process: a missing one is probed again, so a long-lived JVM sees it installed.
+   */
+  private val resolved = new AtomicReference[Option[ImageMagickCommand]](None)
+
+  private def resolveCommand: IO[Option[ImageMagickCommand]] =
     // Helper to check v6 availability and delegate
     def tryV6: IO[Option[ImageMagickCommand]] =
       isCommandAvailable(ImageMagickCommand.Convert6).flatMap {
@@ -240,15 +225,9 @@ object ImageMagick extends Rasterizer:
     findCommand.flatMap {
       case None => IO.pure(None)
       case Some(cmd) =>
-        Processes[IO]
-          .spawn(ProcessBuilder(cmd.command, cmd.versionArgs))
-          .use { process =>
-            for
-              versionOutput <- process.stdout.through(fs2.text.utf8.decode).compile.string
-              _ <- process.stderr.compile.drain
-            yield versionOutput.linesIterator.nextOption()
-          }
-          .handleError(_ => None)
+        PipedBackend
+          .capture(cmd.command, cmd.versionArgs)
+          .map(_.flatMap(_.linesIterator.nextOption()))
     }
 
   /**
