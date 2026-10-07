@@ -339,7 +339,7 @@ class DefinedNameRoundTripSpec extends FunSuite:
       function = true,
       vbProcedure = true,
       xlm = true,
-      functionGroupId = Some(3),
+      functionGroupId = Some(4294967295L),
       shortcutKey = Some("K"),
       publishToServer = true,
       workbookParameter = true,
@@ -385,4 +385,23 @@ class DefinedNameRoundTripSpec extends FunSuite:
       OoxmlWorkbook.parseDefinedNames(Some(scala.xml.XML.loadString(built.toString))),
       Vector(DefinedName("H", "1", hidden = true, otherAttributes = Vector("extra" -> "a")))
     )
+  }
+
+  test("GH-696: functionGroupId reads its whole xsd:unsignedInt range, nothing outside it") {
+    def groupId(raw: String): Option[Long] =
+      OoxmlWorkbook
+        .parseDefinedNames(Some(<definedNames><definedName name="F" functionGroupId={
+          raw
+        }>1</definedName></definedNames>))
+        .headOption
+        .flatMap(_.functionGroupId)
+    assertEquals(groupId("14"), Some(14L))
+    assertEquals(groupId("2147483648"), Some(2147483648L))
+    assertEquals(groupId("4294967295"), Some(4294967295L))
+    assertEquals(groupId("4294967296"), None)
+    assertEquals(groupId("-1"), None)
+    val built = OoxmlWorkbook.buildDefinedNames(
+      Vector(DefinedName("F", "1", functionGroupId = Some(4294967295L)))
+    )
+    assert(built.exists(_.toString.contains("""functionGroupId="4294967295"""")), built.toString)
   }

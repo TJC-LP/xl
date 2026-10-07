@@ -602,6 +602,9 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       .filterNot((key, _) => typedDefinedNameAttributes.contains(key) || key.contains(':'))
       .distinctBy(_._1)
 
+  /** The largest `xsd:unsignedInt`. */
+  private val MaxUnsignedInt: Long = 4294967295L
+
   /** The CT_DefinedName attributes [[DefinedName]] types (ECMA-376 §18.2.5). */
   private val typedDefinedNameAttributes: Set[String] = Set(
     "name",
@@ -643,7 +646,10 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
       function = flag("function"),
       vbProcedure = flag("vbProcedure"),
       xlm = flag("xlm"),
-      functionGroupId = text("functionGroupId").flatMap(_.toIntOption),
+      // xsd:unsignedInt: the whole 0..4294967295 range, past Int's (GH-696)
+      functionGroupId = text("functionGroupId")
+        .flatMap(_.toLongOption)
+        .filter(id => id >= 0 && id <= MaxUnsignedInt),
       shortcutKey = text("shortcutKey"),
       publishToServer = flag("publishToServer"),
       workbookParameter = flag("workbookParameter"),

@@ -35,7 +35,8 @@ import com.tjclp.xl.sheets.Sheet
  * @param xlm
  *   Whether the name refers to an XLM (Excel 4.0 macro sheet) function (`xlm`)
  * @param functionGroupId
- *   The Function Wizard category of a function name (`functionGroupId`)
+ *   The Function Wizard category of a function name (`functionGroupId`), an `xsd:unsignedInt` (0 to
+ *   4294967295), hence a `Long`
  * @param shortcutKey
  *   The keyboard shortcut of a command macro (`shortcutKey`)
  * @param publishToServer
@@ -60,7 +61,7 @@ final case class DefinedName(
   function: Boolean = false,
   vbProcedure: Boolean = false,
   xlm: Boolean = false,
-  functionGroupId: Option[Int] = None,
+  functionGroupId: Option[Long] = None,
   shortcutKey: Option[String] = None,
   publishToServer: Boolean = false,
   workbookParameter: Boolean = false,
