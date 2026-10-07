@@ -278,6 +278,18 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Excel's `Sheet1!#REF!` parses** (#694): the parser refused the spelling Excel writes after a
+  formula's or a name's target is deleted ("missing cell reference after !"). So `insert-rows` /
+  `delete-cols` exited 3 on any sheet with a deleted-target `_xlnm._FilterDatabase` or print area,
+  `put`/`recalc` dropped the cached values of `=Sheet1!#REF!` and `=IFERROR(Sheet1!#REF!,0)` with a
+  `RECALC_ERRORS` warning, and `putf` refused the text. A sheet, quoted or external qualifier
+  followed by an error literal now parses as that error and keeps its qualifier, in expressions and
+  range arguments alike: it prints back as written, evaluates to the error, has no dependency edges,
+  and follows a sheet rename as Excel's does. Structural edits carry such names verbatim. Library
+  code that pattern-matches `TExpr.ErrorLit(e)` or `RangeLocation.Error(e)` now needs the second
+  field (`ErrorLit(e, _)`); constructing them is source-compatible. Neither is binary-compatible
+  with 0.23.x: code compiled against 0.23.x that constructs, copies or matches either must be
+  recompiled.
 - **Spill references read their anchor during recalculation** (#695): every evaluation fold
   (`recalc`, the targeted recalculation behind `put`, the sheet-level dependency folds and the
   `eval` precedent pass) wrote each computed value back as a plain constant before later cells

@@ -67,7 +67,7 @@ private[formula] object ArrayLifting:
     case TExpr.Lit(_: ArrayResult) => false
     case TExpr.Lit(_) => true
     case TExpr.Ref(_, _, _) | TExpr.SheetRef(_, _, _, _) | TExpr.PolyRef(_, _) |
-        TExpr.SheetPolyRef(_, _, _) | TExpr.ExternalRef(_, _, _, _) | TExpr.ErrorLit(_) |
+        TExpr.SheetPolyRef(_, _, _) | TExpr.ExternalRef(_, _, _, _) | TExpr.ErrorLit(_, _) |
         TExpr.Missing | TExpr.Aggregate(_, _) =>
       true
     case TExpr.BindingRef(name) => boundScalar(bindings, name)

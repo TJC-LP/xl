@@ -263,7 +263,7 @@ object Evaluator:
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
       // GH-612: an error in a range slot (SUM(#REF!)) IS the error value it names
-      case TExpr.RangeLocation.Error(error) => Left(EvalError.ErrorValue(error))
+      case TExpr.RangeLocation.Error(error, _) => Left(EvalError.ErrorValue(error))
 
   /**
    * GH-394: resolve a defined name used in a RANGE-typed argument slot to its (sheet, range).
@@ -353,7 +353,7 @@ object Evaluator:
                     resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
                   // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
                   // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
-                  case TExpr.ErrorLit(err) =>
+                  case TExpr.ErrorLit(err, _) =>
                     Left(EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}")))
                   case _ =>
                     // Excel: a non-reference name in a range position is #VALUE!
@@ -479,7 +479,7 @@ object Evaluator:
     // None: not such an operation; Some(sawArray)
     def scan(e: TExpr[?]): Option[Boolean] = e match
       case TExpr.Lit(_: ArrayResult) => Some(true)
-      case TExpr.Lit(_) | TExpr.ErrorLit(_) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) |
+      case TExpr.Lit(_) | TExpr.ErrorLit(_, _) | TExpr.Ref(_, _, _) | TExpr.PolyRef(_, _) |
           TExpr.SheetRef(_, _, _, _) | TExpr.SheetPolyRef(_, _, _) =>
         Some(false)
       case TExpr.Coerced(inner, _) => scan(inner)
@@ -1097,7 +1097,7 @@ private class EvaluatorImpl(
 
       // GH-612: an error literal IS the error value it names — it travels the Left channel like
       // any other Excel error value and promotes to CellValue.Error at the cell boundary
-      case TExpr.ErrorLit(error) =>
+      case TExpr.ErrorLit(error, _) =>
         Left(EvalError.ErrorValue(error))
 
       // GH-603: an omitted argument is a blank — every argument slot that holds a value wraps it

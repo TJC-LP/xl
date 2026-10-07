@@ -59,9 +59,10 @@ trait TExprRangeLocation:
      * What Excel writes when a range argument is deleted or dragged off the grid, and what
      * [[com.tjclp.xl.formula.printer.FormulaShifter]] writes for the same event. It has no cells:
      * `staticRange` is None, it contributes no dependency edges, prints as its code, and evaluates
-     * (through `Evaluator.resolveRangeLocation`) to the error VALUE it names.
+     * (through `Evaluator.resolveRangeLocation`) to the error VALUE it names. GH-694: `qualifier`
+     * as on [[TExpr.ErrorLit]] (`SUM(Sheet1!#REF!)`).
      */
-    case Error(error: CellError)
+    case Error(error: CellError, qualifier: Option[ErrorQualifier] = None)
 
   object RangeLocation:
     extension (loc: RangeLocation)
@@ -77,7 +78,7 @@ trait TExprRangeLocation:
         case CrossSheet(_, r, _) => Some(r)
         case External(_, _, r, _) => Some(r)
         case Name(_, _) => None
-        case Error(_) => None
+        case Error(_, _) => None
 
       /** Get sheet name for cross-sheet, None for local or external-workbook locations */
       def sheetName: Option[SheetName] = loc match
@@ -128,4 +129,4 @@ trait TExprRangeLocation:
           scope match
             case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
             case None => n
-        case Error(e) => e.toExcel
+        case Error(e, q) => com.tjclp.xl.formula.printer.FormulaPrinter.qualifiedError(e, q)

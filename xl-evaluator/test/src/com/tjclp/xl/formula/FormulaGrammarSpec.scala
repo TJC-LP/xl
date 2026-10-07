@@ -515,6 +515,20 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     }
   }
 
+  property("GH-694: sheet- and workbook-qualified error literals round-trip in every position") {
+    val genCase =
+      for
+        qualifier <- genQualifier
+        (written, canonical) <- genErrorLitText
+        shape <- Gen.oneOf(commonShapes)
+      yield (shape(qualifier + written), shape(qualifier + canonical))
+    forAllNoShrink(genCase) { (body, canonicalBody) =>
+      assertPrintsAs(s"=$body", s"=$canonicalBody")
+      assertRoundTrips(s"=$body")
+      true
+    }
+  }
+
   property("GH-653: defined names print verbatim, bare or sheet-qualified, in every position") {
     val genCase =
       for

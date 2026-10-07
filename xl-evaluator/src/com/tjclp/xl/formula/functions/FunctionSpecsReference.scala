@@ -24,7 +24,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * against a `TExpr[Any]` argument.
    */
   private def errorLiteral(expr: TExpr[?]): Option[CellError] = expr match
-    case TExpr.ErrorLit(error) => Some(error)
+    case TExpr.ErrorLit(error, _) => Some(error)
     case _ => None
 
   /** The sheet a reference expression is qualified with, if any (CELL reads the qualifier). */

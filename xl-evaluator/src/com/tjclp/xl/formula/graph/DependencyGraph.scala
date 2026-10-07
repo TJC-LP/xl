@@ -214,7 +214,7 @@ object DependencyGraph:
       // Literals and constants
       case TExpr.Lit(_) => false
 
-      case TExpr.ErrorLit(_) => false
+      case TExpr.ErrorLit(_, _) => false
       case TExpr.Missing => false
 
   /**
@@ -679,7 +679,7 @@ object DependencyGraph:
       // GH-394: an unqualified name's lookup depends on the ambient sheet (sheet-scoped names
       // shadow workbook-scoped ones); a sheet-qualified name carries its own context
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
-      case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_)) => false
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_, _)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -695,7 +695,7 @@ object DependencyGraph:
                 case TExpr.RangeLocation.External(_, _, _, _) => false
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
-                case TExpr.RangeLocation.Error(_) => false
+                case TExpr.RangeLocation.Error(_, _) => false
             case ArgValue.Cells(_) => true
           }
 
@@ -732,7 +732,7 @@ object DependencyGraph:
       // Literals and constants
       case TExpr.Lit(_) => false
 
-      case TExpr.ErrorLit(_) => false
+      case TExpr.ErrorLit(_, _) => false
       case TExpr.Missing => false
 
   /**
@@ -826,7 +826,7 @@ object DependencyGraph:
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
 
-      case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.ErrorLit(_, _) => Set.empty
       case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
@@ -935,7 +935,7 @@ object DependencyGraph:
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
 
-      case TExpr.ErrorLit(_) => Set.empty
+      case TExpr.ErrorLit(_, _) => Set.empty
       case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => recurse(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => recurse(dtExpr)
@@ -2016,7 +2016,7 @@ object DependencyGraph:
             case None => go(TExpr.NameRef(name))
             case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
         // GH-612: an error in a range slot has no cells
-        case TExpr.RangeLocation.Error(_) => Set.empty
+        case TExpr.RangeLocation.Error(_, _) => Set.empty
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match
@@ -2193,7 +2193,7 @@ object DependencyGraph:
         // Literals and nullary functions (no dependencies)
         case TExpr.Lit(_) => Set.empty
 
-        case TExpr.ErrorLit(_) => Set.empty
+        case TExpr.ErrorLit(_, _) => Set.empty
         case TExpr.Missing => Set.empty
         case TExpr.DateToSerial(dateExpr) => go(dateExpr)
         case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)

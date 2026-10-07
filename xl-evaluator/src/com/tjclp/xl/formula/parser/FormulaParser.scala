@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.parser
 
-import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
+import com.tjclp.xl.formula.ast.{ErrorQualifier, RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.formula.functions.{
   FunctionRegistry,
@@ -1280,7 +1280,9 @@ object FormulaParser:
         repeatedEnd match
           case Left(err) => Left(err)
           case Right((refPart, s2)) =>
-            if refPart.isEmpty then
+            if refPart.isEmpty && s2.currentChar.contains('#') then
+              qualifiedErrorLiteral(ErrorQualifier.Sheet(sheetName), s2, s"$sheetStr!", startPos)
+            else if refPart.isEmpty then
               Left(
                 ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !")
               )
@@ -1427,7 +1429,9 @@ object FormulaParser:
     val refPart = state.input.substring(refStartPos, s2.pos)
     val prefix = s"[$index]$name"
 
-    if refPart.isEmpty then
+    if refPart.isEmpty && s2.currentChar.contains('#') then
+      qualifiedErrorLiteral(ErrorQualifier.External(index, name), s2, s"$prefix!", startPos)
+    else if refPart.isEmpty then
       Left(ParseError.InvalidCellRef(s"$prefix!", startPos, "missing cell reference after !"))
     else if refPart.contains(':') then
       // External range reference: [2]Book1!A1:B2
@@ -1509,6 +1513,29 @@ object FormulaParser:
     CellError.values.toList.map(e => (e.toExcel, e)).sortBy(-_._1.length)
 
   /**
+   * GH-694: `Sheet1!#REF!`, `'My Sheet'!#REF!`, `[1]Sheet1!#REF!` — what Excel writes when a
+   * formula's or a name's target range is deleted. The error literal after the `!` keeps its
+   * qualifier so the text prints back as written; anything else after `!#` is not a reference.
+   */
+  private def qualifiedErrorLiteral(
+    qualifier: ErrorQualifier,
+    state: ParserState,
+    written: String,
+    startPos: Int
+  ): ParseResult[TExpr[?]] =
+    parseErrorLiteral(state) match
+      case Right((TExpr.ErrorLit(error, _), next)) =>
+        Right((TExpr.ErrorLit(error, Some(qualifier)), next))
+      case _ =>
+        Left(
+          ParseError.InvalidCellRef(
+            written,
+            startPos,
+            "expected a cell reference or an error literal after !"
+          )
+        )
+
+  /**
    * GH-612: parse an Excel error literal (`#REF!`, `#N/A`, `#DIV/0!`, `#NAME?`, …) by matching the
    * known codes case-insensitively at the cursor (`#ref!` is `#REF!`, as Excel upper-cases it at
    * entry). Matching the codes rather than scanning a character class keeps `#N/A` — the one code
@@ -1558,7 +1585,7 @@ object FormulaParser:
         case (TExpr.Lit(n: BigDecimal), next) =>
           Right((CellValue.Number(if negate then -n else n), next))
         case (TExpr.Lit(text: String), next) => Right((CellValue.Text(text), next))
-        case (TExpr.ErrorLit(error), next) => Right((CellValue.Error(error), next))
+        case (TExpr.ErrorLit(error, _), next) => Right((CellValue.Error(error), next))
         case (_, next) => Left(ParseError.GenericError(expected, Some(next.pos)))
       }
 
