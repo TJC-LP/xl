@@ -438,25 +438,26 @@ object RasterizerChain:
    * referent does not exist yet is written through, creating the referent.
    *
    * The overwrite truncates first, so the old contents are copied to a private sibling beforehand,
-   * and a copy that then fails (a full disk, a quota) writes them back. If that fails too, the
-   * sibling is the only intact copy: it is kept where it is and the error names it. It is never
-   * registered for deletion at exit either, since a JVM stopped mid-overwrite leaves the same
-   * situation. `copy` is the write itself, a parameter so tests can make it fail.
+   * and a copy that then fails (a full disk, a quota) writes them back; an output that cannot even
+   * be opened (read-only) was never truncated, so its failure is reported with the backup removed.
+   * If the write-back fails too, the sibling is the only intact copy: it is kept where it is and
+   * the error names it. It is never registered for deletion at exit either, since a JVM stopped
+   * mid-overwrite leaves the same situation. `copy` is the write itself, a parameter so tests can
+   * make it fail.
    */
   private[raster] def publish(
     staging: Path,
     target: Path,
     copy: (Path, OutputStream) => Unit = (from, out) => Files.copy(from, out): Unit
   ): Unit =
-    def overwrite(from: Path, to: Path): Unit =
-      Using.resource(
-        Files.newOutputStream(
-          to,
-          StandardOpenOption.WRITE,
-          StandardOpenOption.CREATE,
-          StandardOpenOption.TRUNCATE_EXISTING
-        )
-      )(out => copy(from, out))
+    def open(to: Path): OutputStream =
+      Files.newOutputStream(
+        to,
+        StandardOpenOption.WRITE,
+        StandardOpenOption.CREATE,
+        StandardOpenOption.TRUNCATE_EXISTING
+      )
+    def overwrite(from: Path, to: Path): Unit = Using.resource(open(to))(out => copy(from, out))
     if Files.exists(target) then
       val backup = target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.orig")
       createPrivate(backup)
@@ -468,7 +469,14 @@ object RasterizerChain:
         case e: IOException =>
           discard(backup)
           throw e
-      try overwrite(staging, target)
+      // an output that cannot be opened (read-only) was never truncated: nothing to write back
+      val out =
+        try open(target)
+        catch
+          case e: IOException =>
+            discard(backup)
+            throw e
+      try Using.resource(out)(copy(staging, _))
       catch
         case failed: IOException =>
           try overwrite(backup, target)

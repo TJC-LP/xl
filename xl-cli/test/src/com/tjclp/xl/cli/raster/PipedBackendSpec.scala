@@ -305,6 +305,19 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
+  test("publish: a read-only output is reported intact, with no backup left behind") {
+    withDir { dir =>
+      IO.blocking {
+        val target = Files.write(dir.resolve("out.png"), bytes("previous image"))
+        Files.setPosixFilePermissions(target, PosixFilePermissions.fromString("r--r--r--"))
+        val staging = Files.write(dir.resolve(".xl-raster-staged.png"), bytes("new image"))
+        intercept[java.nio.file.AccessDeniedException](RasterizerChain.publish(staging, target))
+        assertEquals(text(target), "previous image")
+        assertEquals(listing(dir).toSet, Set(target, staging), "no backup of an untouched output")
+      }
+    }
+  }
+
   test("a dangling output symlink is written through: the link stays, its referent is created") {
     withDir { dir =>
       val referent = dir.resolve("made.png")

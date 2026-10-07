@@ -242,8 +242,22 @@ class RasterSubprocessSpec extends FunSuite:
 
   // ===== GH-690: what a backend's exit cannot prove, the output file must =====
 
-  /** Answers every probe; a conversion exits 0 at once, reading nothing and writing nothing. */
+  /**
+   * Answers every probe; a conversion reads the whole SVG, then exits 0 writing nothing. Reading it
+   * all keeps the outcome off the stdin write's race with the exit: a shim that exits first is
+   * [[earlyExitScript]]'s case, a different message.
+   */
   private val silentZeroScript =
+    """#!/bin/sh
+      |case "$1" in
+      |  --version|--help) echo "shim 1.0"; exit 0 ;;
+      |esac
+      |cat >/dev/null
+      |exit 0
+      |""".stripMargin
+
+  /** Answers every probe; a conversion exits 0 at once, reading nothing and writing nothing. */
+  private val earlyExitScript =
     """#!/bin/sh
       |case "$1" in
       |  --version|--help) echo "shim 1.0"; exit 0 ;;
@@ -260,6 +274,7 @@ class RasterSubprocessSpec extends FunSuite:
       |  -version|--version|-list) echo "shim 1.0"; exit 0 ;;
       |esac
       |for a in "$@"; do [ "$a" = "png:-" ] && { cat >/dev/null; echo PNG; exit 0; }; done
+      |cat >/dev/null
       |exit 0
       |""".stripMargin
 
@@ -296,6 +311,7 @@ class RasterSubprocessSpec extends FunSuite:
        |""".stripMargin
 
   private val silentZero = shimsWith(silentZeroScript, magickSilentZeroScript)
+  private val earlyExit = shimsWith(earlyExitScript, magickSilentZeroScript)
   private val writing = shimsWith(writingScript, magickSilentZeroScript)
   private val mute = shimsWith(muteFailureScript, muteFailureScript)
   private val chatty = shimsWith(longFailureScript, magickShimScript)
@@ -350,7 +366,7 @@ class RasterSubprocessSpec extends FunSuite:
       }
   }
 
-  silentZero.test("GH-690: exit 0 before reading a large SVG: no JDK wording in the message") {
+  earlyExit.test("GH-690: exit 0 before reading a large SVG: no JDK wording in the message") {
     dir =>
       val run = forcedView(dir, "rsvg-convert", "png", "A1:Z1000")
       assertEquals(run.exit, 3, run.stderr)
