@@ -20,13 +20,52 @@ import com.tjclp.xl.sheets.Sheet
  *   Whether the name is hidden from the Name Manager UI
  * @param comment
  *   Optional comment describing the named range
+ * @param customMenu
+ *   Custom menu text (`customMenu`)
+ * @param description
+ *   Description text (`description`)
+ * @param help
+ *   Help topic (`help`)
+ * @param statusBar
+ *   Status bar text (`statusBar`)
+ * @param function
+ *   Whether the name refers to a function (`function`), e.g. a VBA or XLM macro
+ * @param vbProcedure
+ *   Whether the function is a VBA procedure rather than an XLM one (`vbProcedure`)
+ * @param xlm
+ *   Whether the name refers to an XLM (Excel 4.0 macro sheet) function (`xlm`)
+ * @param functionGroupId
+ *   The Function Wizard category of a function name (`functionGroupId`), an `xsd:unsignedInt` (0 to
+ *   4294967295), hence a `Long`
+ * @param shortcutKey
+ *   The keyboard shortcut of a command macro (`shortcutKey`)
+ * @param publishToServer
+ *   Whether the name is published to Excel Services (`publishToServer`)
+ * @param workbookParameter
+ *   Whether the name is a workbook parameter on Excel Services (`workbookParameter`)
+ * @param otherAttributes
+ *   Unprefixed attributes outside ECMA-376 §18.2.5, in source order, written back verbatim so a
+ *   regenerated `<definedNames>` drops nothing (GH-696). The writer skips a key that is one of the
+ *   typed attributes above or carries a namespace prefix, and keeps the first of a repeated key.
  */
 final case class DefinedName(
   name: String,
   formula: String,
   localSheetId: Option[Int] = None,
   hidden: Boolean = false,
-  comment: Option[String] = None
+  comment: Option[String] = None,
+  customMenu: Option[String] = None,
+  description: Option[String] = None,
+  help: Option[String] = None,
+  statusBar: Option[String] = None,
+  function: Boolean = false,
+  vbProcedure: Boolean = false,
+  xlm: Boolean = false,
+  functionGroupId: Option[Long] = None,
+  shortcutKey: Option[String] = None,
+  publishToServer: Boolean = false,
+  workbookParameter: Boolean = false,
+  otherAttributes: Vector[(String, String)] = Vector.empty
 )
 
 object DefinedName:

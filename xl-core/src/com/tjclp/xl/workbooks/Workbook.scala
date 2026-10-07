@@ -581,8 +581,10 @@ final case class Workbook(
    * read lifts a modelable print name out of `metadata.definedNames` into the sheet's PageSetup
    * (GH-259), so the metadata table alone omits it; this is the table to report. A PageSetup field
    * overrides the same sheet's metadata entry of that identifier, matched case-insensitively
-   * (GH-538), so each (identifier, sheet) appears once, as Excel requires. Without print setups it
-   * is `metadata.definedNames` itself.
+   * (GH-538), so each (identifier, sheet) appears once, as Excel requires. The override is whole:
+   * an explicit print setup replaces an attributed metadata entry (a `description`, GH-696) with a
+   * plain derived name, the user's edit winning. Without print setups it is `metadata.definedNames`
+   * itself.
    */
   def effectiveDefinedNames: Vector[DefinedName] =
     val names = metadata.definedNames

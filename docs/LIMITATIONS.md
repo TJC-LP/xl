@@ -444,6 +444,7 @@ date formatting #667 already fixed.
 #### 15. Named Ranges ✅ NOW SUPPORTED (0.10.0)
 **Status**: Implemented
 **Impact**: `WorkbookMetadata.definedNames` is serialized to `<definedNames>` (previously read-only), with a CLI `name add` / `name rm` verb. Since 0.13.0 (#384), defined names also **resolve in formula evaluation** — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names (sheet-scoped shadows global) via a dedicated `TExpr.NameRef` node, contribute dependency edges so `recalculate()` orders name-gated families correctly, and round-trip byte-faithfully; unresolvable names are clean per-cell errors. Structured references (`Table[@Column]`) inside formulas remain future work.
+- **Source-/binary-compat**: `DefinedName` gained 12 defaulted fields (every ECMA-376 attribute, #696): source-compatible, not binary-compatible with 0.23.x.
 
 ---
 
