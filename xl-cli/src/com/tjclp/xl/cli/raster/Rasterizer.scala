@@ -17,6 +17,7 @@ import java.nio.file.attribute.{
   PosixFilePermissions
 }
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 
 import scala.concurrent.duration.FiniteDuration
 import scala.util.Using
@@ -260,12 +261,13 @@ object RasterizerChain:
     outputPath: Path,
     format: RasterFormat,
     dpi: Int = 144,
-    preferredRasterizer: Option[String] = None
+    preferredRasterizer: Option[String] = None,
+    chain: List[Rasterizer] = defaultChain
   ): IO[String] =
     // Scale SVG dimensions based on DPI for consistent output across all rasterizers
     val scaledSvg = scaleSvgForDpi(svg, dpi)
 
-    preferredRasterizer match
+    preflight(outputPath) >> (preferredRasterizer match
       case Some(name) =>
         // User requested specific rasterizer
         byName.get(name.toLowerCase) match
@@ -291,7 +293,29 @@ object RasterizerChain:
 
       case None =>
         // Try fallback chain
-        tryChain(scaledSvg, outputPath, format, dpi, defaultChain, Nil)
+        tryChain(scaledSvg, outputPath, format, dpi, chain, Nil))
+
+  /**
+   * The output path's own failures, checked once before any backend is chosen (GH-690), so they
+   * read the same whether or not a backend is available: a root, directory, FIFO or device is
+   * [[RasterError.UnsupportedOutput]]; a new output whose directory is missing or not writable is
+   * [[RasterError.OutputFailed]]. [[attempt]] still fails cleanly on whatever changes after this.
+   */
+  private def preflight(outputPath: Path): IO[Unit] =
+    val target = outputPath.toAbsolutePath
+    Option(target.getFileName).flatMap(_ => Option(target.getParent)) match
+      case None => IO.raiseError(RasterError.UnsupportedOutput(target, "not a file path"))
+      case Some(dir) =>
+        IO.blocking {
+          if Files.exists(target) && !Files.isRegularFile(target) then
+            Some(RasterError.UnsupportedOutput(target, "not a regular file"))
+          else if Files.exists(target, LinkOption.NOFOLLOW_LINKS) then None
+          else if !Files.isDirectory(dir) then
+            Some(RasterError.OutputFailed(target, new IOException(s"$dir is not a directory")))
+          else if !Files.isWritable(dir) then
+            Some(RasterError.OutputFailed(target, new IOException(s"$dir is not writable")))
+          else None
+        }.flatMap(_.fold(IO.unit)(IO.raiseError))
 
   /**
    * Try each rasterizer in the chain until one succeeds.
@@ -335,6 +359,8 @@ object RasterizerChain:
                   // a backend that ran out its deadline already cost minutes: report it rather
                   // than spend as long again on each remaining backend
                   case timedOut: RasterError.TimedOut => IO.raiseError(timedOut)
+                  // a usage error (a malformed XL_SPILL_DIR) is every backend's: report it once
+                  case usage: CliException => IO.raiseError(usage)
                   case _: RasterError.FormatNotSupported =>
                     // Format not supported by this rasterizer, try next
                     tryChain(
@@ -417,11 +443,12 @@ object RasterizerChain:
               }
         }
         // a JVM stopped mid-conversion (SIGTERM) skips the release below; this still runs
-        .flatTap(staging => IO.blocking(deleteOnExit(staging)))
+        .flatTap(staging => IO(LiveStaging.add(staging)))
         .adaptError { case e: IOException => RasterError.OutputFailed(target, e) }
     }
     // removal is best-effort: a failed clean-up must not replace the conversion's outcome
-    def remove(p: Path): IO[Unit] = IO.blocking(Files.deleteIfExists(p)).void.handleError(_ => ())
+    def remove(p: Path): IO[Unit] =
+      IO.blocking(Files.deleteIfExists(p)).void.handleError(_ => ()) >> IO(LiveStaging.remove(p))
     Resource.make(staged)(remove).use { staging =>
       rasterizer.convertSvgToRaster(svg, staging, format, dpi) >>
         IO.blocking(Files.isRegularFile(staging) && Files.size(staging) > 0).flatMap {
@@ -467,12 +494,27 @@ object RasterizerChain:
     target.resolveSibling(s".xl-raster-${UUID.randomUUID()}.$ext")
 
   /**
-   * Delete `path` when the JVM exits, where the security policy allows. The JVM keeps every path
-   * registered until it exits, which suits the one-command CLI; a long-lived caller would grow it.
+   * The staging files of exports in progress, deleted by one shutdown hook when the JVM exits
+   * mid-conversion (SIGTERM skips the Resource release). Unlike `File.deleteOnExit`, whose registry
+   * only grows, a path leaves the set when its export ends, so a long-lived JVM holds only live
+   * ones.
    */
-  private def deleteOnExit(path: Path): Unit =
-    try path.toFile.deleteOnExit()
-    catch case _: SecurityException => ()
+  private object LiveStaging:
+    private val paths = ConcurrentHashMap.newKeySet[Path]()
+
+    private lazy val hook: Unit =
+      val cleanup = new Thread(
+        () => paths.forEach(path => discard(path)),
+        "xl-raster-staging-cleanup"
+      )
+      try Runtime.getRuntime.addShutdownHook(cleanup)
+      catch case _: IllegalStateException | _: SecurityException => () // already shutting down
+
+    def add(path: Path): Unit =
+      hook
+      paths.add(path): Unit
+
+    def remove(path: Path): Unit = paths.remove(path): Unit
 
   /** Delete `path` if it exists; a failure to is not the caller's outcome. */
   private def discard(path: Path): Unit =

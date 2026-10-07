@@ -11,7 +11,7 @@ import cats.effect.IO
 import cats.syntax.all.*
 import munit.CatsEffectSuite
 
-import com.tjclp.xl.cli.contract.{CliError, ErrorCode}
+import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode}
 
 /**
  * GH-690: the subprocess layer's bounds, run against `/bin/sh` in this JVM: stderr's tail, a
@@ -485,11 +485,14 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
-  test("a backend that times out stops the default chain: the next one is not run") {
-    def backend(label: String, conversion: IO[Unit]): Rasterizer = new Rasterizer:
+  /** A stand-in backend: `available`, and converting by running `conversion`. */
+  private def backend(label: String, conversion: IO[Unit], available: Boolean = true): Rasterizer =
+    new Rasterizer:
       val name = label
-      def isAvailable = IO.pure(true)
+      def isAvailable = IO.pure(available)
       def convertSvgToRaster(svg: String, out: Path, format: RasterFormat, dpi: Int) = conversion
+
+  test("a backend that times out stops the default chain: the next one is not run") {
     withDir { dir =>
       IO.ref(false).flatMap { ran =>
         val chain = List(
@@ -504,6 +507,35 @@ class PipedBackendSpec extends CatsEffectSuite:
           assertEquals(error, RasterError.TimedOut("slow", 5.minutes))
           ran.get.map(next => assert(!next, "the chain went on past a timeout"))
         }
+      }
+    }
+  }
+
+  test("a usage error from a backend stops the default chain: reported once, not per backend") {
+    val usage = CliException(CliError(ErrorCode.USAGE, "XL_SPILL_DIR is not a valid path"))
+    withDir { dir =>
+      IO.ref(false).flatMap { ran =>
+        val chain = List(backend("first", IO.raiseError(usage)), backend("next", ran.set(true)))
+        failure(
+          RasterizerChain
+            .tryChain(tinySvg, dir.resolve("out.png"), RasterFormat.Png, 96, chain, Nil)
+            .void
+        ).flatMap { error =>
+          assertEquals(error, usage)
+          ran.get.map(next => assert(!next, "the chain went on past a usage error"))
+        }
+      }
+    }
+  }
+
+  test("an unwritable output is IO_WRITE even when no backend is available") {
+    val none = List(backend("absent", IO.unit, available = false))
+    withDir { dir =>
+      List(Path.of("/"), dir, dir.resolve("missing").resolve("out.png")).traverse_ { out =>
+        failure(RasterizerChain.convert(tinySvg, out, RasterFormat.Png, 96, None, none).void)
+          .map { error =>
+            assertEquals(CliError.fromThrowable(error).code, ErrorCode.IO_WRITE, s"$out: $error")
+          }
       }
     }
   }
