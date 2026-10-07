@@ -278,6 +278,15 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **A regenerated `<definedNames>` keeps every attribute** (#696): when xl rewrote the table (a
+  name edit, a GH-593 or #687 heal, a structural edit) it wrote back only `name`, `comment`,
+  `localSheetId` and `hidden`, so one unrelated name edit turned every macro name into a plain
+  name and dropped `description`, `shortcutKey` and the rest. `DefinedName` now carries every
+  ECMA-376 §18.2.5 attribute, plus unknown unprefixed ones in source order; both readers fill it
+  and the writer emits them in Excel's order. A print name with any such attribute stays in the
+  table instead of being lifted into `PageSetup`, which would have dropped it. `DefinedName` gains
+  12 defaulted fields: source-compatible, not binary-compatible with 0.23.x (code compiled against
+  0.23.x that calls `DefinedName.apply`/`.copy` must be recompiled).
 - **A raster backend's exit code no longer counts as success on its own** (#690): an rsvg-convert,
   cairosvg or ImageMagick that exited 0 without writing was reported as `Exported: out.png` with
   exit 0 and no file. Every backend now writes beside the output path, and the image replaces it
