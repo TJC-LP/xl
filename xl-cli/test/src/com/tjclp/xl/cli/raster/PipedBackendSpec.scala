@@ -244,13 +244,19 @@ class PipedBackendSpec extends CatsEffectSuite:
   }
 
   test("a descendant that keeps the pipes open after the child exits cannot stall a deadline") {
+    assume(onPath("pgrep"), "needs pgrep")
+    val marker = "31.6903"
     val started = System.nanoTime()
     // the child outlives the start of the pipe reads: a child gone before they start has its pipes
     // drained and closed by the JDK, and the orphan would hold nothing
-    PipedBackend.probe("sh", List("-c", "sleep 10 & sleep 0.5; exit 0"), 2.seconds).map { ok =>
-      assert(!ok, "the orphan holds the pipes, so the probe must reach its deadline")
-      assert((System.nanoTime() - started).nanos < 6.seconds, "teardown waited on the orphan")
-    }
+    PipedBackend
+      .probe("sh", List("-c", s"sleep $marker & sleep 0.5; exit 0"), 2.seconds)
+      .map { ok =>
+        assert(!ok, "the orphan holds the pipes, so the probe must reach its deadline")
+        assert((System.nanoTime() - started).nanos < 6.seconds, "teardown waited on the orphan")
+        // recorded while the child ran, so killed at release though the child had exited
+        assertEquals(pgrep(s"sleep $marker"), "", "the orphan outlived the probe")
+      }
   }
 
   test("kill stops a helper a SIGTERM handler starts even when the child then exits") {

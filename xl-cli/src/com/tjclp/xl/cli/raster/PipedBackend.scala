@@ -2,7 +2,7 @@ package com.tjclp.xl.cli.raster
 
 import java.io.{IOException, InputStream, OutputStream}
 import java.nio.charset.StandardCharsets
-import java.util.concurrent.{ExecutorService, Executors, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ExecutorService, Executors, TimeUnit}
 
 import scala.annotation.tailrec
 import scala.concurrent.duration.*
@@ -52,6 +52,9 @@ private[raster] object PipedBackend:
 
   /** How long a child gets to exit after the polite signal before it is killed outright. */
   private val GraceMillis: Long = 2000
+
+  /** How often a running child's descendants are recorded ([[recordDescendants]]). */
+  private val TrackMillis: Long = 50
 
   /** How often [[kill]] looks for new descendants during the grace period. */
   private val PollMillis: Long = 10
@@ -179,24 +182,40 @@ private[raster] object PipedBackend:
   /**
    * The child, killed on release if it is still running (cancellation, a timeout, a failed drain),
    * its streams closed once it is gone — on a pipe thread, since closing a stream waits for a read
-   * still blocked on it. A command that cannot be started — not installed, gone since the
-   * availability probe, not executable — is [[RasterError.RasterizerNotFound]], the code the probe
-   * itself would have given.
+   * still blocked on it. Its descendants are recorded while it runs ([[recordDescendants]]) and any
+   * still alive at release are killed too: once the child exits they are no longer its descendants,
+   * and one holding the pipes would otherwise outlive the deadline (GH-690). A command that cannot
+   * be started — not installed, gone since the availability probe, not executable — is
+   * [[RasterError.RasterizerNotFound]], the code the probe itself would have given.
    */
   private def spawn(name: String, command: List[String]): Resource[IO, Process] =
-    Resource.make(
-      IO.blocking(new java.lang.ProcessBuilder(command.asJava).start()).adaptError {
-        case e: IOException =>
-          val program = command.headOption.getOrElse(name)
-          val reason = Option(e.getMessage).getOrElse(e.toString)
-          RasterError.RasterizerNotFound(name, s"`$program` could not be started: $reason.")
+    val start = IO.blocking(new java.lang.ProcessBuilder(command.asJava).start()).adaptError {
+      case e: IOException =>
+        val program = command.headOption.getOrElse(name)
+        val reason = Option(e.getMessage).getOrElse(e.toString)
+        RasterError.RasterizerNotFound(name, s"`$program` could not be started: $reason.")
+    }
+    Resource
+      .make(start.map(_ -> ConcurrentHashMap.newKeySet[ProcessHandle]()).flatTap {
+        (process, seen) => IO(pipeThreads.execute(() => recordDescendants(process, seen)))
+      }) { (process, seen) =>
+        IO.blocking {
+          kill(process)
+          seen.asScala.filter(_.isAlive).foreach(_.destroyForcibly())
+          pipeThreads.execute(() => closeQuietly(process))
+        }
       }
-    )(process =>
-      IO.blocking {
-        kill(process)
-        pipeThreads.execute(() => closeQuietly(process))
-      }
-    )
+      .map(_._1)
+
+  /**
+   * Add `process`'s descendants to `seen` every [[TrackMillis]] until it exits. Best-effort: a
+   * helper started and orphaned within one interval is missed (the JDK cannot start a child in its
+   * own process group).
+   */
+  @tailrec
+  private def recordDescendants(process: Process, seen: java.util.Set[ProcessHandle]): Unit =
+    seen.addAll(descendantsOf(process).asJava)
+    if !process.waitFor(TrackMillis, TimeUnit.MILLISECONDS) then recordDescendants(process, seen)
 
   /** Best-effort discovery of a child's descendants: a sandbox may refuse the enumeration. */
   private def descendantsOf(process: Process): List[ProcessHandle] =
