@@ -1421,11 +1421,15 @@ class FormatCodeParserSpec extends FunSuite:
   }
 
   test("applyFormat: integer placeholders pad as Excel does; a lone 0 needs a `0` (#693)") {
+    // Excel 16 TEXT() oracle; the minus leads the padded field (`-  5`), it does not hug the digits
     def fmt(code: String, n: BigDecimal) =
       FormatCodeParser.applyFormat(n, FormatCodeParser.parse(code).toOption.get)._1
     assertEquals(fmt("_(* \"-\"??_)", 0), " -   ")
     assertEquals(fmt("#.00", BigDecimal("0.5")), ".50")
     assertEquals(fmt("???", 5), "  5")
+    assertEquals(fmt("???", -5), "-  5")
+    assertEquals(fmt("???", -50), "- 50")
+    assertEquals(fmt("#.00", BigDecimal("-0.5")), "-.50")
     assertEquals(fmt("#,###", 0), "")
     assertEquals(fmt("#,##0", 0), "0")
     assertEquals(fmt("000", 5), "005")
