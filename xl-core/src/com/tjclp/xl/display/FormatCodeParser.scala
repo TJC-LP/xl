@@ -219,6 +219,10 @@ object FormatCodeParser:
         case ']' if !inQuotes =>
           inBracket = false
           current += c
+        case '\\' if !inQuotes && i + 1 < code.length =>
+          // An escaped character is a literal, so `0\;;-0;0` has three sections (#693)
+          current += c += code(i + 1)
+          i += 1
         case ';' if !inQuotes && !inBracket =>
           sections += current.toString
           current.clear()

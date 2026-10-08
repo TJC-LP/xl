@@ -1418,6 +1418,7 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("@,"), "abc,")
     assertEquals(fmt("0;-0;0;\"T:\"@"), "T:abc")
     assertEquals(fmt("0.00"), "abc")
+    assertEquals(fmt("0\\;;-0;0"), "abc") // the escaped `;` is no section break (Excel 16)
   }
 
   test("applyFormat: integer placeholders pad as Excel does; a lone 0 needs a `0` (#693)") {
@@ -1430,6 +1431,7 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("???", -5), "-  5")
     assertEquals(fmt("???", -50), "- 50")
     assertEquals(fmt("#.00", BigDecimal("-0.5")), "-.50")
+    assertEquals(fmt("0\\;;-0;0", 5), "5;")
     assertEquals(fmt("#,###", 0), "")
     assertEquals(fmt("#,##0", 0), "0")
     assertEquals(fmt("000", 5), "005")
