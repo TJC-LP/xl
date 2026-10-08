@@ -219,8 +219,9 @@ object FormatCodeParser:
         case ']' if !inQuotes =>
           inBracket = false
           current += c
-        case '\\' if !inQuotes && i + 1 < code.length =>
-          // An escaped character is a literal, so `0\;;-0;0` has three sections (#693)
+        case '\\' | '_' | '*' if !inQuotes && i + 1 < code.length =>
+          // An escape, spacer or fill takes the next character as its operand, so neither
+          // `0\;;-0;0` nor `0_\;-0` splits at that `;` (#693)
           current += c += code(i + 1)
           i += 1
         case ';' if !inQuotes && !inBracket =>

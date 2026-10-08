@@ -299,13 +299,22 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         val (isPercent, afterPercent) =
           if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
           else (false, afterParens)
-        val cleaned = afterPercent.replace(",", "").replace("$", "").trim
-        scala.util.Try(BigDecimal(cleaned)).toEither match
-          case Right(n) =>
+        // One currency sign, leading or after the sign: `1$2` and `$$1` are not numbers (#693)
+        val amount = afterPercent.trim
+        val dollar =
+          if amount.startsWith("$") then 0 else if amount.matches("[+-]\\$.*") then 1 else -1
+        val cleaned =
+          (if dollar < 0 then amount else amount.patch(dollar, "", 1)).replace(",", "").trim
+        // The percent division can overflow the scale (`1E-2147483647%`), so it is inside the Try
+        scala.util
+          .Try {
+            val n = BigDecimal(cleaned)
             val signed = if negFromParens then -n else n
-            Right(if isPercent then signed / 100 else signed)
-          case Left(_) =>
-            Left(unparseableValue(input))
+            if isPercent then signed / 100 else signed
+          }
+          .toEither
+          .left
+          .map(_ => unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs](

@@ -252,6 +252,11 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
     assertScalar("=TEXT(\"(5)\",\"0\")", text("-5"))
     assertScalar("=TEXT(\" \",\"0\")", text(" "))
     assertScalar("=TEXT(\"TRUE\",\"0\")", text("TRUE"))
+    assertScalar("=TEXT(\"1$2\",\"0\")", text("1$2"))
+    assertScalar("=TEXT(\"$$123\",\"0\")", text("$$123"))
+    assertScalar("=TEXT(\"-$5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"$-5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"1E-2147483647%\",\"0\")", text("1E-2147483647%"))
   }
 
   test("#671: a cached formula cell in a text position reads its cached value, not its text") {
