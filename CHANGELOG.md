@@ -278,6 +278,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Text cells render through their format's text section** (#693): `@,` showed `abc` for `abc,` and
+  `0;-0;0;"T:"@` ignored its prefix, in cell display and `TEXT` alike (rich text included; `_`
+  spacers pad, so `_(@_)` is ` abc `). `TEXT` reads a numeric string as its number first
+  (`TEXT("123","0.00")` is `123.00`), and an escaped `\;` (or the operand of `_`/`*`) no longer
+  splits a code into sections. `VALUE` and `TEXT` accept one `$`, leading or after the sign, and
+  commas only as thousands groups of the integer part: `VALUE("1$2")` and `VALUE("1,23")` are
+  `#VALUE!` (were 12 and 123).
+- **Integer placeholders pad as Excel does** (#693): `?` pads with a space and a zero integer part
+  has no significant digit, so the accounting zero `_(* "-"??_)` is ` -   ` (was ` -0 `), `#.00` on
+  0.5 is `.50` (was `0.50`) and `0#` on 0 is `0` (was `00`). Padding zeros group: `0,000` on 0 is
+  `0,000` (was `0000`).
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

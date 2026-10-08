@@ -219,6 +219,11 @@ object FormatCodeParser:
         case ']' if !inQuotes =>
           inBracket = false
           current += c
+        case '\\' | '_' | '*' if !inQuotes && !inBracket && i + 1 < code.length =>
+          // An escape, spacer or fill takes the next character as its operand, so neither
+          // `0\;;-0;0` nor `0_\;-0` splits at that `;` (#693)
+          current += c += code(i + 1)
+          i += 1
         case ';' if !inQuotes && !inBracket =>
           sections += current.toString
           current.clear()
@@ -716,11 +721,10 @@ object FormatCodeParser:
         }
       else 0
 
-    // Count minimum integer digits (0 placeholders)
-    val minIntDigits = tokens.count {
-      case FormatToken.Digit('0') => true
-      case _ => false
-    } - decimalDigits
+    // The integer part's placeholders: `0` pads with zeros, `?` with spaces, `#` with nothing
+    val intPlaceholders = (if hasDecimal then tokens.take(decimalIdx) else tokens).collect {
+      case FormatToken.Digit(c) => c
+    }.mkString
 
     def groupedLength(digits: Long): Long =
       if pattern.hasThousands then digits + (digits - 1) / 3 else digits
@@ -735,11 +739,11 @@ object FormatCodeParser:
         val digits = rounded.divide(unit).toString
         // a rounding carry can add the one digit the bound above did not count
         Option.when(groupedLength(digits.length.toLong) <= MaxDigitBlockLength) {
-          val intStr = if pattern.hasThousands then formatWithThousands(digits) else digits
-          val paddedInt =
-            if minIntDigits > 0 && intStr.length < minIntDigits then
-              "0" * (minIntDigits - intStr.length) + intStr
-            else intStr
+          // A zero integer part has no significant digit; the placeholders alone supply zeros
+          // and spaces, which group with it (#693: `0#` on 0 is `0`, `0,000` is `0,000`)
+          val padded =
+            padPlaceholders(if digits == "0" then "" else digits, intPlaceholders, true)
+          val paddedInt = if pattern.hasThousands then formatWithThousands(padded) else padded
           val decimals = rounded.remainder(unit).toString
           val decStr =
             if decimalDigits > 0 then "0" * (decimalDigits - decimals.length) + decimals
@@ -921,7 +925,8 @@ object FormatCodeParser:
     s.indices.foreach { i =>
       result += s(i)
       val posFromEnd = s.length - 1 - i
-      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += ','
+      // a separator after `?` padding is padding too (Excel: `?,??0` on 0 is `    0`)
+      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += (if s(i) == ' ' then ' ' else ',')
     }
     result.toString
 
@@ -1114,6 +1119,7 @@ object FormatCodeParser:
         section.pattern.tokens.map {
           case FormatToken.TextPlaceholder | FormatToken.General => text
           case FormatToken.Literal(s) => s
+          case FormatToken.Spacer(_) => " " // `_(@_)` pads text as it pads numbers (#693)
           case _ => ""
         }.mkString
       case None => text

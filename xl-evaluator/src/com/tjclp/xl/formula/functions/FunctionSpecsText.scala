@@ -299,13 +299,25 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         val (isPercent, afterPercent) =
           if afterParens.endsWith("%") then (true, afterParens.substring(0, afterParens.length - 1))
           else (false, afterParens)
-        val cleaned = afterPercent.replace(",", "").replace("$", "").trim
-        scala.util.Try(BigDecimal(cleaned)).toEither match
-          case Right(n) =>
+        // One currency sign, leading or after the sign: `1$2` and `$$1` are not numbers (#693)
+        val amount = afterPercent.trim
+        val dollar =
+          if amount.startsWith("$") then 0 else if amount.matches("[+-]\\$.*") then 1 else -1
+        val unpriced = (if dollar < 0 then amount else amount.patch(dollar, "", 1)).trim
+        // Commas only group the integer part in threes: `1,23` and `1.2,3` are not numbers (#693)
+        val (intPart, rest) = unpriced.span(c => c != '.' && c != 'e' && c != 'E')
+        val grouped = !rest.contains(',') &&
+          (!intPart.contains(',') || intPart.matches("[+-]?\\d{1,3}(,\\d{3})+"))
+        // The percent division can overflow the scale (`1E-2147483647%`), so it is inside the Try
+        scala.util
+          .Try {
+            val n = BigDecimal(unpriced.replace(",", ""))
             val signed = if negFromParens then -n else n
-            Right(if isPercent then signed / 100 else signed)
-          case Left(_) =>
-            Left(unparseableValue(input))
+            if isPercent then signed / 100 else signed
+          }
+          .toOption
+          .filter(_ => grouped)
+          .toRight(unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs](
@@ -336,9 +348,15 @@ trait FunctionSpecsText extends FunctionSpecsBase:
 
   /**
    * Coerce ExprValue → CellValue for TEXT. Empty cells are treated as Number(0) per Excel
-   * convention; other types pass through the standard toCellValue path.
+   * convention, and a non-blank numeric string is a number before a section is chosen (#693:
+   * `TEXT("123","0.00")` is `123.00`, not the text section); other types pass through the standard
+   * toCellValue path.
    */
   private def exprValueForTextFn(ev: ExprValue): CellValue =
     ev match
       case ExprValue.Cell(CellValue.Empty) => CellValue.Number(BigDecimal(0))
-      case other => toCellValue(other)
+      case other =>
+        toCellValue(other) match
+          case text @ CellValue.Text(s) if s.trim.nonEmpty =>
+            parseExcelNumber(s).fold(_ => text, CellValue.Number(_))
+          case cv => cv
