@@ -89,19 +89,21 @@ object NumFmtFormatter:
   def formatValue(value: CellValue, numFmt: NumFmt, rule: GeneralRule): String =
     value match
       case CellValue.Number(n) => formatNumber(n, numFmt, rule)
-      // Only a custom code can carry a text section; built-in codes echo the text (#693)
-      case CellValue.Text(s) =>
-        numFmt match
-          case NumFmt.Custom(code) =>
-            FormatCodeParser.parse(code).fold(_ => s, FormatCodeParser.applyTextFormat(s, _))
-          case _ => s
+      case CellValue.Text(s) => formatText(s, numFmt)
       case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
       case CellValue.DateTime(dt) => formatDateTime(dt, numFmt, rule)
       case CellValue.Empty => ""
       case CellValue.Error(err) => formatError(err)
       case CellValue.Formula(expr, _, _) =>
         s"=$expr" // Fallback - should be handled by FormulaDisplayStrategy
-      case CellValue.RichText(rt) => rt.toPlainText
+      case CellValue.RichText(rt) => formatText(rt.toPlainText, numFmt)
+
+  /** Text through the code's text section; only a custom code can carry one (#693). */
+  private def formatText(s: String, numFmt: NumFmt): String =
+    numFmt match
+      case NumFmt.Custom(code) =>
+        FormatCodeParser.parse(code).fold(_ => s, FormatCodeParser.applyTextFormat(s, _))
+      case _ => s
 
   /**
    * Format a numeric value according to Excel number format.

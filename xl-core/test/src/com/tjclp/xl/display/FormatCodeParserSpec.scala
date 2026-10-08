@@ -1418,6 +1418,9 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("@,"), "abc,")
     assertEquals(fmt("0;-0;0;\"T:\"@"), "T:abc")
     assertEquals(fmt("0.00"), "abc")
+    assertEquals(fmt("_(@_)"), " abc ")
+    val rich = CellValue.RichText(com.tjclp.xl.richtext.RichText.plain("abc"))
+    assertEquals(NumFmtFormatter.formatValue(rich, NumFmt.Custom("0;-0;0;\"T:\"@")), "T:abc")
     assertEquals(fmt("0\\;;-0;0"), "abc") // the escaped `;` is no section break (Excel 16)
   }
 

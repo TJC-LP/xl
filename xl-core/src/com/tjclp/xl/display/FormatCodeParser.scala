@@ -1119,6 +1119,7 @@ object FormatCodeParser:
         section.pattern.tokens.map {
           case FormatToken.TextPlaceholder | FormatToken.General => text
           case FormatToken.Literal(s) => s
+          case FormatToken.Spacer(_) => " " // `_(@_)` pads text as it pads numbers (#693)
           case _ => ""
         }.mkString
       case None => text
