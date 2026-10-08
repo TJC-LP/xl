@@ -1441,4 +1441,11 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("#,###", 0), "")
     assertEquals(fmt("#,##0", 0), "0")
     assertEquals(fmt("000", 5), "005")
+    assertEquals(fmt("0#", 0), "0")
+    assertEquals(fmt("0?", 0), "0 ")
+    assertEquals(fmt("?0", 0), " 0")
+    assertEquals(fmt("0#", 5), "05")
+    assertEquals(fmt("0#.00", BigDecimal("0.5")), "0.50")
+    assertEquals(fmt("0,000", 0), "0,000")
+    assertEquals(fmt("?,??0", 0), "    0")
   }

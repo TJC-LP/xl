@@ -286,8 +286,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   commas only as thousands groups of the integer part: `VALUE("1$2")` and `VALUE("1,23")` are
   `#VALUE!` (were 12 and 123).
 - **Integer placeholders pad as Excel does** (#693): `?` pads with a space and a zero integer part
-  shows only through a `0`, so the accounting zero `_(* "-"??_)` is ` -   ` (was ` -0 `) and `#.00`
-  on 0.5 is `.50` (was `0.50`).
+  has no significant digit, so the accounting zero `_(* "-"??_)` is ` -   ` (was ` -0 `), `#.00` on
+  0.5 is `.50` (was `0.50`) and `0#` on 0 is `0` (was `00`). Padding zeros group: `0,000` on 0 is
+  `0,000` (was `0000`).
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

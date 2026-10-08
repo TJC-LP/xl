@@ -739,12 +739,11 @@ object FormatCodeParser:
         val digits = rounded.divide(unit).toString
         // a rounding carry can add the one digit the bound above did not count
         Option.when(groupedLength(digits.length.toLong) <= MaxDigitBlockLength) {
-          // A zero integer part shows only through a `0` placeholder (#693: `??` on 0 is blank)
-          val shown = if digits == "0" && !intPlaceholders.contains('0') then "" else digits
-          val intStr = if pattern.hasThousands then formatWithThousands(shown) else shown
-          val paddedInt =
-            padPlaceholders(shown, intPlaceholders, alignRight = true).dropRight(shown.length) +
-              intStr
+          // A zero integer part has no significant digit; the placeholders alone supply zeros
+          // and spaces, which group with it (#693: `0#` on 0 is `0`, `0,000` is `0,000`)
+          val padded =
+            padPlaceholders(if digits == "0" then "" else digits, intPlaceholders, true)
+          val paddedInt = if pattern.hasThousands then formatWithThousands(padded) else padded
           val decimals = rounded.remainder(unit).toString
           val decStr =
             if decimalDigits > 0 then "0" * (decimalDigits - decimals.length) + decimals
@@ -926,7 +925,8 @@ object FormatCodeParser:
     s.indices.foreach { i =>
       result += s(i)
       val posFromEnd = s.length - 1 - i
-      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += ','
+      // a separator after `?` padding is padding too (Excel: `?,??0` on 0 is `    0`)
+      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += (if s(i) == ' ' then ' ' else ',')
     }
     result.toString
 
