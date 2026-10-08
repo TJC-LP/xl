@@ -207,7 +207,10 @@ class RecalcOptionsSpec extends FunSuite:
 
   test("summary: the clean forms the CLI prints") {
     val one = Workbook(Sheet("S").put(ref"A1", num(5)).put(ref"C1", formula("1/0"))).recalculate()
-    assertEquals(one.summary, "Recalculated 1 formula (1 error value)")
+    assertEquals(
+      one.summary,
+      "Recalculated 1 formula (1 error value: S!C1 #DIV/0! — Division by zero: 1 / 0)"
+    )
     val two = Workbook(
       Sheet("S").put(ref"A1", num(5)).put(ref"B1", formula("A1*2")).put(ref"C1", formula("B1+1"))
     ).recalculate()
@@ -215,7 +218,10 @@ class RecalcOptionsSpec extends FunSuite:
     val twoErrors = Workbook(
       Sheet("S").put(ref"A1", formula("1/0")).put(ref"B1", formula("NA()"))
     ).recalculate()
-    assertEquals(twoErrors.summary, "Recalculated 2 formulas (2 error values)")
+    assertEquals(
+      twoErrors.summary,
+      "Recalculated 2 formulas (2 error values: S!A1 #DIV/0! — Division by zero: 1 / 0; S!B1 #N/A)"
+    )
   }
 
   test("summary: host failures list the first three rendered errors, then an ellipsis") {

@@ -23,6 +23,16 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **The recalc summary names its error-valued cells, with the evaluator's reason** (#692):
+  `Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found:
+  VLOOKUP(42, A1:B3, 2, FALSE))` — the first ten of `RecalcResult.excelErrors`
+  (`RecalcResult.MaxNamedErrorCells`) as `RecalcResult.errorCells: Vector[ErrorValueCell]`
+  (`sheet`, `ref`, `error`, `reason`), the rest counted as `… and N more`. The reason is the
+  diagnostic the evaluator raised the error with (a lookup's miss echoing its call, a division's
+  operands); an error that arrived as a plain value (`NA()`, an error literal, a precedent's error
+  read through a reference, a cycle member) has none. `xl recalc --json` publishes the same list as
+  `errorCells` (`{ref, error, reason}`) beside `errorValuedCycles`; the envelope is otherwise
+  unchanged.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
@@ -277,6 +287,16 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   the defect wording, where it was `INTERNAL`.
 
 ### Fixed
+
+- **One error channel for the lookups, `#VALUE!` for a bad XLOOKUP mode, and the evaluating
+  reader everywhere** (#692, the #670 remainder): an XLOOKUP miss now raises the typed `#N/A`
+  through `lookupNotFound` like VLOOKUP/HLOOKUP/MATCH/LOOKUP/XMATCH, so its call is the cell's
+  reason in the recalc summary (every guard still sees the same `#N/A`); a match_mode or
+  search_mode outside its table is Excel's documented `#VALUE!` for XLOOKUP as it was for XMATCH
+  (XLOOKUP answered `#N/A`, and read an unknown search_mode as forward); MATCH and XLOOKUP read
+  their lookup range through the evaluating reader, so a formula key with no cached value is
+  computed rather than silently skipped (`MATCH(20, A1:A3, 0)` over an uncached `=5*4` is 2, not
+  `#N/A`), and like LOOKUP/XMATCH stop at the sheet's used range.
 
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on

@@ -467,11 +467,37 @@ trait FunctionSpecsBase:
   /**
    * GH-662: the typed `#N/A` a lookup raises when nothing matches. Left channel per the GH-344
    * charter (RANK's not-found precedent), so IFNA/ISNA/ERROR.TYPE see the code and an unguarded
-   * miss promotes to a cached `#N/A` at the CellValue boundary; the context is the human diagnostic
-   * and is dropped, by design, at that boundary. LOOKUP and XMATCH (#670) raise through this too.
+   * miss promotes to a cached `#N/A` at the CellValue boundary, where the context becomes the
+   * cell's reason in the recalc summary (#692). Every lookup's miss travels this one channel:
+   * VLOOKUP/HLOOKUP/MATCH, LOOKUP and XMATCH (#670), XLOOKUP (#692).
    */
   protected def lookupNotFound(context: String): EvalError =
     EvalError.ErrorValue(CellError.NA, Some(context))
+
+  /**
+   * #692: XLOOKUP/XMATCH's match_mode (-1, 0, 1, 2) — a mode outside its table is Excel's
+   * documented `#VALUE!`, for both functions alike.
+   */
+  protected def matchModeError(fn: String, value: Int, call: String): Either[EvalError, Unit] =
+    lookupModeError(fn, "match_mode", Set(-1, 0, 1, 2), "-1, 0, 1 or 2", value, call)
+
+  /** #692: XLOOKUP/XMATCH's search_mode (1, -1, 2, -2), as [[matchModeError]]. */
+  protected def searchModeError(fn: String, value: Int, call: String): Either[EvalError, Unit] =
+    lookupModeError(fn, "search_mode", Set(-2, -1, 1, 2), "1, -1, 2 or -2", value, call)
+
+  private def lookupModeError(
+    fn: String,
+    label: String,
+    allowed: Set[Int],
+    spelled: String,
+    value: Int,
+    call: String
+  ): Either[EvalError, Unit] =
+    if allowed.contains(value) then Right(())
+    else
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"$fn: $label $value is not $spelled: $call"))
+      )
 
   /**
    * One rendering of a lookup value for the lookup diagnostics (the call echoed in the context).

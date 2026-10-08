@@ -252,6 +252,24 @@ final case class SccReport(
     else s"exhausted $rounds round(s)"
 
 /**
+ * #692: one formula cell whose computed VALUE is an Excel error, as the recalc summary and `recalc
+ * --json` name it: where, which code, and — when the evaluator raised the error with a diagnostic
+ * (a lookup's miss echoing its call, a division's operands) — why. A reason is `None` for an error
+ * that arrived as a plain value: `NA()`, an error literal, a precedent's error read through a
+ * reference, or a cycle member's last-round value.
+ */
+final case class ErrorValueCell(
+  sheet: SheetName,
+  ref: ARef,
+  error: CellError,
+  reason: Option[String]
+) derives CanEqual:
+  /** `Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A3, 2, FALSE)` */
+  def render: String =
+    val at = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1} ${error.toExcel}"
+    reason.fold(at)(why => s"$at — $why")
+
+/**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).
  *
  * Evaluation is per-cell: a failing or cyclic formula is collected into `errors` and left uncached,
@@ -311,6 +329,9 @@ final case class SccReport(
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
  *   canonical key (its top-left member: sheet name, row, column). Empty on non-iterative and
  *   acyclic runs. Future diagnostics extend [[SccReport]], not this class.
+ * @param errorReasons
+ *   #692: the diagnostic the evaluator raised an error VALUE with, per cell that has one (see
+ *   [[ErrorValueCell]]); read through [[errorCells]]
  */
 final case class RecalcResult(
   workbook: Workbook,
@@ -318,7 +339,8 @@ final case class RecalcResult(
   errors: Vector[CellEvalError],
   converged: Boolean = true,
   iterationsUsed: Int = 0,
-  cycles: Vector[SccReport] = Vector.empty
+  cycles: Vector[SccReport] = Vector.empty,
+  errorReasons: Map[(SheetName, ARef), String] = Map.empty
 ) derives CanEqual:
 
   /** GH-492: the cyclic components that exhausted their budget — the offenders to name. */
@@ -385,6 +407,19 @@ final case class RecalcResult(
       err <- carriedCellError(value).toList
     yield (sheet, ref, err)).sortBy((sheet, ref, _) => (sheet.value, ref.toA1))
 
+  /**
+   * #692: the first [[RecalcResult.MaxNamedErrorCells]] of [[excelErrors]] with their reasons — the
+   * cells the summary line and `recalc --json` name, in the same sorted order.
+   */
+  def errorCells: Vector[ErrorValueCell] = namedErrorCells(excelErrors)
+
+  private def namedErrorCells(
+    all: Vector[(SheetName, ARef, CellError)]
+  ): Vector[ErrorValueCell] =
+    all.take(RecalcResult.MaxNamedErrorCells).map { (sheet, ref, err) =>
+      ErrorValueCell(sheet, ref, err, errorReasons.get((sheet, ref)))
+    }
+
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private def carriedCellError(value: CellValue): Option[CellError] =
     RecalcResult.carriedCellError(value)
@@ -407,7 +442,8 @@ final case class RecalcResult(
    *
    * {{{
    * Recalculated 12 formulas
-   * Recalculated 12 formulas (1 error value)
+   * Recalculated 12 formulas (1 error value: Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE))
+   * Recalculated 12 formulas (12 error values: Sales!B2 #DIV/0! — Division by zero: A2 / 0; …; … and 2 more)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
    * Recalculated 2 formulas (2 error values); converged in 2 iterative round(s), 1 cycle settled on error values
@@ -419,14 +455,25 @@ final case class RecalcResult(
    * stall was detected on, not the longest run of some converged component. If any component
    * genuinely oscillated to `maxIter`, exhaustion stays the headline. The text after `iterative
    * calculation ` is [[unconvergedVerdict]], the same string the `--strict` reason carries.
+   *
+   * #692: the error-value parenthetical names its cells — the first
+   * [[RecalcResult.MaxNamedErrorCells]] as [[ErrorValueCell.render]], `; `-separated, then `… and N
+   * more` — so a summary can say which cell missed and why.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
     val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
-    val errorValueCount = excelErrors.size
+    val allErrorValues = excelErrors
+    val errorValueCount = allErrorValues.size
     val errorValues =
       if errorValueCount == 0 then ""
-      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
+      else
+        val named = namedErrorCells(allErrorValues).map(_.render)
+        val more =
+          if errorValueCount > named.size then Vector(s"… and ${errorValueCount - named.size} more")
+          else Vector.empty
+        val label = if errorValueCount == 1 then "value" else "values"
+        s" ($errorValueCount error $label: ${(named ++ more).mkString("; ")})"
     val settledOnErrors = errorValuedCycles.size match
       case 0 => ""
       case 1 => ", 1 cycle settled on error values"
@@ -446,6 +493,9 @@ final case class RecalcResult(
 
 object RecalcResult:
 
+  /** #692: how many error-valued cells the summary and `recalc --json` name. */
+  val MaxNamedErrorCells: Int = 10
+
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private[eval] def carriedCellError(value: CellValue): Option[CellError] = value match
     case CellValue.Error(err) => Some(err)
@@ -458,7 +508,8 @@ object RecalcResult:
     successful: Map[SheetName, Map[ARef, CellValue]],
     failures: Vector[CellEvalError],
     dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    cycleReports: Vector[SccReport] = Vector.empty
+    cycleReports: Vector[SccReport] = Vector.empty,
+    reasons: Map[(SheetName, ARef), String] = Map.empty
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -552,5 +603,7 @@ object RecalcResult:
       errors = failures ++ additionalErrors,
       converged = converged,
       iterationsUsed = iterationsUsed,
-      cycles = cycles
+      cycles = cycles,
+      // a reason outlives neither its cell's value nor the invalidation above
+      errorReasons = reasons.filter((at, _) => evaluated.get(at._1).exists(_.contains(at._2)))
     )

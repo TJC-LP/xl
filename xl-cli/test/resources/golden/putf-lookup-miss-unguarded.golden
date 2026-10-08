@@ -12,6 +12,6 @@ B5
 0
 ## stdout
 Put: B5 = =VLOOKUP(2030,A1:B3,2,FALSE) (formula)
-Recalculated 1 formula (1 error value)
+Recalculated 1 formula (1 error value: Data!B5 #N/A — VLOOKUP exact match not found: VLOOKUP(2030, A1:B3, 2, FALSE))
 Saved: <DIR>/putf-miss.xlsx
 ## stderr

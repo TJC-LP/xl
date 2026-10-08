@@ -46,14 +46,17 @@ class SumProductXLookupSpec extends FunSuite:
           case Left(err) => Left(s"Eval error: $err")
       case Left(err) => Left(s"Parse error: $err")
 
-  // Helper to parse and evaluate a formula returning CellValue
+  // Helper to parse and evaluate a formula returning CellValue. #692: an XLOOKUP miss travels the
+  // Left channel like every lookup's, so a Left the GH-344 boundary classifies as an Excel error
+  // value is the value it promotes to.
   private def evalFormulaCellValue(formula: String, sheet: Sheet): Either[String, CellValue] =
     FormulaParser.parse(formula) match
       case Right(expr) =>
         Evaluator.eval(expr, sheet) match
           case Right(value: CellValue) => Right(value)
           case Right(other) => Left(s"Expected CellValue, got: $other")
-          case Left(err) => Left(s"Eval error: $err")
+          case Left(err) =>
+            EvalError.toErrorValue(err).map(CellValue.Error(_)).toRight(s"Eval error: $err")
       case Left(err) => Left(s"Parse error: $err")
 
   // Helper for expected results (BigDecimal)
@@ -661,9 +664,8 @@ class SumProductXLookupSpec extends FunSuite:
       ref"B1" -> 1,
       ref"B2" -> 2
     )
-    val result = evalFormulaCellValue("=XLOOKUP(\"A\", A1:A3, B1:B2)", sheet)
-    assert(result.isLeft)
-    assert(result.left.exists(_.contains("dimension")))
+    // #670: Excel's #VALUE!, a cached error value rather than a host failure
+    assertEvalCellValue("=XLOOKUP(\"A\", A1:A3, B1:B2)", sheet, CellValue.Error(CellError.Value))
   }
 
   test("XLOOKUP: no match returns #N/A (default)") {

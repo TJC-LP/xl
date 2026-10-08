@@ -326,7 +326,10 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
     "INDEX(B3:B7,MATCH(2030,A3:A7,0))"
   )
 
-  /** The value-channel `#N/A` producers a miss must be indistinguishable from. */
+  /**
+   * The `#N/A` producers a miss must be indistinguishable from: `NA()` on the value channel and,
+   * since #692, an XLOOKUP miss on the same Left channel as the legacy lookups.
+   */
   private val naValues: List[String] = List("NA()", "XLOOKUP(2030,A3:A7,B3:B7)")
 
   private val naGuards: List[String => String] = List(

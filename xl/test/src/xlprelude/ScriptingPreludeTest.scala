@@ -643,6 +643,15 @@ class ScriptingPreludeTest extends FunSuite:
     val stale: Vector[StaleDataTable] = wb.audit.staleDataTables
     assertEquals(stale, Vector.empty)
 
+  test("#692: RecalcResult.errorCells and ErrorValueCell resolve with the evaluator's reason"):
+    val wb = Workbook(Sheet("S").put(ref"A1", 1).put(ref"B1", fx"=VLOOKUP(2,A1:A1,1,FALSE)"))
+    val result: RecalcResult = wb.recalculate()
+    val cells: Vector[ErrorValueCell] = result.errorCells
+    assertEquals(cells.map(c => (c.ref, c.error)), Vector((ref"B1", CellError.NA)))
+    assert(cells.exists(_.reason.exists(_.contains("VLOOKUP(2, A1:A1, 1, FALSE)"))), cells)
+    assert(result.summary.contains("S!B1 #N/A — VLOOKUP exact match not found"), result.summary)
+    assertEquals(RecalcResult.MaxNamedErrorCells, 10)
+
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"
   ):

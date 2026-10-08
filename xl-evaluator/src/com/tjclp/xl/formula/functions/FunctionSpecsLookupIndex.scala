@@ -207,13 +207,16 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         matchType <- ctx.evalExpr(matchTypeExpr)
         resolved <- Evaluator.resolveRangeLocation(lookupArray, ctx.sheet, ctx.workbook)
         (targetSheet, lookupRange) = resolved
+        // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed
+        values <- lookupRangeValues(lookupRange, targetSheet, ctx)
         result <- {
           // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
           // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
           val matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
-          val cells: List[(Int, CellValue)] =
-            lookupRange.cells.toList.zipWithIndex.map { case (ref, idx) =>
-              (idx + 1, targetSheet(ref).value)
+          // RANGE positions (row-major, 1-based), blanks included, never compacted
+          val cells: Vector[(Int, CellValue)] =
+            values.zipWithIndex.flatMap { (row, r) =>
+              row.zipWithIndex.map { (cv, c) => (r * lookupRange.width + c + 1, cv) }
             }
 
           val positionOpt: Option[Int] = matchTypeInt match
@@ -276,12 +279,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         searchMode <- toIntArg("XMATCH", searchModeRaw)
         call =
           s"XMATCH(${renderLookupValue(lookup)}, ${lookupLoc.toA1}, $matchMode, $searchMode)"
-        _ <-
-          if Set(-1, 0, 1, 2).contains(matchMode) then Right(())
-          else invalid(s"match_mode $matchMode is not -1, 0, 1 or 2: $call")
-        _ <-
-          if Set(-2, -1, 1, 2).contains(searchMode) then Right(())
-          else invalid(s"search_mode $searchMode is not 1, -1, 2 or -2: $call")
+        _ <- matchModeError("XMATCH", matchMode, call)
+        _ <- searchModeError("XMATCH", searchMode, call)
         resolved <- Evaluator.resolveRangeLocation(lookupLoc, ctx.sheet, ctx.workbook)
         (targetSheet, lookupRange) = resolved
         _ <-
