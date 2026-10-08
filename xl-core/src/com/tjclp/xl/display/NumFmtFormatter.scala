@@ -89,7 +89,12 @@ object NumFmtFormatter:
   def formatValue(value: CellValue, numFmt: NumFmt, rule: GeneralRule): String =
     value match
       case CellValue.Number(n) => formatNumber(n, numFmt, rule)
-      case CellValue.Text(s) => s
+      // Only a custom code can carry a text section; built-in codes echo the text (#693)
+      case CellValue.Text(s) =>
+        numFmt match
+          case NumFmt.Custom(code) =>
+            FormatCodeParser.parse(code).fold(_ => s, FormatCodeParser.applyTextFormat(s, _))
+          case _ => s
       case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
       case CellValue.DateTime(dt) => formatDateTime(dt, numFmt, rule)
       case CellValue.Empty => ""

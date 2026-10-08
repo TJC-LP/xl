@@ -716,11 +716,10 @@ object FormatCodeParser:
         }
       else 0
 
-    // Count minimum integer digits (0 placeholders)
-    val minIntDigits = tokens.count {
-      case FormatToken.Digit('0') => true
-      case _ => false
-    } - decimalDigits
+    // The integer part's placeholders: `0` pads with zeros, `?` with spaces, `#` with nothing
+    val intPlaceholders = (if hasDecimal then tokens.take(decimalIdx) else tokens).collect {
+      case FormatToken.Digit(c) => c
+    }.mkString
 
     def groupedLength(digits: Long): Long =
       if pattern.hasThousands then digits + (digits - 1) / 3 else digits
@@ -735,11 +734,12 @@ object FormatCodeParser:
         val digits = rounded.divide(unit).toString
         // a rounding carry can add the one digit the bound above did not count
         Option.when(groupedLength(digits.length.toLong) <= MaxDigitBlockLength) {
-          val intStr = if pattern.hasThousands then formatWithThousands(digits) else digits
+          // A zero integer part shows only through a `0` placeholder (#693: `??` on 0 is blank)
+          val shown = if digits == "0" && !intPlaceholders.contains('0') then "" else digits
+          val intStr = if pattern.hasThousands then formatWithThousands(shown) else shown
           val paddedInt =
-            if minIntDigits > 0 && intStr.length < minIntDigits then
-              "0" * (minIntDigits - intStr.length) + intStr
-            else intStr
+            padPlaceholders(shown, intPlaceholders, alignRight = true).dropRight(shown.length) +
+              intStr
           val decimals = rounded.remainder(unit).toString
           val decStr =
             if decimalDigits > 0 then "0" * (decimalDigits - decimals.length) + decimals

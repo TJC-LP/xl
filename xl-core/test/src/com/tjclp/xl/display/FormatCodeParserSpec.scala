@@ -1411,3 +1411,22 @@ class FormatCodeParserSpec extends FunSuite:
     val text = FormatCodeParser.parse("0;-0;0;@,").toOption.get
     assertEquals(FormatCodeParser.applyTextFormat("abc", text), "abc,")
   }
+
+  test("formatValue: a text cell renders through the code's text section (#693)") {
+    import com.tjclp.xl.cells.CellValue
+    def fmt(code: String) = NumFmtFormatter.formatValue(CellValue.Text("abc"), NumFmt.Custom(code))
+    assertEquals(fmt("@,"), "abc,")
+    assertEquals(fmt("0;-0;0;\"T:\"@"), "T:abc")
+    assertEquals(fmt("0.00"), "abc")
+  }
+
+  test("applyFormat: integer placeholders pad as Excel does; a lone 0 needs a `0` (#693)") {
+    def fmt(code: String, n: BigDecimal) =
+      FormatCodeParser.applyFormat(n, FormatCodeParser.parse(code).toOption.get)._1
+    assertEquals(fmt("_(* \"-\"??_)", 0), " -   ")
+    assertEquals(fmt("#.00", BigDecimal("0.5")), ".50")
+    assertEquals(fmt("???", 5), "  5")
+    assertEquals(fmt("#,###", 0), "")
+    assertEquals(fmt("#,##0", 0), "0")
+    assertEquals(fmt("000", 5), "005")
+  }
