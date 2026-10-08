@@ -26,6 +26,15 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
   private def bd(unscaled: String, scale: Int): BigDecimal =
     BigDecimal(new java.math.BigDecimal(new BigInteger(unscaled), scale))
 
+  /**
+   * ±unscaled × 10^-scale, negated on the unscaled value. Scala's unary minus rounds under
+   * DECIMAL128: a 40-digit unscaled value loses six digits of scale, which underflows next to
+   * Int.MinValue (#707) and silently rounds the moderate values elsewhere.
+   */
+  private def signed(unscaled: BigInt, scale: Int, negative: Boolean): BigDecimal =
+    val n = if negative then unscaled.bigInteger.negate else unscaled.bigInteger
+    BigDecimal(new java.math.BigDecimal(n, scale))
+
   private val tiny = BigDecimal("1E-2147483647")
   private val huge = BigDecimal("1E+2147483647")
   private val beyondInt = bd("1", Int.MinValue) // 1E+2147483648
@@ -197,9 +206,7 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
         Gen.choose(-20, 20)
       )
       negative <- Gen.oneOf(true, false)
-    yield
-      val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
-      if negative then -magnitude else magnitude
+    yield signed(unscaled, scale, negative)
 
   // No shrinking over extreme scales: halving a value never moves its scale, and a failing case
   // re-run through ScalaCheck's Fractional shrinker for minutes instead of failing
@@ -227,6 +234,20 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
     }
   }
 
+  test("#707: a 40-digit negative at the bottom of the scale range renders under every code") {
+    // Scala's BigDecimal.abs / unary minus round to 34 digits under DECIMAL128 before negating,
+    // which underflows here: the generators and the fraction formatter both threw
+    val digits = BigInt("1234567890" * 4)
+    val neg = signed(digits, Int.MinValue, negative = true)
+    val pos = signed(digits, Int.MinValue, negative = false)
+    assertEquals(neg.bigDecimal.unscaledValue, digits.bigInteger.negate)
+    assertEquals(neg.scale, Int.MinValue)
+    for code <- codes; rule <- bothRules do fmt(code, neg, rule)
+    List("?/8", "# ?/?", "# ?/8").foreach(code =>
+      assertEquals(fmt(code, neg), "-" + fmt(code, pos))
+    )
+  }
+
   /** Values a digit pattern spells out in full: up to 40 digits, exponents within ±400. */
   private val genModerate: Gen[BigDecimal] =
     for
@@ -234,9 +255,7 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
       unscaled <- Gen.listOfN(digits, Gen.choose(0, 9)).map(ds => BigInt(ds.mkString))
       scale <- Gen.choose(-400, 400)
       negative <- Gen.oneOf(true, false)
-    yield
-      val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
-      if negative then -magnitude else magnitude
+    yield signed(unscaled, scale, negative)
 
   property("#689: 0 and 0.00 agree with BigDecimal HALF_UP rounding") {
     forAll(genModerate) { (n: BigDecimal) =>
