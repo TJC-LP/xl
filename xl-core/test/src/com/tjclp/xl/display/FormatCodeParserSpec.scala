@@ -1434,6 +1434,7 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("0\\;;-0;0", 5), "5;")
     assertEquals(fmt("0_\\;-0", 5), "5 ")
     assertEquals(fmt("0*\\;-0", 5), "5")
+    assertEquals(fmt("[$_]0;-0", -5), "-5")
     assertEquals(fmt("#,###", 0), "")
     assertEquals(fmt("#,##0", 0), "0")
     assertEquals(fmt("000", 5), "005")
