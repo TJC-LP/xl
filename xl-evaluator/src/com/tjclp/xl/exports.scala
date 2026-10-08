@@ -50,7 +50,7 @@ object formulaExports:
   export formula.eval.WorkbookEvaluator.*
 
   // Recalc result types (workbook-level total recalculation with per-cell errors)
-  export formula.eval.{CellEvalError, IterativeCalc, RecalcResult}
+  export formula.eval.{CellEvalError, ErrorValueCell, IterativeCalc, RecalcResult}
   // The per-cell range evaluation behind `view --eval` (sheet.evaluateForRangePerCell)
   export formula.eval.RangeEvalResult
   // GH-492: per-strongly-connected-component fixpoint verdicts on RecalcResult.cycles

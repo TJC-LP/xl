@@ -1590,7 +1590,9 @@ object WriteCommands:
   /**
    * [[recalc]] with the typed facts its `--json` payload adds after `{text, saved, written}`:
    * `errorValuedCycles` (#678), each converged cycle that settled on an Excel error, as its member
-   * refs — always present, `[]` when there is none. A `--strict` failure carries the same facts.
+   * refs, and `errorCells` (#692), the first `RecalcResult.MaxNamedErrorCells` error-valued cells
+   * the summary names — `{ref, error, reason}`, `reason` null when the evaluator gave none — both
+   * always present, `[]` when there is none. A `--strict` failure carries the same facts.
    */
   def recalcReport(
     wb: Workbook,
@@ -1638,6 +1640,13 @@ object WriteCommands:
           scc.members.map((sheet, ref) =>
             ujson.Str(DependencyGraph.QualifiedRef(sheet, ref).toString)
           )
+        )
+      }),
+      "errorCells" -> ujson.Arr.from(result.errorCells.map { cell =>
+        ujson.Obj(
+          "ref" -> ujson.Str(DependencyGraph.QualifiedRef(cell.sheet, cell.ref).toString),
+          "error" -> ujson.Str(cell.error.toExcel),
+          "reason" -> cell.reason.fold[ujson.Value](ujson.Null)(ujson.Str(_))
         )
       })
     )

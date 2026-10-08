@@ -69,6 +69,26 @@ object TestFixtures:
       )
     ).withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100)))
 
+  /**
+   * #692: `A1:A3` = 1..3 keyed to `B1:B3`, `D1` an unguarded `VLOOKUP` miss, `D2` the guarded one,
+   * `D3` a `1/0` — the recalc summary names the two error cells with the evaluator's reasons.
+   */
+  def lookupMissBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", 1)
+          .put(ref"A2", 2)
+          .put(ref"A3", 3)
+          .put(ref"B1", "a")
+          .put(ref"B2", "b")
+          .put(ref"B3", "c")
+          .put(ref"D1", CellValue.Formula("VLOOKUP(42,A1:B3,2,FALSE)", None))
+          .put(ref"D2", CellValue.Formula("IFNA(VLOOKUP(42,A1:B3,2,FALSE),\"none\")", None))
+          .put(ref"D3", CellValue.Formula("1/0", None))
+      )
+    )
+
   /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
   def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
 
@@ -250,6 +270,7 @@ object TestFixtures:
     "inplace.xlsx" -> (() => simpleBook()),
     "circular.xlsx" -> (() => circularBook()),
     "error-cycle.xlsx" -> (() => errorCycleBook()),
+    "lookup-miss.xlsx" -> (() => lookupMissBook()),
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),

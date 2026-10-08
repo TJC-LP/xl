@@ -37,6 +37,7 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
   private def assertSameResult(sequential: RecalcResult, parallel: RecalcResult): Unit =
     assertEquals(parallel.errors, sequential.errors)
     assertEquals(parallel.evaluated, sequential.evaluated)
+    assertEquals(parallel.errorReasons, sequential.errorReasons)
     assertEquals(parallel.workbook, sequential.workbook)
     assertEquals(parallel.converged, sequential.converged)
     assertEquals(parallel.iterationsUsed, sequential.iterationsUsed)

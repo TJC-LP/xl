@@ -7,6 +7,7 @@ import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.formula.eval.SheetEvaluator.CellOutcome
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
@@ -383,42 +384,30 @@ object WorkbookEvaluator:
           val ordered = targets.filterNot(bucket.contains) ++ targets.filter(bucket.contains)
           val sheetIndex: Map[SheetName, Int] =
             wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
-          val initial: PassState = (wb.sheets, Map.empty, skippedErrors)
-          val (_, values, errors) = ordered.foldLeft(initial) {
-            case (state @ (sheets, evaluated, failures), q) =>
-              sheetIndex.get(q.sheet) match
-                case None => state
-                case Some(idx) =>
-                  val result =
-                    EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
-                      SheetEvaluator.evaluateCellWithEvaluator(
-                        sheets(idx),
-                        q.ref,
-                        evaluator,
-                        calculationClock,
-                        Some(wb.copy(sheets = sheets))
-                      )
-                    }
-                  result match
-                    case Right(value) =>
-                      (
-                        sheets.updated(
-                          idx,
-                          SheetEvaluator.threadComputed(sheets(idx), q.ref, value)
-                        ),
-                        evaluated.updated(
-                          q.sheet,
-                          evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
-                        ),
-                        failures
-                      )
-                    case Left(error) =>
-                      (sheets, evaluated, failures :+ CellEvalError(q.sheet, q.ref, error))
+          val initial = PassState(wb.sheets, Map.empty, skippedErrors)
+          val PassState(_, values, errors, reasons) = ordered.foldLeft(initial) { (state, q) =>
+            sheetIndex.get(q.sheet) match
+              case None => state
+              case Some(idx) =>
+                val result =
+                  EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
+                    SheetEvaluator.evaluateCellOutcome(
+                      state.sheets(idx),
+                      q.ref,
+                      evaluator,
+                      calculationClock,
+                      Some(wb.copy(sheets = state.sheets))
+                    )
+                  }
+                result match
+                  case Right(outcome) => state.computed(idx, q, outcome)
+                  case Left(error) =>
+                    state.copy(errors = state.errors :+ CellEvalError(q.sheet, q.ref, error))
           }
           // No dependents edges on purpose: cacheResults would otherwise withdraw the caches of
           // cached cells downstream of a failure, and this pass promises cached cells stay
           // byte-identical unconditionally (GH-468).
-          RecalcResult.cacheResults(wb, values, errors, Map.empty)
+          RecalcResult.cacheResults(wb, values, errors, Map.empty, reasons = reasons)
 
   /** A formula cell with no cache that evaluation can compute (data-table records cannot). */
   private def isUncachedEvaluable(value: CellValue): Boolean = value match
@@ -579,7 +568,7 @@ object WorkbookEvaluator:
           tempWb: Workbook,
           q: QualifiedRef,
           clk: Clock
-        ): Option[Either[XLError, CellValue]] =
+        ): Option[Either[XLError, CellOutcome]] =
           sheetIndex.get(q.sheet).map { idx =>
             val tempSheet = sheets(idx)
             // GH-388 defense in depth: recalculate is documented total — a numeric blowup
@@ -588,7 +577,7 @@ object WorkbookEvaluator:
             // unwind the whole recalculation. The guarded evaluator contains throws from the
             // evaluation itself (#681); this catches anything around it.
             EvalDefect.xlGuard(formulaText(q), Some(q.ref)) {
-              SheetEvaluator.evaluateCellWithEvaluator(
+              SheetEvaluator.evaluateCellOutcome(
                 tempSheet,
                 q.ref,
                 generationEvaluator,
@@ -601,30 +590,22 @@ object WorkbookEvaluator:
         def foldResult(
           state: PassState,
           q: QualifiedRef,
-          result: Either[XLError, CellValue]
+          result: Either[XLError, CellOutcome]
         ): PassState =
-          val (sheets, acc, errs) = state
           sheetIndex.get(q.sheet) match
             case None => state
             case Some(idx) =>
               result match
-                case Right(value) =>
-                  (
-                    sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, value)),
-                    acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
-                    errs
-                  )
-                case Left(error) =>
-                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
-                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
+                case Right(outcome) => state.computed(idx, q, outcome)
+                case Left(error) => state.failed(idx, q, error)
 
         def evalPass(
           order: List[QualifiedRef],
           init: PassState,
           clk: Clock
         ): PassState =
-          order.foldLeft(init) { case (state @ (sheets, _, _), q) =>
-            evalOne(sheets, wb.copy(sheets = sheets), q, clk) match
+          order.foldLeft(init) { (state, q) =>
+            evalOne(state.sheets, wb.copy(sheets = state.sheets), q, clk) match
               case None => state // node names a sheet absent from the workbook
               case Some(result) => foldResult(state, q, result)
           }
@@ -733,9 +714,9 @@ object WorkbookEvaluator:
               val wave = waves(waveIndex)
               if wave.length < ParallelWaveCutoff then state = evalPass(wave.toList, state, clk)
               else
-                val (sheets, _, _) = state
+                val sheets = state.sheets
                 val snapshotWb = wb.copy(sheets = sheets)
-                val results: Array[Option[Either[XLError, CellValue]]] =
+                val results: Array[Option[Either[XLError, CellOutcome]]] =
                   Array.fill(wave.length)(None)
                 // Formula costs are heterogeneous (a SUM over 5,000 cells and a scalar add can
                 // share a wave). A shared cursor gives idle workers another cell instead of
@@ -820,7 +801,7 @@ object WorkbookEvaluator:
           pinnedClock: Clock,
           state: PassState
         ): (PassState, SccReport) =
-          val (baseSheets, acc0, errs0) = state
+          val baseSheets = state.sheets
           def withText(order: Vector[QualifiedRef]): List[(QualifiedRef, Int, String)] =
             order.toList.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx, formulaText(q))))
           // `component` is the canonical grid listing (sheet name, row, column): the report, the
@@ -861,19 +842,12 @@ object WorkbookEvaluator:
                 ),
               seed
             )
-          val folded = members.foldLeft((baseSheets, acc0, errs0)) {
-            case ((sheets, acc, errs), (q, idx, _)) =>
-              outcome.results.get(q) match
-                case Some(Right(value)) =>
-                  (
-                    sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, value)),
-                    acc.updated(q.sheet, acc.getOrElse(q.sheet, Map.empty) + (q.ref -> value)),
-                    errs
-                  )
-                case Some(Left(error)) =>
-                  val stripped = SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))
-                  (sheets.updated(idx, stripped), acc, errs :+ CellEvalError(q.sheet, q.ref, error))
-                case None => (sheets, acc, errs) // unreachable: every member evaluates every round
+          // a member's last-round value carries no reason: the round's diagnostic is not kept
+          val folded = members.foldLeft(state) { case (st, (q, idx, _)) =>
+            outcome.results.get(q) match
+              case Some(Right(value)) => st.computed(idx, q, CellOutcome(value, None))
+              case Some(Left(error)) => st.failed(idx, q, error)
+              case None => st // unreachable: every member evaluates every round
           }
           val report = SccReport(
             members = members.map((q, _, _) => (q.sheet, q.ref)).toVector,
@@ -901,8 +875,7 @@ object WorkbookEvaluator:
               (next, reports :+ report)
           }
 
-        val initState: PassState =
-          (initialSheets, Map.empty[SheetName, Map[ARef, CellValue]], Vector.empty[CellEvalError])
+        val initState = PassState(initialSheets, Map.empty, Vector.empty)
 
         // GH-492: iterative mode walks the SCC condensation ONCE in dependency-first order — a run
         // of acyclic components is one `evalPass`, each cyclic component is one `jacobiFixpoint`
@@ -936,13 +909,40 @@ object WorkbookEvaluator:
               case Some(reason) => failPass(orderedBucket, mainState, reason)
             (completedState, Vector.empty[SccReport])
 
-        val (_, successful, evalErrors) = finalState
+        val PassState(_, successful, evalErrors, reasons) = finalState
         val failures = cycleErrors ++ blockedErrors ++ evalErrors
-        RecalcResult.cacheResults(wb, successful, failures, dependents, cycleReports)
+        RecalcResult.cacheResults(wb, successful, failures, dependents, cycleReports, reasons)
 
-  /** GH-492: the threaded state of one recalculation pass (temp sheets, values, errors). */
-  private[eval] type PassState =
-    (Vector[Sheet], Map[SheetName, Map[ARef, CellValue]], Vector[CellEvalError])
+  /**
+   * GH-492: the threaded state of one recalculation pass (temp sheets, values, errors) — #692: and
+   * the reasons of the error-valued cells, for [[RecalcResult.errorCells]].
+   */
+  private[eval] final case class PassState(
+    sheets: Vector[Sheet],
+    values: Map[SheetName, Map[ARef, CellValue]],
+    errors: Vector[CellEvalError],
+    reasons: Map[(SheetName, ARef), String] = Map.empty
+  ):
+    /** A computed cell: threaded onto its sheet and recorded, with its reason when it has one. */
+    def computed(idx: Int, q: QualifiedRef, outcome: CellOutcome): PassState =
+      copy(
+        sheets =
+          sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, outcome.value)),
+        values =
+          values.updated(q.sheet, values.getOrElse(q.sheet, Map.empty) + (q.ref -> outcome.value)),
+        reasons = outcome.reason.fold(reasons - ((q.sheet, q.ref)))(why =>
+          reasons + ((q.sheet, q.ref) -> why)
+        )
+      )
+
+    /**
+     * A host failure: the cell's cache stripped (Excel recalculates it on open), the error kept.
+     */
+    def failed(idx: Int, q: QualifiedRef, error: XLError): PassState =
+      copy(
+        sheets = sheets.updated(idx, SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))),
+        errors = errors :+ CellEvalError(q.sheet, q.ref, error)
+      )
 
   /**
    * Snapshot an explicit clock at most once per recalculation generation.
