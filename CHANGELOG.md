@@ -278,6 +278,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Fraction patterns take an exact absolute value at the bottom of the scale range** (#707): a
+  negative value with more than 34 significant digits and a scale within six of `Int.MinValue`
+  threw `ArithmeticException: Underflow` under a `?/?`-style code, because Scala's
+  `BigDecimal.abs` rounds under DECIMAL128 before negating; the formatter now takes Java's exact
+  `abs`. The `ExtremeExponentFormatSpec` generators negated through the same operator, which both
+  hid the defect (negative samples were rounded to 34 digits first) and made the suite flake with
+  the same exception; they now negate the unscaled value.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
