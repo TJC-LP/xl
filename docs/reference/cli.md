@@ -992,6 +992,14 @@ legacy formula, and xl computes it the same way:
   as legacy inside a plain SUMPRODUCT. Or store the formula as Excel 365 stores a typed one —
   `putf --array` (below): `putf --array C5 "=SUM(A1:A10*B1:B10)"` is the array sum in any row, and
   `putf --array A1 "=SORT(B1:B3)"` spills.
+- **The `IMPLICIT_INTERSECTION` warning** (GH-714). An in-memory `putf` or batch `putf` whose plain
+  cell evaluates differently from the same formula as an array formula says so — the cell, both
+  values and the remedy: `Sheet1!C5: =SUM(A1:A10*B1:B10) is 25 as a plain cell (implicit
+  intersection) but 385 as an array formula; use SUMPRODUCT, putf --array (batch "array": true), or
+  an explicit @`. A formula that cannot spill as a plain cell (`=A1:A10*2`, `=SORT(B1:B3)`) names the
+  array's shape. One warning per command lists the first ten cells, located at the first; it is
+  informational and never gates (`--strict` exits 0 on it). Streaming writes and `--dry-run` do not
+  evaluate and stay silent; `put`, `fill` and `copy` do not check.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").

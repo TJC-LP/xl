@@ -1643,6 +1643,34 @@ object BatchParser:
       }
 
   /**
+   * GH-714: the cells a batch's plain (non-array) putf ops wrote, sheet-qualified by THE sheet rule
+   * on `wb` — the input of the `IMPLICIT_INTERSECTION` check. An op whose sheet does not resolve
+   * contributes nothing (the check is advisory).
+   */
+  def putfTargets(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp]
+  ): Vector[(SheetName, ARef)] =
+    scoped.flatMap { s =>
+      val refs = s.op match
+        case BatchOp.PutFormula(ref, _, _, false) => Vector(ref)
+        case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
+        case BatchOp.PutFormulas(range, _, _) => Vector(range)
+        case _ => Vector.empty
+      lazy val sheet = opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten
+      refs.flatMap { r =>
+        RefType.parse(r).toOption.toList.toVector.flatMap {
+          case RefType.Cell(ref) => sheet.map(_ -> ref).toList.toVector
+          case RefType.QualifiedCell(name, ref) => Vector(name -> ref)
+          case RefType.Range(range) => sheet.toList.toVector.flatMap(n => range.cells.map(n -> _))
+          case RefType.QualifiedRange(name, range) => range.cells.map(name -> _).toVector
+          case _ => Vector.empty
+        }
+      }
+    }
+
+  /**
    * GH-714: a putf with `"array": true` — a dynamic-array anchor at the op's cell, its spill
    * computed now ([[DynamicArrayAuthoring]]); a `format` covers the whole spill. A spill Excel
    * would block fails the op (the batch's `BATCH_OP_FAILED`, the blockers in the message).

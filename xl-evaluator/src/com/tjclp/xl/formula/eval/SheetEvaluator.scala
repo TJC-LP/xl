@@ -656,6 +656,20 @@ object SheetEvaluator:
         case other => Vector(Vector(spillValue(EvalResult.toCellValue(other))))
       }
 
+  /**
+   * GH-714: `formula` evaluated as the plain (legacy) cell at `ref` would be — references in value
+   * positions intersected with the cell — with an explicit evaluator (randomness source).
+   */
+  private[xl] def evaluatePlainAt(
+    sheet: Sheet,
+    formula: String,
+    ref: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, Some(ref))
+
   /** The value one element of an evaluated array stores in its cell (see [[cellResult]]). */
   private def spillValue(value: CellValue): CellValue =
     effectiveValue(value) match

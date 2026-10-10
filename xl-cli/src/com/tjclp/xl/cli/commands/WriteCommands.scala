@@ -26,6 +26,7 @@ import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
   Diagnostics,
+  IntersectionHit,
   OffGridHit,
   Warning,
   WarningCode
@@ -43,7 +44,12 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
-import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.formula.eval.{
+  DynamicArrayAuthoring,
+  ImplicitIntersection,
+  StructuralCachePolicy,
+  StructuralEditor
+}
 import com.tjclp.xl.formula.graph.NameChanges
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -159,7 +165,8 @@ object WriteCommands:
     stream: Boolean,
     policy: WritePolicy,
     warn: Warning => IO[Unit],
-    offGrid: Vector[OffGridHit] = Vector.empty
+    offGrid: Vector[OffGridHit] = Vector.empty,
+    advisories: Workbook => Vector[Warning] = _ => Vector.empty
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -184,14 +191,17 @@ object WriteCommands:
           case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
             ""
           case Some(r) => "\n" + formatRecalcSummary(r)
-        strictGate(
-          policy,
-          s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
-          result,
-          Vector.empty,
-          warn,
-          offGrid
-        )
+        IO.blocking(advisories(finalWb)).flatMap { extra =>
+          strictGate(
+            policy,
+            s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
+            result,
+            Vector.empty,
+            warn,
+            offGrid,
+            extra
+          )
+        }
       }
     }
 
@@ -626,7 +636,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        advisories = intersectionAdvisory(Vector(sheet.name -> ref))
       )
     yield result
 
@@ -708,6 +719,17 @@ object WriteCommands:
         )
       case _ => CliException(base)
 
+  /**
+   * GH-714: the `IMPLICIT_INTERSECTION` advisory for the plain formulas a putf wrote, evaluated on
+   * the final workbook (both evaluations share one clock reading). Informational: never gates.
+   */
+  private[cli] def intersectionAdvisory(
+    targets: Vector[(SheetName, ARef)]
+  ): Workbook => Vector[Warning] = finalWb =>
+    val now = java.time.LocalDateTime.now()
+    val clock = Clock.fixed(now.toLocalDate, now)
+    IntersectionHit.warning(ImplicitIntersection.check(finalWb, targets, clock)).toList.toVector
+
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
     wb: Workbook,
@@ -741,7 +763,8 @@ object WriteCommands:
         stream,
         policy,
         warn,
-        OffGridHit.of(sheet.name, offGrid)
+        OffGridHit.of(sheet.name, offGrid),
+        intersectionAdvisory(range.cellsRowMajor.map(sheet.name -> _).toVector)
       )
     yield result
 
@@ -797,7 +820,8 @@ object WriteCommands:
             config,
             stream,
             policy,
-            warn
+            warn,
+            advisories = intersectionAdvisory(updates.map((r, _) => sheet.name -> r).toVector)
           )
         yield result
 
@@ -1547,7 +1571,8 @@ object WriteCommands:
     recalc: Option[RecalcResult],
     warnings: Vector[SeedTableWarning],
     warn: Warning => IO[Unit],
-    offGrid: Vector[OffGridHit] = Vector.empty
+    offGrid: Vector[OffGridHit] = Vector.empty,
+    extraWarnings: Vector[Warning] = Vector.empty
   ): IO[String] =
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
@@ -1560,10 +1585,13 @@ object WriteCommands:
     val reasons = recalcReasons ++
       Option.when(warnings.nonEmpty)(s"${warnings.size} data-table seeding warning(s)").toList ++
       OffGridHit.strictReason(offGrid).toList
+    // GH-714: informational advisories (IMPLICIT_INTERSECTION) are emitted on both paths and are
+    // never a reason — `--strict` does not gate on them
     if policy.strict && reasons.nonEmpty then
-      IO.raiseError(
-        new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
-      )
+      extraWarnings.traverse_(warn) *>
+        IO.raiseError(
+          new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
+        )
     else
       // Advisory: the summary names the failing cells; the warning is the machine-readable flag
       // (`RECALC_ERRORS` on stderr, or in `warnings[]` under --json) that some formulas were left
@@ -1576,7 +1604,7 @@ object WriteCommands:
             "left uncached (see the recalculation summary; --strict makes this exit 1)"
         )
       }
-      (OffGridHit.warning(offGrid).toList ++ advisory).traverse_(warn).as(summary)
+      (OffGridHit.warning(offGrid).toList ++ advisory ++ extraWarnings).traverse_(warn).as(summary)
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
@@ -1642,7 +1670,11 @@ object WriteCommands:
                     val recalcLine = refreshLine.fold("")(line => s"$line\n")
                     val rendered =
                       s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                    strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid)
+                    // GH-714: the batch's plain putf cells, checked once on the final workbook
+                    val targets = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
+                    IO.blocking(intersectionAdvisory(targets)(finalWb)).flatMap { extra =>
+                      strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
+                    }
                   }
               }
             }
