@@ -4,6 +4,7 @@ import java.util.concurrent.atomic.AtomicLong
 
 import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.{
+  ArgValue,
   ArrayLift,
   EvalContext,
   FunctionSpec,
@@ -217,8 +218,8 @@ object Evaluator:
     )
 
   /**
-   * Resolve a RangeLocation to its target (sheet, range) pair — THE single resolution boundary for
-   * range-typed argument slots (GH-394).
+   * Resolve a RangeLocation to its target (sheet, range) pair — THE single static resolution
+   * boundary for range-typed argument slots (GH-394).
    *
    * For Local ranges, returns the current sheet with the carried range. For CrossSheet ranges,
    * looks up the target sheet in the workbook context. For Name locations the carried range is
@@ -229,7 +230,9 @@ object Evaluator:
    * hop by hop like expression-position NameRef (GH-411), guarded by `resolvingNames` — a chain
    * that revisits a member is a clean cycle error, one deeper than [[NameWalk.MaxDepth]] names a
    * clean too-deep error (#691). Other non-range targets (constants, formulas) are a clean per-cell
-   * #VALUE! error — never a MatchError.
+   * #VALUE! error — never a MatchError. This is the STATIC resolution: a function's range slot goes
+   * through `EvalContext.resolveRange` (GH-710), which also evaluates a name computing a reference
+   * and reads a LET name's reference.
    *
    * @param resolvingNames
    *   the GH-384 name-cycle guard (the resolved names on the current resolution path, #691);
@@ -263,6 +266,15 @@ object Evaluator:
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
+      // GH-710: a LET name's reference lives in the LET environment, which only a function's
+      // EvalContext carries (EvalContext.resolveRange)
+      case TExpr.RangeLocation.Binding(name) =>
+        Left(
+          EvalError.ErrorValue(
+            CellError.Value,
+            Some(s"LET name '$name' resolves only inside its LET")
+          )
+        )
       // GH-612: an error in a range slot (SUM(#REF!)) IS the error value it names
       case TExpr.RangeLocation.Error(error, _) => Left(EvalError.ErrorValue(error))
 
@@ -623,6 +635,31 @@ object Evaluator:
       true
     case call: TExpr.Call[?] => referenceFunctions.contains(call.spec.name)
     case TExpr.Coerced(inner, _) => denotesReference(inner)
+    case _ => false
+
+  /**
+   * GH-710: whether an expression reads a LET name in a range slot (`COUNTIF(r, ">2")`). An array
+   * evaluation's LET binds a reference-denoting value as the reference itself only then — the range
+   * slot needs the reference, and every other read of the name materializes it as before.
+   */
+  private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean = expr match
+    case call: TExpr.Call[?] =>
+      call.spec.argSpec.toValues(call.args).exists {
+        case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
+        case ArgValue.Expr(arg) => readsBindingAsRange(arg)
+        case _ => false
+      }
+    case chain if BinarySpine.isBinary(chain) =>
+      BinarySpine.operandList(chain).exists(readsBindingAsRange)
+    case TExpr.Let(letBindings, body) =>
+      letBindings.exists((_, value) => readsBindingAsRange(value)) || readsBindingAsRange(body)
+    case TExpr.Aggregate(_, TExpr.RangeLocation.Binding(_)) => true
+    case TExpr.Coerced(inner, _) => readsBindingAsRange(inner)
+    case TExpr.UnaryPlus(inner) => readsBindingAsRange(inner)
+    case TExpr.Percent(inner) => readsBindingAsRange(inner)
+    case TExpr.ToInt(inner) => readsBindingAsRange(inner)
+    case TExpr.DateToSerial(inner) => readsBindingAsRange(inner)
+    case TExpr.DateTimeToSerial(inner) => readsBindingAsRange(inner)
     case _ => false
 
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
@@ -1800,8 +1837,10 @@ private class EvaluatorImpl(
    * cell, a name, a LET name bound to one, OFFSET/INDIRECT/INDEX, IF/CHOOSE selecting one) binds
    * the reference itself, a [[RangeOperand]]: intersected where the body reads it as a value, whole
    * where it reads it as a reference (an aggregate, ROWS), materialized in array mode (SUMPRODUCT).
-   * Every other binding is its value — in a plain cell its references intersect, while an
-   * array-returning call (TRANSPOSE) still binds its array.
+   * Array mode binds the reference as well when a range slot in the LET reads a LET name
+   * (`COUNTIF(r, ">2")`, GH-710): the slot takes it whole, every value read materializes it. Every
+   * other binding is its value — in a plain cell its references intersect, while an array-returning
+   * call (TRANSPOSE) still binds its array.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalLet(
@@ -1824,6 +1863,10 @@ private class EvaluatorImpl(
         workbookPath,
         aggregateMemoOpt
       )
+    // GH-710: an array evaluation binds references too when a range slot reads a LET name
+    lazy val bindsReferences = !allowArrayResults ||
+      letBindings.exists((_, value) => Evaluator.readsBindingAsRange(value)) ||
+      Evaluator.readsBindingAsRange(body)
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
       case (Right(env), (name, valueExpr)) =>
@@ -1831,7 +1874,7 @@ private class EvaluatorImpl(
           case _: TExpr.RangeRef | _: TExpr.SheetRange => Right(env)
           case _ =>
             val evaluated =
-              if !allowArrayResults && Evaluator.denotesReference(valueExpr) then
+              if Evaluator.denotesReference(valueExpr) && bindsReferences then
                 scoped(env).referenceArgument(
                   valueExpr.asInstanceOf[TExpr[Any]],
                   sheet,

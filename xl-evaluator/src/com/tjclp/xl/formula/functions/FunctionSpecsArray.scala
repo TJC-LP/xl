@@ -29,10 +29,9 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val transpose: FunctionSpec[ArrayResult] { type Args = UnaryRange } =
     FunctionSpec.simple[ArrayResult, UnaryRange]("TRANSPOSE", Arity.one) { (location, ctx) =>
-      Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-        case (targetSheet, range) =>
-          extractRangeAsMatrixEval(range, targetSheet, ctx)
-            .map(values => ArrayResult(values.transpose))
+      ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+        extractRangeAsMatrixEval(range, targetSheet, ctx)
+          .map(values => ArrayResult(values.transpose))
       }
     }
 
@@ -336,7 +335,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         sortIndex <- idxOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
         sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
-        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(location)
         (targetSheet, range) = resolved
         matrix <- extractRangeAsMatrixEval(range, targetSheet, ctx)
         result <-
@@ -374,7 +373,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         byCol <- byColOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
         exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
-        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(location)
         (targetSheet, range) = resolved
         matrix0 <- extractRangeAsMatrixEval(range, targetSheet, ctx)
       yield
@@ -418,14 +417,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
           case None => Right(ArrayResult.single(CellValue.Error(CellError.NA)))
       for
-        resolvedArray <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
+        resolvedArray <- ctx.resolveRange(arrayLoc)
         (arraySheet, arrayRange) = resolvedArray
         matrix <- extractRangeAsMatrixEval(arrayRange, arraySheet, ctx)
         include <- includeArg match
           case Left(includeLoc) =>
-            Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook).flatMap {
-              case (includeSheet, includeRange) =>
-                extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
+            ctx.resolveRange(includeLoc).flatMap { case (includeSheet, includeRange) =>
+              extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
             }
           // GH-654: a bare cell (`=FILTER(A1:C1,D1)`) arrives as an unresolved PolyRef —
           // evalMaybeArrayArg resolves it to its 1×1 value like every other array-aware slot

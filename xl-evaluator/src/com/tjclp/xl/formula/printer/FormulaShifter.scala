@@ -352,6 +352,8 @@ object FormulaShifter:
       // GH-394: a defined name is an identifier, not coordinates — shifting is a no-op
       // (its refersTo text lives in workbook metadata, not in this formula)
       case name @ RangeLocation.Name(_, _) => name
+      // GH-710: a LET name is an identifier too (its binding's value shifts in the LET)
+      case binding @ RangeLocation.Binding(_) => binding
       // GH-612: an error has no coordinates
       case error @ RangeLocation.Error(_, _) => error
 
@@ -388,7 +390,7 @@ object FormulaShifter:
     def goLoc(location: RangeLocation): Boolean = location match
       case RangeLocation.CrossSheet(sheet, _, _) => matches(sheet)
       case RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, _) | RangeLocation.Error(_, _) =>
+          RangeLocation.Name(_, _) | RangeLocation.Binding(_) | RangeLocation.Error(_, _) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetRef(sheet, _, _, _) => matches(sheet)
@@ -449,7 +451,8 @@ object FormulaShifter:
       case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
       case RangeLocation.Error(_, qualifier) => names(qualifier)
       case RangeLocation.Name(_, None) | RangeLocation.Local(_, _) |
-          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) =>
+          RangeLocation.CrossSheet(_, _, _) | RangeLocation.External(_, _, _, _) |
+          RangeLocation.Binding(_) =>
         false
     def go(e: TExpr[?]): Boolean = e match
       case SheetNameRef(qualifier, _) => qualifier.value.equalsIgnoreCase(sheet)
@@ -513,7 +516,7 @@ object FormulaShifter:
       case RangeLocation.Error(error, qualifier) =>
         RangeLocation.Error(error, qualifier.map(targetQualifier))
       case other @ (RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, None)) =>
+          RangeLocation.Name(_, None) | RangeLocation.Binding(_)) =>
         other
 
     expr match
@@ -706,6 +709,8 @@ object FormulaShifter:
       // GH-394: a defined name is an identifier — structural edits never move or void it
       // (its refersTo text lives in workbook metadata, not in this formula)
       case RangeLocation.Name(_, _) => location
+      // GH-710: a LET name is an identifier (its binding's value shifts in the LET)
+      case RangeLocation.Binding(_) => location
       // GH-612: an error has no coordinates
       case RangeLocation.Error(_, _) => location
 
