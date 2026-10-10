@@ -236,6 +236,21 @@ class SheetEditsSpec extends FunSuite:
     assertEquals(values(a1("D5")).value, num(60))
   }
 
+  test("GH-714: a dynamic-array anchor of any size pastes as a 1x1 dynamic array at the target") {
+    val dyn = CellValue.Formula(
+      "SORT($A$1:$A$3)",
+      Some(num(1)),
+      FormulaKind.dynamicArray(rng("B1:B3"))
+    )
+    val s = Sheet(name).put(a1("B1"), dyn).put(a1("B2"), num(2)).put(a1("B3"), num(3))
+    val copied = ok(s.copyRange(rng("B1"), rng("D5"), valuesOnly = false)(using marking))
+    // Excel re-spills a pasted =SORT(..): the extent is re-derived there, so the record is 1x1
+    assertEquals(
+      copied(a1("D5")).value,
+      CellValue.Formula("SORT($A$1:$A$3)|2,4", None, FormulaKind.dynamicArray(rng("D5:D5")))
+    )
+  }
+
   test("a multi-cell array anchor pastes a plain formula and its members their constants") {
     val s = Sheet(name)
       .put(a1("B1"), arrayFormula("A1:A2*10", "B1:B2", Some(num(10))))

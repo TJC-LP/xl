@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.sheets.{
   ColumnProperties,
@@ -204,8 +204,22 @@ object XlsxReader:
   private case class RetainedDrawingParts(
     xml: Map[String, String], // drawingN.xml and drawingN.xml.rels, as UTF-8
     charts: Map[String, String], // chartN.xml and chartN.xml.rels (GH-222), as UTF-8
-    media: Map[String, ArraySeq[Byte]] // xl/media/*
+    media: Map[String, ArraySeq[Byte]], // xl/media/*
+    // GH-714: cell-metadata candidates (xl/metadata.xml), resolved by workbook rel type
+    cellMetadata: Map[String, String] = Map.empty
   )
+
+  /**
+   * Cell-metadata candidates retained at scan time (GH-714), the comment-candidate pattern: which
+   * part is the workbook's metadata part is decided by the `sheetMetadata` workbook relationship
+   * ([[SheetMetadataPart.locate]]). The part stays UNPARSED in the manifest — it rides the verbatim
+   * copy loop unless a write must extend it.
+   */
+  private def isCellMetadataCandidatePart(path: String): Boolean =
+    path.startsWith("xl/") && path.endsWith(".xml") && !path.contains("/_rels/") && {
+      val basename = path.substring(path.lastIndexOf('/') + 1)
+      basename.toLowerCase.contains("metadata")
+    }
 
   private def isDrawingXmlPart(path: String): Boolean =
     path.matches("xl/drawings/drawing\\d+\\.xml") ||
@@ -320,6 +334,7 @@ object XlsxReader:
     val drawingXml = mutable.Map[String, String]()
     val chartXml = mutable.Map[String, String]()
     val mediaBytes = mutable.Map[String, ArraySeq[Byte]]()
+    val cellMetadataXml = mutable.Map[String, String]()
     val manifestBuilder = PartManifestBuilder.empty
 
     // Security tracking
@@ -398,6 +413,8 @@ object XlsxReader:
                   parts(entryName) = new String(content, "UTF-8")
                 else if entryName.startsWith("xl/media/") then
                   mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
+                else if isCellMetadataCandidatePart(entryName) then
+                  cellMetadataXml(entryName) = new String(content, "UTF-8")
                 // Unknown part - index but don't store content
                 builder = builder.recordUnparsed(entryName)
 
@@ -428,7 +445,12 @@ object XlsxReader:
           // Parse workbook structure from known parts
           parseWorkbook(
             parts.toMap,
-            RetainedDrawingParts(drawingXml.toMap, chartXml.toMap, mediaBytes.toMap),
+            RetainedDrawingParts(
+              drawingXml.toMap,
+              chartXml.toMap,
+              mediaBytes.toMap,
+              cellMetadataXml.toMap
+            ),
             source,
             manifest,
             fingerprint,
@@ -482,6 +504,13 @@ object XlsxReader:
       // Parse theme (optional, falls back to Office theme)
       theme = parseTheme(parts)
 
+      // GH-714: the dynamic-array `cm` indices, resolved through the metadata part
+      cellMetadata = SheetMetadataPart
+        .locate(workbookRels)
+        .flatMap(retainedDrawings.cellMetadata.get)
+        .map(SheetMetadataPart.parse)
+        .getOrElse(CellMetadataIndex.empty)
+
       // Parse sheets and collect comment/drawing mappings (GH-221)
       parsedSheets <- parseSheets(
         parts,
@@ -489,7 +518,8 @@ object XlsxReader:
         ooxmlWb.sheets,
         sst,
         styles,
-        workbookRels
+        workbookRels,
+        cellMetadata
       )
       (sheets, commentPathMapping) = (parsedSheets.sheets, parsedSheets.commentPathMapping)
 
@@ -900,7 +930,8 @@ object XlsxReader:
     sheetRefs: Seq[SheetRef],
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
-    relationships: Relationships
+    relationships: Relationships,
+    cellMetadata: CellMetadataIndex
   ): XLResult[ParsedSheets] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
     val commentPathBuilder = Map.newBuilder[SheetName, String]
@@ -982,7 +1013,8 @@ object XlsxReader:
             comments,
             tables,
             hyperlinkRels,
-            drawings
+            drawings,
+            cellMetadata
           )
         yield domainSheet
       }
@@ -1062,7 +1094,8 @@ object XlsxReader:
     comments: Map[ARef, com.tjclp.xl.cells.Comment],
     tables: Map[String, TableSpec],
     hyperlinkRels: Map[String, String],
-    drawings: Vector[com.tjclp.xl.drawings.Drawing]
+    drawings: Vector[com.tjclp.xl.drawings.Drawing],
+    cellMetadata: CellMetadataIndex
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
@@ -1074,8 +1107,15 @@ object XlsxReader:
       row <- ooxmlSheet.rows
       ooxmlCell <- row.cells
     do
-      // SST resolution already done in OoxmlWorksheet.fromXml
-      val value = ooxmlCell.value
+      // SST resolution already done in OoxmlWorksheet.fromXml. GH-714: an array record whose `cm`
+      // resolves to XLDAPR dynamic-array properties is a dynamic array.
+      val value = ooxmlCell.value match
+        case f @ CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
+            if ooxmlCell.cellMetadata.isDefined =>
+          FormulaKindCodec
+            .withCellMetadata(Some(arr), ooxmlCell.cellMetadata.map(_.toString), cellMetadata)
+            .fold(f)(k => f.copy(kind = k))
+        case other => other
       val styleIdOpt = ooxmlCell.styleIndex.flatMap(styleMapping.get)
       val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
       builder += (cell.ref -> cell)

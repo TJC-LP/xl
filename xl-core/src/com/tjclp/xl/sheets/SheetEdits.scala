@@ -34,8 +34,9 @@ private[xl] object SheetEdits:
    *
    * A single-cell array formula (a 1x1 CSE record) stays one, re-anchored at `target`: Excel pastes
    * and fills `{=...}` as `{=...}`, and a plain paste would be a legacy formula computing another
-   * value. A multi-cell array anchor pastes a plain formula, since its record claims cells the
-   * paste does not write.
+   * value. A multi-cell CSE anchor pastes a plain formula, since its record claims cells the paste
+   * does not write. A dynamic-array anchor of any size pastes as a 1x1 dynamic array at `target`
+   * (GH-714): its extent is re-derived by the next evaluation.
    */
   private def shifted(
     value: CellValue,
@@ -48,6 +49,10 @@ private[xl] object SheetEdits:
         Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
       case CellValue.Formula(expr, _, kind) =>
         val pastedKind = kind match
+          // GH-714: a dynamic array of any size pastes as a dynamic array anchored at the target;
+          // its spill is recomputed there, as Excel re-spills a pasted `=SORT(..)`
+          case arr: FormulaKind.ArrayFormula if arr.isDynamicArray =>
+            arr.copy(ref = CellRange(target, target))
           case arr: FormulaKind.ArrayFormula if arr.ref.width == 1 && arr.ref.height == 1 =>
             arr.copy(ref = CellRange(target, target))
           case _ => FormulaKind.Normal()

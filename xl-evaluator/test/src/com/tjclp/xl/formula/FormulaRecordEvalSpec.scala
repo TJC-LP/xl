@@ -381,6 +381,45 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("A1*2", None))
   }
 
+  private def kindAt(out: Workbook, at: ARef): FormulaKind =
+    sheetNamed(out, "S")(at).value match
+      case CellValue.Formula(_, _, kind) => kind
+      case other => fail(s"expected a formula, got $other")
+
+  private def sortSheet: Sheet =
+    Sheet(S).put(
+      ref"C8",
+      CellValue.Formula("=SORT(A1:A4)", Some(num(1)), FormulaKind.dynamicArray(range("C8:C11")))
+    )
+
+  test("GH-714: a delete inside a dynamic array shrinks its extent and keeps the mode") {
+    // delete row 10 (index0 9), strictly inside C8:C11
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 1)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C10")))
+  }
+
+  test("GH-714: a delete band swallowing a dynamic array's end stops it at the last survivor") {
+    // delete rows 10..13 (index0 9..12): the end C11 falls in the band
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 4)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C9")))
+  }
+
+  test("GH-714: an insert inside a dynamic array grows it; an insert before shifts it") {
+    val grown = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 9, count = 2)
+    assertEquals(kindAt(grown, ref"C8"), FormulaKind.dynamicArray(range("C8:C13")))
+    val shifted = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 0, count = 1)
+    assertEquals(kindAt(shifted, ref"C9"), FormulaKind.dynamicArray(range("C9:C12")))
+  }
+
+  test("GH-714: a legacy (CSE) record torn by the same delete still degrades") {
+    val cse = Sheet(S).put(
+      ref"C8",
+      CellValue.Formula("=SUM(A1:A4*2)", Some(num(1)), FormulaKind.ArrayFormula(range("C8:C11")))
+    )
+    val out = StructuralEditor.deleteRows(Workbook(Vector(cse)), S, at = 9, count = 1)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.Normal())
+  }
+
   test("GH-495 round-trip gate: a refused tear leaves the record in the written XML, lint clean") {
     import com.tjclp.xl.sheets.dataTableSyntax.*
     val authored = Sheet("Data")

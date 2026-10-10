@@ -25,13 +25,15 @@ object RendererCommon:
     else "#ERROR!"
 
   /**
-   * Formula display text: leading `=` always; `{=...}` braces when the cell carries a non-Normal
-   * CT_CellFormula record (array/dataTable) — Excel's own formula-bar convention (GH-430).
+   * Formula display text: leading `=` always; `{=...}` braces when the cell carries a CSE array or
+   * data-table record — Excel's own formula-bar convention (GH-430). A dynamic-array anchor shows
+   * no braces: Excel 365 displays a spilling `=SORT(..)` exactly as typed (GH-714).
    */
   def formulaDisplay(expr: String, kind: FormulaKind): String =
     val withEquals = if expr.startsWith("=") then expr else s"=$expr"
     kind match
       case _: FormulaKind.Normal => withEquals
+      case k if k.isDynamicArray => withEquals
       case _ => s"{$withEquals}"
 
   /**

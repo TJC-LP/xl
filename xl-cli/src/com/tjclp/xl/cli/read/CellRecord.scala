@@ -59,12 +59,16 @@ final case class FormulaInfo(expression: String, kind: FormulaKind, cached: Bool
   /** The expression with its leading `=`, as the JSON `formula` field carries it. */
   def text: String = if expression.startsWith("=") then expression else s"=$expression"
 
-  /** The formula-bar spelling: `=…`, braced `{=…}` for array and data-table records. */
+  /** The formula-bar spelling: `=…`, braced `{=…}` for CSE array and data-table records. */
   def display: String = RendererCommon.formulaDisplay(expression, kind)
 
-  /** The additive `formulaKind` name; `None` for a normal formula. */
+  /**
+   * The additive `formulaKind` name; `None` for a normal formula. A dynamic-array anchor is
+   * `dynamicArray` (GH-714); `array` stays the CSE record.
+   */
   def kindName: Option[String] = kind match
     case _: FormulaKind.Normal => None
+    case k if k.isDynamicArray => Some("dynamicArray")
     case _: FormulaKind.ArrayFormula => Some("array")
     case _: FormulaKind.DataTable => Some("dataTable")
 

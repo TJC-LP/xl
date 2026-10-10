@@ -1,7 +1,18 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.FormulaKind
+import com.tjclp.xl.cells.{ArrayMode, FormulaKind}
+
+/**
+ * The resolved `cm` (cell metadata) indices of a package (GH-714): the 1-based `cellMetadata/bk`
+ * index of every block that names XLDAPR dynamic-array properties with `fDynamic` set, mapped to
+ * the dynamic mode it describes. Built once per package from `xl/metadata.xml` and shared by the
+ * DOM and streaming readers; an index absent from the map is not a dynamic-array marker.
+ */
+private[xl] final case class CellMetadataIndex(byCm: Map[Int, ArrayMode.Dynamic])
+
+private[xl] object CellMetadataIndex:
+  val empty: CellMetadataIndex = CellMetadataIndex(Map.empty)
 
 /**
  * String-level codec between CT_CellFormula record attributes and [[FormulaKind]] (GH-430).
@@ -80,10 +91,14 @@ private[xl] object FormulaKindCodec:
     kind match
       case FormulaKind.Normal(aca, ca) =>
         (if aca then List("aca" -> "1") else Nil) ++ (if ca then List("ca" -> "1") else Nil)
-      case FormulaKind.ArrayFormula(ref, aca, ca) =>
+      case FormulaKind.ArrayFormula(ref, aca, ca, mode) =>
+        // GH-714: Excel writes a 1x1 dynamic array with a bare ref (`ref="C5"`); CSE keeps the pin
+        val refText = mode match
+          case _: ArrayMode.Dynamic if ref.start == ref.end => ref.start.toA1
+          case _ => ref.toA1
         List("t" -> "array")
           ++ (if aca then List("aca" -> "1") else Nil)
-          ++ List("ref" -> ref.toA1)
+          ++ List("ref" -> refText)
           ++ (if ca then List("ca" -> "1") else Nil)
       case FormulaKind.DataTable(ref, dt2D, dtr, r1, r2, del1, del2, ca) =>
         List(
@@ -97,3 +112,38 @@ private[xl] object FormulaKindCodec:
           ++ r1.map(r => "r1" -> r.toA1).toList
           ++ r2.map(r => "r2" -> r.toA1).toList
           ++ (if ca then List("ca" -> "1") else Nil)
+
+  /**
+   * GH-714: upgrade an array record to a dynamic array when the cell's `cm` attribute resolves,
+   * through the package's metadata part, to XLDAPR properties with `fDynamic` set. Anything else —
+   * no `cm`, a junk or out-of-range index, a non-XLDAPR block, `fDynamic=0`, a missing part, or a
+   * `cm` on a record that is not an array — leaves the kind exactly as read (lenient-total).
+   */
+  def withCellMetadata(
+    kind: Option[FormulaKind],
+    cm: Option[String],
+    idx: CellMetadataIndex
+  ): Option[FormulaKind] =
+    kind match
+      case Some(arr: FormulaKind.ArrayFormula) =>
+        cm.flatMap(_.trim.toIntOption).flatMap(idx.byCm.get) match
+          case Some(dynamic) => Some(arr.copy(mode = dynamic))
+          case None => kind
+      case _ => kind
+
+  /**
+   * The `<c>` attributes a record contributes (GH-714): `cm` for a dynamic array, from the index
+   * the writer's metadata plan allocated (`None` = no part to point at, so the record is written in
+   * its legacy shape rather than with a dangling `cm`); nothing for every other kind.
+   */
+  def cellAttrs(kind: FormulaKind, cmOf: ArrayMode.Dynamic => Option[Int]): List[(String, String)] =
+    cellMetadataOf(kind, cmOf).map(n => "cm" -> n.toString).toList
+
+  /** The `cm` index a record is written with: [[cellAttrs]] as a number. */
+  def cellMetadataOf(kind: FormulaKind, cmOf: ArrayMode.Dynamic => Option[Int]): Option[Int] =
+    kind match
+      case FormulaKind.ArrayFormula(_, _, _, dynamic: ArrayMode.Dynamic) => cmOf(dynamic)
+      case _ => None
+
+  /** No metadata part: dynamic records are written without `cm`. */
+  val noCellMetadata: ArrayMode.Dynamic => Option[Int] = _ => None

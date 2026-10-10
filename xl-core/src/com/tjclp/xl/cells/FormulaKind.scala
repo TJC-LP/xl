@@ -23,8 +23,19 @@ enum FormulaKind derives CanEqual:
    */
   case Normal(aca: Boolean = false, ca: Boolean = false)
 
-  /** `<f t="array" ref="..">expr</f>` — legacy CSE anchor. */
-  case ArrayFormula(ref: CellRange, aca: Boolean = false, ca: Boolean = false)
+  /**
+   * `<f t="array" ref="..">expr</f>` — an array-formula anchor whose result fills `ref`. `mode`
+   * tells a legacy CSE record (`{=…}`, Ctrl+Shift+Enter) from an Excel 365 dynamic array (a
+   * spilling formula, flagged on disk by the cell's `cm` attribute pointing at XLDAPR dynamic-array
+   * properties in `xl/metadata.xml`, GH-714). Both evaluate in array mode; only the mode decides
+   * which one Excel shows and whether it re-spills.
+   */
+  case ArrayFormula(
+    ref: CellRange,
+    aca: Boolean = false,
+    ca: Boolean = false,
+    mode: ArrayMode = ArrayMode.Legacy
+  )
 
   /**
    * `<f t="dataTable" .../>` — carries no formula text in XML; the owning Formula's expression is
@@ -43,6 +54,16 @@ enum FormulaKind derives CanEqual:
   )
 
 object FormulaKind:
+  /** An Excel 365 dynamic-array anchor whose spill fills `extent` (anchor = `extent.start`). */
+  def dynamicArray(extent: CellRange): FormulaKind.ArrayFormula =
+    ArrayFormula(extent, mode = ArrayMode.Dynamic())
+
+  extension (k: FormulaKind)
+    /** True for an Excel 365 dynamic-array anchor (GH-714); false for CSE and every other kind. */
+    def isDynamicArray: Boolean = k match
+      case ArrayFormula(_, _, _, ArrayMode.Dynamic(_)) => true
+      case _ => false
+
   /**
    * Excel formula-bar text for a data table record, without braces or a leading `=`: a 2-D table
    * renders `TABLE(r1,r2)`; a 1-D row-oriented table (`dtr`) renders `TABLE(r1,)`; a 1-D
@@ -54,3 +75,16 @@ object FormulaKind:
     if dt.dt2D then s"TABLE($first,$second)"
     else if dt.dtr then s"TABLE($first,)"
     else s"TABLE(,$first)"
+
+/**
+ * How an [[FormulaKind.ArrayFormula]] record is stored and shown (GH-714).
+ *
+ * `Legacy` is the CSE array Excel shows in braces (`{=SUM(A1:A3*B1:B3)}`): `t="array"` and no `cm`.
+ * `Dynamic` is the Excel 365 spilling formula: the same `<f t="array">` record plus the cell's `cm`
+ * attribute, resolved through `xl/metadata.xml` to XLDAPR dynamic-array properties with `fDynamic`
+ * set. `collapsed` carries XLDAPR's `fCollapsed` losslessly. The model never holds the raw `cm`
+ * index; the writer allocates it from the metadata part it ships.
+ */
+enum ArrayMode derives CanEqual:
+  case Legacy
+  case Dynamic(collapsed: Boolean = false)

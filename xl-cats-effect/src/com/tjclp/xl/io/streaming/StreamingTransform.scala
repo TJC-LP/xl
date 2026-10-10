@@ -638,6 +638,12 @@ object StreamingTransform:
                 case Some(t) if t.nonEmpty => writer.writeAttribute("t", t)
                 case Some(_) => () // Empty type = number, don't write
                 case None => writer.writeAttribute(attrQName, attrValue)
+            else if skipContent && (attrQName == "cm" || attrQName == "vm") then
+              // GH-714: cell/value metadata describe the content a value patch replaces — a
+              // dynamic-array marker or a rich value (image in cell). Left on the new value, `cm`
+              // turns a plain formula into a phantom dynamic array; a stream write never authors
+              // either.
+              ()
             else writer.writeAttribute(attrQName, attrValue)
 
           // Add missing attributes if needed
@@ -1192,6 +1198,12 @@ object StreamingTransform:
                 case Some(t) if t.nonEmpty => writer.writeAttribute("t", t)
                 case Some(_) => () // Empty type = number, don't write
                 case None => writer.writeAttribute(attrQName, attrValue)
+            else if skipContent && (attrQName == "cm" || attrQName == "vm") then
+              // GH-714: cell/value metadata describe the content a value patch replaces — a
+              // dynamic-array marker or a rich value (image in cell). Left on the new value, `cm`
+              // turns a plain formula into a phantom dynamic array; a stream write never authors
+              // either.
+              ()
             else writer.writeAttribute(attrQName, attrValue)
 
           // Add missing attributes if needed
