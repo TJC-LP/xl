@@ -1619,11 +1619,24 @@ private class EvaluatorImpl(
       // into its argument list: `SUM("5")` is 5, `SUM("x")` is #VALUE!)
       case TExpr.Coerced(inner, _) =>
         referenceArgument(inner.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
-      case call: TExpr.Call[?] if Evaluator.referenceFunctions.contains(call.spec.name) =>
+      case call: TExpr.Call[?]
+          if Evaluator.referenceFunctions.contains(call.spec.name) && !liftsOverArray(call) =>
         evalCall(call, sheet, clock, workbook, currentCell, selectsReference = true)
       // `+range` is an operator with a value operand, not a reference (the ToolPak rule relies on
       // it): in a plain cell it is intersected like any operand
       case other => eval(other.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+
+  /**
+   * In array mode, a reference function lifted over an array (`INDEX(A1:C3,{1,2},1)`) is the array
+   * of the values it selects, not one reference: the condition [[evalLiftedCall]] lifts on.
+   */
+  private def liftsOverArray(call: TExpr.Call[?]): Boolean =
+    allowArrayResults && (call.spec.flags.lift match
+      case ArrayLift.Off => false
+      case ArrayLift.On(lifted, _) =>
+        call.spec.argSpec.scalarSlots(call.args).zipWithIndex.exists { case ((expr, _), at) =>
+          lifted.forall(_.contains(at)) && !ArrayLifting.isScalarCertain(expr, bindings)
+        })
 
   // ===== Excel array lifting (FunctionFlags.lift) =====
 

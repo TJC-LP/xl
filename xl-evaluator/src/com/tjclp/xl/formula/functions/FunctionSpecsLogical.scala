@@ -37,19 +37,22 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
     combine: (Boolean, Boolean) => Boolean
   ): Either[EvalError, Option[Boolean]] =
     val label = s"$fnName condition"
-    // AND's and OR's arguments are Excel's reference class: a bare range arrives whole as an
-    // ArrayResult and folds by Excel's reference rule; any other expression evaluates in the
+    // AND's and OR's arguments are Excel's reference class: a bare range arrives whole as a
+    // reference and folds by Excel's reference rule; any other expression evaluates in the
     // formula's mode (in a plain cell its references intersect) and an array result folds by the
     // array-condition rule.
     val range = bareRange(expr)
     val isRange = range.isDefined
-    range
-      .fold(ctx.evalReferenceArg(expr.asInstanceOf[TExpr[Any]]))(evalMaybeArrayArg(ctx, _))
+    ctx
+      .evalReferenceArg(range.getOrElse(expr).asInstanceOf[TExpr[Any]])
       .flatMap {
-        // a reference IF/CHOOSE selected, or a range name: Excel's reference rule, as for a range
+        // a range, a reference IF/CHOOSE selected, or a range name: Excel's reference rule, which
+        // ignores blanks, so a whole column or row reads only the used range (GH-711)
         case RangeOperand(target, selected) =>
-          extractRangeAsMatrixEval(selected, target, ctx)
-            .flatMap(m => rangeFold(label, ArrayResult(m), combine))
+          boundedToUsed(selected, target).fold(Right(None))(used =>
+            extractRangeAsMatrixEval(used, target, ctx)
+              .flatMap(m => rangeFold(label, ArrayResult(m), combine))
+          )
         case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
         case arr: ArrayResult =>
           ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
