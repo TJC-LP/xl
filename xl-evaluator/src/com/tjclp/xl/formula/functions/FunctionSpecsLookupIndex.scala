@@ -37,7 +37,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     )((args, ctx) => indexTarget(args, ctx).map(_.fold(identity, identity))) { (args, ctx) =>
       indexTarget(args, ctx).flatMap {
         case Left(values) => Right(values)
-        case Right(ref) => referenceResult(ref.range, ref.sheet, ctx)(indexValues(ref, ctx))
+        case Right(ref) =>
+          referenceResult(ref.range, ref.sheet, ctx)(boundedReferenceValues(ref, ctx))
       }
     }
 
@@ -159,36 +160,6 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         )
       )
     else Right(Some(pos - 1))
-
-  /**
-   * The values of the reference INDEX returns, a whole row or column bounded to the sheet's used
-   * range (empty when the two do not meet), so `INDEX($A$1:$A$100000,0)` costs the data, not the
-   * reference — cells past the used range are blank either way.
-   */
-  private def indexValues(ref: RangeOperand, ctx: EvalContext): Either[EvalError, ArrayResult] =
-    val RangeOperand(targetSheet, reference) = ref
-    val used = targetSheet.usedRange
-    def span(lo: Int, hi: Int, usedAxis: Option[(Int, Int)]): Option[(Int, Int)] =
-      if lo == hi then Some((lo, hi))
-      else
-        usedAxis
-          .map { case (ulo, uhi) => (math.max(ulo, lo), math.min(uhi, hi)) }
-          .filter { case (l, h) => l <= h }
-    val rowSpan = span(
-      reference.rowStart.index0,
-      reference.rowEnd.index0,
-      used.map(u => (u.rowStart.index0, u.rowEnd.index0))
-    )
-    val colSpan = span(
-      reference.colStart.index0,
-      reference.colEnd.index0,
-      used.map(u => (u.colStart.index0, u.colEnd.index0))
-    )
-    (rowSpan, colSpan) match
-      case (Some((r0, r1)), Some((c0, c1))) =>
-        val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
-        extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
-      case _ => Right(ArrayResult.empty)
 
   val matchFn: FunctionSpec[BigDecimal] { type Args = MatchArgs } =
     FunctionSpec.simple[BigDecimal, MatchArgs](

@@ -250,9 +250,20 @@ class ErrorLiteralSpec extends FunSuite:
     )
   }
 
-  test("GH-694: an error literal as one end of a range is refused, not read as a range") {
-    // Excel collapses a range with a deleted end to the whole `Sheet1!#REF!`; these never occur
-    List("=Sheet1!#REF!:A1", "=Sheet1!A1:#REF!", "=SUM(Sheet1!A1:#REF!)").foreach { text =>
-      assert(FormulaParser.parse(text).isLeft, s"$text parsed as ${FormulaParser.parse(text)}")
+  test("GH-694: an error literal as one end of a range is never read as a lexical range") {
+    // Excel collapses a range with a deleted end to the whole `Sheet1!#REF!`. GH-713: written by
+    // hand — or left by a deletion under the range operator, `#REF!:INDEX(…)` — the error literal
+    // is an operand of `:`, and the range is the error
+    List("=T!#REF!:A1", "=T!A1:#REF!", "=SUM(T!A1:#REF!)", "=#REF!:A1").foreach { text =>
+      FormulaParser.parse(text) match
+        case Right(_: TExpr.SheetRange | _: TExpr.RangeRef) => fail(s"$text read as a range")
+        case Right(_) =>
+          val book = Workbook(sheet)
+          assertEquals(
+            sheet.evaluateFormula(text, workbook = Some(book)).fold(e => fail(e.message), identity),
+            CellValue.Error(CellError.Ref),
+            text
+          )
+        case Left(err) => fail(s"$text: $err")
     }
   }

@@ -486,13 +486,18 @@ class SpillReferenceSpec extends FunSuite:
   }
 
   test("GH-695: lookup values feed aggregates without retaining their formula records") {
+    // VLOOKUP and HLOOKUP return the value (TRUE, counted as 1); XLOOKUP returns a reference
+    // (GH-713), whose logical SUM skips exactly as `SUM(B1,1)` and `SUM(INDEX(B1:B1,1),1)` do in
+    // Excel — its if_not_found is a value again
     val selectors = List(
-      "VLOOKUP(1,A1:B1,2,FALSE)",
-      "HLOOKUP(1,A1:A2,2,FALSE)",
-      "XLOOKUP(1,A1:A1,B1:B1)",
-      "XLOOKUP(2,A1:A1,B1:B1,B1)"
+      ("VLOOKUP(1,A1:B1,2,FALSE)", 2),
+      ("HLOOKUP(1,A1:A2,2,FALSE)", 2),
+      ("XLOOKUP(1,A1:A1,B1:B1)", 1),
+      ("INDEX(B1:B1,1)", 1),
+      ("B1", 1),
+      ("XLOOKUP(2,A1:A1,B1:B1,B1)", 2)
     )
-    selectors.foreach { selector =>
+    selectors.foreach { (selector, expected) =>
       val formula = s"SUM($selector,1)"
       val sheet = Sheet("Sheet1")
         .put(ref"A1", n(1))
@@ -506,7 +511,7 @@ class SpillReferenceSpec extends FunSuite:
       )
       results.foreach { result =>
         assertEquals(result.errors, Vector.empty, formula)
-        assertEquals(c1(result.workbook), CellValue.Formula(formula, Some(n(2))), formula)
+        assertEquals(c1(result.workbook), CellValue.Formula(formula, Some(n(expected))), formula)
       }
     }
   }

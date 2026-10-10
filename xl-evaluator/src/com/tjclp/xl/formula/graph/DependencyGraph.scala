@@ -233,7 +233,10 @@ object DependencyGraph:
   ): Boolean =
     expr match
       case call: TExpr.Call[?] =>
-        (includeDynamicCalls && call.spec.flags.dynamicDeps) || call.spec.argSpec
+        // GH-713: a computed range its own edges do not cover reads cells the graph cannot see
+        (includeDynamicCalls && (call.spec.flags.dynamicDeps ||
+          ReferenceOperators.isComputedRangeDynamic(call, ReferenceOperators.staticShape))) ||
+        call.spec.argSpec
           .toValues(call.args)
           .exists {
             case ArgValue.Expr(e) => referencesMatching(e, resolveName, includeDynamicCalls)
@@ -411,17 +414,17 @@ object DependencyGraph:
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
     val names = FunctionRegistry.dynamicFunctionNames
-    if names.isEmpty then Set.empty
-    else
-      sheet.cells.iterator.flatMap { case (ref, cell) =>
-        cell.value match
-          case CellValue.Formula(expression, _, _)
-              if names.exists(n => expression.toUpperCase(java.util.Locale.ROOT).contains(n)) =>
-            FormulaParser.parse(expression) match
-              case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
-              case _ => None
-          case _ => None
-      }.toSet
+    sheet.cells.iterator.flatMap { case (ref, cell) =>
+      cell.value match
+        // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
+        case CellValue.Formula(expression, _, _)
+            if names.exists(n => expression.toUpperCase(java.util.Locale.ROOT).contains(n)) ||
+              ReferenceOperators.mayContainComputedRange(expression) =>
+          FormulaParser.parse(expression) match
+            case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
+            case _ => None
+        case _ => None
+    }.toSet
 
   /**
    * GH-520: workbook-aware dynamic classification, including parseable defined-name chains.
@@ -591,20 +594,20 @@ object DependencyGraph:
     val candidateTokens = dynamicFunctions ++ nameTokens
 
     val cells =
-      if candidateTokens.isEmpty then Set.empty[QualifiedRef]
-      else
-        workbook.sheets.iterator.flatMap { sheet =>
-          sheet.cells.iterator.flatMap { case (ref, cell) =>
-            cell.value match
-              case CellValue.Formula(expression, _, _)
-                  if candidateTokens.exists(upper(expression).contains) =>
-                parse(expression) match
-                  case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
-                    Some(QualifiedRef(sheet.name, ref))
-                  case _ => None
-              case _ => None
-          }
-        }.toSet
+      workbook.sheets.iterator.flatMap { sheet =>
+        sheet.cells.iterator.flatMap { case (ref, cell) =>
+          cell.value match
+            // GH-713: a computed range its edges do not cover is dynamic (see dynamicCells(sheet))
+            case CellValue.Formula(expression, _, _)
+                if candidateTokens.exists(upper(expression).contains) ||
+                  ReferenceOperators.mayContainComputedRange(expression) =>
+              parse(expression) match
+                case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
+                  Some(QualifiedRef(sheet.name, ref))
+                case _ => None
+            case _ => None
+        }
+      }.toSet
     DynamicCellsTrace(cells, parses, classifications)
 
   /**
@@ -769,7 +772,8 @@ object DependencyGraph:
         depsFromArgValues(
           ReferenceOperators.dependencyValues(
             call.spec.name,
-            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+            ReferenceOperators.staticShape
           ),
           expr => extractDependencies(expr),
           _.localCells,
@@ -892,7 +896,8 @@ object DependencyGraph:
         depsFromArgValues(
           ReferenceOperators.dependencyValues(
             call.spec.name,
-            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+            ReferenceOperators.staticShape
           ),
           recurse,
           localCells,
@@ -2153,20 +2158,24 @@ object DependencyGraph:
           // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first — a static
           // shape, or a defined name's resolved through the workbook when one is at hand
           // GH-669: an intersection of static locations depends only on the cells they share
+          // GH-713: a range of names resolved through the workbook gets its bounding edges
+          def resolvedShape(location: TExpr.RangeLocation): Option[(SheetName, CellRange)] =
+            for
+              wb <- workbook
+              source <- wb(currentSheet).toOption
+              resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
+            yield (resolved._1.name, resolved._2)
           val values = ReferenceOperators.dependencyValues(
             call.spec.name,
             CriteriaRangeResize.resizedArgs(
               call.spec.name,
               call.spec.argSpec.toValues(call.args),
-              shapeOf = location =>
-                location.staticRange.orElse(
-                  for
-                    wb <- workbook
-                    source <- wb(currentSheet).toOption
-                    resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
-                  yield resolved._2
-                )
-            )
+              shapeOf = location => location.staticRange.orElse(resolvedShape(location).map(_._2))
+            ),
+            location =>
+              ReferenceOperators
+                .staticShape(location)
+                .orElse(resolvedShape(location).map((sheet, range) => (Some(sheet), range)))
           )
           val selected = lookupCells(call.spec.name, values)
           values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>

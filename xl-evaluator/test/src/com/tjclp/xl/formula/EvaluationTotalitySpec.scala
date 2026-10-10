@@ -71,6 +71,22 @@ class EvaluationTotalitySpec extends FunSuite:
     }
   }
 
+  test("GH-713: a defect inside a computed range or XLOOKUP's reference is contained too") {
+    factories.foreach { (label, evaluator) =>
+      List(
+        "=SUM(A1:INDEX(A1:A3,TODAY()))",
+        "=ROWS(XLOOKUP(TODAY(),A1:A3,A1:A3):A1)",
+        "=A1:INDEX(A1:A3,TODAY())"
+      ).foreach { formula =>
+        assertEquals(
+          evaluator.eval(parse(formula), sheet, boom, None, Some(ref"B1")),
+          Left(EvalError.EvalFailed(defectAtB1)),
+          s"$label $formula"
+        )
+      }
+    }
+  }
+
   test("a StackOverflowError is EvalFailed naming the exhausted stack, every factory") {
     factories.foreach { (label, evaluator) =>
       assertEquals(

@@ -108,7 +108,13 @@ class ArrayTypingLawsSpec extends FunSuite:
     "=UPPER(B2:B4&\"\")",
     "=LEN(TRANSPOSE(A1:D1)&\"\")",
     "=NOT(B2:B4>0)",
-    "=EDATE(DATE(2020,1,31),B2:B4*1)"
+    "=EDATE(DATE(2020,1,31),B2:B4*1)",
+    // GH-713: computed ranges and XLOOKUP's reference in typed slots
+    "=ABS(B2:INDEX(B2:B4,3)+0)",
+    "=ROUND(INDEX(C2:C4,2):C4/3,1)",
+    "=SUM(ABS(XLOOKUP(B2:B4,B2:B4,C2:D4)+0))",
+    "=LEN(XLOOKUP(B2,B2:B4,C2:D4)&\"\")",
+    "=DATE(2020,XLOOKUP(B3,B2:B4,C2:C4):C4+0,1)"
   )
 
   test("an array-valued expression in a typed argument never reaches a function body mistyped") {

@@ -477,8 +477,23 @@ object ArgSpec:
               tail
             )
           )
+        // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
+        // is named, never reported as a wrong argument count — accepting it here is #710's
+        case (call: TExpr.Call[?]) :: _ if ComputedReferenceCalls.contains(call.spec.name) =>
+          Left(
+            ParseError.InvalidArguments(
+              fnName,
+              pos,
+              describe,
+              "a computed reference (A1:INDEX(...), OFFSET, INDIRECT, INDEX or XLOOKUP), " +
+                "which this range argument does not accept yet"
+            )
+          )
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
+
+    private val ComputedReferenceCalls: Set[String] =
+      Set("OFFSET", "INDIRECT", "INDEX", "XLOOKUP", ReferenceOperators.RangeName)
 
     /** The 1×1 range a cell reference addresses, its anchor on both corners. */
     private def singleCell(at: ARef, anchor: Anchor): CellRange =
