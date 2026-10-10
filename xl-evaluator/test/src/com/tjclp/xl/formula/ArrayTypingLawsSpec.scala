@@ -156,14 +156,14 @@ class ArrayTypingLawsSpec extends FunSuite:
   }
 
   test("the typed collapse coerces by the node's static kind, so a text element is a clean Left") {
-    // A1:A2 top-left is "Label": a numeric slot that does not lift refuses it as a type
-    // mismatch, and so does a plain cell's ABS; a lifting ABS answers #VALUE! per element
+    // A1:A2 top-left is "Label": a numeric slot that does not lift refuses it as #VALUE! (#709),
+    // and so does a plain cell's ABS; a lifting ABS answers #VALUE! per element
     arrayEval("=SEQUENCE(A1:A2&\"\")") match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     scalarEval("=ABS(A1:A2&\"\")") match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     assertEquals(
       arrayEval("=ABS(A1:A2&\"\")"),
       Right(column(CellValue.Error(CellError.Value), CellValue.Error(CellError.Value)))
@@ -261,8 +261,8 @@ class ArrayTypingLawsSpec extends FunSuite:
     assertEquals(Evaluator.instance.eval(serial, sheet), Right(BigDecimal(5)))
     val textual = TExpr.DateToSerial(TExpr.Lit("abc").asInstanceOf[TExpr[LocalDate]])
     Evaluator.instance.eval(textual, sheet) match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
   }
 
   // ===== Programmatic ASTs: literal arms and TExpr.cond =====
@@ -288,8 +288,8 @@ class ArrayTypingLawsSpec extends FunSuite:
     val mistyped = TExpr.Lit("abc").asInstanceOf[TExpr[BigDecimal]]
     val expr = TExpr.cond(TExpr.Lit(false), TExpr.Lit(BigDecimal(1)), mistyped)
     Evaluator.instance.eval(expr, sheet) match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     assertEquals(
       Evaluator.instance
         .eval(TExpr.cond(TExpr.Lit(true), TExpr.Lit(BigDecimal(1)), mistyped), sheet),

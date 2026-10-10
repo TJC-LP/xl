@@ -65,11 +65,25 @@ trait TExprDecoders:
    * over a sparse range ignore blanks, and a blank cashflow must not become a period-shifting 0.
    * Error values still refuse via the delegate's catch-all (Empty and Error are distinct
    * constructors, so blank-as-zero can never mask a carried error).
+   *
+   * #709: numeric text is its number here, as Excel reads it (`=ABS(A1)` over `'5` is 5, like
+   * ScalarCoercion.coerceNumeric and the lifted element) — the folds keep skipping it. Other text
+   * refuses; the evaluator turns that refusal into `#VALUE!`.
    */
   def decodeNumericScalar(cell: Cell): Either[CodecError, BigDecimal] =
     cell.value match
       case CellValue.Empty => scala.util.Right(BigDecimal(0))
-      case _ => decodeNumeric(cell)
+      case _ =>
+        numericText(cell.value) match
+          case Some(n) => scala.util.Right(n)
+          case None => decodeNumeric(cell)
+
+  /** #709: the number a text cell (or a formula cached as text) spells, if it spells one. */
+  private def numericText(value: CellValue): Option[BigDecimal] = value match
+    case CellValue.Text(s) => ScalarCoercion.parseNumericText(s)
+    case CellValue.RichText(rt) => ScalarCoercion.parseNumericText(rt.toPlainText)
+    case CellValue.Formula(_, Some(cached), _) => numericText(cached)
+    case _ => None
 
   /**
    * Decode cell as LocalDate value (extracts date from DateTime).
@@ -240,7 +254,8 @@ trait TExprDecoders:
    *   - Empty -> 1900-01-01 (GH-396: Excel's blank-as-serial-0 rendering, see
    *     ScalarCoercion.BlankDate for the day-0 caveat)
    *   - Formula -> cached DateTime, serial Number, or Bool, same conversions
-   *   - Text -> error (Excel does not coerce arbitrary text in date positions)
+   *   - Text -> numeric text is its serial (#709, as ScalarCoercion.coerceDate); other text
+   *     refuses, which the evaluator turns into `#VALUE!`
    */
   def decodeAsDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
     def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
@@ -266,12 +281,7 @@ trait TExprDecoders:
         serialToDate(cached).toRight(CodecError.TypeMismatch("Date", cell.value))
       case CellValue.Formula(_, Some(CellValue.Bool(cached)), _) => boolToDate(cached)
       case other =>
-        scala.util.Left(
-          CodecError.TypeMismatch(
-            expected = "Date",
-            actual = other
-          )
-        )
+        numericText(other).flatMap(serialToDate).toRight(CodecError.TypeMismatch("Date", other))
 
   /**
    * Decode cell as Int with automatic type coercion.
