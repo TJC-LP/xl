@@ -229,7 +229,8 @@ object Schema:
     ),
     VerbDoc(
       Vector("eval"),
-      "Evaluate a formula without modifying the sheet (--with overrides; no -f for constants)",
+      "Evaluate a formula without modifying the sheet (--at evaluates it as the plain cell there; " +
+        "--with overrides; no -f for constants)",
       Needs(file = false, sheet = true, output = false, streaming = false),
       plain,
       None,

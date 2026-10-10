@@ -219,7 +219,9 @@ write a condition as a factor (`=SUMPRODUCT((r>2)*r)`, `=SUMPRODUCT(--(r>2))`), 
 `IFERROR`: Excel evaluates IF and IFERROR inside a plain SUMPRODUCT as legacy and gets the row's
 value, while xl gets the array's. There is no CLI flag for array formulas.
 `eval` without a cell answers as the formula typed into a new Excel 365 cell would (its top-left
-value); `evala` shows the whole array. In an array context (`evala`, SUMPRODUCT, an array formula)
+value); `evala` shows the whole array. `eval --at <ref>` answers as the plain cell at `<ref>` would,
+without writing: `xl eval "=SUM(A1:A10*B1:B10)" --at D5` is `A5*B5`, as `putf D5` would show (a
+qualified `--at Data!D5` names the sheet; `--with` still applies). In an array context (`evala`, SUMPRODUCT, an array formula)
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
 pass `+A2:A10` to lift them. In a plain cell `+A2:A10` reads the formula's row like any operand. No
 array constants (`{1,2,3}`).

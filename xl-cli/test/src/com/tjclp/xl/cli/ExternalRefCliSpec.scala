@@ -43,7 +43,8 @@ class ExternalRefCliSpec extends FunSuite:
       .put(d2, CellValue.Number(BigDecimal(8)))
     val wb = Workbook(sheet)
 
-    val result = ReadCommands.eval(wb, Some(wb.sheets.head), "=SUM(D1:D2)", Nil).unsafeRunSync()
+    val result =
+      ReadCommands.eval(wb, Some(wb.sheets.head), "=SUM(D1:D2)", None, Nil).unsafeRunSync()
     assert(result.contains("50"), s"Expected 50 (42 cached + 8), got: $result")
   }
 
@@ -51,7 +52,7 @@ class ExternalRefCliSpec extends FunSuite:
     val wb = Workbook(Sheet("Data").put(d2, CellValue.Number(BigDecimal(8))))
 
     val result = ReadCommands
-      .eval(wb, Some(wb.sheets.head), "=SUM([2]Book1!A1:A2)", Nil)
+      .eval(wb, Some(wb.sheets.head), "=SUM([2]Book1!A1:A2)", None, Nil)
       .attempt
       .unsafeRunSync()
 

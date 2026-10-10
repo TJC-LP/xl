@@ -1212,10 +1212,19 @@ USAGE:
   private def parseOverrides(withStrs: List[String]): List[String] =
     withStrs.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
 
+  private val evalAtOpt =
+    Opts
+      .option[String](
+        "at",
+        "Evaluate as the plain cell at this ref would, implicit intersection included " +
+          "(nothing is written); without it the formula has no cell and evaluates as an array"
+      )
+      .orNone
+
   val evalCmd: Opts[CliCommand] =
     Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
-      (formulaArg, withOpts).mapN { (formula, withStrs) =>
-        CliCommand.Eval(formula, parseOverrides(withStrs))
+      (formulaArg, evalAtOpt, withOpts).mapN { (formula, at, withStrs) =>
+        CliCommand.Eval(formula, at, parseOverrides(withStrs))
       }
     }
 
@@ -2594,10 +2603,10 @@ EXAMPLES:
         wb <- workbookIO
         sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, w => warnings.update(_ :+ w))
         payload <- (cmd, mode) match
-          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
-            ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
-          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Json) =>
-            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Raw(_))
+          case (CliCommand.Eval(formulaStr, at, overrides), OutputMode.Text) =>
+            ReadCommands.eval(wb, sheet, formulaStr, at, overrides).map(Payload.text)
+          case (CliCommand.Eval(formulaStr, at, overrides), OutputMode.Json) =>
+            ReadCommands.evalData(wb, sheet, formulaStr, at, overrides).map(Payload.Raw(_))
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Text) =>
             ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides).map(Payload.text)
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Json) =>
@@ -3315,8 +3324,8 @@ EXAMPLES:
             CliException(CliError(ErrorCode.INTERNAL, s"no read query for ${cmd.verb}"))
           )
 
-    case CliCommand.Eval(formulaStr, overrides) =>
-      ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
+    case CliCommand.Eval(formulaStr, at, overrides) =>
+      ReadCommands.eval(wb, sheetOpt, formulaStr, at, overrides)
 
     case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
       ReadCommands.evalArray(wb, sheetOpt, formulaStr, targetRef, overrides)
