@@ -68,7 +68,9 @@ final case class OpSpec(
   cliVerb: Option[String],
   since: String,
   doc: String,
-  example: ujson.Obj
+  example: ujson.Obj,
+  // GH-714: fields a streamable op cannot carry under --stream (published x-streamRefusedFields)
+  streamRefusedFields: Vector[String] = Vector.empty
 ) derives CanEqual:
 
   def field(name: String): Option[Field] = fields.find(_.name == name)

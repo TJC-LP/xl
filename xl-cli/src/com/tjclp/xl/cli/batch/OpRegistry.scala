@@ -105,7 +105,13 @@ object OpRegistry:
         "Anchor cell: the formula is dragged across `ref` from here, shifting relative refs like Excel fill-down",
         "anchor"
       ),
-      opt("format", NumFmt, formatDoc, "numFormat")
+      opt("format", NumFmt, formatDoc, "numFormat"),
+      opt(
+        "array",
+        Bool,
+        "Write an Excel 365 dynamic-array anchor at `ref` that spills (one cell; not with " +
+          "`from`/`values`; refused under --stream)"
+      )
     ),
     oneOf = Vector(Set("value"), Set("values")),
     sheetScoped = true,
@@ -118,7 +124,9 @@ object OpRegistry:
     doc =
       "Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. " +
         "Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID " +
-        "before anything is written, --dry-run included.",
+        "before anything is written, --dry-run included. `\"array\": true` stores one cell as " +
+        "an Excel 365 dynamic array that spills (putf --array).",
+    streamRefusedFields = Vector("array"),
     example = ujson.Obj(
       "op" -> ujson.Str("putf"),
       "ref" -> ujson.Str("B2:B10"),
@@ -883,6 +891,15 @@ object OpRegistry:
     case _: BatchOp.SetHeaderFooter => headerFooter
     case _: BatchOp.AddConditionalFormat => cf
 
+  /**
+   * GH-714: the fields of a parsed op that `--stream` refuses and that this op sets — a subset of
+   * its spec's `streamRefusedFields`. The streaming batch refuses an op with any, before any byte
+   * is written.
+   */
+  def streamRefusedFieldsSet(op: BatchOp): Vector[String] = op match
+    case BatchOp.PutFormula(_, _, _, true) => Vector("array")
+    case _ => Vector.empty
+
   /** The op name of a parsed op (`PutFormulaDragging` → `putf`). */
   def nameOf(op: BatchOp): String = specOf(op).name
 
@@ -893,7 +910,7 @@ object OpRegistry:
    */
   def targetRefs(op: BatchOp): Vector[String] = op match
     case BatchOp.Put(ref, _, _) => Vector(ref)
-    case BatchOp.PutFormula(ref, _, _) => Vector(ref)
+    case BatchOp.PutFormula(ref, _, _, _) => Vector(ref)
     case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
     case BatchOp.PutFormulas(range, _, _) => Vector(range)
     case BatchOp.PutValues(range, _) => Vector(range)
@@ -1016,6 +1033,12 @@ object OpRegistry:
       "x-cliVerb" -> spec.cliVerb.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
       "x-since" -> ujson.Str(spec.since),
       "x-example" -> spec.example
+    ) ++ (
+      if spec.streamRefusedFields.isEmpty then Vector.empty
+      else
+        Vector(
+          "x-streamRefusedFields" -> ujson.Arr.from(spec.streamRefusedFields.map(ujson.Str(_)))
+        )
     )
     val oneOf: Vector[(String, ujson.Value)] =
       if spec.oneOf.isEmpty then Vector.empty

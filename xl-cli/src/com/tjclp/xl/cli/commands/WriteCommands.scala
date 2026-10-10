@@ -43,7 +43,7 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
-import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, StructuralCachePolicy, StructuralEditor}
 import com.tjclp.xl.formula.graph.NameChanges
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -484,7 +484,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     policy: WritePolicy = WritePolicy.default,
-    warn: Warning => IO[Unit] = _ => IO.unit
+    warn: Warning => IO[Unit] = _ => IO.unit,
+    array: Boolean = false
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
@@ -501,6 +502,25 @@ object WriteCommands:
 
       // Determine mode based on ref type and formula count
       result <- (refOrRange, formulas) match
+        // GH-714: one dynamic-array anchor; its spill extent comes from evaluation
+        case (Left(ref), List(singleFormula)) if array =>
+          putfDynamicArray(
+            wb,
+            targetSheet,
+            ref,
+            singleFormula,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+
+        case (_, _ :: _) if array =>
+          IO.raiseError(
+            usage("--array anchors at one cell; the spill extent comes from evaluation")
+          )
+
         case (Left(ref), List(singleFormula)) =>
           // Mode 1: Single cell
           putfSingleCell(
@@ -609,6 +629,84 @@ object WriteCommands:
         warn
       )
     yield result
+
+  /**
+   * GH-714: `putf --array` — store the formula as Excel 365 stores a typed one: a dynamic-array
+   * anchor at `ref` whose spill extent and values come from evaluating it as an array now
+   * ([[DynamicArrayAuthoring]]). The evaluation runs under `--no-recalc` too (it defines the
+   * extent); `--no-recalc` still suppresses the dependent refresh. A spill Excel would block is
+   * refused as `FORMULA_ERROR`, writing nothing.
+   */
+  private def putfDynamicArray(
+    wb: Workbook,
+    sheet: Sheet,
+    ref: ARef,
+    formulaStr: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    val formula = CellValue.canonicalFormulaText(formulaStr)
+    val fullFormula = s"=$formula"
+    for
+      parsedExpr <- IO.fromEither(
+        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
+      )
+      authored <- IO.fromEither(
+        DynamicArrayAuthoring
+          .author(wb, sheet, ref, formula, Clock.system)
+          .left
+          .map(spillRefusal)
+      )
+      // Auto-apply a date format over the spill when the formula involves date functions
+      finalSheet =
+        if TExpr.containsDateFunction(parsedExpr) then
+          val numFmt =
+            if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+          authored.extent.cells.foldLeft(authored.sheet) { (s, r) =>
+            val existing = s.cells
+              .get(r)
+              .flatMap(_.styleId)
+              .flatMap(s.styleRegistry.get)
+              .getOrElse(CellStyle.default)
+            styleSyntax.withRangeStyle(s)(CellRange(r, r), existing.withNumFmt(numFmt))
+          }
+        else authored.sheet
+      result <- writeAfterRefresh(
+        wb.put(finalSheet),
+        sheet.name,
+        authored.touched,
+        s"Put dynamic array $fullFormula at ${ref.toA1} (spills ${authored.extent.toA1})",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    yield result
+
+  /**
+   * A dynamic-array authoring failure as the CLI reports it: `FORMULA_ERROR`, and for a blocked
+   * spill a hint that names what to do about the blockers (the message names them).
+   */
+  private[cli] def spillRefusal(err: XLError): CliException =
+    val base = CliError.fromXLError(err, None)
+    err match
+      case XLError.FormulaError(_, reason) if reason.contains("#SPILL!") =>
+        val blockers = reason match
+          case s"$_ blocked by $who (Excel shows #SPILL!)$_" => Some(who)
+          case _ => None
+        CliException(
+          base.copy(
+            message = reason,
+            hint = Some(
+              blockers.fold("choose another anchor")(who => s"clear $who or choose another anchor")
+            )
+          )
+        )
+      case _ => CliException(base)
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(

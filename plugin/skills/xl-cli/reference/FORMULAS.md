@@ -217,7 +217,11 @@ holds in the formula's row. **For array math in one cell, use SUMPRODUCT**:
 `=SUMPRODUCT(A1:A10*B1:B10)`, `=SUMPRODUCT(--(r>0))`, `=SUMPRODUCT(ABS(r))`. Inside SUMPRODUCT
 write a condition as a factor (`=SUMPRODUCT((r>2)*r)`, `=SUMPRODUCT(--(r>2))`), not as `IF` or
 `IFERROR`: Excel evaluates IF and IFERROR inside a plain SUMPRODUCT as legacy and gets the row's
-value, while xl gets the array's. There is no CLI flag for array formulas.
+value, while xl gets the array's. **Or write the formula as an array formula: `putf --array`**
+(batch `"array": true`) stores it as Excel 365 stores a typed formula — a dynamic array anchored
+at the cell, with no implicit intersection: `putf --array C5 "=SUM(A1:A10*B1:B10)"` is the array
+sum in any row, and `putf --array A1 "=SORT(B1:B3)"` spills A1:A3. One cell, one formula; a spill
+into occupied cells is refused.
 `eval` without a cell answers as the formula typed into a new Excel 365 cell would (its top-left
 value); `evala` shows the whole array. In an array context (`evala`, SUMPRODUCT, an array formula)
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
