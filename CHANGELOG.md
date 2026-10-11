@@ -269,7 +269,7 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   precedent evaluated on demand now runs at its own cell position and in its own mode (array mode
   for an ArrayFormula record), whether a reference or an aggregate, criteria or SUMPRODUCT range
   walk reads it.
-- **`FunctionFlags` gains a field (`lift`)**: source-compatible, binary-incompatible for positional
+- **`FunctionFlags` gains two fields (`lift`, `selector`)**: source-compatible, binary-incompatible for positional
   construction (the `volatile` precedent, #597).
 - **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.
