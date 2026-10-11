@@ -407,18 +407,22 @@ object DependencyGraph:
   /**
    * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
    *
-   * A case-insensitive substring pre-filter over dynamicDeps-flagged names and resizing functions
-   * runs before parsing. Only unresolved resize geometry needs dynamic scheduling; literal ranges
-   * remain static. Formulas that fail to parse are not dynamic (matching `fromSheet`, where they
-   * contribute no edges).
+   * A case-insensitive substring pre-filter over dynamicDeps-flagged names, and
+   * [[CriteriaRangeResize.mayResizeThroughName]] for a SUMIF or AVERAGEIF that may resize through a
+   * named or LET range, run before parsing. Only unresolved resize geometry needs dynamic
+   * scheduling; literal ranges remain static, and SUMIFS/AVERAGEIFS never resize. Formulas that
+   * fail to parse are not dynamic (matching `fromSheet`, where they contribute no edges).
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
-    val names = FunctionRegistry.dynamicFunctionNames ++ CriteriaRangeResize.resizingFunctions
+    val names = FunctionRegistry.dynamicFunctionNames
+    def mentionsAny(tokens: Iterable[String], expression: String): Boolean =
+      val text = expression.toUpperCase(java.util.Locale.ROOT)
+      tokens.exists(text.contains)
     sheet.cells.iterator.flatMap { case (ref, cell) =>
       cell.value match
-        // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
         case CellValue.Formula(expression, _, _)
-            if names.exists(n => expression.toUpperCase(java.util.Locale.ROOT).contains(n)) ||
+            if mentionsAny(names, expression) ||
+              CriteriaRangeResize.mayResizeThroughName(expression) ||
               ReferenceOperators.mayContainComputedRange(expression) =>
           FormulaParser.parse(expression) match
             case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
@@ -591,16 +595,20 @@ object DependencyGraph:
         .filter(dn => dynamicKeys.contains(resolutionKey(dn.name)))
         .map(dn => upper(dn.name))
         .toSet
-    val candidateTokens = dynamicFunctions ++ CriteriaRangeResize.resizingFunctions ++ nameTokens
+    val candidateTokens = dynamicFunctions ++ nameTokens
+    // A SUMIF/AVERAGEIF resized through a named or LET range is dynamic too (hasDynamicResize):
+    // its own text pre-filter keeps SUMIFS and SUMIF over written ranges unparsed
+    def candidate(expression: String): Boolean =
+      val text = upper(expression)
+      candidateTokens.exists(text.contains) ||
+      CriteriaRangeResize.mayResizeThroughName(expression) ||
+      ReferenceOperators.mayContainComputedRange(expression)
 
     val cells =
       workbook.sheets.iterator.flatMap { sheet =>
         sheet.cells.iterator.flatMap { case (ref, cell) =>
           cell.value match
-            // GH-713: a computed range its edges do not cover is dynamic (see dynamicCells(sheet))
-            case CellValue.Formula(expression, _, _)
-                if candidateTokens.exists(upper(expression).contains) ||
-                  ReferenceOperators.mayContainComputedRange(expression) =>
+            case CellValue.Formula(expression, _, _) if candidate(expression) =>
               parse(expression) match
                 case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
                   Some(QualifiedRef(sheet.name, ref))

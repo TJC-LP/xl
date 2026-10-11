@@ -230,9 +230,16 @@ object Evaluator:
    * hop by hop like expression-position NameRef (GH-411), guarded by `resolvingNames` — a chain
    * that revisits a member is a clean cycle error, one deeper than [[NameWalk.MaxDepth]] names a
    * clean too-deep error (#691). Other non-range targets (constants, formulas) are a clean per-cell
-   * #VALUE! error — never a MatchError. This is the STATIC resolution: a function's range slot goes
-   * through `EvalContext.resolveRange` (GH-710), which also evaluates a name computing a reference
-   * and reads a LET name's reference.
+   * #VALUE! error — never a MatchError. This is the STATIC resolution: a function's range slot, and
+   * the typed [[TExpr.Aggregate]] node's, go through [[resolveRangeSlot]] (GH-710), which also
+   * evaluates a name computing a reference and reads a LET name's reference.
+   *
+   * The callers that stay static do so on purpose: a written cross-sheet reference or range (the
+   * SheetRange/SheetRef operand paths, a defined name's own refersTo hops), which no evaluation can
+   * change; the callers that try the static form first and evaluate when it fails (OFFSET's base,
+   * the `@` operand, the reference-argument path for a name, a lifted slot's name); and the spill
+   * operator's anchor (`x#` takes one cell, written or named). A LET name never reaches them as a
+   * location: `ArgSpec.sumProductArg` and those paths carry it as an expression.
    *
    * @param resolvingNames
    *   the GH-384 name-cycle guard (the resolved names on the current resolution path, #691);
@@ -297,6 +304,38 @@ object Evaluator:
     workbook: Option[Workbook],
     resolvingNames: NameTrail
   ): Either[EvalError, (Sheet, CellRange)] =
+    resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
+      case NameRangeTarget.Range(target, range) => Right((target, range))
+      case NameRangeTarget.Computed(notARange) => Left(notARange)
+    }
+
+  /**
+   * GH-710: what a defined name in a range slot names statically — a range, or a value only
+   * evaluation can compute (the name, or the last name of its chain, is bound to a formula or a
+   * constant). Every failure on the way — no workbook, an unknown or unparseable name, a name cycle
+   * or a chain too deep (#691), a name bound to an error literal, a missing sheet — is a `Left`, so
+   * [[resolveRangeSlot]] evaluates a name only when its definition really computes something.
+   */
+  private[formula] enum NameRangeTarget:
+    case Range(target: Sheet, range: CellRange)
+
+    /** The definition is a formula or a constant; `notARange` is the static diagnostic. */
+    case Computed(notARange: EvalError)
+
+  private def resolveNameRangeTarget(
+    name: String,
+    scope: Option[SheetName],
+    currentSheet: Sheet,
+    workbook: Option[Workbook],
+    resolvingNames: NameTrail
+  ): Either[EvalError, NameRangeTarget] =
+    def crossSheet(
+      location: TExpr.RangeLocation,
+      definingSheet: Sheet,
+      guard: NameTrail
+    ): Either[EvalError, NameRangeTarget] =
+      resolveRangeLocation(location, definingSheet, workbook, guard)
+        .map((target, range) => NameRangeTarget.Range(target, range))
     workbook match
       case None =>
         Left(
@@ -325,40 +364,39 @@ object Evaluator:
                     )
                   )
                 case Right(target) =>
+                  def range(at: Sheet, cells: CellRange): Either[EvalError, NameRangeTarget] =
+                    Right(NameRangeTarget.Range(at, cells))
                   target match
-                    case TExpr.RangeRef(range, _) => Right((definingSheet, range))
-                    case TExpr.SheetRange(sheetName, range, _) =>
-                      resolveRangeLocation(
-                        TExpr.RangeLocation.CrossSheet(sheetName, range),
+                    case TExpr.RangeRef(cells, _) => range(definingSheet, cells)
+                    case TExpr.SheetRange(sheetName, cells, _) =>
+                      crossSheet(
+                        TExpr.RangeLocation.CrossSheet(sheetName, cells),
                         definingSheet,
-                        workbook,
                         guard
                       )
                     // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
                     // A standalone ref at the top of a parsed formula surfaces as the TYPED
                     // Ref/SheetRef (the resolved-value rewrite); Poly forms are kept for safety.
-                    case TExpr.Ref(at, _, _) => Right((definingSheet, CellRange(at, at)))
-                    case TExpr.PolyRef(at, _) => Right((definingSheet, CellRange(at, at)))
+                    case TExpr.Ref(at, _, _) => range(definingSheet, CellRange(at, at))
+                    case TExpr.PolyRef(at, _) => range(definingSheet, CellRange(at, at))
                     case TExpr.SheetRef(sheetName, at, _, _) =>
-                      resolveRangeLocation(
+                      crossSheet(
                         TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
                         definingSheet,
-                        workbook,
                         guard
                       )
                     case TExpr.SheetPolyRef(sheetName, at, _) =>
-                      resolveRangeLocation(
+                      crossSheet(
                         TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
                         definingSheet,
-                        workbook,
                         guard
                       )
                     // GH-411: name→name chains follow like expression position, each hop as seen
                     // from its predecessor's defining sheet, under the shared cycle guard
                     case TExpr.NameRef(next) =>
-                      resolveNameToRange(next, None, definingSheet, workbook, guard)
+                      resolveNameRangeTarget(next, None, definingSheet, workbook, guard)
                     case TExpr.SheetNameRef(qualifier, next) =>
-                      resolveNameToRange(next, Some(qualifier), definingSheet, workbook, guard)
+                      resolveNameRangeTarget(next, Some(qualifier), definingSheet, workbook, guard)
                     // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
                     // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
                     case TExpr.ErrorLit(err, _) =>
@@ -366,14 +404,79 @@ object Evaluator:
                         EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}"))
                       )
                     case _ =>
-                      // Excel: a non-reference name in a range position is #VALUE!
-                      Left(
-                        EvalError.ErrorValue(
-                          com.tjclp.xl.cells.CellError.Value,
-                          Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
+                      // Excel: a non-reference name in a range position is #VALUE! — unless the
+                      // formula computes a reference (GH-710, resolveRangeSlot)
+                      Right(
+                        NameRangeTarget.Computed(
+                          EvalError.ErrorValue(
+                            CellError.Value,
+                            Some(
+                              s"name '$name' does not refer to a range (refersTo: ${dn.formula})"
+                            )
+                          )
                         )
                       )
             }
+
+  /**
+   * The (sheet, range) a range-typed argument slot names — THE resolver for a function's range slot
+   * (`EvalContext.resolveRange`) and the typed [[TExpr.Aggregate]] node's (GH-710). A written range
+   * or cell and a name bound to one resolve statically ([[resolveRangeLocation]]). A name whose
+   * definition is a formula is evaluated (`evalReference`) for the reference it computes — OFFSET,
+   * INDIRECT, INDEX, IF or CHOOSE over references, a dynamic range — and a LET name is the
+   * reference it is bound to (`bindings`). The error such a formula evaluates to is the slot's
+   * error (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as
+   * in Excel, with the static diagnostic. A name that fails statically (unknown, cyclic, too deep,
+   * bound to an error literal) is never evaluated.
+   *
+   * @param evalReference
+   *   evaluates an expression for the reference it denotes, a [[RangeOperand]] when it denotes one
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private[formula] def resolveRangeSlot(
+    location: TExpr.RangeLocation,
+    currentSheet: Sheet,
+    workbook: Option[Workbook],
+    resolvingNames: NameTrail,
+    bindings: Map[String, Any],
+    evalReference: TExpr[Any] => Either[EvalError, Any]
+  ): Either[EvalError, (Sheet, CellRange)] =
+    def referenceOf(value: Any, notARange: EvalError): Either[EvalError, (Sheet, CellRange)] =
+      value match
+        case RangeOperand(target, range) => Right((target, range))
+        case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+        // a named formula evaluates as an array: its error arrives as a 1×1 array
+        case single: ArrayResult if single.rows == 1 && single.cols == 1 =>
+          single(0, 0) match
+            case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+            case _ => Left(notARange)
+        case _ => Left(notARange)
+    // a bare #VALUE! says less than the static diagnostic it stands for
+    def specific(notARange: EvalError)(failure: EvalError): EvalError = failure match
+      case EvalError.ErrorValue(CellError.Value, None) => notARange
+      case other => other
+    location match
+      case TExpr.RangeLocation.Name(name, scope) =>
+        resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
+          case NameRangeTarget.Range(target, range) => Right((target, range))
+          case NameRangeTarget.Computed(notARange) =>
+            val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+            evalReference(named.asInstanceOf[TExpr[Any]])
+              .flatMap(referenceOf(_, notARange))
+              .left
+              .map(specific(notARange))
+        }
+      case TExpr.RangeLocation.Binding(name) =>
+        val notARange = EvalError.ErrorValue(
+          CellError.Value,
+          Some(s"LET name '$name' does not refer to a range")
+        )
+        bindings.get(name) match
+          case Some(value) => referenceOf(value, notARange)
+          // Unreachable from formula text: the parser emits Binding only for a LET name in scope,
+          // and evalLet binds every name before its body runs. A hand-built AST can still get here.
+          case None => Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
+      case _ => resolveRangeLocation(location, currentSheet, workbook, resolvingNames)
 
   // ===== GH-384: defined-name resolution =====
 
@@ -644,6 +747,18 @@ object Evaluator:
    * GH-710: whether an expression reads a LET name in a range slot (`COUNTIF(r, ">2")`). An array
    * evaluation's LET binds a reference-denoting value as the reference itself only then — the range
    * slot needs the reference, and every other read of the name materializes it as before.
+   *
+   * The walk tracks neither which name a slot reads nor shadowing: a range-slot read of any LET
+   * name in the subtree, an inner LET's own or one that shadows an outer name, makes the outer LET
+   * bind its references too. That over-approximation is harmless: every value read of a bound
+   * reference materializes it, so the result is the same either way.
+   *
+   * The walk must descend through every wrapper a range slot can sit under (the binary operators,
+   * `Coerced`, `UnaryPlus`, `Percent`, `ToInt`, the date serials): a wrapper it misses turns
+   * `COUNTIF(r, …)` into `#VALUE!` in array mode. DynamicNameRangeSlotSpec pins one formula per
+   * wrapper. `evalLet` runs it once per LET evaluation, over that LET's subtree, so nested LETs
+   * walk their inner subtrees again (size × depth per evaluation). It is a pure function of the AST
+   * and could be computed once per `Let` node at parse time if profiling ever shows the cost.
    */
   private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean = expr match
     case call: TExpr.Call[?] =>
@@ -1441,8 +1556,16 @@ private class EvaluatorImpl(
             Left(EvalError.EvalFailed(s"Unknown aggregator: $aggregatorId", None))
           case Some(agg) =>
             // GH-411: the ambient name-cycle guard rides along so a name's refersTo cannot
-            // re-enter itself through a range slot
-            Evaluator.resolveRangeLocation(location, sheet, workbook, resolvingNames) match
+            // re-enter itself through a range slot. GH-710: a dynamic name and a LET name resolve
+            // as in a function's range slot
+            Evaluator.resolveRangeSlot(
+              location,
+              sheet,
+              workbook,
+              resolvingNames,
+              bindings,
+              referenceArgument(_, sheet, clock, workbook, currentCell)
+            ) match
               // GH-630: a slot that IS an error value (`COUNT(#REF!)`, a name bound to `#N/A`)
               // follows the aggregate's error-argument policy, exactly as the Call form does
               case Left(err) => errorArgumentResult(agg, err)

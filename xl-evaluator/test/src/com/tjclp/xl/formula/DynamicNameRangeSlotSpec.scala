@@ -3,6 +3,8 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.sheets.Sheet
@@ -218,11 +220,159 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     assertEquals(FormulaParser.parse(s"=$printed"), Right(parsed))
   }
 
-  test("a name whose reference reads itself through a range slot is a clean error") {
+  test("a name whose reference reads itself through a range slot is a clean name-cycle error") {
+    // Excel flags the circular reference; xl's name-cycle guard (#691) stops the walk the second
+    // time `loop` is entered and the cell reports that cycle, uncached — never a stack overflow
     val looped = book.withDefinedName("loop", "OFFSET(Sheet1!$A$1,0,0,COUNTIF(loop,\">2\"),1)")
     val placed = Sheet(emptyName).put(ref"A1", CellValue.Formula("COUNTIF(loop,\">2\")", None))
     val result = placed.evaluateCell(ref"A1", Clock.system, Some(looped.put(placed)))
-    assert(result.isLeft || result.exists(_.isInstanceOf[CellValue.Error]), result.toString)
+    assertEquals(
+      result.left.map(_.message),
+      Left(
+        "Formula error in 'COUNTIF(loop,\">2\")': Evaluation failed: Defined name cycle " +
+          "detected while resolving 'loop'. (COUNTIF(loop,\">2\"))"
+      )
+    )
+  }
+
+  // ----- the static resolution decides whether a name is evaluated (review of #717) -----
+
+  private val unread: TExpr[Any] => Either[EvalError, Any] =
+    expr => fail(s"$expr must not be evaluated: its static resolution already failed")
+
+  private def slot(
+    wb: Workbook,
+    name: String,
+    evalReference: TExpr[Any] => Either[EvalError, Any] = unread
+  ): Either[EvalError, (Sheet, CellRange)] =
+    Evaluator.resolveRangeSlot(
+      TExpr.RangeLocation.Name(name, None),
+      sheet1,
+      Some(wb),
+      Evaluator.NameTrail.empty,
+      Map.empty,
+      evalReference
+    )
+
+  test("a name that fails statically is never evaluated, and keeps its own diagnostic") {
+    val wb = book
+      .withDefinedName("badValue", "#VALUE!")
+      .withDefinedName("badNa", "#N/A")
+      .withDefinedName("cycA", "cycB")
+      .withDefinedName("cycB", "cycA")
+    assertEquals(
+      slot(wb, "badValue"),
+      Left(EvalError.ErrorValue(CellError.Value, Some("Defined name 'badValue' is #VALUE!")))
+    )
+    assertEquals(
+      slot(wb, "badNa"),
+      Left(EvalError.ErrorValue(CellError.NA, Some("Defined name 'badNa' is #N/A")))
+    )
+    assertEquals(
+      slot(wb, "cycA"),
+      Left(EvalError.EvalFailed("Defined name cycle detected while resolving 'cycA'.", None))
+    )
+    assertEquals(
+      slot(wb, "nope"),
+      Left(EvalError.EvalFailed("Name 'nope' is not defined in this workbook.", None))
+    )
+    // a written range and a name chain ending at one resolve without evaluation too
+    assertEquals(
+      slot(wb.withDefinedName("written", "Sheet1!$A$1:$A$3"), "written").map(_._2.toA1),
+      Right("A1:A3")
+    )
+  }
+
+  test("a name bound to a formula is evaluated; a value it computes keeps the static diagnostic") {
+    val notARange =
+      EvalError.ErrorValue(
+        CellError.Value,
+        Some("name 'konst' does not refer to a range (refersTo: 5)")
+      )
+    assertEquals(slot(book, "konst", _ => Right(BigDecimal(5))), Left(notARange))
+    // a bare #VALUE! from the evaluation says less than the static diagnostic
+    assertEquals(
+      slot(book, "konst", _ => Left(EvalError.ErrorValue(CellError.Value, None))),
+      Left(notARange)
+    )
+    // a more specific failure of the evaluation is the slot's
+    val failed = EvalError.EvalFailed("boom", None)
+    assertEquals(slot(book, "konst", _ => Left(failed)), Left(failed))
+    assertEquals(
+      slot(book, "konst", _ => Right(CellValue.Error(CellError.Ref))),
+      Left(EvalError.ErrorValue(CellError.Ref))
+    )
+    // the evaluation sees the name itself, unqualified as written
+    assertEquals(
+      slot(book, "dyn", expr => Right(RangeOperand(other, CellRange(ref"A1", ref"A2")))),
+      Right((other, CellRange(ref"A1", ref"A2")))
+    )
+  }
+
+  // ----- the typed Aggregate node resolves its slot like a function's range slot -----
+
+  test("a typed Aggregate over a dynamic name or a LET name reads the reference it denotes") {
+    val sumDyn = TExpr.Aggregate("SUM", TExpr.RangeLocation.Name("dyn", None))
+    val sumLet = TExpr.Let(
+      List("r" -> TExpr.NameRef("dyn")),
+      TExpr.Aggregate("SUM", TExpr.RangeLocation.Binding("r"))
+    )
+    List(Evaluator.instance, Evaluator.instance.withArrayResults).foreach { evaluator =>
+      assertEquals(
+        evaluator.eval(sumDyn, sheet1, workbook = Some(book)),
+        Right(BigDecimal("122.25"))
+      )
+      assertEquals(
+        evaluator.eval(sumLet, sheet1, workbook = Some(book)),
+        Right(BigDecimal("122.25"))
+      )
+    }
+    // a name computing a value is still #VALUE!, triaged as SUM triages an error argument
+    assertEquals(
+      Evaluator.instance
+        .eval(
+          TExpr.Aggregate("COUNT", TExpr.RangeLocation.Name("konst", None)),
+          sheet1,
+          workbook = Some(book)
+        ),
+      Right(BigDecimal(0))
+    )
+  }
+
+  // ----- every wrapper between a LET and its range slot keeps the binding a reference -----
+
+  List(
+    "-LET(r,dyn,COUNTIF(r,\">2\"))" -> N("-5"),
+    "LET(r,dyn,-COUNTIF(r,\">2\"))" -> N("-5"),
+    "LET(r,dyn,+COUNTIF(r,\">2\"))" -> N("5"),
+    "LET(r,dyn,COUNTIF(r,\">2\")%)" -> N("0.05"),
+    "LET(r,dyn,COUNTIF(r,\">2\")&\"\")" -> T("5"),
+    "LET(r,dyn,COUNTIF(r,\">2\")=5)" -> CellValue.Bool(true),
+    "LET(r,dyn,LEFT(\"abcdef\",COUNTIF(r,\">2\")))" -> T("abcde"),
+    "LET(r,dyn,ROUND(COUNTIF(r,\">2\")/3,1))" -> N("1.7"),
+    "LET(r,dyn,DATE(2000,1,COUNTIF(r,\">2\"))+0)" -> N("36530"),
+    "LET(r,dyn,IF(TRUE,COUNTIF(r,\">2\"),0))" -> N("5"),
+    "SUMPRODUCT(-LET(r,dyn,COUNTIF(r,\">2\")))" -> N("-5")
+  ).foreach { case (formula, expected) =>
+    test(s"=$formula reads its LET name as a reference in array mode too") {
+      agree(unplaced(formula), expected)
+      agree(plain("Empty", "A1", formula), expected)
+    }
+  }
+
+  // ----- a LET name as an operand of the reference operators -----
+
+  List(
+    "LET(r,dyn,SUM((r,Sheet1!B1)))" -> N("124.25"),
+    "LET(r,dyn,COUNT((r,Sheet1!B1)))" -> N("11"),
+    "LET(r,dyn,AREAS((r,Sheet1!B1)))" -> N("2"),
+    "LET(r,dyn,SUM(r Sheet1!A3:B3))" -> N("3.5"),
+    "LET(r,dyn,COUNTIF(r,\">2\")+AREAS((r,Sheet1!B1)))" -> N("7")
+  ).foreach { case (formula, expected) =>
+    test(s"=$formula unions and intersects the LET name's reference in both modes") {
+      agree(plain("Empty", "A1", formula), expected)
+      agree(unplaced(formula), expected)
+    }
   }
 
   test("recalculation reads a dynamic range's precedent formulas before the range slot") {
