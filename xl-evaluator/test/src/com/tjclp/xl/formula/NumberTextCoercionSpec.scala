@@ -246,6 +246,22 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
   private def cachedCase(formula: String, expected: CellValue)(implicit loc: munit.Location): Unit =
     assertEquals(cached.evaluateFormula(formula), Right(expected), formula)
 
+  test("#693: TEXT coerces a numeric string before choosing a section (Excel 16)") {
+    assertScalar("=TEXT(\"123\",\"0;0;0;\")", text("123"))
+    assertScalar("=TEXT(\"123\",\"0.00\")", text("123.00"))
+    assertScalar("=TEXT(\"(5)\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\" \",\"0\")", text(" "))
+    assertScalar("=TEXT(\"TRUE\",\"0\")", text("TRUE"))
+    assertScalar("=TEXT(\"1$2\",\"0\")", text("1$2"))
+    assertScalar("=TEXT(\"$$123\",\"0\")", text("$$123"))
+    assertScalar("=TEXT(\"-$5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"$-5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"1E-2147483647%\",\"0\")", text("1E-2147483647%"))
+    assertScalar("=TEXT(\"1,234.5\",\"0.0\")", text("1234.5"))
+    for s <- List("1.2,3", "1,23", ",123", "123,", "1,,234", "1e3,0") do
+      assertScalar(s"=TEXT(\"$s\",\"0\")", text(s))
+  }
+
   test("#671: a cached formula cell in a text position reads its cached value, not its text") {
     cachedCase("=\"\"&B1", text("0"))
     cachedCase("=B2&\"!\"", text("xy!"))

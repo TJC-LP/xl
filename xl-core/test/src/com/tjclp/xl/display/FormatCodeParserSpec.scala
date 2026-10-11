@@ -1411,3 +1411,41 @@ class FormatCodeParserSpec extends FunSuite:
     val text = FormatCodeParser.parse("0;-0;0;@,").toOption.get
     assertEquals(FormatCodeParser.applyTextFormat("abc", text), "abc,")
   }
+
+  test("formatValue: a text cell renders through the code's text section (#693)") {
+    import com.tjclp.xl.cells.CellValue
+    def fmt(code: String) = NumFmtFormatter.formatValue(CellValue.Text("abc"), NumFmt.Custom(code))
+    assertEquals(fmt("@,"), "abc,")
+    assertEquals(fmt("0;-0;0;\"T:\"@"), "T:abc")
+    assertEquals(fmt("0.00"), "abc")
+    assertEquals(fmt("_(@_)"), " abc ")
+    val rich = CellValue.RichText(com.tjclp.xl.richtext.RichText.plain("abc"))
+    assertEquals(NumFmtFormatter.formatValue(rich, NumFmt.Custom("0;-0;0;\"T:\"@")), "T:abc")
+    assertEquals(fmt("0\\;;-0;0"), "abc") // the escaped `;` is no section break (Excel 16)
+  }
+
+  test("applyFormat: integer placeholders pad as Excel does; a lone 0 needs a `0` (#693)") {
+    // Excel 16 TEXT() oracle; the minus leads the padded field (`-  5`), it does not hug the digits
+    def fmt(code: String, n: BigDecimal) =
+      FormatCodeParser.applyFormat(n, FormatCodeParser.parse(code).toOption.get)._1
+    assertEquals(fmt("_(* \"-\"??_)", 0), " -   ")
+    assertEquals(fmt("#.00", BigDecimal("0.5")), ".50")
+    assertEquals(fmt("???", 5), "  5")
+    assertEquals(fmt("???", -5), "-  5")
+    assertEquals(fmt("???", -50), "- 50")
+    assertEquals(fmt("#.00", BigDecimal("-0.5")), "-.50")
+    assertEquals(fmt("0\\;;-0;0", 5), "5;")
+    assertEquals(fmt("0_\\;-0", 5), "5 ")
+    assertEquals(fmt("0*\\;-0", 5), "5")
+    assertEquals(fmt("[$_]0;-0", -5), "-5")
+    assertEquals(fmt("#,###", 0), "")
+    assertEquals(fmt("#,##0", 0), "0")
+    assertEquals(fmt("000", 5), "005")
+    assertEquals(fmt("0#", 0), "0")
+    assertEquals(fmt("0?", 0), "0 ")
+    assertEquals(fmt("?0", 0), " 0")
+    assertEquals(fmt("0#", 5), "05")
+    assertEquals(fmt("0#.00", BigDecimal("0.5")), "0.50")
+    assertEquals(fmt("0,000", 0), "0,000")
+    assertEquals(fmt("?,??0", 0), "    0")
+  }
