@@ -990,8 +990,9 @@ object FormatCodeParser:
             val maxDen = math.pow(10, digits.toDouble) - 1
             // Excel stores values as IEEE-754 doubles and runs the search on the FULL value:
             // the whole part's binary noise is observable (12.3 → 12 1/3, but 0.3 → 2/7).
-            // java's abs is exact; Scala's rounds to 34 digits under DECIMAL128 first, which
-            // underflows for a longer value whose scale sits next to Int.MinValue (#707)
+            // java's abs is exact; Scala's rounds to 34 digits under DECIMAL128 first (and,
+            // computed eagerly above the branch, underflowed next to Int.MinValue — #707). Exact
+            // also avoids double rounding: to 34 digits, then to a double.
             val d = value.bigDecimal.abs.doubleValue
             if d.isInfinite then
               // |value| overflows Double (BigDecimal admits > ~1.8E308): the convergent search

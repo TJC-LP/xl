@@ -242,10 +242,31 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
     val pos = signed(digits, Int.MinValue, negative = false)
     assertEquals(neg.bigDecimal.unscaledValue, digits.bigInteger.negate)
     assertEquals(neg.scale, Int.MinValue)
+    // Totality only: every code renders without throwing
     for code <- codes; rule <- bothRules do fmt(code, neg, rule)
-    List("?/8", "# ?/?", "# ?/8").foreach(code =>
-      assertEquals(fmt(code, neg), "-" + fmt(code, pos))
+    // Sign symmetry, -x == "-" + x, for every code but the ones whose negative differs by design:
+    // a parenthesized negative section, and a date, which a negative renders as ###### (as the
+    // positive does here, being far beyond any serial)
+    val ownSign = Set(
+      "#,##0.00;(#,##0.00);\"zero\";@",
+      "\"$\"#,##0_);[Red](\"$\"#,##0)",
+      "yyyy-mm-dd;@"
     )
+    for code <- codes if !ownSign(code); rule <- bothRules do
+      assertEquals(fmt(code, neg, rule), "-" + fmt(code, pos, rule), s"$code under $rule")
+  }
+
+  test("#707: a 40-digit negative at moderate scale runs the convergent search on an exact |x|") {
+    // Two integer digits, so the fraction formatter takes the convergent branch, where |x| feeds
+    // the search as a double: exact through Java's abs, where Scala's rounds to 34 digits first
+    val digits = BigInt("1234567890" * 4)
+    val neg = signed(digits, 38, negative = true) // -12.345678901234567890…
+    val pos = signed(digits, 38, negative = false)
+    assertEquals(neg.bigDecimal.unscaledValue, digits.bigInteger.negate)
+    for code <- List("# ?/?", "?/8", "# ?/8"); rule <- bothRules do
+      assertEquals(fmt(code, neg, rule), "-" + fmt(code, pos, rule), s"$code under $rule")
+    assertEquals(fmt("# ?/?", neg), "-12 1/3")
+    assertEquals(fmt("?/8", neg), "-99/8")
   }
 
   /** Values a digit pattern spells out in full: up to 40 digits, exponents within ±400. */
