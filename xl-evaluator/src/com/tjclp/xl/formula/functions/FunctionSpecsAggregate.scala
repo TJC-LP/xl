@@ -1336,7 +1336,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
             // A computed reference takes the shared extent only for axes represented in the
             // static inputs. No discovered whole axis is different from an empty used extent:
-            // INDEX(namedColumn,0) still materializes by its own reference rules.
+            // INDEX(namedColumn,0) still materializes by its own reference rules. The extent is
+            // sheet-agnostic on purpose: computeBounds unions the used ranges of every sheet the
+            // operands name, and every operand takes that one extent, so a computed reference on
+            // any sheet (ROW(INDEX(Other!A:A,0))) lines up with A:A here; its sheet is not needed.
             val boundsColumns = rangesWithSheets.exists(_._1.isFullColumn)
             val boundsRows = rangesWithSheets.exists(_._1.isFullRow)
             def constrainComputedRange(range: CellRange): CellRange =

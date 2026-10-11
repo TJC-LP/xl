@@ -174,6 +174,55 @@ class RowColumnArraySpec extends FunSuite:
     )
   }
 
+  // ===== The runtime trimming follows the static path: nested shape readers see every row =====
+
+  test("MAX, MIN and COUNT of ROW(A:A) nested in SUMPRODUCT see the whole column, as in Excel") {
+    // (A:A>0) has three TRUEs (rows 5..7); MAX(ROW(A:A)) and COUNT(ROW(A:A)) are 1,048,576 and
+    // MIN(ROW(A:A)) is 1 in Excel and LibreOffice, not the used extent's 7, 3 and 5
+    val wholeColumn = 3 * 1048576
+    def sp(formula: String) = rowsCell(rowsFrom5, formula, ref"B6")
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*MAX(ROW(A:A)))"), Right(number(wholeColumn)))
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*COUNT(ROW(A:A)))"), Right(number(wholeColumn)))
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*MIN(ROW(A:A)))"), Right(number(3)))
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*MAX(ROW(INDEX(A:A,0))))"), Right(number(wholeColumn)))
+    assertEquals(sp("=SUMPRODUCT(MAX(ROW(A:A)))"), Right(number(1048576)))
+    // COLUMN over a whole row: (1:1>0) has three TRUEs (C1:E1), MAX(COLUMN(1:1)) is 16,384
+    assertEquals(
+      gridCell("=SUMPRODUCT((1:1>0)*MAX(COLUMN(1:1)))", ref"H9"),
+      Right(number(3 * 16384))
+    )
+    // ROW's array as SUMPRODUCT's own element source still lines up: 5 + 6 + 7
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*ROW(A:A))"), Right(number(18)))
+    assertEquals(sp("=SUMPRODUCT((A:A>0)*ROW(INDEX(A:A,0)))"), Right(number(18)))
+  }
+
+  test("a named formula read inside SUMPRODUCT evaluates whole, outside the trimming") {
+    def at(formula: String) =
+      val placed = rowsFrom5.put(ref"B6", CellValue.Formula(formula, None))
+      val named = Workbook(placed)
+        .withDefinedName("nmMax", "MAX(ROW(Rows!$A:$A))")
+        .withDefinedName("nmCount", "COUNT(ROW(Rows!$A:$A))")
+      placed.evaluateCell(ref"B6", Clock.system, Some(named))
+    assertEquals(at("=SUMPRODUCT((A:A>0)*nmMax)"), Right(number(3 * 1048576)))
+    assertEquals(at("=SUMPRODUCT((A:A>0)*nmCount)"), Right(number(3 * 1048576)))
+  }
+
+  // ===== A union is no single reference =====
+
+  test("ROW and COLUMN of a union are #VALUE!, as in Excel") {
+    val value = CellValue.Error(CellError.Value)
+    assertEquals(plain("=ROW((A1,A3))"), Right(value))
+    assertEquals(plain("=COLUMN((A1,B1))"), Right(value))
+    assertEquals(plain("=IFERROR(ROW((A1,A3)),\"err\")"), Right(text("err")))
+    assertEquals(plain("=ERROR.TYPE(COLUMN((A1,B1)))"), Right(number(3)))
+    assertEquals(array("=SUMPRODUCT(ROW((A1,A3)))"), Right(value))
+    evala("=ROW((A1:A2,A3))") match
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
+    // an intersection that leaves one area is an ordinary reference
+    assertEquals(plain("=ROW(A1:B3 B2:C3)"), Right(number(2)))
+  }
+
   // ===== LET keeps the reference ROW, COLUMN, ROWS and COLUMNS read =====
 
   test("ROW keeps the reference of an INDEX result bound by LET in array mode") {

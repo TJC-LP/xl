@@ -651,6 +651,14 @@ object Evaluator:
     case TExpr.DateTimeToSerial(inner) => inspectsReference(inner)
     case _ => false
 
+  /**
+   * GH-712: whether SUMPRODUCT's shared extent survives into `call`'s arguments — the calls whose
+   * slots its static trimming (`TExpr.transformRanges`) also enters: a lifted call (element-wise,
+   * so its arrays must line up with the other operands) and ROW/COLUMN (`boundsReferenceAxis`).
+   */
+  private[formula] def keepsArrayRangeBounds(call: TExpr.Call[?]): Boolean =
+    call.spec.flags.boundsReferenceAxis || call.spec.flags.lift != ArrayLift.Off
+
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -1490,9 +1498,48 @@ private class EvaluatorImpl(
   /**
    * A function call. `selectsReference`: the call's result feeds a reference position (an
    * aggregate's argument), so IF, IFS, CHOOSE and SWITCH keep the reference they select whole.
+   *
+   * GH-712: SUMPRODUCT's shared extent reaches a call only along the path its static trimming
+   * (`TExpr.transformRanges`) takes — operators, LET, lifted calls and the calls flagged
+   * `boundsReferenceAxis` (ROW, COLUMN). Any other call (MAX, COUNT, INDEX's shape, IF, a nested
+   * SUMPRODUCT) evaluates its arguments outside it, so `SUMPRODUCT((A:A>0)*MAX(ROW(A:A)))` reads
+   * MAX over every row, as Excel does, rather than over the used ones.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalCall(
+    call: TExpr.Call[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef],
+    selectsReference: Boolean
+  ): Either[EvalError, Any] =
+    if arrayRangeBounds.isDefined && !Evaluator.keepsArrayRangeBounds(call) then
+      outsideArrayRangeBounds.evalCallNode(
+        call,
+        sheet,
+        clock,
+        workbook,
+        currentCell,
+        selectsReference
+      )
+    else evalCallNode(call, sheet, clock, workbook, currentCell, selectsReference)
+
+  /** This evaluator without SUMPRODUCT's shared extent (see [[evalCall]]). */
+  private lazy val outsideArrayRangeBounds: EvaluatorImpl =
+    new EvaluatorWithDepth(
+      currentDepth,
+      allowArrayResults,
+      bindings,
+      rng,
+      memoOpt,
+      resolvingNames,
+      workbookPath,
+      aggregateMemoOpt,
+      arrayRangeBounds = None
+    )
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalCallNode(
     call: TExpr.Call[?],
     sheet: Sheet,
     clock: Clock,
@@ -2051,6 +2098,10 @@ private class EvaluatorImpl(
             // carries the cycle guard and a FRESH binding environment (LET
             // bindings never leak into a name's definition). A named formula is an
             // array context, as in Excel; one that computes a reference keeps it.
+            // GH-712: the definition is its own formula, outside SUMPRODUCT's static
+            // trimming, so it evaluates without the shared extent (a name computing
+            // `MAX(ROW(Sheet1!$A:$A))` is 1,048,576); a reference it returns is
+            // bounded by the ROW or COLUMN that reads it.
             val resolved = TExpr.asResolvedValueExpr(other)
             val derived: EvaluatorImpl = new EvaluatorWithDepth(
               currentDepth,
@@ -2061,7 +2112,7 @@ private class EvaluatorImpl(
               trail,
               workbookPath,
               aggregateMemoOpt,
-              arrayRangeBounds
+              arrayRangeBounds = None
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
