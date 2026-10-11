@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula.eval
 
+import java.util.regex.Pattern
+
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
@@ -279,13 +281,16 @@ object ErrorValueCell:
   /** The longest rendered reason in Unicode code points, including the `…` that marks a cut. */
   val MaxReasonLength: Int = 120
 
+  /** Every run of whitespace, with NEL and the line and paragraph separators `\s` leaves out. */
+  private val LineBreaksAndWhitespace: Pattern = Pattern.compile("[\\s\\u0085\\u2028\\u2029]+")
+
   /**
    * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line
    * and paragraph separators) and tab a single space, runs of whitespace collapsed, then cut to
    * [[MaxReasonLength]] Unicode code points with a trailing `…`, keeping surrogate pairs whole.
    */
   def boundReason(reason: String): String =
-    val oneLine = reason.replaceAll("[\\s\\u0085\\u2028\\u2029]+", " ").trim
+    val oneLine = LineBreaksAndWhitespace.matcher(reason).replaceAll(" ").trim
     if oneLine.codePointCount(0, oneLine.length) <= MaxReasonLength then oneLine
     else oneLine.substring(0, oneLine.offsetByCodePoints(0, MaxReasonLength - 1)) + "…"
 
@@ -360,7 +365,7 @@ final case class RecalcResult(
   converged: Boolean = true,
   iterationsUsed: Int = 0,
   cycles: Vector[SccReport] = Vector.empty,
-  errorReasons: Map[(SheetName, ARef), String] = Map.empty
+  errorReasons: Map[QualifiedRef, String] = Map.empty
 ) derives CanEqual:
 
   /** GH-492: the cyclic components that exhausted their budget — the offenders to name. */
@@ -437,7 +442,7 @@ final case class RecalcResult(
     all: Vector[(SheetName, ARef, CellError)]
   ): Vector[ErrorValueCell] =
     all.take(RecalcResult.MaxNamedErrorCells).map { (sheet, ref, err) =>
-      ErrorValueCell(sheet, ref, err, errorReasons.get((sheet, ref)))
+      ErrorValueCell(sheet, ref, err, errorReasons.get(QualifiedRef(sheet, ref)))
     }
 
   /** The Excel error a computed value carries, if any (cached formula values included). */
@@ -529,7 +534,7 @@ object RecalcResult:
     failures: Vector[CellEvalError],
     dependents: Map[QualifiedRef, Set[QualifiedRef]],
     cycleReports: Vector[SccReport] = Vector.empty,
-    reasons: Map[(SheetName, ARef), String] = Map.empty
+    reasons: Map[QualifiedRef, String] = Map.empty
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -625,5 +630,5 @@ object RecalcResult:
       iterationsUsed = iterationsUsed,
       cycles = cycles,
       // a reason outlives neither its cell's value nor the invalidation above
-      errorReasons = reasons.filter((at, _) => evaluated.get(at._1).exists(_.contains(at._2)))
+      errorReasons = reasons.filter((q, _) => evaluated.get(q.sheet).exists(_.contains(q.ref)))
     )

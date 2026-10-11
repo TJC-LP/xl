@@ -650,6 +650,8 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(cells.map(c => (c.ref, c.error)), Vector((ref"B1", CellError.NA)))
     assert(cells.exists(_.reason.exists(_.contains("VLOOKUP(2, A1:A1, 1, FALSE)"))), cells)
     assert(result.summary.contains("S!B1 #N/A — VLOOKUP exact match not found"), result.summary)
+    val reasons: Map[QualifiedRef, String] = result.errorReasons
+    assertEquals(reasons.keySet, Set(QualifiedRef(SheetName.unsafe("S"), ref"B1")))
     assertEquals(RecalcResult.MaxNamedErrorCells, 10)
     assertEquals(ErrorValueCell.MaxReasonLength, 120)
     assertEquals(ErrorValueCell.boundReason("why\r\nnot"), "why not")

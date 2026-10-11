@@ -178,6 +178,110 @@ class LookupChannelSpec extends FunSuite:
     assert(grid.evaluateFormula("=MATCH(9,A1:B3,0)").isLeft)
   }
 
+  test("#692: XLOOKUP reads an uncached formula cell in return_array through the reader") {
+    // B2 is a formula with no cached value: the hit's return cell must be computed, not the
+    // raw formula record (the old `unwrapCachedValue` read left an uncached record as it was)
+    val keys = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", num(10))
+      .put(ref"A2", num(20))
+      .put(ref"A3", num(30))
+      .put(ref"B1", text("a"))
+      .put(ref"B2", CellValue.Formula("\"b\"&\"2\"", None))
+      .put(ref"B3", CellValue.Formula("A3*2", None))
+    check(keys, "=XLOOKUP(20,A1:A3,B1:B3)", text("b2"))
+    check(keys, "=XLOOKUP(30,A1:A3,B1:B3,,0,-1)", num(60))
+    check(keys, "=XLOOKUP(25,A1:A3,B1:B3,,-1)", text("b2"))
+    check(keys, "=XLOOKUP(25,A1:A3,B1:B3,,1)", num(60))
+    check(keys, "=XLOOKUP(\"b*\",B1:B3,A1:A3,,2)", num(20))
+    // a return cell that computes an error is that error value, not a host failure
+    val erring = keys.put(ref"B2", CellValue.Formula("1/0", None))
+    check(erring, "=XLOOKUP(20,A1:A3,B1:B3)", err(CellError.Div0))
+    // and on another sheet
+    val wb =
+      Workbook(Vector(Sheet(SheetName.unsafe("Main")), keys.copy(name = SheetName.unsafe("Keys"))))
+    assertEquals(
+      wb.sheets.headOption
+        .map(_.evaluateFormula("=XLOOKUP(30,Keys!A1:A3,Keys!B1:B3)", workbook = Some(wb))),
+      Some(Right(num(60)))
+    )
+  }
+
+  test("#692: a reverse exact search evaluates the cells below the hit, never the ones above") {
+    // A1 and B1 cannot parse: a reverse walk (search_mode -1, and -2 the same walk) reads row 5,
+    // 4, 3 and stops at the hit in row 3, so row 1 is never evaluated — while a forward walk
+    // reads it first
+    val keys = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Formula("1+", None))
+      .put(ref"A2", num(20))
+      .put(ref"A3", num(30))
+      .put(ref"A4", num(40))
+      .put(ref"A5", num(50))
+      .put(ref"B1", CellValue.Formula("1+", None))
+      .put(ref"B2", text("b"))
+      .put(ref"B3", text("c"))
+      .put(ref"B4", text("d"))
+      .put(ref"B5", text("e"))
+    List(-1, -2).foreach { mode =>
+      check(keys, s"=XLOOKUP(30,A1:A5,B1:B5,,0,$mode)", text("c"))
+      check(keys, s"=XLOOKUP(\"c*\",B1:B5,A1:A5,,2,$mode)", num(30))
+      check(keys, s"=XMATCH(30,A1:A5,0,$mode)", num(3))
+      check(keys, s"=XMATCH(\"c*\",B1:B5,2,$mode)", num(3))
+      // a hit in row 2 is reached before row 1 too, so row 1 is still never read
+      check(keys, s"=XLOOKUP(20,A1:A5,B1:B5,,0,$mode)", text("b"))
+    }
+    // the broken cell AFTER the hit in reverse order, i.e. below it, ends the search instead
+    val broken = keys
+      .put(ref"A1", num(10))
+      .put(ref"B1", text("a"))
+      .put(ref"A5", CellValue.Formula("1+", None))
+      .put(ref"B5", CellValue.Formula("1+", None))
+    List(-1, -2).foreach { mode =>
+      assert(broken.evaluateFormula(s"=XLOOKUP(30,A1:A5,B1:B5,,0,$mode)").isLeft, mode)
+      assert(broken.evaluateFormula(s"=XLOOKUP(\"c*\",B1:B5,A1:A5,,2,$mode)").isLeft, mode)
+      assert(broken.evaluateFormula(s"=XMATCH(30,A1:A5,0,$mode)").isLeft, mode)
+      assert(broken.evaluateFormula(s"=XMATCH(\"c*\",B1:B5,2,$mode)").isLeft, mode)
+    }
+    // while the forward walk over the same sheet stops at row 3 and never reads row 5
+    check(broken, "=XLOOKUP(30,A1:A5,B1:B5)", text("c"))
+    check(broken, "=XMATCH(\"c*\",B1:B5,2)", num(3))
+    check(broken, "=MATCH(30,A1:A5,0)", num(3))
+    // the forward walk over the same keys reads A1 first and fails there
+    assert(keys.evaluateFormula("=XLOOKUP(30,A1:A5,B1:B5)").isLeft)
+    assert(keys.evaluateFormula("=XMATCH(30,A1:A5)").isLeft)
+    assert(keys.evaluateFormula("=MATCH(30,A1:A5,0)").isLeft)
+  }
+
+  test("#692: a forward exact search surfaces a host-failing key before the hit, as XMATCH did") {
+    // the old MATCH/XLOOKUP readers skipped a formula they could not evaluate; now it fails the
+    // search with its own error, in the exact modes only when it sits before the hit
+    def failing(formula: String): Sheet =
+      Sheet(SheetName.unsafe("S"))
+        .put(ref"A1", num(10))
+        .put(ref"A2", CellValue.Formula(formula, None))
+        .put(ref"A3", num(30))
+        .put(ref"B1", text("a"))
+        .put(ref"B2", text("b"))
+        .put(ref"B3", text("c"))
+    List("1+", "NOSUCHFUNCTION(1)").foreach { formula =>
+      val keys = failing(formula)
+      assert(keys.evaluateFormula("=MATCH(30,A1:A3,0)").isLeft, formula)
+      assert(keys.evaluateFormula("=XLOOKUP(30,A1:A3,B1:B3)").isLeft, formula)
+      // the return cell past the broken key is read without evaluating the key column's A2
+      check(keys, "=XLOOKUP(\"c\",B1:B3,A1:A3,,2)", num(30))
+      assert(keys.evaluateFormula("=XMATCH(30,A1:A3)").isLeft, formula)
+      // the hit before the broken cell is still found
+      check(keys, "=MATCH(10,A1:A3,0)", num(1))
+      check(keys, "=XLOOKUP(10,A1:A3,B1:B3)", text("a"))
+      // the approximate modes read the whole used range
+      assert(keys.evaluateFormula("=MATCH(10,A1:A3,1)").isLeft, formula)
+      assert(keys.evaluateFormula("=XLOOKUP(10,A1:A3,B1:B3,,-1)").isLeft, formula)
+    }
+    // a key that EVALUATES to an error is a value the search skips past, as Excel does
+    val errorKey = failing("1/0")
+    check(errorKey, "=MATCH(30,A1:A3,0)", num(3))
+    check(errorKey, "=XLOOKUP(30,A1:A3,B1:B3)", text("c"))
+  }
+
   test("#692: MATCH and XLOOKUP compute an uncached formula key on another sheet") {
     val keys = Sheet(SheetName.unsafe("Keys"))
       .put(ref"A1", num(10))

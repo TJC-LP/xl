@@ -36,8 +36,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…` —
   a lookup echoes its key, which can be a 32,767-character multi-line cell — while
   `ErrorValueCell.reason` and the JSON `reason` keep the full text. `RecalcResult` gains the
-  defaulted field `errorReasons`: source-compatible, but the binary signatures of its
-  `apply`/`copy`/`unapply` change for code compiled against an earlier `xl-evaluator`.
+  defaulted field `errorReasons: Map[QualifiedRef, String]`: source-compatible, but the binary
+  signatures of its `apply`/`copy`/`unapply` change for code compiled against an earlier
+  `xl-evaluator`.
 - **The `:` range operator between references a function returns** (#713):
   `=SUM(A1:INDEX(A:A,COUNTA(A:A)))`, `=SUM(INDEX(B1:B3,1):INDEX(B1:B3,2))` and
   `=SUM(B1:XLOOKUP(2,A1:A3,B1:B3))` parse, print back, shift, and evaluate to the bounding range,
@@ -324,7 +325,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   XLOOKUP, XMATCH and MATCH walk that range lazily, one cell at a time in search order, so a hit
   near the top of a 50k-row column costs the cells up to it, never the column (200 `XLOOKUP` + 200
   `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s is reading and
-  writing the book); the approximate modes read the used range as before.
+  writing the book); the approximate modes read the used range as before. XLOOKUP's
+  `return_array` cell is read through the same evaluating reader, so an uncached formula there is
+  computed instead of returning the raw formula record. A key cell whose formula cannot be
+  evaluated at all (unparseable, or an unknown function) is a host failure, not a value: MATCH and
+  XLOOKUP's exact searches now surface it when it sits before the hit in search order, as
+  LOOKUP/XMATCH already did (the old readers skipped it silently); the cells after the hit are
+  never evaluated, while the approximate modes read the whole used range and so fail on such a
+  cell anywhere in it.
 
 - **Text cells render through their format's text section** (#693): `@,` showed `abc` for `abc,` and
   `0;-0;0;"T:"@` ignored its prefix, in cell display and `TEXT` alike (rich text included; `_`
