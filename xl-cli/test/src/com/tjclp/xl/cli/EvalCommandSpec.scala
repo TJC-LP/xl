@@ -384,3 +384,151 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(streamed.stderr.contains("eval is not supported with --stream"), streamed.stderr)
       assert(help.stdout.contains("--at"), help.stdout)
   }
+
+  // --- GH-715 review: same-sheet qualified reads, empty sheets, long cycles, columns ------------
+
+  /** `eval --at` on `wb` (default sheet `sheet`) must refuse, naming the cycle. */
+  private def circularIn(
+    wb: Workbook,
+    sheet: Option[Sheet],
+    formula: String,
+    at: String,
+    cycle: String
+  ): IO[Unit] =
+    ReadCommands.eval(wb, sheet, formula, Some(at), Nil).attempt.map {
+      case Left(e: XLException) =>
+        assert(e.getMessage.contains(s"Circular reference detected: $cycle"), e.getMessage)
+      case other => fail(s"$formula --at $at: expected a circular reference, got $other")
+    }
+
+  /** Test (A1:B10 paired, D5 holding a stale 7) and Other (D5 holding 9). */
+  private val stale: Workbook = Workbook(
+    Vector(
+      pairedColumns(Sheet("Test")).put(ref"D5", CellValue.Number(BigDecimal(7))),
+      Sheet("Other").put(ref"D5", CellValue.Number(BigDecimal(9)))
+    )
+  )
+
+  private val staleTest: Sheet = stale.sheets.head
+  private val staleOther: Sheet = stale.sheets(1)
+
+  test("GH-715: a read qualified with the placement's own sheet is circular, not its old value") {
+    val test = Some(staleTest)
+    circularIn(stale, test, "=Test!D5", "Test!D5", "D5 → D5") >>
+      circularIn(stale, test, "=Test!D5+1", "D5", "D5 → D5") >>
+      circularIn(stale, Some(staleOther), "=Test!D5", "Test!D5", "D5 → D5") >>
+      circularIn(stale, test, "='Test'!D5*2", "D5", "D5 → D5") >>
+      circularIn(stale, test, "=test!D5", "D5", "D5 → D5") >>
+      circularIn(stale, test, "=SUM(Test!D1:D9)", "Test!D5", "D5 → D5") >>
+      circularIn(stale, test, "=SUM(Test!D:D)", "Test!D20", "D20 → D20")
+  }
+
+  test("GH-715: a precedent's read qualified with the placement's sheet closes the cycle too") {
+    val direct = staleTest.put(ref"C1", CellValue.Formula("=Test!D5*2"))
+    val chained = staleTest
+      .put(ref"C1", CellValue.Formula("=Test!B20+1"))
+      .put(ref"B20", CellValue.Formula("=D5*2"))
+    circularIn(stale.put(direct), Some(direct), "=C1+1", "D5", "D5 → C1 → D5") >>
+      circularIn(stale.put(chained), Some(chained), "=C1+1", "D5", "D5 → C1 → B20 → D5")
+  }
+
+  test("GH-715: another sheet's same address, and inspecting the own-sheet address, evaluate") {
+    for
+      other <- ReadCommands.eval(stale, Some(staleTest), "=Other!D5+1", Some("D5"), Nil)
+      row <- ReadCommands.eval(stale, Some(staleTest), "=ROW(Test!D5)", Some("D5"), Nil)
+    yield
+      assert(other.contains("Result: 10 (number)"), other)
+      assert(row.contains("Result: 5 (number)"), row)
+  }
+
+  test("GH-715 known gap: a cycle through another sheet's formula is not detected") {
+    // Out of scope for the same-sheet check: Other!A1 reads Test!D5, so the plain cell would be
+    // circular, but eval --at follows no other sheet's formulas and answers with D5's old 7.
+    val wb = stale.put(staleOther.put(ref"A1", CellValue.Formula("=Test!D5*2")))
+    for result <- ReadCommands.eval(wb, Some(staleTest), "=Other!A1", Some("D5"), Nil)
+    yield assert(result.contains("Result: 14 (number)"), result)
+  }
+
+  test("GH-715: --at on an empty sheet does not enumerate the formula's whole-column ranges") {
+    // Without a used range to bound them, A:XFC would expand to 17 billion cells.
+    val wb = Workbook(Vector(pairedColumns(Sheet("Test")), Sheet("Other")))
+    for
+      at <- ReadCommands.eval(wb, wb.sheets.headOption, "=SUM(A:XFC)", Some("Other!XFD5"), Nil)
+      positionless <- ReadCommands.eval(wb, wb.sheets.lift(1), "=SUM(A:XFC)", None, Nil)
+    yield
+      assert(at.contains("Result: 0 (number)"), at)
+      assert(positionless.contains("Result: 0 (number)"), positionless)
+  }
+
+  /** Test with C1 = C2, C2 = C3, …, C`length` = D5. */
+  private def chainTo(length: Int): Sheet =
+    (1 to length).foldLeft(Sheet("Test")) { (s, row) =>
+      val next = if row == length then "=D5" else s"=C${row + 1}"
+      s.put(ARef.from0(2, row - 1), CellValue.Formula(next))
+    }
+
+  test("GH-715: a long cycle path is elided in the middle; a short one is printed whole") {
+    val huge = chainTo(5000)
+    for
+      _ <- circularAt(chainTo(40), "=C1", "D5", "D5 → C1 → C2 → … (37 more) … → C40 → D5")
+      _ <- circularAt(chainTo(7), "=C1", "D5", "D5 → C1 → C2 → C3 → C4 → C5 → C6 → C7 → D5")
+      message <- ReadCommands.eval(Workbook(huge), Some(huge), "=C1", Some("D5"), Nil).attempt
+    yield message match
+      case Left(e: XLException) =>
+        assert(e.getMessage.contains("… (4,997 more) …"), e.getMessage)
+        assert(e.getMessage.length < 300, e.getMessage)
+      case other => fail(s"expected a circular reference, got $other")
+  }
+
+  test("GH-715: a cycle elsewhere on the sheet does not block --at") {
+    // Only the formula's own closure is ordered: F1 and F2 read each other but nothing reads them.
+    val sheet = pairedColumns(Sheet("Test"))
+      .put(ref"F1", CellValue.Formula("=F2"))
+      .put(ref"F2", CellValue.Formula("=F1"))
+      .put(ref"C1", CellValue.Formula("=A5*10"))
+    for result <- ReadCommands.eval(Workbook(sheet), Some(sheet), "=C1+1", Some("D5"), Nil)
+    yield assert(result.contains("Result: 51 (number)"), result)
+  }
+
+  test("GH-715: --at intersects a row range with the placement's column") {
+    // A1:J1 holds 1..10 and A2:J2 holds 10..100; the plain cell at E5 reads E1 and E2.
+    val rows = (0 until 10).foldLeft(Sheet("Test")) { (s, c) =>
+      s.put(ARef.from0(c, 0), CellValue.Number(BigDecimal(c + 1)))
+        .put(ARef.from0(c, 1), CellValue.Number(BigDecimal(10 * (c + 1))))
+    }
+    val wb = Workbook(Vector(rows))
+    val formula = "=SUM(A1:J1*A2:J2)"
+    for
+      positionless <- ReadCommands.eval(wb, Some(rows), formula, None, Nil)
+      at <- ReadCommands.eval(wb, Some(rows), formula, Some("E5"), Nil)
+      outside <- ReadCommands.eval(wb, Some(rows), formula, Some("L5"), Nil)
+    yield
+      assert(positionless.contains("Result: 3850 (number)"), positionless)
+      assert(at.contains("Result: 250 (number)"), at)
+      assert(outside.contains("Result: #VALUE! (error)"), outside)
+  }
+
+  test("GH-715 CLI: a same-sheet qualified self-read is FORMULA_ERROR; --stream refuses --at") {
+    for
+      book <- written(stale)
+      self <- CliHarness.run("-f", book, "-s", "Test", "--json", "eval", "=Test!D5", "--at", "D5")
+      streamed <- CliHarness.run(
+        "-f",
+        book,
+        "-s",
+        "Test",
+        "--json",
+        "--stream",
+        "eval",
+        sumProduct,
+        "--at",
+        "D5"
+      )
+    yield
+      assertEquals(self.exit, 3, self.stdout)
+      val error = ujson.read(self.stdout)("error")
+      assertEquals(error("code"), ujson.Str("FORMULA_ERROR"), self.stdout)
+      assert(error("message").str.contains("Circular reference detected: D5 → D5"), self.stdout)
+      assertEquals(streamed.exit, 2, streamed.stdout)
+      assertEquals(ujson.read(streamed.stdout)("error")("code"), ujson.Str("UNSUPPORTED_IN_STREAM"))
+  }
