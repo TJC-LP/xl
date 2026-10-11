@@ -12,6 +12,7 @@ import com.tjclp.xl.error.XLException
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator, TExpr}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
+import com.tjclp.xl.formula.graph.ValueDependencies
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 /**
@@ -273,8 +274,10 @@ object ReadCommands:
     for
       tempSheet <- applyOverrides(sheet, overrides)
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
-      targetDeps = DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange)
-      graph = DependencyGraph.fromSheet(tempSheet)
+      targetDeps = at.fold(DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))(
+        _ => ValueDependencies.extract(expr, tempSheet.usedRange)
+      )
+      graph = at.fold(DependencyGraph.fromSheet(tempSheet))(_ => valueReadGraph(tempSheet))
       _ <- at.flatMap(cycleThrough(tempSheet, graph, expr, targetDeps, _)) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
         case None => IO.unit
@@ -307,6 +310,30 @@ object ReadCommands:
       }
     yield (evalSheet, evaluator)
 
+  /** Preserve structural dependency information elsewhere; positioned eval orders value reads. */
+  private def valueReadGraph(sheet: Sheet): DependencyGraph =
+    val graph = DependencyGraph.fromSheet(sheet)
+    val dependencies = graph.dependencies.map { (ref, deps) =>
+      val reads = sheet(ref).value match
+        case CellValue.Formula(text, _, _) =>
+          FormulaParser
+            .parse(text)
+            .fold(
+              _ => deps,
+              expr =>
+                val structural = DependencyGraph.extractDependenciesBounded(expr, sheet.usedRange)
+                val values = ValueDependencies.extract(expr, sheet.usedRange)
+                (deps -- (structural -- values)) ++ values
+            )
+        case _ => deps
+      ref -> reads
+    }
+    val dependents = dependencies.foldLeft(Map.empty[ARef, Set[ARef]]) {
+      case (reverse, (ref, deps)) =>
+        deps.foldLeft(reverse)((acc, dep) => acc.updated(dep, acc.getOrElse(dep, Set.empty) + ref))
+    }
+    DependencyGraph(dependencies, dependents)
+
   /**
    * The cycle `expr` would close as the cell `at` on `sheet`, `at` first and last: `expr` reads
    * `at`, or a formula in its closure does. Breadth first, so the shortest. Whether a formula reads
@@ -322,7 +349,7 @@ object ReadCommands:
   ): Option[List[ARef]] =
     val only = Some(CellRange(at, at))
     def reads(e: TExpr[?]): Boolean =
-      DependencyGraph.extractDependenciesBounded(e, only).contains(at)
+      ValueDependencies.extract(e, only).contains(at)
     def readsBack(ref: ARef): Boolean =
       sheet(ref).value match
         case CellValue.Formula(text, _, _) => FormulaParser.parse(text).exists(reads)
