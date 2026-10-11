@@ -44,7 +44,16 @@ final case class FunctionFlags(
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
    * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
    */
-  lift: ArrayLift = ArrayLift.Off
+  lift: ArrayLift = ArrayLift.Off,
+  /**
+   * GH-711: True for the selectors IF, IFS, CHOOSE and SWITCH, which return the argument they
+   * select as it is — the reference itself when the call feeds a reference position
+   * (`FunctionSpecsBase.evalSelected`). The flag is the single source of truth for the analyses
+   * that see through a selector: SUMPRODUCT's whole-column trimming bounds every range under one
+   * (`TExprAnalysis.transformRanges`). `Evaluator.referenceFunctions`, which routes a reference
+   * position to the selected reference, lists every flagged spec (a drift law pins it).
+   */
+  selector: Boolean = false
 )
 
 /**

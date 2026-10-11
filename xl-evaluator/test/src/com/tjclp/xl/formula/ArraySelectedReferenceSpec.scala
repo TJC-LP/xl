@@ -28,19 +28,21 @@ class ArraySelectedReferenceSpec extends FunSuite:
       .put(ref"B2", num(2))
       .put(ref"B3", num(3))
 
-  private val book: Workbook = Workbook(Vector(sheet))
-
   /** `formula` with no cell position: an array formula, as `xl eval` evaluates it. */
   private def positionless(formula: String, on: Sheet = sheet): XLResult[CellValue] =
     on.evaluateFormula(formula, Clock.system, Some(Workbook(Vector(on))), None)
 
   /** `formula` as a one-cell CSE record at D1, recalculated; its cached value. */
-  private def cse(formula: String): Option[CellValue] =
-    val placed = sheet.put(
-      ref"D1",
-      CellValue.Formula(formula, None, FormulaKind.ArrayFormula(CellRange(ref"D1", ref"D1")))
-    )
-    book
+  private def cse(formula: String, on: Sheet = sheet): Option[CellValue] =
+    recalculatedAtD1(formula, FormulaKind.ArrayFormula(CellRange(ref"D1", ref"D1")), on)
+
+  /** `formula` as a plain cell's (legacy) formula at D1, recalculated; its cached value. */
+  private def plain(formula: String, on: Sheet): Option[CellValue] =
+    recalculatedAtD1(formula, FormulaKind.Normal(), on)
+
+  private def recalculatedAtD1(formula: String, kind: FormulaKind, on: Sheet): Option[CellValue] =
+    val placed = on.put(ref"D1", CellValue.Formula(formula, None, kind))
+    Workbook(Vector(on))
       .put(placed)
       .recalculate()
       .workbook
@@ -77,6 +79,41 @@ class ArraySelectedReferenceSpec extends FunSuite:
     assertEquals(positionless("=COUNTBLANK(B:B)"), Right(num(1048573)))
     assertEquals(positionless("=COUNTBLANK(IF(TRUE,B:B,A:A))"), Right(num(1048573)))
     assertEquals(cse("COUNTBLANK(IF(TRUE,B:B,A:A))"), Some(num(1048573)))
+  }
+
+  test("AND, OR and the aggregates over a selected whole row follow the reference rule") {
+    // row 2 holds A2=5 and B2=2, row 1 A1=4 and B1=1; the other 16382 cells of each are blank
+    assertEquals(positionless("=AND(2:2)"), Right(CellValue.Bool(true)))
+    assertEquals(positionless("=AND(IF(TRUE,2:2,1:1))"), Right(CellValue.Bool(true)))
+    assertEquals(positionless("=OR(CHOOSE(1,2:2,1:1))"), Right(CellValue.Bool(true)))
+    // the CSE record sits at D1, so it selects between rows 2 and 3 (row 1 would be circular)
+    assertEquals(cse("AND(IF(TRUE,2:2,3:3))"), Some(CellValue.Bool(true)))
+    assertEquals(positionless("=SUM(IF(TRUE,2:2,1:1))"), Right(num(7)))
+    // every blank cell of the row counts, as in Excel and LibreOffice: 16384 cells, two filled
+    assertEquals(positionless("=COUNTBLANK(1:1)"), Right(num(16382)))
+    assertEquals(positionless("=COUNTBLANK(IF(TRUE,1:1,2:2))"), Right(num(16382)))
+    assertEquals(cse("COUNTBLANK(IF(TRUE,2:2,3:3))"), Some(num(16382)))
+  }
+
+  test("COUNTBLANK counts the blanks above a used range that starts below row 1") {
+    // only B5:B7 hold values: B1:B4 lie before the used range and B8 onwards after it
+    val lower = Sheet(SheetName.unsafe("L"))
+      .put(ref"B5", num(1))
+      .put(ref"B6", num(2))
+      .put(ref"B7", num(3))
+    List("COUNTBLANK(B:B)", "COUNTBLANK(IF(TRUE,B:B,A:A))", "COUNTBLANK(CHOOSE(2,A:A,B:B))")
+      .foreach { formula =>
+        assertEquals(positionless("=" + formula, lower), Right(num(1048573)), formula)
+        assertEquals(cse(formula, lower), Some(num(1048573)), formula)
+        assertEquals(plain(formula, lower), Some(num(1048573)), formula)
+      }
+    // a column the used range does not cross is blank throughout; two columns, all but three
+    assertEquals(positionless("=COUNTBLANK(A:A)", lower), Right(num(1048576)))
+    assertEquals(positionless("=COUNTBLANK(B:C)", lower), Right(num(2097149)))
+    // the other aggregates and AND skip those blanks
+    assertEquals(positionless("=SUM(IF(TRUE,B:B,A:A))", lower), Right(num(6)))
+    assertEquals(positionless("=COUNTA(IF(TRUE,B:B,A:A))", lower), Right(num(3)))
+    assertEquals(positionless("=AND(IF(TRUE,B:B,A:A))", lower), Right(CellValue.Bool(true)))
   }
 
   test("ROWS of a selected whole column is the column's height") {
@@ -123,6 +160,31 @@ class ArraySelectedReferenceSpec extends FunSuite:
     assertEquals(positionless("=SUMPRODUCT(IF(TRUE,B:B,A:A),A:A)"), Right(num(32)))
     // an array condition broadcasts against branches trimmed to the same extent
     assertEquals(positionless("=SUMPRODUCT(IF(A:A>4,B:B,0))"), Right(num(5)))
+    // a whole-column condition and two whole-column branches, all trimmed to one size: A1 (4 is
+    // not > 4) and B2, B3, so 4+2+3 (LibreOffice: 9)
+    assertEquals(positionless("=SUMPRODUCT(IF(A:A>4,B:B,A:A))"), Right(num(9)))
+  }
+
+  test("SUMPRODUCT trims a selector's condition and branches when the columns' data differ") {
+    // A1:A5 = 1..5, B1:B2 = 10,20: B:B is trimmed to A's five rows, its blanks reading 0
+    val ragged = (1 to 5)
+      .foldLeft(Sheet(SheetName.unsafe("R")))((s, i) =>
+        s.put(ARef.from0(0, i - 1), num(i.toDouble))
+      )
+      .put(ref"B1", num(10))
+      .put(ref"B2", num(20))
+    // LibreOffice: 21, 41 and 50
+    assertEquals(positionless("=SUMPRODUCT(IF(A:A>1,B:B,A:A))", ragged), Right(num(21)))
+    assertEquals(positionless("=SUMPRODUCT(IF(A:A>1,B:B,A:A),A:A)", ragged), Right(num(41)))
+    assertEquals(positionless("=SUMPRODUCT(CHOOSE(1,B:B,A:A),A:A)", ragged), Right(num(50)))
+  }
+
+  test("drift: the selector flag marks IF, IFS, CHOOSE and SWITCH, each a reference function") {
+    val flagged =
+      com.tjclp.xl.formula.functions.FunctionRegistry.all.filter(_.flags.selector).map(_.name).toSet
+    assertEquals(flagged, Set("IF", "IFS", "CHOOSE", "SWITCH"))
+    // a reference position routes each to the reference it selects (Evaluator.referenceArgument)
+    assert(flagged.subsetOf(com.tjclp.xl.formula.eval.Evaluator.referenceFunctions), flagged)
   }
 
   test("SUMPRODUCT bounds a selected column on another sheet with the shared extent") {
