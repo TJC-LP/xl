@@ -442,10 +442,27 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(row.contains("Result: 5 (number)"), row)
   }
 
-  test("GH-715 known gap: a cycle through another sheet's formula is not detected") {
-    // Out of scope for the same-sheet check: Other!A1 reads Test!D5, so the plain cell would be
-    // circular, but eval --at follows no other sheet's formulas and answers with D5's old 7.
+  /** `eval --at` must refuse: the run-time guard saw a read of the placement `cell`. */
+  private def readsPlacement(wb: Workbook, formula: String, at: String, cell: String): IO[Unit] =
+    ReadCommands.eval(wb, wb.sheets.headOption, formula, Some(at), Nil).attempt.map {
+      case Left(e: XLException) =>
+        val expected = s"Circular reference detected: the formula reads its own placement $cell"
+        assert(e.getMessage.contains(expected), e.getMessage)
+      case other => fail(s"$formula --at $at: expected a circular reference, got $other")
+    }
+
+  test("GH-715 (#729): a cycle through another sheet's uncached formula is circular") {
+    // Other!A1 reads Test!D5. The static check follows no other sheet; the run-time guard sees
+    // Other!A1's evaluation read the placement.
     val wb = stale.put(staleOther.put(ref"A1", CellValue.Formula("=Test!D5*2")))
+    readsPlacement(wb, "=Other!A1", "D5", "D5")
+  }
+
+  test("GH-715 known gap (#729): another sheet's CACHED formula that reads the placement") {
+    // A cached formula on another sheet is read as its cache, never re-evaluated, so the guard
+    // never sees its read of Test!D5: the answer is that cache (here 14).
+    val cached = CellValue.Formula("=Test!D5*2", Some(CellValue.Number(BigDecimal(14))))
+    val wb = stale.put(staleOther.put(ref"A1", cached))
     for result <- ReadCommands.eval(wb, Some(staleTest), "=Other!A1", Some("D5"), Nil)
     yield assert(result.contains("Result: 14 (number)"), result)
   }
@@ -554,19 +571,38 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(overBroken.contains("Result: 11 (number)"), overBroken)
   }
 
-  test("GH-715 known gap (#729): INDIRECT naming the --at cell answers with its old value") {
-    // The reference INDIRECT builds is not static, so the cycle check cannot see it.
-    for result <- ReadCommands.eval(stale, Some(staleTest), "=INDIRECT(\"D5\")+1", Some("D5"), Nil)
-    yield assert(result.contains("Result: 8 (number)"), result)
-  }
-
-  test("GH-715 known gap (#729): a defined name naming the --at cell answers with its old value") {
-    // Names resolve through workbook metadata, which the same-sheet value reads do not follow.
+  test("GH-715 (#729): a reference computed at run time that lands on the placement is circular") {
+    // The static check cannot see these reads; the run-time guard does, as Excel's would.
     val named = stale.copy(metadata =
       stale.metadata.copy(definedNames = Vector(DefinedName("placed", "Test!$D$5")))
     )
-    for result <- ReadCommands.eval(named, Some(staleTest), "=placed+1", Some("D5"), Nil)
-    yield assert(result.contains("Result: 8 (number)"), result)
+    val dynamicPrecedent = staleTest.put(ref"C1", CellValue.Formula("=INDIRECT(\"D5\")*2"))
+    readsPlacement(stale, "=INDIRECT(\"D5\")+1", "D5", "D5") >>
+      readsPlacement(stale, "=INDIRECT(\"Test!D5\")", "D5", "D5") >>
+      readsPlacement(stale, "=OFFSET(A1,4,0)", "A5", "A5") >>
+      readsPlacement(stale, "=SUM(OFFSET(A1,0,0,10,1))", "A5", "A5") >>
+      readsPlacement(stale, "=IFERROR(INDIRECT(\"D5\"),0)", "D5", "D5") >>
+      readsPlacement(named, "=placed+1", "D5", "D5") >>
+      // a precedent whose run-time read lands on the placement fails while the closure evaluates
+      readsPlacement(stale.put(dynamicPrecedent), "=C1+1", "D5", "D5")
+  }
+
+  test("GH-715: run-time references elsewhere evaluate; INDEX over the placement is static") {
+    val selector = staleTest.put(ref"C1", CellValue.Number(BigDecimal(5)))
+    for
+      beside <- ReadCommands.eval(stale, Some(staleTest), "=INDIRECT(\"A5\")+1", Some("D5"), Nil)
+      offset <- ReadCommands.eval(stale, Some(staleTest), "=OFFSET(A1,4,0)*2", Some("D5"), Nil)
+      // INDEX reads its whole array as values, so a computed selector over the placement is a
+      // cycle the static check already names
+      _ <- circularIn(stale.put(selector), Some(selector), "=INDEX(A1:A10,C1)", "A5", "A5 → A5")
+    yield
+      assert(beside.contains("Result: 6 (number)"), beside)
+      assert(offset.contains("Result: 10 (number)"), offset)
+  }
+
+  test("GH-715: a LET body that returns its bound placement reads it") {
+    circularAt(staleTest, "=LET(x,D5,x)", "D5", "D5 → D5") >>
+      circularAt(staleTest, "=LET(x,Test!D5,x+0)", "D5", "D5 → D5")
   }
 
   test("GH-715: --with on the --at cell itself is USAGE: the formula is that cell") {

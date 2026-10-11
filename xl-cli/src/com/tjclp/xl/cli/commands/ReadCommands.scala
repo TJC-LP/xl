@@ -293,14 +293,51 @@ object ReadCommands:
     overrides: List[String],
     position: Option[ARef]
   ): IO[CellValue] =
-    precedentsEvaluated(wb, sheet, formula, overrides, position).flatMap { (evalSheet, evaluator) =>
+    precedentsEvaluated(wb, sheet, formula, overrides, position).flatMap { evaluated =>
       IO.fromEither(
-        SheetEvaluator
-          .evaluateFormulaUsing(evalSheet, formula, evaluator, Some(wb), currentCell = position)
-          .left
-          .map(XLException(_))
+        evaluated.checked(
+          SheetEvaluator.evaluateFormulaUsing(
+            evaluated.sheet,
+            formula,
+            evaluated.evaluator,
+            Some(evaluated.book),
+            currentCell = position
+          ),
+          formula
+        )
       )
     }
+
+  /**
+   * The closure [[precedentsEvaluated]] evaluated: `sheet` with it threaded, the `evaluator` and
+   * `book` the formula then evaluates with, and under `--at` (GH-715) the `placement` whose guard
+   * saw any read of the `--at` cell.
+   */
+  private final case class Evaluated(
+    sheet: Sheet,
+    evaluator: Evaluator,
+    book: Workbook,
+    placement: Option[(ARef, SheetEvaluator.Placement)]
+  ):
+    /**
+     * `result` as the CLI raises it. If the evaluation read the placement, by any path and even
+     * when IFERROR swallowed the guard's failure, the plain cell would be circular: a read the
+     * static check could not see, computed at run time by INDIRECT, OFFSET or a defined name, or
+     * made by another sheet's formula.
+     */
+    def checked[A](result: XLResult[A], formula: String): Either[XLException, A] =
+      placement.filter(_._2.wasRead) match
+        case Some((cell, _)) =>
+          Left(
+            XLException(
+              XLError.FormulaError(
+                formula,
+                s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
+                  "(through INDIRECT, OFFSET, a defined name or another sheet's formula)"
+              )
+            )
+          )
+        case None => result.left.map(XLException(_))
 
   /**
    * `sheet` with the `--with` overrides applied and only the formula cells in the formula's
@@ -314,8 +351,8 @@ object ReadCommands:
    *
    * With `at` (GH-715) the formula is the cell there: a closure that reads `at` back is the
    * circular reference the plain cell would be, raised as the recalc cycle is, not `at`'s old
-   * content (within the sheet: see [[cycleThrough]]). Its closure is the one [[valueReadClosure]]
-   * walks.
+   * content. [[cycleThrough]] names the path of a static read; the placed evaluator catches a read
+   * made at run time ([[Evaluated.checked]]). Its closure is the one [[valueReadClosure]] walks.
    */
   private def precedentsEvaluated(
     wb: Workbook,
@@ -323,7 +360,7 @@ object ReadCommands:
     formula: String,
     overrides: List[String],
     at: Option[ARef]
-  ): IO[(Sheet, Evaluator)] =
+  ): IO[Evaluated] =
     for
       tempSheet <- applyOverrides(sheet, overrides)
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
@@ -358,19 +395,29 @@ object ReadCommands:
             .left
             .map(cyclic(_, formula))
       )
-      evaluator = SheetEvaluator.spillTrackingEvaluator(formula, wb)
-      evalSheet <- evalOrder.foldLeft(IO.pure(tempSheet)) { (sheetIO, ref) =>
-        sheetIO.flatMap { s =>
+      // GH-715: the placed formula sits, uncached, at `at` in the sheet and in the workbook, and
+      // the placed evaluator guards that cell, so a read the static check cannot see (INDIRECT,
+      // OFFSET, a defined name, another sheet's formula) fails instead of reading its old content
+      placedSheet = at.fold(tempSheet)(SheetEvaluator.placed(tempSheet, _, formula))
+      book = at.fold(wb)(_ => wb.put(placedSheet))
+      placement = at.map(cell =>
+        (cell, SheetEvaluator.placement(formula, wb, tempSheet.name, cell))
+      )
+      evaluator = placement.fold(SheetEvaluator.spillTrackingEvaluator(formula, wb))(
+        _._2.evaluator
+      )
+      start = Evaluated(placedSheet, evaluator, book, placement)
+      evaluated <- evalOrder.foldLeft(IO.pure(start)) { (evaluatedIO, ref) =>
+        evaluatedIO.flatMap { e =>
           IO.fromEither(
-            SheetEvaluator
-              .evaluateCellUsing(s, ref, evaluator, Some(wb))
-              .map(value => SheetEvaluator.threadComputed(s, ref, value))
-              .left
-              .map(XLException(_))
+            e.checked(
+              SheetEvaluator.evaluateCellUsing(e.sheet, ref, evaluator, Some(book)),
+              formula
+            ).map(value => e.copy(sheet = SheetEvaluator.threadComputed(e.sheet, ref, value)))
           )
         }
       }
-    yield (evalSheet, evaluator)
+    yield evaluated
 
   /**
    * The closure [[valueReadClosure]] walks: `graph` has an edge from each formula it reached to the
@@ -440,7 +487,11 @@ object ReadCommands:
    * formula reads `at` is asked of its references themselves (bounded to `at` alone): `at` may lie
    * outside the used range that bounds the graph's range edges, as a total placed below its column
    * does. A reference qualified with `home` is a read of this sheet; another sheet's formulas are
-   * not followed.
+   * not followed (the placed evaluator's run-time guard catches those reads).
+   *
+   * For `=B1+1 --at D5` with B1 = `=C1*2` and C1 = `=D5`: the formula does not read D5 itself, so
+   * the search starts from its reads, B1, each seeded with `at` as its parent. B1 does not read D5;
+   * its read C1 does, and walking the parents back gives `D5 → B1 → C1 → D5`.
    */
   private def cycleThrough(
     home: SheetName,
@@ -533,7 +584,8 @@ object ReadCommands:
         sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
         // positionless: evala anchors its display, it does not place the formula in a cell
         precedents <- precedentsEvaluated(wb, sheet, formula, overrides, None)
-        (evalSheet, evaluator) = precedents
+        evalSheet = precedents.sheet
+        evaluator = precedents.evaluator
         // Parse target ref or use a virtual cell far from data
         originRef = targetRefOpt
           .flatMap(ARef.parse(_).toOption)

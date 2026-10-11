@@ -7,7 +7,7 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -853,6 +853,41 @@ object SheetEvaluator:
       Rng.system,
       Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook)
     )
+
+  /**
+   * GH-715: an evaluation of a formula placed at `at` on the sheet named `sheet`: `evaluator` is
+   * [[spillTrackingEvaluator]] with that cell guarded. Any read of it during the evaluation, by
+   * whatever path computed it (INDIRECT, OFFSET, a defined name, another sheet's formula), fails
+   * instead of answering with the cell's old content, and [[wasRead]] records it even when the
+   * failure is swallowed (IFERROR takes any failure). For the reads to reach the guard, the caller
+   * puts an uncached formula at `at` ([[placed]]) in the sheet it evaluates on and in the workbook
+   * it passes. Single-use, like the memo it holds.
+   */
+  private[xl] final class Placement private[SheetEvaluator] (
+    val evaluator: Evaluator,
+    memo: Evaluator.EvalMemo
+  ):
+    /** Whether the evaluation read the placement: the plain cell there would be circular. */
+    def wasRead: Boolean = memo.placementRead
+
+  /** A [[Placement]] for `formula` at `at` on the sheet named `sheet` of `workbook`. */
+  private[xl] def placement(
+    formula: String,
+    workbook: Workbook,
+    sheet: SheetName,
+    at: ARef
+  ): Placement =
+    val (evaluator, memo) = Evaluator.placedInstance(
+      Rng.system,
+      Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook),
+      sheet,
+      at
+    )
+    new Placement(evaluator, memo)
+
+  /** `sheet` with `formula` placed, uncached, at `at`: what a [[Placement]] needs there. */
+  private[xl] def placed(sheet: Sheet, at: ARef, formula: String): Sheet =
+    sheet.put(at, CellValue.Formula(formula, None))
 
   /** GH-695: whether a sheet-level fold should record anchors' results for `x#` readers. */
   private def readsSpills(sheet: Sheet, workbook: Option[Workbook]): Boolean =

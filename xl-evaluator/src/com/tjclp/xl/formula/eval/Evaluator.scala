@@ -139,9 +139,36 @@ object Evaluator:
    * computed values like a recalculation but never had the aggregate memo.
    */
   private[formula] def spillTrackingInstance(rng: Rng, trackSpills: Boolean): Evaluator =
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(spillTracking(trackSpills))))
+
+  private def spillTracking(trackSpills: Boolean): AggregateMemo =
     val memo = new AggregateMemo(cachesAggregates = false)
     if trackSpills then memo.trackSpills()
-    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(memo)))
+    memo
+
+  /**
+   * GH-715: [[spillTrackingInstance]] for a formula placed at `at` on the sheet named `sheet`: one
+   * [[EvalMemo]] guarding that cell serves every read from depth 0 on, so a read of the placement
+   * by any path is a `CircularRef`, and the returned memo's `placementRead` records it. The caller
+   * puts an uncached formula at `at`, in the sheet it evaluates on and in the workbook it passes,
+   * so reads reach the memo.
+   */
+  private[formula] def placedInstance(
+    rng: Rng,
+    trackSpills: Boolean,
+    sheet: SheetName,
+    at: ARef
+  ): (Evaluator, EvalMemo) =
+    val memo = new EvalMemo(Some((sheet, at)))
+    val evaluator = TotalEvaluator(
+      new EvaluatorWithDepth(
+        0,
+        rng = rng,
+        memo = Some(memo),
+        aggregateMemo = Some(spillTracking(trackSpills))
+      )
+    )
+    (evaluator, memo)
 
   /**
    * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
@@ -710,6 +737,8 @@ object Evaluator:
             )
           )
         )
+      // GH-715: a positioned evaluation's placement is never evaluated as a precedent of itself
+      currentCell.flatMap(memo.guard(targetSheet, _)).foreach(error => break(Left(error)))
 
       FormulaParser.parse(formulaStr) match
         case Left(parseErr) =>
@@ -769,6 +798,9 @@ object Evaluator:
           None
         )
       )
+    else if memo.guard(targetSheet, anchor).isDefined then
+      // GH-715: the placement's own spill, `D5#` placed at D5, reads the placement
+      Left(EvalError.CircularRef(List(anchor)))
     else
       FormulaParser.parse(formulaStr) match
         case Left(parseErr) =>
@@ -817,8 +849,17 @@ object Evaluator:
    * that is observable only on chains deeper than the guard, where results were already
    * path-dependent (and where whole-workbook `recalculate()`, which orders iteratively, is the
    * supported path).
+   *
+   * GH-715: `placement` guards one cell, the cell a positioned evaluation places its formula in
+   * ([[placedInstance]]). That cell holds an uncached formula, so every read of it, whatever
+   * computed it (INDIRECT, OFFSET, a defined name, another sheet's formula), comes here, and is the
+   * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
+   * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo:
+  private[formula] final class EvalMemo(placement: Option[(SheetName, ARef)]):
+    /** The ordinary memo: no cell is guarded. */
+    def this() = this(None)
+
     private val bySheet =
       new java.util.IdentityHashMap[
         Sheet,
@@ -826,6 +867,30 @@ object Evaluator:
       ]()
 
     def getOrCompute(sheet: Sheet, at: ARef)(
+      compute: => Either[EvalError, CellValue]
+    ): Either[EvalError, CellValue] =
+      guard(sheet, at).fold(memoized(sheet, at, compute))(Left(_))
+
+    /**
+     * The guarded placement's error when `at` on `sheet` is it. Reads that evaluate an uncached
+     * formula without this memo's lookup ([[evalCrossSheetFormula]], [[evalSpillFormula]]) ask too.
+     */
+    def guard(sheet: Sheet, at: ARef): Option[EvalError] =
+      val guarded = placement.exists((name, cell) => cell == at && sheet.name == name)
+      if guarded then placementReads.set(true)
+      Option.when(guarded)(EvalError.CircularRef(List(at)))
+
+    /**
+     * Whether anything read the guarded placement. The error a read returns can be swallowed
+     * (IFERROR takes any failure), but the read itself still made the plain cell circular.
+     */
+    def placementRead: Boolean = placementReads.get
+
+    private val placementReads = new java.util.concurrent.atomic.AtomicBoolean(false)
+
+    private def memoized(
+      sheet: Sheet,
+      at: ARef,
       compute: => Either[EvalError, CellValue]
     ): Either[EvalError, CellValue] =
       val forSheet =

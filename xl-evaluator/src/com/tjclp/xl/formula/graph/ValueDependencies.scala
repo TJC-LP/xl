@@ -41,6 +41,8 @@ private[xl] object ValueDependencies:
     "CHOOSE" -> ((index, _) => index > 0),
     "IFS" -> ((index, _) => index % 2 == 1),
     "SWITCH" -> ((index, count) => index > 0 && (index % 2 == 0 || index == count - 1)),
+    // return_array alone: a reference given as if_not_found (index 3) still counts as a value
+    // read, an over-report kept on purpose, since a false cycle is safer than a stale value
     "XLOOKUP" -> ((index, _) => index == 2),
     ReferenceOperators.UnionName -> ((_, _) => true),
     ReferenceOperators.IntersectionName -> ((_, _) => true),
@@ -57,7 +59,8 @@ private[xl] object ValueDependencies:
    * another sheet and reads nothing here.
    *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
-   * them, as `DependencyGraph.fromSheet` does (GH-522).
+   * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
+   * not thread-safe, so never share one across fibers or threads (`recalc --parallel`).
    */
   final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
