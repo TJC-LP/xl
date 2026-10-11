@@ -283,8 +283,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   CHOOSE or SWITCH selected was materialized row by row and folded as an array, so
   `=AND(IF(TRUE,B:B,A:A))` was FALSE (its blanks counted as FALSE) where `=AND(B:B)` is TRUE, and
   `SUMPRODUCT(IF(TRUE,B:B,A:A))` read a million cells. A reference position (aggregates, AND/OR,
-  ROWS) now folds the selected reference within the used range, as a plain cell already did;
-  COUNTBLANK still counts the blank rows past it.
+  ROWS) now folds the selected reference within the used range, as a plain cell already did.
+- **COUNTBLANK over a whole column or row counts every blank cell, as Excel does** (#711): it
+  counted only the blanks inside the sheet's used range, in plain cells too, so a recalculated
+  `=COUNTBLANK(B:B)` over a sheet holding only B1:B3 was 0 where Excel shows 1048573. It now
+  counts the blank cells above, below and beside the used range, whether the column is written,
+  selected by IF or CHOOSE, or computed by INDEX or OFFSET. `COUNTIF(B:B,"")` still counts only
+  the used range.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
