@@ -165,24 +165,23 @@ final case class EvalContext(
   private[formula] def selectsReference: Boolean = operands.selectsReference
 
   /**
-   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
-   * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
-   * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]], in either mode (GH-711: `AND(IF(TRUE,B:B,A:A))` in
-   * an array formula ignores B's blanks as `AND(B:B)` does); any other expression evaluates in the
-   * formula's own mode, its result not collapsed (an array-returning call folds whole), so in a
-   * plain cell its references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel
-   * computes a legacy formula, and in array mode it is the array.
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'): exactly
+   * [[evalReference]], in either mode (GH-711: `AND(IF(TRUE,B:B,A:A))` in an array formula ignores
+   * B's blanks as `AND(B:B)` does). The name says which position asks.
    */
   private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
     evalReference(expr)
 
   /**
    * The reference an expression denotes, in either mode, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]] — for the positions that need the reference itself
-   * whatever the formula's mode: the `@` operand, OFFSET's base, the reference IF, IFS, CHOOSE or
-   * SWITCH select for a reference position. An expression that denotes no reference evaluates in
-   * the formula's mode, its result not collapsed.
+   * [[com.tjclp.xl.formula.eval.RangeOperand]] — a cell or range, a name or LET name bound to one,
+   * the reference IF, IFS, CHOOSE or SWITCH select, the one OFFSET, INDIRECT or INDEX return — for
+   * the positions that need the reference itself whatever the formula's mode: a reference-class
+   * argument ([[evalReferenceArg]]), the `@` operand, OFFSET's base, the reference a selector
+   * returns to a reference position. An expression that denotes no reference evaluates in the
+   * formula's mode, its result not collapsed (an array-returning call folds whole): in a plain cell
+   * its references are intersected, so `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a
+   * legacy formula, and in array mode it is the array.
    */
   private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
     operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))

@@ -116,6 +116,20 @@ class ArraySelectedReferenceSpec extends FunSuite:
     assertEquals(positionless("=AND(IF(TRUE,B:B,A:A))", lower), Right(CellValue.Bool(true)))
   }
 
+  test("COUNTBLANK over two whole columns, one union and a whole column OFFSET returns") {
+    // A:B holds 2 * 1048576 cells, six filled (LibreOffice: 2097146)
+    assertEquals(positionless("=COUNTBLANK(A:B)"), Right(num(2097146)))
+    assertEquals(cse("COUNTBLANK(A:B)"), Some(num(2097146)))
+    // COUNTBLANK takes one range: a union of two areas is #VALUE!, as in Excel (LibreOffice
+    // counts both areas), now that each area folds through the trimmed-blank path too
+    assertEquals(positionless("=COUNTBLANK((A:A,B:B))"), Right(CellValue.Error(CellError.Value)))
+    // OFFSET's whole column reaches COUNTBLANK as a reference (LibreOffice: 1048573)
+    assertEquals(positionless("=COUNTBLANK(OFFSET(A:A,0,1))"), Right(num(1048573)))
+    assertEquals(positionless("=COUNTBLANK(IF(TRUE,OFFSET(A:A,0,1),A:A))"), Right(num(1048573)))
+    assertEquals(cse("COUNTBLANK(OFFSET(A:A,0,1))"), Some(num(1048573)))
+    assertEquals(positionless("=SUM(OFFSET(A:A,0,1))"), Right(num(6)))
+  }
+
   test("ROWS of a selected whole column is the column's height") {
     assertEquals(positionless("=ROWS(IF(TRUE,B:B,A:A))"), Right(num(1048576)))
   }

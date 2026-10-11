@@ -134,6 +134,10 @@ trait TExprAnalysis:
   def collectRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] = expr match
     case RangeRef(range, _) => List((None, range))
     case SheetRange(sheet, range, _) => List((Some(sheet), range))
+    // Every argument of every call contributes, including the shape-sensitive ones
+    // transformRanges leaves untrimmed (ROWS(Other!A:A)). Such a range can only widen the shared
+    // extent with its sheet's used range, adding blank rows that every element but a
+    // blank-counting one (`--(A:A="")`, the GH-192 divergence) reads as nothing
     case call: Call[?] =>
       call.spec.argSpec
         .toValues(call.args)
