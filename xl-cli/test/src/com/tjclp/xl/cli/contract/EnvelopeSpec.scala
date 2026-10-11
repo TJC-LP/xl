@@ -312,6 +312,31 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
+  test("#692: the summary bounds a reason to one line; errorCells[].reason keeps the full text") {
+    val out = file("lookup-miss-long-key-out.xlsx")
+    CliHarness
+      .run("-f", file("lookup-miss-long-key.xlsx"), "-o", out, "--json", "recalc")
+      .map { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        val data = envelope(run)("data")
+        val text = data("text").str
+        val summary = text.linesIterator.find(_.startsWith("Recalculated")).getOrElse("")
+        assert(
+          summary.startsWith(
+            "Recalculated 1 formula (1 error value: Data!D1 #N/A — VLOOKUP exact match not found: " +
+              "VLOOKUP(Line one line two line three four "
+          ),
+          summary
+        )
+        assert(summary.endsWith("…)"), summary)
+        assert(summary.length < 250, summary.length)
+        val reason = data("errorCells")(0)("reason").str
+        assert(reason.contains(TestFixtures.LongMultiLineKey), reason)
+        assert(reason.contains("\r\n") && reason.contains("\t"), reason)
+        assertEquals(data("errorCells")(0)("ref"), ujson.Str("Data!D1"))
+      }
+  }
+
   test("#678: a recalc with no error-valued cycle still carries the field, empty") {
     val out = file("simple-recalc-out.xlsx")
     CliHarness.run("-f", file("simple.xlsx"), "-o", out, "--json", "recalc").map { run =>

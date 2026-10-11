@@ -89,6 +89,29 @@ object TestFixtures:
       )
     )
 
+  /**
+   * #692: `lookupMissBook`'s table with `A5` a 1,000-character multi-line text key and `D1` the
+   * unguarded `VLOOKUP` of it — the summary carries the reason bounded to one line, `recalc --json`
+   * the full text.
+   */
+  def lookupMissLongKeyBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", 1)
+          .put(ref"A2", 2)
+          .put(ref"A3", 3)
+          .put(ref"B1", "a")
+          .put(ref"B2", "b")
+          .put(ref"B3", "c")
+          .put(ref"A5", LongMultiLineKey)
+          .put(ref"D1", CellValue.Formula("VLOOKUP(A5,A1:B3,2,FALSE)", None))
+      )
+    )
+
+  /** The key of [[lookupMissLongKeyBook]]: 1,000 characters, CRLF, LF and tab included. */
+  val LongMultiLineKey: String = ("Line one\r\nline two\nline three\tfour  " * 40).take(1000)
+
   /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
   def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
 
@@ -271,6 +294,7 @@ object TestFixtures:
     "circular.xlsx" -> (() => circularBook()),
     "error-cycle.xlsx" -> (() => errorCycleBook()),
     "lookup-miss.xlsx" -> (() => lookupMissBook()),
+    "lookup-miss-long-key.xlsx" -> (() => lookupMissLongKeyBook()),
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),

@@ -651,6 +651,8 @@ class ScriptingPreludeTest extends FunSuite:
     assert(cells.exists(_.reason.exists(_.contains("VLOOKUP(2, A1:A1, 1, FALSE)"))), cells)
     assert(result.summary.contains("S!B1 #N/A — VLOOKUP exact match not found"), result.summary)
     assertEquals(RecalcResult.MaxNamedErrorCells, 10)
+    assertEquals(ErrorValueCell.MaxReasonLength, 120)
+    assertEquals(ErrorValueCell.boundReason("why\r\nnot"), "why not")
 
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"

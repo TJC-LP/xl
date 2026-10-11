@@ -264,10 +264,30 @@ final case class ErrorValueCell(
   error: CellError,
   reason: Option[String]
 ) derives CanEqual:
-  /** `Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A3, 2, FALSE)` */
+  /**
+   * `Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A3, 2, FALSE)` — one line, the
+   * reason bounded by [[ErrorValueCell.boundReason]]: [[reason]] keeps the full text (a lookup key
+   * echoes the cell it came from, up to 32,767 characters, newlines included), the rendering is
+   * what the one-line summary and the CLI's text output can carry.
+   */
   def render: String =
     val at = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1} ${error.toExcel}"
-    reason.fold(at)(why => s"$at — $why")
+    reason.fold(at)(why => s"$at — ${ErrorValueCell.boundReason(why)}")
+
+object ErrorValueCell:
+
+  /** The longest reason [[ErrorValueCell.render]] carries, the `…` that marks a cut included. */
+  val MaxReasonLength: Int = 120
+
+  /**
+   * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line
+   * and paragraph separators) and tab a single space, runs of whitespace collapsed, then cut to
+   * [[MaxReasonLength]] characters with a trailing `…`.
+   */
+  def boundReason(reason: String): String =
+    val oneLine = reason.replaceAll("[\\s\\u0085\\u2028\\u2029]+", " ").trim
+    if oneLine.length <= MaxReasonLength then oneLine
+    else oneLine.take(MaxReasonLength - 1) + "…"
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).

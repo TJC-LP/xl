@@ -13,8 +13,9 @@ enum Payload derives CanEqual:
    * every write knows — the path the run committed to (the user-visible one, never the staging
    * temp) and whether it committed at all. `saved = None`, `written = false` when nothing was
    * committed: a read verb, or a run whose `--strict` gate withheld the staged output (`-o` or
-   * `-i`). `facts` are typed fields a prose verb also knows (recalc's `errorValuedCycles`, #678),
-   * added to `data` after the three, in order; text mode never prints them.
+   * `-i`). `facts` are typed fields a prose verb also knows (recalc's `errorValuedCycles`, #678,
+   * and `errorCells`, #692), added to `data` after the three, in order; text mode never prints
+   * them.
    */
   case Text(
     text: String,

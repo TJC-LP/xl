@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, CriteriaMatcher}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -10,6 +10,13 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
+  /**
+   * XLOOKUP's search once its arguments are validated. The caller has checked `matchMode` and
+   * `searchMode` against their tables ([[matchModeError]], [[searchModeError]]); `call` is by name,
+   * rendered only for a miss. match_mode 0 and 2 walk the lookup range lazily through
+   * [[exactLookupPosition]] (#692: an uncached formula key is computed when reached, never past the
+   * hit); -1 and 1 share the lookups' approximate plane over the materialised range.
+   */
   private def performXLookup(
     lookupValue: ExprValue,
     lookupSheet: Sheet,
@@ -19,47 +26,47 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     ifNotFoundOpt: Option[AnyExpr],
     matchMode: Int,
     searchMode: Int,
-    call: String,
+    call: => String,
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
-    val returnCells = returnArray.cells.toVector
-
     // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
     // a ref to a cell holding "k2" must match exactly like the literal "k2".
     val lookup = normalizeLookupValue(lookupValue)
 
-    val wildcardCriterionOpt = lookup match
-      case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case _ => None
-
     for
-      // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed, not
-      // skipped; keys are (row-major position, value), cut off at the sheet's used range
-      values <- lookupRangeValues(lookupArray, lookupSheet, ctx)
-      keys = values.zipWithIndex.flatMap { (row, r) =>
-        row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
-      }
-      // GH-55: binary-search modes 2 (ascending) and -2 (descending) are answered by the linear
-      // search in their direction; -2 iterates reversed like -1 (descending order)
-      ordered = if searchMode < 0 then keys.reverse else keys
-      matchedIndexOpt = matchMode match
-        case 0 =>
-          ordered.collectFirst { case (idx, cv) if matchesLookupExact(cv, lookup) => idx }
+      matchedIndexOpt <- matchMode match
+        case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
         case 2 =>
-          ordered.collectFirst {
-            case (idx, cv)
-                if matchesLookupExact(cv, lookup) ||
-                  wildcardCriterionOpt.exists(CriteriaMatcher.matches(cv, _)) =>
-              idx
-          }
+          exactLookupPosition(
+            lookupArray,
+            lookupSheet,
+            ctx,
+            lookup,
+            wildcardCriterion(lookup),
+            searchMode
+          )
         // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
-        // included); a linear search, so a tie keeps the first key in search order
-        case direction => approximateMatch(ordered, lookup, direction, lastOnTie = false)
+        // included); a linear search over the evaluating reader's rows (keys as row-major
+        // positions, cut off at the used range), so a tie keeps the first key in search order;
+        // -2 iterates reversed like -1 (descending order, GH-55)
+        case -1 | 1 =>
+          lookupRangeValues(lookupArray, lookupSheet, ctx).map { values =>
+            val keys = values.zipWithIndex.flatMap { (row, r) =>
+              row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
+            }
+            val ordered = if searchMode < 0 then keys.reverse else keys
+            approximateMatch(ordered, lookup, matchMode, lastOnTie = false)
+          }
+        // unreachable: the caller validated the mode; a second call site that does not gets the
+        // same #VALUE! rather than the approximate search
+        case other => matchModeError("XLOOKUP", other, call).map(_ => None)
       result <- matchedIndexOpt match
-        case Some(idx) => rangeCellReader(returnSheet, ctx)(returnCells(idx))
+        case Some(idx) =>
+          val at = ARef.from0(
+            returnArray.colStart.index0 + idx % lookupArray.width,
+            returnArray.rowStart.index0 + idx / lookupArray.width
+          )
+          rangeCellReader(returnSheet, ctx)(at)
         case None =>
           ifNotFoundOpt match
             case Some(expr) => evalValue(ctx, expr).map(toCellValue)
@@ -260,11 +267,13 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         searchModeRaw <- evalValue(ctx, searchModeExpr)
         matchMode <- toIntArg("XLOOKUP", matchModeRaw)
         searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-        call =
+        // the rendered call is a diagnostic — built by name, only for a bad mode or a miss, never
+        // on a hit or for every element of a lifted array
+        call = () =>
           s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
         // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
-        _ <- matchModeError("XLOOKUP", matchMode, call)
-        _ <- searchModeError("XLOOKUP", searchMode, call)
+        _ <- matchModeError("XLOOKUP", matchMode, call())
+        _ <- searchModeError("XLOOKUP", searchMode, call())
         result <- performXLookup(
           lookupValueEval,
           lookupSheet,
@@ -274,7 +283,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           ifNotFoundOpt,
           matchMode,
           searchMode,
-          call,
+          call(),
           ctx
         )
       yield result
