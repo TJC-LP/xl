@@ -952,7 +952,9 @@ object FormatCodeParser:
     frac: FormatToken.Fraction,
     rule: NumFmtFormatter.GeneralRule
   ): String =
-    val abs = value.abs
+    // GH-730: the exact magnitude. Scala's `abs` rounds to the value's 34-digit context, which
+    // underflows a 35-40 digit value whose scale is near Int.MinValue.
+    val abs = BigDecimal(value.bigDecimal.abs)
     // |value| = magnitude × 10^-scale, rounded through roundToInteger (#689)
     val magnitude = value.bigDecimal.unscaledValue.abs
     val scale = value.scale.toLong
