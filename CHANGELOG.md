@@ -23,6 +23,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **`xl eval --at <ref>`** (#715): evaluates the formula as the plain (legacy) cell it would be at
+  `<ref>`, implicit intersection included (`=SUM(A1:A10*B1:B10) --at D5` is A5*B5 where a
+  positionless `eval` gives the array sum), read-only, with `--with`, under the one-sheet rule. A
+  placement that would read itself is a `FORMULA_ERROR` naming the cycle.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
