@@ -4,11 +4,11 @@ import cats.effect.IO
 import cats.implicits.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, RefType}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.contract.{CliError, CliException}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{Escape, Format, JsonRenderer}
-import com.tjclp.xl.error.XLException
+import com.tjclp.xl.error.{XLError, XLException}
 import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator, TExpr}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
@@ -35,9 +35,22 @@ object ReadCommands:
   private def unparseable(error: ParseError, formula: String): XLException =
     XLException(ParseError.toXLError(error, formula))
 
-  /** A cycle found while ordering the closure: the evaluator's own error, with its code. */
-  private def cyclic(error: EvalError, formula: String): XLException =
-    XLException(EvalError.toXLError(error, Some(formula)))
+  /**
+   * A cycle found while ordering the closure: the evaluator's own error, with its code. A path
+   * longer than [[MaxCyclePath]] keeps its first three cells and its last two (the cell that reads
+   * the start back, then the start) and counts the cells between. A 20,000-cell chain would
+   * otherwise make a 169 KB message.
+   */
+  private def cyclic(error: EvalError, formula: String): XLException = error match
+    case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
+      val elided = "… (%,d more) …".formatLocal(java.util.Locale.ROOT, cycle.size - 5)
+      val path = (cycle.take(3).map(_.toA1) ++ (elided :: cycle.takeRight(2).map(_.toA1)))
+        .mkString(" → ")
+      XLException(XLError.FormulaError(formula, s"Circular reference detected: $path"))
+    case _ => XLException(EvalError.toXLError(error, Some(formula)))
+
+  /** The longest cycle path [[cyclic]] prints in full. */
+  private val MaxCyclePath = 10
 
   /**
    * Show used range of current sheet.
@@ -164,10 +177,10 @@ object ReadCommands:
         .flatMap(closureEval(wb, _, formula, overrides, None))
     else if hasAnyCellRefs then
       // GH-210: every ref is qualified — any sheet is the ambient context, since the evaluator
-      // resolves cross-sheet refs by name. Safe: the workbook is non-empty (checked above).
-      val sheet = (sheetOpt.orElse(wb.sheets.headOption): @unchecked) match
-        case Some(s) => s
-      closureEval(wb, sheet, formula, overrides, None)
+      // resolves cross-sheet refs by name. The workbook is non-empty (checked above).
+      sheetOpt
+        .orElse(wb.sheets.headOption)
+        .fold(IO.raiseError(fileRequired))(closureEval(wb, _, formula, overrides, None))
     else constantEval(wb, sheetOpt.getOrElse(Sheet("_eval")), formula, None)
 
   /**
@@ -258,30 +271,41 @@ object ReadCommands:
    *   - formula chains work (`=C1` where C1=B1+50, B1=A1*2);
    *   - overrides propagate through chains (TJC-698): A1=200 → B1=400 → C1=450;
    *   - only the O(k) closure is evaluated, not the O(n) sheet. GH-197: bounded extraction, so a
-   *     full-column range does not enumerate 1M+ cells.
+   *     full-column range does not enumerate 1M+ cells. A sheet with no cells has no used range to
+   *     bound by, but it also has no precedent to evaluate, so nothing is extracted.
    *
    * With `at` (GH-715) the formula is the cell there: a closure that reads `at` back is the
-   * circular reference the plain cell would be, raised as the recalc cycle is, never `at`'s old
-   * content.
+   * circular reference the plain cell would be, raised as the recalc cycle is, not `at`'s old
+   * content (within the sheet: see [[cycleThrough]]). Its closure is the one [[valueReadClosure]]
+   * walks.
    */
   private def precedentsEvaluated(
     wb: Workbook,
     sheet: Sheet,
     formula: String,
     overrides: List[String],
-    at: Option[ARef] = None
+    at: Option[ARef]
   ): IO[(Sheet, Evaluator)] =
     for
       tempSheet <- applyOverrides(sheet, overrides)
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
-      targetDeps = at.fold(DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))(
-        _ => ValueDependencies.extract(expr, tempSheet.usedRange)
-      )
-      graph = at.fold(DependencyGraph.fromSheet(tempSheet))(_ => valueReadGraph(tempSheet))
-      _ <- at.flatMap(cycleThrough(tempSheet, graph, expr, targetDeps, _)) match
-        case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
-        case None => IO.unit
-      allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
+      bounds = tempSheet.usedRange
+      closure <- at match
+        case None =>
+          val targetDeps =
+            bounds.fold(Set.empty[ARef])(b =>
+              DependencyGraph.extractDependenciesBounded(expr, Some(b))
+            )
+          val graph = DependencyGraph.fromSheet(tempSheet)
+          IO.pure((graph, DependencyGraph.transitiveDependencies(graph, targetDeps)))
+        case Some(cell) =>
+          val reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
+          val targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
+          val closure = valueReadClosure(tempSheet, reads, targetDeps)
+          cycleThrough(tempSheet.name, closure, expr, targetDeps, cell) match
+            case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
+            case None => IO.pure((closure.graph, closure.reached))
+      (graph, allDeps) = closure
       formulaDeps = allDeps.filter(ref =>
         tempSheet(ref).value match
           case _: CellValue.Formula => true
@@ -310,50 +334,86 @@ object ReadCommands:
       }
     yield (evalSheet, evaluator)
 
-  /** Preserve structural dependency information elsewhere; positioned eval orders value reads. */
-  private def valueReadGraph(sheet: Sheet): DependencyGraph =
-    val graph = DependencyGraph.fromSheet(sheet)
-    val dependencies = graph.dependencies.map { (ref, deps) =>
-      val reads = sheet(ref).value match
-        case CellValue.Formula(text, _, _) =>
-          FormulaParser
-            .parse(text)
-            .fold(
-              _ => deps,
-              expr =>
-                val structural = DependencyGraph.extractDependenciesBounded(expr, sheet.usedRange)
-                val values = ValueDependencies.extract(expr, sheet.usedRange)
-                (deps -- (structural -- values)) ++ values
-            )
-        case _ => deps
-      ref -> reads
-    }
-    val dependents = dependencies.foldLeft(Map.empty[ARef, Set[ARef]]) {
-      case (reverse, (ref, deps)) =>
-        deps.foldLeft(reverse)((acc, dep) => acc.updated(dep, acc.getOrElse(dep, Set.empty) + ref))
-    }
-    DependencyGraph(dependencies, dependents)
+  /**
+   * The closure [[valueReadClosure]] walks: `graph` has an edge from each formula it reached to the
+   * cells whose values that formula reads (`dependents` only among those formulas, which is all
+   * Kahn's order consults); `reached` is every cell reached, the formula's own reads included;
+   * `formulas` holds each parse, so the cycle search does not parse again.
+   */
+  private final case class ValueReads(
+    graph: DependencyGraph,
+    reached: Set[ARef],
+    formulas: Map[ARef, TExpr[?]]
+  )
 
   /**
-   * The cycle `expr` would close as the cell `at` on `sheet`, `at` first and last: `expr` reads
-   * `at`, or a formula in its closure does. Breadth first, so the shortest. Whether a formula reads
-   * `at` is asked of its references themselves (bounded to `at` alone): `at` may lie outside the
-   * used range that bounds the graph's range edges, as a total placed below its column does.
+   * The dependency graph positioned evaluation orders by, built from `roots` (the formula's own
+   * reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
+   *   - its edges are structural. ROW(D5), ROWS(A:A), or a LET name that ROW inspects, make an edge
+   *     to cells whose values are never read. A formula that inspects its own address, or a
+   *     precedent that inspects the placement, would look circular, and the closure would be
+   *     ordered by reads that do not happen. [[ValueDependencies]] keeps only the value reads.
+   *   - it drops every sheet-qualified reference, but `Data!D5` in a cell on Data reads D5 as
+   *     surely as `D5` does: the plain cell at D5 reading itself.
+   *   - it analyses every formula on the sheet, where the plain cell needs only its closure. This
+   *     walk parses and extracts each formula in the closure once, sharing one range cache, and
+   *     touches nothing else.
+   *
+   * Like `fromSheet`, a data table's cells are value sources, not nodes (GH-430), and a formula
+   * that does not parse is a node with no edges.
+   */
+  private def valueReadClosure(
+    sheet: Sheet,
+    reads: ValueDependencies.Reader,
+    roots: Set[ARef]
+  ): ValueReads =
+    @scala.annotation.tailrec
+    def walk(
+      frontier: Set[ARef],
+      reached: Set[ARef],
+      edges: Map[ARef, Set[ARef]],
+      formulas: Map[ARef, TExpr[?]]
+    ): ValueReads =
+      val visit = frontier -- reached
+      if visit.isEmpty then
+        val formulaEdges =
+          edges.toList.flatMap((ref, deps) => deps.filter(edges.contains).map(_ -> ref))
+        val dependents = formulaEdges.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
+        ValueReads(DependencyGraph(edges, dependents), reached, formulas)
+      else
+        val (nextEdges, nextFormulas, next) =
+          visit.foldLeft((edges, formulas, Set.empty[ARef])) { case ((e, f, n), ref) =>
+            sheet(ref).value match
+              case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (e, f, n)
+              case CellValue.Formula(text, _, _) =>
+                FormulaParser.parse(text) match
+                  case Right(expr) =>
+                    val deps = reads.reads(expr)
+                    (e.updated(ref, deps), f.updated(ref, expr), n ++ deps)
+                  case Left(_) => (e.updated(ref, Set.empty), f, n)
+              case _ => (e, f, n)
+          }
+        walk(next, reached ++ visit, nextEdges, nextFormulas)
+    walk(roots, Set.empty, Map.empty, Map.empty)
+
+  /**
+   * The cycle `expr` would close as the cell `at` on the sheet named `home`, `at` first and last:
+   * `expr` reads `at`, or a formula in its closure does. Breadth first, so the shortest. Whether a
+   * formula reads `at` is asked of its references themselves (bounded to `at` alone): `at` may lie
+   * outside the used range that bounds the graph's range edges, as a total placed below its column
+   * does. A reference qualified with `home` is a read of this sheet; another sheet's formulas are
+   * not followed.
    */
   private def cycleThrough(
-    sheet: Sheet,
-    graph: DependencyGraph,
+    home: SheetName,
+    closure: ValueReads,
     expr: TExpr[?],
     targetDeps: Set[ARef],
     at: ARef
   ): Option[List[ARef]] =
-    val only = Some(CellRange(at, at))
-    def reads(e: TExpr[?]): Boolean =
-      ValueDependencies.extract(e, only).contains(at)
-    def readsBack(ref: ARef): Boolean =
-      sheet(ref).value match
-        case CellValue.Formula(text, _, _) => FormulaParser.parse(text).exists(reads)
-        case _ => false
+    val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
+    def reads(e: TExpr[?]): Boolean = only.reads(e).contains(at)
+    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads)
     @scala.annotation.tailrec
     def trace(ref: ARef, parent: Map[ARef, ARef], path: List[ARef]): List[ARef] =
       parent.get(ref) match
@@ -366,7 +426,7 @@ object ReadCommands:
         case None =>
           val (next, reached) = frontier.foldLeft((Vector.empty[ARef], parent)) {
             case ((acc, seen), ref) =>
-              graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
+              closure.graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
                 case ((a, s), dep) =>
                   if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
               }
@@ -433,7 +493,8 @@ object ReadCommands:
     else
       for
         sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
-        precedents <- precedentsEvaluated(wb, sheet, formula, overrides)
+        // positionless: evala anchors its display, it does not place the formula in a cell
+        precedents <- precedentsEvaluated(wb, sheet, formula, overrides, None)
         (evalSheet, evaluator) = precedents
         // Parse target ref or use a virtual cell far from data
         originRef = targetRefOpt

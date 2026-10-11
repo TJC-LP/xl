@@ -222,7 +222,8 @@ value, while xl gets the array's. There is no CLI flag for array formulas.
 value); `evala` shows the whole array. `eval --at <ref>` answers as the plain cell at `<ref>` would,
 without writing: `xl eval "=SUM(A1:A10*B1:B10)" --at D5` is `A5*B5`, as `putf D5` would show (a
 qualified `--at Data!D5` names the sheet; `--with` still applies; a formula that reads `<ref>` back
-is a circular reference). In an array context (`evala`, SUMPRODUCT, an array formula)
+on that sheet, `Data!D5` included, is a circular reference; a cycle through another sheet's
+formula, INDIRECT or a defined name is not detected). In an array context (`evala`, SUMPRODUCT, an array formula)
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
 pass `+A2:A10` to lift them. In a plain cell `+A2:A10` reads the formula's row like any operand. No
 array constants (`{1,2,3}`).
