@@ -59,6 +59,7 @@ xl -f model.xlsx cell B5                   # Get single cell details (single-she
 xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
 xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
 xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
+xl -f model.xlsx -s "P&L" eval "=B1:B10*2" --at D5  # ...as the plain cell at D5 would
 xl -f model.xlsx -s "P&L" evala "=TRANSPOSE(A1:C2)"  # Evaluate array formula (spill grid)
 
 # Mutations (require -o or -i)
@@ -927,22 +928,27 @@ sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the
 
 ---
 
-### `xl eval <formula> [--with overrides]`
+### `xl eval <formula> [--at <ref>] [--with overrides]`
 
 Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
-The formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+Without `--at` the formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+
+`--at <ref>` answers the second question without writing the file: the formula evaluates as the plain cell at `<ref>` would. With A1:A10 and B1:B10 holding 1..10, `eval "=SUM(A1:A10*B1:B10)"` is 385, `--at D5` is 25 (`A5*B5`) and `--at D20` is `#VALUE!` (row 20 crosses neither range). The ref follows the one sheet rule: a qualified ref (`--at Data!D5`) names the sheet the formula evaluates on, else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` (exit 3). It must be one cell: a range or a malformed ref is `INVALID_REFERENCE` (exit 3). If the formula reads `<ref>`, directly or through its precedents (`eval "=SUM(A1:A10)" --at A5`, or `--at D5` when C1 holds `=D5*2` and the formula reads C1), the plain cell would be a circular reference, and `eval --at` fails with `FORMULA_ERROR` (exit 3) naming the cycle (`Circular reference detected: D5 → C1 → D5`), as a cycle among its precedents does, never answering with the cell's current content. `--at` composes with `--with`, needs no `-f` for a formula that reads no cell (`xl eval "=ROW()" --at D5` is 5), and, like `eval` itself, is refused under `--stream`. The text output adds an `At:` line and the JSON payload's `at` carries the cell as evaluated (`"Data!D5"`; `null` without `--at`). `evala --at` is different: it only anchors where the displayed spill starts.
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Formula to evaluate |
+| `--at` | string | No | Evaluate as the plain cell at this ref (implicit intersection included; nothing is written). Without it the formula evaluates as an array, showing its top-left value |
 | `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) |
 
 **Examples**:
 ```bash
 xl -f model.xlsx -s Sheet1 eval "=SUM(B1:B10)"
 xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
+xl -f model.xlsx -s Sheet1 eval "=SUM(A1:A10*B1:B10)" --at D5   # what putf D5 would show
+xl -f model.xlsx eval "=A1:A10*2" --at Data!E3 --with "A3=7"     # qualified ref names the sheet
 ```
 
 ---
@@ -2378,7 +2384,8 @@ otherwise:
 - Typed verbs build `data` directly: `sheets` → `{sheets: [{name, index, state, dimension}]}`
   (`--stats` adds `cells`, `formulas` to each element; the elements are `describe`'s
   `data.sheets`); `names` → `{names: [{name, refersTo, scope, hidden}]}`; `bounds` →
-  `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
+  `{sheet, range, dimension}`; `eval` → `{formula, at, result: {type, value, formatted},
+  overrides}` (`at` is the `--at` cell as evaluated, `null` without it);
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `{functions: [{name, minArgs, maxArgs, args, returnsDate, returnsTime,
   dynamicDeps, volatile, specialForm}]}`; `rasterizers` → `{backends: [{name, status, note}],

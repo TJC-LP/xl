@@ -430,7 +430,7 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
-  test("eval --json: typed {formula, result: {type, value, formatted}, overrides}") {
+  test("eval --json: typed {formula, at, result: {type, value, formatted}, overrides}") {
     for
       constant <- CliHarness.run("--json", "eval", "=1+1")
       withRefs <- CliHarness
@@ -443,6 +443,7 @@ class EnvelopeSpec extends CatsEffectSuite:
         e("data"),
         ujson.Obj(
           "formula" -> ujson.Str("=1+1"),
+          "at" -> ujson.Null,
           "result" -> ujson.Obj(
             "type" -> ujson.Str("number"),
             "value" -> ujson.Num(2),

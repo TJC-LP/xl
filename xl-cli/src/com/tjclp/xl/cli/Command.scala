@@ -105,7 +105,8 @@ enum CliCommand derives CanEqual:
   // deps <ref> [--direction] [--depth] [--expand]; expand lists a precedent range's cells
   case Deps(ref: String, direction: Direction, depth: Depth, expand: Boolean)
   // Analyze
-  case Eval(formula: String, overrides: List[String])
+  // at (GH-715): evaluate as the plain cell there; None evaluates positionless (array mode)
+  case Eval(formula: String, at: Option[String], overrides: List[String])
   case EvalArray(formula: String, targetRef: Option[String], overrides: List[String])
   // Mutate (require -o)
   case Put(
@@ -264,7 +265,8 @@ enum CliCommand derives CanEqual:
 
   /**
    * The ref strings the verb targets — what THE sheet rule's step 1 reads for a qualifier. `Nil`
-   * for a verb with no ref argument (`bounds`, `row`, `unfreeze`, …) or a formula one (`eval`).
+   * for a verb with no ref argument (`bounds`, `row`, `unfreeze`, …) or a formula one (`eval`
+   * without `--at`).
    */
   def targetRefs: List[String] = this match
     case v: View => v.range.toList
@@ -287,18 +289,20 @@ enum CliCommand derives CanEqual:
     case c: ChartAdd => c.data :: c.at :: c.categories.toList
     case AddImage(_, at, _) => List(at)
     case Copy(source, target, _) => List(source, target)
+    case Eval(_, at, _) => at.toList
     case _ => Nil
 
   /**
    * Whether the run's default sheet (THE sheet rule's steps 2–3) can matter for this verb: it takes
    * a sheet ([[takesSheet]]) and does not name its own — every target ref qualified, an `import`
-   * into `--new-sheet`, or an `eval` whose formula references only qualified cells needs none, so a
-   * single-sheet book's auto-select is not announced for them.
+   * into `--new-sheet`, an `eval --at` at a qualified cell, or a positionless `eval` whose formula
+   * references only qualified cells needs none, so a single-sheet book's auto-select is not
+   * announced for them.
    */
   def usesDefaultSheet: Boolean = this match
     case i: Import => i.newSheet.isEmpty
     case i: ImportMarkdown => i.newSheet.isEmpty
-    case Eval(formula, overrides) =>
+    case Eval(formula, None, overrides) =>
       overrides.nonEmpty || FormulaParser
         .parse(formula)
         .toOption
@@ -331,7 +335,7 @@ enum CliCommand derives CanEqual:
     case Describe(_) => "describe"
     case Audit(_) => "audit"
     case Deps(_, _, _, _) => "deps"
-    case Eval(_, _) => "eval"
+    case Eval(_, _, _) => "eval"
     case EvalArray(_, _, _) => "evala"
     case _: Put => "put"
     case PutFormula(_, _) => "putf"

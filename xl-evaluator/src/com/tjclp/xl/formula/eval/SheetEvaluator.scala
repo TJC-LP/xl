@@ -867,14 +867,16 @@ object SheetEvaluator:
   ): XLResult[CellValue] =
     evaluateCellWithEvaluator(sheet, ref, evaluator, clock, workbook)
 
+  /** `currentCell` as in the public `evaluateFormula`: `Some(cell)` is the plain cell there. */
   private[xl] def evaluateFormulaUsing(
     sheet: Sheet,
     formula: String,
     evaluator: Evaluator,
     workbook: Option[Workbook],
-    clock: Clock = Clock.system
+    clock: Clock = Clock.system,
+    currentCell: Option[ARef] = None
   ): XLResult[CellValue] =
-    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, None)
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, currentCell)
 
   private[xl] def evaluateArrayFormulaUsing(
     sheet: Sheet,
