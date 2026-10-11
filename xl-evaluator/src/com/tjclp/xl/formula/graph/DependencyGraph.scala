@@ -223,7 +223,8 @@ object DependencyGraph:
    * A dynamic reference is a `TExpr.Call` whose spec is flagged `FunctionFlags.dynamicDeps` (e.g.
    * INDIRECT): its data dependencies are decided by evaluated text, so the static graph cannot see
    * them. The walk recurses into Call arguments; `ArgValue.Range`/`Cells` arguments cannot contain
-   * calls, and reference/literal leaves are never dynamic.
+   * calls. Resized SUMIF/AVERAGEIF ranges whose shape or origin is named or LET-bound also have
+   * dynamic dependencies: the original reference's cells do not cover the resized target.
    */
   @nowarn("msg=Unreachable case")
   private[graph] def referencesMatching[A](
@@ -233,15 +234,15 @@ object DependencyGraph:
   ): Boolean =
     expr match
       case call: TExpr.Call[?] =>
-        (includeDynamicCalls && call.spec.flags.dynamicDeps) || call.spec.argSpec
-          .toValues(call.args)
-          .exists {
-            case ArgValue.Expr(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-            case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
-              resolveName(name, scope)
-            case ArgValue.Range(_) => false
-            case ArgValue.Cells(_) => false
-          }
+        val values = call.spec.argSpec.toValues(call.args)
+        (includeDynamicCalls && (call.spec.flags.dynamicDeps ||
+          CriteriaRangeResize.hasDynamicResize(call.spec.name, values))) || values.exists {
+          case ArgValue.Expr(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+          case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
+            resolveName(name, scope)
+          case ArgValue.Range(_) => false
+          case ArgValue.Cells(_) => false
+        }
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
           _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
@@ -405,12 +406,13 @@ object DependencyGraph:
   /**
    * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
    *
-   * A case-insensitive substring pre-filter over the registry's dynamicDeps-flagged names runs
-   * before any parsing, so sheets without dynamic functions pay no parse cost. Formulas that fail
-   * to parse are not dynamic (matching `fromSheet`, where they contribute no edges).
+   * A case-insensitive substring pre-filter over dynamicDeps-flagged names and resizing functions
+   * runs before parsing. Only unresolved resize geometry needs dynamic scheduling; literal ranges
+   * remain static. Formulas that fail to parse are not dynamic (matching `fromSheet`, where they
+   * contribute no edges).
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
-    val names = FunctionRegistry.dynamicFunctionNames
+    val names = FunctionRegistry.dynamicFunctionNames ++ CriteriaRangeResize.resizingFunctions
     if names.isEmpty then Set.empty
     else
       sheet.cells.iterator.flatMap { case (ref, cell) =>
@@ -588,7 +590,7 @@ object DependencyGraph:
         .filter(dn => dynamicKeys.contains(resolutionKey(dn.name)))
         .map(dn => upper(dn.name))
         .toSet
-    val candidateTokens = dynamicFunctions ++ nameTokens
+    val candidateTokens = dynamicFunctions ++ CriteriaRangeResize.resizingFunctions ++ nameTokens
 
     val cells =
       if candidateTokens.isEmpty then Set.empty[QualifiedRef]
