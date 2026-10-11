@@ -290,7 +290,14 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
       _ <- matchModeError("XLOOKUP", matchMode, diagnostic)
       _ <- searchModeError("XLOOKUP", searchMode, diagnostic)
-      matchedIndex <- xlookupIndex(lookupValueEval, lookupSheet, lookupArray, matchMode, searchMode, ctx)
+      matchedIndex <- xlookupIndex(
+        lookupValueEval,
+        lookupSheet,
+        lookupArray,
+        matchMode,
+        searchMode,
+        ctx
+      )
       result <- matchedIndex match
         case Some(i) => Right(Right(RangeOperand(returnSheet, strip(i))))
         case None =>
