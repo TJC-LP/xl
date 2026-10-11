@@ -424,6 +424,65 @@ class ArrayLiftingSpec extends FunSuite:
     assertEquals(cellNamed("=YEAR(gap)", ref"F9"), Right(num(1900)))
   }
 
+  // ===== ROW and COLUMN over a multi-cell reference (GH-712) =====
+
+  test("ROW and COLUMN over a multi-cell reference spill their numbers in array mode") {
+    assertEquals(arrayEval("=ROW(A1:A3)"), Right(column(num(1), num(2), num(3))))
+    assertEquals(arrayEval("=COLUMN(A1:C1)"), Right(row(num(1), num(2), num(3))))
+    // a 2-D reference: ROW is a column of its rows, COLUMN a row of its columns
+    assertEquals(arrayEval("=ROW(B2:D4)"), Right(column(num(2), num(3), num(4))))
+    assertEquals(arrayEval("=COLUMN(B2:D4)"), Right(row(num(2), num(3), num(4))))
+    // along the other axis a range is one number, as is a single cell
+    assertEquals(arrayEval("=ROW(B2:D2)"), Right(BigDecimal(2)))
+    assertEquals(arrayEval("=COLUMN(C2:C4)"), Right(BigDecimal(3)))
+    assertEquals(arrayEval("=ROW(C3)"), Right(BigDecimal(3)))
+    assertEquals(arrayEval("=ROW(Sheet1!B3:B4)"), Right(column(num(3), num(4))))
+    // a whole row is every column number of the grid
+    arrayEval("=COLUMN(1:1)") match
+      case Right(ar: ArrayResult) => assertEquals((ar.rows, ar.cols), (1, 16384))
+      case other => fail(s"expected a 1x16384 array, got $other")
+  }
+
+  test("ROW's array composes: positions, conditions, lifted functions, CSE lookups") {
+    assertEquals(
+      arrayEval("=ROW(B2:B4)-ROW(B2)+1"),
+      Right(column(num(1), num(2), num(3)))
+    )
+    assertEquals(arrayEval("=MOD(ROW(B2:B4),2)"), Right(column(num(0), num(1), num(0))))
+    // the CSE idiom: the last row whose B is positive is row 4, and INDEX reads B4
+    assertEquals(number(arrayEval("=MAX(IF(B2:B4>0,ROW(B2:B4),\"\"))")), BigDecimal(4))
+    assertEquals(
+      arrayEval("=INDEX(B2:B4,MAX(IF(B2:B4>0,ROW(B2:B4)-ROW(B2)+1,\"\")))"),
+      Right(column(num(7)))
+    )
+    assertEquals(number(arrayEval("=SUM(ROW(B2:B4))")), BigDecimal(9))
+    assertEquals(number(arrayEval("=SUMPRODUCT(COLUMN(B2:D2)*B2:D2)")), BigDecimal(10 - 9 + 4))
+  }
+
+  test("ROW and COLUMN of a reference a name, OFFSET, INDIRECT or INDEX returns") {
+    val named = workbook.withDefinedName("vals", "Sheet1!$C$2:$C$4")
+    def arrayNamed(f: String): Either[EvalError, Any] =
+      Evaluator.arrayInstance.eval(parse(f), sheet, Clock.system, Some(named), Some(ref"Z1"))
+    assertEquals(arrayNamed("=ROW(vals)"), Right(column(num(2), num(3), num(4))))
+    assertEquals(arrayEval("=ROW(OFFSET(B2,0,0,2,1))"), Right(column(num(2), num(3))))
+    assertEquals(arrayEval("=COLUMN(INDIRECT(\"B2:C2\"))"), Right(row(num(2), num(3))))
+    assertEquals(arrayEval("=ROW(INDEX(B2:D4,0,1))"), Right(column(num(2), num(3), num(4))))
+    assertEquals(cellAt("=ROW(INDIRECT(\"B3:B4\"))", ref"F9"), Right(num(3)))
+    // INDIRECT of an unresolvable text is #REF!, which ROW passes on
+    assertEquals(cellAt("=ROW(INDIRECT(\"nowhere!!\"))", ref"F9"), Right(err(CellError.Ref)))
+    // a value is not a reference: the same loud failure as before
+    assert(cellAt("=ROW(1+1)", ref"F9").isLeft)
+  }
+
+  test("a plain cell keeps the first row or column of ROW's array, not the intersected one") {
+    assertEquals(cellAt("=ROW(B2:B4)", ref"F3"), Right(num(2)))
+    assertEquals(cellAt("=ROW(B2:B4)", ref"F20"), Right(num(2)))
+    assertEquals(cellAt("=COLUMN(B2:D2)", ref"C9"), Right(num(2)))
+    assertEquals(cellAt("=ROW(B2:B4)+1", ref"F4"), Right(num(3)))
+    assertEquals(cellAt("=SUM(ROW(B2:B4))", ref"F3"), Right(num(2)))
+    assertEquals(cellAt("=SUMPRODUCT(ROW(B2:B4))", ref"F3"), Right(num(9)))
+  }
+
   // ===== Unchanged behaviour =====
 
   test("non-lifted functions and scalar calls are unchanged") {
