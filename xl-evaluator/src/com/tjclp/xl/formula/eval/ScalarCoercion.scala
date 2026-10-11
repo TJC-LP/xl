@@ -281,9 +281,25 @@ private[formula] object ScalarCoercion:
 
   /** Excel truncates fractional values toward zero in integer positions; guard the Int range. */
   private def truncateToInt(label: String, bd: BigDecimal): Either[EvalError, Any] =
-    val truncated = bd.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
-    if truncated.isValidInt then Right(truncated.toInt)
-    else mismatch(label, "valid integer", bd)
+    truncatedInt(bd).toRight(intOutOfRange(label, bd.toString))
+
+  /**
+   * #709: `bd` truncated toward zero as an Int, or None outside the Int range. The magnitude is
+   * read from precision and scale BEFORE any `setScale`: text like `1e2147483647` or
+   * `1e-2147483647` would otherwise make `setScale(0)` build a BigInteger beyond the supported
+   * range (an ArithmeticException) or spend seconds on `1e10000000`. Digits left of the point =
+   * precision - scale: 0 or fewer means |bd| < 1 (truncates to 0), more than 10 means |bd| >=
+   * 10^10, past Int.MaxValue. In between, the scale is at most the precision, so `setScale` is
+   * cheap. Shared by the literal path ([[coerce]]) and the reference decoder
+   * (TExprDecoders.decodeAsInt).
+   */
+  private[formula] def truncatedInt(bd: BigDecimal): Option[Int] =
+    val intDigits = bd.precision.toLong - bd.scale.toLong
+    if bd.signum == 0 || intDigits <= 0 then Some(0)
+    else if intDigits > 10 then None
+    else
+      val truncated = bd.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
+      Option.when(truncated.isValidInt)(truncated.toInt)
 
   /**
    * Numeric-text parse (the extractNumericForMatch convention): trimmed, total. Shared with
@@ -291,7 +307,16 @@ private[formula] object ScalarCoercion:
    * same text domain.
    */
   private[formula] def parseNumericText(s: String): Option[BigDecimal] =
-    scala.util.Try(BigDecimal(s.trim)).toOption
+    val t = s.trim
+    // A number's text starts with a digit (any Unicode digit, as the BigDecimal parser reads),
+    // a sign or a point; anything else is refused without building and catching the parser's
+    // NumberFormatException — a column of text placeholders read by `=ABS(C2)` filled down no
+    // longer throws once per cell. Same answers as the bare parse (TextScalarSlotLawsSpec).
+    if t.isEmpty then None
+    else
+      val c = t.charAt(0)
+      if c.isDigit || c == '+' || c == '-' || c == '.' then scala.util.Try(BigDecimal(t)).toOption
+      else None
 
   /**
    * #709: the text a cell holds — plain, rich (its plain text), or a formula's cached text — if it
@@ -316,6 +341,26 @@ private[formula] object ScalarCoercion:
       CellError.Value,
       Some(s"$label: serial ${quotedText(serial)} is outside the 1900 date range")
     )
+
+  /**
+   * #709: an integer slot's value outside the Int range — `=LEFT("abc",1E10)`, `=LEFT("abc",A1)`
+   * over `1E10` or `'1e10` — as one error value on every path, like any other value the slot cannot
+   * read (`#VALUE!`; LibreOffice refuses it too).
+   */
+  private[formula] def intOutOfRange(label: String, shown: String): EvalError =
+    EvalError.ErrorValue(
+      CellError.Value,
+      Some(s"$label: ${quotedText(shown)} is outside the integer range")
+    )
+
+  /**
+   * #709: a cell's value as a diagnostic shows it — a number in its plain scientific form (cheap
+   * for any exponent, unlike General formatting), text as written, a formula as its cached value.
+   */
+  private[formula] def shownValue(value: CellValue): String = value match
+    case CellValue.Number(n) => n.toString
+    case CellValue.Formula(_, Some(cached), _) => shownValue(cached)
+    case other => cellText(other).getOrElse(other.toString)
 
   /** Longest run of a cell's text, in code points, quoted in a `#VALUE!` diagnostic. */
   private[formula] val MaxQuotedText: Int = 40

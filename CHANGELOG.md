@@ -275,19 +275,23 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.
 - **A contained evaluator defect in `xl eval` / `evala` is `FORMULA_ERROR`** (still exit 3) with
   the defect wording, where it was `INTERNAL`.
+- **A refused text cell at a reference is `EvalError.ErrorValue(#VALUE!)`, not `CodecFailed`**
+  (#709): for library callers, when any single-reference decoder refuses a text cell (plain, rich,
+  or a formula's cached text), including a decoder passed to the public `TExpr.ref(at, decode)`,
+  evaluation now returns the `#VALUE!` error value instead of `EvalError.CodecFailed`. Code that
+  matched `CodecFailed` on such cells sees the error value instead.
 
 ### Fixed
 
 - **Text in a typed scalar argument is `#VALUE!`, not an evaluation failure** (#709): `=ABS(C5)`,
-  `=ROUND(C5,0)`, `=IF(C5,1,0)`, `=NOT(C5)` over a text cell left the cell uncached with a type
-  mismatch (`RECALC_ERRORS`, `--strict` exit 1); they now cache Excel's `#VALUE!`, which IFERROR
-  and ISERROR see. Numeric text still reads as its number in a numeric or date slot (`'45000` in
-  `YEAR` is 2023); range folds that take dates (NETWORKDAYS holidays, XIRR/XNPV dates) still refuse
-  text, as Excel does. For library callers, a text cell that any single-reference decoder refuses,
-  including one supplied through the public `TExpr.ref(at, decode)`, now surfaces as
-  `EvalError.ErrorValue(#VALUE!)` instead of `EvalError.CodecFailed`. An out-of-range date serial
-  (outside 0..2958465) in a date argument is now the `#VALUE!` error value on every path (literal,
-  reference, computed), not a recalculation failure; Excel's `#NUM!` is tracked in #726.
+  `=ROUND(C5,0)`, `=IF(C5,1,0)`, `=NOT(C5)` over a text cell left the cell uncached
+  (`RECALC_ERRORS`, `--strict` exit 1); they now cache Excel's `#VALUE!`, which IFERROR and ISERROR
+  see. Numeric text still reads as its number in a numeric or date slot (`'45000` in `YEAR` is
+  2023); date range folds (NETWORKDAYS holidays, XIRR/XNPV dates) still refuse text, as Excel does.
+  On every path (literal, reference, computed), a date serial outside 0..2958465 and an integer
+  argument outside the integer range (`=LEFT("abc",1E10)`) are now `#VALUE!` too, not a
+  recalculation failure; Excel's `#NUM!` for dates is tracked in #726. A huge exponent in an
+  integer argument (`'1e2147483647`) no longer raises an internal defect or stalls.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

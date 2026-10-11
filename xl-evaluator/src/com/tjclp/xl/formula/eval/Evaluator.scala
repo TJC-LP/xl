@@ -1149,7 +1149,7 @@ private class EvaluatorImpl(
                   // GH-430: TABLE(...) display text is not evaluable — the decoder path treats
                   // the uncached record like any cached formula (pinned semantics, no parse)
                   case CellValue.Formula(_, None, _: FormulaKind.DataTable) =>
-                    decodeOrCarried(at, cell, decode)
+                    decodeOrCarried(at, cell, decode, Some(sheetName))
                   case CellValue.Formula(formulaStr, None, kind) =>
                     // Formula has no cached value - parse and evaluate against target sheet
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
@@ -1174,11 +1174,11 @@ private class EvaluatorImpl(
                         )
                       }
                       .flatMap(evaluatedValue =>
-                        decodeOrCarried(at, Cell(at, evaluatedValue), decode)
+                        decodeOrCarried(at, Cell(at, evaluatedValue), decode, Some(sheetName))
                       )
                   case _ =>
                     // Cached formula or non-formula cell - use decoder
-                    decodeOrCarried(at, cell, decode)
+                    decodeOrCarried(at, cell, decode, Some(sheetName))
 
       // ===== GH-353: External-Workbook References =====
       //
@@ -2116,25 +2116,36 @@ private class EvaluatorImpl(
   /**
    * GH-344: decode a cell for a typed reference position, falling back to the Excel error VALUE the
    * cell carries when the decode refuses — `=A1+1` over a #REF! cell is #REF!, not a type mismatch.
-   * #709: a text cell the decoder refuses is `#VALUE!` — `=ABS(A1)` over "abc", `=IF(A1,1,0)` over
-   * "abc" — as Excel computes it (the decoders read numeric text first). A date slot's out-of-range
-   * serial (TExpr.DateSerialOutOfRange, a number or numeric text) is matched on the codec error
-   * first: the text fallback below would discard that reason. Decode failures over other values
-   * keep their loud CodecFailed; positions whose decoders accept error cells
-   * (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never reach the fallback.
+   *
+   * #709: a refusal over a text cell (plain, rich, or a formula's cached text) is `#VALUE!` —
+   * `=ABS(A1)` over "abc", `=IF(A1,1,0)` over "abc" — as Excel computes it, WHICHEVER decoder
+   * refused and for whatever reason: the built-in decoders read numeric text first, so a text
+   * refusal at a reference boundary is always Excel's `#VALUE!`, and a caller's decoder passed
+   * through `TExpr.ref(at, decode)` gets the same treatment (it no longer sees `CodecFailed` over
+   * text). Decode failures over other values keep their loud CodecFailed; positions whose decoders
+   * accept error cells (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never
+   * reach the fallback.
+   *
+   * The date slot's out-of-range serial and the integer slot's out-of-range value are matched
+   * first, by instance (TExpr.DateSerialOutOfRange, TExpr.IntOutOfRange — produced only by
+   * decodeAsDateScalar and decodeAsInt): they are error values over numbers too, and the text
+   * fallback would discard the reason. `sheet` names a sheet-qualified reference's sheet in the
+   * diagnostic (`Other!C5`).
    */
   private def decodeOrCarried[B](
     at: ARef,
     cell: Cell,
-    decode: Cell => Either[com.tjclp.xl.codec.CodecError, B]
+    decode: Cell => Either[com.tjclp.xl.codec.CodecError, B],
+    sheet: Option[SheetName] = None
   ): Either[EvalError, B] =
-    decode(cell).left.map {
-      // the date slot's out-of-range serial: ScalarCoercion.dateSerialOutOfRange holds the error
-      // value (#VALUE!, Excel's #NUM! once #726 lands), shared with the literal path. Matched
-      // before the text fallback, which would discard the reason.
-      case com.tjclp.xl.codec.CodecError.ParseError(serial, _, TExpr.DateSerialOutOfRange) =>
-        ScalarCoercion.dateSerialOutOfRange(at.toA1, serial)
-      case codecErr =>
+    def label: String =
+      sheet.fold(at.toA1)(s => s"${SheetName.quoteForFormula(s.value)}!${at.toA1}")
+    decode(cell).left.map { codecErr =>
+      if codecErr eq TExpr.DateSerialOutOfRange then
+        ScalarCoercion.dateSerialOutOfRange(label, ScalarCoercion.shownValue(cell.value))
+      else if codecErr eq TExpr.IntOutOfRange then
+        ScalarCoercion.intOutOfRange(label, ScalarCoercion.shownValue(cell.value))
+      else
         ArrayArithmetic.carriedError(cell.value) match
           case Some(err) => EvalError.ErrorValue(err)
           case None =>
@@ -2142,7 +2153,7 @@ private class EvaluatorImpl(
               case Some(text) =>
                 EvalError.ErrorValue(
                   CellError.Value,
-                  Some(s"${at.toA1}: text '${ScalarCoercion.quotedText(text)}' in a typed argument")
+                  Some(s"$label: text '${ScalarCoercion.quotedText(text)}' in a typed argument")
                 )
               case None => EvalError.CodecFailed(at, codecErr)
     }

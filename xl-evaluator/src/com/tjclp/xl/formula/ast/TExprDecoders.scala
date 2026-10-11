@@ -69,9 +69,15 @@ trait TExprDecoders:
    * #709: numeric text is its number here, as Excel reads it (`=ABS(A1)` over `'5` is 5, like
    * ScalarCoercion.coerceNumeric and the lifted element) — the folds keep skipping it. Other text
    * refuses; the evaluator turns that refusal into `#VALUE!`.
+   *
+   * For a SINGLE-REFERENCE scalar slot only. Never use it for a range or aggregate fold: Excel's
+   * folds skip text that arrives through a reference, so `=SUM(A1)` over the text `'5` is 0, where
+   * this decoder reads 5 (the aggregates keep [[decodeNumeric]]; TextScalarSlotSpec pins it).
    */
   def decodeNumericScalar(cell: Cell): Either[CodecError, BigDecimal] =
     cell.value match
+      // the common case first: a number skips the text lookup below (cellText + parse). Not
+      // redundant with decodeNumeric's Number arm — it keeps the hot path off numericText.
       case CellValue.Number(n) => scala.util.Right(n)
       case CellValue.Empty => scala.util.Right(BigDecimal(0))
       case other =>
@@ -284,6 +290,10 @@ trait TExprDecoders:
    * number or numeric text — refuses with [[DateSerialOutOfRange]], which the evaluator turns into
    * the error value ScalarCoercion.dateSerialOutOfRange gives the literal path. The holiday and
    * XIRR/XNPV folds keep the strict decoder.
+   *
+   * For a SINGLE-REFERENCE scalar slot only: a range fold that takes dates must use
+   * [[decodeAsDate]], which never reads text as a date (Excel's NETWORKDAYS holidays and XIRR/XNPV
+   * dates do not).
    */
   def decodeAsDateScalar(cell: Cell): Either[CodecError, java.time.LocalDate] =
     val serial = cell.value match
@@ -291,17 +301,28 @@ trait TExprDecoders:
       case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
       case other => numericText(other)
     serial match
-      case Some(n) =>
-        serialToDate(n).toRight(CodecError.ParseError(n.toString, "Date", DateSerialOutOfRange))
+      case Some(n) => serialToDate(n).toRight(DateSerialOutOfRange)
       case None => decodeAsDate(cell)
 
   /**
-   * #709: the [[CodecError.ParseError]] detail [[decodeAsDateScalar]] gives a serial outside
-   * 0..MaxExcelDateSerial. The evaluator's reference boundary (decodeOrCarried) matches it before
-   * its text fallback and answers ScalarCoercion.dateSerialOutOfRange, the literal path's error
-   * value (`#VALUE!` until #726 makes it `#NUM!`).
+   * #709: the refusal [[decodeAsDateScalar]] gives a serial outside 0..MaxExcelDateSerial, and the
+   * only one it gives for that reason. A sentinel INSTANCE: the evaluator's reference boundary
+   * (decodeOrCarried) recognises it by identity (`eq`), never by its fields, so an equal
+   * `ParseError` built by any other decoder — a caller's, through `TExpr.ref(at, decode)` — is not
+   * mistaken for it. decodeOrCarried answers ScalarCoercion.dateSerialOutOfRange, the literal
+   * path's error value (`#VALUE!` until #726 makes it `#NUM!`). TextScalarSlotSpec pins both
+   * directions (the real refusal maps, a forged equal one does not).
    */
-  private[formula] val DateSerialOutOfRange: String = "serial outside the 1900 date range"
+  private[formula] val DateSerialOutOfRange: CodecError =
+    CodecError.ParseError("serial", "Date", "serial outside the 1900 date range (0 to 2958465)")
+
+  /**
+   * #709: the refusal [[decodeAsInt]] gives a value outside the Int range — a number, a formula's
+   * cached number or numeric text — recognised by identity like [[DateSerialOutOfRange]];
+   * decodeOrCarried answers ScalarCoercion.intOutOfRange, the literal path's error value.
+   */
+  private[formula] val IntOutOfRange: CodecError =
+    CodecError.ParseError("value", "Int", "value outside the integer range")
 
   private def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
     if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
@@ -315,7 +336,8 @@ trait TExprDecoders:
    * boundaries previously diverged (a blank/numeric-text/fractional cell errored where the same
    * value as a literal or call result coerced):
    *   - Number -> truncates toward zero like Excel (LEFT("hello", 2.7) -> "he"); values outside the
-   *     Int range are a clean error
+   *     Int range refuse with [[IntOutOfRange]] (#709: `#VALUE!` at the reference boundary, sized
+   *     before truncating, so `1e2147483647` never builds its BigInteger)
    *   - Boolean -> 1 for TRUE, 0 for FALSE
    *   - Text -> numeric text parses ("3" -> 3; "abc" is a clean error — Excel #VALUE!); rich text
    *     reads through its plain text (#709)
@@ -324,10 +346,10 @@ trait TExprDecoders:
    *     the cached arms)
    */
   def decodeAsInt(cell: Cell): Either[CodecError, Int] =
+    // #709: magnitude-guarded (ScalarCoercion.truncatedInt); out of the Int range is the
+    // IntOutOfRange refusal, which the evaluator reads as the literal path's error value
     def truncateToInt(n: BigDecimal): Either[CodecError, Int] =
-      val truncated = n.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
-      if truncated.isValidInt then scala.util.Right(truncated.toInt)
-      else scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
+      ScalarCoercion.truncatedInt(n).toRight(IntOutOfRange)
 
     def convert(value: CellValue): Either[CodecError, Int] = value match
       case CellValue.Number(n) => truncateToInt(n)

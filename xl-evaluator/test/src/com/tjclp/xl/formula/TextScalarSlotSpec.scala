@@ -11,6 +11,9 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
+import scala.concurrent.{ExecutionContext, Future}
+import scala.concurrent.duration.*
+
 /**
  * #709: a text value in a typed scalar slot — a numeric, integer or date argument, the IF/IFS
  * condition, NOT's operand, a computed AND/OR value — is Excel's `#VALUE!`, an error value the cell
@@ -23,6 +26,10 @@ import munit.FunSuite
  * LibreOffice cannot compute, are pinned after it, each with its reason.
  */
 class TextScalarSlotSpec extends FunSuite:
+
+  // the magnitude tests run as Futures so a regression that builds a huge BigInteger fails here
+  // instead of hanging the suite (munit applies the timeout to Future-valued tests only)
+  override val munitTimeout: Duration = 20.seconds
 
   private def N(n: String): CellValue = CellValue.Number(BigDecimal(n))
   private def T(s: String): CellValue = CellValue.Text(s)
@@ -315,15 +322,117 @@ class TextScalarSlotSpec extends FunSuite:
       Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
     }
     assert(diffs.isEmpty, diffs.mkString("\n"))
-    assertEquals(
-      TExpr.decodeAsDateScalar(Cell(ref"A1", T("-5"))),
-      Left(CodecError.ParseError("-5", "Date", TExpr.DateSerialOutOfRange))
-    )
-    assertEquals(
-      TExpr.decodeAsDateScalar(Cell(ref"A3", N("-5"))),
-      Left(CodecError.ParseError("-5", "Date", TExpr.DateSerialOutOfRange))
-    )
+    // the decoder's refusal is the one sentinel instance the evaluator recognises (by identity)
+    List(T("-5"), N("-5"), CellValue.Formula("x", Some(T("3000000")))).foreach { v =>
+      TExpr.decodeAsDateScalar(Cell(ref"A1", v)) match
+        case Left(err) => assert(err eq TExpr.DateSerialOutOfRange, s"$v: $err")
+        case other => fail(s"$v: expected the out-of-range refusal, got $other")
+    }
     assertEquals(TExpr.decodeAsDateScalar(Cell(ref"A1", T("45000"))).map(_.getYear), Right(2023))
+  }
+
+  test("#709: a caller's decoder cannot forge the out-of-range refusals") {
+    // decodeOrCarried recognises the date and integer out-of-range refusals by instance, not by
+    // their text: an equal ParseError from another decoder over a number cell stays CodecFailed.
+    val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", N("5"))
+    List(TExpr.DateSerialOutOfRange, TExpr.IntOutOfRange).foreach { sentinel =>
+      val forged = sentinel match
+        case CodecError.ParseError(v, t, d) => CodecError.ParseError(v, t, d)
+        case CodecError.TypeMismatch(e, a) => CodecError.TypeMismatch(e, a)
+      assertEquals(forged, sentinel)
+      assert(!(forged eq sentinel))
+      val decode: Cell => Either[CodecError, BigDecimal] = _ => Left(forged)
+      Evaluator.instance.eval(TExpr.ref(ref"A1", decode), sheet) match
+        case Left(EvalError.CodecFailed(at, err)) =>
+          assertEquals(at, ref"A1")
+          assertEquals(err, forged)
+        case other => fail(s"expected CodecFailed, got $other")
+    }
+  }
+
+  test("#709: a sheet-qualified reference names its sheet in the #VALUE! diagnostic") {
+    val main = Sheet(SheetName.unsafe("Sheet1")).put(ref"C5", N("1")).put(ref"D5", T("x"))
+    val other = Sheet(SheetName.unsafe("Other")).put(ref"C5", T("n/a"))
+    val spaced = Sheet(SheetName.unsafe("My Data")).put(ref"C5", T("-5"))
+    val wb = Workbook(Vector(main, other, spaced))
+    def message[A](expr: TExpr[A]): String =
+      Evaluator.instance.eval(expr, main, workbook = Some(wb)) match
+        case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) => msg
+        case other => fail(s"expected #VALUE! with a message, got $other")
+    val numeric = message(
+      TExpr.SheetRef(SheetName.unsafe("Other"), ref"C5", Anchor.Relative, TExpr.decodeNumericScalar)
+    )
+    assert(numeric.startsWith("Other!C5: "), numeric)
+    val date = message(
+      TExpr.SheetRef(
+        SheetName.unsafe("My Data"),
+        ref"C5",
+        Anchor.Relative,
+        TExpr.decodeAsDateScalar
+      )
+    )
+    assert(date.startsWith("'My Data'!C5: "), date)
+    // the unqualified reference keeps the bare address
+    val bare = message(TExpr.ref(ref"D5", TExpr.decodeNumericScalar))
+    assert(bare.startsWith("D5: "), bare)
+  }
+
+  test("#709: integer slots refuse a magnitude outside the Int range without building it") {
+    // Before the guard, truncating "1e2147483647" threw ArithmeticException (BigInteger would
+    // overflow) and "1e10000000" spent ~10 s building 10^10000000. Now the size is read from
+    // precision and scale first: out of the Int range is the int-slot #VALUE!, on every path
+    // (LibreOffice 24.2 refuses these too, with Err:502); a magnitude below 1 truncates to 0.
+    Future {
+      val rich = (s: String) => CellValue.RichText(RichText.plain(s))
+      val sheet = Sheet(SheetName.unsafe("Sheet1"))
+        .put(ref"A1", T("1e2147483647"))
+        .put(ref"A2", rich("1e2147483647"))
+        .put(ref"A3", CellValue.Formula("x", Some(T("1e2147483647"))))
+        .put(ref"A4", T("1e10000000"))
+        .put(ref"A5", T("1e-10000000"))
+        .put(ref"A6", N("1E10"))
+        .put(ref"A7", T("1e10"))
+        .put(ref"A8", N("2147483647"))
+        .put(ref"A9", T("2147483648"))
+        .put(ref"A10", T("0E+2147483647"))
+        .put(ref"A11", T("-1e-2147483647"))
+        .put(ref"A12", CellValue.Formula("x", Some(N("1E10"))))
+      val wb = Workbook(Vector(sheet))
+      val cases = List(
+        ("B1", "LEFT(\"abc\",A1)", Value),
+        ("B2", "LEFT(\"abc\",A2)", Value),
+        ("B3", "LEFT(\"abc\",A3)", Value),
+        ("B4", "LEFT(\"abc\",A4)", Value),
+        ("B5", "LEFT(\"abc\",A5)", T("")),
+        ("B6", "LEFT(\"abc\",A6)", Value),
+        ("B7", "LEFT(\"abc\",A7)", Value),
+        ("B8", "LEFT(\"abc\",A8)", T("abc")),
+        ("B9", "LEFT(\"abc\",A9)", Value),
+        ("B10", "LEFT(\"abc\",A10)", T("")),
+        ("B11", "LEFT(\"abc\",A11)", T("")),
+        ("B12", "LEFT(\"abc\",A12)", Value),
+        ("B13", "MID(\"abcdef\",2,A1)", Value),
+        ("B14", "LEFT(\"abc\",1E10)", Value),
+        ("B15", "LEFT(\"abc\",\"1e2147483647\")", Value),
+        ("B16", "LEFT(\"abc\",\"1e-2147483647\")", T("")),
+        ("B17", "IFERROR(LEFT(\"abc\",A1),\"caught\")", T("caught"))
+      )
+      val diffs = cases.flatMap { case (at, formula, expected) =>
+        val got = plainIn(wb, at, formula)
+        Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
+      }
+      assert(diffs.isEmpty, diffs.mkString("\n"))
+    }(using ExecutionContext.global)
+  }
+
+  test("#709: a formula's cached non-numeric text is #VALUE! in a numeric slot") {
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"A1", CellValue.Formula("IF(TRUE,\"n/a\")", Some(T("n/a"))))
+      .put(ref"A2", CellValue.Formula("\"5\"", Some(T("5"))))
+    val wb = Workbook(Vector(sheet))
+    assertEquals(plainIn(wb, "B1", "ABS(A1)"), Right(Value))
+    assertEquals(plainIn(wb, "B2", "ABS(A2)"), Right(N("5")))
+    assertEquals(plainIn(wb, "B3", "IFERROR(ABS(A1),\"caught\")"), Right(T("caught")))
   }
 
   test("#709: the diagnostic cut never splits a surrogate pair") {

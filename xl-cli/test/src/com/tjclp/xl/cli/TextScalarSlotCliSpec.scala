@@ -33,26 +33,30 @@ class TextScalarSlotCliSpec extends CatsEffectSuite:
       .put(ref"F5", CellValue.Formula("IFERROR(ABS(C5),\"caught\")", None))
     tempXlsx("xl-709-src-").evalTap(p => ExcelIO.instance[IO].write(Workbook(sheet), p))
 
+  /**
+   * The cached value of the formula at `at`; a missing sheet or a non-formula cell fails the IO.
+   */
   private def cached(path: Path, at: ARef): IO[Option[CellValue]] =
-    ExcelIO.instance[IO].read(path).map { wb =>
-      wb.sheets.headOption.getOrElse(fail("no sheet"))(at).value match
-        case CellValue.Formula(_, c, _) => c
-        case other => fail(s"expected a formula at ${at.toA1}, got $other")
+    ExcelIO.instance[IO].read(path).flatMap { wb =>
+      wb.sheets.headOption match
+        case None => IO.raiseError(new AssertionError(s"no sheet in $path"))
+        case Some(sheet) =>
+          sheet(at).value match
+            case CellValue.Formula(_, c, _) => IO.pure(c)
+            case other =>
+              IO.raiseError(new AssertionError(s"expected a formula at ${at.toA1}, got $other"))
     }
 
   test("#709: recalc --strict over =ABS(C5) on text exits 0 and caches #VALUE!") {
     source.flatMap(src => tempXlsx("xl-709-out-").map(out => (src, out))).use { (src, out) =>
       for
         run <- CliHarness.run("-f", src.toString, "-o", out.toString, "--strict", "recalc")
-        d5 <- cached(out, ref"D5")
-        e5 <- cached(out, ref"E5")
-        f5 <- cached(out, ref"F5")
-      yield
-        assertEquals(run.exit, 0, run.toString)
-        assert(!run.toString.contains("RECALC_ERRORS"), run.toString)
-        assert(!run.stdout.contains("STRICT FAILURE"), run.stdout)
-        assertEquals(d5, Some(CellValue.Error(CellError.Value)))
-        assertEquals(e5, Some(CellValue.Error(CellError.Value)))
-        assertEquals(f5, Some(CellValue.Text("caught")))
+        _ <- assertIO(IO.pure(run.exit), 0, run.toString)
+        _ <- assertIOBoolean(IO.pure(!run.toString.contains("RECALC_ERRORS")), run.toString)
+        _ <- assertIOBoolean(IO.pure(!run.stdout.contains("STRICT FAILURE")), run.stdout)
+        _ <- assertIO(cached(out, ref"D5"), Some(CellValue.Error(CellError.Value)))
+        _ <- assertIO(cached(out, ref"E5"), Some(CellValue.Error(CellError.Value)))
+        _ <- assertIO(cached(out, ref"F5"), Some(CellValue.Text("caught")))
+      yield ()
     }
   }
