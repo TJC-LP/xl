@@ -287,13 +287,15 @@ trait FunctionSpecsBase:
    * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
    * the sheet's last row or column (`A:A`, `B5:B1048576`, `2:2`): it stops where the used range
    * does (one cell when they do not meet), so `INDEX(A:A,0)` or `XLOOKUP(k,ids,B:B)` costs the
-   * data, not a million blanks. The start is never moved.
+   * data, not a million blanks. SUMPRODUCT supplies a shared extent for whole axes, including
+   * leading blanks and empty ranges; apply it after reference resolution to keep INDEX's origin.
    */
   protected def boundedReferenceValues(
     ref: RangeOperand,
     ctx: EvalContext
   ): Either[EvalError, ArrayResult] =
-    val RangeOperand(targetSheet, reference) = ref
+    val RangeOperand(targetSheet, original) = ref
+    val reference = ctx.boundArrayRange(original)
     val used = targetSheet.usedRange
     def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
       if hi < sheetLast then hi
@@ -311,7 +313,8 @@ trait FunctionSpecsBase:
       used.map(_.colEnd.index0)
     )
     val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
-    extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
+    if reference.height <= 0 || reference.width <= 0 then Right(ArrayResult.empty)
+    else extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the

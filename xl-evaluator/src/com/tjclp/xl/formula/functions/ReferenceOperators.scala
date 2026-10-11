@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.Arity
 import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
@@ -339,7 +339,14 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       case Right(other) =>
         ctx.evalReference(other).flatMap {
           case operand: RangeOperand => Right(Vector(operand))
-          case _ => Left(EvalError.ErrorValue(CellError.Value, Some("not a reference")))
+          case other =>
+            val value = other match
+              case array: ArrayResult if !array.isEmpty => array(0, 0)
+              case scalar => scalar
+            val code = value match
+              case cell: CellValue => ArrayArithmetic.carriedError(cell)
+              case _ => None
+            Left(EvalError.ErrorValue(code.getOrElse(CellError.Value), Some("not a reference")))
         }
 
   private def intersect(
