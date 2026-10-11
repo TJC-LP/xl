@@ -234,16 +234,36 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case None => acc
         }
 
-  /** Resolve a raw range and apply the full-row/full-column used-area constraint once. */
-  private def resolveConstrainedRange(
-    location: TExpr.RangeLocation,
-    ctx: EvalContext
-  ): Either[EvalError, (com.tjclp.xl.sheets.Sheet, CellRange)] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
-      case (targetSheet, range) =>
-        val bounds = computeBounds(List((range, targetSheet)))
-        (targetSheet, constrainRange(range, bounds))
-    }
+  /**
+   * GH-711: the cells of a whole-column or whole-row `range` that the used-area constraint dropped
+   * (`constrained` is `range` after [[constrainRange]]). They lie past every non-empty cell, so all
+   * are blank: COUNTBLANK counts them, as Excel does (`COUNTBLANK(B:B)` with B1:B3 filled is
+   * 1048573), and every other aggregate skips them. A whole sheet holds 2^34 cells, past `Int`, so
+   * the count rides beside the accumulator and joins the finalized result.
+   */
+  private def blanksTrimmed(
+    agg: Aggregator[?],
+    range: CellRange,
+    constrained: CellRange
+  ): BigDecimal =
+    if agg.countsEmpty && (range.isFullColumn || range.isFullRow) then
+      BigDecimal(range.cellCount - constrained.cellCount)
+    else BigDecimal(0)
+
+  /**
+   * Fold one reference, a whole column or row within the sheet's used area, into the accumulator;
+   * the second component is [[blanksTrimmed]].
+   */
+  private def foldReference[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    ctx: EvalContext,
+    acc: A
+  ): Either[EvalError, (A, BigDecimal)] =
+    val constrained = constrainRange(range, computeBounds(List((range, targetSheet))))
+    foldRawRange(agg, targetSheet, constrained, ctx, acc)
+      .map((_, blanksTrimmed(agg, range, constrained)))
 
   /** Stream one already-constrained raw range into the supplied accumulator. */
   private def foldRawRange[A](
@@ -298,6 +318,69 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case CellValue.RichText(rt) => directValue(agg, acc, CellValue.Text(rt.toPlainText))
       case _ => Right(acc)
 
+  /**
+   * Fold an aggregate argument that evaluated to a value, not a reference: an array's elements, or
+   * a scalar.
+   */
+  private def foldEvaluatedArg[A](
+    agg: Aggregator[A],
+    evaluated: Any,
+    acc: A
+  ): Either[EvalError, A] =
+    evaluated match
+      case ar: ArrayResult =>
+        ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
+          case (Left(err), _) => Left(err)
+          case (Right(current), cellValue) =>
+            if agg.countsNonEmpty then
+              cellValue match
+                case CellValue.Empty => Right(current)
+                case _ => Right(agg.combine(current, aggregateCountUnit))
+            else if agg.countsEmpty then
+              cellValue match
+                case CellValue.Empty => Right(agg.combine(current, aggregateCountUnit))
+                case _ => Right(current)
+            else
+              ArrayArithmetic.carriedError(cellValue) match
+                case Some(err) if agg.propagatesErrors =>
+                  Left(propagatedElementError(agg.name, err))
+                case Some(_) => Right(current) // COUNT: errors are not numbers
+                case None =>
+                  extractNumericValue(cellValue) match
+                    case Some(n) => Right(agg.combine(current, n))
+                    case None => Right(current)
+        }
+      case value: BigDecimal =>
+        // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
+        // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
+        Right(
+          if agg.countsNonEmpty then agg.combine(acc, aggregateCountUnit)
+          else if agg.countsEmpty then acc
+          else agg.combine(acc, value)
+        )
+      case other =>
+        // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
+        // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
+        // numeric-mode error policing is unchanged
+        val cellValue = ArrayArithmetic.anyToCellValue(other)
+        if agg.countsNonEmpty then
+          cellValue match
+            case CellValue.Empty => Right(acc)
+            case _ => Right(agg.combine(acc, aggregateCountUnit))
+        else if agg.countsEmpty then
+          cellValue match
+            case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
+            case _ => Right(acc)
+        else
+          ArrayArithmetic.carriedError(cellValue) match
+            case Some(err) if agg.propagatesErrors =>
+              Left(propagatedElementError(agg.name, err))
+            case Some(_) => Right(acc)
+            case None =>
+              extractNumericValue(cellValue) match
+                case Some(n) => Right(agg.combine(acc, n))
+                case None => directValue(agg, acc, cellValue)
+
   /** Helper to evaluate variadic aggregates with proper type handling. */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalVariadicAggregate[A](
@@ -307,18 +390,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, BigDecimal] =
     // Stream values into the aggregator's own accumulator. Aggregators that need to retain their
     // inputs (for example MEDIAN) do so in A; ordinary aggregates avoid an intermediate Vector.
-    def foldAllArgs: Either[EvalError, A] =
-      args.foldLeft[Either[EvalError, A]](Right(agg.empty)) {
+    // The second component counts the blanks trimmed off whole columns and rows (GH-711)
+    def foldAllArgs: Either[EvalError, (A, BigDecimal)] =
+      args.foldLeft[Either[EvalError, (A, BigDecimal)]](Right((agg.empty, BigDecimal(0)))) {
         case (Left(err), _) => Left(err)
-        case (Right(acc), Left(location)) =>
+        case (Right((acc, trimmed)), arg) =>
+          foldArg(acc, arg).map((next, more) => (next, trimmed + more))
+      }
+
+    def valueOnly(result: Either[EvalError, A]): Either[EvalError, (A, BigDecimal)] =
+      result.map((_, BigDecimal(0)))
+
+    def foldArg(acc: A, arg: NumericArg): Either[EvalError, (A, BigDecimal)] =
+      arg match
+        case Left(location) =>
           // GH-630: an error in the RANGE slot (`COUNT(#REF!)` parses `#REF!` as a range argument,
           // like `SUM(#REF!)`) is triaged exactly like an error-valued direct argument
-          resolveConstrainedRange(location, ctx).fold(
-            triageErrorArgument(agg, acc, _),
-            { case (targetSheet, constrainedRange) =>
-              foldRawRange(agg, targetSheet, constrainedRange, ctx, acc)
-            }
-          )
+          Evaluator
+            .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+            .fold(
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
+              { case (targetSheet, range) => foldReference(agg, targetSheet, range, ctx, acc) }
+            )
         // GH-395: direct single-cell references triage per-cell like a 1×1 range. In NumericArg
         // position Ref/SheetRef can ONLY arise from direct refs (asNumericExpr rewrites
         // PolyRef → Ref and SheetPolyRef → SheetRef; no other NumericArg source produces these
@@ -326,26 +419,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // blank direct arg is ignored by COUNT/AVERAGE (not coerced to a genuine 0 by the
         // scalar decode), a text cell skips like the range fold, and COUNTBLANK still counts
         // the blank.
-        case (Right(acc), Right(TExpr.Ref(at, _, _))) =>
-          triageCellForAggregate(agg, ctx.sheet, at, ctx, acc)
-        case (Right(acc), Right(TExpr.SheetRef(sheetName, at, _, _))) =>
-          Evaluator
-            .resolveRangeLocation(
-              TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
-              ctx.sheet,
-              ctx.workbook
-            )
-            .flatMap { case (targetSheet, _) =>
-              triageCellForAggregate(agg, targetSheet, at, ctx, acc)
-            }
+        case Right(TExpr.Ref(at, _, _)) =>
+          valueOnly(triageCellForAggregate(agg, ctx.sheet, at, ctx, acc))
+        case Right(TExpr.SheetRef(sheetName, at, _, _)) =>
+          valueOnly(
+            Evaluator
+              .resolveRangeLocation(
+                TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                ctx.sheet,
+                ctx.workbook
+              )
+              .flatMap { case (targetSheet, _) =>
+                triageCellForAggregate(agg, targetSheet, at, ctx, acc)
+              }
+          )
         // GH-669: a union or intersection folds every area it denotes, each like a written range,
         // in either mode — resolved as one argument, so its first error is triaged once (GH-630).
         // COUNTBLANK takes one range: several areas are #VALUE!, as in Excel
-        case (Right(acc), Right(ReferenceOperators.OperatorCall(call))) =>
+        case Right(ReferenceOperators.OperatorCall(call)) =>
           ReferenceOperators
             .areas(Right(call.asInstanceOf[TExpr[Any]]), ctx)
             .fold(
-              triageErrorArgument(agg, acc, _),
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
               areas =>
                 if agg.countsEmpty && areas.size > 1 then
                   Left(
@@ -355,14 +450,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     )
                   )
                 else
-                  areas.foldLeft[Either[EvalError, A]](Right(acc)) {
+                  areas.foldLeft[Either[EvalError, (A, BigDecimal)]](Right((acc, BigDecimal(0)))) {
                     case (Left(err), _) => Left(err)
-                    case (Right(current), RangeOperand(targetSheet, range)) =>
-                      val bounds = computeBounds(List((range, targetSheet)))
-                      foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, current)
+                    case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
+                      foldReference(agg, targetSheet, range, ctx, current)
+                        .map((next, more) => (next, trimmed + more))
                   }
             )
-        case (Right(acc), Right(expr)) =>
+        case Right(expr) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
           // aggregate exactly like a literal range would; scalars keep their existing behavior.
           // GH-337: carried error ELEMENTS in the evaluated array fail loudly (per the
@@ -376,67 +471,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           ctx
             .evalReferenceArg(expr.asInstanceOf[TExpr[Any]])
             .fold(
-              triageErrorArgument(agg, acc, _),
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
               {
                 // a reference IF/CHOOSE selected, or a range name: folded like a written range
                 case RangeOperand(targetSheet, range) =>
-                  val bounds = computeBounds(List((range, targetSheet)))
-                  foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, acc)
-                case ar: ArrayResult =>
-                  ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
-                    case (Left(err), _) => Left(err)
-                    case (Right(current), cellValue) =>
-                      if agg.countsNonEmpty then
-                        cellValue match
-                          case CellValue.Empty => Right(current)
-                          case _ => Right(agg.combine(current, aggregateCountUnit))
-                      else if agg.countsEmpty then
-                        cellValue match
-                          case CellValue.Empty => Right(agg.combine(current, aggregateCountUnit))
-                          case _ => Right(current)
-                      else
-                        ArrayArithmetic.carriedError(cellValue) match
-                          case Some(err) if agg.propagatesErrors =>
-                            Left(propagatedElementError(agg.name, err))
-                          case Some(_) => Right(current) // COUNT: errors are not numbers
-                          case None =>
-                            extractNumericValue(cellValue) match
-                              case Some(n) => Right(agg.combine(current, n))
-                              case None => Right(current)
-                  }
-                case value: BigDecimal =>
-                  // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
-                  // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
-                  Right(
-                    if agg.countsNonEmpty then agg.combine(acc, aggregateCountUnit)
-                    else if agg.countsEmpty then acc
-                    else agg.combine(acc, value)
-                  )
-                case other =>
-                  // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
-                  // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
-                  // numeric-mode error policing is unchanged
-                  val cellValue = ArrayArithmetic.anyToCellValue(other)
-                  if agg.countsNonEmpty then
-                    cellValue match
-                      case CellValue.Empty => Right(acc)
-                      case _ => Right(agg.combine(acc, aggregateCountUnit))
-                  else if agg.countsEmpty then
-                    cellValue match
-                      case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
-                      case _ => Right(acc)
-                  else
-                    ArrayArithmetic.carriedError(cellValue) match
-                      case Some(err) if agg.propagatesErrors =>
-                        Left(propagatedElementError(agg.name, err))
-                      case Some(_) => Right(acc)
-                      case None =>
-                        extractNumericValue(cellValue) match
-                          case Some(n) => Right(agg.combine(acc, n))
-                          case None => directValue(agg, acc, cellValue)
+                  foldReference(agg, targetSheet, range, ctx, acc)
+                case evaluated => valueOnly(foldEvaluatedArg(agg, evaluated, acc))
               }
             )
-      }
 
     // The common workbook-recalc hot shape is one literal raw range. Its finalized immutable
     // result can be shared across formulas in this calculation generation when the target range
@@ -464,7 +506,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               foldRawRange(agg, targetSheet, effectiveRange, ctx, agg.empty)
                 .flatMap(agg.finalizeWithError)
 
-            ctx.aggregateMemo match
+            // the memo keys the used-area fold; the trimmed blanks depend on the raw range too
+            val folded = ctx.aggregateMemo match
               case Some(memo) =>
                 memo.getOrCompute(
                   targetSheet,
@@ -473,7 +516,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   Evaluator.AggregateMemoMode.FunctionCall
                 )(compute)
               case None => compute
-      case _ => foldAllArgs.flatMap(agg.finalizeWithError)
+            folded.map(_ + blanksTrimmed(agg, rawRange, effectiveRange))
+      case _ =>
+        foldAllArgs.flatMap((acc, trimmed) => agg.finalizeWithError(acc).map(_ + trimmed))
 
   private def evalCriteriaValues(
     ctx: EvalContext,

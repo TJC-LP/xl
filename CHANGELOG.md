@@ -278,6 +278,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Array contexts keep the reference IF and CHOOSE select** (#711): in an array formula,
+  SUMPRODUCT, a conditional-format rule or a positionless `xl eval`, a whole column that IF, IFS,
+  CHOOSE or SWITCH selected was materialized row by row and folded as an array, so
+  `=AND(IF(TRUE,B:B,A:A))` was FALSE (its blanks counted as FALSE) where `=AND(B:B)` is TRUE, and
+  `SUMPRODUCT(IF(TRUE,B:B,A:A))` read a million cells. A reference position (aggregates, AND/OR,
+  ROWS) now folds the selected reference within the used range, as a plain cell already did;
+  COUNTBLANK still counts the blank rows past it.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

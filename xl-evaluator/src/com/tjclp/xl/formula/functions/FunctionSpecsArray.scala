@@ -169,10 +169,6 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case None => Right(ArrayResult.empty)
       case Some(r) => extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
 
-  private def boundedToUsed(range: CellRange, target: Sheet): Option[CellRange] =
-    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
-    else Some(range)
-
   /**
    * INDIRECT(ref_text, [a1])
    *
