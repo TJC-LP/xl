@@ -342,7 +342,10 @@ trait FunctionSpecsBase:
 
   /**
    * A whole column or row bounded to the sheet's used range (None when the two do not meet); any
-   * other range as is. Cells past the used range are blank either way.
+   * other range as is. Cells outside the used range are blank either way. The one used-area bound
+   * for a reference read on its own: AND and OR, the aggregates (`FunctionSpecsAggregate.usedArea`,
+   * where COUNTBLANK counts the dropped cells back) read it. Array operands instead use their
+   * context's shared bounds so computed and direct references remain aligned.
    */
   protected def boundedToUsed(
     range: CellRange,

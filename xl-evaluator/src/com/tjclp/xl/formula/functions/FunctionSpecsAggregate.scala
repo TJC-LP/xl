@@ -26,6 +26,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private type ColBounds = (Column, Column)
   private val aggregateCountUnit = BigDecimal(1)
 
+  /** No blanks trimmed ([[blanksTrimmed]]): shared, so the common fold allocates no zero. */
+  private val noBlanksTrimmed = BigDecimal(0)
+
   /**
    * GH-337/GH-344: the propagated failure for a carried error element consumed by an aggregate —
    * the element's Excel error VALUE (surfacing as `Right(CellValue.Error(code))` at the result
@@ -40,6 +43,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * We still enforce Excel's dimension rules on the original ranges, but we constrain full
    * column/row ranges to the union of used ranges across all involved sheets. This prevents
    * mismatched lengths after constraining while preserving performance.
+   *
+   * This is the bound for several ranges that must line up (SUMPRODUCT's arrays, a criteria range
+   * and its sum or average range), and for the criteria functions over one range: a blank criterion
+   * (`COUNTIF(B:B,"")`) counts the blanks this rectangle walks, the documented GH-192 divergence,
+   * so its shape is behaviour there. A reference folded on its own by an aggregate, AND or OR reads
+   * [[usedArea]] instead, whose dropped cells no fold observes.
    */
   private def computeBounds(
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
@@ -235,11 +244,21 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
 
   /**
+   * The cells an aggregate folds for one reference: a whole column or row within the sheet's used
+   * range ([[boundedToUsed]], the bound AND and OR read a reference by, so the two cannot drift),
+   * `CellRange.empty` when the two do not meet; any other range as is. Every cell it drops lies
+   * outside the used range, so it is blank: only COUNTBLANK observes them, and [[blanksTrimmed]]
+   * counts them back.
+   */
+  private def usedArea(range: CellRange, targetSheet: com.tjclp.xl.sheets.Sheet): CellRange =
+    boundedToUsed(range, targetSheet).getOrElse(CellRange.empty)
+
+  /**
    * GH-711: the cells of a whole-column or whole-row `range` that the used-area constraint dropped
-   * (`constrained` is `range` after [[constrainRange]]). They lie past every non-empty cell, so all
-   * are blank: COUNTBLANK counts them, as Excel does (`COUNTBLANK(B:B)` with B1:B3 filled is
-   * 1048573), and every other aggregate skips them. A whole sheet holds 2^34 cells, past `Int`, so
-   * the count rides beside the accumulator and joins the finalized result.
+   * (`constrained` is `range` after [[usedArea]]), above, below or beside the used range. All are
+   * blank: COUNTBLANK counts them, as Excel does (`COUNTBLANK(B:B)` is 1048573 with B1:B3 filled
+   * and with B5:B7 filled alike), and every other aggregate skips them. A whole sheet holds 2^34
+   * cells, past `Int`, so the count rides beside the accumulator and joins the finalized result.
    */
   private def blanksTrimmed(
     agg: Aggregator[?],
@@ -248,11 +267,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): BigDecimal =
     if agg.countsEmpty && (range.isFullColumn || range.isFullRow) then
       BigDecimal(range.cellCount - constrained.cellCount)
-    else BigDecimal(0)
+    else noBlanksTrimmed
 
   /**
-   * Fold one reference, a whole column or row within the sheet's used area, into the accumulator;
-   * the second component is [[blanksTrimmed]].
+   * Fold one reference, a whole column or row within the sheet's used range ([[usedArea]]), into
+   * the accumulator; the second component is [[blanksTrimmed]].
    */
   private def foldReference[A](
     agg: Aggregator[A],
@@ -261,7 +280,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, (A, BigDecimal)] =
-    val constrained = constrainRange(range, computeBounds(List((range, targetSheet))))
+    val constrained = usedArea(range, targetSheet)
     foldRawRange(agg, targetSheet, constrained, ctx, acc)
       .map((_, blanksTrimmed(agg, range, constrained)))
 
@@ -392,14 +411,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     // inputs (for example MEDIAN) do so in A; ordinary aggregates avoid an intermediate Vector.
     // The second component counts the blanks trimmed off whole columns and rows (GH-711)
     def foldAllArgs: Either[EvalError, (A, BigDecimal)] =
-      args.foldLeft[Either[EvalError, (A, BigDecimal)]](Right((agg.empty, BigDecimal(0)))) {
+      args.foldLeft[Either[EvalError, (A, BigDecimal)]](Right((agg.empty, noBlanksTrimmed))) {
         case (Left(err), _) => Left(err)
         case (Right((acc, trimmed)), arg) =>
           foldArg(acc, arg).map((next, more) => (next, trimmed + more))
       }
 
     def valueOnly(result: Either[EvalError, A]): Either[EvalError, (A, BigDecimal)] =
-      result.map((_, BigDecimal(0)))
+      result.map((_, noBlanksTrimmed))
 
     def foldArg(acc: A, arg: NumericArg): Either[EvalError, (A, BigDecimal)] =
       arg match
@@ -450,12 +469,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     )
                   )
                 else
-                  areas.foldLeft[Either[EvalError, (A, BigDecimal)]](Right((acc, BigDecimal(0)))) {
-                    case (Left(err), _) => Left(err)
-                    case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
-                      foldReference(agg, targetSheet, range, ctx, current)
-                        .map((next, more) => (next, trimmed + more))
-                  }
+                  areas
+                    .foldLeft[Either[EvalError, (A, BigDecimal)]](Right((acc, noBlanksTrimmed))) {
+                      case (Left(err), _) => Left(err)
+                      case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
+                        foldReference(agg, targetSheet, range, ctx, current)
+                          .map((next, more) => (next, trimmed + more))
+                    }
             )
         case Right(expr) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
@@ -497,10 +517,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // bounds may shrink when an earlier formula evaluates to Empty even though the formula
             // lies outside the referenced row/column, so resolve them before keying. Ordinary
             // bounded ranges skip usedRange entirely and use their declared geometry directly.
-            val effectiveRange =
-              if rawRange.isFullColumn || rawRange.isFullRow then
-                constrainRange(rawRange, computeBounds(List((rawRange, targetSheet))))
-              else rawRange
+            val effectiveRange = usedArea(rawRange, targetSheet)
 
             def compute: Either[EvalError, BigDecimal] =
               foldRawRange(agg, targetSheet, effectiveRange, ctx, agg.empty)

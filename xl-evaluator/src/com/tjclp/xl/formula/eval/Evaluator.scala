@@ -1604,10 +1604,10 @@ private class EvaluatorImpl(
         boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
       )
     )
-    // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX,
-    // XLOOKUP) for the reference itself, unread. GH-713: only once its lifted slots are planned,
-    // so an array in one (`SUM(XLOOKUP({1;2},…))`, `SUM(INDEX(r,{1;2}))`) still lifts — per
-    // element, as values — and a scalar one is evaluated once
+    // a reference position asks a function that returns a reference (`FunctionSpec.reference`)
+    // for the reference itself, unread — only once its lifted slots are planned, so an array in
+    // one (`SUM(INDEX(r,{1;2}))`) still lifts, per element, as values, and a scalar one is
+    // evaluated once
     def unlifted(args: call.spec.Args): Either[EvalError, Any] =
       if selectsReference then call.spec.reference(args, ctx).getOrElse(call.spec.eval(args, ctx))
       else call.spec.eval(args, ctx)

@@ -304,7 +304,7 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   precedent evaluated on demand now runs at its own cell position and in its own mode (array mode
   for an ArrayFormula record), whether a reference or an aggregate, criteria or SUMPRODUCT range
   walk reads it.
-- **`FunctionFlags` gains a field (`lift`)**: source-compatible, binary-incompatible for positional
+- **`FunctionFlags` gains three fields (`lift`, `requiresReferenceArguments`, `selector`)**: source-compatible, binary-incompatible for positional
   construction (the `volatile` precedent, #597).
 - **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.
@@ -374,8 +374,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   CHOOSE or SWITCH selected was materialized row by row and folded as an array, so
   `=AND(IF(TRUE,B:B,A:A))` was FALSE (its blanks counted as FALSE) where `=AND(B:B)` is TRUE, and
   `SUMPRODUCT(IF(TRUE,B:B,A:A))` read a million cells. A reference position (aggregates, AND/OR,
-  ROWS) now folds the selected reference within the used range, as a plain cell already did;
-  COUNTBLANK still counts the blank rows past it.
+  ROWS) now folds the selected reference within the used range, as a plain cell already did.
+- **COUNTBLANK over a whole column or row counts every blank cell, as Excel does** (#711): it
+  counted only the blanks inside the sheet's used range, in plain cells too, so a recalculated
+  `=COUNTBLANK(B:B)` over a sheet holding only B1:B3 was 0 where Excel shows 1048573. It now
+  counts the blank cells above, below and beside the used range, whether the column is written,
+  selected by IF or CHOOSE, or computed by INDEX or OFFSET. `COUNTIF(B:B,"")` still counts only
+  the used range.
 - **ROW and COLUMN over a multi-cell reference are arrays** (#712): `=SUMPRODUCT(ROW(A1:A10))` is
   55, `=SUMPRODUCT(COLUMN(A1:E1))` 15 and `=SUMPRODUCT(--(ROW(A1:A10)>5))` 5, as in Excel, where
   they read the first number only. A plain cell still keeps the top-left (`=SUM(ROW(A1:A10))` is 1,

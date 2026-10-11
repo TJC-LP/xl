@@ -54,6 +54,9 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
             extractRangeAsMatrixEval(used, target, ctx)
               .flatMap(m => rangeFold(label, ArrayResult(m), combine))
           )
+        // a bare range read as its values: only a context built outside the evaluator, without
+        // a reference operand (`EvalContext.Operands.array`), evaluates it so; the reference rule
+        // still applies
         case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
         case arr: ArrayResult =>
           ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
