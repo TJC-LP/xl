@@ -362,10 +362,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         try streamCellDetailsSync(zipFile, sheetName, targetRef, preloaded)
         finally zipFile.close()
       }
-      .flatMap {
-        case Right(details) => Async[F].pure(details)
-        case Left(err) => Async[F].raiseError(new Exception(err))
-      }
+      .flatMap(Sync[F].fromEither)
 
   // Sync helper for streamCellDetails - pure function using open ZipFile
   private def streamCellDetailsSync(
@@ -373,27 +370,29 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetName: String,
     targetRef: ARef,
     preloaded: Option[(Option[SharedStrings], WorkbookStyles)]
-  ): Either[String, StreamingCellDetails] =
+  ): Either[Throwable, StreamingCellDetails] =
     for
+      // Validate the relationship part and its metadata before any worksheet lookup reads them.
+      cellMetadata <- loadCellMetadataIndexSync(zipFile)
       // 1. Resolve worksheet path from workbook metadata
-      worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName)
+      worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
 
       // 2. Load styles.xml (0.2-1.5MB), unless the caller holds them
-      styles <- preloaded.fold(loadStylesSync(zipFile))(p => Right(p._2))
+      styles <- preloaded.fold(loadStylesSync(zipFile))(p => Right(p._2)).leftMap(new Exception(_))
 
       // 3. Load sharedStrings.xml through the SAX reader, unless the caller holds it. The
       // library's own entry point applies no limit, like the row streams; a caller with a limit to
       // enforce loads the table through `loadSharedStrings` and passes it in
       sst <- preloaded.fold(
-        loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive).left
-          .map(_.getMessage)
+        loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive)
       )(p => Right(p._1))
 
       // 4. Load comments for this sheet (10-100KB)
-      comments <- loadCommentsSync(zipFile, worksheetPath)
+      comments <- loadCommentsSync(zipFile, worksheetPath).leftMap(new Exception(_))
 
       // 5. Stream worksheet with early-abort to find target cell
-      cellResult <- extractCellSync(zipFile, worksheetPath, targetRef, sst)
+      cellResult <- extractCellSync(zipFile, worksheetPath, targetRef, sst, cellMetadata)
+        .leftMap(new Exception(_))
 
       // 6. Resolve style from styleId
       resolvedStyle = cellResult.flatMap(_.styleId).flatMap(styles.styleAt)
@@ -499,7 +498,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     zipFile: ZipFile,
     worksheetPath: String,
     targetRef: ARef,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    cellMetadata: CellMetadataIndex
   ): Either[String, Option[SaxSingleCellReader.CellResult]] =
     val sheetEntry = Option(zipFile.getEntry(worksheetPath))
     sheetEntry match
@@ -509,29 +509,36 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         try
           Right(
             SaxSingleCellReader
-              .extractCell(stream, targetRef, sst, loadCellMetadataIndexSync(zipFile))
+              .extractCell(stream, targetRef, sst, cellMetadata)
           )
         finally stream.close()
 
   /**
-   * GH-714: the package's dynamic-array `cm` indices, from the metadata part the workbook's
-   * `sheetMetadata` relationship names. A small part read by random access, so the row stream stays
-   * O(1) in sheet size; a missing or malformed part (or rels) reads as no dynamic arrays.
+   * GH-714: the package's dynamic-array `cm` indices, following its sheetMetadata relationship.
+   * Both parts use the same inflation-size and compression-ratio guard as the SST. Validate them
+   * before worksheet resolution, which also reads workbook.xml.rels. Missing or malformed XML keeps
+   * the existing empty-index fallback; exceeding a ZIP limit is a typed security failure.
    */
-  private def loadCellMetadataIndexSync(zipFile: ZipFile): CellMetadataIndex =
-    def text(path: String): Option[String] =
-      Option(zipFile.getEntry(path)).map { entry =>
-        val in = zipFile.getInputStream(entry)
-        try new String(in.readAllBytes(), "UTF-8")
-        finally in.close()
-      }
-    text("xl/_rels/workbook.xml.rels")
-      .flatMap(xml => XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption)
-      .flatMap(elem => Relationships.fromXml(elem).toOption)
-      .flatMap(SheetMetadataPart.locate)
-      .flatMap(text)
-      .map(SheetMetadataPart.parse)
-      .getOrElse(CellMetadataIndex.empty)
+  private[io] def loadCellMetadataIndexSync(
+    zipFile: ZipFile,
+    config: XlsxReader.ReaderConfig = XlsxReader.ReaderConfig.default
+  ): Either[Throwable, CellMetadataIndex] =
+    def text(path: String): Either[Throwable, Option[String]] =
+      Option(zipFile.getEntry(path)) match
+        case None => Right(None)
+        case Some(entry) =>
+          val in = ZipEntryGuard.open(zipFile, entry, config)
+          try Right(Some(new String(in.readAllBytes(), StandardCharsets.UTF_8)))
+          catch case limit: ZipEntryGuard.LimitExceeded => Left(new XLException(limit.error))
+          finally in.close()
+    for
+      rels <- text("xl/_rels/workbook.xml.rels")
+      path = rels
+        .flatMap(xml => XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption)
+        .flatMap(elem => Relationships.fromXml(elem).toOption)
+        .flatMap(SheetMetadataPart.locate)
+      metadata <- path.fold[Either[Throwable, Option[String]]](Right(None))(text)
+    yield metadata.map(SheetMetadataPart.parse).getOrElse(CellMetadataIndex.empty)
 
   // Helper: Parse formula dependencies (referenced cells)
   private def parseFormulaDependencies(formula: String): Vector[String] =
@@ -554,15 +561,25 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetIndex: Int,
     range: Option[CellRange]
   ): Stream[F, RowData] =
-    Stream
-      .eval(
-        Sync[F].fromEither(
-          resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
+    Stream.eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile)).rethrow).flatMap { metadata =>
+      Stream
+        .eval(
+          Sync[F]
+            .blocking(
+              resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
+            )
+            .rethrow
         )
-      )
-      .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range, loadSharedStringsForStream(zipFile))
-      }
+        .flatMap { worksheetPath =>
+          readWorksheetStream(
+            zipFile,
+            worksheetPath,
+            range,
+            loadSharedStringsForStream(zipFile),
+            metadata
+          )
+        }
+    }
 
   private def readStreamByName(
     zipFile: ZipFile,
@@ -578,21 +595,26 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     range: Option[CellRange],
     sst: F[Option[SharedStrings]]
   ): Stream[F, RowData] =
-    Stream
-      .eval(
-        Sync[F].fromEither(
-          resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
+    Stream.eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile)).rethrow).flatMap { metadata =>
+      Stream
+        .eval(
+          Sync[F]
+            .blocking(
+              resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
+            )
+            .rethrow
         )
-      )
-      .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range, sst)
-      }
+        .flatMap { worksheetPath =>
+          readWorksheetStream(zipFile, worksheetPath, range, sst, metadata)
+        }
+    }
 
   private def readWorksheetStream(
     zipFile: ZipFile,
     worksheetPath: String,
     range: Option[CellRange],
-    sst: F[Option[SharedStrings]]
+    sst: F[Option[SharedStrings]],
+    cellMetadata: CellMetadataIndex
   ): Stream[F, RowData] =
     Stream
       .eval(sst)
@@ -613,7 +635,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                   sst,
                   rowBounds,
                   colBounds,
-                  loadCellMetadataIndexSync(zipFile)
+                  cellMetadata
                 )
               }
           case None =>
