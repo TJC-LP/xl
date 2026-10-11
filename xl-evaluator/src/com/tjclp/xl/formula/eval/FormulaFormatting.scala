@@ -115,6 +115,8 @@ object FormulaFormatting:
         // GH-394: the target range lives behind workbook metadata this walk cannot see —
         // no format to inherit (the GH-384 NameRef precedent)
         case TExpr.RangeLocation.Name(_, _) => Vector.empty
+        // GH-710: a LET name's reference is known only at evaluation
+        case TExpr.RangeLocation.Binding(_) => Vector.empty
         case TExpr.RangeLocation.Error(_, _) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =

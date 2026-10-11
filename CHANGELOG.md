@@ -278,6 +278,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Dynamic named ranges and LET references work in range arguments** (#710): a name computing a
+  reference (`dyn = OFFSET(Sheet1!$A$1,0,0,10,1)`, or INDEX/INDIRECT/IF/CHOOSE over references) was
+  `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
+  `VLOOKUP(7,dyn,1,FALSE)` — and so was a LET name bound to one (`LET(r,dyn,COUNTIF(r,">2"))`). Every
+  range slot now resolves them through one evaluator-aware resolver, matching LibreOffice.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
