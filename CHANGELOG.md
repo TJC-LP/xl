@@ -278,6 +278,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Text in a typed scalar argument is `#VALUE!`, not an evaluation failure** (#709): `=ABS(C5)`,
+  `=ROUND(C5,0)`, `=IF(C5,1,0)`, `=NOT(C5)` over a text cell left the cell uncached with a type
+  mismatch (`RECALC_ERRORS`, `--strict` exit 1); they now cache Excel's `#VALUE!`, which IFERROR
+  and ISERROR see. Numeric text still reads as its number in a numeric or date slot (`'45000` in
+  `YEAR` is 2023); range folds that take dates (NETWORKDAYS holidays, XIRR/XNPV dates) still refuse
+  text, as Excel does.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
