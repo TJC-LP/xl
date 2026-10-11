@@ -194,9 +194,53 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
       4 -> genQualifiedRef,
       2 -> genQualifiedRange,
       2 -> genQualifiedName(scope),
-      1 -> genSpill(scope)
+      1 -> genSpill(scope),
+      1 -> genRangeOperator(scope)
     )
     Gen.frequency((leaves ++ bound)*)
+
+  /** A defined name that is not spelled like a column or a row (those never join a `:`). */
+  private def genOperandName(scope: Scope): Gen[String] =
+    genUnboundName(scope).map(name =>
+      if (name.forall(_.isLetter) || name.forall(_.isDigit)) &&
+        com.tjclp.xl.CellRange.parse(s"$name:$name").isRight
+      then name + "_n"
+      else name
+    )
+
+  /**
+   * GH-713: one operand of the range operator — a cell, a range, a name, an error literal, a call
+   * that returns a reference, or a parenthesized union.
+   */
+  private def genRangeOperand(scope: Scope): Gen[String] =
+    Gen.frequency(
+      3 -> genRefText,
+      2 -> genBoundedRangeText,
+      1 -> genFullColumnText,
+      2 -> genOperandName(scope),
+      1 -> Gen.const("#REF!"),
+      2 -> genRangeText.map(r => s"INDEX($r, 1)"),
+      1 -> Gen.const("XLOOKUP(1, A1:A3, B1:C3)"),
+      1 -> genRefText.map(r => s"OFFSET($r, 1, 1)"),
+      1 -> genRefText.map(r => s"IF(A1, $r, B2)"),
+      1 -> genRefText.map(r => s"($r,B2)")
+    )
+
+  /**
+   * GH-713: `a:b[:c…]` — the first operand may carry a sheet qualifier (`Sheet1!A1:INDEX(…)`); a
+   * later one stays local, as a qualified end after a local token is a 3-D shape xl refuses.
+   */
+  private def genRangeOperator(scope: Scope): Gen[String] =
+    for
+      qualifier <- Gen.frequency(3 -> Gen.const(""), 1 -> genSheetQualifier)
+      first <- Gen.frequency(
+        3 -> genRangeOperand(scope),
+        1 -> genRefText.map(qualifier + _),
+        1 -> genOperandName(scope).map(qualifier + _)
+      )
+      more <- Gen.choose(1, 3)
+      rest <- Gen.listOfN(more, genRangeOperand(scope))
+    yield (first :: rest).mkString(":")
 
   /** The operand shapes the `@` arm accepts: one primary. */
   private def genPrimary(depth: Int, scope: Scope): Gen[String] =
@@ -785,9 +829,18 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
       1 -> genArrayConstant.map(constant => s"MATCH(1, $constant, 0)")
     )
 
-  /** GH-669: grammar the parser used to refuse and now accepts. */
+  /** GH-669 / GH-713: grammar the parser used to refuse and now accepts. */
   private val genFormerlyRejected: Gen[String] =
-    Gen.frequency(2 -> genArrayConstant, 1 -> genUnion, 1 -> genIntersection)
+    Gen.frequency(
+      2 -> genArrayConstant,
+      1 -> genUnion,
+      1 -> genIntersection,
+      2 -> genRangeOperator(NoScope).flatMap(op =>
+        Gen
+          .oneOf[Shape](x => x, x => s"SUM($x)", x => s"ROWS($x)", x => s"-$x", x => s"@$x")
+          .map(_(op))
+      )
+    )
 
   /** Total rejection: a Left with a position inside the text, never a throw. */
   private def assertRejected(body: String): ParseError =
@@ -837,7 +890,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     }
   }
 
-  property("GH-669: array constants, unions and intersections round-trip") {
+  property("GH-669/GH-713: array constants, unions, intersections and `:` ranges round-trip") {
     forAllNoShrink(genFormerlyRejected) { body =>
       assertRoundTrips(s"=$body")
       true

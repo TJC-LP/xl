@@ -406,8 +406,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case Left(location) =>
           // GH-630: an error in the RANGE slot (`COUNT(#REF!)` parses `#REF!` as a range argument,
           // like `SUM(#REF!)`) is triaged exactly like an error-valued direct argument
-          Evaluator
-            .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+          ctx
+            .resolveRange(location)
             .fold(
               err => valueOnly(triageErrorArgument(agg, acc, err)),
               { case (targetSheet, range) => foldReference(agg, targetSheet, range, ctx, acc) }

@@ -523,7 +523,7 @@ object FormulaParser:
    * `A1 A1+A1 A1+…` costs one level per space in each term, never summed across terms.
    */
   private def parseIntersection(state: ParserState): ParseResult[TExpr[?]] =
-    parsePrimary(state).flatMap { case (first, s1) =>
+    parseRangeOperator(state).flatMap { case (first, s1) =>
       def triggers(s: ParserState, s2: ParserState): Boolean =
         s2.pos > s.pos && s.input.substring(s.pos, s2.pos).forall(_ == ' ') &&
           s2.currentChar.exists { c =>
@@ -538,8 +538,40 @@ object FormulaParser:
           descend(s2) match
             case Left(err) => Left(err)
             case Right(sd) =>
-              parsePrimary(sd).flatMap { case (right, s3) =>
+              parseRangeOperator(sd).flatMap { case (right, s3) =>
                 ReferenceOperators.mkIntersection(acc, right, s2.pos).map((_, s3))
+              } match
+                case Right((node, s3)) => loop(node, s3.copy(depth = sd.depth))
+                case Left(err) => Left(err)
+      loop(first, s1)
+    }
+
+  /**
+   * GH-713: the range operator `:` between reference-valued primaries — `INDEX(r,1):INDEX(r,2)`,
+   * `B1:B3:A2`, `(A1,C3):A1` — Excel's tightest-binding operator, folding left. The `:` must touch
+   * both operands (no whitespace on either side) and the operand so far must be a reference;
+   * otherwise the state before it is returned, so `1:A1` and `A1 : B2` keep their errors. A token
+   * on the left of a `:` is read by the primary itself (the lexical range `A1:B2`, or
+   * [[rangeFallback]] for `A1:INDEX(…)`); this loop takes every `:` after a primary that is not a
+   * bare token: a call, a parenthesized reference, an error literal, a lexical range.
+   *
+   * Each `:` keeps the nesting level it takes, as the intersection does: the chain builds a left
+   * spine of operator calls that the walkers recurse along.
+   */
+  private def parseRangeOperator(state: ParserState): ParseResult[TExpr[?]] =
+    parsePrimary(state).flatMap { case (first, s1) =>
+      @tailrec
+      def loop(acc: TExpr[?], s: ParserState): ParseResult[TExpr[?]] =
+        val afterColon = s.advance()
+        if !(s.currentChar.contains(':') && afterColon.currentChar.exists(!_.isWhitespace) &&
+            ReferenceOperators.isReferenceShape(acc))
+        then Right((acc, s))
+        else
+          descend(s) match
+            case Left(err) => Left(err)
+            case Right(sd) =>
+              parsePrimary(sd.advance()).flatMap { case (right, s3) =>
+                ReferenceOperators.mkRange(acc, right, s.pos).map((_, s3))
               } match
                 case Right((node, s3)) => loop(node, s3.copy(depth = sd.depth))
                 case Left(err) => Left(err)
@@ -710,8 +742,9 @@ object FormulaParser:
         // The operand is one primary (a reference, name, call, or parenthesized expression), so
         // `@A1:A10%` is (@A1:A10)% and `@A1^2` is (@A1)^2, as in Excel.
         descend(s).flatMap { sd =>
-          // GH-655: the operand may carry the spill suffix — `@A1#` is `@(A1#)`
-          parsePrimary(skipWhitespace(sd.advance()))
+          // GH-655: the operand may carry the spill suffix — `@A1#` is `@(A1#)`; GH-713: `:` binds
+          // tighter than `@`, so `@A1:INDEX(…)` is `@(A1:INDEX(…))`
+          parseRangeOperator(skipWhitespace(sd.advance()))
             .flatMap { case (primary, s2) => withSpillSuffix(primary, s2) }
             .flatMap { case (operand, s2) =>
               FunctionSpecs.single.argSpec
@@ -873,6 +906,19 @@ object FormulaParser:
           case _ =>
             // Not a boolean - check for function call (identifier followed by '(')
             val s3 = skipWhitespace(s2)
+            val rawIdent = state.input.substring(startPos, s2.pos)
+            // GH-193: a bare identifier matching an in-scope LET binding resolves to the
+            // binding (case-insensitive, innermost first) — even when the name shadows a
+            // function name. Function-call syntax still wins for `name(...)`.
+            def bare: ParseResult[TExpr[?]] =
+              state.scope.find(_.name.equalsIgnoreCase(rawIdent)) match
+                case Some(entry) =>
+                  entry.substitution match
+                    case Some(rangeExpr) => Right((rangeExpr, s2))
+                    case None => Right((TExpr.BindingRef(entry.name), s2))
+                case None =>
+                  // Cell reference
+                  parseCellReference(rawIdent, s2, startPos)
             s3.currentChar match
               // GH-669: `A1 (B1:C2)` — a cell reference, a space, then a parenthesized reference —
               // is an intersection, not a call to a function named A1: an ARef-shaped identifier
@@ -885,21 +931,9 @@ object FormulaParser:
                 // Function call
                 parseFunction(ident, s3, startPos)
               case Some(':') =>
-                // Range (e.g., A1:B10)
-                parseRange(state.input.substring(startPos, s2.pos), s2, startPos)
-              case _ =>
-                // GH-193: a bare identifier matching an in-scope LET binding resolves to the
-                // binding (case-insensitive, innermost first) — even when the name shadows a
-                // function name. Function-call syntax above still wins for `name(...)`.
-                val rawIdent = state.input.substring(startPos, s2.pos)
-                state.scope.find(_.name.equalsIgnoreCase(rawIdent)) match
-                  case Some(entry) =>
-                    entry.substitution match
-                      case Some(rangeExpr) => Right((rangeExpr, s2))
-                      case None => Right((TExpr.BindingRef(entry.name), s2))
-                  case None =>
-                    // Cell reference
-                    parseCellReference(rawIdent, s2, startPos)
+                // Range (e.g., A1:B10), or GH-713 the range operator after this token alone
+                parseRange(rawIdent, s2, startPos, bare)
+              case _ => bare
 
   /**
    * GH-669: an identifier that is a cell reference and cannot be a function name (see above) — not
@@ -1277,6 +1311,31 @@ object FormulaParser:
                 )
               )
 
+        // Single cell reference or name: Sheet1!A1, Model!case
+        def single(refPart: String, s2: ParserState): ParseResult[TExpr[?]] =
+          val (cleanRef, anchor) = Anchor.parse(refPart)
+          ARef.parse(cleanRef) match
+            case Right(aref) =>
+              Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
+            case Left(err) =>
+              // GH-394: a name-shaped tail is a sheet-qualified defined name (=Model!case —
+              // legal Excel syntax for sheet-scoped names), resolved against the workbook at
+              // evaluation. Total disambiguation like parseCellReference: ARef success means
+              // cell ref, name-shaped failure means SheetNameRef, anything else keeps the
+              // InvalidCellRef.
+              if isValidLetName(refPart) then Right((TExpr.SheetNameRef(sheetName, refPart), s2))
+              else Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+
+        // Range reference: Sheet1!A1:B10
+        def wholeRange(refPart: String, s2: ParserState): ParseResult[TExpr[?]] =
+          CellRange.parse(refPart) match
+            case Right(range) =>
+              // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
+              // over every row/column canonicalises to it, as Excel does at entry)
+              Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
+            case Left(err) =>
+              Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+
         repeatedEnd match
           case Left(err) => Left(err)
           case Right((refPart, s2)) =>
@@ -1286,30 +1345,30 @@ object FormulaParser:
               Left(
                 ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !")
               )
-            else if refPart.contains(':') then
-              // Range reference: Sheet1!A1:B10
-              CellRange.parse(refPart) match
-                case Right(range) =>
-                  // GH-612: keep the whole-column / whole-row form the text spelled (a corner range
-                  // over every row/column canonicalises to it, as Excel does at entry)
-                  Right((TExpr.SheetRange(sheetName, range, RangeForm.of(refPart, range)), s2))
-                case Left(err) =>
-                  Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
-            else
-              // Single cell reference: Sheet1!A1
-              val (cleanRef, anchor) = Anchor.parse(refPart)
-              ARef.parse(cleanRef) match
-                case Right(aref) =>
-                  Right((TExpr.SheetPolyRef(sheetName, aref.asInstanceOf[ARef], anchor), s2))
-                case Left(err) =>
-                  // GH-394: a name-shaped tail is a sheet-qualified defined name (=Model!case —
-                  // legal Excel syntax for sheet-scoped names), resolved against the workbook at
-                  // evaluation. Total disambiguation like parseCellReference: ARef success means
-                  // cell ref, name-shaped failure means SheetNameRef, anything else keeps the
-                  // InvalidCellRef.
-                  if isValidLetName(refPart) then
-                    Right((TExpr.SheetNameRef(sheetName, refPart), s2))
-                  else Left(ParseError.InvalidCellRef(s"$sheetStr!$refPart", startPos, err))
+            else if refPart.contains(':') && s2.pos == s1.pos then
+              // GH-713: read exactly as the unqualified `A1:B2` — the first two tokens are a
+              // lexical range unless a call follows (`Sheet1!A1:INDEX(…)`); otherwise the first
+              // token is the left operand of the range operator, and any further `:` belongs to
+              // the operator's loop (`Sheet1!A1:B2:INDEX(…)`)
+              val colon = refPart.indexOf(':')
+              val first = refPart.substring(0, colon)
+              val second = refPart.substring(colon + 1).takeWhile(_ != ':')
+              val afterSecond = state.advance(colon + 1 + second.length)
+              val pair = s"$first:$second"
+              CellRange.parse(pair) match
+                case Right(range) if !afterSecond.currentChar.exists(c => c == '(' || c == '!') =>
+                  Right(
+                    (TExpr.SheetRange(sheetName, range, RangeForm.of(pair, range)), afterSecond)
+                  )
+                case _ =>
+                  rangeFallback(
+                    state.advance(colon),
+                    wholeRange(refPart, s2),
+                    single(first, state.advance(colon)),
+                    leftQualified = true
+                  )
+            else if refPart.contains(':') then wholeRange(refPart, s2)
+            else single(refPart, s2)
 
   /**
    * GH-669: a quoted sheet qualifier at the cursor — `'My Sheet'!`, `''` escaping a quote — as the
@@ -1470,17 +1529,20 @@ object FormulaParser:
     // Check if followed by ':' for range
     s2.currentChar match
       case Some(':') =>
-        parseRange(refStr, s2, startPos)
+        parseRange(refStr, s2, startPos, parseCellReference(refStr, s2, startPos))
       case _ =>
         parseCellReference(refStr, s2, startPos)
 
   /**
-   * Parse range: A1:B10
+   * Parse range: A1:B10. GH-713: when the text after the `:` is not a lexical range end — or is one
+   * followed by `(`, a call such as `A1:LOG10(…)` — the start token alone (`leftAlone`, read at the
+   * `:`) may be the left operand of the range operator ([[rangeFallback]]).
    */
   private def parseRange(
     startRef: String,
     state: ParserState,
-    startPos: Int
+    startPos: Int,
+    leftAlone: => ParseResult[TExpr[?]]
   ): ParseResult[TExpr[?]] =
     // Skip ':'
     val s2 = state.advance()
@@ -1497,7 +1559,7 @@ object FormulaParser:
     val endRef = state.input.substring(endPos, s3.pos)
     val rangeStr = s"$startRef:$endRef"
 
-    CellRange.parse(rangeStr) match
+    val lexical: ParseResult[TExpr[?]] = CellRange.parse(rangeStr) match
       case Right(range) =>
         // GH-612: the form is the syntax consumed — A:C is whole columns, A1:C10 corners — so a
         // whole-column reference prints back as written and drags only along columns; a corner
@@ -1505,6 +1567,99 @@ object FormulaParser:
         Right((TExpr.RangeRef(range, RangeForm.of(rangeStr, range)), s3))
       case Left(err) =>
         Left(ParseError.InvalidCellRef(rangeStr, startPos, err))
+    // a qualified end (`A1:Sheet2!B2`, `Sheet1:Sheet3!A1`) keeps today's answer: 3-D references
+    // are not the range operator
+    if endRef.contains('!') || (lexical.isRight && !s3.currentChar.contains('(')) then lexical
+    else rangeFallback(state, lexical, leftAlone, leftQualified = false)
+
+  /**
+   * GH-713: the range operator with a token on its left that the lexical range could not take —
+   * `A1:INDEX(A:A,3)`, `Start:Finish`, `Sheet1!A1:XLOOKUP(…)`. `colon` is the state at the `:`,
+   * `lexical` what the lexical reading gave, `leftAlone` the start token alone (a cell, a LET name
+   * or a defined name, as it would read before any other character). The right operand is one
+   * primary, read straight after the `:`.
+   *
+   * Accepted only when both sides are references, neither is a bare name spelled like a column or
+   * row (`A1:B` stays a typo, `A:IF(…)` a column range), and, for an unqualified left token, the
+   * right is not a sheet-qualified location (`A1:'Q 1'!B2` stays refused like `A1:Sheet2!B2`).
+   * Otherwise the lexical answer — its diagnostic unchanged — stands. Only the nesting guards and
+   * an error inside a right-hand call's arguments ([[insideCall]]) escape the probe, so a deep
+   * chain is `NestingTooDeep`, never a stack overflow.
+   */
+  private def rangeFallback(
+    colon: ParserState,
+    lexical: ParseResult[TExpr[?]],
+    leftAlone: => ParseResult[TExpr[?]],
+    leftQualified: Boolean
+  ): ParseResult[TExpr[?]] =
+    val afterColon = colon.advance()
+    val opens = colon.currentChar.contains(':') && afterColon.currentChar.exists(!_.isWhitespace)
+    val probe: Either[ParseError, Option[(TExpr[?], ParserState)]] =
+      if !opens then Right(None)
+      else
+        leftAlone match
+          case Right((left, _))
+              if ReferenceOperators.isReferenceShape(left) && !spellsAxisName(left) =>
+            descend(colon).flatMap { sd =>
+              parsePrimary(sd.advance()).map { case (right, after) =>
+                Option.when(
+                  ReferenceOperators.isReferenceShape(right) && !spellsAxisName(right) &&
+                    (leftQualified || !isQualifiedLocation(right))
+                )((right, after))
+              } match
+                case Right(Some((right, after))) =>
+                  ReferenceOperators
+                    .mkRange(left, right, colon.pos)
+                    .map(node => Some((node, after.copy(depth = colon.depth))))
+                case Right(None) => Right(None)
+                case Left(err @ (_: ParseError.NestingTooDeep | _: ParseError.TooManyOperators)) =>
+                  Left(err)
+                case Left(err) if insideCall(afterColon, err) => Left(err)
+                case Left(_) => Right(None)
+            }
+          case _ => Right(None)
+    probe match
+      case Right(Some(parsed)) => Right(parsed)
+      case Right(None) => lexical
+      case Left(err) => Left(err)
+
+  /**
+   * Whether `err` lies inside the argument list of a call that opens the right operand
+   * (`A1:INDEX(A:A,FOO(1))`): the right side is a call, so its own diagnostic (an unknown `FOO`)
+   * beats the lexical reading's `Invalid cell reference 'A1:INDEX'`.
+   */
+  private def insideCall(right: ParserState, err: ParseError): Boolean =
+    val name = right.remaining.takeWhile(c => c.isLetterOrDigit || c == '_' || c == '.')
+    val open = right.pos + name.length
+    val errPos = err match
+      case ParseError.UnexpectedChar(_, pos, _) => Some(pos)
+      case ParseError.UnexpectedEOF(pos, _) => Some(pos)
+      case ParseError.InvalidCellRef(_, pos, _) => Some(pos)
+      case ParseError.InvalidNumber(_, pos, _) => Some(pos)
+      case ParseError.UnbalancedDelimiter(pos, _, _) => Some(pos)
+      case ParseError.UnknownFunction(_, pos, _) => Some(pos)
+      case ParseError.InvalidArguments(_, pos, _, _) => Some(pos)
+      case ParseError.InvalidOperator(_, pos, _) => Some(pos)
+      case ParseError.GenericError(_, pos) => pos
+      case _ => None
+    name.headOption.exists(_.isLetter) && right.input.lift(open).contains('(') &&
+    errPos.exists(_ > open)
+
+  /** A bare name spelled like a column (`B`, `Jan`) or a row: never an operand of `:`. */
+  private def spellsAxisName(expr: TExpr[?]): Boolean =
+    def axis(name: String): Boolean =
+      (name.forall(_.isLetter) || name.forall(_.isDigit)) && CellRange.parse(s"$name:$name").isRight
+    expr match
+      case TExpr.NameRef(name) => axis(name)
+      case TExpr.SheetNameRef(_, name) => axis(name)
+      case _ => false
+
+  /** A sheet- or workbook-qualified location (`Sheet2!B2`, `'Q 1'!B2`, `[1]Book!A1`). */
+  private def isQualifiedLocation(expr: TExpr[?]): Boolean = expr match
+    case _: TExpr.SheetPolyRef | _: TExpr.SheetRef[?] | _: TExpr.SheetRange |
+        _: TExpr.SheetNameRef | _: TExpr.ExternalRef | _: TExpr.ExternalRange =>
+      true
+    case _ => false
 
   /**
    * The Excel error codes, longest first, so a prefix match never stops short (`#N/A` vs `#NAME?`).

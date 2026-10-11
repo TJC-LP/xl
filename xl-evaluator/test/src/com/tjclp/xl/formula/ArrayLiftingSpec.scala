@@ -288,7 +288,11 @@ class ArrayLiftingSpec extends FunSuite:
     )
     assertEquals(arrayEval("=MATCH(B2:B4,B2:B4,0)"), Right(column(num(1), num(2), num(3))))
     // XLOOKUP lifts lookup_value only: a found value never replicates its if_not_found array
-    assertEquals(arrayEval("=XLOOKUP(5,B2:B4,C2:C4,D2:D4)"), Right(num(-3)))
+    // (GH-713: the found cell is a reference, read whole in array mode — a 1×1 array, like INDEX)
+    assertEquals(
+      arrayEval("=XLOOKUP(5,B2:B4,C2:C4,D2:D4)"),
+      Right(ArrayResult.single(num(-3)))
+    )
   }
 
   test("criteria functions lift their criteria: the distinct-count idiom") {

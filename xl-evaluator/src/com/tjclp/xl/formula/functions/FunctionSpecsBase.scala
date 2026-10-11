@@ -12,7 +12,7 @@ import com.tjclp.xl.formula.eval.{
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 
@@ -280,6 +280,38 @@ trait FunctionSpecsBase:
       Evaluator
         .implicitIntersection(range, ctx.currentCell)
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
+
+  /**
+   * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
+   * reference's own shape — rows × columns equal ROWS × COLUMNS, blanks included, so array
+   * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
+   * the sheet's last row or column (`A:A`, `B5:B1048576`, `2:2`): it stops where the used range
+   * does (one cell when they do not meet), so `INDEX(A:A,0)` or `XLOOKUP(k,ids,B:B)` costs the
+   * data, not a million blanks. The start is never moved.
+   */
+  protected def boundedReferenceValues(
+    ref: RangeOperand,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    val RangeOperand(targetSheet, reference) = ref
+    val used = targetSheet.usedRange
+    def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
+      if hi < sheetLast then hi
+      else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
+    val rowEnd = end(
+      reference.rowStart.index0,
+      reference.rowEnd.index0,
+      Row.MaxIndex0,
+      used.map(_.rowEnd.index0)
+    )
+    val colEnd = end(
+      reference.colStart.index0,
+      reference.colEnd.index0,
+      Column.MaxIndex0,
+      used.map(_.colEnd.index0)
+    )
+    val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
+    extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
