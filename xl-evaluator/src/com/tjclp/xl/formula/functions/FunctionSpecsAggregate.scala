@@ -1334,6 +1334,16 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               if rangesWithSheets.nonEmpty then computeBounds(rangesWithSheets)
               else (None, None)
 
+            // A computed reference takes the shared extent only for axes represented in the
+            // static inputs. No discovered whole axis is different from an empty used extent:
+            // INDEX(namedColumn,0) still materializes by its own reference rules.
+            val boundsColumns = rangesWithSheets.exists(_._1.isFullColumn)
+            val boundsRows = rangesWithSheets.exists(_._1.isFullRow)
+            def constrainComputedRange(range: CellRange): CellRange =
+              if (range.isFullColumn && boundsColumns) || (range.isFullRow && boundsRows) then
+                constrainRange(range, bounds)
+              else range
+
             // Helper to constrain ranges in expressions
             def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
               TExpr.transformRanges(
@@ -1355,7 +1365,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support
                   val boundedExpr = constrainExprRanges(expr)
-                  ctx.evalArrayExpr(boundedExpr).flatMap {
+                  ctx.evalBoundedArrayExpr(boundedExpr, constrainComputedRange).flatMap {
                     case ar: ArrayResult =>
                       // Convert ArrayResult to numeric matrix with boolean coercion.
                       // GH-337: a carried error element fails loudly naming the code — the

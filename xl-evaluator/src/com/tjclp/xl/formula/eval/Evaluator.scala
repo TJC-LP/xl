@@ -1068,7 +1068,8 @@ private class EvaluatorImpl(
   rng: Rng = Rng.system,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -1092,7 +1093,8 @@ private class EvaluatorImpl(
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1508,7 +1510,10 @@ private class EvaluatorImpl(
     // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
     // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
     // (e.g. SUM over a range-valued binding) still resolve in-scope names.
-    def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    def evalArrayArg(
+      expr: TExpr[Any],
+      bounds: Option[CellRange => CellRange] = arrayRangeBounds
+    ): Either[EvalError, Any] =
       new EvaluatorWithDepth(
         currentDepth,
         allowArrayResults = true,
@@ -1517,7 +1522,8 @@ private class EvaluatorImpl(
         Some(callMemo),
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -1526,7 +1532,7 @@ private class EvaluatorImpl(
       clock,
       workbook,
       [A] => (expr: TExpr[A]) => evalArg(expr),
-      evalArrayArg,
+      expr => evalArrayArg(expr),
       currentCell,
       currentDepth,
       bindings,
@@ -1537,7 +1543,9 @@ private class EvaluatorImpl(
       operands = EvalContext.Operands(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),
-        selectsReference = selectsReference
+        selectsReference = selectsReference,
+        arrayRangeBounds = arrayRangeBounds,
+        boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
       )
     )
     // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX,
@@ -1826,7 +1834,8 @@ private class EvaluatorImpl(
         memoOpt,
         resolvingNames,
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        arrayRangeBounds
       )
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
@@ -2026,7 +2035,8 @@ private class EvaluatorImpl(
               memoOpt,
               trail,
               workbookPath,
-              aggregateMemoOpt
+              aggregateMemoOpt,
+              arrayRangeBounds
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -2606,14 +2616,16 @@ private class EvaluatorWithDepth(
   memo: Option[Evaluator.EvalMemo] = None,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -2626,5 +2638,6 @@ private class EvaluatorWithDepth(
       memo,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )
