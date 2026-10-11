@@ -1,5 +1,6 @@
 package com.tjclp.xl.render
 
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cf.{CfOverlay, CfPaint}
@@ -409,7 +410,8 @@ object SvgRenderer:
     val clipAttr = s""" clip-path="url(#$clipId)""""
 
     cell.value match
-      case CellValue.RichText(rt) if includeStyles && rt.runs.nonEmpty =>
+      case CellValue.RichText(raw) if includeStyles && raw.runs.nonEmpty =>
+        val rt = NumFmtFormatter.formatRichText(raw, resolved.numFmt)
         // Get cell's base font for inheritance by unstyled runs
         val baseFont = style.map(_.font)
 
