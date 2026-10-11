@@ -25,16 +25,18 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 - **The recalc summary names its error-valued cells, with the evaluator's reason** (#692):
   `Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found:
-  VLOOKUP(42, A1:B3, 2, FALSE))` — the first ten of `RecalcResult.excelErrors`
-  (`RecalcResult.MaxNamedErrorCells`) as `RecalcResult.errorCells: Vector[ErrorValueCell]`
-  (`sheet`, `ref`, `error`, `reason`), the rest counted as `… and N more`. The reason is the
+  VLOOKUP(42, A1:B3, 2, FALSE))` — the first three (`RecalcResult.MaxSummaryErrorCells`) in the
+  text, the rest counted as `… and N more`, the same cap as the could-not-evaluate list; the first
+  ten (`RecalcResult.MaxNamedErrorCells`) as `RecalcResult.errorCells: Vector[ErrorValueCell]`
+  (`sheet`, `ref`, `error`, `reason`). The reason is the
   diagnostic the evaluator raised the error with (a lookup's miss echoing its call, a division's
   operands); an error that arrived as a plain value (`NA()`, an error literal, a precedent's error
   read through a reference, a cycle member) has none. `xl recalc --json` publishes the same list as
   `errorCells` (`{ref, error, reason}`) beside `errorValuedCycles`; the envelope is otherwise
   unchanged. `ErrorValueCell.render` (and so the summary and the CLI's text) carries each reason
-  as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…` —
-  a lookup echoes its key, which can be a 32,767-character multi-line cell — while
+  as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…`,
+  every control character (an ANSI or OSC escape in an untrusted key) replaced by a space — a
+  lookup echoes its key, which can be a 32,767-character multi-line cell — while
   `ErrorValueCell.reason` and the JSON `reason` keep the full text. `RecalcResult` gains the
   defaulted field `errorReasons: Map[QualifiedRef, String]`: source-compatible, but the binary
   signatures of its `apply`/`copy`/`unapply` change for code compiled against an earlier

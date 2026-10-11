@@ -18,7 +18,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
    * hit); -1 and 1 share the lookups' approximate plane over the materialised range.
    */
   private def performXLookup(
-    lookupValue: ExprValue,
+    lookup: ExprValue,
     lookupSheet: Sheet,
     lookupArray: CellRange,
     returnSheet: Sheet,
@@ -29,10 +29,6 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     call: => String,
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
-    // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
-    // a ref to a cell holding "k2" must match exactly like the literal "k2".
-    val lookup = normalizeLookupValue(lookupValue)
-
     for
       matchedIndexOpt <- matchMode match
         case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
@@ -275,7 +271,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         _ <- matchModeError("XLOOKUP", matchMode, call())
         _ <- searchModeError("XLOOKUP", searchMode, call())
         result <- performXLookup(
-          lookupValueEval,
+          normalized,
           lookupSheet,
           lookupArray,
           returnSheet,

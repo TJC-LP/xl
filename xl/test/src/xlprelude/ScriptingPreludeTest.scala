@@ -653,8 +653,10 @@ class ScriptingPreludeTest extends FunSuite:
     val reasons: Map[QualifiedRef, String] = result.errorReasons
     assertEquals(reasons.keySet, Set(QualifiedRef(SheetName.unsafe("S"), ref"B1")))
     assertEquals(RecalcResult.MaxNamedErrorCells, 10)
+    assertEquals(RecalcResult.MaxSummaryErrorCells, 3)
     assertEquals(ErrorValueCell.MaxReasonLength, 120)
     assertEquals(ErrorValueCell.boundReason("why\r\nnot"), "why not")
+    assertEquals(ErrorValueCell.boundReason("why\u001b[31mnot\u0007"), "why [31mnot")
 
   test(
     "GH-559: SheetRenamer, FormulaOps, FormulaShifter, StructuralEditor and QualifiedRef resolve"

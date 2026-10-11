@@ -178,6 +178,30 @@ class LookupChannelSpec extends FunSuite:
     assert(grid.evaluateFormula("=MATCH(9,A1:B3,0)").isLeft)
   }
 
+  test("#692: XLOOKUP over a horizontal pair walks the columns in search_mode's direction") {
+    // A1:E1 keys with 20 twice, A2:E2 and A4:E4 returns: a reversed walk (search_mode -1) reads
+    // E1 first and lands on the LAST 20; the hit's position maps to return_array by `idx % width`
+    val keys = (0 until 5).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, c) =>
+      s.put(ref"A1".shift(c, 0), num(Vector(10, 20, 30, 20, 50)(c)))
+        .put(ref"A2".shift(c, 0), text(("a".charAt(0) + c).toChar.toString))
+        .put(ref"A4".shift(c, 0), num(100 * (c + 1)))
+    }
+    check(keys, "=XLOOKUP(20,A1:E1,A2:E2)", text("b"))
+    check(keys, "=XLOOKUP(20,A1:E1,A2:E2,,0,-1)", text("d"))
+    check(keys, "=XLOOKUP(20,A1:E1,A4:E4,,0,-1)", num(400))
+    check(keys, "=XLOOKUP(50,A1:E1,A4:E4,,0,-1)", num(500))
+    check(keys, "=XLOOKUP(10,A1:E1,A4:E4,,0,-1)", num(100))
+    check(keys, "=XLOOKUP(\"?\",A2:E2,A1:E1,,2,-1)", num(50))
+    check(keys, "=XMATCH(20,A1:E1,0,-1)", num(4))
+    // the reversed column walk stops at its first hit: an unparseable key in A1 is never read
+    val broken = keys.put(ref"A1", CellValue.Formula("1+", None))
+    check(broken, "=XLOOKUP(20,A1:E1,A2:E2,,0,-1)", text("d"))
+    check(broken, "=XLOOKUP(50,A1:E1,A2:E2,,0,-1)", text("e"))
+    assert(broken.evaluateFormula("=XLOOKUP(20,A1:E1,A2:E2)").isLeft)
+    // a miss walks every column and raises through the one channel
+    check(keys, "=XLOOKUP(99,A1:E1,A2:E2,,0,-1)", err(CellError.NA))
+  }
+
   test("#692: XLOOKUP reads an uncached formula cell in return_array through the reader") {
     // B2 is a formula with no cached value: the hit's return cell must be computed, not the
     // raw formula record (the old `unwrapCachedValue` read left an uncached record as it was)

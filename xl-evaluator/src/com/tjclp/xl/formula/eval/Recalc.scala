@@ -281,16 +281,22 @@ object ErrorValueCell:
   /** The longest rendered reason in Unicode code points, including the `…` that marks a cut. */
   val MaxReasonLength: Int = 120
 
-  /** Every run of whitespace, with NEL and the line and paragraph separators `\s` leaves out. */
-  private val LineBreaksAndWhitespace: Pattern = Pattern.compile("[\\s\\u0085\\u2028\\u2029]+")
+  /**
+   * Every run of whitespace, control characters (the C0 and C1 blocks, `\p{Cc}`: CR, LF, tab, NEL,
+   * ESC, BEL, DEL, …) and the Unicode line and paragraph separators `\s` leaves out.
+   */
+  private val ControlsAndWhitespace: Pattern = Pattern.compile("[\\s\\p{Cc}\\u2028\\u2029]+")
 
   /**
    * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line
-   * and paragraph separators) and tab a single space, runs of whitespace collapsed, then cut to
+   * and paragraph separators), tab and other control character a single space — a lookup echoes its
+   * key, so an untrusted workbook's ANSI or OSC escape sequence must not reach the terminal through
+   * a summary the user never asked to see — runs of whitespace collapsed, then cut to
    * [[MaxReasonLength]] Unicode code points with a trailing `…`, keeping surrogate pairs whole.
+   * [[ErrorValueCell.reason]] (and so the JSON `reason`) keeps the text as the cell holds it.
    */
   def boundReason(reason: String): String =
-    val oneLine = LineBreaksAndWhitespace.matcher(reason).replaceAll(" ").trim
+    val oneLine = ControlsAndWhitespace.matcher(reason).replaceAll(" ").trim
     if oneLine.codePointCount(0, oneLine.length) <= MaxReasonLength then oneLine
     else oneLine.substring(0, oneLine.offsetByCodePoints(0, MaxReasonLength - 1)) + "…"
 
@@ -434,14 +440,17 @@ final case class RecalcResult(
 
   /**
    * #692: the first [[RecalcResult.MaxNamedErrorCells]] of [[excelErrors]] with their reasons — the
-   * cells the summary line and `recalc --json` name, in the same sorted order.
+   * cells `recalc --json` names, in the same sorted order; the text [[summary]] names the first
+   * [[RecalcResult.MaxSummaryErrorCells]] of them.
    */
-  def errorCells: Vector[ErrorValueCell] = namedErrorCells(excelErrors)
+  def errorCells: Vector[ErrorValueCell] =
+    namedErrorCells(excelErrors, RecalcResult.MaxNamedErrorCells)
 
   private def namedErrorCells(
-    all: Vector[(SheetName, ARef, CellError)]
+    all: Vector[(SheetName, ARef, CellError)],
+    count: Int
   ): Vector[ErrorValueCell] =
-    all.take(RecalcResult.MaxNamedErrorCells).map { (sheet, ref, err) =>
+    all.take(count).map { (sheet, ref, err) =>
       ErrorValueCell(sheet, ref, err, errorReasons.get(QualifiedRef(sheet, ref)))
     }
 
@@ -468,7 +477,7 @@ final case class RecalcResult(
    * {{{
    * Recalculated 12 formulas
    * Recalculated 12 formulas (1 error value: Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE))
-   * Recalculated 12 formulas (12 error values: Sales!B2 #DIV/0! — Division by zero: A2 / 0; …; … and 2 more)
+   * Recalculated 12 formulas (12 error values: Sales!B2 #DIV/0! — Division by zero: A2 / 0; …; … and 9 more)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
    * Recalculated 2 formulas (2 error values); converged in 2 iterative round(s), 1 cycle settled on error values
@@ -482,8 +491,9 @@ final case class RecalcResult(
    * calculation ` is [[unconvergedVerdict]], the same string the `--strict` reason carries.
    *
    * #692: the error-value parenthetical names its cells — the first
-   * [[RecalcResult.MaxNamedErrorCells]] as [[ErrorValueCell.render]], `; `-separated, then `… and N
-   * more` — so a summary can say which cell missed and why.
+   * [[RecalcResult.MaxSummaryErrorCells]] as [[ErrorValueCell.render]], `; `-separated, then `… and
+   * N more` — so a summary can say which cell missed and why; [[errorCells]] carries the first
+   * [[RecalcResult.MaxNamedErrorCells]] for `recalc --json` and the API.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
@@ -493,7 +503,8 @@ final case class RecalcResult(
     val errorValues =
       if errorValueCount == 0 then ""
       else
-        val named = namedErrorCells(allErrorValues).map(_.render)
+        val named =
+          namedErrorCells(allErrorValues, RecalcResult.MaxSummaryErrorCells).map(_.render)
         val more =
           if errorValueCount > named.size then Vector(s"… and ${errorValueCount - named.size} more")
           else Vector.empty
@@ -518,8 +529,19 @@ final case class RecalcResult(
 
 object RecalcResult:
 
-  /** #692: how many error-valued cells the summary and `recalc --json` name. */
+  /**
+   * #692: how many error-valued cells [[RecalcResult.errorCells]] carries, for `recalc --json` and
+   * the API — a list an agent or script reads, so it affords ten.
+   */
   val MaxNamedErrorCells: Int = 10
+
+  /**
+   * #692: how many of them the one-line text [[RecalcResult.summary]] names before `… and N more` —
+   * the same three as the could-not-evaluate list, because every mutation verb prints the line and
+   * each cell can carry a reason of [[ErrorValueCell.MaxReasonLength]] characters; `recalc --json`
+   * and [[RecalcResult.errorCells]] keep [[MaxNamedErrorCells]].
+   */
+  val MaxSummaryErrorCells: Int = 3
 
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private[eval] def carriedCellError(value: CellValue): Option[CellError] = value match
