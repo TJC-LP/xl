@@ -19,7 +19,7 @@ import com.tjclp.xl.tables.TableSpec
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, FilterInputStream, InputStream}
 import java.nio.file.{Files, Path, Paths}
-import java.util.zip.ZipInputStream
+import java.util.zip.{ZipFile, ZipInputStream}
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.platform.Sha256
@@ -212,8 +212,10 @@ object XlsxReader:
   /**
    * Cell-metadata candidates retained at scan time (GH-714), the comment-candidate pattern: which
    * part is the workbook's metadata part is decided by the `sheetMetadata` workbook relationship
-   * ([[SheetMetadataPart.locate]]). The part stays UNPARSED in the manifest — it rides the verbatim
-   * copy loop unless a write must extend it.
+   * ([[SheetMetadataPart.locate]]). This is only a fast path: a target with any other filename is
+   * loaded from the source after the scan, once its relationship and the archive's security limits
+   * have been checked. The part stays UNPARSED in the manifest — it rides the verbatim copy loop
+   * unless a write must extend it.
    */
   private def isCellMetadataCandidatePart(path: String): Boolean =
     path.startsWith("xl/") && path.endsWith(".xml") && !path.contains("/_rels/") && {
@@ -505,11 +507,7 @@ object XlsxReader:
       theme = parseTheme(parts)
 
       // GH-714: the dynamic-array `cm` indices, resolved through the metadata part
-      cellMetadata = SheetMetadataPart
-        .locate(workbookRels)
-        .flatMap(retainedDrawings.cellMetadata.get)
-        .map(SheetMetadataPart.parse)
-        .getOrElse(CellMetadataIndex.empty)
+      cellMetadata <- readCellMetadata(workbookRels, parts, retainedDrawings, source, config)
 
       // Parse sheets and collect comment/drawing mappings (GH-221)
       parsedSheets <- parseSheets(
@@ -572,6 +570,65 @@ object XlsxReader:
         sheetPathMapping = parsedSheets.sheetPathMapping
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
+
+  /**
+   * Resolve metadata by relationship even when its filename is unfamiliar or it precedes the
+   * workbook relationships in ZIP order. Only that one part is reread; unknown XML is never all
+   * retained in memory. The complete archive has already passed the reader's security checks.
+   */
+  private def readCellMetadata(
+    workbookRels: Relationships,
+    parts: Map[String, String],
+    retained: RetainedDrawingParts,
+    source: Option[SourceHandle],
+    config: ReaderConfig
+  ): XLResult[CellMetadataIndex] =
+    SheetMetadataPart.locate(workbookRels) match
+      case None => Right(CellMetadataIndex.empty)
+      case Some(path) =>
+        val cached = parts.get(path).orElse(retained.cellMetadata.get(path))
+        val text = cached match
+          case Some(xml) => Right(Some(xml))
+          case None => readSourcePart(source, path, config)
+        text.map(_.map(SheetMetadataPart.parse).getOrElse(CellMetadataIndex.empty))
+
+  private def readSourcePart(
+    source: Option[SourceHandle],
+    path: String,
+    config: ReaderConfig
+  ): XLResult[Option[String]] =
+    def readText(in: InputStream): XLResult[Option[String]] =
+      // Bound the second read as well, including a file replaced since the initial ZIP scan.
+      val bytes =
+        if config.maxUncompressedSize > 0 && config.maxUncompressedSize < Int.MaxValue then
+          in.readNBytes(config.maxUncompressedSize.toInt + 1)
+        else in.readAllBytes()
+      if config.maxUncompressedSize > 0 && bytes.length.toLong > config.maxUncompressedSize then
+        Left(XLError.SecurityError(s"Metadata part '$path' exceeds uncompressed size limit"))
+      else Right(Some(new String(bytes, "UTF-8")))
+
+    source match
+      case None => Right(None)
+      case Some(SourceHandle.OnDisk(file, _, _)) =>
+        val zip = new ZipFile(file.toFile)
+        try
+          Option(zip.getEntry(path)) match
+            case None => Right(None)
+            case Some(entry) =>
+              val in = zip.getInputStream(entry)
+              try readText(in)
+              finally in.close()
+        finally zip.close()
+      case Some(SourceHandle.InMemory(bytes)) =>
+        val zip = new ZipInputStream(new ByteArrayInputStream(SourceContent.rawArray(bytes)))
+        @annotation.tailrec
+        def find(): XLResult[Option[String]] =
+          Option(zip.getNextEntry) match
+            case None => Right(None)
+            case Some(entry) if entry.getName == path => readText(zip)
+            case Some(_) => find()
+        try find()
+        finally zip.close()
 
   /**
    * Parse docProps/core.xml + app.xml into the modeled metadata fields (GH-242).

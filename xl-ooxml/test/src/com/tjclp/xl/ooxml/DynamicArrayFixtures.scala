@@ -23,6 +23,18 @@ object DynamicArrayFixtures:
     """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       |<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>""".stripMargin
 
+  /** A valid block with a different metadata type before the dynamic-array record. */
+  val multiRecordMetadataXml: String = metadataXml
+    .replace(
+      """<metadataTypes count="1">""",
+      """<metadataTypes count="2"><metadataType name="OTHER" minSupportedVersion="120000" cellMeta="1"/>"""
+    )
+    .replace(
+      """<futureMetadata name="XLDAPR"""",
+      """<futureMetadata name="OTHER" count="1"><bk/></futureMetadata><futureMetadata name="XLDAPR""""
+    )
+    .replace("""<rc t="1" v="0"/>""", """<rc t="1" v="0"/><rc t="2" v="0"/>""")
+
   /** The spill-anchor sheet: B1 is the dynamic record, C1 sums its spill. */
   val sortSheetXml: String =
     """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -59,6 +71,18 @@ object DynamicArrayFixtures:
           (if metadata.isDefined then metadataRel else "") + "</Relationships>"),
       "xl/worksheets/sheet1.xml" -> sheetXml
     ) ++ metadata.toList.map("xl/metadata.xml" -> _)
+
+  /** Keep the relationship and content-type declaration with a renamed metadata part. */
+  def relocatedMetadataParts(
+    path: String = "xl/custom/state.xml",
+    metadata: String = metadataXml
+  ): Vector[(String, String)] =
+    parts(metadata = Some(metadata)).map { case (name, xml) =>
+      val renamed = if name == "xl/metadata.xml" then path else name
+      renamed -> xml
+        .replace("/xl/metadata.xml", s"/$path")
+        .replace("""Target="metadata.xml"""", s"""Target="${path.stripPrefix("xl/")}"""")
+    }
 
   /** Zip the parts into package bytes, in order. */
   def xlsx(parts: Vector[(String, String)] = parts()): Array[Byte] =

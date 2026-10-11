@@ -76,7 +76,7 @@ private[xl] object SheetMetadataPart:
   /** The package path of the metadata part, found by relationship type (never by name). */
   def locate(workbookRels: Relationships): Option[String] =
     workbookRels.relationships
-      .find(_.`type` == relType)
+      .find(rel => rel.`type` == relType && !rel.targetMode.exists(_.equalsIgnoreCase("External")))
       .map(rel => Relationships.resolveWorkbookTarget(rel.target))
 
   /** Resolve every dynamic-array `cm` index of a part; malformed XML reads as none. */
@@ -123,14 +123,16 @@ private[xl] object SheetMetadataPart:
     val types = xldaprTypeIndices(root)
     val blocks = xldaprBlocks(root)
     val byCm = cellBlocks(root).zipWithIndex.flatMap { case (bk, i) =>
-      children(bk, "rc").headOption.flatMap { rc =>
-        for
-          t <- attr(rc, "t").flatMap(_.trim.toIntOption)
-          if types.contains(t)
-          v <- attr(rc, "v").flatMap(_.trim.toIntOption)
-          mode <- blocks.lift(v).flatten
-        yield (i + 1) -> mode
-      }
+      children(bk, "rc").iterator
+        .flatMap { rc =>
+          for
+            t <- attr(rc, "t").flatMap(_.trim.toIntOption)
+            if types.contains(t)
+            v <- attr(rc, "v").flatMap(_.trim.toIntOption)
+            mode <- blocks.lift(v).flatten
+          yield (i + 1) -> mode
+        }
+        .nextOption()
     }
     CellMetadataIndex(byCm.toMap)
 
@@ -178,7 +180,12 @@ private[xl] object SheetMetadataPart:
   private def el(label: String, scope: NamespaceBinding, attrs: List[(String, String)])(
     kids: Node*
   ): Elem =
-    Elem(null, label, metaData(attrs), scope, true, kids*)
+    // A source may bind SpreadsheetML only through a prefix. Give new unprefixed elements an
+    // explicit default binding without changing any namespace on the preserved source nodes.
+    val spreadsheetScope =
+      if scope.getURI(null) == XmlUtil.nsSpreadsheetML then scope
+      else NamespaceBinding(null, XmlUtil.nsSpreadsheetML, scope)
+    Elem(null, label, metaData(attrs), spreadsheetScope, true, kids*)
 
   /** The XLDAPR future-metadata block of one variant; declares `xda` unless `scope` binds it. */
   private def futureBlock(m: ArrayMode.Dynamic, scope: NamespaceBinding): Elem =
