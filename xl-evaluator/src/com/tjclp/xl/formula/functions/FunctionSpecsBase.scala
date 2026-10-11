@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
 }
@@ -423,6 +424,77 @@ trait FunctionSpecsBase:
             ctx
           )
 
+  /**
+   * #692: the first position of a lookup range whose value satisfies `matches`, reading the range
+   * through the evaluating reader ONE CELL AT A TIME — an uncached formula key is computed when the
+   * search reaches it and never past the hit, so an exact XLOOKUP/XMATCH/MATCH over a 50k-row
+   * column whose key sits near the top costs the cells up to the hit, not the column (the
+   * materialised [[lookupRangeValues]] built and evaluated every cell first). Positions are the
+   * range's own row-major 0-based positions (blanks included, never compacted); the walk is cut off
+   * at the sheet's used range like [[lookupRangeValues]], forward or — `descending` — from the last
+   * used cell back. The first cell that fails to evaluate ends the search with its error.
+   */
+  protected def findLookupPosition(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    descending: Boolean
+  )(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
+    targetSheet.usedRange match
+      case None => Right(None)
+      case Some(used) =>
+        val rowStart = range.rowStart.index0
+        val colStart = range.colStart.index0
+        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
+        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
+        if rowEnd < rowStart || colEnd < colStart then Right(None)
+        else
+          val rows = if descending then rowEnd to rowStart by -1 else rowStart to rowEnd
+          val cols = if descending then colEnd to colStart by -1 else colStart to colEnd
+          val cells = rows.iterator.flatMap(row => cols.iterator.map(col => (row, col)))
+          val read = rangeCellReader(targetSheet, ctx)
+          @annotation.tailrec
+          def search(): Either[EvalError, Option[Int]] =
+            if !cells.hasNext then Right(None)
+            else
+              val (row, col) = cells.next()
+              read(ARef.from0(col, row)) match
+                case Left(error) => Left(error)
+                case Right(cv) =>
+                  if matches(cv) then Right(Some((row - rowStart) * range.width + (col - colStart)))
+                  else search()
+          search()
+
+  /**
+   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's
+   * direction, through [[findLookupPosition]]: the first key in search order that equals the lookup
+   * value in the lookup plane, or matches the wildcard criterion. search_mode 2 / -2 (the binary
+   * searches) are answered by the same walk in their direction, which agrees on the sorted data
+   * they require (GH-55).
+   */
+  protected def exactLookupPosition(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    lookup: ExprValue,
+    wildcard: Option[CriteriaMatcher.Wildcard],
+    searchMode: Int
+  ): Either[EvalError, Option[Int]] =
+    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0) { cv =>
+      matchesLookupExact(cv, lookup) || wildcard.exists(CriteriaMatcher.matches(cv, _))
+    }
+
+  /**
+   * The wildcard criterion a text lookup value spells (`*`, `?`, `~` escapes), for match_mode 2.
+   */
+  protected def wildcardCriterion(lookup: ExprValue): Option[CriteriaMatcher.Wildcard] =
+    lookup match
+      case ExprValue.Text(text) =>
+        CriteriaMatcher.parse(ExprValue.Text(text)) match
+          case c: CriteriaMatcher.Wildcard => Some(c)
+          case _ => None
+      case _ => None
+
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match
     case arr: ArrayResult => arr
@@ -524,20 +596,21 @@ trait FunctionSpecsBase:
    * #692: XLOOKUP/XMATCH's match_mode (-1, 0, 1, 2) — a mode outside its table is Excel's
    * documented `#VALUE!`, for both functions alike.
    */
-  protected def matchModeError(fn: String, value: Int, call: String): Either[EvalError, Unit] =
+  protected def matchModeError(fn: String, value: Int, call: => String): Either[EvalError, Unit] =
     lookupModeError(fn, "match_mode", Set(-1, 0, 1, 2), "-1, 0, 1 or 2", value, call)
 
   /** #692: XLOOKUP/XMATCH's search_mode (1, -1, 2, -2), as [[matchModeError]]. */
-  protected def searchModeError(fn: String, value: Int, call: String): Either[EvalError, Unit] =
+  protected def searchModeError(fn: String, value: Int, call: => String): Either[EvalError, Unit] =
     lookupModeError(fn, "search_mode", Set(-2, -1, 1, 2), "1, -1, 2 or -2", value, call)
 
+  /** `call` is by name: the rendered call is built only for the diagnostic of a bad mode. */
   private def lookupModeError(
     fn: String,
     label: String,
     allowed: Set[Int],
     spelled: String,
     value: Int,
-    call: String
+    call: => String
   ): Either[EvalError, Unit] =
     if allowed.contains(value) then Right(())
     else

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, CriteriaMatcher, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -10,50 +10,38 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
-  /** GH-713: the 0-based position of XLOOKUP's match along its lookup vector, if any. */
+  /** The matched position, lazily reading exact/wildcard keys until the first hit. */
   private def xlookupIndex(
     lookupValue: ExprValue,
     lookupSheet: Sheet,
     lookupArray: CellRange,
     matchMode: Int,
     searchMode: Int,
+    call: => String,
     ctx: EvalContext
   ): Either[EvalError, Option[Int]] =
-    // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
-    // a ref to a cell holding "k2" must match exactly like the literal "k2".
     val lookup = normalizeLookupValue(lookupValue)
-
-    val wildcardCriterionOpt = lookup match
-      case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case _ => None
-
-    for
-      // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed, not
-      // skipped; keys are (row-major position, value), cut off at the sheet's used range
-      values <- lookupRangeValues(lookupArray, lookupSheet, ctx)
-      keys = values.zipWithIndex.flatMap { (row, r) =>
-        row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
-      }
-      // GH-55: binary-search modes 2 (ascending) and -2 (descending) are answered by the linear
-      // search in their direction; -2 iterates reversed like -1 (descending order)
-      ordered = if searchMode < 0 then keys.reverse else keys
-      matchedIndexOpt = matchMode match
-        case 0 =>
-          ordered.collectFirst { case (idx, cv) if matchesLookupExact(cv, lookup) => idx }
-        case 2 =>
-          ordered.collectFirst {
-            case (idx, cv)
-                if matchesLookupExact(cv, lookup) ||
-                  wildcardCriterionOpt.exists(CriteriaMatcher.matches(cv, _)) =>
-              idx
+    matchMode match
+      case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
+      case 2 =>
+        exactLookupPosition(
+          lookupArray,
+          lookupSheet,
+          ctx,
+          lookup,
+          wildcardCriterion(lookup),
+          searchMode
+        )
+      case -1 | 1 =>
+        lookupRangeValues(lookupArray, lookupSheet, ctx).map { values =>
+          val keys = values.zipWithIndex.flatMap { (row, r) =>
+            row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
           }
-        // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
-        // included); a linear search, so a tie keeps the first key in search order
-        case direction => approximateMatch(ordered, lookup, direction, lastOnTie = false)
-    yield matchedIndexOpt
+          val ordered = if searchMode < 0 then keys.reverse else keys
+          approximateMatch(ordered, lookup, matchMode, lastOnTie = false)
+        }
+      // The caller validates modes; retain the typed error for any later internal caller too.
+      case other => matchModeError("XLOOKUP", other, call).map(_ => None)
 
   /**
    * GH-713: the strip of `return_array` a match at position i selects — Excel's shape rule. A
@@ -285,17 +273,18 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       searchModeRaw <- evalValue(ctx, searchModeExpr)
       matchMode <- toIntArg("XLOOKUP", matchModeRaw)
       searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-      diagnostic =
+      diagnostic = () =>
         s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
       // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
-      _ <- matchModeError("XLOOKUP", matchMode, diagnostic)
-      _ <- searchModeError("XLOOKUP", searchMode, diagnostic)
+      _ <- matchModeError("XLOOKUP", matchMode, diagnostic())
+      _ <- searchModeError("XLOOKUP", searchMode, diagnostic())
       matchedIndex <- xlookupIndex(
         lookupValueEval,
         lookupSheet,
         lookupArray,
         matchMode,
         searchMode,
+        diagnostic(),
         ctx
       )
       result <- matchedIndex match
@@ -307,7 +296,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             case None =>
               Left(
                 lookupNotFound(
-                  s"XLOOKUP: no match found for lookup value: $diagnostic"
+                  s"XLOOKUP: no match found for lookup value: ${diagnostic()}"
                 )
               )
     yield result

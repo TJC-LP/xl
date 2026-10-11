@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, CriteriaMatcher, EvalError, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -189,42 +189,38 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         matchType <- ctx.evalExpr(matchTypeExpr)
         resolved <- ctx.resolveRange(lookupArray)
         (targetSheet, lookupRange) = resolved
-        // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed
-        values <- lookupRangeValues(lookupRange, targetSheet, ctx)
-        result <- {
-          // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
-          // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
-          val matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
-          // RANGE positions (row-major, 1-based), blanks included, never compacted
-          val cells: Vector[(Int, CellValue)] =
-            values.zipWithIndex.flatMap { (row, r) =>
-              row.zipWithIndex.map { (cv, c) => (r * lookupRange.width + c + 1, cv) }
-            }
-
-          val positionOpt: Option[Int] = matchTypeInt match
-            case 0 =>
-              cells
-                .find { case (_, cv) =>
-                  matchesLookupExact(cv, lookup)
+        // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
+        // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
+        matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
+        // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed.
+        // RANGE positions (row-major, 1-based), blanks included, never compacted.
+        positionOpt <- matchTypeInt match
+          // the exact match walks the range lazily and stops at the first hit
+          case 0 =>
+            findLookupPosition(lookupRange, targetSheet, ctx, descending = false)(
+              matchesLookupExact(_, lookup)
+            ).map(_.map(_ + 1))
+          // #670(g): 1 is the largest key ≤ the value over ascending keys, -1 the smallest key ≥
+          // it over descending keys — numbers or text (case-insensitive), the last of a run of
+          // equal keys as Excel's binary search lands; the whole (used) range is read
+          case sign =>
+            lookupRangeValues(lookupRange, targetSheet, ctx).map { values =>
+              val cells: Vector[(Int, CellValue)] =
+                values.zipWithIndex.flatMap { (row, r) =>
+                  row.zipWithIndex.map { (cv, c) => (r * lookupRange.width + c + 1, cv) }
                 }
-                .map(_._1)
-            // #670(g): 1 is the largest key ≤ the value over ascending keys, -1 the smallest key ≥
-            // it over descending keys — numbers or text (case-insensitive), the last of a run of
-            // equal keys as Excel's binary search lands
-            case 1 => approximateMatch(cells, lookup, -1, lastOnTie = true)
-            case _ => approximateMatch(cells, lookup, 1, lastOnTie = true)
-
-          positionOpt match
-            case Some(pos) => Right(BigDecimal(pos))
-            case None =>
-              // GH-662: the typed #N/A (Left channel: MATCH is a FunctionSpec[BigDecimal]), with
-              // the real call rendered as its diagnostic context
-              Left(
-                lookupNotFound(
-                  s"MATCH: no match found for lookup value: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, $matchTypeInt)"
-                )
+              approximateMatch(cells, lookup, -sign, lastOnTie = true)
+            }
+        result <- positionOpt match
+          case Some(pos) => Right(BigDecimal(pos))
+          case None =>
+            // GH-662: the typed #N/A (Left channel: MATCH is a FunctionSpec[BigDecimal]), with
+            // the real call rendered as its diagnostic context
+            Left(
+              lookupNotFound(
+                s"MATCH: no match found for lookup value: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, $matchTypeInt)"
               )
-        }
+            )
       yield result
     }
 
@@ -268,30 +264,33 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         _ <-
           if lookupRange.width == 1 || lookupRange.height == 1 then Right(())
           else invalid(s"lookup_array ${lookupRange.toA1} is not a single row or column: $call")
-        values <- lookupRangeValues(lookupRange, targetSheet, ctx)
-        result <- {
-          val keys = values.flatten.zipWithIndex.map { case (cv, idx) => (idx + 1, cv) }
-          val ordered = if searchMode < 0 then keys.reverse else keys
-          val wildcard = lookup match
-            case ExprValue.Text(text) =>
-              CriteriaMatcher.parse(ExprValue.Text(text)) match
-                case c: CriteriaMatcher.Wildcard => Some(c)
-                case _ => None
-            case _ => None
-          val positionOpt = matchMode match
-            case 0 =>
-              ordered.collectFirst { case (pos, cv) if matchesLookupExact(cv, lookup) => pos }
-            case 2 =>
-              ordered.collectFirst {
-                case (pos, cv)
-                    if matchesLookupExact(cv, lookup) ||
-                      wildcard.exists(CriteriaMatcher.matches(cv, _)) =>
-                  pos
-              }
-            case direction => approximateMatch(ordered, lookup, direction, lastOnTie = false)
-          positionOpt
-            .map(pos => BigDecimal(pos))
-            .toRight(lookupNotFound(s"XMATCH: no match found for lookup value: $call"))
-        }
+        // #692: the exact and wildcard modes walk the range lazily in search_mode's direction and
+        // stop at the first hit (positions 1-based along the single row or column); -1 and 1 read
+        // the whole (used) range for the approximate plane
+        positionOpt <- matchMode match
+          case 0 =>
+            exactLookupPosition(lookupRange, targetSheet, ctx, lookup, None, searchMode)
+              .map(_.map(_ + 1))
+          case 2 =>
+            exactLookupPosition(
+              lookupRange,
+              targetSheet,
+              ctx,
+              lookup,
+              wildcardCriterion(lookup),
+              searchMode
+            ).map(_.map(_ + 1))
+          case -1 | 1 =>
+            lookupRangeValues(lookupRange, targetSheet, ctx).map { values =>
+              val keys = values.flatten.zipWithIndex.map { case (cv, idx) => (idx + 1, cv) }
+              val ordered = if searchMode < 0 then keys.reverse else keys
+              approximateMatch(ordered, lookup, matchMode, lastOnTie = false)
+            }
+          // unreachable: matchModeError above validated the mode; kept total rather than sending
+          // an unknown mode into the approximate search
+          case other => matchModeError("XMATCH", other, call).map(_ => None)
+        result <- positionOpt
+          .map(pos => BigDecimal(pos))
+          .toRight(lookupNotFound(s"XMATCH: no match found for lookup value: $call"))
       yield result
     }

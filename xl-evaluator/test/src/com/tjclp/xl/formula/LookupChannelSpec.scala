@@ -7,6 +7,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.workbooks.Workbook
 
 /**
  * #692: the lookup family after #670 — one error channel for every miss (XLOOKUP raises the typed
@@ -135,6 +136,65 @@ class LookupChannelSpec extends FunSuite:
     // the readers agree with LOOKUP and XMATCH, which already evaluated
     check(keys, "=XMATCH(20,A1:A3)", num(2))
     check(keys, "=LOOKUP(20,A1:A3,B1:B3)", text("b2"))
+  }
+
+  test("#692: an exact lookup stops at the first hit and never evaluates the cells past it") {
+    // A5 is a formula that cannot even parse: reading it is a host failure (a Left), so a search
+    // that reached it would fail the whole lookup. The hit at A2 comes first in a forward walk.
+    val keys = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", num(10))
+      .put(ref"A2", num(20))
+      .put(ref"A3", num(30))
+      .put(ref"A5", CellValue.Formula("1+", None))
+      .put(ref"B1", text("a"))
+      .put(ref"B2", text("b"))
+      .put(ref"B3", text("c"))
+      .put(ref"B5", text("e"))
+    check(keys, "=XLOOKUP(20,A1:A5,B1:B5)", text("b"))
+    check(keys, "=XLOOKUP(20,A1:A5,B1:B5,,0,2)", text("b"))
+    check(keys, "=XLOOKUP(\"b*\",B1:B5,A1:A5,,2)", num(20))
+    check(keys, "=MATCH(20,A1:A5,0)", num(2))
+    check(keys, "=XMATCH(20,A1:A5)", num(2))
+    check(keys, "=XMATCH(\"b*\",B1:B5,2)", num(2))
+    // a reverse search reads A5 first, and the first evaluation failure ends the search
+    assert(keys.evaluateFormula("=XLOOKUP(30,A1:A5,B1:B5,,0,-1)").isLeft)
+    assert(keys.evaluateFormula("=XMATCH(30,A1:A5,0,-1)").isLeft)
+    // so does a miss, which has to read every key; and the approximate modes read them all
+    assert(keys.evaluateFormula("=XLOOKUP(99,A1:A5,B1:B5)").isLeft)
+    assert(keys.evaluateFormula("=MATCH(25,A1:A5,1)").isLeft)
+    assert(keys.evaluateFormula("=XLOOKUP(25,A1:A5,B1:B5,,-1)").isLeft)
+    // the walk is row-major over a 2-D lookup_array, positions the range's own
+    val grid = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", num(1))
+      .put(ref"B1", num(2))
+      .put(ref"A2", num(3))
+      .put(ref"B2", num(4))
+      .put(ref"A3", CellValue.Formula("1+", None))
+      .put(ref"D2", text("dd"))
+    check(grid, "=MATCH(4,A1:B3,0)", num(4))
+    check(grid, "=XLOOKUP(4,A1:B2,C1:D2)", text("dd"))
+    assert(grid.evaluateFormula("=MATCH(9,A1:B3,0)").isLeft)
+  }
+
+  test("#692: MATCH and XLOOKUP compute an uncached formula key on another sheet") {
+    val keys = Sheet(SheetName.unsafe("Keys"))
+      .put(ref"A1", num(10))
+      .put(ref"A2", CellValue.Formula("5*4", None))
+      .put(ref"A3", num(30))
+      .put(ref"B1", text("a"))
+      .put(ref"B2", CellValue.Formula("\"b\"&\"2\"", None))
+      .put(ref"B3", text("c"))
+    val main = Sheet(SheetName.unsafe("S"))
+    val wb = Workbook(Vector(main, keys))
+    def across(formula: String, expected: CellValue)(implicit loc: munit.Location): Unit =
+      assertEquals(main.evaluateFormula(formula, workbook = Some(wb)), Right(expected), formula)
+    across("=MATCH(20,Keys!A1:A3,0)", num(2))
+    across("=MATCH(25,Keys!A1:A3,1)", num(2))
+    across("=XLOOKUP(20,Keys!A1:A3,Keys!B1:B3)", text("b2"))
+    across("=XLOOKUP(20,Keys!A1:A3,Keys!B1:B3,,0,-1)", text("b2"))
+    across("=XLOOKUP(25,Keys!A1:A3,Keys!B1:B3,,-1)", text("b2"))
+    across("=XMATCH(20,Keys!A1:A3,0,-1)", num(2))
+    across("=XMATCH(\"b2\",Keys!B1:B3)", num(2))
   }
 
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {

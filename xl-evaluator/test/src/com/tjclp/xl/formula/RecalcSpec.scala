@@ -390,14 +390,51 @@ class RecalcSpec extends FunSuite:
     val capped = Workbook(many).recalculate()
     assertEquals(capped.excelErrors.size, 12)
     assertEquals(capped.errorCells.size, RecalcResult.MaxNamedErrorCells)
-    assert(
-      capped.summary.startsWith(
-        "Recalculated 12 formulas (12 error values: S!A1 #DIV/0! — Division by zero: 1 / 0; "
-      ),
-      capped.summary
+    assertEquals(
+      capped.errorCells.headOption.map(_.render),
+      Some("S!A1 #DIV/0! — Division by zero: 1 / 0")
     )
-    assert(capped.summary.endsWith("; … and 2 more)"), capped.summary)
-    assertEquals(capped.summary.sliding(8).count(_ == "#DIV/0! "), RecalcResult.MaxNamedErrorCells)
+    assertEquals(
+      capped.summary,
+      "Recalculated 12 formulas (12 error values: " +
+        capped.errorCells.map(_.render).mkString("; ") + "; … and 2 more)"
+    )
+
+  test("#692: the summary bounds each reason to one line; errorCells keeps the full text"):
+    // a 1,000-character text key with every kind of line break and a tab: the lookup echoes it
+    val key = ("Line one\r\nline two\nline three\tfour  " * 40).take(1000)
+    assertEquals(key.length, 1000)
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Text(key))
+      .put(ref"C1", num(1))
+      .put(ref"B1", formula("=VLOOKUP(A1,C1:C1,1,FALSE)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val cell = result.errorCells match
+      case Vector(only) => only
+      case other => fail(s"expected one error cell, got $other")
+    // the field keeps the full diagnostic, line breaks included (what `recalc --json` publishes)
+    assert(cell.reason.exists(_.contains(key)), cell.reason)
+    assert(cell.reason.exists(_.length > 1000), cell.reason.map(_.length))
+    // the rendering is one bounded line
+    val rendered = cell.render
+    assert(!rendered.exists(c => c == '\n' || c == '\r' || c == '\t'), rendered)
+    assert(
+      rendered.startsWith(
+        "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(Line one line two line three four "
+      ),
+      rendered
+    )
+    assert(rendered.endsWith("…"), rendered)
+    assertEquals(rendered.length, "S!B1 #N/A — ".length + ErrorValueCell.MaxReasonLength)
+    assertEquals(result.summary.linesIterator.size, 1)
+    assertEquals(result.summary, s"Recalculated 1 formula (1 error value: $rendered)")
+    // the bound itself: whitespace runs become one space, a cut ends in `…` at the bound
+    assertEquals(ErrorValueCell.MaxReasonLength, 120)
+    assertEquals(ErrorValueCell.boundReason(" a\r\nb\tc  d\n"), "a b c d")
+    assertEquals(ErrorValueCell.boundReason("a\u2028b\u2029c\u0085d"), "a b c d")
+    assertEquals(ErrorValueCell.boundReason("x" * 120), "x" * 120)
+    assertEquals(ErrorValueCell.boundReason("x" * 121), "x" * 119 + "…")
 
   test("GH-662: a lookup miss recalculates as a cached #N/A — guarded cells cache their fallback"):
     // The dogfood book: A3:A7 years keyed to B3:B7; B18 unguarded miss, B19 the ISNA idiom, B20
