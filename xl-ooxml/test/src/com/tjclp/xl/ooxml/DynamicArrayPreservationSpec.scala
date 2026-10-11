@@ -1,10 +1,13 @@
 package com.tjclp.xl.ooxml
 
+import java.nio.file.Files
+
 import munit.FunSuite
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.{ArrayMode, CellValue, FormulaKind}
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 
@@ -65,6 +68,68 @@ class DynamicArrayPreservationSpec extends FunSuite:
 
   test("the reader resolves cm=1 to a dynamic array") {
     assertEquals(kindAt(read(xlsx()), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+  }
+
+  test("a later dynamic record survives a regenerated sheet") {
+    val wb = read(xlsx(parts(metadata = Some(multiRecordMetadataXml))))
+    assertEquals(kindAt(wb, ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+    val out = write(dirty(wb))
+    assertEquals(entryText(out, "xl/metadata.xml"), Some(multiRecordMetadataXml))
+    assertEquals(kindAt(read(out), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+  }
+
+  for
+    metadataPath <- List("xl/custom/state.xml", "xl/custom/state.bin")
+    metadataFirst <- List(false, true)
+  do
+    test(s"metadata resolves by relationship at $metadataPath, first=$metadataFirst") {
+      val relocated = relocatedMetadataParts(metadataPath)
+      val bytes = xlsx(if metadataFirst then relocated.reverse else relocated)
+      val file = Files.createTempFile("xl-metadata-path-", ".xlsx")
+      try
+        Files.write(file, bytes)
+        val fromFile = XlsxReader.read(file).fold(e => fail(e.message), identity)
+        List(read(bytes), fromFile).foreach { wb =>
+          assertEquals(kindAt(wb, ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+          backends.foreach { case (_, config) =>
+            val out = write(dirty(wb), config)
+            assertEquals(entryText(out, metadataPath), Some(metadataXml))
+            assertEquals(entries(out).count(_._1 == metadataPath), 1)
+            assertEquals(entryText(out, "xl/metadata.xml"), None)
+            assertEquals(kindAt(read(out), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+          }
+        }
+      finally Files.deleteIfExists(file)
+    }
+
+  test("a renamed metadata part remains subject to the archive size limit") {
+    val bytes = xlsx(relocatedMetadataParts())
+    val result = XlsxReader.readFromBytes(
+      bytes,
+      XlsxReader.ReaderConfig(maxUncompressedSize = metadataXml.length.toLong)
+    )
+    assert(result.left.toOption.exists {
+      case XLError.SecurityError(_) => true
+      case _ => false
+    })
+  }
+
+  test("a newly authored variant extends the relationship's renamed metadata part") {
+    val path = "xl/custom/state.xml"
+    val wb = read(xlsx(relocatedMetadataParts(path)))
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val collapsed = FormulaKind.ArrayFormula(
+      CellRange(ref"E1", ref"E1"),
+      mode = ArrayMode.Dynamic(collapsed = true)
+    )
+    val edited = wb.put(sheet.put(ref"E1", CellValue.Formula("SEQUENCE(1)", None, collapsed)))
+    backends.foreach { case (_, config) =>
+      val out = write(edited, config)
+      assertEquals(entries(out).count(_._1 == path), 1)
+      assertEquals(entryText(out, "xl/metadata.xml"), None)
+      assertEquals(kindAt(read(out), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+      assertEquals(kindAt(read(out), ref"E1"), Some(collapsed))
+    }
   }
 
   test("a dangling cm (no metadata part) reads as a legacy array and writes no cm") {

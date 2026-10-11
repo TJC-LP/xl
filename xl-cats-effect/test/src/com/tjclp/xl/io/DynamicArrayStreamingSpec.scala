@@ -44,6 +44,21 @@ class DynamicArrayStreamingSpec extends CatsEffectSuite:
     yield assertEquals(kindOf(Some(details.value)), Some(dynamicSort))
   }
 
+  test("both streaming readers follow a renamed metadata part and find later block records") {
+    val parts = DynamicArrayFixtures
+      .relocatedMetadataParts(
+        metadata = DynamicArrayFixtures.multiRecordMetadataXml
+      )
+      .reverse
+    for
+      path <- fixture(DynamicArrayFixtures.xlsx(parts))
+      rows <- ExcelIO.instance[IO].readStream(path).compile.toVector
+      details <- ExcelIO.instance[IO].streamCellDetails(path, "Sheet1", ref"B1")
+    yield
+      assertEquals(kindOf(rows.find(_.rowIndex == 1).flatMap(_.cells.get(1))), Some(dynamicSort))
+      assertEquals(kindOf(Some(details.value)), Some(dynamicSort))
+  }
+
   test("without the metadata part both readers report a legacy array") {
     for
       path <- fixture(DynamicArrayFixtures.xlsx(DynamicArrayFixtures.parts(metadata = None)))

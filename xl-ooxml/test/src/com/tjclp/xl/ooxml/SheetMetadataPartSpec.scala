@@ -89,6 +89,61 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
     assertEquals(resolve(richOnly), Map.empty)
   }
 
+  test("a dynamic record following another record in the same block is resolved and reused") {
+    val source = DynamicArrayFixtures.multiRecordMetadataXml
+    assertEquals(resolve(source), Map(1 -> plain))
+    assertEquals(
+      SheetMetadataPart.plan(Some(source), Set(plain)),
+      CellMetadataPlan(Map(plain -> 1), MetadataOutput.Untouched)
+    )
+    val plan = SheetMetadataPart.plan(Some(source), Set(plain, collapsed))
+    assertEquals(resolve(outputXml(source, plan)), Map(1 -> plain, 2 -> collapsed))
+  }
+
+  test("appending to a prefix-qualified part keeps new elements in SpreadsheetML") {
+    val namespace = XmlUtil.nsSpreadsheetML
+    val labels = Set(
+      "metadata",
+      "metadataTypes",
+      "metadataType",
+      "futureMetadata",
+      "cellMetadata",
+      "valueMetadata",
+      "bk",
+      "rc",
+      "extLst",
+      "ext"
+    )
+    Vector(DynamicArrayFixtures.metadataXml, richOnly).foreach { source =>
+      val qualified = source
+        .replace(ns, s"""xmlns:m="$namespace"""")
+        .replaceAll(s"<(/?)(${labels.toVector.sorted.mkString("|")})([ />])", "<$1m:$2$3")
+      val plan = SheetMetadataPart.plan(Some(qualified), Set(plain, collapsed))
+      val appended = outputXml(qualified, plan)
+      val root =
+        XmlSecurity.parseSafe(appended, "metadata.xml").fold(e => fail(e.message), identity)
+      root.descendant_or_self.collect { case e: Elem if labels.contains(e.label) => e }.foreach {
+        e =>
+          assertEquals(Option(e.namespace), Some(namespace), s"element ${e.label}: $appended")
+      }
+      assertEquals(resolve(appended), Map(1 -> plain, 2 -> collapsed))
+      assertEquals(
+        SheetMetadataPart.plan(Some(appended), Set(plain, collapsed)).output,
+        MetadataOutput.Untouched
+      )
+    }
+  }
+
+  test("external sheetMetadata relationships do not identify a package part") {
+    val external = Relationship("rId2", SheetMetadataPart.relType, "metadata.xml", Some("External"))
+    assertEquals(SheetMetadataPart.locate(Relationships(Seq(external))), None)
+    val internal = external.copy(id = "rId3", targetMode = None)
+    assertEquals(
+      SheetMetadataPart.locate(Relationships(Seq(external, internal))),
+      Some("xl/metadata.xml")
+    )
+  }
+
   test("parse is lenient: junk, a dangling v, a non-XLDAPR t") {
     assertEquals(resolve("<metadata"), Map.empty)
     assertEquals(resolve(""), Map.empty)
