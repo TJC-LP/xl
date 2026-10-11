@@ -10,6 +10,7 @@ import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.ReadCommands
 import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode}
+import com.tjclp.xl.error.XLException
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
 
@@ -261,6 +262,43 @@ class EvalCommandSpec extends CatsEffectSuite:
       assertEquals(at("result")("value"), ujson.Num(25))
       assertEquals(none("at"), ujson.Null)
       assertEquals(none("result")("value"), ujson.Num(385))
+  }
+
+  /** `eval --at` on `sheet` must refuse, naming the cycle the plain cell would close. */
+  private def circularAt(sheet: Sheet, formula: String, at: String, cycle: String): IO[Unit] =
+    ReadCommands.eval(Workbook(Vector(sheet)), Some(sheet), formula, Some(at), Nil).attempt.map {
+      case Left(e: XLException) =>
+        assert(e.getMessage.contains(s"Circular reference detected: $cycle"), e.getMessage)
+      case other => fail(s"$formula --at $at: expected a circular reference, got $other")
+    }
+
+  test("GH-715: eval --at a cell the formula reads is a circular reference, not its old value") {
+    val sheet = pairedColumns(Sheet("Test"))
+    circularAt(sheet, "=SUM(A1:A10)", "A5", "A5 → A5") >>
+      circularAt(sheet, "=B3+1", "B3", "B3 → B3") >>
+      circularAt(sheet, sumProduct, "B3", "B3 → B3")
+  }
+
+  test("GH-715: eval --at a cell its precedents read back is a circular reference") {
+    val sheet = pairedColumns(Sheet("Test")).put(ref"C1", CellValue.Formula("=D5*2"))
+    circularAt(sheet, "=C1+1", "D5", "D5 → C1 → D5")
+  }
+
+  test("GH-715: a cycle through a range is caught outside the used range too") {
+    val sheet = pairedColumns(Sheet("Test")).put(ref"C1", CellValue.Formula("=SUM(D:D)"))
+    circularAt(sheet, "=SUM(A:A)", "A20", "A20 → A20") >>
+      circularAt(sheet, "=C1", "D20", "D20 → C1 → D20")
+  }
+
+  test("GH-715: eval --at a cell the formula does not read evaluates") {
+    val sheet = pairedColumns(Sheet("Test")).put(ref"C1", CellValue.Formula("=D5*2"))
+    val wb = Workbook(Vector(sheet))
+    for
+      below <- ReadCommands.eval(wb, Some(sheet), "=SUM(A1:A10)", Some("A11"), Nil)
+      beside <- ReadCommands.eval(wb, Some(sheet), "=C1+1", Some("D6"), Nil)
+    yield
+      assert(below.contains("Result: 55 (number)"), below)
+      assert(beside.contains("Result: 1 (number)"), beside)
   }
 
   // --- GH-715 end to end, through the real command tree ----------------------------------------

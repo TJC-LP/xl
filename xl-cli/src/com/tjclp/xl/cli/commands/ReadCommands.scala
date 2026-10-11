@@ -9,7 +9,7 @@ import com.tjclp.xl.cli.contract.{CliError, CliException}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver, ValueParser}
 import com.tjclp.xl.cli.output.{Escape, Format, JsonRenderer}
 import com.tjclp.xl.error.XLException
-import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator}
+import com.tjclp.xl.formula.{DependencyGraph, FormulaParser, SheetEvaluator, TExpr}
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -241,7 +241,7 @@ object ReadCommands:
     overrides: List[String],
     position: Option[ARef]
   ): IO[CellValue] =
-    precedentsEvaluated(wb, sheet, formula, overrides).flatMap { (evalSheet, evaluator) =>
+    precedentsEvaluated(wb, sheet, formula, overrides, position).flatMap { (evalSheet, evaluator) =>
       IO.fromEither(
         SheetEvaluator
           .evaluateFormulaUsing(evalSheet, formula, evaluator, Some(wb), currentCell = position)
@@ -258,23 +258,26 @@ object ReadCommands:
    *   - overrides propagate through chains (TJC-698): A1=200 → B1=400 → C1=450;
    *   - only the O(k) closure is evaluated, not the O(n) sheet. GH-197: bounded extraction, so a
    *     full-column range does not enumerate 1M+ cells.
+   *
+   * With `at` (GH-715) the formula is the cell there: a closure that reads `at` back is the
+   * circular reference the plain cell would be, raised as the recalc cycle is, never `at`'s old
+   * content.
    */
   private def precedentsEvaluated(
     wb: Workbook,
     sheet: Sheet,
     formula: String,
-    overrides: List[String]
+    overrides: List[String],
+    at: Option[ARef] = None
   ): IO[(Sheet, Evaluator)] =
     for
       tempSheet <- applyOverrides(sheet, overrides)
-      targetDeps <- IO.fromEither(
-        FormulaParser
-          .parse(formula)
-          .map(expr => DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange))
-          .left
-          .map(unparseable(_, formula))
-      )
+      expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
+      targetDeps = DependencyGraph.extractDependenciesBounded(expr, tempSheet.usedRange)
       graph = DependencyGraph.fromSheet(tempSheet)
+      _ <- at.flatMap(cycleThrough(tempSheet, graph, expr, targetDeps, _)) match
+        case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
+        case None => IO.unit
       allDeps = DependencyGraph.transitiveDependencies(graph, targetDeps)
       formulaDeps = allDeps.filter(ref =>
         tempSheet(ref).value match
@@ -303,6 +306,49 @@ object ReadCommands:
         }
       }
     yield (evalSheet, evaluator)
+
+  /**
+   * The cycle `expr` would close as the cell `at` on `sheet`, `at` first and last: `expr` reads
+   * `at`, or a formula in its closure does. Breadth first, so the shortest. Whether a formula reads
+   * `at` is asked of its references themselves (bounded to `at` alone): `at` may lie outside the
+   * used range that bounds the graph's range edges, as a total placed below its column does.
+   */
+  private def cycleThrough(
+    sheet: Sheet,
+    graph: DependencyGraph,
+    expr: TExpr[?],
+    targetDeps: Set[ARef],
+    at: ARef
+  ): Option[List[ARef]] =
+    val only = Some(CellRange(at, at))
+    def reads(e: TExpr[?]): Boolean =
+      DependencyGraph.extractDependenciesBounded(e, only).contains(at)
+    def readsBack(ref: ARef): Boolean =
+      sheet(ref).value match
+        case CellValue.Formula(text, _, _) => FormulaParser.parse(text).exists(reads)
+        case _ => false
+    @scala.annotation.tailrec
+    def trace(ref: ARef, parent: Map[ARef, ARef], path: List[ARef]): List[ARef] =
+      parent.get(ref) match
+        case Some(from) if ref != at => trace(from, parent, ref :: path)
+        case _ => at :: path
+    @scala.annotation.tailrec
+    def search(frontier: Vector[ARef], parent: Map[ARef, ARef]): Option[List[ARef]] =
+      frontier.find(readsBack) match
+        case Some(last) => Some(trace(last, parent, List(at)))
+        case None =>
+          val (next, reached) = frontier.foldLeft((Vector.empty[ARef], parent)) {
+            case ((acc, seen), ref) =>
+              graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
+                case ((a, s), dep) =>
+                  if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
+              }
+          }
+          if next.isEmpty then None else search(next, reached)
+    if reads(expr) then Some(List(at, at))
+    else
+      val roots = (targetDeps - at).toVector
+      search(roots, roots.map(_ -> at).toMap)
 
   /**
    * Evaluate array formula and display result as table.
