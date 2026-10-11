@@ -184,3 +184,11 @@ class ArraySelectedReferenceSpec extends FunSuite:
       Right(CellValue.Error(CellError.Value))
     )
   }
+
+  test("computed scalar reference slots are classified before reference dispatch") {
+    assertEquals(positionless("=COUNTBLANK(INDEX(B:B,SUM(0)))"), Right(num(1048573)))
+    assertEquals(positionless("=ROWS(INDEX(B:B,SUM(0)))"), Right(num(1048576)))
+    assertEquals(positionless("=SUM(INDEX(B1:B3,SUM(1,1)))"), Right(num(2)))
+    assertEquals(positionless("=ROWS(INDEX(B:B,{0}))"), Right(num(1048576)))
+    assertEquals(positionless("=SUM(INDEX(B1:B3,{1,3}))"), Right(num(4)))
+  }
