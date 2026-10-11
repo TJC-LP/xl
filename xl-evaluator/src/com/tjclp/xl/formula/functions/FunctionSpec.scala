@@ -1,13 +1,13 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -179,43 +179,24 @@ final case class EvalContext(
 
   /**
    * The (sheet, range) a range-typed argument slot names — the resolver every function's range slot
-   * uses (GH-710). A written range or cell and a name bound to one resolve statically
-   * ([[Evaluator.resolveRangeLocation]]). A name whose formula computes a reference (OFFSET,
-   * INDIRECT, INDEX, IF or CHOOSE over references — a dynamic range) is evaluated for it, and a LET
-   * name is the reference it is bound to. The error such a formula evaluates to is the slot's error
-   * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
-   * Excel.
+   * uses (GH-710), [[Evaluator.resolveRangeSlot]] with this call's LET environment. A written range
+   * or cell and a name bound to one resolve statically ([[Evaluator.resolveRangeLocation]]). A name
+   * whose formula computes a reference (OFFSET, INDIRECT, INDEX, IF or CHOOSE over references — a
+   * dynamic range) is evaluated for it, and a LET name is the reference it is bound to. The error
+   * such a formula evaluates to is the slot's error (`#REF!` for an OFFSET off the grid); a name or
+   * LET name holding a value is `#VALUE!`, as in Excel.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[formula] def resolveRange(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange)] =
-    def notARange(what: String): EvalError =
-      EvalError.ErrorValue(CellError.Value, Some(s"$what does not refer to a range"))
-    def reference(value: Any, otherwise: => EvalError): Either[EvalError, (Sheet, CellRange)] =
-      value match
-        case RangeOperand(target, range) => Right((target, range))
-        case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
-        // a named formula evaluates as an array: its error arrives as a 1×1 array
-        case single: ArrayResult if single.rows == 1 && single.cols == 1 =>
-          single(0, 0) match
-            case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
-            case _ => Left(otherwise)
-        case _ => Left(otherwise)
-    location match
-      case TExpr.RangeLocation.Name(name, scope) =>
-        Evaluator.resolveRangeLocation(location, sheet, workbook) match
-          // bound to a formula rather than a range: the reference the formula computes, if any
-          case Left(static @ EvalError.ErrorValue(CellError.Value, _)) =>
-            val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
-            evalReference(named.asInstanceOf[TExpr[Any]]).flatMap(reference(_, static))
-          case resolved => resolved
-      case TExpr.RangeLocation.Binding(name) =>
-        bindings
-          .get(name)
-          .toRight(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
-          .flatMap(reference(_, notARange(s"LET name '$name'")))
-      case _ => Evaluator.resolveRangeLocation(location, sheet, workbook)
+    Evaluator.resolveRangeSlot(
+      location,
+      sheet,
+      workbook,
+      Evaluator.NameTrail.empty,
+      bindings,
+      evalReference
+    )
 
 object EvalContext:
   /**

@@ -4,6 +4,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.DependentRecalculation
+import com.tjclp.xl.formula.functions.CriteriaRangeResize
 import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -149,4 +150,75 @@ class CriteriaRangeDependencySpec extends FunSuite:
     val result = Workbook(original).recalculate()
     assert(result.errors.exists(_.ref == ref"C2"), result.errors.toString)
     assertEquals(cache(resultSheet(result.workbook), ref"C2"), None)
+  }
+
+  // ----- the text pre-filter: sound for names and LET names, silent for everything else -----
+
+  List(
+    "SUMIF(A1:A3,\">0\",amt)",
+    "SUMIF(amt,\">0\")",
+    "sumif(A1:A3,\">0\",amt)",
+    "AVERAGEIF (A1:A3, 1, amt)",
+    "1+SUMIF(criteria,\">0\",C1)",
+    "SUMIF(Sheet1!amt,1,C1)",
+    "SUMIF('My Sheet'!amt,1,C1)",
+    "SUMIF(A1:A3,1,Sales.Total)",
+    "SUMIF(A1:A3,1,_amt)",
+    "SUMIF(A1:A3,1,\\amt)",
+    "SUMIF(A1:A3,1,ümsatz)",
+    // past column XFD: not a cell, so the parser reads a name
+    "SUMIF(A1:A3,1,XFE1)",
+    "LET(t,C1,SUMIF(A1:A3,\">0\",t))",
+    "_xlfn.LET(_xlpm.t,C1,SUMIF(A1:A3,\">0\",_xlpm.t))",
+    "SUMIF(A1:A3,\"x\",C1)+LET(t,C1,SUMIF(A1:A3,\">0\",t))",
+    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)"
+  ).foreach { formula =>
+    test(s"pre-filter keeps =$formula, which may resize through a name") {
+      assert(CriteriaRangeResize.mayResizeThroughName(formula))
+    }
+  }
+
+  List(
+    "SUMIFS(C1:C3,amt,\">0\")",
+    "AVERAGEIFS(amt,A1:A3,1)",
+    "SUM(amt)",
+    "SUMIF(A1:A3,\">0\",C1:C3)",
+    "SUMIF($A$1:$A$10,$B2,$C$1)",
+    "SUMIF(A:A,\"x\",B:B)",
+    "SUMIF($A:$A,\"x\",$B:$B)",
+    "SUMIF(1:3,\"x\",5:7)",
+    "SUMIF(A1:A3,\"amt\",C1)",
+    "SUMIF(A1:A3,TRUE,C1)",
+    "SUMIF(Sheet1!A1:A3,\">0\",Sheet1!C1)",
+    "SUMIF('amt sheet'!A1:A3,\">0\",'amt sheet'!C1)",
+    "SUMIF('O''Brien amt'!A1:A3,\">0\",C1)",
+    "ROUND(SUMIF(A1:A3,\">0\",C1),2)",
+    "SUMIF(A1:A3,#N/A,C1)+SUMIF(A1:A3,1.5E3,C1)",
+    "SUMIF(A1:A3,\">0\",C1#)",
+    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)"
+  ).foreach { formula =>
+    test(s"pre-filter skips =$formula, which cannot resize through a name") {
+      assert(!CriteriaRangeResize.mayResizeThroughName(formula))
+    }
+  }
+
+  test("dynamic-cell discovery parses no SUMIFS and no SUMIF over written ranges") {
+    val literal = (1 to 50).foldLeft(sheet) { (s, i) =>
+      s.put(ARef.from0(5, i), CellValue.Formula(s"SUMIFS(C1:C3,A1:A3,\">$i\")", None))
+        .put(ARef.from0(6, i), CellValue.Formula(s"SUMIF(A1:A3,\">$i\",C1)", None))
+        .put(ARef.from0(7, i), CellValue.Formula(s"AVERAGEIFS(C1:C3,criteria,$i)", None))
+    }
+    val wb = names(Workbook(literal))
+    val trace = DependencyGraph.dynamicCellsTraced(wb)
+    assertEquals(trace.cells, Set.empty[QualifiedRef])
+    // the three definitions parse; no cell does
+    assertEquals(trace.parses, 3)
+    assertEquals(DependencyGraph.dynamicCells(literal), Set.empty[ARef])
+
+    // one resizing reader through a name is found, and is the one cell parsed
+    val withReader = literal.put(ref"E1", CellValue.Formula("SUMIF(A1:A3,\">0\",target)", None))
+    val traced = DependencyGraph.dynamicCellsTraced(names(Workbook(withReader)))
+    assertEquals(traced.cells, Set(QualifiedRef(sheet.name, ref"E1")))
+    assertEquals(traced.parses, 4)
+    assertEquals(DependencyGraph.dynamicCells(withReader), Set(ref"E1"))
   }
