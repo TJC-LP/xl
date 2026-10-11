@@ -283,6 +283,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
   `VLOOKUP(7,dyn,1,FALSE)` — and so was a LET name bound to one (`LET(r,dyn,COUNTIF(r,">2"))`). Every
   range slot now resolves them through one evaluator-aware resolver, matching LibreOffice.
+- **SUMIF and AVERAGEIF resized through a named or LET-bound range recalculate as dynamic**
+  (#710): the cells summed take the criteria range's shape from the target's top-left cell, so
+  `SUMIF(A1:A3,">0",amt)` or `LET(t,C1,SUMIF(A1:A3,">0",t))` read cells the static dependency graph
+  never recorded, and an edit to them left the result stale. Such a cell is now scheduled like an
+  INDIRECT or OFFSET reader: `xl audit` lists it under `dynamic`, `recalc --tables` seeding skips a
+  data table whose cone holds it (`Skipped`, naming the cell), and `recalculateDependents` treats
+  it as always dirty. A SUMIF over written ranges, and SUMIFS/AVERAGEIFS, stay static and are not
+  parsed for it.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
