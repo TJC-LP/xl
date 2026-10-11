@@ -264,6 +264,10 @@ private[formula] object ScalarCoercion:
     // GH-307: booleans are their Excel serial in date positions too (TRUE=1 → 1900-01-01,
     // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
     case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
+    // a serial outside 0..MaxExcelDateSerial (the in-range arms above took the rest) is an error
+    // value, as through a reference (#709); #726 makes it #NUM! in [[dateSerialOutOfRange]]
+    case bd: BigDecimal => Left(dateSerialOutOfRange(label, bd.toString))
+    case i: Int => Left(dateSerialOutOfRange(label, i.toString))
     // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023); other text is
     // #VALUE! (#709) — date-shaped text included, which VALUE does not parse either
     case s: String =>
@@ -300,6 +304,18 @@ private[formula] object ScalarCoercion:
     case CellValue.RichText(rt) => Some(rt.toPlainText)
     case CellValue.Formula(_, Some(cached), _) => cellText(cached)
     case _ => None
+
+  /**
+   * #709: a date slot's serial outside 0..[[MaxExcelDateSerial]] — `=YEAR(-5)`, `=YEAR("-5")`,
+   * `=YEAR(A1)` over `-5` or `'-5` — as one error value on every path. Excel's answer is `#NUM!`
+   * (#726, which changes the code here alone); `#VALUE!` until then, so the cell caches an error
+   * value instead of failing the recalculation.
+   */
+  private[formula] def dateSerialOutOfRange(label: String, serial: String): EvalError =
+    EvalError.ErrorValue(
+      CellError.Value,
+      Some(s"$label: serial ${quotedText(serial)} is outside the 1900 date range")
+    )
 
   /** Longest run of a cell's text, in code points, quoted in a `#VALUE!` diagnostic. */
   private[formula] val MaxQuotedText: Int = 40

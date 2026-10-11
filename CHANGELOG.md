@@ -361,7 +361,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `YEAR` is 2023); range folds that take dates (NETWORKDAYS holidays, XIRR/XNPV dates) still refuse
   text, as Excel does. For library callers, a text cell that any single-reference decoder refuses,
   including one supplied through the public `TExpr.ref(at, decode)`, now surfaces as
-  `EvalError.ErrorValue(#VALUE!)` instead of `EvalError.CodecFailed`.
+  `EvalError.ErrorValue(#VALUE!)` instead of `EvalError.CodecFailed`. An out-of-range date serial
+  (outside 0..2958465) in a date argument is now the `#VALUE!` error value on every path (literal,
+  reference, computed), not a recalculation failure; Excel's `#NUM!` is tracked in #726.
 - **Dynamic named ranges and LET references work in range arguments** (#710): a name computing a
   reference (`dyn = OFFSET(Sheet1!$A$1,0,0,10,1)`, or INDEX/INDIRECT/IF/CHOOSE over references) was
   `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
