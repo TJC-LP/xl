@@ -155,6 +155,30 @@ class CriteriaRangeDependencySpec extends FunSuite:
   // ----- the text pre-filter: sound for names and LET names, silent for everything else -----
 
   List(
+    ("SUMIF\u2003", "SUMIF with EM SPACE", 60, 240),
+    ("SUMIF\u2028", "SUMIF with LINE SEPARATOR", 60, 240),
+    ("\u017fUMIF", "SUMIF with long s", 60, 240),
+    ("SUM\u0131F", "SUMIF with dotless i", 60, 240),
+    ("AVERAGEIF\u2003", "AVERAGEIF with EM SPACE", 20, 80),
+    ("AVERAGE\u0131F", "AVERAGEIF with dotless i", 20, 80)
+  ).foreach { (function, label, initial, expected) =>
+    test(s"$label keeps resized named dependencies discoverable") {
+      val formula = s"$function(A1:A3,\">0\",staticTarget)"
+      val original = sheet.put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
+      val wb = names(Workbook(original))
+      // The parser accepts these spellings as the canonical function, so its pre-filter must too.
+      assertEquals(original.evaluateCell(ref"E1", Clock.system, Some(wb)), Right(n(initial)))
+      val updated = wb
+        .put(original.put(ref"C2", n(200)))
+        .recalculateDependents(original.name, Set(ref"C2"))
+      assertEquals(cache(resultSheet(updated), ref"E1"), Some(n(expected)))
+      assert(CriteriaRangeResize.mayResizeThroughName(formula))
+      assertEquals(DependencyGraph.dynamicCells(original), Set(ref"E1"))
+      assertEquals(DependencyGraph.dynamicCells(wb), Set(QualifiedRef(sheet.name, ref"E1")))
+    }
+  }
+
+  List(
     "SUMIF(A1:A3,\">0\",amt)",
     "SUMIF(amt,\">0\")",
     "sumif(A1:A3,\">0\",amt)",

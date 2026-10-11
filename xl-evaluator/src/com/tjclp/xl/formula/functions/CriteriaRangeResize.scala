@@ -42,10 +42,14 @@ object CriteriaRangeResize:
         unresolved(criteria) || unresolved(target)
       case _ => false)
 
-  /** A call to SUMIF or AVERAGEIF — not SUMIFS or AVERAGEIFS, which never resize. */
+  /**
+   * A call to SUMIF or AVERAGEIF — not SUMIFS or AVERAGEIFS, which never resize. Match the parser's
+   * Unicode case folding and Char.isWhitespace so valid spellings cannot evade discovery.
+   */
   private val ResizingCall = java.util.regex.Pattern.compile(
-    "\\b(?:SUMIF|AVERAGEIF)\\s*\\(",
-    java.util.regex.Pattern.CASE_INSENSITIVE
+    "\\b(?:SUMIF|AVERAGEIF)\\p{javaWhitespace}*\\(",
+    java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE |
+      java.util.regex.Pattern.UNICODE_CHARACTER_CLASS
   )
 
   /**
