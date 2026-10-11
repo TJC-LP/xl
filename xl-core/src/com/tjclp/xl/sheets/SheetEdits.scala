@@ -36,23 +36,29 @@ private[xl] object SheetEdits:
    * and fills `{=...}` as `{=...}`, and a plain paste would be a legacy formula computing another
    * value. A multi-cell CSE anchor pastes a plain formula, since its record claims cells the paste
    * does not write. A dynamic-array anchor of any size pastes as a 1x1 dynamic array at `target`
-   * (GH-714): its extent is re-derived by the next evaluation.
+   * (GH-714), unless the copy includes its entire spill. A complete copied spill keeps its shifted
+   * extent so Excel recognizes the copied constants as spill members, not occupied cells.
    */
   private def shifted(
     value: CellValue,
     target: ARef,
     colDelta: Int,
-    rowDelta: Int
+    rowDelta: Int,
+    copiedSource: Option[CellRange] = None
   )(using fs: FormulaSupport): XLResult[(CellValue, Vector[String])] =
     value match
       case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
         Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
       case CellValue.Formula(expr, _, kind) =>
         val pastedKind = kind match
-          // GH-714: a dynamic array of any size pastes as a dynamic array anchored at the target;
-          // its spill is recomputed there, as Excel re-spills a pasted `=SORT(..)`
           case arr: FormulaKind.ArrayFormula if arr.isDynamicArray =>
-            arr.copy(ref = CellRange(target, target))
+            val extent = for
+              source <- copiedSource
+              if source.contains(arr.ref.start) && source.contains(arr.ref.end)
+              start <- arr.ref.start.tryShift(colDelta, rowDelta)
+              end <- arr.ref.end.tryShift(colDelta, rowDelta)
+            yield CellRange(start, end)
+            arr.copy(ref = extent.getOrElse(CellRange(target, target)))
           case arr: FormulaKind.ArrayFormula if arr.ref.width == 1 && arr.ref.height == 1 =>
             arr.copy(ref = CellRange(target, target))
           case _ => FormulaKind.Normal()
@@ -180,8 +186,10 @@ private[xl] object SheetEdits:
    * sheet when the names agree). Source cells are snapshotted before any write, so an overlapping
    * same-sheet copy reads the pre-copy state whatever the iteration order. Empty source cells leave
    * their target unchanged; styles travel with their cells (looked up in the source registry,
-   * registered in the target's). `valuesOnly` pastes a formula's cached value — an uncached formula
-   * pastes `Empty`; callers with an evaluator cache the source first.
+   * registered in the target's). A fully included dynamic spill keeps its shifted array extent; an
+   * anchor copied without its whole spill keeps a 1x1 record. `valuesOnly` pastes a formula's
+   * cached value — an uncached formula pastes `Empty`; callers with an evaluator cache the source
+   * first.
    */
   def copyRange(
     target: Sheet,
@@ -208,6 +216,7 @@ private[xl] object SheetEdits:
     val colDelta = targetRange.colStart.index0 - sourceRange.colStart.index0
     val rowDelta = targetRange.rowStart.index0 - sourceRange.rowStart.index0
     val working = if sourceSheet.name == target.name then sourceSheet else target
+    val copiedSource = Some(sourceRange)
     val zero: Reporting = (working, Vector.empty)
     foldE(sourceRange.cells)(zero) { case ((s, offGrid), srcRef) =>
       val tgtRef = ARef.from0(srcRef.col.index0 + colDelta, srcRef.row.index0 + rowDelta)
@@ -219,7 +228,7 @@ private[xl] object SheetEdits:
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
             case CellValue.Formula(_, cachedOpt, _) if valuesOnly =>
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
-            case other => shifted(other, tgtRef, colDelta, rowDelta)
+            case other => shifted(other, tgtRef, colDelta, rowDelta, copiedSource)
           copied.map { (v, voided) =>
             val withValue = s.put(tgtRef, v)
             val styled = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match
