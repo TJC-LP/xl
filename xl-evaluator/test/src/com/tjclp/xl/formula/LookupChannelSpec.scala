@@ -172,7 +172,9 @@ class LookupChannelSpec extends FunSuite:
       .put(ref"A3", CellValue.Formula("1+", None))
       .put(ref"D2", text("dd"))
     check(grid, "=MATCH(4,A1:B3,0)", num(4))
-    check(grid, "=XLOOKUP(4,A1:B2,C1:D2)", text("dd"))
+    // XLOOKUP's keys are one row or column; preserve each orientation's own position.
+    check(grid, "=XLOOKUP(4,A2:B2,C2:D2)", text("dd"))
+    check(grid, "=XLOOKUP(4,B1:B2,D1:D2)", text("dd"))
     assert(grid.evaluateFormula("=MATCH(9,A1:B3,0)").isLeft)
   }
 
