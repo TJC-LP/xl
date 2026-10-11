@@ -73,6 +73,10 @@ class ArraySelectedReferenceSpec extends FunSuite:
     assertEquals(positionless("=SUM(IF(TRUE,B:B,A:A))"), Right(num(6)))
     assertEquals(cse("SUM(IF(TRUE,B:B,A:A))"), Some(num(6)))
     assertEquals(cse("COUNTA(IF(TRUE,B:B,A:A))"), Some(num(3)))
+    // every blank row of the column counts, as in Excel: 1048576 cells, three filled
+    assertEquals(positionless("=COUNTBLANK(B:B)"), Right(num(1048573)))
+    assertEquals(positionless("=COUNTBLANK(IF(TRUE,B:B,A:A))"), Right(num(1048573)))
+    assertEquals(cse("COUNTBLANK(IF(TRUE,B:B,A:A))"), Some(num(1048573)))
   }
 
   test("ROWS of a selected whole column is the column's height") {
@@ -174,6 +178,7 @@ class ArraySelectedReferenceSpec extends FunSuite:
     val empty = Sheet(SheetName.unsafe("E"))
     assertEquals(positionless("=SUM(IF(TRUE,B:B,A:A))", empty), Right(num(0)))
     assertEquals(positionless("=SUMPRODUCT(IF(TRUE,B:B,A:A))", empty), Right(num(0)))
+    assertEquals(positionless("=COUNTBLANK(IF(TRUE,B:B,A:A))", empty), Right(num(1048576)))
     assertEquals(
       positionless("=AND(IF(TRUE,B:B,A:A))", empty),
       Right(CellValue.Error(CellError.Value))
