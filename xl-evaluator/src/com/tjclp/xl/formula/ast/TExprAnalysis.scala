@@ -216,9 +216,9 @@ trait TExprAnalysis:
       case Coerced(inner, target) => Coerced(transformRanges(inner, f), target)
       // A lifted call evaluates element-wise over its lifted scalar slots, so a range there is an
       // element source like an operand's and takes the same bounds (SUMPRODUCT(--(A:A>0),ABS(B:B))
-      // must not mismatch its dimensions), and so does ROW's or COLUMN's range, whose array has one
-      // number per row or column of it (GH-712: SUMPRODUCT((A:A>5)*ROW(A:A))). Other calls are
-      // shape-sensitive (ROWS(A:A), INDEX).
+      // must not mismatch its dimensions), and so does the range of a call flagged
+      // `boundsReferenceAxis` (ROW, COLUMN), whose array has one number per row or column of it
+      // (GH-712: SUMPRODUCT((A:A>5)*ROW(A:A))). Other calls are shape-sensitive (ROWS(A:A), INDEX).
       case call: Call[?] => transformLiftedSlots(call, f)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other
@@ -229,7 +229,7 @@ trait TExprAnalysis:
     f: (Option[SheetName], CellRange) => CellRange
   ): TExpr[A] =
     call.spec.flags.lift match
-      case ArrayLift.Off if call.spec.name == "ROW" || call.spec.name == "COLUMN" =>
+      case ArrayLift.Off if call.spec.flags.boundsReferenceAxis =>
         val replacements =
           call.spec.argSpec.scalarSlots(call.args).map((slot, _) => transformRanges(slot, f))
         Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)

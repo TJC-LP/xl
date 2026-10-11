@@ -68,7 +68,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "ROW",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        boundsReferenceAxis = true
+      )
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) => positions("ROW", expr, ctx, alongRows = true)
@@ -89,7 +93,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "COLUMN",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        boundsReferenceAxis = true
+      )
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) => positions("COLUMN", expr, ctx, alongRows = false)
@@ -122,19 +130,25 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     ctx: EvalContext,
     alongRows: Boolean
   ): Either[EvalError, BigDecimal] =
+    def axis(range: CellRange): (Int, Int) =
+      if alongRows then (range.rowStart.index0, range.rowEnd.index0)
+      else (range.colStart.index0, range.colEnd.index0)
     def numbers(reference: CellRange): Either[EvalError, Any] =
-      val range = ctx.boundArrayRange(reference)
-      val (first, last) =
-        if alongRows then (range.rowStart.index0, range.rowEnd.index0)
-        else (range.colStart.index0, range.colEnd.index0)
-      if range.height <= 0 || range.width <= 0 then Right(ArrayResult.empty)
-      else if first == last || !ctx.arrayMode then Right(BigDecimal(first + 1))
+      // a plain cell's number is the reference's own first row or column: SUMPRODUCT's shared
+      // extent only aligns arrays, so it never reaches the scalar answer
+      if !ctx.arrayMode then Right(BigDecimal(axis(reference)._1 + 1))
       else
-        val values = (first to last).map(i => CellValue.Number(BigDecimal(i + 1))).toVector
-        // a whole column SUMPRODUCT constrained to an empty sheet's used area has no numbers
-        if values.isEmpty then Right(ArrayResult.empty)
-        else if alongRows then Right(ArrayResult(values.map(Vector(_))))
-        else Right(ArrayResult(Vector(values)))
+        val range = ctx.boundArrayRange(reference)
+        // CellRange.empty (start past end, so no rows or columns): a whole axis SUMPRODUCT
+        // constrained to an empty sheet's used area has no numbers
+        if range.height <= 0 || range.width <= 0 then Right(ArrayResult.empty)
+        else
+          val (first, last) = axis(range)
+          if first == last then Right(BigDecimal(first + 1))
+          else
+            val values = (first to last).map(i => CellValue.Number(BigDecimal(i + 1))).toVector
+            if alongRows then Right(ArrayResult(values.map(Vector(_))))
+            else Right(ArrayResult(Vector(values)))
     def notAReference: EvalError =
       EvalError.EvalFailed(
         s"$fnName requires a cell reference",

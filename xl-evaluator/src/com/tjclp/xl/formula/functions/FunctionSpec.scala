@@ -45,8 +45,18 @@ final case class FunctionFlags(
    * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
    */
   lift: ArrayLift = ArrayLift.Off,
-  /** An expression argument needs reference identity (ROW/COLUMN and shape inspection). */
-  requiresReferenceArguments: Boolean = false
+  /**
+   * GH-712: an expression argument needs reference identity, its position or shape rather than its
+   * value (ROW, COLUMN, ROWS, COLUMNS), so a LET binding it reads keeps the reference it denotes.
+   */
+  requiresReferenceArguments: Boolean = false,
+  /**
+   * GH-712: the result has one element per row or column of the reference argument (ROW, COLUMN),
+   * so SUMPRODUCT's whole-axis trimming (GH-192) reaches that reference as it does a lifted slot,
+   * keeping `SUMPRODUCT((A:A>5)*ROW(A:A))` aligned. False for shape readers whose answer is the
+   * reference's full extent (ROWS, COLUMNS) and for every other function.
+   */
+  boundsReferenceAxis: Boolean = false
 )
 
 /**
@@ -150,7 +160,10 @@ final case class EvalContext(
    */
   private[formula] def arrayMode: Boolean = operands.arrayMode
 
-  /** Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. */
+  /**
+   * Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. It
+   * shapes arrays only: callers apply it in array mode, never to a scalar answer.
+   */
   private[formula] def boundArrayRange(range: CellRange): CellRange =
     operands.arrayRangeBounds.fold(range)(_(range))
 
