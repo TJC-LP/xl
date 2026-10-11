@@ -12,7 +12,8 @@ import com.tjclp.xl.syntax.*
 import munit.FunSuite
 
 /**
- * Integration probes for PRs #706 and #708; expected numeric coercions verified in Excel 16.113.4.
+ * Numeric-string coercion and formatted rich-text display. Numeric expectations verified in Excel
+ * 16.113.4.
  */
 class NumericTextGroupingSpec extends FunSuite:
   private val sheet = Sheet("Review")

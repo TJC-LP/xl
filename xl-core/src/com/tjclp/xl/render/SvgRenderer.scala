@@ -1,9 +1,9 @@
 package com.tjclp.xl.render
 
-import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cf.{CfOverlay, CfPaint}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -405,7 +405,8 @@ object SvgRenderer:
     val cellPt = style.fold(DefaultFontSize.toDouble)(_.font.sizePt)
     val (textX, anchor) = textAlignment(resolved, box.x, box.width)
     // Rich text shares one baseline: its largest run must fit the row like Excel autofits it
-    val drawnPt = if includeStyles then largestFontPt(cell.value, cellPt) else cellPt
+    val drawnPt =
+      if includeStyles then largestFontPt(cell.value, cellPt, resolved.numFmt) else cellPt
     val textY = textYPosition(style, drawnPt, box.y, box.height)
     val clipAttr = s""" clip-path="url(#$clipId)""""
 
