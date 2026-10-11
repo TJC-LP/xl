@@ -62,6 +62,9 @@ object XmlUtil:
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/chart"
   val relTypeTheme =
     "http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme"
+  // GH-714: the workbook's cell/value metadata part (xl/metadata.xml: dynamic arrays, rich values)
+  val relTypeSheetMetadata =
+    "http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata"
   // docProps relationships (GH-242): core props is a PACKAGE relationship type, app is officeDocument
   val relTypeCoreProperties =
     "http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties"
@@ -117,6 +120,8 @@ object XmlUtil:
   val ctDrawing = "application/vnd.openxmlformats-officedocument.drawing+xml"
   val ctChart = "application/vnd.openxmlformats-officedocument.drawingml.chart+xml"
   val ctTheme = "application/vnd.openxmlformats-officedocument.theme+xml"
+  val ctSheetMetadata =
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"
   val ctRelationships = "application/vnd.openxmlformats-package.relationships+xml"
   val ctCoreProperties = "application/vnd.openxmlformats-package.core-properties+xml"
   val ctExtendedProperties =

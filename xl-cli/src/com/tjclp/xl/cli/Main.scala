@@ -584,6 +584,15 @@ RUNNING TOTALS:
 BATCH (explicit, no dragging):
   putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"  → Formulas applied as-is
 
+DYNAMIC ARRAYS (--array, in-memory only):
+  A plain putf is a legacy formula: Excel 365 opens =SORT(B1:B3) as =@SORT(B1:B3) (one value)
+  and =SUM(A1:A10*B1:B10) as row-by-row implicit intersection. --array stores the formula as
+  Excel 365 stores a typed one: a dynamic array anchored at <ref> that spills, with the spill
+  extent and its values computed now. One cell, one formula; a spill into occupied cells, a
+  merge, another array or a table is refused (Excel would show #SPILL!).
+  putf --array A1 "=SORT(B1:B3)"          → A1:A3 spill
+  putf --array C1 "=SUM(A1:A10*B1:B10)"   → one value, no implicit intersection
+
 EXAMPLES:
   xl -f f.xlsx -s S1 -o o.xlsx putf C1 "=A1+B1"
   xl -f f.xlsx -s S1 -o o.xlsx putf B2:B100 "=A2*1.1"
@@ -1263,9 +1272,17 @@ USAGE:
   // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
   private val formulasArg = Opts.arguments[String]("formula")
 
+  private val arrayOpt = Opts
+    .flag(
+      "array",
+      "Store as an Excel 365 dynamic-array formula anchored at <ref>; it spills from that cell, " +
+        "with no implicit intersection (in-memory only)"
+    )
+    .orFalse
+
   val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", putfHelp) {
-    (refArg, formulasArg).mapN { (ref, formulas) =>
-      CliCommand.PutFormula(ref, formulas.toList)
+    (refArg, formulasArg, arrayOpt).mapN { (ref, formulas, array) =>
+      CliCommand.PutFormula(ref, formulas.toList, array)
     }
   }
 
@@ -3233,12 +3250,21 @@ EXAMPLES:
               detect
             )
 
-    case CliCommand.PutFormula(refStr, formulas) =>
-      outputOpt match
-        case None =>
-          IO.raiseError(outputRequired("--output is required for putf command"))
-        case Some(outputPath) =>
-          StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
+    case CliCommand.PutFormula(refStr, formulas, array) =>
+      if array then
+        IO.raiseError(
+          unsupportedInStream(
+            "putf --array is not supported with --stream (the spill extent comes from evaluating " +
+              "the formula, which needs the workbook in memory)",
+            "omit --stream; use --max-size <MB> to load a large file in memory"
+          )
+        )
+      else
+        outputOpt match
+          case None =>
+            IO.raiseError(outputRequired("--output is required for putf command"))
+          case Some(outputPath) =>
+            StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
     // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
@@ -3327,9 +3353,9 @@ EXAMPLES:
         WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy, warn)
       )
 
-    case CliCommand.PutFormula(refStr, formulas) =>
+    case CliCommand.PutFormula(refStr, formulas, array) =>
       requireOutput("putf", outputOpt, backendOpt, stream)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn, array)
       )
 
     case CliCommand.Style(

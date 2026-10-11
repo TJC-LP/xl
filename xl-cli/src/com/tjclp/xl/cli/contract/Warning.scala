@@ -70,6 +70,15 @@ object WarningCode:
    */
   val CF_NOT_RENDERED: String = "CF_NOT_RENDERED"
 
+  /**
+   * GH-714: an in-memory `putf` or batch `putf` left a plain formula whose value as a plain cell —
+   * Excel's legacy implicit intersection — differs from its value as an array formula
+   * (`=SUM(A1:A10*B1:B10)` in row 5 is `A5*B5`; `=A1:A10*2` cannot spill). Names the cells, both
+   * values and the remedy: SUMPRODUCT, `putf --array`, or an explicit `@`. Informational: never
+   * gates, `--strict` included.
+   */
+  val IMPLICIT_INTERSECTION: String = "IMPLICIT_INTERSECTION"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -85,5 +94,6 @@ object WarningCode:
     NO_NUMERIC_VALUES,
     OFF_GRID_REF,
     LINT_HYGIENE,
-    CF_NOT_RENDERED
+    CF_NOT_RENDERED,
+    IMPLICIT_INTERSECTION
   )

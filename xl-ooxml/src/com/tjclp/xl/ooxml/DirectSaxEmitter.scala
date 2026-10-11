@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.{Sheet, Cell}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, CellValue, FormulaKind}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.RowProperties
@@ -65,6 +65,8 @@ object DirectSaxEmitter:
    *   If true, escape text values starting with =, +, -, @ to prevent formula injection
    * @param legacyDrawingRelId
    *   The r:id of the sheet's vmlDrawing relationship, as planned by the writer (GH-557)
+   * @param cellMetadata
+   *   GH-714: the `cm` index of each dynamic-array variant, from the writer's metadata plan
    */
   def emitWorksheet(
     writer: SaxWriter,
@@ -73,7 +75,8 @@ object DirectSaxEmitter:
     styleRemapping: Map[Int, Int],
     tablePartsXml: Option[scala.xml.Elem] = None,
     escapeFormulas: Boolean = false,
-    legacyDrawingRelId: String = "rId2"
+    legacyDrawingRelId: String = "rId2",
+    cellMetadata: ArrayMode.Dynamic => Option[Int] = FormulaKindCodec.noCellMetadata
   ): Unit =
     writer.startDocument()
     writer.startElement("worksheet")
@@ -110,7 +113,7 @@ object DirectSaxEmitter:
       emitCols(writer, sheet, styleRemapping)
 
       // Emit sheetData directly from domain cells
-      emitSheetData(writer, sheet, sst, styleRemapping, escapeFormulas)
+      emitSheetData(writer, sheet, sst, styleRemapping, escapeFormulas, cellMetadata)
 
       // GH-429: sheet-level autoFilter belongs after sheetData and before mergeCells.
       // The direct path is source-free, so only a modeled Ranged state materializes here.
@@ -215,7 +218,8 @@ object DirectSaxEmitter:
     sheet: Sheet,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
-    escapeFormulas: Boolean
+    escapeFormulas: Boolean,
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
   ): Unit =
     writer.startElement("sheetData")
 
@@ -259,7 +263,8 @@ object DirectSaxEmitter:
         rowPropsOpt,
         sst,
         styleRemapping,
-        escapeFormulas
+        escapeFormulas,
+        cellMetadata
       )
 
     writer.endElement() // sheetData
@@ -279,7 +284,8 @@ object DirectSaxEmitter:
     rowProps: Option[RowProperties],
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
-    escapeFormulas: Boolean
+    escapeFormulas: Boolean,
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
   ): Unit =
     writer.startElement("row")
     writer.writeAttribute("r", rowIdx.toString)
@@ -302,7 +308,7 @@ object DirectSaxEmitter:
     // Emit cells sorted by column
     var idx = start
     while idx < end do
-      emitCell(writer, cells(idx), sst, styleRemapping, escapeFormulas)
+      emitCell(writer, cells(idx), sst, styleRemapping, escapeFormulas, cellMetadata)
       idx += 1
 
     writer.endElement() // row
@@ -315,7 +321,8 @@ object DirectSaxEmitter:
     cell: Cell,
     sst: Option[SharedStrings],
     styleRemapping: Map[Int, Int],
-    escapeFormulas: Boolean
+    escapeFormulas: Boolean,
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
   ): Unit =
     val ref = cell.ref
     // Determine cell type and prepare value
@@ -332,6 +339,14 @@ object DirectSaxEmitter:
 
     // Cell type
     if cellType.nonEmpty then writer.writeAttribute("t", cellType)
+
+    // GH-714: a dynamic-array anchor's cell-metadata index (CT_Cell order: r, s, t, cm)
+    cell.value match
+      case CellValue.Formula(_, _, kind) =>
+        FormulaKindCodec
+          .cellMetadataOf(kind, cellMetadata)
+          .foreach(cm => writer.writeAttribute("cm", cm.toString))
+      case _ => ()
 
     // Cell value
     emitCellValue(writer, cellType, preparedValue, sst, escapeFormulas)

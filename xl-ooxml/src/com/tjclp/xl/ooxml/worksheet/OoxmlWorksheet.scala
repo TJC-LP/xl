@@ -4,7 +4,8 @@ import scala.xml.*
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Row}
 import com.tjclp.xl.ooxml.XmlUtil.{elem, nsRelationships}
-import com.tjclp.xl.ooxml.{SaxSerializable, SaxWriter, SharedStrings, XmlWritable}
+import com.tjclp.xl.ooxml.{FormulaKindCodec, SaxSerializable, SaxWriter, SharedStrings, XmlWritable}
+import com.tjclp.xl.cells.ArrayMode
 import com.tjclp.xl.sheets.Sheet
 
 /**
@@ -357,7 +358,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     tableParts: Option[Elem] = None,
     escapeFormulas: Boolean = false,
     condFmt: Option[Seq[Elem]] = None,
-    dataValidations: Option[Option[Elem]] = None
+    dataValidations: Option[Option[Elem]] = None,
+    cellMetadata: ArrayMode.Dynamic => Option[Int] = FormulaKindCodec.noCellMetadata
   ): OoxmlWorksheet =
     fromDomainWithMetadata(
       sheet,
@@ -367,7 +369,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
       tableParts,
       escapeFormulas,
       condFmt = condFmt,
-      dataValidations = dataValidations
+      dataValidations = dataValidations,
+      cellMetadata = cellMetadata
     )
 
   /**
@@ -402,6 +405,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
    *   (dv-clean → preserved source element verbatim, dv-dirty/fresh → DataValidationCodec;
    *   `Some(None)` actively clears); `None` falls back to the preserved element (legacy
    *   direct-caller behavior).
+   * @param cellMetadata
+   *   GH-714: the `cm` index the writer's metadata plan allocated to each dynamic-array variant.
+   *   The default allocates none, so a direct caller with no metadata part to point at writes a
+   *   dynamic record in its legacy shape rather than with a dangling `cm`.
    */
   def fromDomainWithMetadata(
     sheet: Sheet,
@@ -413,7 +420,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     drawingRef: Option[Elem] = None,
     condFmt: Option[Seq[Elem]] = None,
     dataValidations: Option[Option[Elem]] = None,
-    legacyDrawingRelId: String = "rId2"
+    legacyDrawingRelId: String = "rId2",
+    cellMetadata: ArrayMode.Dynamic => Option[Int] = FormulaKindCodec.noCellMetadata
   ): OoxmlWorksheet =
     // GH-558: the domain `sheet.rowProperties` is authoritative for every row attribute the reader
     // models (s/customFormat, ht/customHeight, hidden, outlineLevel, collapsed). A structural edit
@@ -478,7 +486,11 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           case com.tjclp.xl.cells.CellValue.Error(_) => ("e", cell.value)
           case com.tjclp.xl.cells.CellValue.Empty => ("", cell.value)
 
-        OoxmlCell(cell.ref, value, globalStyleIdx, cellType)
+        val cm = cell.value match
+          case com.tjclp.xl.cells.CellValue.Formula(_, _, kind) =>
+            FormulaKindCodec.cellMetadataOf(kind, cellMetadata)
+          case _ => None
+        OoxmlCell(cell.ref, value, globalStyleIdx, cellType, cm)
       }.toSeq
 
       // The source record's unmodelled metadata rides along when the row existed in the source
