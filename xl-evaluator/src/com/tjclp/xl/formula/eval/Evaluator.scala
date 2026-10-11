@@ -192,13 +192,6 @@ object Evaluator:
       None
     )
 
-  /** #709: the text a cell holds — plain, rich, or a formula's cached text — if it holds text. */
-  private[formula] def textValue(value: CellValue): Option[String] = value match
-    case CellValue.Text(s) => Some(s)
-    case CellValue.RichText(rt) => Some(rt.toPlainText)
-    case CellValue.Formula(_, Some(cached), _) => textValue(cached)
-    case _ => None
-
   /**
    * GH-353: external-workbook references cannot be resolved (the external workbook is not loaded).
    * Closed-workbook semantics live OUTSIDE the evaluator: a formula cell bearing an external ref
@@ -2137,11 +2130,11 @@ private class EvaluatorImpl(
       ArrayArithmetic.carriedError(cell.value) match
         case Some(err) => EvalError.ErrorValue(err)
         case None =>
-          Evaluator.textValue(cell.value) match
+          ScalarCoercion.cellText(cell.value) match
             case Some(text) =>
               EvalError.ErrorValue(
                 CellError.Value,
-                Some(s"${at.toA1}: text '$text' in a typed argument")
+                Some(s"${at.toA1}: text '${ScalarCoercion.quotedText(text)}' in a typed argument")
               )
             case None => EvalError.CodecFailed(at, codecErr)
     }

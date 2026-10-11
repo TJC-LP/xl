@@ -3,6 +3,9 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator}
+import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -211,4 +214,39 @@ class TextScalarSlotSpec extends FunSuite:
       Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
     }
     assert(diffs.isEmpty, diffs.mkString("\n"))
+  }
+
+  test("#709: an aggregate over a single numeric-text reference ignores it; ABS reads it") {
+    // Excel's SUM/COUNT skip text that arrives through a reference (only a literal like SUM("5")
+    // converts), while a scalar numeric slot reads '5 as 5. The aggregates route a bare reference
+    // through their own cell triage before the looser scalar decoder can see it.
+    agree("L1", "SUM(F1)", N("0"))
+    agree("L2", "COUNT(F1)", N("0"))
+    agree("L3", "ABS(F1)", N("5"))
+  }
+
+  test("#709: a rich-text condition element is read through its plain text") {
+    val rich = (s: String) => CellValue.RichText(RichText.plain(s))
+    assertEquals(ArrayArithmetic.conditionTruthy("IF", rich("TRUE")), Right(true))
+    assertEquals(ArrayArithmetic.conditionTruthy("IF", rich("false")), Right(false))
+    ArrayArithmetic.conditionTruthy("IF", rich("abc")) match
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
+  }
+
+  test("#709: the #VALUE! diagnostic quotes at most 40 characters of the cell's text") {
+    val long = "x" * 200
+    val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", T(long))
+    Evaluator.instance.eval(TExpr.ref(ref"A1", TExpr.decodeNumeric), sheet) match
+      case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) =>
+        assert(msg.contains(s"'${"x" * 40}…'"), msg)
+        assert(!msg.contains("x" * 41), msg)
+      case other => fail(s"expected #VALUE! with a message, got $other")
+    Evaluator.instance.eval(
+      TExpr.ref(ref"A1", TExpr.decodeNumeric),
+      sheet.put(ref"A1", T("abc"))
+    ) match
+      case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) =>
+        assert(msg.contains("'abc'"), msg)
+      case other => fail(s"expected #VALUE! with a message, got $other")
   }

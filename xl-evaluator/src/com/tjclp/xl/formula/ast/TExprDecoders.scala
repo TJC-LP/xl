@@ -79,11 +79,8 @@ trait TExprDecoders:
           case None => decodeNumeric(cell)
 
   /** #709: the number a text cell (or a formula cached as text) spells, if it spells one. */
-  private def numericText(value: CellValue): Option[BigDecimal] = value match
-    case CellValue.Text(s) => ScalarCoercion.parseNumericText(s)
-    case CellValue.RichText(rt) => ScalarCoercion.parseNumericText(rt.toPlainText)
-    case CellValue.Formula(_, Some(cached), _) => numericText(cached)
-    case _ => None
+  private def numericText(value: CellValue): Option[BigDecimal] =
+    ScalarCoercion.cellText(value).flatMap(ScalarCoercion.parseNumericText)
 
   /**
    * Decode cell as LocalDate value (extracts date from DateTime).
