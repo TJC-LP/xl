@@ -188,7 +188,12 @@ private[formula] object ScalarCoercion:
    * failure.
    */
   private def textRefused(label: String, expected: String, s: String): Either[EvalError, Any] =
-    Left(EvalError.ErrorValue(CellError.Value, Some(s"$label: text '$s' is not $expected")))
+    Left(
+      EvalError.ErrorValue(
+        CellError.Value,
+        Some(s"$label: text '${quotedText(s)}' is not $expected")
+      )
+    )
 
   private def coerceText(label: String, value: Any): Either[EvalError, Any] = value match
     case s: String => Right(s)
@@ -283,3 +288,27 @@ private[formula] object ScalarCoercion:
    */
   private[formula] def parseNumericText(s: String): Option[BigDecimal] =
     scala.util.Try(BigDecimal(s.trim)).toOption
+
+  /**
+   * #709: the text a cell holds — plain, rich (its plain text), or a formula's cached text — if it
+   * holds text. The one definition of "this cell is text" shared by the decode-time read
+   * (TExprDecoders.numericText) and the evaluator's `#VALUE!` fallback for refused text, so the two
+   * cannot drift when a text-bearing CellValue is added.
+   */
+  private[formula] def cellText(value: CellValue): Option[String] = value match
+    case CellValue.Text(s) => Some(s)
+    case CellValue.RichText(rt) => Some(rt.toPlainText)
+    case CellValue.Formula(_, Some(cached), _) => cellText(cached)
+    case _ => None
+
+  /** Longest run of a cell's text, in code points, quoted in a `#VALUE!` diagnostic. */
+  private[formula] val MaxQuotedText: Int = 40
+
+  /**
+   * #709: `s` as a diagnostic quotes it — at most [[MaxQuotedText]] code points, then an ellipsis —
+   * so a pasted paragraph in a cell does not become a paragraph-long error message. The cut counts
+   * code points, so it never leaves half a surrogate pair (an emoji) in the message.
+   */
+  private[formula] def quotedText(s: String): String =
+    if s.codePointCount(0, s.length) <= MaxQuotedText then s
+    else s.substring(0, s.offsetByCodePoints(0, MaxQuotedText)) + "…"

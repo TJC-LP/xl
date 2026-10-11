@@ -445,8 +445,13 @@ object ArrayArithmetic:
         case Some(b) => Right(b)
         case None =>
           Left(
-            EvalError.ErrorValue(CellError.Value, Some(s"$label: text '$s' is not TRUE or FALSE"))
+            EvalError.ErrorValue(
+              CellError.Value,
+              Some(s"$label: text '${ScalarCoercion.quotedText(s)}' is not TRUE or FALSE")
+            )
           )
+    // rich text is text: read through its plain text, like the aggregates' directValue
+    case CellValue.RichText(rt) => conditionTruthy(label, CellValue.Text(rt.toPlainText))
     case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
 
   /**
