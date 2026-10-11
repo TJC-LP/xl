@@ -70,3 +70,16 @@ class ReviewLookupNamesIntegrationSpec extends FunSuite:
     assertEquals(result.errorCells.size, 2)
     assert(result.errorCells.forall(_.reason.nonEmpty))
   }
+
+  test("resized LET targets and ROW preserve one reference through incremental and full recalc") {
+    val formula = "LET(chosen,INDEX(C1:C3,2),SUMIF(A1:A3,\">0\",chosen)+ROW(chosen))"
+    val original = sheet.put(ref"E1", CellValue.Formula(formula, Some(n(52))))
+    assertEquals(original.evaluateFormula(formula), Right(n(52)))
+    val edited = original.put(ref"C3", n(300)).recalculateDependents(Set(ref"C3"))
+    assertEquals(edited(ref"E1").value, CellValue.Formula(formula, Some(n(322))))
+    val stale = original.put(ref"C3", CellValue.Formula("100*3", Some(n(30))))
+    val result = Workbook(stale).recalculate()
+    assert(result.errors.isEmpty, result.errors.toString)
+    val recalculated = result.workbook(original.name).fold(e => fail(e.message), identity)
+    assertEquals(recalculated(ref"E1").value, CellValue.Formula(formula, Some(n(322))))
+  }

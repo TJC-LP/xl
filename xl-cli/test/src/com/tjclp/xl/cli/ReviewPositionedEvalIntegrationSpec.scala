@@ -30,3 +30,10 @@ class ReviewPositionedEvalIntegrationSpec extends CatsEffectSuite:
       assertEquals(ujson.read(text)("result")("value").num, 9.0)
     }
   }
+
+  test("positioned ROW can inspect a LET reference preserved by the combined evaluator") {
+    ReadCommands.evalData(wb, Some(sheet), "LET(chosen,D5,ROW(chosen))", Some("D5"), Nil).map {
+      text =>
+        assertEquals(ujson.read(text)("result")("value").num, 5.0)
+    }
+  }
