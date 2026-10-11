@@ -338,13 +338,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   0.5 is `.50` (was `0.50`) and `0#` on 0 is `0` (was `00`). Padding zeros group: `0,000` on 0 is
   `0,000` (was `0000`).
 - **Fraction patterns take an exact absolute value at the bottom of the scale range** (#707): a
-  negative value with more than 34 significant digits and a scale within six of `Int.MinValue`
-  threw `ArithmeticException: Underflow` under a `?/?`-style code, because the formatter took
-  Scala's `BigDecimal.abs` eagerly on every path, and it rounds under DECIMAL128 before negating;
-  the absolute value is now computed only in the convergent-search branch that needs it, and
-  exactly, through Java's `abs`. The `ExtremeExponentFormatSpec` generators negated through the
-  same operator, which both hid the defect (negative samples were rounded to 34 digits first) and
-  made the suite flake with the same exception; they now negate the unscaled value.
+  negative value with more than 34 significant digits and a scale near `Int.MinValue` (within the
+  number of digits past 34) threw `ArithmeticException: Underflow` under a `?/?`-style code: the
+  formatter took Scala's `BigDecimal.abs` eagerly on every path, and it rounds under DECIMAL128
+  before negating. The absolute value is now computed only in the convergent-search branch that
+  needs it, exactly, through Java's `abs`. The `ExtremeExponentFormatSpec` generators and the
+  `DisplaySpec` General sign-law oracle negated through the same Scala operator, which hid the
+  defect (negative samples were rounded to 34 digits first) and made both suites flake; they now
+  negate the unscaled value or use Java's `negate()`.
 - **Text in a typed scalar argument is `#VALUE!`, not an evaluation failure** (#709): `=ABS(C5)`,
   `=ROUND(C5,0)`, `=IF(C5,1,0)`, `=NOT(C5)` over a text cell left the cell uncached with a type
   mismatch (`RECALC_ERRORS`, `--strict` exit 1); they now cache Excel's `#VALUE!`, which IFERROR
