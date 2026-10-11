@@ -234,6 +234,10 @@ trait TExprAnalysis:
     f: (Option[SheetName], CellRange) => CellRange
   ): TExpr[A] =
     call.spec.flags.lift match
+      case ArrayLift.Off if call.spec.name == "ROW" || call.spec.name == "COLUMN" =>
+        val replacements =
+          call.spec.argSpec.scalarSlots(call.args).map((slot, _) => transformRanges(slot, f))
+        Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)
       case ArrayLift.Off => call
       case ArrayLift.On(lifted, _) =>
         val replacements =

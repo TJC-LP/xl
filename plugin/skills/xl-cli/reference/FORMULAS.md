@@ -189,6 +189,10 @@ exact. `OFFSET` returns a range and composes with aggregates (`=SUM(OFFSET(A1, 1
 `INDIRECT` reads the cell its text names. Both are dynamic: the dependency graph cannot see their
 targets, so cells holding them are always recalculated. `ADDRESS` `abs_num`: 1 = `$A$1`, 2 = `A$1`,
 3 = `$A1`, 4 = `A1`. `ROW()`/`COLUMN()` without an argument refer to the cell being evaluated.
+Over a multi-cell range they are arrays of row or column numbers in an array context (`evala`,
+SUMPRODUCT, an array formula): `=SUMPRODUCT((MOD(ROW(r),2)=0)*r)` sums every other row,
+`ROW(r)-ROW(first)+1` numbers positions. A plain cell keeps the first number (`=SUM(ROW(A1:A10))`
+is 1, as in legacy Excel), so fold ROW's array with SUMPRODUCT.
 `CELL("filename")` reports the workbook's saved path, `CELL("address", ref)`, `CELL("row", ref)` and
 `CELL("col", ref)` the reference parts.
 
