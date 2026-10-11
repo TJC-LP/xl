@@ -237,6 +237,8 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
   test("#707: a 40-digit negative at the bottom of the scale range renders under every code") {
     // Scala's BigDecimal.abs / unary minus round to 34 digits under DECIMAL128 before negating,
     // which underflows here: the generators and the fraction formatter both threw
+    // At this scale the fraction formatter takes its General branch, so this guards the eager
+    // |x| (the throw), not the convergent-branch abs line; the next test covers that line
     val digits = BigInt("1234567890" * 4)
     val neg = signed(digits, Int.MinValue, negative = true)
     val pos = signed(digits, Int.MinValue, negative = false)
@@ -252,13 +254,16 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
       "\"$\"#,##0_);[Red](\"$\"#,##0)",
       "yyyy-mm-dd;@"
     )
+    assert(ownSign.subsetOf(codes.toSet), s"stale exclusion: ${ownSign -- codes.toSet}")
     for code <- codes if !ownSign(code); rule <- bothRules do
       assertEquals(fmt(code, neg, rule), "-" + fmt(code, pos, rule), s"$code under $rule")
   }
 
-  test("#707: a 40-digit negative at moderate scale runs the convergent search on an exact |x|") {
+  test(
+    "#707: a 40-digit negative at moderate scale renders sign-symmetrically in the convergent branch"
+  ) {
     // Two integer digits, so the fraction formatter takes the convergent branch, where |x| feeds
-    // the search as a double: exact through Java's abs, where Scala's rounds to 34 digits first
+    // the search as a double through Java's abs; pins sign symmetry and the expected strings
     val digits = BigInt("1234567890" * 4)
     val neg = signed(digits, 38, negative = true) // -12.345678901234567890…
     val pos = signed(digits, 38, negative = false)
