@@ -1,9 +1,9 @@
 package com.tjclp.xl.render
 
-import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cf.{CfBar, CfOverlay}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}

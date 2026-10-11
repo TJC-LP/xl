@@ -622,11 +622,20 @@ object RenderUtils:
         math.min(autofit, excelRowHeightToPixels(stored))
       case _ => autofit
 
-  /** The largest font a value draws in: its largest rich-text run, else the cell's own font. */
-  private[render] def largestFontPt(value: CellValue, cellFontPt: Double): Double =
+  /** The largest font drawn after text-section substitution, else the cell's own font. */
+  private[render] def largestFontPt(
+    value: CellValue,
+    cellFontPt: Double,
+    numFmt: NumFmt = NumFmt.General
+  ): Double =
     value match
       case CellValue.RichText(rt) =>
-        rt.runs.map(_.font.fold(cellFontPt)(_.sizePt)).maxOption.getOrElse(cellFontPt)
+        NumFmtFormatter
+          .formatRichText(rt, numFmt)
+          .runs
+          .map(_.font.fold(cellFontPt)(_.sizePt))
+          .maxOption
+          .getOrElse(cellFontPt)
       case _ => cellFontPt
 
   /**
@@ -671,7 +680,11 @@ object RenderUtils:
       case _ if width <= 0 => None
       case value =>
         val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-        val fontPt = largestFontPt(value, style.fold(baseFontPt(sheet))(_.font.sizePt))
+        val fontPt = largestFontPt(
+          value,
+          style.fold(baseFontPt(sheet))(_.font.sizePt),
+          style.fold(NumFmt.General)(_.numFmt)
+        )
         val lines = value match
           // SvgRenderer draws rich text on one line, wrapText or not
           case CellValue.RichText(_) => 1
