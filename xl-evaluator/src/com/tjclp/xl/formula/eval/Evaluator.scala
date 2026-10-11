@@ -665,7 +665,13 @@ object Evaluator:
     case TExpr.DateTimeToSerial(inner) => readsBindingAsRange(inner)
     case _ => false
 
-  /** Reference consumers expressed as scalar slots still need a LET binding's original address. */
+  /**
+   * Whether `expr` reads a reference's position or shape anywhere (a call flagged
+   * `requiresReferenceArguments`: ROW, COLUMN, ROWS, COLUMNS), so an array-mode LET binds its
+   * reference-denoting values as references. The walk covers every node with children: calls, the
+   * binary operators (unary minus is `0 - x`), the unary wrappers, nested LETs and coercions; array
+   * constants are literals and hold no reference.
+   */
   private[formula] def inspectsReference(expr: TExpr[?]): Boolean = expr match
     case call: TExpr.Call[?] =>
       call.spec.flags.requiresReferenceArguments || call.spec.argSpec.toValues(call.args).exists {
