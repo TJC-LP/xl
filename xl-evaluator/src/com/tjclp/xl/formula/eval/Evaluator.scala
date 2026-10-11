@@ -672,6 +672,25 @@ object Evaluator:
     case TExpr.DateTimeToSerial(inner) => readsBindingAsRange(inner)
     case _ => false
 
+  /** Reference consumers expressed as scalar slots still need a LET binding's original address. */
+  private[formula] def inspectsReference(expr: TExpr[?]): Boolean = expr match
+    case call: TExpr.Call[?] =>
+      call.spec.flags.requiresReferenceArguments || call.spec.argSpec.toValues(call.args).exists {
+        case ArgValue.Expr(arg) => inspectsReference(arg)
+        case _ => false
+      }
+    case chain if BinarySpine.isBinary(chain) =>
+      BinarySpine.operandList(chain).exists(inspectsReference)
+    case TExpr.Let(letBindings, body) =>
+      letBindings.exists((_, value) => inspectsReference(value)) || inspectsReference(body)
+    case TExpr.Coerced(inner, _) => inspectsReference(inner)
+    case TExpr.UnaryPlus(inner) => inspectsReference(inner)
+    case TExpr.Percent(inner) => inspectsReference(inner)
+    case TExpr.ToInt(inner) => inspectsReference(inner)
+    case TExpr.DateToSerial(inner) => inspectsReference(inner)
+    case TExpr.DateTimeToSerial(inner) => inspectsReference(inner)
+    case _ => false
+
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -1112,7 +1131,8 @@ private class EvaluatorImpl(
   rng: Rng = Rng.system,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -1136,7 +1156,8 @@ private class EvaluatorImpl(
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1552,7 +1573,10 @@ private class EvaluatorImpl(
     // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
     // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
     // (e.g. SUM over a range-valued binding) still resolve in-scope names.
-    def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    def evalArrayArg(
+      expr: TExpr[Any],
+      bounds: Option[CellRange => CellRange] = arrayRangeBounds
+    ): Either[EvalError, Any] =
       new EvaluatorWithDepth(
         currentDepth,
         allowArrayResults = true,
@@ -1561,7 +1585,8 @@ private class EvaluatorImpl(
         Some(callMemo),
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -1570,7 +1595,7 @@ private class EvaluatorImpl(
       clock,
       workbook,
       [A] => (expr: TExpr[A]) => evalArg(expr),
-      evalArrayArg,
+      expr => evalArrayArg(expr),
       currentCell,
       currentDepth,
       bindings,
@@ -1581,7 +1606,9 @@ private class EvaluatorImpl(
       operands = EvalContext.Operands(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),
-        selectsReference = selectsReference
+        selectsReference = selectsReference,
+        arrayRangeBounds = arrayRangeBounds,
+        boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
       )
     )
     // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX,
@@ -1872,12 +1899,15 @@ private class EvaluatorImpl(
         memoOpt,
         resolvingNames,
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        arrayRangeBounds
       )
     // GH-710: an array evaluation binds references too when a range slot reads a LET name
     lazy val bindsReferences = !allowArrayResults ||
       letBindings.exists((_, value) => Evaluator.readsBindingAsRange(value)) ||
-      Evaluator.readsBindingAsRange(body)
+      Evaluator.readsBindingAsRange(body) ||
+      letBindings.exists((_, value) => Evaluator.inspectsReference(value)) ||
+      Evaluator.inspectsReference(body)
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
       case (Right(env), (name, valueExpr)) =>
@@ -2076,7 +2106,8 @@ private class EvaluatorImpl(
               memoOpt,
               trail,
               workbookPath,
-              aggregateMemoOpt
+              aggregateMemoOpt,
+              arrayRangeBounds
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -2664,14 +2695,16 @@ private class EvaluatorWithDepth(
   memo: Option[Evaluator.EvalMemo] = None,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -2684,5 +2717,6 @@ private class EvaluatorWithDepth(
       memo,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )

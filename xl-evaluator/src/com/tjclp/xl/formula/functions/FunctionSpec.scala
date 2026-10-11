@@ -44,7 +44,9 @@ final case class FunctionFlags(
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
    * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
    */
-  lift: ArrayLift = ArrayLift.Off
+  lift: ArrayLift = ArrayLift.Off,
+  /** An expression argument needs reference identity (ROW/COLUMN and shape inspection). */
+  requiresReferenceArguments: Boolean = false
 )
 
 /**
@@ -148,6 +150,16 @@ final case class EvalContext(
    */
   private[formula] def arrayMode: Boolean = operands.arrayMode
 
+  /** Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. */
+  private[formula] def boundArrayRange(range: CellRange): CellRange =
+    operands.arrayRangeBounds.fold(range)(_(range))
+
+  private[formula] def evalBoundedArrayExpr(
+    expr: TExpr[Any],
+    bound: CellRange => CellRange
+  ): Either[EvalError, Any] =
+    operands.boundedArrayArg.fold(evalArrayExpr(expr))(_(expr, bound))
+
   /**
    * Whether this call's result feeds a reference position, so the value IF, IFS, CHOOSE and SWITCH
    * select is kept as a reference (Excel's IF and CHOOSE return references):
@@ -228,7 +240,9 @@ object EvalContext:
   private[formula] final case class Operands(
     arrayMode: Boolean,
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
-    selectsReference: Boolean
+    selectsReference: Boolean,
+    arrayRangeBounds: Option[CellRange => CellRange] = None,
+    boundedArrayArg: Option[(TExpr[Any], CellRange => CellRange) => Either[EvalError, Any]] = None
   )
 
   private[formula] object Operands:

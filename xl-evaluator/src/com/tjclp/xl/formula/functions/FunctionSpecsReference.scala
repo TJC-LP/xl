@@ -68,7 +68,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "ROW",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) => positions("ROW", expr, ctx, alongRows = true)
@@ -89,7 +89,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "COLUMN",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (exprOpt, ctx) =>
       exprOpt match
         case Some(expr) => positions("COLUMN", expr, ctx, alongRows = false)
@@ -122,11 +122,13 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     ctx: EvalContext,
     alongRows: Boolean
   ): Either[EvalError, BigDecimal] =
-    def numbers(range: CellRange): Either[EvalError, Any] =
+    def numbers(reference: CellRange): Either[EvalError, Any] =
+      val range = ctx.boundArrayRange(reference)
       val (first, last) =
         if alongRows then (range.rowStart.index0, range.rowEnd.index0)
         else (range.colStart.index0, range.colEnd.index0)
-      if first == last || !ctx.arrayMode then Right(BigDecimal(first + 1))
+      if range.height <= 0 || range.width <= 0 then Right(ArrayResult.empty)
+      else if first == last || !ctx.arrayMode then Right(BigDecimal(first + 1))
       else
         val values = (first to last).map(i => CellValue.Number(BigDecimal(i + 1))).toVector
         // a whole column SUMPRODUCT constrained to an empty sheet's used area has no numbers
@@ -164,7 +166,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "ROWS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (expr, ctx) =>
       // GH-612: ROWS(#REF!) is #REF!, the error value the argument names
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
@@ -183,7 +185,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "COLUMNS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (expr, ctx) =>
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
         extractCellRange(expr) match
