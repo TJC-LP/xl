@@ -721,7 +721,9 @@ object WriteCommands:
 
   /**
    * GH-714: the `IMPLICIT_INTERSECTION` advisory for the plain formulas a putf wrote, evaluated on
-   * the final workbook (both evaluations share one clock reading). Informational: never gates.
+   * the final workbook (both evaluations share one clock reading). Only formulas with an array
+   * source in a value position are evaluated, at most [[ImplicitIntersection.DefaultBudget]] of
+   * them, so a long drag costs a parse per cell. Informational: never gates.
    */
   private[cli] def intersectionAdvisory(
     targets: Vector[(SheetName, ARef)]

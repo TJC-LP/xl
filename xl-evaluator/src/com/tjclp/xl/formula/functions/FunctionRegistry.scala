@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -33,3 +33,14 @@ object FunctionRegistry:
    */
   lazy val volatileFunctionNames: List[String] =
     byName.values.filter(_.flags.volatile).map(_.name.toUpperCase).toList.sorted
+
+  private inline def arrayResultSpecs: List[FunctionSpec[?]] =
+    ${ FunctionRegistryMacro.collectReturning[FunctionSpecs.type, ArrayResult] }
+
+  /**
+   * GH-714: upper-case names of the functions whose declared result is an array
+   * (`FunctionSpec[ArrayResult]`: SEQUENCE, SORT, TRANSPOSE, FILTER, INDEX, OFFSET, …), read from
+   * the specs' types — a new array function joins without a list to update.
+   */
+  lazy val arrayResultNames: Set[String] =
+    arrayResultSpecs.map(_.name.toUpperCase).toSet

@@ -998,8 +998,13 @@ legacy formula, and xl computes it the same way:
   intersection) but 385 as an array formula; use SUMPRODUCT, putf --array (batch "array": true), or
   an explicit @`. A formula that cannot spill as a plain cell (`=A1:A10*2`, `=SORT(B1:B3)`) names the
   array's shape. One warning per command lists the first ten cells, located at the first; it is
-  informational and never gates (`--strict` exits 0 on it). Streaming writes and `--dry-run` do not
-  evaluate and stay silent; `put`, `fill` and `copy` do not check.
+  informational and never gates (`--strict` exits 0 on it). Only a formula with an array source in
+  a value position is evaluated twice — a multi-cell reference or name used as an operand or scalar
+  argument, an array constant, an array function (SORT, SEQUENCE, INDEX…) — so a range a function
+  takes whole (`=SUM($A$1:A1)`, `COUNTIF`, `VLOOKUP`'s table, `SUMPRODUCT`) costs nothing to check;
+  at most the first 1000 such cells of a command are checked, and a warning from a longer drag says
+  `(first 1000 of N cells checked)`. Streaming writes and `--dry-run` do not evaluate and stay
+  silent; `put`, `fill` and `copy` do not check.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").
@@ -1164,7 +1169,8 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
 
 **Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
 survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
-`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dynamicArray" | "dataTable"`
+field (dynamic arrays: GH-714 above).
 An array record evaluates as an array (`recalc`, `view --eval`) and its anchor caches the array's
 top-left element, Excel's anchor value; the record's other cells keep their cached constants.
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display

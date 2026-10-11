@@ -2,6 +2,8 @@ package com.tjclp.xl.cli
 
 import java.nio.file.{Files, Path}
 
+import scala.concurrent.duration.*
+
 import cats.effect.IO
 import munit.CatsEffectSuite
 
@@ -17,6 +19,9 @@ import com.tjclp.xl.io.ExcelIO
  * runs stay silent.
  */
 class ImplicitIntersectionCliSpec extends CatsEffectSuite:
+
+  // the 5,000-row drags below take seconds each; the budget is asserted, not this timeout
+  override def munitIOTimeout: Duration = 5.minutes
 
   /** A1:A10 = 1..10 and B1:B10 = 1..10. */
   private def numbers(): IO[Path] =
@@ -112,6 +117,84 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assert(run.stdout.contains("(+2 more)"), run.stdout)
       assert(run.stdout.contains("\"ref\": \"C1\""), run.stdout)
     }
+  }
+
+  test("a long drag checks a bounded sample and says so") {
+    putf("C1:C1100", "=A$1:A$10*2").map { run =>
+      assertEquals(run.exit, 0, run.toString)
+      assert(run.stdout.contains("1000 formulas evaluate differently"), run.stdout)
+      assert(run.stdout.contains("(+990 more)"), run.stdout)
+      assert(run.stdout.contains("(first 1000 of 1100 cells checked)"), run.stdout)
+    }
+  }
+
+  /** A1:A`rows` = 1..rows. */
+  private def column(rows: Int): IO[Path] =
+    for
+      p <- IO.blocking(Files.createTempFile("xl-gh714-ii-col-", ".xlsx"))
+      sheet = (1 to rows).foldLeft(Sheet("Sheet1")) { (s, i) =>
+        s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+      }
+      _ <- ExcelIO.instance[IO].write(Workbook(sheet), p)
+    yield p
+
+  private def timedDrag(src: Path, formula: String): IO[(CliRun, Long)] =
+    for
+      out <- outPath()
+      start <- IO.monotonic
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-o",
+        out.toString,
+        "putf",
+        "B1:B5000",
+        formula,
+        "--no-recalc",
+        "--json"
+      )
+      end <- IO.monotonic
+    yield (run, (end - start).toMillis)
+
+  /**
+   * One evaluation of each running total, as `--no-recalc` caches it: the drag's own cost by design
+   * (GH-714 adds none for a formula with no array source in a value position).
+   */
+  private def evaluationPass(src: Path): IO[Long] =
+    for
+      wb <- ExcelIO.instance[IO].read(src)
+      sheet <- IO.fromOption(wb.sheets.headOption)(new IllegalStateException("no sheet"))
+      start <- IO.monotonic
+      _ <- IO.blocking((1 to 5000).foreach { i =>
+        sheet.evaluateFormula(
+          s"=SUM($$A$$1:A$i)",
+          workbook = Some(wb),
+          currentCell = Some(ARef.from0(1, i - 1))
+        )
+      })
+      end <- IO.monotonic
+    yield (end - start).toMillis
+
+  test(
+    "a 5,000-row running-total drag under --no-recalc evaluates each cell once, not three times"
+  ) {
+    for
+      src <- column(5000)
+      _ <- timedDrag(src, "=A1+1") // warm-up
+      passMs <- evaluationPass(src)
+      (plain, plainMs) <- timedDrag(src, "=A1+1")
+      (total, totalMs) <- timedDrag(src, "=SUM($A$1:A1)")
+    yield
+      assertEquals(plain.exit, 0, plain.toString)
+      assertEquals(total.exit, 0, total.toString)
+      assert(!warned(total), total.stdout)
+      // measured alone, the drag takes about 1.6 passes (the cache pass, then the write); with
+      // two more evaluations per cell for the advisory it took 4.4
+      val bound = plainMs + passMs * 5 / 2 + 2000
+      assert(
+        totalMs <= bound,
+        s"running total ${totalMs}ms, bound ${bound}ms (plain ${plainMs}ms, pass ${passMs}ms)"
+      )
   }
 
   private def batch(ops: String, extra: String*): IO[CliRun] =
