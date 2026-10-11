@@ -62,9 +62,9 @@ live model.
 | XLSB is "3-5x faster" | **Qualified** | No primary Microsoft benchmark exists; vendor and forum figures are 2 to 3x faster open/save, up to ~50% smaller [U for the multiplier] |
 | "Names, not addresses … impossible inside xlsx" | **Qualified** | Excel Tables with structured references survive row insertion; LET/LAMBDA/AFE give named formulas. What xlsx cannot hold is layout intent and a stable identity for a row outside a Table (§3.4) |
 | "Keep Excel's formula language. Do not invent one." | **Confirmed** | OpenFormula took six years to agree a syntax while Excel's became de facto; every names-not-cells product that invented a language exported values (§3.3) |
-| 200k x 8: CSV 10.7 MB, sheet XML 55.8 MB, 8.9 MB zipped, Parquet 3.0 MB | **Reproduced within the expected range** (dataset composition differs) | §8 |
-| Read times: Parquet 0.04 s, `xl --stream` 7.6 s, in-memory 38-41 s | **Reproduced in shape** (JAR here, native image there) | §8 |
-| "The other 30x is our implementation, not the file. A better reader would." | **Confirmed** | A plain SAX pass over the same sheet XML is far below xl's stream time (§8); roadmap #634 (streaming-default read engine) is the relevant item [V] |
+| 200k x 8: CSV 10.7 MB, sheet XML 55.8 MB, 8.9 MB zipped, Parquet 3.0 MB | **Reproduced** (Parquet within 2x; dataset composition differs) | §8 |
+| Read times: Parquet 0.04 s, `xl --stream` 7.6 s, in-memory 38-41 s | **Reproduced on a native image built from the same tree** (8.3 to 8.9 s and 49 to 56 s on a slower vCPU) | §8 |
+| "The other 30x is our implementation (JVM, BigDecimal, immutable model), not the file. A better reader would." | **Confirmed in direction, attribution refined**: the DOM-first reader and the `-Os` native build are the cost, not the JVM or BigDecimal (a JIT'd SAX pass takes 1.1 s; BigDecimal ~0.4 s) | §8; roadmap #634 (streaming-default read engine) is the relevant item [V] |
 | Delta Kernel too heavy for the native binary | **Confirmed** | `delta-kernel-defaults` 4.0.0 depends on `hadoop-client-runtime` (30.4 MB shaded) + `parquet-hadoop` 1.12.3 + Jackson; native image reflect-config today is 1.6 KB, Batik/Xerces only [V] |
 | "Write plain Parquet locally and let Databricks commit it" | **Go one step simpler**: plain text | Parquet writers for the JVM drag Hadoop or are beta (Hardwood); text is zero-dependency, git-diffable and a first-class Auto Loader input (§5.5) |
 | "xlsx to .xl is exact for files we compiled (stamp the source hash)" | **Confirmed with a carrier caveat** | Custom doc property and defined names survive Excel; unknown custom parts and `extLst` are unverified in Excel 365 (§4.1) |
@@ -552,8 +552,42 @@ builder (§5.2), so scripts build models from data and compile through the same 
 
 ## 8. Benchmark reproduction
 
-_To be filled from the benchmark lane (in progress at the time of writing; see Appendix B if this section is
-still a placeholder)._
+The benchmark lane rebuilt the CLI from `6697409` in the sandbox (4 shared vCPU Xeon 2.1 GHz, 15 GB), as
+both the fat JAR on Temurin 25 and a GraalVM CE 25.0.1 native image with the release flags
+(`xl-cli/package.mill:51-54`: `-Os`, no PGO), generated a 200k x 8 workbook (ints, two-decimal floats, 2,000
+and 5-distinct strings, dates; 25% strings; openpyxl `write_only`, which writes `inlineStr` and no
+`<dimension>`), and timed every claim. gridcraft could not be fetched (no egress to its GitHub or crates.io).
+Two runs each; treat anything within 20% as equal.
+
+| Claim (Weaver) | Weaver | This sandbox | Verdict |
+|---|---|---|---|
+| CSV 10.7 MB -> sheet XML 55.8 MB (8.9 MB zipped) | 10.7 / 55.8 / 8.9 | 12.0 / 72.0 (openpyxl, inlineStr) or 63.5 (xl's writer, SST) / 10.5 to 13.4 | Reproduced; the 5 to 6x XML blow-up is inherent to SpreadsheetML |
+| Parquet 3.0 MB | 3.0 | 5.5 snappy / 4.5 zstd | Within 2x (cardinality and codec); Parquet is 2 to 3x smaller than the zipped xlsx |
+| Parquet read 0.04 s | 0.04 | 0.07 warm; 0.03 read + column sum; 0.38 cold | Reproduced |
+| gridcraft 1.3 s | 1.3 | not testable; a plain Java SAX pass over the same XML is 1.1 s (count) / 1.5 s (parse every number as Double and BigDecimal) | Not tested; plausible |
+| `xl --stream` 7.6 s | 7.6 | **native image: 8.3 to 8.9 s** for whole-sheet `stats` or a forced `bounds` scan; JAR: 4.8 to 5.9 s including 1.4 s JVM startup; early-exit verbs (`--stream view A1:H5`, `bounds` when `<dimension>` is present) 0.03 to 0.04 s natively | Reproduced (1.1 to 1.2x) |
+| xl in-memory 38 to 41 s | 38 to 41 | **native image: 49 to 56 s** (3.3 to 3.7 GB RSS); JAR on HotSpot: 14 to 17 s (2.4 to 2.9 GB RSS); in-memory load plus full rewrite 34 s (JAR) | Reproduced (1.2 to 1.4x on a slower vCPU) |
+| "The other 30x is our implementation (JVM, BigDecimal, immutable model), not the file" | | floors: zip inflate 0.17 s; bare SAX 1.1 s (Java) / 3.5 s (Python); openpyxl `read_only` 21 s | Direction confirmed, attribution refined (below) |
+
+**Attribution of the gap** (an estimate from ratios across tools, not a profile): of the ~700x between a
+warm Parquet read and xl's in-memory native load, roughly 20x is the file (XML must be inflated and tokenised;
+Parquet is read by column with no parsing), roughly 13x is xl's DOM-first reader, and roughly 3.5x is the
+size-optimised native build. BigDecimal parsing of all 1.2M numbers costs about 0.4 s. "JVM" is the wrong
+culprit: HotSpot SAX-parses the 72 MB in 1.1 s. The reader design is the cost, and it is visible in the code
+[V]: `XlsxReader` reads each part as a String and parses it into a scala-xml DOM (`XlsxReader.scala:926` ->
+`XmlSecurity.parseSafe`, `xl-ooxml/src/com/tjclp/xl/ooxml/xml.scala:890-893`), then
+`OoxmlWorksheet.fromXmlWithSST` walks the DOM into `Map[ARef, Cell]`; the whole 72 MB part is materialised as
+Node objects before the immutable model is built. Streaming RSS was flat at 113 to 184 MB for 1.6M cells.
+
+Two findings beyond Weaver's: (1) the `-Os` native image is 3.2 to 3.6x slower than the JAR on HotSpot on the
+allocation-heavy in-memory path and 1.5 to 1.7x on the streaming path, while starting ~45x faster, which is a
+cheap lever (`-O2`/`-O3` or PGO; not tried, it needs a `package.mill` change); (2) the cost is per whole-sheet
+pass, not per call: verbs that can stop early are essentially free natively.
+
+**Conclusion for the format question**: Weaver's conclusion holds. A SAX-to-model in-memory reader (the
+`--stream` path already is one) would put in-memory load in the 4 to 9 s class without touching the file;
+only a columnar format reaches the 0.05 s class, and that part is the file's share. A `.xl` source format does
+nothing for read speed; `data/*.parquet` bulk blocks and the #634 reader do.
 
 ---
 
@@ -739,7 +773,11 @@ format descriptions; Microsoft Learn and support.microsoft.com pages (structured
 CalculationProperties, KB 948615); Grist, Causal, Anaplan, Quantrix documentation; Brian Jones's OOXML history;
 LibreOffice help and bugzilla; openpyxl heptapod issues.
 
-**Could not verify**: any primary Microsoft XLSB benchmark; whether Excel 365 preserves an unknown custom part
+**Measured in the sandbox** (§8): sizes and timings on a generated 200k x 8 workbook, on the JAR and on a
+native image built from `6697409`; raw outputs and scripts are in the session scratchpad, not committed.
+
+**Could not verify**: gridcraft's 1.3 s (no egress to its repository); Weaver's dataset, machine and Parquet
+codec; any primary Microsoft XLSB benchmark; whether Excel 365 preserves an unknown custom part
 or `extLst` on save; whether an edit-free Excel save changes `revisionPtr`; whether PR #721's output opens as a
 spill in Excel 365; Google Sheets' treatment of `custom.xml`; preview renderers (Quick Look, Outlook,
 SharePoint) as cache-only; Excel for Mac extension sniffing; native-image behaviour of any Parquet library;
