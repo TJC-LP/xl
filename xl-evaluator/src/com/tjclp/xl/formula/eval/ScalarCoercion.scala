@@ -301,12 +301,14 @@ private[formula] object ScalarCoercion:
     case CellValue.Formula(_, Some(cached), _) => cellText(cached)
     case _ => None
 
-  /** Longest run of a cell's text quoted in a `#VALUE!` diagnostic before it is cut. */
+  /** Longest run of a cell's text, in code points, quoted in a `#VALUE!` diagnostic. */
   private[formula] val MaxQuotedText: Int = 40
 
   /**
-   * #709: `s` as a diagnostic quotes it — at most [[MaxQuotedText]] characters, then an ellipsis —
-   * so a pasted paragraph in a cell does not become a paragraph-long error message.
+   * #709: `s` as a diagnostic quotes it — at most [[MaxQuotedText]] code points, then an ellipsis —
+   * so a pasted paragraph in a cell does not become a paragraph-long error message. The cut counts
+   * code points, so it never leaves half a surrogate pair (an emoji) in the message.
    */
   private[formula] def quotedText(s: String): String =
-    if s.length <= MaxQuotedText then s else s.take(MaxQuotedText) + "…"
+    if s.codePointCount(0, s.length) <= MaxQuotedText then s
+    else s.substring(0, s.offsetByCodePoints(0, MaxQuotedText)) + "…"

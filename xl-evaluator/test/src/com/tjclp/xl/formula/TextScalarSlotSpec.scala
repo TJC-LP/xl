@@ -2,9 +2,10 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator, ScalarCoercion}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -249,4 +250,77 @@ class TextScalarSlotSpec extends FunSuite:
       case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) =>
         assert(msg.contains("'abc'"), msg)
       case other => fail(s"expected #VALUE! with a message, got $other")
+  }
+
+  test("#709: rich text through a reference reads as its plain text in every scalar slot") {
+    // A rich-text cell is text to Excel: the formatting runs never change what a slot reads.
+    val rich = (s: String) => CellValue.RichText(RichText.plain(s))
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"A1", rich("TRUE"))
+      .put(ref"A2", rich("3"))
+      .put(ref"A3", rich("abc"))
+      .put(ref"A4", rich("FALSE"))
+      .put(ref"A5", rich("45000"))
+    val wb = Workbook(Vector(sheet))
+    val cases = List(
+      ("B1", "IF(A1,1,0)", N("1")),
+      ("B2", "LEFT(\"abcdef\",A2)", T("abc")),
+      ("B3", "NOT(A4)", B(true)),
+      ("B4", "ABS(A2)", N("3")),
+      ("B5", "YEAR(A5)", N("2023")),
+      ("B6", "IF(A3,1,0)", Value),
+      ("B7", "LEFT(\"abcdef\",A3)", Value),
+      ("B8", "ABS(A3)", Value),
+      ("B9", "YEAR(A3)", Value)
+    )
+    val diffs = cases.flatMap { case (at, formula, expected) =>
+      val got = plainIn(wb, at, formula)
+      Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
+    }
+    assert(diffs.isEmpty, diffs.mkString("\n"))
+  }
+
+  test("#709: numeric text outside the date range is #VALUE!, through its own refusal (#726)") {
+    // Excel gives #NUM! for an out-of-range serial (#726); until then the cell is #VALUE!, and the
+    // decoder already names the reason so the #NUM! fix changes one mapping.
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"A1", T("-5"))
+      .put(ref"A2", T("3000000"))
+    val wb = Workbook(Vector(sheet))
+    assertEquals(plainIn(wb, "B1", "YEAR(A1)"), Right(Value))
+    assertEquals(plainIn(wb, "B2", "YEAR(A2)"), Right(Value))
+    assertEquals(
+      TExpr.decodeAsDateScalar(Cell(ref"A1", T("-5"))),
+      Left(CodecError.ParseError("-5", "Date", TExpr.DateSerialOutOfRange))
+    )
+    assertEquals(TExpr.decodeAsDateScalar(Cell(ref"A1", T("45000"))).map(_.getYear), Right(2023))
+  }
+
+  test("#709: the diagnostic cut never splits a surrogate pair") {
+    val emoji = "\uD83D\uDE00" // one code point, two UTF-16 chars
+    // 39 code points then the emoji: the 40th code point is whole, nothing is cut
+    val exactly40 = "x" * 39 + emoji
+    assertEquals(ScalarCoercion.quotedText(exactly40), exactly40)
+    // the emoji straddles char 40: it is kept whole before the ellipsis, never half a pair
+    val straddling = "x" * 39 + emoji + "tail"
+    assertEquals(ScalarCoercion.quotedText(straddling), "x" * 39 + emoji + "\u2026")
+    // a long run of emoji is cut at 40 code points (80 chars)
+    val emojis = emoji * 50
+    assertEquals(ScalarCoercion.quotedText(emojis), emoji * 40 + "\u2026")
+  }
+
+  test("#709: numeric text in an XIRR/XNPV values range is still refused") {
+    // The value fold is strict like the dates fold: '300 among the cash flows is #VALUE!. Excel's
+    // XNPV documents #VALUE! for a nonnumeric argument, and XIRR shares the cash-flow model.
+    // LibreOffice 24.2 differs: it drops the text pair (XIRR -0.3755, XNPV -235.34 here).
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"N1", N("-1000"))
+      .put(ref"N2", T("300"))
+      .put(ref"N3", N("800"))
+      .put(ref"O1", N("44927"))
+      .put(ref"O2", N("45000"))
+      .put(ref"O3", N("45100"))
+    val wb = Workbook(Vector(sheet))
+    assertEquals(plainIn(wb, "P1", "XIRR(N1:N3,O1:O3)"), Right(Value))
+    assertEquals(plainIn(wb, "P2", "XNPV(0.1,N1:N3,O1:O3)"), Right(Value))
   }

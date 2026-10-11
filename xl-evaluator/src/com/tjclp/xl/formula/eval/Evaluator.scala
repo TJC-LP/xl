@@ -2117,9 +2117,11 @@ private class EvaluatorImpl(
    * GH-344: decode a cell for a typed reference position, falling back to the Excel error VALUE the
    * cell carries when the decode refuses — `=A1+1` over a #REF! cell is #REF!, not a type mismatch.
    * #709: a text cell the decoder refuses is `#VALUE!` — `=ABS(A1)` over "abc", `=IF(A1,1,0)` over
-   * "abc" — as Excel computes it (the decoders read numeric text first). Decode failures over other
-   * values keep their loud CodecFailed; positions whose decoders accept error cells
-   * (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never reach the fallback.
+   * "abc" — as Excel computes it (the decoders read numeric text first); out-of-range numeric text
+   * in a date slot (TExpr.DateSerialOutOfRange) is `#VALUE!` too until #726 maps it to `#NUM!`.
+   * Decode failures over other values keep their loud CodecFailed; positions whose decoders accept
+   * error cells (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never reach the
+   * fallback.
    */
   private def decodeOrCarried[B](
     at: ARef,
