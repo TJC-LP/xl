@@ -12,6 +12,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.contract.{CliHarness, CliRun}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ooxml.DynamicArrayFixtures
 
 /**
  * GH-695, end to end through the real command tree on the book Excel writes: A1:A5 hold numbers, B1
@@ -22,32 +23,8 @@ import com.tjclp.xl.macros.ref
  */
 class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
 
-  private val parts: Vector[(String, String)] = Vector(
-    "[Content_Types].xml" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/metadata.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheetMetadata+xml"/></Types>""".stripMargin,
-    "_rels/.rels" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>""".stripMargin,
-    "xl/workbook.xml" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>""".stripMargin,
-    "xl/_rels/workbook.xml.rels" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sheetMetadata" Target="metadata.xml"/></Relationships>""".stripMargin,
-    "xl/metadata.xml" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<metadata xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:xda="http://schemas.microsoft.com/office/spreadsheetml/2017/dynamicarray"><metadataTypes count="1"><metadataType name="XLDAPR" minSupportedVersion="120000" copy="1" pasteAll="1" pasteValues="1" merge="1" splitFirst="1" rowColShift="1" clearFormats="1" clearComments="1" assign="1" coerce="1" cellMeta="1"/></metadataTypes><futureMetadata name="XLDAPR" count="1"><bk><extLst><ext uri="{bdbb8cdc-fa1e-496e-a857-3c3f30c029c3}"><xda:dynamicArrayProperties fDynamic="1" fCollapsed="0"/></ext></extLst></bk></futureMetadata><cellMetadata count="1"><bk><rc t="1" v="0"/></bk></cellMetadata></metadata>""".stripMargin,
-    "xl/worksheets/sheet1.xml" ->
-      """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-        |<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>
-        |<row r="1"><c r="A1"><v>5</v></c><c r="B1" cm="1"><f t="array" ref="B1:B5">_xlfn._xlws.SORT(A1:A5)</f><v>1</v></c><c r="C1"><f>SUM(_xlfn.ANCHORARRAY(B1))</f><v>15</v></c></row>
-        |<row r="2"><c r="A2"><v>3</v></c><c r="B2"><v>2</v></c></row>
-        |<row r="3"><c r="A3"><v>1</v></c><c r="B3"><v>3</v></c></row>
-        |<row r="4"><c r="A4"><v>4</v></c><c r="B4"><v>4</v></c></row>
-        |<row r="5"><c r="A5"><v>2</v></c><c r="B5"><v>5</v></c></row>
-        |</sheetData></worksheet>""".stripMargin
-  )
+  // GH-714: the Excel-shaped package lives in the shared fixture builder
+  private val parts: Vector[(String, String)] = DynamicArrayFixtures.parts()
 
   private def excelShapedSource(): IO[Path] = IO.blocking {
     val out = Files.createTempFile("xl-gh695-src-", ".xlsx")

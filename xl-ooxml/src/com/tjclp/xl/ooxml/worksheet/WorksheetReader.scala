@@ -222,8 +222,10 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
         ref <- ARef.parse(refStr)
         cellType = getAttrOpt(e, "t").getOrElse("")
         styleIdx = getAttrOpt(e, "s").flatMap(_.toIntOption)
+        // GH-714: kept raw; the reader resolves it through the metadata part
+        cellMetadata = getAttrOpt(e, "cm").flatMap(_.trim.toIntOption)
         value <- parseCellValue(e, ref, cellType, sst, sharedFormulaMasters)
-      yield OoxmlCell(ref, value, styleIdx, cellType)
+      yield OoxmlCell(ref, value, styleIdx, cellType, cellMetadata)
     }
 
     val errors = parsed.collect { case Left(err) => err }

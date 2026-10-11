@@ -537,6 +537,15 @@ Subcommands:
         BATCH (explicit, no dragging):
           putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"  → Formulas applied as-is
 
+        DYNAMIC ARRAYS (--array, in-memory only):
+          A plain putf is a legacy formula: Excel 365 opens =SORT(B1:B3) as =@SORT(B1:B3) (one value)
+          and =SUM(A1:A10*B1:B10) as row-by-row implicit intersection. --array stores the formula as
+          Excel 365 stores a typed one: a dynamic array anchored at <ref> that spills, with the spill
+          extent and its values computed now. One cell, one formula; a spill into occupied cells, a
+          merge, another array or a table is refused (Excel would show #SPILL!).
+          putf --array A1 "=SORT(B1:B3)"          → A1:A3 spill
+          putf --array C1 "=SUM(A1:A10*B1:B10)"   → one value, no implicit intersection
+
         EXAMPLES:
           xl -f f.xlsx -s S1 -o o.xlsx putf C1 "=A1+B1"
           xl -f f.xlsx -s S1 -o o.xlsx putf B2:B100 "=A2*1.1"

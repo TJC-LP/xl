@@ -600,25 +600,7 @@ object SheetEvaluator:
     workbook: Option[Workbook]
   ): XLResult[(Sheet, CellRange)] =
     for
-      // Parse formula string to TExpr AST
-      expr <- FormulaParser
-        .parse(formula)
-        .left
-        .map(parseError =>
-          XLError.FormulaError(
-            formula,
-            s"Parse error: ${ParseError.describe(parseError)}"
-          )
-        )
-
-      // Evaluate TExpr against sheet. GH-344: a Left carrying an Excel error VALUE promotes to
-      // a 1x1 CellValue.Error spilled at the origin; host failures stay loud Lefts.
-      result <- evaluator.eval(expr, sheet, clock, workbook, Some(originRef)) match
-        case scala.util.Right(value) => scala.util.Right(value)
-        case scala.util.Left(evalError) =>
-          EvalError.toErrorValue(evalError) match
-            case Some(code) => scala.util.Right(CellValue.Error(code): Any)
-            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
+      result <- evaluateArrayRaw(sheet, formula, originRef, evaluator, clock, workbook)
 
       // Handle array vs scalar result
       updated <- result match
@@ -630,6 +612,69 @@ object SheetEvaluator:
           val cv = EvalResult.toCellValue(other)
           scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
     yield updated
+
+  /**
+   * Parse and evaluate `formula` at `originRef` with `evaluator` (array mode for the callers here),
+   * without touching the sheet. GH-344: a Left carrying an Excel error VALUE promotes to that error
+   * as the result; host failures stay loud Lefts.
+   */
+  private def evaluateArrayRaw(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[Any] =
+    parseFormula(formula).flatMap { expr =>
+      evaluator.eval(expr, sheet, clock, workbook, Some(originRef)) match
+        case scala.util.Right(value) => scala.util.Right(value)
+        case scala.util.Left(evalError) =>
+          EvalError.toErrorValue(evalError) match
+            case Some(code) => scala.util.Right(CellValue.Error(code): Any)
+            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
+    }
+
+  /**
+   * GH-714: the array value of `formula` entered at `originRef` — what Excel 365 computes for the
+   * formula typed into that cell (no implicit intersection) — as the row-major grid of values its
+   * spill would show, without patching anything. A scalar result is a 1x1 grid. Each element is the
+   * value a spill cell stores: a cached formula record reads as its cache, and an empty element
+   * reads 0 (a formula cell is never blank, the [[cellResult]] rule).
+   */
+  private[xl] def evaluateArrayValues(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[Vector[Vector[CellValue]]] =
+    evaluateArrayRaw(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
+      .map {
+        case ar: ArrayResult => ar.values.map(_.map(spillValue))
+        case other => Vector(Vector(spillValue(EvalResult.toCellValue(other))))
+      }
+
+  /**
+   * GH-714: `formula` evaluated as the plain (legacy) cell at `ref` would be — references in value
+   * positions intersected with the cell — with an explicit evaluator (randomness source).
+   */
+  private[xl] def evaluatePlainAt(
+    sheet: Sheet,
+    formula: String,
+    ref: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, Some(ref))
+
+  /** The value one element of an evaluated array stores in its cell (see [[cellResult]]). */
+  private def spillValue(value: CellValue): CellValue =
+    effectiveValue(value) match
+      case CellValue.Empty => CellValue.Number(BigDecimal(0))
+      case other => other
 
   // ========== Helper Functions ==========
 

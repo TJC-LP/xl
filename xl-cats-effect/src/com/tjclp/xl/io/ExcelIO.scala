@@ -14,9 +14,11 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.ooxml.{
+  CellMetadataIndex,
   OoxmlComments,
   OoxmlStyles,
   Relationships,
+  SheetMetadataPart,
   SstPolicy,
   XlsxReader,
   XlsxWriter,
@@ -504,8 +506,32 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       case None => Left(s"Worksheet not found: $worksheetPath")
       case Some(entry) =>
         val stream = zipFile.getInputStream(entry)
-        try Right(SaxSingleCellReader.extractCell(stream, targetRef, sst))
+        try
+          Right(
+            SaxSingleCellReader
+              .extractCell(stream, targetRef, sst, loadCellMetadataIndexSync(zipFile))
+          )
         finally stream.close()
+
+  /**
+   * GH-714: the package's dynamic-array `cm` indices, from the metadata part the workbook's
+   * `sheetMetadata` relationship names. A small part read by random access, so the row stream stays
+   * O(1) in sheet size; a missing or malformed part (or rels) reads as no dynamic arrays.
+   */
+  private def loadCellMetadataIndexSync(zipFile: ZipFile): CellMetadataIndex =
+    def text(path: String): Option[String] =
+      Option(zipFile.getEntry(path)).map { entry =>
+        val in = zipFile.getInputStream(entry)
+        try new String(in.readAllBytes(), "UTF-8")
+        finally in.close()
+      }
+    text("xl/_rels/workbook.xml.rels")
+      .flatMap(xml => XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption)
+      .flatMap(elem => Relationships.fromXml(elem).toOption)
+      .flatMap(SheetMetadataPart.locate)
+      .flatMap(text)
+      .map(SheetMetadataPart.parse)
+      .getOrElse(CellMetadataIndex.empty)
 
   // Helper: Parse formula dependencies (referenced cells)
   private def parseFormulaDependencies(formula: String): Vector[String] =
@@ -582,7 +608,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
               .flatMap { stream =>
                 val rowBounds = range.map(r => (r.start.row.index1, r.end.row.index1))
                 val colBounds = range.map(r => (r.start.col.index0, r.end.col.index0))
-                SaxStreamingReader.parseWorksheetStream[F](stream, sst, rowBounds, colBounds)
+                SaxStreamingReader.parseWorksheetStream[F](
+                  stream,
+                  sst,
+                  rowBounds,
+                  colBounds,
+                  loadCellMetadataIndexSync(zipFile)
+                )
               }
           case None =>
             Stream.raiseError[F](

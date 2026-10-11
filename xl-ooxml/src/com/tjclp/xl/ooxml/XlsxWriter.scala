@@ -15,6 +15,7 @@ import scala.collection.immutable.ArraySeq
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
+import com.tjclp.xl.cells.{ArrayMode, FormulaKind}
 import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.context.{ModificationTracker, SourceContent, SourceContext}
@@ -581,7 +582,8 @@ object XlsxWriter:
     tablePartsXml: Option[scala.xml.Elem],
     escapeFormulas: Boolean,
     legacyDrawingRelId: String,
-    config: WriterConfig
+    config: WriterConfig,
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
   ): Unit =
     val entry = new ZipEntry(entryName)
     entry.setTime(0L)
@@ -598,7 +600,8 @@ object XlsxWriter:
           styleRemapping,
           tablePartsXml,
           escapeFormulas,
-          legacyDrawingRelId
+          legacyDrawingRelId,
+          cellMetadata
         )
         val bytes = baos.toByteArray
 
@@ -622,7 +625,8 @@ object XlsxWriter:
           styleRemapping,
           tablePartsXml,
           escapeFormulas,
-          legacyDrawingRelId
+          legacyDrawingRelId,
+          cellMetadata
         )
         saxWriter.flush()
         val bytes = baos.toByteArray
@@ -2175,6 +2179,47 @@ object XlsxWriter:
     // skeleton MUST be regenerated from the domain — these gated views feed the byte-stable
     // preservation branches only.
     val metadataStable = !tracker.modifiedMetadata
+
+    // GH-714: dynamic-array anchors carry `cm`, an index into the workbook's cell-metadata part.
+    // The variants the REGENERATED sheets hold (verbatim sheets keep their own bytes) are planned
+    // against the source part: reused when it already has their XLDAPR blocks, appended when it
+    // lacks one (existing indices never move — rich-value `vm`s and foreign `cm`s stay valid), or
+    // generated when the package has none. No dynamic record means no plan: today's exact bytes.
+    val neededDynamic: Set[ArrayMode.Dynamic] =
+      sheetsToRegenerate.iterator
+        .flatMap(workbook.sheets.lift)
+        .flatMap(_.cells.valuesIterator)
+        .map(_.value)
+        .collect {
+          case CellValue.Formula(_, _, FormulaKind.ArrayFormula(_, _, _, d: ArrayMode.Dynamic)) => d
+        }
+        .distinct
+        .take(2)
+        .toSet
+    val sourceMetadataPath: Option[String] =
+      if neededDynamic.isEmpty then None
+      else preservedStructWbRels.flatMap(SheetMetadataPart.locate)
+    val sourceMetadataXml: Option[String] = (sourceContext, sourceMetadataPath) match
+      case (Some(ctx), Some(path)) if ctx.partManifest.contains(path) =>
+        withSourceZip(ctx.content)(readZipEntry(_, path))
+      case _ => None
+    val metadataPlan: SheetMetadataPart.CellMetadataPlan =
+      (sourceMetadataPath, sourceMetadataXml) match
+        // a relationship naming a part the package lacks: nothing to extend or to point at
+        case (Some(_), None) => SheetMetadataPart.CellMetadataPlan.none
+        case _ => SheetMetadataPart.plan(sourceMetadataXml, neededDynamic)
+    val generatedMetadataPath: Option[String] = metadataPlan.output match
+      case SheetMetadataPart.MetadataOutput.Generated(_) =>
+        val claimed = sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)
+        Some(
+          (Iterator.single(SheetMetadataPart.defaultPath) ++
+            Iterator.from(2).map(n => s"xl/metadata$n.xml")).filterNot(claimed.contains).next()
+        )
+      case _ => None
+    // the source path whose bytes this write replaces (skipped by the verbatim copy loop)
+    val appendedMetadataPath: Option[String] = metadataPlan.output match
+      case SheetMetadataPart.MetadataOutput.Appended(_) => sourceMetadataPath
+      case _ => None
     val preservedContentTypes = preservedStructCt.filter(_ => metadataStable)
     val preservedWorkbook = preservedStructWb.filter(_ => metadataStable)
 
@@ -2224,7 +2269,8 @@ object XlsxWriter:
           preservedRels,
           sheetSourcePaths,
           sheetOutputPaths,
-          ensureSharedStrings = sharedStringsInOutput
+          ensureSharedStrings = sharedStringsInOutput,
+          ensureSheetMetadata = generatedMetadataPath
         )
       case None =>
         // GH-327: fresh rels target the SAME output paths the physical writes use (for a
@@ -2246,7 +2292,18 @@ object XlsxWriter:
               )
             )
           else base
-        (OoxmlWorkbook.sequentialRelIds(workbook.sheets.size), withTheme)
+        // GH-714: the generated cell-metadata part, appended like the theme
+        val withMetadata = generatedMetadataPath match
+          case Some(path) =>
+            Relationships(
+              withTheme.relationships :+ Relationship(
+                s"rId${withTheme.relationships.size + 1}",
+                XmlUtil.relTypeSheetMetadata,
+                path.stripPrefix("xl/")
+              )
+            )
+          case None => withTheme
+        (OoxmlWorkbook.sequentialRelIds(workbook.sheets.size), withMetadata)
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
@@ -2367,7 +2424,9 @@ object XlsxWriter:
     // non-writer-owned classes reconcile keeps (chart colors/style).
     // GH-555: the calcChain Override leaves with the part.
     val contentTypes =
-      reconciledContentTypes.withoutParts(removalOrphans ++ droppedCalcChain ++ staleTableParts)
+      reconciledContentTypes
+        .withoutParts(removalOrphans ++ droppedCalcChain ++ staleTableParts)
+        .withSheetMetadataOverride(generatedMetadataPath)
 
     // GH-320: ungated like the content types (GH-314) — a metadata-modified write must keep the
     // preserved package-level rels (docProps/custom.xml and friends ride the verbatim copy loop).
@@ -2414,6 +2473,14 @@ object XlsxWriter:
           copyPreservedPart(ctx.content, DefaultTheme.path, zip)
       }
       if needsGeneratedTheme then writeRawTextPart(zip, DefaultTheme.path, DefaultTheme.xml, config)
+
+      // GH-714: a generated or extended cell-metadata part (an untouched one rides verbatim)
+      metadataPlan.output match
+        case SheetMetadataPart.MetadataOutput.Generated(xml) =>
+          generatedMetadataPath.foreach(writeRawTextPart(zip, _, xml, config))
+        case SheetMetadataPart.MetadataOutput.Appended(xml) =>
+          appendedMetadataPath.foreach(writeRawTextPart(zip, _, xml, config))
+        case SheetMetadataPart.MetadataOutput.Untouched => ()
 
       if regenerateSharedStrings then
         sst.foreach { sharedStrings =>
@@ -2543,7 +2610,8 @@ object XlsxWriter:
                 tablePartsXml,
                 escapeFormulas,
                 legacyDrawingRelId,
-                config
+                config,
+                metadataPlan.lookup
               )
             case _ =>
               val ooxmlSheet =
@@ -2557,7 +2625,8 @@ object XlsxWriter:
                   drawingPlan.drawingRefs.get(idx),
                   condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty)),
                   dataValidations = Some(dvPlan.getOrElse(idx, None)),
-                  legacyDrawingRelId = legacyDrawingRelId
+                  legacyDrawingRelId = legacyDrawingRelId,
+                  cellMetadata = metadataPlan.lookup
                 )
               writeWorksheet(zip, sheetOutputPaths(idx), ooxmlSheet, config)
 
@@ -2629,7 +2698,8 @@ object XlsxWriter:
           // vmlPathsToSkip holds the exact regeneration targets — including foreign-named VML
           // parts like openpyxl's commentsDrawing1.vml (GH-292), so no filename-prefix guard
           val shouldSkip =
-            vmlPathsToSkip.contains(path) || drawingPlan.skipPaths.contains(path)
+            vmlPathsToSkip.contains(path) || drawingPlan.skipPaths.contains(path) ||
+              appendedMetadataPath.contains(path)
 
           if !shouldSkip then copyPreservedPart(ctx.content, path, zip)
         }

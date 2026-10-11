@@ -26,6 +26,9 @@ import com.tjclp.xl.formula.{
   SheetEvaluator,
   TExpr
 }
+import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -82,8 +85,16 @@ object BatchParser:
     /** Put a single value to a cell with optional format */
     case Put(ref: String, value: CellValue, format: Option[NumFmt])
 
-    /** Put a formula to a single cell with optional number format (GH-356) */
-    case PutFormula(ref: String, formula: String, format: Option[NumFmt] = None)
+    /**
+     * Put a formula to a single cell with optional number format (GH-356). `array` (GH-714) writes
+     * an Excel 365 dynamic-array anchor at `ref` instead of a plain (legacy) formula.
+     */
+    case PutFormula(
+      ref: String,
+      formula: String,
+      format: Option[NumFmt] = None,
+      array: Boolean = false
+    )
 
     /** Put a formula to a range with dragging (from anchor cell) */
     case PutFormulaDragging(
@@ -223,8 +234,9 @@ object BatchParser:
     op match
       case BatchOp.Put(ref, value, fmt) =>
         s"  PUT $ref = $value${formatSuffix(fmt)}"
-      case BatchOp.PutFormula(ref, formula, fmt) =>
-        s"  PUTF $ref = $formula${formatSuffix(fmt)}"
+      case BatchOp.PutFormula(ref, formula, fmt, array) =>
+        val kind = if array then " (dynamic array)" else ""
+        s"  PUTF $ref = $formula$kind${formatSuffix(fmt)}"
       case BatchOp.PutFormulaDragging(range, formula, from, fmt) =>
         s"  PUTF $range = $formula (from $from)${formatSuffix(fmt)}"
       case BatchOp.PutFormulas(range, formulas, fmt) =>
@@ -446,6 +458,27 @@ object BatchParser:
             // GH-663: the ONLY constructor of the three putf ops is this branch, so parsing here
             // is the invariant — no apply-time re-parse (PR #679 review: a second gate was
             // unreachable, cost a parse per formula, and would have reported the wrong code)
+            // GH-714: `array` writes one dynamic-array anchor; its spill extent comes from
+            // evaluation, so it never combines with a range, `values` or a `from` drag
+            val array = objMap.get("array") match
+              case None => false
+              case Some(v) =>
+                v.boolOpt.getOrElse(throw invalid(idx, "'array' must be true or false"))
+            if array then
+              if objMap.contains("values") || objMap.contains("from") then
+                throw invalid(
+                  idx,
+                  "'array' anchors one cell: it cannot combine with 'values' or 'from' " +
+                    "(the spill extent comes from evaluation)"
+                )
+              RefType.parse(ref) match
+                case Right(RefType.Range(_)) | Right(RefType.QualifiedRange(_, _)) =>
+                  throw invalid(
+                    idx,
+                    s"'array' anchors one cell, not a range: $ref (the spill extent comes from " +
+                      "evaluation)"
+                  )
+                case _ => ()
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
@@ -464,7 +497,7 @@ object BatchParser:
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
                   case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)
-                  case None => BatchOp.PutFormula(ref, formula, format)
+                  case None => BatchOp.PutFormula(ref, formula, format, array)
 
           case "style" =>
             collectStyleNumFmtWarning(objMap, idx).foreach(warnings += _)
@@ -1318,7 +1351,10 @@ object BatchParser:
       case BatchOp.Put(refStr, cellValue, format) =>
         applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format, scoped.hint)
 
-      case BatchOp.PutFormula(refStr, formula, format) =>
+      case BatchOp.PutFormula(refStr, formula, format, true) =>
+        applyPutDynamicArray(currentWb, defaultSheetName, refStr, formula, format)
+
+      case BatchOp.PutFormula(refStr, formula, format, false) =>
         applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
 
       case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
@@ -1605,6 +1641,70 @@ object BatchParser:
             )
           )
       }
+
+  /**
+   * GH-714: the cells a batch's plain (non-array) putf ops wrote, sheet-qualified by THE sheet rule
+   * on `wb` — the input of the `IMPLICIT_INTERSECTION` check. An op whose sheet does not resolve
+   * contributes nothing (the check is advisory).
+   */
+  def putfTargets(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp]
+  ): Vector[(SheetName, ARef)] =
+    scoped.flatMap { s =>
+      val refs = s.op match
+        case BatchOp.PutFormula(ref, _, _, false) => Vector(ref)
+        case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
+        case BatchOp.PutFormulas(range, _, _) => Vector(range)
+        case _ => Vector.empty
+      lazy val sheet = opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten
+      refs.flatMap { r =>
+        RefType.parse(r).toOption.toList.toVector.flatMap {
+          case RefType.Cell(ref) => sheet.map(_ -> ref).toList.toVector
+          case RefType.QualifiedCell(name, ref) => Vector(name -> ref)
+          case RefType.Range(range) => sheet.toList.toVector.flatMap(n => range.cells.map(n -> _))
+          case RefType.QualifiedRange(name, range) => range.cells.map(name -> _).toVector
+          case _ => Vector.empty
+        }
+      }
+    }
+
+  /**
+   * GH-714: a putf with `"array": true` — a dynamic-array anchor at the op's cell, its spill
+   * computed now ([[DynamicArrayAuthoring]]); a `format` covers the whole spill. A spill Excel
+   * would block fails the op (the batch's `BATCH_OP_FAILED`, the blockers in the message).
+   */
+  private def applyPutDynamicArray(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String,
+    formula: String,
+    format: Option[NumFmt]
+  ): IO[Workbook] =
+    def at(sheetName: SheetName, ref: ARef): IO[Workbook] =
+      wb.sheets.find(_.name == sheetName).fold(IO.raiseError(sheetNotFound(wb, sheetName))) {
+        sheet =>
+          IO.fromEither(
+            DynamicArrayAuthoring
+              .author(wb, sheet, ref, formula, Clock.system)
+              .left
+              .map(WriteCommands.spillRefusal)
+          ).map { authored =>
+            val formatted = format.fold(authored.sheet) { numFmt =>
+              authored.extent.cells
+                .foldLeft(authored.sheet)((s, r) => applyNumFmt(s, r, Some(numFmt)))
+            }
+            wb.put(formatted)
+          }
+      }
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        sheetFor(wb, defaultSheetName, "putf").flatMap(at(_, ref))
+      case RefType.QualifiedCell(sheetName, ref) => at(sheetName, ref)
+      case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+        IO.raiseError(new Exception(s"batch putf with 'array' requires a single cell ref: $refStr"))
+    }
 
   /**
    * The expression a putf drag shifts: the op's formula, canonicalised and parsed. Total (GH-681):

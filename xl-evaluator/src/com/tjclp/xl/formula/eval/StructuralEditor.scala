@@ -763,11 +763,11 @@ object StructuralEditor:
     else (range.start.col.index0, range.end.col.index0)
 
   /**
-   * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing the range
-   * degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation analog).
-   * The degraded cell keeps `ca` (GH-435: volatile marking is legal on a plain formula) and drops
-   * the array-only `aca`. DataTable kinds never reach here (dedicated branch above); Normal is
-   * identity.
+   * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing a legacy
+   * (CSE) range degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation
+   * analog). The degraded cell keeps `ca` (GH-435: volatile marking is legal on a plain formula)
+   * and drops the array-only `aca`. DataTable kinds never reach here (dedicated branch above);
+   * Normal is identity.
    */
   private def shiftedArrayKind(
     kind: FormulaKind,
@@ -777,6 +777,21 @@ object StructuralEditor:
     delta: Int
   ): FormulaKind =
     kind match
+      case arr: FormulaKind.ArrayFormula if shiftLocal && arr.isDynamicArray =>
+        // GH-714: a dynamic array is never degraded — Excel resizes the spill instead of turning
+        // `=SORT(..)` into its implicit-intersection form. The extent follows the anchor; its end
+        // shifts with the edit, or stops at the last surviving index when a delete band swallows it.
+        val max = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+        val (s, e) = axisBounds(arr.ref, isRow)
+        shiftedIndex0(s, at, delta, max) match
+          case None => arr // the anchor itself left the grid: its cell goes with the record
+          case Some(newStart) =>
+            val newEnd = shiftedIndex0(e, at, delta, max)
+              .getOrElse(if delta < 0 then at - 1 else max)
+              .max(newStart)
+            def place(ref: ARef, i: Int): ARef =
+              if isRow then ARef.from0(ref.col.index0, i) else ARef.from0(i, ref.row.index0)
+            arr.copy(ref = CellRange(place(arr.ref.start, newStart), place(arr.ref.end, newEnd)))
       case arr: FormulaKind.ArrayFormula if shiftLocal =>
         val degraded = FormulaKind.Normal(ca = arr.ca)
         if editIntersects(arr.ref, isRow, at, delta) then degraded

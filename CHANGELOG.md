@@ -23,6 +23,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **Dynamic-array authoring** (#714): `putf --array` and batch `putf` with `"array": true` write
+  an Excel 365 dynamic-array formula (`cm="1"` and the `xl/metadata.xml` dynamic-array properties)
+  anchored at the target, with its spill cached (in memory only; `--stream --array` is refused, and a
+  spill Excel would block is refused without writing), so Excel opens it spilling instead of as a legacy
+  `@` formula. A file's existing `cm` and metadata part now survive every in-memory and `--stream`
+  write, where they were dropped (Excel then read the formula as a legacy `{=…}` array).
+- **`IMPLICIT_INTERSECTION` warning** (#714): an in-memory `putf` or batch `putf` whose plain-cell
+  value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
+  row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy
+  (SUMPRODUCT, `--array`, or `@`). It never gates, `--strict` included; `--stream` writes do not
+  evaluate and never warn; the check samples at most 1,000 candidate cells per command.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains

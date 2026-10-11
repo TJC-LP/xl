@@ -436,6 +436,7 @@ object StreamingWriteCommands:
       // ADR-017 invariant 2: refuse by index what this writer cannot apply, before any byte is
       // read beyond workbook.xml or written
       _ <- refuseNonStreamable(scoped)
+      _ <- refuseStreamRefusedFields(scoped)
 
       // Resolve the one worksheet this batch streams (workbook.xml only), then refuse by index
       // every op that would land anywhere else
@@ -512,6 +513,15 @@ object StreamingWriteCommands:
   /** Raise [[refusal]] when there is anything to refuse. */
   private def refuse(rejects: Vector[ScopedOp], reason: String): IO[Unit] =
     if rejects.isEmpty then IO.unit else IO.raiseError(refusal(rejects, reason))
+
+  /** GH-714: ops setting a field `--stream` refuses (`"array": true` on putf). */
+  private def refuseStreamRefusedFields(scoped: Vector[ScopedOp]): IO[Unit] =
+    val rejects = scoped.filter(s => OpRegistry.streamRefusedFieldsSet(s.op).nonEmpty)
+    val fields = rejects.flatMap(s => OpRegistry.streamRefusedFieldsSet(s.op)).distinct
+    refuse(
+      rejects,
+      s"set ${fields.map(f => s"'$f'").mkString(", ")}, which streaming mode cannot apply"
+    )
 
   /** Ops this writer has no arm for. */
   private def refuseNonStreamable(scoped: Vector[ScopedOp]): IO[Unit] =
@@ -733,7 +743,7 @@ object StreamingWriteCommands:
                   StreamingTransform.CellPatch.SetValue(cellValue, preserveStyle = true)
             summaryLines += s"  PUT $refStr = $cellValue"
 
-          case BatchParser.BatchOp.PutFormula(refStr, formula, formatOpt) =>
+          case BatchParser.BatchOp.PutFormula(refStr, formula, formatOpt, _) =>
             val ref = ARef.parse(refStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid ref '$refStr': $e")
@@ -966,7 +976,7 @@ object StreamingWriteCommands:
       case BatchParser.BatchOp.Put(refStr, _, Some(_)) => cellOf(refStr)
       case BatchParser.BatchOp.PutValues(rangeStr, values) if values.exists(_.format.isDefined) =>
         cellsOf(rangeStr)
-      case BatchParser.BatchOp.PutFormula(refStr, _, Some(_)) => cellOf(refStr)
+      case BatchParser.BatchOp.PutFormula(refStr, _, Some(_), _) => cellOf(refStr)
       case BatchParser.BatchOp.PutFormulaDragging(rangeStr, _, _, Some(_)) => cellsOf(rangeStr)
       case BatchParser.BatchOp.PutFormulas(rangeStr, _, Some(_)) => cellsOf(rangeStr)
       case BatchParser.BatchOp.Style(rangeStr, props) if !props.replace => cellsOf(rangeStr)

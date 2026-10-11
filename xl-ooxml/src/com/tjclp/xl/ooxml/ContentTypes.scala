@@ -96,6 +96,16 @@ case class ContentTypes(
     else copy(overrides = overrides + ("/xl/theme/theme1.xml" -> ctTheme))
 
   /**
+   * GH-714: register a generated cell-metadata part (`xl/metadata.xml`). Adds only a missing
+   * override: a source registration rides through untouched.
+   */
+  def withSheetMetadataOverride(path: Option[String]): ContentTypes =
+    path match
+      case Some(p) if !overrides.contains(s"/$p") =>
+        copy(overrides = overrides + (s"/$p" -> ctSheetMetadata))
+      case _ => this
+
+  /**
    * Register drawing-part overrides (GH-221). `partPaths` are zip paths without the leading slash
    * ("xl/drawings/drawing1.xml"). Idempotent.
    */

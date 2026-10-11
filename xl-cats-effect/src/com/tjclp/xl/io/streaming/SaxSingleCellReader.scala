@@ -6,6 +6,7 @@ import org.xml.sax.helpers.DefaultHandler
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.{
+  CellMetadataIndex,
   FormulaKindCodec,
   FormulaStorage,
   SharedFormula,
@@ -70,18 +71,21 @@ object SaxSingleCellReader:
    *   Cell reference to find (e.g., A1, B5)
    * @param sst
    *   Optional SharedStrings table for resolving string references
+   * @param cellMetadata
+   *   GH-714: the package's dynamic-array `cm` indices (empty = every array record is legacy)
    * @return
    *   Some(CellResult) if cell exists, None if cell is empty/missing
    */
   def extractCell(
     stream: InputStream,
     targetRef: ARef,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    cellMetadata: CellMetadataIndex = CellMetadataIndex.empty
   ): Option[CellResult] =
     try
       // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
       val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-      val handler = new SingleCellHandler(targetRef, sst)
+      val handler = new SingleCellHandler(targetRef, sst, cellMetadata)
       parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       // Reached end of document without finding cell
       None
@@ -98,7 +102,8 @@ object SaxSingleCellReader:
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private class SingleCellHandler(
     targetRef: ARef,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    cellMetadata: CellMetadataIndex
   ) extends DefaultHandler:
     // Target cell reference in A1 notation for matching
     private val targetRefA1 = targetRef.toA1
@@ -123,6 +128,8 @@ object SaxSingleCellReader:
     // GH-430: t="array"/t="dataTable" record recognized from <f> attributes via the shared codec
     var formulaRecordKind: Option[FormulaKind] = None
     var currentCellType: Option[String] = None
+    // GH-714: the target cell's raw `cm` (resolved through the metadata index)
+    var currentCellMetadata: Option[String] = None
     var pendingTarget: Option[PendingSharedTarget] = None
     val valueText = new StringBuilder
     val sharedFormulaMasters
@@ -155,8 +162,10 @@ object SaxSingleCellReader:
           sharedFormulaIndex = None
           sharedFormulaRange = None
           formulaRecordKind = None
+          currentCellMetadata = None
           if inTargetCell then
             currentCellType = Option(attributes.getValue("t"))
+            currentCellMetadata = Option(attributes.getValue("cm"))
             currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
             valueText.clear()
 
@@ -286,7 +295,9 @@ object SaxSingleCellReader:
                     cachedValue,
                     currentCellType,
                     currentCellStyleId,
-                    arr
+                    FormulaKindCodec
+                      .withCellMetadata(Some(arr), currentCellMetadata, cellMetadata)
+                      .getOrElse(arr)
                   )
                 )
               case Some(plain: FormulaKind.Normal) =>

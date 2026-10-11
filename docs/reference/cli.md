@@ -989,7 +989,22 @@ legacy formula, and xl computes it the same way:
   does.
 - **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`, with
   conditions as factors (`=SUMPRODUCT((A1:A10>2)*A1:A10)`) rather than IF, which Excel evaluates
-  as legacy inside a plain SUMPRODUCT.
+  as legacy inside a plain SUMPRODUCT. Or store the formula as Excel 365 stores a typed one —
+  `putf --array` (below): `putf --array C5 "=SUM(A1:A10*B1:B10)"` is the array sum in any row, and
+  `putf --array A1 "=SORT(B1:B3)"` spills.
+- **The `IMPLICIT_INTERSECTION` warning** (GH-714). An in-memory `putf` or batch `putf` whose plain
+  cell evaluates differently from the same formula as an array formula says so — the cell, both
+  values and the remedy: `Sheet1!C5: =SUM(A1:A10*B1:B10) is 25 as a plain cell (implicit
+  intersection) but 385 as an array formula; use SUMPRODUCT, putf --array (batch "array": true), or
+  an explicit @`. A formula that cannot spill as a plain cell (`=A1:A10*2`, `=SORT(B1:B3)`) names the
+  array's shape. One warning per command lists the first ten cells, located at the first; it is
+  informational and never gates (`--strict` exits 0 on it). Only a formula with an array source in
+  a value position is evaluated twice — a multi-cell reference or name used as an operand or scalar
+  argument, an array constant, an array function (SORT, SEQUENCE, INDEX…) — so a range a function
+  takes whole (`=SUM($A$1:A1)`, `COUNTIF`, `VLOOKUP`'s table, `SUMPRODUCT`) costs nothing to check;
+  at most the first 1000 such cells of a command are checked, and a warning from a longer drag says
+  `(first 1000 of N cells checked)`. Streaming writes and `--dry-run` do not evaluate and stay
+  silent; `put`, `fill` and `copy` do not check.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").
@@ -1103,6 +1118,7 @@ Write formula(s) to a cell or range with Excel-style dragging.
 | Single | `putf C1 "=A1+B1"` | One formula, one cell |
 | Drag | `putf B2:B10 "=A2*1.1"` | Single formula + range: references shift per cell (`$` anchors pin) |
 | Batch | `putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"` | One formula per cell, applied as-is (no dragging) |
+| Dynamic array | `putf --array A1 "=SORT(B1:B3)"` | One cell: an Excel 365 dynamic array anchored at the cell, spilling (GH-714) |
 
 **Anchor modes** (`$` controls shifting when dragging): `$A$1` absolute, `$A1` column-absolute, `A$1` row-absolute, `A1` fully relative.
 
@@ -1116,9 +1132,45 @@ xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running 
 
 (The batch JSON `putf` op additionally accepts a `"from"` field to drag from an explicit source cell.)
 
+**Dynamic arrays (`--array`, GH-714)**: a plain `putf` cell is a legacy formula — Excel 365 opens
+`=SORT(B1:B3)` as `=@SORT(B1:B3)` (one value) and intersects `=SUM(A1:A10*B1:B10)` with the cell's
+row. `--array` stores the formula as Excel 365 stores one typed into the cell: a dynamic-array
+anchor (`<f t="array" ref="…">` plus the `cm` cell attribute and its `xl/metadata.xml` block) that
+spills. The formula is evaluated as an array at `<ref>`: the anchor's `ref` is the spill extent,
+cached at the array's top-left value, and the other cells of the extent hold the spilled values (a
+scalar result is a 1×1 record). Dependents of the spill cells refresh in the same command;
+`--no-recalc` suppresses that refresh but still evaluates the formula, which defines the extent.
+`cell` and `view --formulas` show it without braces (`=SORT(B1:B3)`, as Excel 365 does) and JSON
+carries `"formulaKind": "dynamicArray"`.
+
+```bash
+xl -f in.xlsx -s S1 -o out.xlsx putf --array A1 "=SORT(B1:B3)"           # Put dynamic array =SORT(B1:B3) at A1 (spills A1:A3)
+xl -f in.xlsx -s S1 -o out.xlsx putf --array C5 "=SUM(A1:A10*B1:B10)"    # 1x1: the array sum, any row
+echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in.xlsx -o out.xlsx batch -
+```
+
+- **One cell, one formula**: `--array` over a range or with several formulas is `USAGE`; batch
+  `"array": true` with `from`, `values` or a range `ref` is `BATCH_OP_INVALID` (`--dry-run` too).
+- **A blocked spill is refused**, as `FORMULA_ERROR` naming the blockers, and nothing is written —
+  Excel would show `#SPILL!`: a cell of the extent other than the anchor holding a value or formula
+  (an empty string counts; a style-only cell does not), a merge, another array formula's range, a
+  table, or the grid edge.
+- **Re-authoring** a dynamic anchor clears its previous spill first, so a shrinking spill leaves no
+  stale cells. Other writes do not: a later `put` into a spill cell or over the anchor leaves the
+  rest of the spill as constants, and a later recalculation re-evaluates the anchor without
+  re-spilling (Excel recalculates on open).
+- **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with
+  `"array": true` is refused by index before anything is written (`x-streamRefusedFields` in
+  `xl batch --schema`). A streamed `put`/`putf` over an existing anchor writes a plain cell and
+  drops its `cm`.
+- Dynamic-array anchors read from Excel files keep their `cm` through every in-memory write; the
+  metadata part is reused, extended (never renumbered, so images-in-cells metadata stays valid) or
+  generated.
+
 **Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
 survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
-`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dynamicArray" | "dataTable"`
+field (dynamic arrays: GH-714 above).
 An array record evaluates as an array (`recalc`, `view --eval`) and its anchor caches the array's
 top-left element, Excel's anchor value; the record's other cells keep their cached constants.
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
