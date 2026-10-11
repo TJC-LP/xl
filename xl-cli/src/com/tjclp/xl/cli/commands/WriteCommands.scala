@@ -1722,9 +1722,10 @@ object WriteCommands:
   /**
    * [[recalc]] with the typed facts its `--json` payload adds after `{text, saved, written}`:
    * `errorValuedCycles` (#678), each converged cycle that settled on an Excel error, as its member
-   * refs, and `errorCells` (#692), the first `RecalcResult.MaxNamedErrorCells` error-valued cells
-   * the summary names — `{ref, error, reason}`, `reason` null when the evaluator gave none — both
-   * always present, `[]` when there is none. A `--strict` failure carries the same facts.
+   * refs, and `errorCells` (#692), the first `RecalcResult.MaxNamedErrorCells` (10) error-valued
+   * cells (the text names the first `MaxSummaryErrorCells`, 3) — `{ref, error, reason}`, `reason`
+   * null when the evaluator gave none — both always present, `[]` when there is none. A `--strict`
+   * failure carries the same facts.
    */
   def recalcReport(
     wb: Workbook,

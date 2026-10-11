@@ -12,7 +12,7 @@ import com.tjclp.xl.sheets.Sheet
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   /** The matched position, lazily reading exact/wildcard keys until the first hit. */
   private def xlookupIndex(
-    lookupValue: ExprValue,
+    lookup: ExprValue,
     lookupSheet: Sheet,
     lookupArray: CellRange,
     matchMode: Int,
@@ -20,7 +20,6 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     call: => String,
     ctx: EvalContext
   ): Either[EvalError, Option[Int]] =
-    val lookup = normalizeLookupValue(lookupValue)
     matchMode match
       case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
       case 2 =>
@@ -279,7 +278,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       _ <- matchModeError("XLOOKUP", matchMode, diagnostic())
       _ <- searchModeError("XLOOKUP", searchMode, diagnostic())
       matchedIndex <- xlookupIndex(
-        lookupValueEval,
+        normalized,
         lookupSheet,
         lookupArray,
         matchMode,

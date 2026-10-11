@@ -282,6 +282,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
             ).map(_.map(_ + 1))
           case -1 | 1 =>
             lookupRangeValues(lookupRange, targetSheet, ctx).map { values =>
+              // flattening is position-exact only because the single row/column check above ran
               val keys = values.flatten.zipWithIndex.map { case (cv, idx) => (idx + 1, cv) }
               val ordered = if searchMode < 0 then keys.reverse else keys
               approximateMatch(ordered, lookup, matchMode, lastOnTie = false)

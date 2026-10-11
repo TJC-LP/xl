@@ -337,6 +337,30 @@ class EnvelopeSpec extends CatsEffectSuite:
       }
   }
 
+  test("#692: the summary strips a key's control characters; errorCells[].reason keeps them") {
+    val out = file("lookup-miss-control-key-out.xlsx")
+    CliHarness
+      .run("-f", file("lookup-miss-control-key.xlsx"), "-o", out, "--json", "recalc")
+      .map { run =>
+        assertEquals(run.exit, 0, run.stderr)
+        val data = envelope(run)("data")
+        val text = data("text").str
+        // the text is lines (`Recalculated …`, `Saved: …`): nothing but its line feeds is control
+        assert(!text.exists(c => c.isControl && c != '\n'), text)
+        assert(
+          text.contains(
+            "Data!D1 #N/A — VLOOKUP exact match not found: " +
+              "VLOOKUP(red 31mtext 0m bell 0;title , A1:B3, 2, FALSE)"
+          ),
+          text
+        )
+        // the JSON field keeps the key as the cell holds it
+        val reason = data("errorCells")(0)("reason").str
+        assert(reason.contains(TestFixtures.ControlCharacterKey), reason)
+        assert(reason.exists(_.isControl), reason)
+      }
+  }
+
   test("#678: a recalc with no error-valued cycle still carries the field, empty") {
     val out = file("simple-recalc-out.xlsx")
     CliHarness.run("-f", file("simple.xlsx"), "-o", out, "--json", "recalc").map { run =>
