@@ -563,9 +563,10 @@ object Evaluator:
 
   /**
    * The functions that return a reference (Excel's IF, IFS, CHOOSE and SWITCH return the reference
-   * they select; OFFSET, INDIRECT and INDEX compute one; GH-669: so does the intersection operator
-   * ` `): in a reference position their result reaches the consumer whole, in a plain cell's value
-   * position it is implicitly intersected.
+   * they select; OFFSET, INDIRECT, INDEX and, GH-713, XLOOKUP compute one; GH-669: so does the
+   * intersection operator ` `, and GH-713 the range operator `:`): in a reference position their
+   * result reaches the consumer whole, in a plain cell's value position it is implicitly
+   * intersected. Every `FunctionSpec.Referencing` is here (a drift law pins it).
    */
   private[formula] val referenceFunctions: Set[String] =
     Set(
@@ -576,7 +577,9 @@ object Evaluator:
       "OFFSET",
       "INDIRECT",
       "INDEX",
-      ReferenceOperators.IntersectionName
+      "XLOOKUP",
+      ReferenceOperators.IntersectionName,
+      ReferenceOperators.RangeName
     )
 
   /**
@@ -1537,17 +1540,19 @@ private class EvaluatorImpl(
         selectsReference = selectsReference
       )
     )
-    // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX)
-    // for the reference itself, unread
-    val reference = if selectsReference then call.spec.reference(call.args, ctx) else None
-    reference.getOrElse {
-      call.spec.flags.lift match
-        case ArrayLift.Off => call.spec.eval(call.args, ctx)
-        // in array mode the result may be an ArrayResult: its consumers handle one (the
-        // array-mode typing invariant)
-        case lift @ ArrayLift.On(_, _) =>
-          evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)
-    }
+    // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX,
+    // XLOOKUP) for the reference itself, unread. GH-713: only once its lifted slots are planned,
+    // so an array in one (`SUM(XLOOKUP({1;2},…))`, `SUM(INDEX(r,{1;2}))`) still lifts — per
+    // element, as values — and a scalar one is evaluated once
+    def unlifted(args: call.spec.Args): Either[EvalError, Any] =
+      if selectsReference then call.spec.reference(args, ctx).getOrElse(call.spec.eval(args, ctx))
+      else call.spec.eval(args, ctx)
+    call.spec.flags.lift match
+      case ArrayLift.Off => unlifted(call.args)
+      // in array mode the result may be an ArrayResult: its consumers handle one (the
+      // array-mode typing invariant)
+      case lift @ ArrayLift.On(_, _) =>
+        evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)(unlifted)
 
   /**
    * An argument in Excel's reference operand class ([[EvalContext.evalReferenceArg]]), and the
@@ -1642,7 +1647,7 @@ private class EvaluatorImpl(
     clock: Clock,
     workbook: Option[Workbook],
     currentCell: Option[ARef]
-  ): Either[EvalError, Any] =
+  )(unlifted: call.spec.Args => Either[EvalError, Any]): Either[EvalError, Any] =
     import ArrayLifting.SlotValue
     val slots = call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map {
       case ((expr, kind), position) => (expr, kind, lift.slots.forall(_.contains(position)))
@@ -1655,8 +1660,7 @@ private class EvaluatorImpl(
       else
         val peeled = ArrayLifting.peel(expr, kind)._1
         ArrayLifting.referenceLocation(peeled).isDefined || Evaluator.isArrayConstant(peeled)
-    if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then
-      call.spec.eval(call.args, ctx)
+    if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then unlifted(call.args)
     else
       val planned = slots.foldLeft[Either[EvalError, Vector[(TExpr[?], LiftSlot, SlotValue)]]](
         Right(Vector.empty)
@@ -1695,7 +1699,7 @@ private class EvaluatorImpl(
             }
           call.spec.argSpec.replaceScalarSlots(call.args, replacements.toList)._1
         val arrays = plan.collect { case (_, _, SlotValue.Elements(array, _)) => array }
-        if arrays.isEmpty then call.spec.eval(argsFor(Vector.empty), ctx)
+        if arrays.isEmpty then unlifted(argsFor(Vector.empty))
         else
           ArrayArithmetic.broadcastN(arrays) { elements =>
             ArrayLifting.elementResult(call.spec.eval(argsFor(elements), ctx))

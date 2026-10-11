@@ -37,7 +37,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     )((args, ctx) => indexTarget(args, ctx).map(_.fold(identity, identity))) { (args, ctx) =>
       indexTarget(args, ctx).flatMap {
         case Left(values) => Right(values)
-        case Right(ref) => referenceResult(ref.range, ref.sheet, ctx)(indexValues(ref, ctx))
+        case Right(ref) =>
+          referenceResult(ref.range, ref.sheet, ctx)(boundedReferenceValues(ref, ctx))
       }
     }
 
@@ -59,11 +60,13 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       areaNum <- areaNumOpt match
         case Some(TExpr.Missing) | Some(TExpr.Coerced(TExpr.Missing, _)) | None => Right(1)
         case Some(expr) => ctx.evalExpr(expr).map(_.toInt)
-      operandText = array match
-        case Left(location) => location.toA1
-        case Right(expr) => FormulaPrinter.printFileForm(expr)
-      call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
-        s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
+      // rendered only for a diagnostic: printing a `:` operand re-parses it
+      call = () =>
+        val operandText = array match
+          case Left(location) => location.toA1
+          case Right(expr) => FormulaPrinter.printFileForm(expr)
+        s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
+          s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
       target <- array match
         case Right(TExpr.Lit(values: ArrayResult)) =>
           pickArea(1, areaNum, call).flatMap(_ =>
@@ -98,16 +101,17 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     yield target
 
   /** GH-669: area_num against the number of areas — `#VALUE!` below 1, `#REF!` past the last. */
-  private def pickArea(count: Int, areaNum: Int, call: String): Either[EvalError, Unit] =
+  private def pickArea(count: Int, areaNum: Int, call: () => String): Either[EvalError, Unit] =
     if areaNum < 1 then
       Left(
-        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 ($call)"))
+        EvalError
+          .ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 (${call()})"))
       )
     else if areaNum > count then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
-          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) ($call)")
+          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) (${call()})")
         )
       )
     else Right(())
@@ -122,7 +126,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     colNum: Option[BigDecimal],
     numRows: Int,
     numCols: Int,
-    call: String
+    call: () => String
   ): Either[EvalError, (Vector[Int], Vector[Int])] =
     val (rowPos, colPos) = colNum match
       case Some(c) => (rowNum.toInt, c.toInt)
@@ -142,53 +146,25 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     size: Int,
     label: String,
     noun: String,
-    call: String
+    call: () => String
   ): Either[EvalError, Option[Int]] =
     // #670: Excel's codes as cached error values — a negative position is #VALUE!, one past the
     // array #REF! (LibreOffice: Err:502, its #VALUE!, and #REF!)
     if pos == 0 then Right(None)
     else if pos < 0 then
-      Left(EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: $call")))
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: ${call()}"))
+      )
     else if pos > size then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
           Some(
-            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): $call"
+            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): ${call()}"
           )
         )
       )
     else Right(Some(pos - 1))
-
-  /**
-   * The values of the reference INDEX returns, a whole row or column bounded to the sheet's used
-   * range (empty when the two do not meet), so `INDEX($A$1:$A$100000,0)` costs the data, not the
-   * reference — cells past the used range are blank either way.
-   */
-  private def indexValues(ref: RangeOperand, ctx: EvalContext): Either[EvalError, ArrayResult] =
-    val RangeOperand(targetSheet, reference) = ref
-    val used = targetSheet.usedRange
-    def span(lo: Int, hi: Int, usedAxis: Option[(Int, Int)]): Option[(Int, Int)] =
-      if lo == hi then Some((lo, hi))
-      else
-        usedAxis
-          .map { case (ulo, uhi) => (math.max(ulo, lo), math.min(uhi, hi)) }
-          .filter { case (l, h) => l <= h }
-    val rowSpan = span(
-      reference.rowStart.index0,
-      reference.rowEnd.index0,
-      used.map(u => (u.rowStart.index0, u.rowEnd.index0))
-    )
-    val colSpan = span(
-      reference.colStart.index0,
-      reference.colEnd.index0,
-      used.map(u => (u.colStart.index0, u.colEnd.index0))
-    )
-    (rowSpan, colSpan) match
-      case (Some((r0, r1)), Some((c0, c1))) =>
-        val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
-        extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
-      case _ => Right(ArrayResult.empty)
 
   val matchFn: FunctionSpec[BigDecimal] { type Args = MatchArgs } =
     FunctionSpec.simple[BigDecimal, MatchArgs](

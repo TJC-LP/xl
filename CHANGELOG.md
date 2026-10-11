@@ -23,6 +23,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **The `:` range operator between references a function returns** (#713):
+  `=SUM(A1:INDEX(A:A,COUNTA(A:A)))`, `=SUM(INDEX(B1:B3,1):INDEX(B1:B3,2))` and
+  `=SUM(B1:XLOOKUP(2,A1:A3,B1:B3))` parse, print back, shift, and evaluate to the bounding range,
+  as in Excel; a cell holding one is a dynamic dependency, like OFFSET.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
@@ -278,6 +282,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **XLOOKUP returns a reference, and a whole matched row or column** (#713):
+  `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
+  folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).
+  `INDEX(r,i,0)` and XLOOKUP's returned row or column keep the reference's shape.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

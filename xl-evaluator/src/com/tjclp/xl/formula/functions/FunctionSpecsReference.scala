@@ -331,6 +331,9 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     // prints its own)
     case ReferenceOperators.OperatorCall(call) =>
       call.spec.name != ReferenceOperators.IntersectionName
+    // GH-713: `@(A1:INDEX(…))` keeps its parens — the stored form's `_xlfn.SINGLE(…)` wraps one
+    // reference token and one call, never a `:` chain
+    case ReferenceOperators.RangeOperatorCall(_) => false
     case _: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
         _: TExpr.Percent | _: TExpr.Concat | _: TExpr.UnaryPlus[?] | _: TExpr.Eq[?] |
         _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] | _: TExpr.Gt[?] | _: TExpr.Gte[?] =>

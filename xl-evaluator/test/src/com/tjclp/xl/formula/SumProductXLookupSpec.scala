@@ -52,9 +52,17 @@ class SumProductXLookupSpec extends FunSuite:
       case Right(expr) =>
         Evaluator.eval(expr, sheet) match
           case Right(value: CellValue) => Right(value)
+          // GH-713: XLOOKUP returns a reference (typed ArrayResult, like INDEX) — one cell
+          case Right(eval.ArrayResult(Vector(Vector(single)))) => Right(single)
           case Right(other) => Left(s"Expected CellValue, got: $other")
           case Left(err) => Left(s"Eval error: $err")
       case Left(err) => Left(s"Parse error: $err")
+
+  /** GH-713: a miss is the typed #N/A (the Left channel every lookup shares). */
+  private def assertNotFound(formula: String, sheet: Sheet)(implicit loc: munit.Location): Unit =
+    FormulaParser.parse(formula).map(Evaluator.eval(_, sheet)) match
+      case Right(Left(EvalError.ErrorValue(CellError.NA, _))) => ()
+      case other => fail(s"$formula should be #N/A, got $other")
 
   // Helper for expected results (BigDecimal)
   private def assertEval(formula: String, sheet: Sheet, expected: BigDecimal)(implicit
@@ -518,11 +526,7 @@ class SumProductXLookupSpec extends FunSuite:
       ref"A2" -> "Banana",
       ref"B2" -> 200
     )
-    assertEvalCellValue(
-      "=XLOOKUP(\"Cherry\", A1:A2, B1:B2)",
-      sheet,
-      CellValue.Error(CellError.NA)
-    )
+    assertNotFound("=XLOOKUP(\"Cherry\", A1:A2, B1:B2)", sheet)
   }
 
   test("XLOOKUP: match_mode -1 (next smaller)") {
@@ -671,11 +675,7 @@ class SumProductXLookupSpec extends FunSuite:
       ref"A1" -> "Apple",
       ref"B1" -> 100
     )
-    assertEvalCellValue(
-      "=XLOOKUP(\"Banana\", A1:A1, B1:B1)",
-      sheet,
-      CellValue.Error(CellError.NA)
-    )
+    assertNotFound("=XLOOKUP(\"Banana\", A1:A1, B1:B1)", sheet)
   }
 
   test("XLOOKUP: single cell arrays") {
