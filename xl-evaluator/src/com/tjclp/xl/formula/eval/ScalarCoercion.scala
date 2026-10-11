@@ -19,7 +19,9 @@ import scala.math.BigDecimal
  *   - number → text renders via numberText (Excel's General text conversion, GH-665 — the
  *     decodeAsString/concatText convention)
  *   - number → boolean is zero/non-zero (Excel: 0 = FALSE, anything else = TRUE)
- *   - numeric text → number/integer parses ("3" coerces, "abc" is a clean error — Excel #VALUE!)
+ *   - numeric text → number/integer/date parses ("3" coerces); any other text is Excel's #VALUE!
+ *     (#709), in a logical slot every text but TRUE/FALSE — an error value the cell caches and
+ *     IFERROR sees, never a host failure
  *   - fractional → integer TRUNCATES toward zero (Excel truncates months/days/num_chars)
  *   - boolean → number is TRUE=1/FALSE=0; dates ARE numbers (Excel serial)
  *   - Empty → ""/0/FALSE per target (the decodeResolvedValue zero convention)
@@ -31,8 +33,9 @@ import scala.math.BigDecimal
  * to the evaluation positions (scalar argument positions collapse to top-left through
  * [[collapseTo]], operand positions pass arrays through to the broadcasting machinery).
  *
- * Total: every input yields Right(coerced) or Left(TypeMismatch/EvalFailed); never a thrown
- * exception, never a ClassCastException deferred to the consuming function.
+ * Total: every input yields Right(coerced), Left(ErrorValue) for an Excel error value or text the
+ * slot refuses, or Left(TypeMismatch) for a runtime value with no Excel meaning there; never a
+ * thrown exception, never a ClassCastException deferred to the consuming function.
  */
 private[formula] object ScalarCoercion:
 
@@ -179,6 +182,14 @@ private[formula] object ScalarCoercion:
   private def mismatch(label: String, expected: String, value: Any): Either[EvalError, Any] =
     Left(EvalError.TypeMismatch(label, expected, s"$value"))
 
+  /**
+   * #709: text a typed scalar slot cannot read is Excel's `#VALUE!` — `=ABS("abc")`,
+   * `=IF("abc",1,0)` — the answer the operators and the lifted elements already give, not a host
+   * failure.
+   */
+  private def textRefused(label: String, expected: String, s: String): Either[EvalError, Any] =
+    Left(EvalError.ErrorValue(CellError.Value, Some(s"$label: text '$s' is not $expected")))
+
   private def coerceText(label: String, value: Any): Either[EvalError, Any] = value match
     case s: String => Right(s)
     case bd: BigDecimal => Right(numberText(bd))
@@ -202,7 +213,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       parseNumericText(s) match
         case Some(bd) => truncateToInt(label, bd)
-        case None => mismatch(label, "integer", s)
+        case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(0)
     case other => mismatch(label, "integer", other)
 
@@ -219,7 +230,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       boolTextValue(s) match
         case Some(b) => Right(b)
-        case None => mismatch(label, "boolean", s)
+        case None => textRefused(label, "TRUE or FALSE", s)
     case CellValue.Empty => Right(false)
     case other => mismatch(label, "boolean", other)
 
@@ -234,7 +245,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       parseNumericText(s) match
         case Some(bd) => Right(bd)
-        case None => mismatch(label, "number", s)
+        case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(BigDecimal(0))
     case other => mismatch(label, "number", other)
 
@@ -248,6 +259,12 @@ private[formula] object ScalarCoercion:
     // GH-307: booleans are their Excel serial in date positions too (TRUE=1 → 1900-01-01,
     // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
     case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
+    // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023); other text is
+    // #VALUE! (#709) — date-shaped text included, which VALUE does not parse either
+    case s: String =>
+      parseNumericText(s) match
+        case Some(bd) => coerceDate(label, bd)
+        case None => textRefused(label, "a date serial", s)
     // GH-396: a blank in a date position renders like Excel's serial-0 year/month (see
     // [[BlankDate]]) — previously a clean error while decodeAsDate/other targets accepted Empty
     case CellValue.Empty => Right(BlankDate)

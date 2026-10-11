@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.SheetName
 // conversions.given and SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
@@ -136,10 +136,9 @@ class TypeCoercionSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(2025))))
   }
 
-  test("YEAR with non-date cell returns error") {
+  test("YEAR with non-date cell returns #VALUE! (#709)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Text("not a date"))
-    val result = sheet.evaluateFormula("=YEAR(A1)")
-    assert(result.isLeft, "Expected error for text cell in YEAR function")
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Error(CellError.Value)))
   }
 
   // ============================================================================
@@ -316,10 +315,10 @@ class TypeCoercionSpec extends FunSuite:
     )
   }
 
-  test("GH-385: text cell in numeric position is still a clean error (not 0)") {
+  test("GH-385: text cell in numeric position is #VALUE! (not 0)") {
+    // #709: Excel's error value, cached like any other, not a host failure
     val sheet = sheetWith(ref"A1" -> CellValue.Text("abc"))
-    val result = sheet.evaluateFormula("=A1+1")
-    assert(result.isLeft, s"expected error for text cell in numeric position, got $result")
+    assertEquals(sheet.evaluateFormula("=A1+1"), Right(CellValue.Error(CellError.Value)))
   }
 
   test("GH-385: range aggregates still SKIP blanks while scalar refs coerce to 0") {
@@ -522,19 +521,28 @@ class TypeCoercionSpec extends FunSuite:
     )
   }
 
-  test("GH-306: uncoercible call results are clean per-cell errors, never thrown") {
+  test("GH-306: uncoercible call results are #VALUE! per cell, never thrown") {
+    // #709: text a typed slot cannot read is Excel's #VALUE!
     // text where a number is needed
-    val r1 = emptySheet.evaluateFormula("=ABS(UPPER(\"xy\"))")
-    assert(r1.isLeft, s"expected clean Left for text in numeric position, got $r1")
+    assertEquals(
+      emptySheet.evaluateFormula("=ABS(UPPER(\"xy\"))"),
+      Right(CellValue.Error(CellError.Value))
+    )
     // text where a boolean is needed
-    val r2 = emptySheet.evaluateFormula("=IF(\"a\"&\"b\", 1, 2)")
-    assert(r2.isLeft, s"expected clean Left for text in boolean position, got $r2")
+    assertEquals(
+      emptySheet.evaluateFormula("=IF(\"a\"&\"b\", 1, 2)"),
+      Right(CellValue.Error(CellError.Value))
+    )
     // text where an int is needed
-    val r3 = emptySheet.evaluateFormula("=LEFT(\"hello\", UPPER(\"xy\"))")
-    assert(r3.isLeft, s"expected clean Left for text in int position, got $r3")
+    assertEquals(
+      emptySheet.evaluateFormula("=LEFT(\"hello\", UPPER(\"xy\"))"),
+      Right(CellValue.Error(CellError.Value))
+    )
     // text where a date is needed
-    val r4 = emptySheet.evaluateFormula("=YEAR(UPPER(\"xy\"))")
-    assert(r4.isLeft, s"expected clean Left for text in date position, got $r4")
+    assertEquals(
+      emptySheet.evaluateFormula("=YEAR(UPPER(\"xy\"))"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-306: totality sweep — cross-type compositions never throw") {
@@ -643,10 +651,12 @@ class TypeCoercionSpec extends FunSuite:
     assertEquals(sheet.evaluateFormula("=LEFT(\"hello\", A1)"), Right(CellValue.Text("he")))
   }
 
-  test("GH-396: non-numeric text cell in int position is a clean error (not 0)") {
+  test("GH-396: non-numeric text cell in int position is #VALUE! (not 0)") {
     val sheet = sheetWith(ref"A1" -> CellValue.Text("abc"))
-    val result = sheet.evaluateFormula("=LEFT(\"hello\", A1)")
-    assert(result.isLeft, s"expected error for non-numeric text in int position, got $result")
+    assertEquals(
+      sheet.evaluateFormula("=LEFT(\"hello\", A1)"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-396: YEAR/MONTH of a blank cell match Excel's serial-0 rendering (1900/1)") {

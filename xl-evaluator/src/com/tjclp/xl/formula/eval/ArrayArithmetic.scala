@@ -422,14 +422,12 @@ object ArrayArithmetic:
    * GH-333/GH-338: Excel truthiness for a condition element, shared by broadcastIf (IF over an
    * array condition) and the logical functions' array paths (AND/OR aggregation, NOT broadcast):
    * booleans as-is, numbers zero/non-zero, empty is FALSE (the ScalarCoercion Bool conventions);
-   * text refuses cleanly with a Left naming the position via `label`.
+   * text other than TRUE/FALSE is `#VALUE!` (#709), naming the position via `label`.
    *
    * GH-344: an error element propagates as its Excel error VALUE (Left(ErrorValue) — the AND/OR
    * folds short-circuit with it and the boundary promotes it to the error cell, Excel-exact).
    * broadcastIf and broadcastNot pre-check errors with [[carriedError]] and demote their residual
-   * text refusals to #VALUE! elements, so their condition failures stay positional; the AND/OR
-   * folds keep the text refusal loud (full #VALUE! parity arrives with the TypeMismatch boundary
-   * demotion follow-up).
+   * refusals to #VALUE! elements, so their condition failures stay positional.
    */
   def conditionTruthy(label: String, cv: CellValue): Either[EvalError, Boolean] = cv match
     case CellValue.Bool(b) => Right(b)
@@ -445,14 +443,17 @@ object ArrayArithmetic:
     case CellValue.Text(s) =>
       ScalarCoercion.boolTextValue(s) match
         case Some(b) => Right(b)
-        case None => Left(EvalError.TypeMismatch(label, "boolean", cv.toString))
+        case None =>
+          Left(
+            EvalError.ErrorValue(CellError.Value, Some(s"$label: text '$s' is not TRUE or FALSE"))
+          )
     case other => Left(EvalError.TypeMismatch(label, "boolean", other.toString))
 
   /**
    * GH-338: truthiness of every element (row-major), for the AND/OR aggregation folds (AND =
    * forall, OR = exists). The first refusing element short-circuits with its Left — GH-344: an
    * error element's Left carries its Excel error VALUE (the fold's result at the boundary), a text
-   * element's stays a loud TypeMismatch.
+   * element's is `#VALUE!` (#709).
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
     traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
