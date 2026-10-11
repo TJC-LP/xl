@@ -2,9 +2,15 @@ package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.formula.Arity
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.Evaluator
-import com.tjclp.xl.formula.functions.{FunctionRegistry, FunctionSpec, ReferenceOperators}
+import com.tjclp.xl.formula.functions.{
+  FunctionRegistry,
+  FunctionSpec,
+  FunctionSpecs,
+  ReferenceOperators
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import munit.FunSuite
 
@@ -94,4 +100,25 @@ class ValueDependenciesSpec extends FunSuite:
     val missing = (referencing.toSet ++ Evaluator.referenceFunctions + ReferenceOperators.UnionName)
       .filterNot(ValueDependencies.referencePassing.contains)
     assertEquals(missing, Set.empty[String], "add them to ValueDependencies.referencePassing")
+  }
+
+  test("computed range inspection reads endpoint selectors but not the referenced cells") {
+    // Build GH-713's operator shape directly: this branch can merge before its parser support.
+    // The same ArgSpec carries the endpoints of all two-operand reference operators.
+    type Operands = (ReferenceOperators.Operand, ReferenceOperators.Operand)
+    val range = FunctionSpec.simple[Any, Operands]("(range)", Arity.two)((_, _) => Right(0))(using
+      ReferenceOperators.intersection.argSpec
+    )
+    val endpoint = ReferenceOperators.referenceOperand
+      .parse(List(parsed("INDEX(D5:D6,A1)")), 0, "(range)")
+      .fold(error => fail(error.toString), _._1)
+    val computed = TExpr.Call(
+      range,
+      (Left(TExpr.RangeLocation.Local(ref"D5:D5")), endpoint)
+    )
+    val inspected = TExpr.Call(FunctionSpecs.rows, computed)
+    val bounds = Some(ref"A1:F10")
+    assertEquals(ValueDependencies.extract(inspected, bounds, None), Set(ref"A1"))
+    // Reading the range as a value must still retain those cell dependencies.
+    assertEquals(ValueDependencies.extract(computed, bounds, None), Set(ref"A1", ref"D5", ref"D6"))
   }

@@ -37,7 +37,10 @@ private[xl] object ValueDependencies:
     "SWITCH" -> ((index, count) => index > 0 && (index % 2 == 0 || index == count - 1)),
     "XLOOKUP" -> ((index, _) => index == 2),
     ReferenceOperators.UnionName -> ((_, _) => true),
-    ReferenceOperators.IntersectionName -> ((_, _) => true)
+    ReferenceOperators.IntersectionName -> ((_, _) => true),
+    // GH-713 introduces this operator separately; retain its reference-only operand semantics
+    // before that branch lands so either merge order keeps positioned inspection correct.
+    "(range)" -> ((_, _) => true)
   )
 
   /**
