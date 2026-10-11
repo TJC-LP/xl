@@ -368,6 +368,11 @@ class RecalcSpec extends FunSuite:
         )
       )
     )
+    // the reasons themselves are keyed by QualifiedRef, one per cell that has one
+    assertEquals(
+      result.errorReasons.keySet,
+      Set(QualifiedRef(S, ref"B1"), QualifiedRef(S, ref"B2"), QualifiedRef(S, ref"B5"))
+    )
     assertEquals(
       result.summary,
       "Recalculated 5 formulas (5 error values: " +

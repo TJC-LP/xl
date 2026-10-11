@@ -921,7 +921,7 @@ object WorkbookEvaluator:
     sheets: Vector[Sheet],
     values: Map[SheetName, Map[ARef, CellValue]],
     errors: Vector[CellEvalError],
-    reasons: Map[(SheetName, ARef), String] = Map.empty
+    reasons: Map[QualifiedRef, String] = Map.empty
   ):
     /** A computed cell: threaded onto its sheet and recorded, with its reason when it has one. */
     def computed(idx: Int, q: QualifiedRef, outcome: CellOutcome): PassState =
@@ -930,9 +930,7 @@ object WorkbookEvaluator:
           sheets.updated(idx, SheetEvaluator.threadComputed(sheets(idx), q.ref, outcome.value)),
         values =
           values.updated(q.sheet, values.getOrElse(q.sheet, Map.empty) + (q.ref -> outcome.value)),
-        reasons = outcome.reason.fold(reasons - ((q.sheet, q.ref)))(why =>
-          reasons + ((q.sheet, q.ref) -> why)
-        )
+        reasons = outcome.reason.fold(reasons - q)(why => reasons + (q -> why))
       )
 
     /**
