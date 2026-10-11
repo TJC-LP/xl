@@ -12,7 +12,7 @@ import com.tjclp.xl.formula.eval.{
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 
@@ -282,10 +282,12 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
-   * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), a whole row or
-   * column bounded to the target sheet's used range (empty when the two do not meet), so
-   * `INDEX($A$1:$A$100000,0)` or `XLOOKUP(k,ids,B:M)` costs the data, not the reference — cells
-   * past the used range are blank either way.
+   * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
+   * reference's own shape — rows × columns equal ROWS × COLUMNS, blanks included, so array
+   * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
+   * the sheet's last row or column (`A:A`, `B5:B1048576`, `2:2`): it stops where the used range
+   * does (one cell when they do not meet), so `INDEX(A:A,0)` or `XLOOKUP(k,ids,B:B)` costs the
+   * data, not a million blanks. The start is never moved.
    */
   protected def boundedReferenceValues(
     ref: RangeOperand,
@@ -293,27 +295,23 @@ trait FunctionSpecsBase:
   ): Either[EvalError, ArrayResult] =
     val RangeOperand(targetSheet, reference) = ref
     val used = targetSheet.usedRange
-    def span(lo: Int, hi: Int, usedAxis: Option[(Int, Int)]): Option[(Int, Int)] =
-      if lo == hi then Some((lo, hi))
-      else
-        usedAxis
-          .map { case (ulo, uhi) => (math.max(ulo, lo), math.min(uhi, hi)) }
-          .filter { case (l, h) => l <= h }
-    val rowSpan = span(
+    def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
+      if hi < sheetLast then hi
+      else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
+    val rowEnd = end(
       reference.rowStart.index0,
       reference.rowEnd.index0,
-      used.map(u => (u.rowStart.index0, u.rowEnd.index0))
+      Row.MaxIndex0,
+      used.map(_.rowEnd.index0)
     )
-    val colSpan = span(
+    val colEnd = end(
       reference.colStart.index0,
       reference.colEnd.index0,
-      used.map(u => (u.colStart.index0, u.colEnd.index0))
+      Column.MaxIndex0,
+      used.map(_.colEnd.index0)
     )
-    (rowSpan, colSpan) match
-      case (Some((r0, r1)), Some((c0, c1))) =>
-        val selected = CellRange(ARef.from0(c0, r0), ARef.from0(c1, r1))
-        extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
-      case _ => Right(ArrayResult.empty)
+    val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
+    extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the

@@ -60,11 +60,13 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       areaNum <- areaNumOpt match
         case Some(TExpr.Missing) | Some(TExpr.Coerced(TExpr.Missing, _)) | None => Right(1)
         case Some(expr) => ctx.evalExpr(expr).map(_.toInt)
-      operandText = array match
-        case Left(location) => location.toA1
-        case Right(expr) => FormulaPrinter.printFileForm(expr)
-      call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
-        s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
+      // rendered only for a diagnostic: printing a `:` operand re-parses it
+      call = () =>
+        val operandText = array match
+          case Left(location) => location.toA1
+          case Right(expr) => FormulaPrinter.printFileForm(expr)
+        s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
+          s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
       target <- array match
         case Right(TExpr.Lit(values: ArrayResult)) =>
           pickArea(1, areaNum, call).flatMap(_ =>
@@ -99,16 +101,17 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     yield target
 
   /** GH-669: area_num against the number of areas — `#VALUE!` below 1, `#REF!` past the last. */
-  private def pickArea(count: Int, areaNum: Int, call: String): Either[EvalError, Unit] =
+  private def pickArea(count: Int, areaNum: Int, call: () => String): Either[EvalError, Unit] =
     if areaNum < 1 then
       Left(
-        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 ($call)"))
+        EvalError
+          .ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 (${call()})"))
       )
     else if areaNum > count then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
-          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) ($call)")
+          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) (${call()})")
         )
       )
     else Right(())
@@ -123,7 +126,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     colNum: Option[BigDecimal],
     numRows: Int,
     numCols: Int,
-    call: String
+    call: () => String
   ): Either[EvalError, (Vector[Int], Vector[Int])] =
     val (rowPos, colPos) = colNum match
       case Some(c) => (rowNum.toInt, c.toInt)
@@ -143,19 +146,21 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     size: Int,
     label: String,
     noun: String,
-    call: String
+    call: () => String
   ): Either[EvalError, Option[Int]] =
     // #670: Excel's codes as cached error values — a negative position is #VALUE!, one past the
     // array #REF! (LibreOffice: Err:502, its #VALUE!, and #REF!)
     if pos == 0 then Right(None)
     else if pos < 0 then
-      Left(EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: $call")))
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: ${call()}"))
+      )
     else if pos > size then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
           Some(
-            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): $call"
+            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): ${call()}"
           )
         )
       )

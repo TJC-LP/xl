@@ -181,6 +181,10 @@ class RangeOperatorSpec extends FunSuite:
     refused("=A1:LOG10(5)") match
       case ParseError.UnexpectedChar('(', _, _) => ()
       case other => fail(s"A1:LOG10(5): $other")
+    // a defect inside the right operand's call is that call's own diagnostic
+    refused("=SUM(A1:INDEX(A:A,FOO(1)))") match
+      case ParseError.UnknownFunction("FOO", _, _) => ()
+      case other => fail(s"A1:INDEX(A:A,FOO(1)): $other")
     // a computed reference in a typed range slot names the construct (follow-up: #710)
     refused("=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)") match
       case ParseError.InvalidArguments("SUMIF", _, _, actual) =>

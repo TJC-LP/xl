@@ -1582,8 +1582,9 @@ object FormulaParser:
    * Accepted only when both sides are references, neither is a bare name spelled like a column or
    * row (`A1:B` stays a typo, `A:IF(…)` a column range), and, for an unqualified left token, the
    * right is not a sheet-qualified location (`A1:'Q 1'!B2` stays refused like `A1:Sheet2!B2`).
-   * Otherwise the lexical answer — its diagnostic unchanged — stands. Only the nesting guards
-   * escape the probe, so a deep chain is `NestingTooDeep`, never a stack overflow.
+   * Otherwise the lexical answer — its diagnostic unchanged — stands. Only the nesting guards and
+   * an error inside a right-hand call's arguments ([[insideCall]]) escape the probe, so a deep
+   * chain is `NestingTooDeep`, never a stack overflow.
    */
   private def rangeFallback(
     colon: ParserState,
@@ -1613,6 +1614,7 @@ object FormulaParser:
                 case Right(None) => Right(None)
                 case Left(err @ (_: ParseError.NestingTooDeep | _: ParseError.TooManyOperators)) =>
                   Left(err)
+                case Left(err) if insideCall(afterColon, err) => Left(err)
                 case Left(_) => Right(None)
             }
           case _ => Right(None)
@@ -1620,6 +1622,28 @@ object FormulaParser:
       case Right(Some(parsed)) => Right(parsed)
       case Right(None) => lexical
       case Left(err) => Left(err)
+
+  /**
+   * Whether `err` lies inside the argument list of a call that opens the right operand
+   * (`A1:INDEX(A:A,FOO(1))`): the right side is a call, so its own diagnostic (an unknown `FOO`)
+   * beats the lexical reading's `Invalid cell reference 'A1:INDEX'`.
+   */
+  private def insideCall(right: ParserState, err: ParseError): Boolean =
+    val name = right.remaining.takeWhile(c => c.isLetterOrDigit || c == '_' || c == '.')
+    val open = right.pos + name.length
+    val errPos = err match
+      case ParseError.UnexpectedChar(_, pos, _) => Some(pos)
+      case ParseError.UnexpectedEOF(pos, _) => Some(pos)
+      case ParseError.InvalidCellRef(_, pos, _) => Some(pos)
+      case ParseError.InvalidNumber(_, pos, _) => Some(pos)
+      case ParseError.UnbalancedDelimiter(pos, _, _) => Some(pos)
+      case ParseError.UnknownFunction(_, pos, _) => Some(pos)
+      case ParseError.InvalidArguments(_, pos, _, _) => Some(pos)
+      case ParseError.InvalidOperator(_, pos, _) => Some(pos)
+      case ParseError.GenericError(_, pos) => pos
+      case _ => None
+    name.headOption.exists(_.isLetter) && right.input.lift(open).contains('(') &&
+    errPos.exists(_ > open)
 
   /** A bare name spelled like a column (`B`, `Jan`) or a row: never an operand of `:`. */
   private def spellsAxisName(expr: TExpr[?]): Boolean =

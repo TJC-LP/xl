@@ -146,3 +146,67 @@ class XLookupReferenceSpec extends FunSuite:
       "SUM(B1:_xlfn.XLOOKUP(2,A1:A3,B1:B3))"
     )
   }
+
+  /** Sheet1: C1:E3 = i*100, i*10, i; G1:G3 = 1,2,3; columns A and B empty. */
+  private val offsetBook: Workbook =
+    val grid = (1 to 3).foldLeft(Sheet(SheetName.unsafe("Sheet1"))) { (s, i) =>
+      s.put(ARef.from1(3, i), N((i * 100).toString))
+        .put(ARef.from1(4, i), N((i * 10).toString))
+        .put(ARef.from1(5, i), N(i.toString))
+        .put(ARef.from1(7, i), N(i.toString))
+    }
+    Workbook(Vector(grid))
+
+  private def offsetArray(formula: String): Either[EvalError, Any] =
+    Evaluator.arrayInstance.eval(
+      FormulaParser
+        .parse(formula)
+        .fold(err => fail(s"$formula: $err"), identity)
+        .asInstanceOf[TExpr[Any]],
+      offsetBook.sheets.headOption.getOrElse(fail("no sheet")),
+      workbook = Some(offsetBook)
+    )
+
+  private def offsetPlain(formula: String): Either[String, CellValue] =
+    val target = offsetBook.sheets.headOption.getOrElse(fail("no sheet"))
+    val placed = target.put(ref"J1", CellValue.Formula(formula, None))
+    placed.evaluateCell(ref"J1", Clock.system, Some(offsetBook.put(placed))).left.map(_.message)
+
+  test("GH-713: a returned row keeps the reference's shape — leading blanks stay in place") {
+    val expected = ArrayResult(
+      Vector(Vector(CellValue.Empty, CellValue.Empty, N("200"), N("20"), N("2")))
+    )
+    for call <- List("XLOOKUP(2,G1:G3,A1:E3)", "INDEX(A1:E3,2,0)") do
+      assertEquals(offsetArray(s"=$call"), Right(expected), call)
+      assertEquals(offsetPlain(s"COLUMNS($call)"), Right(N("5")), call)
+      assertEquals(offsetPlain(s"SUMPRODUCT($call*{1,2,3,4,5})"), Right(N("690")), call)
+      assertEquals(offsetPlain(s"SUMPRODUCT($call,{1,2,3,4,5})"), Right(N("690")), call)
+  }
+
+  test("GH-713: a returned row past the used range keeps its trailing blanks") {
+    val months = "{1,2,3,4,5,6,7,8,9,10,11,12}"
+    array("=XLOOKUP(2,A1:A3,B1:M3)") match
+      case Right(r: ArrayResult) =>
+        assertEquals((r.rows, r.cols), (1, 12))
+        assertEquals(r.values.headOption.map(_.take(2)), Some(Vector(N("20"), N("200"))))
+        assert(r.values.flatten.drop(2).forall(_ == CellValue.Empty), r.toString)
+      case other => fail(s"XLOOKUP(2,A1:A3,B1:M3): $other")
+    assertEquals(plain("H1", s"SUMPRODUCT(XLOOKUP(2,A1:A3,B1:M3)*$months)"), Right(N("420")))
+    assertEquals(plain("H1", s"SUMPRODUCT(INDEX(B1:M3,2,0)*$months)"), Right(N("420")))
+  }
+
+  test("GH-713: a whole-column result is still bounded to the used rows, from its start") {
+    // used rows end at row 5 (the key row): A:A materializes rows 1..5, never a million blanks
+    array("=INDEX(A:A,0)") match
+      case Right(r: ArrayResult) => assertEquals((r.rows, r.cols), (5, 1))
+      case other => fail(s"INDEX(A:A,0): $other")
+    // a column reaching the sheet's last row past the data: anchored at its start, one blank
+    array("=INDEX(A9:A1048576,0)") match
+      case Right(r: ArrayResult) =>
+        assertEquals(r, ArrayResult(Vector(Vector(CellValue.Empty))))
+      case other => fail(s"INDEX(A9:A1048576,0): $other")
+    // a whole-row result is bounded to the used columns
+    array("=INDEX(2:2,0)") match
+      case Right(r: ArrayResult) => assertEquals((r.rows, r.cols), (1, 3))
+      case other => fail(s"INDEX(2:2,0): $other")
+  }
