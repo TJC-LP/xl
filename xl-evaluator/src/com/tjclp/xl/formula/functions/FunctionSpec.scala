@@ -159,13 +159,14 @@ final case class EvalContext(
    * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
    * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
    * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
-   * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
-   * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
-   * formula. In array mode, [[evalArrayExpr]].
+   * [[com.tjclp.xl.formula.eval.RangeOperand]], in either mode (GH-711: `AND(IF(TRUE,B:B,A:A))` in
+   * an array formula ignores B's blanks as `AND(B:B)` does); any other expression evaluates in the
+   * formula's own mode, its result not collapsed (an array-returning call folds whole), so in a
+   * plain cell its references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel
+   * computes a legacy formula, and in array mode it is the array.
    */
   private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
-    if arrayMode then evalArrayExpr(expr) else evalReference(expr)
+    evalReference(expr)
 
   /**
    * The reference an expression denotes, in either mode, as a

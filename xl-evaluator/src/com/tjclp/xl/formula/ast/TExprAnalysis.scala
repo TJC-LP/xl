@@ -217,10 +217,17 @@ trait TExprAnalysis:
       // A lifted call evaluates element-wise over its lifted scalar slots, so a range there is an
       // element source like an operand's and takes the same bounds (SUMPRODUCT(--(A:A>0),ABS(B:B))
       // must not mismatch its dimensions). Other calls are shape-sensitive (ROWS(A:A), INDEX).
+      // GH-711: the reference IF, IFS, CHOOSE and SWITCH select, and an array condition its
+      // branches broadcast against, are element sources too (SUMPRODUCT(IF(TRUE,B:B,A:A)) reads
+      // B's used extent, as SUMPRODUCT(B:B) does)
+      case call: Call[?] if selectors.contains(call.spec.name) =>
+        Call(call.spec, call.spec.argSpec.map(call.args)(transformRanges(_, f), identity, identity))
       case call: Call[?] => transformLiftedSlots(call, f)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other
     ).asInstanceOf[TExpr[A]]
+
+  private val selectors: Set[String] = Set("IF", "IFS", "CHOOSE", "SWITCH")
 
   private def transformLiftedSlots[A](
     call: Call[A],
