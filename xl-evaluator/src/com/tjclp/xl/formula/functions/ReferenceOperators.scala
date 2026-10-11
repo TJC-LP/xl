@@ -396,7 +396,11 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * every operand's edges, a sound over-approximation; a computed range those edges do not cover is
    * a dynamic reference ([[isComputedRangeDynamic]]).
    */
-  def dependencyValues(specName: String, values: List[ArgValue], shapeOf: ShapeOf): List[ArgValue] =
+  def dependencyValues(
+    specName: String,
+    values: List[ArgValue],
+    shapeOf: ShapeOf = staticShape
+  ): List[ArgValue] =
     if specName == RangeName then values ++ boundingEdges(values, shapeOf)
     else if specName != IntersectionName then values
     else
