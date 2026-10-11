@@ -278,6 +278,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **ROW and COLUMN over a multi-cell reference are arrays** (#712): `=SUMPRODUCT(ROW(A1:A10))` is
+  55, `=SUMPRODUCT(COLUMN(A1:E1))` 15 and `=SUMPRODUCT(--(ROW(A1:A10)>5))` 5, as in Excel, where
+  they read the first number only. A plain cell still keeps the top-left (`=SUM(ROW(A1:A10))` is 1,
+  legacy Excel's value). Inside SUMPRODUCT a whole-column `ROW(A:A)` is trimmed to the used rows, the
+  GH-192 trimming that keeps `SUMPRODUCT((A:A="x")*ROW(A:A))` sized.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
