@@ -198,8 +198,10 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
       )
       negative <- Gen.oneOf(true, false)
     yield
-      val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
-      if negative then -magnitude else magnitude
+      // GH-730: the sign goes into the unscaled value. Scala's unary minus rounds to 34 digits,
+      // which underflows a 35-40 digit value whose scale is near Int.MinValue.
+      val signed = if negative then -unscaled else unscaled
+      BigDecimal(new java.math.BigDecimal(signed.bigInteger, scale))
 
   // No shrinking over extreme scales: halving a value never moves its scale, and a failing case
   // re-run through ScalaCheck's Fractional shrinker for minutes instead of failing
