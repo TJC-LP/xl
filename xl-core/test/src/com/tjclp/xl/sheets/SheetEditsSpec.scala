@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, Comment, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, CellValue, Comment, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
@@ -249,6 +249,55 @@ class SheetEditsSpec extends FunSuite:
       copied(a1("D5")).value,
       CellValue.Formula("SORT($A$1:$A$3)|2,4", None, FormulaKind.dynamicArray(rng("D5:D5")))
     )
+  }
+
+  test("a complete dynamic spill copy keeps its shifted extent and record flags") {
+    val kind: FormulaKind.ArrayFormula = FormulaKind.ArrayFormula(
+      rng("B2:C3"),
+      aca = true,
+      ca = true,
+      mode = ArrayMode.Dynamic(collapsed = true)
+    )
+    val s = Sheet(name)
+      .put(a1("B2"), CellValue.Formula("SEQUENCE($A$1,2)", Some(num(1)), kind))
+      .put(a1("C2"), num(2))
+      .put(a1("B3"), num(3))
+      .put(a1("C3"), num(4))
+    val copied = ok(s.copyRange(rng("A1:C3"), rng("E5:G7"), valuesOnly = false)(using marking))
+    assertEquals(
+      copied(a1("F6")).value,
+      CellValue.Formula("SEQUENCE($A$1,2)|4,4", None, kind.copy(ref = rng("F6:G7")))
+    )
+    assertEquals(copied(a1("G6")).value, num(2))
+    assertEquals(copied(a1("F7")).value, num(3))
+    assertEquals(copied(a1("G7")).value, num(4))
+    assertEquals(copied(a1("B2")).value, s(a1("B2")).value)
+    val other = Sheet(SheetName.unsafe("Other"))
+    val crossSheet =
+      ok(other.copyRangeFrom(s, rng("B2:C3"), rng("D4:E5"), valuesOnly = false)(using marking))
+    assertEquals(
+      crossSheet(a1("D4")).value,
+      CellValue.Formula("SEQUENCE($A$1,2)|2,2", None, kind.copy(ref = rng("D4:E5")))
+    )
+  }
+
+  test("partial dynamic copies keep a 1x1 anchor; values-only copies stay constants") {
+    val kind = FormulaKind.dynamicArray(rng("A1:A3"))
+    val s = Sheet(name)
+      .put(a1("A1"), CellValue.Formula("SEQUENCE(3)", Some(num(1)), kind))
+      .put(a1("A2"), num(2))
+      .put(a1("A3"), num(3))
+    val partial = ok(s.copyRange(rng("A1:A2"), rng("C1:C2"), valuesOnly = false)(using marking))
+    assertEquals(
+      partial(a1("C1")).value,
+      CellValue.Formula("SEQUENCE(3)|2,0", None, kind.copy(ref = rng("C1")))
+    )
+    assertEquals(partial(a1("C2")).value, num(2))
+    assert(!partial.contains(a1("C3")))
+    val values = ok(s.copyRange(rng("A1:A3"), rng("C1:C3"), valuesOnly = true))
+    assertEquals(Vector("C1", "C2", "C3").map(r => values(a1(r)).value), Vector(1, 2, 3).map(num))
+    val children = ok(s.copyRange(rng("A2:A3"), rng("C1:C2"), valuesOnly = false))
+    assertEquals(Vector("C1", "C2").map(r => children(a1(r)).value), Vector(2, 3).map(num))
   }
 
   test("a multi-cell array anchor pastes a plain formula and its members their constants") {

@@ -7,8 +7,9 @@ import munit.FunSuite
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.*
 import com.tjclp.xl.cells.{ArrayMode, CellValue, FormulaKind}
-import com.tjclp.xl.error.XLError
+import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.ops.FormulaSupport
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
 
 /**
@@ -56,6 +57,53 @@ class DynamicArrayPreservationSpec extends FunSuite:
     }
 
   private val sortRange = CellRange(ref"B1", ref"B5")
+
+  // This fixture's sole formula uses an absolute reference; no evaluator is needed to shift it.
+  private val anchoredFormulaSupport: FormulaSupport = new FormulaSupport:
+    export FormulaSupport.textOnly.{
+      validate,
+      insertRows,
+      deleteRows,
+      insertCols,
+      deleteCols,
+      renameSheet
+    }
+    def shift(formula: String, colDelta: Int, rowDelta: Int): XLResult[String] =
+      if formula == "SEQUENCE($A$1)" then Right(formula)
+      else Left(FormulaSupport.unsupported("shift"))
+
+  backends.foreach { case (name, config) =>
+    test(s"whole dynamic spill copies preserve their owned cells through OOXML ($name)") {
+      val kind = FormulaKind.dynamicArray(ref"B1:B3")
+      val source = Sheet("Sheet1")
+        .put(ref"A1", CellValue.Number(3))
+        .put(ref"B1", CellValue.Formula("SEQUENCE($A$1)", Some(CellValue.Number(1)), kind))
+        .put(ref"B2", CellValue.Number(2))
+        .put(ref"B3", CellValue.Number(3))
+      val sourceWorkbook = read(write(Workbook(source), config))
+      val sourceSheet = sourceWorkbook.sheets.headOption.getOrElse(fail("no source sheet"))
+      val copied = sourceSheet
+        .copyRange(ref"B1:B3", ref"D1:D3", valuesOnly = false)(using anchoredFormulaSupport)
+        .fold(e => fail(e.message), identity)
+      val out = write(sourceWorkbook.put(copied), config)
+      val back = read(out)
+      val targetSheet = back.sheets.headOption.getOrElse(fail("no target sheet"))
+      assertEquals(kindAt(back, ref"D1"), Some(FormulaKind.dynamicArray(ref"D1:D3")))
+      assertEquals(kindAt(back, ref"B1"), Some(kind))
+      assertEquals(targetSheet(ref"D2").value, CellValue.Number(2))
+      assertEquals(targetSheet(ref"D3").value, CellValue.Number(3))
+      assertEquals(
+        targetSheet(ref"D1").value,
+        CellValue.Formula("SEQUENCE($A$1)", None, FormulaKind.dynamicArray(ref"D1:D3"))
+      )
+      val xml =
+        XmlSecurity.parseSafe(sheet1(out), "sheet1.xml").fold(e => fail(e.message), identity)
+      val anchor = (xml \\ "c").find(n => (n \ "@r").text == "D1").getOrElse(fail("no D1"))
+      assertEquals((anchor \ "@cm").text, "1")
+      assertEquals((anchor \ "f" \ "@ref").text, "D1:D3")
+      assertWiredOnce(out)
+    }
+  }
 
   backends.foreach { case (name, config) =>
     test(s"put D1 keeps the anchor's cm and the metadata part ($name)") {
