@@ -337,6 +337,68 @@ class RecalcSpec extends FunSuite:
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(28)))
 
+  test("#692: the summary names the first ten error-valued cells with the evaluator's reason"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", num(10))
+      .put(ref"B1", formula("=VLOOKUP(42,A1:A1,1,FALSE)"))
+      .put(ref"B2", formula("=1/0"))
+      .put(ref"B3", formula("=NA()"))
+      .put(ref"B4", formula("=B1+1")) // an error read through a reference: code, no reason
+      .put(ref"B5", formula("=XLOOKUP(42,A1:A1,A1:A1)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val S = SheetName.unsafe("S")
+    assertEquals(
+      result.errorCells,
+      Vector(
+        ErrorValueCell(
+          S,
+          ref"B1",
+          CellError.NA,
+          Some("VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE)")
+        ),
+        ErrorValueCell(S, ref"B2", CellError.Div0, Some("Division by zero: 1 / 0")),
+        ErrorValueCell(S, ref"B3", CellError.NA, None),
+        ErrorValueCell(S, ref"B4", CellError.NA, None),
+        ErrorValueCell(
+          S,
+          ref"B5",
+          CellError.NA,
+          Some("XLOOKUP: no match found for lookup value: XLOOKUP(42, A1:A1, A1:A1, 0, 1)")
+        )
+      )
+    )
+    assertEquals(
+      result.summary,
+      "Recalculated 5 formulas (5 error values: " +
+        "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE); " +
+        "S!B2 #DIV/0! — Division by zero: 1 / 0; S!B3 #N/A; S!B4 #N/A; " +
+        "S!B5 #N/A — XLOOKUP: no match found for lookup value: XLOOKUP(42, A1:A1, A1:A1, 0, 1))"
+    )
+    // the targeted paths carry the reasons too (an edit of A1 reaches B1, B4 and B5)
+    val afterEdit = Workbook(sheet).recalculateAfterEdit(S, Set(ref"A1"), RecalcOptions())
+    assertEquals(
+      afterEdit.errorCells,
+      result.errorCells.filter(c => Set(ref"B1", ref"B4", ref"B5")(c.ref))
+    )
+    val uncached = Workbook(sheet).recalculateUncached(RecalcOptions())
+    assertEquals(uncached.errorCells, result.errorCells)
+    // more than MaxNamedErrorCells: the first ten named, the rest counted
+    val many = (1 to 12).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), formula(s"=$i/0"))
+    }
+    val capped = Workbook(many).recalculate()
+    assertEquals(capped.excelErrors.size, 12)
+    assertEquals(capped.errorCells.size, RecalcResult.MaxNamedErrorCells)
+    assert(
+      capped.summary.startsWith(
+        "Recalculated 12 formulas (12 error values: S!A1 #DIV/0! — Division by zero: 1 / 0; "
+      ),
+      capped.summary
+    )
+    assert(capped.summary.endsWith("; … and 2 more)"), capped.summary)
+    assertEquals(capped.summary.sliding(8).count(_ == "#DIV/0! "), RecalcResult.MaxNamedErrorCells)
+
   test("GH-662: a lookup miss recalculates as a cached #N/A — guarded cells cache their fallback"):
     // The dogfood book: A3:A7 years keyed to B3:B7; B18 unguarded miss, B19 the ISNA idiom, B20
     // IFNA over MATCH. Before GH-662 B18/B20 were host failures (uncached, in `errors`) and B19
@@ -356,7 +418,22 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"B18"), Some(CellValue.Error(CellError.NA)))
     assertEquals(cached(result.workbook, "S", ref"B19"), Some(num(0)))
     assertEquals(cached(result.workbook, "S", ref"B20"), Some(num(0)))
-    assertEquals(result.summary, "Recalculated 3 formulas (1 error value)")
+    assertEquals(
+      result.summary,
+      "Recalculated 3 formulas (1 error value: S!B18 #N/A — VLOOKUP exact match not found: " +
+        "VLOOKUP(2030, A3:B7, 2, FALSE))"
+    )
+    assertEquals(
+      result.errorCells,
+      Vector(
+        ErrorValueCell(
+          SheetName.unsafe("S"),
+          ref"B18",
+          CellError.NA,
+          Some("VLOOKUP exact match not found: VLOOKUP(2030, A3:B7, 2, FALSE)")
+        )
+      )
+    )
     // and the audit of the recalculated book lists the miss as an error cell, nothing uncached
     val audit = WorkbookAudit.of(result.workbook)
     assertEquals(

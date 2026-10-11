@@ -284,12 +284,41 @@ class EnvelopeSpec extends CatsEffectSuite:
     }
   }
 
+  test("#692: recalc --json names the error-valued cells with the evaluator's reason") {
+    val out = file("lookup-miss-out.xlsx")
+    CliHarness.run("-f", file("lookup-miss.xlsx"), "-o", out, "--json", "recalc").map { run =>
+      assertEquals(run.exit, 0, run.stderr)
+      val data = envelope(run)("data")
+      val text = data("text").str
+      assert(
+        text.contains(
+          "Recalculated 3 formulas (2 error values: Data!D1 #N/A — VLOOKUP exact match not found: " +
+            "VLOOKUP(42, A1:B3, 2, FALSE); Data!D3 #DIV/0! — Division by zero: 1 / 0)"
+        ),
+        text
+      )
+      assertEquals(
+        data("errorCells"),
+        ujson.Arr(
+          ujson.Obj(
+            "ref" -> "Data!D1",
+            "error" -> "#N/A",
+            "reason" -> "VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE)"
+          ),
+          ujson.Obj("ref" -> "Data!D3", "error" -> "#DIV/0!", "reason" -> "Division by zero: 1 / 0")
+        )
+      )
+      assertEquals(data("errorValuedCycles"), ujson.Arr())
+    }
+  }
+
   test("#678: a recalc with no error-valued cycle still carries the field, empty") {
     val out = file("simple-recalc-out.xlsx")
     CliHarness.run("-f", file("simple.xlsx"), "-o", out, "--json", "recalc").map { run =>
       assertEquals(run.exit, 0, run.stderr)
       val data = envelope(run)("data")
       assertEquals(data("errorValuedCycles"), ujson.Arr())
+      assertEquals(data("errorCells"), ujson.Arr())
       assertEquals(data("written"), ujson.True)
     }
   }

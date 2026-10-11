@@ -19,20 +19,14 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     ifNotFoundOpt: Option[AnyExpr],
     matchMode: Int,
     searchMode: Int,
+    call: String,
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
-    val lookupCells = lookupArray.cells.toVector
     val returnCells = returnArray.cells.toVector
 
     // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
     // a ref to a cell holding "k2" must match exactly like the literal "k2".
     val lookup = normalizeLookupValue(lookupValue)
-
-    // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
-    // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
-    val indices =
-      if searchMode == -1 || searchMode == -2 then lookupCells.indices.reverse
-      else lookupCells.indices
 
     val wildcardCriterionOpt = lookup match
       case ExprValue.Text(text) =>
@@ -41,38 +35,37 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           case _ => None
       case _ => None
 
-    // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
-    // included); a linear search, so a tie keeps the first key in search order
-    def approximate(direction: Int): Option[Int] =
-      approximateMatch(
-        indices.map(idx => (idx, lookupSheet(lookupCells(idx)).value)),
-        lookup,
-        direction,
-        lastOnTie = false
-      )
-
-    val matchedIndexOpt = matchMode match
-      case 0 =>
-        indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
-          matchesLookupExact(cellValue, lookup)
-        }
-      case -1 => approximate(-1)
-      case 1 => approximate(1)
-      case 2 =>
-        indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
-          matchesLookupExact(cellValue, lookup) ||
-          wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
-        }
-      case _ => None
-
-    matchedIndexOpt match
-      case Some(idx) => Right(unwrapCachedValue(returnSheet(returnCells(idx)).value))
-      case None =>
-        ifNotFoundOpt match
-          case Some(expr) => evalValue(ctx, expr).map(toCellValue)
-          case None => Right(CellValue.Error(CellError.NA))
+    for
+      // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed, not
+      // skipped; keys are (row-major position, value), cut off at the sheet's used range
+      values <- lookupRangeValues(lookupArray, lookupSheet, ctx)
+      keys = values.zipWithIndex.flatMap { (row, r) =>
+        row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
+      }
+      // GH-55: binary-search modes 2 (ascending) and -2 (descending) are answered by the linear
+      // search in their direction; -2 iterates reversed like -1 (descending order)
+      ordered = if searchMode < 0 then keys.reverse else keys
+      matchedIndexOpt = matchMode match
+        case 0 =>
+          ordered.collectFirst { case (idx, cv) if matchesLookupExact(cv, lookup) => idx }
+        case 2 =>
+          ordered.collectFirst {
+            case (idx, cv)
+                if matchesLookupExact(cv, lookup) ||
+                  wildcardCriterionOpt.exists(CriteriaMatcher.matches(cv, _)) =>
+              idx
+          }
+        // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
+        // included); a linear search, so a tie keeps the first key in search order
+        case direction => approximateMatch(ordered, lookup, direction, lastOnTie = false)
+      result <- matchedIndexOpt match
+        case Some(idx) => rangeCellReader(returnSheet, ctx)(returnCells(idx))
+        case None =>
+          ifNotFoundOpt match
+            case Some(expr) => evalValue(ctx, expr).map(toCellValue)
+            // #692: one channel for every lookup's miss — the typed #N/A with its diagnostic
+            case None => Left(lookupNotFound(s"XLOOKUP: no match found for lookup value: $call"))
+    yield result
 
   /**
    * VLOOKUP/HLOOKUP's search over the key line: approximate (range_lookup TRUE) through the shared
@@ -261,11 +254,17 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             )
           else Right(())
         lookupValueEval <- evalValue(ctx, lookupValue)
-        _ <- lookupValueError("XLOOKUP", normalizeLookupValue(lookupValueEval))
+        normalized = normalizeLookupValue(lookupValueEval)
+        _ <- lookupValueError("XLOOKUP", normalized)
         matchModeRaw <- evalValue(ctx, matchModeExpr)
         searchModeRaw <- evalValue(ctx, searchModeExpr)
         matchMode <- toIntArg("XLOOKUP", matchModeRaw)
         searchMode <- toIntArg("XLOOKUP", searchModeRaw)
+        call =
+          s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
+        // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
+        _ <- matchModeError("XLOOKUP", matchMode, call)
+        _ <- searchModeError("XLOOKUP", searchMode, call)
         result <- performXLookup(
           lookupValueEval,
           lookupSheet,
@@ -275,6 +274,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           ifNotFoundOpt,
           matchMode,
           searchMode,
+          call,
           ctx
         )
       yield result

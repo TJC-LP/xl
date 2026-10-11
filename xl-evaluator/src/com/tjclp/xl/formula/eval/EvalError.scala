@@ -203,6 +203,16 @@ object EvalError:
     case _ => None
 
   /**
+   * #692: the diagnostic an error VALUE was raised with, when it has one — the context of an
+   * [[EvalError.ErrorValue]] (a lookup's miss echoing its call) or a division's operands. The
+   * recalc summary names an error-valued cell with it; None for the other errors.
+   */
+  def reason(error: EvalError): Option[String] = error match
+    case ErrorValue(_, context) => context
+    case DivByZero(num, denom) => Some(s"Division by zero: $num / $denom")
+    case _ => None
+
+  /**
    * Create a RefError with standard "cell not found" message.
    */
   def cellNotFound(ref: ARef): EvalError =
