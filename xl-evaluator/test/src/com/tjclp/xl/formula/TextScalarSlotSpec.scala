@@ -280,17 +280,47 @@ class TextScalarSlotSpec extends FunSuite:
     assert(diffs.isEmpty, diffs.mkString("\n"))
   }
 
-  test("#709: numeric text outside the date range is #VALUE!, through its own refusal (#726)") {
-    // Excel gives #NUM! for an out-of-range serial (#726); until then the cell is #VALUE!, and the
-    // decoder already names the reason so the #NUM! fix changes one mapping.
+  test("#709: an out-of-range date serial is #VALUE! on every path until #726 makes it #NUM!") {
+    // Excel gives #NUM! for a serial outside 0..2958465 (#726). Until then every path agrees on
+    // #VALUE!, an error value the cell caches: numeric text or a number through a reference, a
+    // literal number or literal text, a computed value and a LET binding. The decoder names the
+    // reason with its own refusal, so the #NUM! fix changes one mapping.
     val sheet = Sheet(SheetName.unsafe("Sheet1"))
       .put(ref"A1", T("-5"))
       .put(ref"A2", T("3000000"))
+      .put(ref"A3", N("-5"))
+      .put(ref"A4", N("2958466"))
+      .put(ref"A5", CellValue.Formula("A3*1", Some(N("-5"))))
     val wb = Workbook(Vector(sheet))
-    assertEquals(plainIn(wb, "B1", "YEAR(A1)"), Right(Value))
-    assertEquals(plainIn(wb, "B2", "YEAR(A2)"), Right(Value))
+    val cases = List(
+      ("B1", "YEAR(A1)", Value),
+      ("B2", "YEAR(A2)", Value),
+      ("B3", "YEAR(A3)", Value),
+      ("B4", "MONTH(A4)", Value),
+      ("B5", "DAY(A5)", Value),
+      ("B6", "YEAR(-5)", Value),
+      ("B7", "YEAR(\"-5\")", Value),
+      ("B8", "YEAR(3000000)", Value),
+      ("B9", "YEAR(A3*1)", Value),
+      ("B10", "EDATE(-1,1)", Value),
+      ("B11", "LET(x,-5,YEAR(x))", Value),
+      ("B12", "IFERROR(YEAR(-5),\"caught\")", T("caught")),
+      ("B13", "ERROR.TYPE(YEAR(A3))", N("3")),
+      // the edges stay dates
+      ("B14", "YEAR(1)", N("1900")),
+      ("B15", "YEAR(2958465)", N("9999"))
+    )
+    val diffs = cases.flatMap { case (at, formula, expected) =>
+      val got = plainIn(wb, at, formula)
+      Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
+    }
+    assert(diffs.isEmpty, diffs.mkString("\n"))
     assertEquals(
       TExpr.decodeAsDateScalar(Cell(ref"A1", T("-5"))),
+      Left(CodecError.ParseError("-5", "Date", TExpr.DateSerialOutOfRange))
+    )
+    assertEquals(
+      TExpr.decodeAsDateScalar(Cell(ref"A3", N("-5"))),
       Left(CodecError.ParseError("-5", "Date", TExpr.DateSerialOutOfRange))
     )
     assertEquals(TExpr.decodeAsDateScalar(Cell(ref"A1", T("45000"))).map(_.getYear), Right(2023))

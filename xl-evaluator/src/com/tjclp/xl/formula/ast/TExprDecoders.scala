@@ -280,22 +280,28 @@ trait TExprDecoders:
   /**
    * #709: [[decodeAsDate]] for a single reference in a date slot (YEAR(A1), EDATE(A1, 1)), where
    * numeric text is its serial as ScalarCoercion.coerceDate reads it. Other text refuses, which the
-   * evaluator turns into `#VALUE!`. The holiday and XIRR/XNPV folds keep the strict decoder.
+   * evaluator turns into `#VALUE!`. A serial outside the date range — a number, a formula's cached
+   * number or numeric text — refuses with [[DateSerialOutOfRange]], which the evaluator turns into
+   * the error value ScalarCoercion.dateSerialOutOfRange gives the literal path. The holiday and
+   * XIRR/XNPV folds keep the strict decoder.
    */
   def decodeAsDateScalar(cell: Cell): Either[CodecError, java.time.LocalDate] =
-    numericText(cell.value) match
-      case Some(serial) =>
-        serialToDate(serial).toRight(
-          CodecError.ParseError(serial.toString, "Date", DateSerialOutOfRange)
-        )
+    val serial = cell.value match
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
+      case other => numericText(other)
+    serial match
+      case Some(n) =>
+        serialToDate(n).toRight(CodecError.ParseError(n.toString, "Date", DateSerialOutOfRange))
       case None => decodeAsDate(cell)
 
   /**
-   * #726: the [[CodecError.ParseError]] detail [[decodeAsDateScalar]] gives numeric text whose
-   * serial is outside 0..MaxExcelDateSerial. Excel's answer is `#NUM!`; until #726 lands the
-   * evaluator reads it as any other refused text (`#VALUE!`), and the fix maps this detail alone.
+   * #709: the [[CodecError.ParseError]] detail [[decodeAsDateScalar]] gives a serial outside
+   * 0..MaxExcelDateSerial. The evaluator's reference boundary (decodeOrCarried) matches it before
+   * its text fallback and answers ScalarCoercion.dateSerialOutOfRange, the literal path's error
+   * value (`#VALUE!` until #726 makes it `#NUM!`).
    */
-  val DateSerialOutOfRange: String = "serial outside the 1900 date range"
+  private[formula] val DateSerialOutOfRange: String = "serial outside the 1900 date range"
 
   private def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
     if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
