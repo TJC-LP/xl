@@ -13,6 +13,7 @@ import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode}
 import com.tjclp.xl.error.XLException
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.macros.ref
+import com.tjclp.xl.workbooks.DefinedName
 
 /**
  * Tests for eval command, particularly --with override propagation (TJC-698).
@@ -531,4 +532,72 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(error("message").str.contains("Circular reference detected: D5 → D5"), self.stdout)
       assertEquals(streamed.exit, 2, streamed.stdout)
       assertEquals(ujson.read(streamed.stdout)("error")("code"), ujson.Str("UNSUPPORTED_IN_STREAM"))
+  }
+
+  test("GH-715: a formula already at the --at cell is replaced: neither a node nor evaluated") {
+    // D5's own formula reads itself and the other one does not parse. Evaluating either, or
+    // ordering it with the closure, would fail; the plain cell at D5 is the new formula alone.
+    val base = pairedColumns(Sheet("Test")).put(ref"C1", CellValue.Formula("=A5*2"))
+    val circular = base.put(ref"D5", CellValue.Formula("=D5+1"))
+    val broken = base.put(ref"D5", CellValue.Formula("=SUM(1,"))
+    for
+      overCircular <- ReadCommands.eval(
+        Workbook(circular),
+        Some(circular),
+        "=C1+1",
+        Some("D5"),
+        Nil
+      )
+      overBroken <- ReadCommands.eval(Workbook(broken), Some(broken), "=C1+1", Some("D5"), Nil)
+    yield
+      assert(overCircular.contains("Result: 11 (number)"), overCircular)
+      assert(overBroken.contains("Result: 11 (number)"), overBroken)
+  }
+
+  test("GH-715 known gap (#729): INDIRECT naming the --at cell answers with its old value") {
+    // The reference INDIRECT builds is not static, so the cycle check cannot see it.
+    for result <- ReadCommands.eval(stale, Some(staleTest), "=INDIRECT(\"D5\")+1", Some("D5"), Nil)
+    yield assert(result.contains("Result: 8 (number)"), result)
+  }
+
+  test("GH-715 known gap (#729): a defined name naming the --at cell answers with its old value") {
+    // Names resolve through workbook metadata, which the same-sheet value reads do not follow.
+    val named = stale.copy(metadata =
+      stale.metadata.copy(definedNames = Vector(DefinedName("placed", "Test!$D$5")))
+    )
+    for result <- ReadCommands.eval(named, Some(staleTest), "=placed+1", Some("D5"), Nil)
+    yield assert(result.contains("Result: 8 (number)"), result)
+  }
+
+  test("GH-715: --with on the --at cell itself is USAGE: the formula is that cell") {
+    def refused(at: String, overrides: List[String]): IO[Unit] =
+      ReadCommands.eval(stale, Some(staleTest), "=A5+1", Some(at), overrides).attempt.map {
+        case Left(e: CliException) =>
+          assertEquals(e.error.code, ErrorCode.USAGE)
+          assert(e.error.message.contains("--with") && e.error.message.contains("--at"), e.error)
+        case other => fail(s"--at $at --with $overrides: expected USAGE, got $other")
+      }
+    for
+      _ <- refused("D5", List("D5=3"))
+      _ <- refused("Test!D5", List("A1=2", "Test!D5=3"))
+      _ <- refused("D5", List(" d5 = 3"))
+      beside <- ReadCommands.eval(stale, Some(staleTest), "=A5+1", Some("D5"), List("A5=3"))
+      book <- written(stale)
+      cli <- CliHarness.run(
+        "-f",
+        book,
+        "-s",
+        "Test",
+        "--json",
+        "eval",
+        "=A5",
+        "--at",
+        "D5",
+        "-w",
+        "D5=3"
+      )
+    yield
+      assert(beside.contains("Result: 4 (number)"), beside)
+      assertEquals(cli.exit, 2, cli.stdout)
+      assertEquals(ujson.read(cli.stdout)("error")("code"), ujson.Str("USAGE"), cli.stdout)
   }

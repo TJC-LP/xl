@@ -13,7 +13,13 @@ import com.tjclp.xl.formula.functions.{ArgValue, CriteriaRangeResize, ReferenceO
  */
 private[xl] object ValueDependencies:
   private final case class Bound(expr: TExpr[?], env: Map[String, Bound])
-  private val inspectors = Set("ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS")
+
+  /**
+   * Functions that read only the address or shape of every argument, never a value. The specs live
+   * in FunctionSpecsReference; ValueDependenciesSpec checks each name is registered and that its
+   * result does not change with the referenced cell's value.
+   */
+  private[graph] val inspectors = Set("ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS")
 
   /**
    * The functions whose result can be a reference, each with the arguments (by index, given the
@@ -41,17 +47,13 @@ private[xl] object ValueDependencies:
   )
 
   /**
-   * The cells whose values `expr` reads on its own sheet, with ranges bounded by `bounds`. `home`
-   * is that sheet's name. A reference qualified with it (`Data!D5` in a formula on Data) is a read
-   * like `D5`. Sheet names compare case-insensitively, as Excel's do and as
+   * The cells whose values a formula reads on its own sheet ([[reads]]), with ranges bounded by
+   * `bounds`. `home` is that sheet's name. A reference qualified with it (`Data!D5` in a formula on
+   * Data) is a read like `D5`. Sheet names compare case-insensitively, as Excel's do and as
    * [[ReferenceOperators.dependencyValues]] compares them. Any other qualified reference belongs to
    * another sheet and reads nothing here.
-   */
-  def extract(expr: TExpr[?], bounds: Option[CellRange], home: Option[SheetName]): Set[ARef] =
-    Reader(bounds, home).reads(expr)
-
-  /**
-   * [[extract]] for many formulas on one sheet. Each distinct range is expanded once for all of
+   *
+   * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522).
    */
   final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
@@ -128,7 +130,12 @@ private[xl] object ValueDependencies:
           )
           val passes = if referenceOnly then referencePassing.get(name) else None
           args.zipWithIndex.foldLeft(Set.empty[ARef]) { case (acc, (a, index)) =>
-            // CELL's supported info types inspect metadata; info_type itself is a value read.
+            // CELL's reference is address-only because every info type `cellFn` supports
+            // (FunctionSpecsReference: filename, address, row, col) reads the address, never the
+            // value; info_type itself is a value read. An arm that reads the value ("contents",
+            // "type") must make this a read, at least when info_type names that arm.
+            // ValueDependenciesSpec pins the supported arms, so adding one fails until this is
+            // revisited.
             val addressOnly = inspectors.contains(name) || (name == "CELL" && index == 1) ||
               passes.exists(_(index, args.size))
             acc ++ arg(a, addressOnly)

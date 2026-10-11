@@ -37,20 +37,30 @@ object ReadCommands:
 
   /**
    * A cycle found while ordering the closure: the evaluator's own error, with its code. A path
-   * longer than [[MaxCyclePath]] keeps its first three cells and its last two (the cell that reads
-   * the start back, then the start) and counts the cells between. A 20,000-cell chain would
-   * otherwise make a 169 KB message.
+   * longer than [[MaxCyclePath]] keeps its first [[CycleHead]] cells and its last [[CycleTail]] and
+   * counts the cells between. A 20,000-cell chain would otherwise make a 169 KB message.
    */
   private def cyclic(error: EvalError, formula: String): XLException = error match
     case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
-      val elided = "… (%,d more) …".formatLocal(java.util.Locale.ROOT, cycle.size - 5)
-      val path = (cycle.take(3).map(_.toA1) ++ (elided :: cycle.takeRight(2).map(_.toA1)))
-        .mkString(" → ")
-      XLException(XLError.FormulaError(formula, s"Circular reference detected: $path"))
+      val between = cycle.size - CycleHead - CycleTail
+      val elided = "… (%,d more) …".formatLocal(java.util.Locale.ROOT, between)
+      val ends = cycle.take(CycleHead).map(_.toA1) ++
+        (elided :: cycle.takeRight(CycleTail).map(_.toA1))
+      XLException(
+        XLError.FormulaError(formula, s"Circular reference detected: ${ends.mkString(" → ")}")
+      )
     case _ => XLException(EvalError.toXLError(error, Some(formula)))
 
   /** The longest cycle path [[cyclic]] prints in full. */
   private val MaxCyclePath = 10
+
+  /** The cells an elided cycle path keeps from its start. */
+  private val CycleHead = 3
+
+  /**
+   * The cells an elided cycle path keeps from its end: the cell that reads the start, the start.
+   */
+  private val CycleTail = 2
 
   /**
    * Show used range of current sheet.
@@ -215,10 +225,38 @@ object ReadCommands:
     else
       SheetResolver.resolveRef(wb, sheetOpt, atStr, "eval").flatMap {
         case (sheet, Left(cell)) =>
-          closureEval(wb, sheet, formula, overrides, Some(cell))
-            .map((RefType.QualifiedCell(sheet.name, cell).toA1, _))
+          overrides.find(overridesCell(_, sheet.name, cell)) match
+            case Some(clash) => IO.raiseError(placementOverridden(clash, atStr))
+            case None =>
+              closureEval(wb, sheet, formula, overrides, Some(cell))
+                .map((RefType.QualifiedCell(sheet.name, cell).toA1, _))
         case (_, Right(_)) => IO.raiseError(notOneCell(atStr))
       }
+
+  /**
+   * Whether the `--with` override `override_` sets `cell` on the sheet named `sheet`: its ref,
+   * unqualified or qualified with that sheet (as [[applyOverrides]] reads it), is `cell`. A
+   * malformed override is not a match; [[applyOverrides]] reports it.
+   */
+  private def overridesCell(override_ : String, sheet: SheetName, cell: ARef): Boolean =
+    override_.split("=", 2).headOption.exists { refStr =>
+      Resolve.ref(refStr.trim) match
+        case Right((qualifier, Resolve.Target.Cell(ref))) =>
+          ref == cell && qualifier.forall(_ == sheet)
+        case _ => false
+    }
+
+  /**
+   * `--with` on the `--at` cell: the formula IS that cell, so an override of it could never be
+   * read. Refused up front as `USAGE`, before it could surface as a circular reference.
+   */
+  private def placementOverridden(override_ : String, atStr: String): CliException =
+    CliException(
+      CliError.usage(
+        s"--with ${override_.trim} sets the --at cell $atStr, which the formula replaces",
+        Some("drop that override, or override the cells the formula reads")
+      )
+    )
 
   /** `--at` names the one cell the formula would sit in: a range is `INVALID_REFERENCE`. */
   private def notOneCell(atStr: String): CliException =

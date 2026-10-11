@@ -2,6 +2,8 @@ package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.formula.functions.{FunctionRegistry, FunctionSpec, ReferenceOperators}
@@ -13,11 +15,13 @@ class ValueDependenciesSpec extends FunSuite:
     FormulaParser.parse(formula).fold(error => fail(error.toString), identity)
 
   private def reads(formula: String): Set[ARef] =
-    ValueDependencies.extract(parsed(formula), Some(ref"A1:F10"), None)
+    ValueDependencies.Reader(Some(ref"A1:F10"), None).reads(parsed(formula))
 
   /** The value reads of `formula` placed on the sheet named Test. */
   private def readsOnTest(formula: String): Set[ARef] =
-    ValueDependencies.extract(parsed(formula), Some(ref"A1:F10"), Some(SheetName.unsafe("Test")))
+    ValueDependencies
+      .Reader(Some(ref"A1:F10"), Some(SheetName.unsafe("Test")))
+      .reads(parsed(formula))
 
   List(
     "LET(chosen,D5,ROW(chosen))",
@@ -57,7 +61,7 @@ class ValueDependenciesSpec extends FunSuite:
     // representation as this unqualified location, so the analysis needs no parser rewrite.
     val source = TExpr.Aggregate("SUM", TExpr.RangeLocation.Name("named", None))
     val formula = TExpr.Let(List("named" -> TExpr.PolyRef(ref"D5")), source)
-    assertEquals(ValueDependencies.extract(formula, Some(ref"A1:F10"), None), Set(ref"D5"))
+    assertEquals(ValueDependencies.Reader(Some(ref"A1:F10"), None).reads(formula), Set(ref"D5"))
   }
 
   // --- a reference qualified with the formula's own sheet is a read on that sheet --------------
@@ -94,4 +98,59 @@ class ValueDependenciesSpec extends FunSuite:
     val missing = (referencing.toSet ++ Evaluator.referenceFunctions + ReferenceOperators.UnionName)
       .filterNot(ValueDependencies.referencePassing.contains)
     assertEquals(missing, Set.empty[String], "add them to ValueDependencies.referencePassing")
+  }
+
+  // --- the address-only rules hold only while those functions never read a value ---------------
+
+  /** `formula` evaluated on a sheet whose A1 holds `a1`. */
+  private def evaluatedOver(a1: CellValue, formula: String): Either[String, CellValue] =
+    Sheet("Test").put(ref"A1", a1).evaluateFormula(formula).left.map(_.toString)
+
+  private val valuesOfA1 = List(
+    CellValue.Number(BigDecimal(42)),
+    CellValue.Text("text"),
+    CellValue.Error(CellError.Div0)
+  )
+
+  /** Whether `formula` answers the same whatever A1 holds, without an error. */
+  private def addressOnly(formula: String): Boolean =
+    val results = valuesOfA1.map(evaluatedOver(_, formula))
+    results.distinct.sizeIs == 1 && results.forall {
+      case Right(CellValue.Error(_)) | Left(_) => false
+      case Right(_) => true
+    }
+
+  test("every inspector is a registered function whose result ignores the referenced value") {
+    ValueDependencies.inspectors.foreach { name =>
+      assert(FunctionRegistry.lookup(name).isDefined, s"$name is not a registered function")
+      assert(addressOnly(s"=$name(A1)"), s"$name(A1) depends on A1's value")
+    }
+  }
+
+  test("CELL's supported info types are exactly the address-only arms the CELL rule assumes") {
+    // Every info type Excel documents. If CELL learns one that reads the referenced value
+    // ("contents", "type"), the supported set grows and this fails: revisit the CELL rule in
+    // ValueDependencies.Reader before updating the expected set.
+    val excel = List(
+      "address",
+      "col",
+      "color",
+      "contents",
+      "filename",
+      "format",
+      "parentheses",
+      "prefix",
+      "protect",
+      "row",
+      "type",
+      "width"
+    )
+    val unsupported = Right(CellValue.Error(CellError.Value))
+    val supported = excel.filter { info =>
+      evaluatedOver(CellValue.Number(BigDecimal(42)), s"=CELL(\"$info\",A1)") != unsupported
+    }
+    assertEquals(supported.toSet, Set("address", "col", "filename", "row"))
+    supported.foreach(info =>
+      assert(addressOnly(s"=CELL(\"$info\",A1)"), s"CELL(\"$info\") depends on A1's value")
+    )
   }
