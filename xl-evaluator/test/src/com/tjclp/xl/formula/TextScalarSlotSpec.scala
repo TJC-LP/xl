@@ -61,12 +61,15 @@ class TextScalarSlotSpec extends FunSuite:
 
   /** `formula` as a plain formula cell at `Sheet1!at`, evaluated at its own position. */
   private def plain(at: String, formula: String): Either[String, CellValue] =
+    plainIn(book, at, formula)
+
+  private def plainIn(wb: Workbook, at: String, formula: String): Either[String, CellValue] =
     val ref = ARef.parse(at).fold(msg => fail(msg), identity)
-    book.sheets.headOption match
+    wb.sheets.headOption match
       case None => Left("no sheet")
       case Some(target) =>
         val placed = target.put(ref, CellValue.Formula(formula, None))
-        placed.evaluateCell(ref, Clock.system, Some(book.put(placed))).left.map(_.message)
+        placed.evaluateCell(ref, Clock.system, Some(wb.put(placed))).left.map(_.message)
 
   private def agree(at: String, formula: String, expected: CellValue): Unit =
     assertEquals(plain(at, formula), Right(expected), s"$at: =$formula")
@@ -181,4 +184,31 @@ class TextScalarSlotSpec extends FunSuite:
   test("#709: host failures in a typed slot stay loud") {
     assert(plain("K9", "ABS(Missing!A1)").isLeft, "a missing sheet is not #VALUE!")
     assert(plain("K10", "IF(Missing!A1,1,0)").isLeft, "a missing sheet is not #VALUE!")
+  }
+
+  test("#709: range folds over date cells keep refusing numeric text") {
+    // Only a single reference in a date slot reads numeric text as a serial; a holiday list or an
+    // XIRR/XNPV dates range still refuses it (LibreOffice 24.2: NETWORKDAYS 22; Excel documents
+    // #VALUE! for an invalid XIRR/XNPV date).
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"M1", N("44927"))
+      .put(ref"M2", N("44957"))
+      .put(ref"M3", T("44935"))
+      .put(ref"N1", N("-1000"))
+      .put(ref"N2", N("300"))
+      .put(ref"N3", N("800"))
+      .put(ref"O1", N("44927"))
+      .put(ref"O2", T("45000"))
+      .put(ref"O3", N("45100"))
+    val wb = Workbook(Vector(sheet))
+    val cases = List(
+      ("P1", "NETWORKDAYS(M1,M2,M3)", N("22")),
+      ("P2", "XIRR(N1:N3,O1:O3)", Value),
+      ("P3", "XNPV(0.1,N1:N3,O1:O3)", Value)
+    )
+    val diffs = cases.flatMap { case (at, formula, expected) =>
+      val got = plainIn(wb, at, formula)
+      Option.when(got != Right(expected))(s"$at =$formula: expected $expected, got $got")
+    }
+    assert(diffs.isEmpty, diffs.mkString("\n"))
   }

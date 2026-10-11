@@ -254,15 +254,10 @@ trait TExprDecoders:
    *   - Empty -> 1900-01-01 (GH-396: Excel's blank-as-serial-0 rendering, see
    *     ScalarCoercion.BlankDate for the day-0 caveat)
    *   - Formula -> cached DateTime, serial Number, or Bool, same conversions
-   *   - Text -> numeric text is its serial (#709, as ScalarCoercion.coerceDate); other text
-   *     refuses, which the evaluator turns into `#VALUE!`
+   *   - Text -> error (a range fold — NETWORKDAYS/WORKDAY holidays, XIRR/XNPV dates — never reads
+   *     text as a date; the single-reference slot uses [[decodeAsDateScalar]])
    */
   def decodeAsDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
-    def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
-      if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
-        Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
-      else None
-
     def boolToDate(b: Boolean): Either[CodecError, java.time.LocalDate] =
       serialToDate(if b then BigDecimal(1) else BigDecimal(0))
         .toRight(CodecError.TypeMismatch("Date", cell.value))
@@ -281,7 +276,27 @@ trait TExprDecoders:
         serialToDate(cached).toRight(CodecError.TypeMismatch("Date", cell.value))
       case CellValue.Formula(_, Some(CellValue.Bool(cached)), _) => boolToDate(cached)
       case other =>
-        numericText(other).flatMap(serialToDate).toRight(CodecError.TypeMismatch("Date", other))
+        scala.util.Left(
+          CodecError.TypeMismatch(
+            expected = "Date",
+            actual = other
+          )
+        )
+
+  /**
+   * #709: [[decodeAsDate]] for a single reference in a date slot (YEAR(A1), EDATE(A1, 1)), where
+   * numeric text is its serial as ScalarCoercion.coerceDate reads it. Other text refuses, which the
+   * evaluator turns into `#VALUE!`. The holiday and XIRR/XNPV folds keep the strict decoder.
+   */
+  def decodeAsDateScalar(cell: Cell): Either[CodecError, java.time.LocalDate] =
+    numericText(cell.value).flatMap(serialToDate) match
+      case Some(date) => scala.util.Right(date)
+      case None => decodeAsDate(cell)
+
+  private def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
+    if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
+      Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
+    else None
 
   /**
    * Decode cell as Int with automatic type coercion.
