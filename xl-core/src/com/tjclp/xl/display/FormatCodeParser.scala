@@ -6,6 +6,8 @@ import java.time.LocalDateTime
 import scala.collection.mutable.ArrayBuffer
 import scala.util.boundary, boundary.break
 
+import com.tjclp.xl.richtext.{RichText, TextRun}
+
 /**
  * Parser for Excel custom number format codes.
  *
@@ -1108,6 +1110,18 @@ object FormatCodeParser:
    * than 4 sections (GH-285). Without either, text echoes unchanged.
    */
   def applyTextFormat(text: String, format: FormatCode): String =
+    textFormatParts(format).map(_.getOrElse(text)).mkString
+
+  /** Apply the same text section while retaining the font of each substituted text run. */
+  private[xl] def applyRichTextFormat(text: RichText, format: FormatCode): RichText =
+    RichText(textFormatParts(format).flatMap {
+      case None => text.runs
+      case Some(literal) if literal.nonEmpty => Vector(TextRun(literal))
+      case Some(_) => Vector.empty
+    })
+
+  /** None substitutes the source text; Some emits a literal in the cell's base font. */
+  private def textFormatParts(format: FormatCode): Vector[Option[String]] =
     val all = Vector(format.positive) ++ format.negative ++ format.zero ++ format.text
     val textSection = format.text.orElse(
       if all.sizeIs < 4 then
@@ -1117,12 +1131,12 @@ object FormatCodeParser:
     textSection match
       case Some(section) =>
         section.pattern.tokens.map {
-          case FormatToken.TextPlaceholder | FormatToken.General => text
-          case FormatToken.Literal(s) => s
-          case FormatToken.Spacer(_) => " " // `_(@_)` pads text as it pads numbers (#693)
-          case _ => ""
-        }.mkString
-      case None => text
+          case FormatToken.TextPlaceholder | FormatToken.General => None
+          case FormatToken.Literal(s) => Some(s)
+          case FormatToken.Spacer(_) => Some(" ")
+          case _ => Some("")
+        }.toVector
+      case None => Vector(None)
 
   // ========== Date/Time Formatter ==========
 

@@ -307,7 +307,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         // Commas only group the integer part in threes: `1,23` and `1.2,3` are not numbers (#693)
         val (intPart, rest) = unpriced.span(c => c != '.' && c != 'e' && c != 'E')
         val grouped = !rest.contains(',') &&
-          (!intPart.contains(',') || intPart.matches("[+-]?\\d{1,3}(,\\d{3})+"))
+          (!intPart.contains(',') || intPart.matches("[+-]?\\d+(,\\d{3})+"))
         // The percent division can overflow the scale (`1E-2147483647%`), so it is inside the Try
         scala.util
           .Try {

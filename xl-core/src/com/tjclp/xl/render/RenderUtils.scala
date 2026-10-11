@@ -142,18 +142,24 @@ object RenderUtils:
    * that is the string the renderers emit (GH-502).
    */
   def measureCellValueWidth(value: CellValue, numFmt: NumFmt, font: Option[Font]): Int =
-    measureContentWidth(value, renderedContent(value, numFmt), font)
+    measureContentWidth(value, renderedContent(value, numFmt), font, numFmt)
 
   /** [[measureCellValueWidth]] with the content already resolved (`content` is `value`'s). */
   private def measureContentWidth(
     value: CellValue,
     content: RenderedContent,
-    font: Option[Font]
+    font: Option[Font],
+    numFmt: NumFmt
   ): Int =
     value match
       case CellValue.RichText(rt) =>
-        rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-      case CellValue.Formula(_, Some(cached), _) => measureContentWidth(cached, content, font)
+        NumFmtFormatter
+          .formatRichText(rt, numFmt)
+          .runs
+          .map(run => measureTextWidth(run.text, run.font.orElse(font)))
+          .sum
+      case CellValue.Formula(_, Some(cached), _) =>
+        measureContentWidth(cached, content, font, numFmt)
       case _ => measureTextWidth(content.text, font)
 
   /** [[measureCellValueWidth]] under the General number format. */
@@ -223,7 +229,8 @@ object RenderUtils:
       // Size the span from what the renderers DRAW — the formatted text — never the raw value:
       // a rounding format must not claim neighbours for digits it never shows, and a widening
       // one must get the room its text needs (GH-502).
-      val textWidth = measureContentWidth(cell.cell.value, cell.content, style.map(_.font))
+      val textWidth =
+        measureContentWidth(cell.cell.value, cell.content, style.map(_.font), cell.numFmt)
       val (pastLeft, pastRight) = textOverhang(cell.align, style, cellWidth, textWidth)
       def side(step: Int, need: Double): Int =
         emptyNeighbours(cellRef, step, need, colWidths, sheet, startCol, endCol)
@@ -476,7 +483,8 @@ object RenderUtils:
    * neighbours, never `####` (GH-501). A 4-section code whose last arm is `@` is still Numeric.
    */
   def renderedContent(value: CellValue, numFmt: NumFmt): RenderedContent = value match
-    case CellValue.RichText(rt) => RenderedContent(RenderedKind.Text, rt.toPlainText)
+    case CellValue.RichText(_) =>
+      RenderedContent(RenderedKind.Text, NumFmtFormatter.formatValue(value, numFmt))
     case CellValue.Empty => RenderedContent(RenderedKind.Empty, "")
     case CellValue.Formula(_, Some(cached), _) => renderedContent(cached, numFmt)
     case CellValue.Formula(expr, None, _) => RenderedContent(RenderedKind.Text, s"=$expr")
