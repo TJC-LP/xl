@@ -276,18 +276,18 @@ final case class ErrorValueCell(
 
 object ErrorValueCell:
 
-  /** The longest reason [[ErrorValueCell.render]] carries, the `…` that marks a cut included. */
+  /** The longest rendered reason in Unicode code points, including the `…` that marks a cut. */
   val MaxReasonLength: Int = 120
 
   /**
    * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line
    * and paragraph separators) and tab a single space, runs of whitespace collapsed, then cut to
-   * [[MaxReasonLength]] characters with a trailing `…`.
+   * [[MaxReasonLength]] Unicode code points with a trailing `…`, keeping surrogate pairs whole.
    */
   def boundReason(reason: String): String =
     val oneLine = reason.replaceAll("[\\s\\u0085\\u2028\\u2029]+", " ").trim
-    if oneLine.length <= MaxReasonLength then oneLine
-    else oneLine.take(MaxReasonLength - 1) + "…"
+    if oneLine.codePointCount(0, oneLine.length) <= MaxReasonLength then oneLine
+    else oneLine.substring(0, oneLine.offsetByCodePoints(0, MaxReasonLength - 1)) + "…"
 
 /**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).

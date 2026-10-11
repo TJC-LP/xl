@@ -436,6 +436,16 @@ class RecalcSpec extends FunSuite:
     assertEquals(ErrorValueCell.boundReason("x" * 120), "x" * 120)
     assertEquals(ErrorValueCell.boundReason("x" * 121), "x" * 119 + "…")
 
+  test("#692: bounding a summary reason never splits a Unicode surrogate pair"):
+    val emoji = "\uD83D\uDE00"
+    val exactly120 = "x" * 119 + emoji
+    assertEquals(ErrorValueCell.boundReason(exactly120), exactly120)
+    val boundary = "x" * 118 + emoji + "tail"
+    val bounded = ErrorValueCell.boundReason(boundary)
+    assertEquals(bounded, "x" * 118 + emoji + "…")
+    assertEquals(bounded.codePointCount(0, bounded.length), ErrorValueCell.MaxReasonLength)
+    assertEquals(ErrorValueCell.boundReason(emoji * 130), emoji * 119 + "…")
+
   test("GH-662: a lookup miss recalculates as a cached #N/A — guarded cells cache their fallback"):
     // The dogfood book: A3:A7 years keyed to B3:B7; B18 unguarded miss, B19 the ISNA idiom, B20
     // IFNA over MATCH. Before GH-662 B18/B20 were host failures (uncached, in `errors`) and B19
