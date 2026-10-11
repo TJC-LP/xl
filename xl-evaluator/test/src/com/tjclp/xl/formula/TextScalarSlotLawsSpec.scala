@@ -24,13 +24,17 @@ import com.tjclp.xl.syntax.*
  */
 class TextScalarSlotLawsSpec extends ScalaCheckSuite:
 
+  /** Keep extreme exponents covered without constructing and parsing million-digit integers. */
+  private def boundedPlain(n: BigDecimal): String =
+    if n.scale >= -256 && n.scale <= 256 then n.bigDecimal.toPlainString else n.toString
+
   /** Text Excel would and would not read as a number, plus whatever ScalaCheck invents. */
   private val genText: Gen[String] =
     val pad = Gen.oneOf("", " ", "  ", "\t")
     val numeric = for
       n <- genWideBigDecimal
       neg <- Gen.oneOf(true, false)
-      form <- Gen.oneOf[BigDecimal => String](_.toString, _.bigDecimal.toPlainString)
+      form <- Gen.oneOf[BigDecimal => String](_.toString, boundedPlain)
       before <- pad
       after <- pad
     yield before + form(if neg then -n else n) + after
