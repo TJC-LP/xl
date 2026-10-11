@@ -23,6 +23,23 @@ object CriteriaRangeResize:
   val resizingFunctions: Set[String] = Set("SUMIF", "AVERAGEIF")
 
   /**
+   * Whether resizing can read cells absent from the static dependency graph. A named or LET range
+   * can supply either the shape or the target's origin at evaluation time; recording the name's
+   * original cells is insufficient, since resizing may extend beyond them. Defer these readers
+   * through the dynamic-recalculation path, which invalidates them on edits and evaluates them
+   * after static precedents with dynamic caches cleared. A two-argument call does not resize.
+   */
+  def hasDynamicResize(name: String, values: List[ArgValue]): Boolean =
+    def unresolved(location: TExpr.RangeLocation): Boolean = location match
+      case TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Binding(_) => true
+      case _ => false
+
+    resizingFunctions.contains(name.toUpperCase(java.util.Locale.ROOT)) && (values match
+      case ArgValue.Range(criteria) :: _ :: ArgValue.Range(target) :: _ =>
+        unresolved(criteria) || unresolved(target)
+      case _ => false)
+
+  /**
    * `target` resized to `shape`'s height and width from its upper-left cell, clipped to the grid.
    */
   def resize(target: CellRange, shape: CellRange): CellRange =
