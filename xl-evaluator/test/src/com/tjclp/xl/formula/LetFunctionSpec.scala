@@ -2,7 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -428,8 +428,9 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertEquals(direct, Right(CellValue.Number(BigDecimal(1))))
     val directRefuse = sheet.evaluateFormula("""=IF(" TRUE", 1, 2)""")
     val boundRefuse = sheet.evaluateFormula("""=LET(x, " TRUE", IF(x, 1, 2))""")
-    assert(directRefuse.isLeft, s"' TRUE' must refuse (no trim): $directRefuse")
-    assert(boundRefuse.isLeft, s"' TRUE' must refuse when bound: $boundRefuse")
+    // #709: the refusal is Excel's #VALUE!, bound or not
+    assertEquals(directRefuse, Right(CellValue.Error(CellError.Value)), "' TRUE' must refuse")
+    assertEquals(boundRefuse, directRefuse, "' TRUE' must refuse when bound")
   }
 
   test("Boolean position: LET(x, A1, IF(x, 1, 2)) matches IF(A1, 1, 2) and never throws") {
@@ -442,9 +443,11 @@ class LetFunctionSpec extends ScalaCheckSuite:
     assertEquals(direct, Right(CellValue.Number(BigDecimal(1))))
   }
 
-  test("Numeric position gives clean Left for a text binding: LET(s, \"ab\", ABS(s))") {
+  test("Numeric position gives #VALUE! for a text binding: LET(s, \"ab\", ABS(s))") {
+    // #709: the same #VALUE! the direct =ABS("ab") gives
     val result = sheet.evaluateFormula("""=LET(s, "ab", ABS(s))""")
-    assert(result.isLeft, s"expected clean Left for text in numeric position, got $result")
+    assertEquals(result, Right(CellValue.Error(CellError.Value)))
+    assertEquals(result, sheet.evaluateFormula("""=ABS("ab")"""))
   }
 
   test("Date position: LET(d, A1, YEAR(d)) works when A1 holds a date") {
@@ -515,8 +518,7 @@ class LetFunctionSpec extends ScalaCheckSuite:
     val evaluated = result.evaluated(SheetName.unsafe("S"))
     assertEquals(evaluated.get(ref"B1"), Some(CellValue.Text("he")))
     assertEquals(evaluated.get(ref"B2"), Some(CellValue.Text("10")))
-    assert(
-      result.errors.exists(e => e.ref == ref"B3"),
-      s"expected a per-cell error for B3, got: ${result.errors}"
-    )
+    // #709: text in a numeric slot is the cached #VALUE!, not a host failure
+    assertEquals(evaluated.get(ref"B3"), Some(CellValue.Error(CellError.Value)))
+    assert(result.errors.isEmpty, s"expected no host failures, got: ${result.errors}")
   }

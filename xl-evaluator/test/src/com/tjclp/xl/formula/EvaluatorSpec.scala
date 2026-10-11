@@ -213,14 +213,14 @@ class EvaluatorSpec extends ScalaCheckSuite:
     assert(evalOk(expr, sheet) == BigDecimal(42))
   }
 
-  test("Cell reference: text cell with numeric decoder returns CodecFailed") {
+  test("Cell reference: text cell with numeric decoder is #VALUE! (#709)") {
     val ref = ARef.from0(0, 0) // A1
     val sheet = sheetWith(ref -> CellValue.Text("hello"))
     val expr = TExpr.ref(ref, TExpr.decodeNumeric)
     val error = evalErr(expr, sheet)
     error match
-      case _: EvalError.CodecFailed => // success
-      case other => fail(s"Expected CodecFailed, got $other")
+      case EvalError.ErrorValue(CellError.Value, _) => // success
+      case other => fail(s"Expected #VALUE!, got $other")
   }
 
   test("Boolean And: And(true, true) == Right(true)") {
@@ -1538,8 +1538,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
     expectDate(sheet.evaluateFormula("=EDATE(A1, -1.9)"), 2023, 12, 15) // toward zero
     expectDate(sheet.evaluateFormula("=EDATE(A1, \"3\")"), 2024, 4, 15) // numeric text coerces
     expectDate(sheet.evaluateFormula("=EDATE(A1, TRUE)"), 2024, 2, 15) // TRUE = 1
-    val bad = sheet.evaluateFormula("=EDATE(A1, \"abc\")")
-    assert(bad.isLeft, s"expected clean error for non-numeric months, got $bad")
+    // #709: non-numeric text is #VALUE!, as in Excel
+    assertEquals(
+      sheet.evaluateFormula("=EDATE(A1, \"abc\")"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-307 EOMONTH truth table") {
@@ -1548,8 +1551,10 @@ class EvaluatorSpec extends ScalaCheckSuite:
     expectDate(sheet.evaluateFormula("=EOMONTH(A1, 1.9)"), 2024, 2, 29) // fractional truncates
     expectDate(sheet.evaluateFormula("=EOMONTH(A1, \"2\")"), 2024, 3, 31) // numeric text coerces
     expectDate(sheet.evaluateFormula("=EOMONTH(A1, TRUE)"), 2024, 2, 29) // TRUE = 1
-    val bad = sheet.evaluateFormula("=EOMONTH(A1, \"x\")")
-    assert(bad.isLeft, s"expected clean error for non-numeric months, got $bad")
+    assertEquals(
+      sheet.evaluateFormula("=EOMONTH(A1, \"x\")"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-307 WORKDAY truth table") {
@@ -1558,8 +1563,10 @@ class EvaluatorSpec extends ScalaCheckSuite:
     expectDate(sheet.evaluateFormula("=WORKDAY(A1, 5.9)"), 2024, 1, 22) // fractional truncates
     expectDate(sheet.evaluateFormula("=WORKDAY(A1, \"3\")"), 2024, 1, 18) // numeric text coerces
     expectDate(sheet.evaluateFormula("=WORKDAY(A1, TRUE)"), 2024, 1, 16) // TRUE = 1
-    val bad = sheet.evaluateFormula("=WORKDAY(A1, \"y\")")
-    assert(bad.isLeft, s"expected clean error for non-numeric days, got $bad")
+    assertEquals(
+      sheet.evaluateFormula("=WORKDAY(A1, \"y\")"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-307 YEARFRAC basis argument is total") {
@@ -1570,9 +1577,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
     )
     // numeric text coerces to a valid basis
     assert(sheet.evaluateFormula("=YEARFRAC(A1, B1, \"2\")").isRight)
-    // non-numeric text is a clean error (previously: silent basis 0)
-    val bad = sheet.evaluateFormula("=YEARFRAC(A1, B1, \"z\")")
-    assert(bad.isLeft, s"expected clean error for non-numeric basis, got $bad")
+    // non-numeric text is #VALUE! (previously: silent basis 0; #709: no longer a host failure)
+    assertEquals(
+      sheet.evaluateFormula("=YEARFRAC(A1, B1, \"z\")"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-307 XLOOKUP match_mode/search_mode arguments are total") {
@@ -1591,9 +1600,11 @@ class EvaluatorSpec extends ScalaCheckSuite:
       sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, \"0\", \"1\")"),
       Right(CellValue.Number(BigDecimal(2)))
     )
-    // non-numeric mode text is a clean error (previously: silent mode 0)
-    val bad = sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, \"nope\")")
-    assert(bad.isLeft, s"expected clean error for non-numeric match_mode, got $bad")
+    // non-numeric mode text is #VALUE! (previously: silent mode 0; #709: no longer a host failure)
+    assertEquals(
+      sheet.evaluateFormula("=XLOOKUP(\"b\", A1:A2, B1:B2, 0, \"nope\")"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("GH-307 literal cross-typed positions are total (no ClassCastException)") {
@@ -1604,10 +1615,9 @@ class EvaluatorSpec extends ScalaCheckSuite:
     // boolean position: Excel truthiness for numeric literals
     assertEquals(sheet.evaluateFormula("=IF(1, 2, 3)"), Right(CellValue.Number(BigDecimal(2))))
     assertEquals(sheet.evaluateFormula("=IF(0, 2, 3)"), Right(CellValue.Number(BigDecimal(3))))
-    // numeric position: numeric text parses, non-numeric is a clean Left
+    // numeric position: numeric text parses, non-numeric is #VALUE! (#709)
     assertEquals(sheet.evaluateFormula("=SQRT(\"16\")"), Right(CellValue.Number(BigDecimal(4))))
-    val bad = sheet.evaluateFormula("=SQRT(\"abc\")")
-    assert(bad.isLeft, s"expected clean error, got $bad")
+    assertEquals(sheet.evaluateFormula("=SQRT(\"abc\")"), Right(CellValue.Error(CellError.Value)))
     // date position: boolean literals coerce via their Excel serial like any number
     // (TRUE=1 -> 1900-01-01 so =YEAR(TRUE) is 1900 like Excel; FALSE=0 -> 1899-12-31,
     // the same mapping as =MONTH(0) — Excel's "Jan 0 1900" is not a real date).

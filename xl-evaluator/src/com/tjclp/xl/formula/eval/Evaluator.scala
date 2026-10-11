@@ -192,6 +192,13 @@ object Evaluator:
       None
     )
 
+  /** #709: the text a cell holds — plain, rich, or a formula's cached text — if it holds text. */
+  private[formula] def textValue(value: CellValue): Option[String] = value match
+    case CellValue.Text(s) => Some(s)
+    case CellValue.RichText(rt) => Some(rt.toPlainText)
+    case CellValue.Formula(_, Some(cached), _) => textValue(cached)
+    case _ => None
+
   /**
    * GH-353: external-workbook references cannot be resolved (the external workbook is not loaded).
    * Closed-workbook semantics live OUTSIDE the evaluator: a formula cell bearing an external ref
@@ -2116,9 +2123,10 @@ private class EvaluatorImpl(
   /**
    * GH-344: decode a cell for a typed reference position, falling back to the Excel error VALUE the
    * cell carries when the decode refuses — `=A1+1` over a #REF! cell is #REF!, not a type mismatch.
-   * Decode failures over non-error values keep their loud CodecFailed; positions whose decoders
-   * accept error cells (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never
-   * reach the fallback.
+   * #709: a text cell the decoder refuses is `#VALUE!` — `=ABS(A1)` over "abc", `=IF(A1,1,0)` over
+   * "abc" — as Excel computes it (the decoders read numeric text first). Decode failures over other
+   * values keep their loud CodecFailed; positions whose decoders accept error cells
+   * (decodeCellValue/decodeResolvedValue: ISERROR, IFERROR, bare `=A1`) never reach the fallback.
    */
   private def decodeOrCarried[B](
     at: ARef,
@@ -2128,7 +2136,14 @@ private class EvaluatorImpl(
     decode(cell).left.map { codecErr =>
       ArrayArithmetic.carriedError(cell.value) match
         case Some(err) => EvalError.ErrorValue(err)
-        case None => EvalError.CodecFailed(at, codecErr)
+        case None =>
+          Evaluator.textValue(cell.value) match
+            case Some(text) =>
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"${at.toA1}: text '$text' in a typed argument")
+              )
+            case None => EvalError.CodecFailed(at, codecErr)
     }
 
   /**
