@@ -208,8 +208,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   ): Either[EvalError, Vector[RangeOperand]] =
     op match
       case Left(location) =>
-        Evaluator
-          .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        ctx
+          .resolveRange(location)
           .map((sheet, range) => Vector(RangeOperand(sheet, range)))
       case Right(OperatorCall(call)) if call.spec.name == UnionName =>
         call.args

@@ -665,6 +665,8 @@ object DependencyGraph:
       // shadow workbook-scoped ones); a sheet-qualified name carries its own context
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
       case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_, _)) => false
+      // GH-710: a LET name's binding value carries its own references (the Let case)
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Binding(_)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -680,6 +682,7 @@ object DependencyGraph:
                 case TExpr.RangeLocation.External(_, _, _, _) => false
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
+                case TExpr.RangeLocation.Binding(_) => false
                 case TExpr.RangeLocation.Error(_, _) => false
             case ArgValue.Cells(_) => true
           }
@@ -2054,6 +2057,8 @@ object DependencyGraph:
             case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
         // GH-612: an error in a range slot has no cells
         case TExpr.RangeLocation.Error(_, _) => Set.empty
+        // GH-710: a LET name — its binding's value expression contributes the edges
+        case TExpr.RangeLocation.Binding(_) => Set.empty
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match

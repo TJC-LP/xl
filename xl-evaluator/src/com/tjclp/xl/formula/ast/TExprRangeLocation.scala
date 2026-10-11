@@ -46,12 +46,25 @@ trait TExprRangeLocation:
      * `Evaluator.resolveRangeLocation` is the single resolution boundary — it looks the name up
      * (sheet-scoped shadows workbook-scoped, case-insensitive, relative to `scope` when qualified),
      * parses the refersTo text, and yields the resolved (sheet, CellRange) pair for range-shaped
-     * targets (single-cell targets act as 1×1 ranges). Non-range targets (constants, formulas) are
-     * a clean per-cell error VALUE. This case deliberately has NO static range: the pre-resolution
-     * accessors below (`staticRange`, `localCells*`, …) return their empty forms for it, and every
-     * evaluation-time consumer goes through the resolution boundary.
+     * targets (single-cell targets act as 1×1 ranges). A function's range slot resolves through
+     * `EvalContext.resolveRange`, which also evaluates a formula target for the reference it
+     * computes (GH-710: a dynamic range, `OFFSET(…)`); any other target (a constant, a formula
+     * computing a value) is a clean per-cell error VALUE. This case deliberately has NO static
+     * range: the pre-resolution accessors below (`staticRange`, `localCells*`, …) return their
+     * empty forms for it, and every evaluation-time consumer goes through the resolution boundary.
      */
     case Name(name: String, scope: Option[SheetName])
+
+    /**
+     * GH-710: a LET name in a range-typed argument slot — `LET(r, dyn, COUNTIF(r, ">2"))`, where
+     * the binding is not a literal range (a literal range is substituted by the parser).
+     *
+     * The range is the reference the binding holds, known only at evaluation (the LET binds a
+     * reference-denoting value — a cell, a name, OFFSET, INDIRECT, INDEX, IF/CHOOSE over references
+     * — as that reference). Like [[Name]] it has no static range and contributes no dependency
+     * edges of its own: the binding's value expression carries them.
+     */
+    case Binding(name: String)
 
     /**
      * GH-612: an error literal in a range-typed argument slot — `SUM(#REF!)`, `COUNTIF(#REF!, x)`.
@@ -78,6 +91,7 @@ trait TExprRangeLocation:
         case CrossSheet(_, r, _) => Some(r)
         case External(_, _, r, _) => Some(r)
         case Name(_, _) => None
+        case Binding(_) => None
         case Error(_, _) => None
 
       /** Get sheet name for cross-sheet, None for local or external-workbook locations */
@@ -129,4 +143,5 @@ trait TExprRangeLocation:
           scope match
             case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
             case None => n
+        case Binding(n) => n
         case Error(e, q) => com.tjclp.xl.formula.printer.FormulaPrinter.qualifiedError(e, q)

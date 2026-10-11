@@ -46,7 +46,7 @@ object CriteriaRangeResize:
 
   /**
    * A range-slot location resized to `shape` when it carries a range (local, cross-sheet or
-   * external); a defined name or an error is returned as it is.
+   * external); a defined name, a LET name or an error is returned as it is.
    */
   def resizeLocation(location: TExpr.RangeLocation, shape: CellRange): TExpr.RangeLocation =
     location match
@@ -56,7 +56,9 @@ object CriteriaRangeResize:
         TExpr.RangeLocation.CrossSheet(sheet, resize(range, shape), RangeForm.Cells)
       case TExpr.RangeLocation.External(index, name, range, _) =>
         TExpr.RangeLocation.External(index, name, resize(range, shape), RangeForm.Cells)
-      case other @ (TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Error(_, _)) => other
+      case other @ (TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Binding(_) |
+          TExpr.RangeLocation.Error(_, _)) =>
+        other
 
   /**
    * The argument values of a call to `name` with the resize applied: for a resizing function whose

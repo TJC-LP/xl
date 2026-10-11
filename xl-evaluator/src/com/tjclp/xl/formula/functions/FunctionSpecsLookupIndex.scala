@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, CriteriaMatcher, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, CriteriaMatcher, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -64,14 +64,20 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         case Right(expr) => FormulaPrinter.printFileForm(expr)
       call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
         s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
-      target <- array match
-        case Right(TExpr.Lit(values: ArrayResult)) =>
+      // an array constant, or a LET name bound to an array (LET(x, SEQUENCE(3), INDEX(x, 2)))
+      constant = array match
+        case Right(TExpr.Lit(values: ArrayResult)) => Some(values)
+        case Left(TExpr.RangeLocation.Binding(name)) =>
+          ctx.bindings.get(name).collect { case values: ArrayResult => values }
+        case _ => None
+      target <- constant match
+        case Some(values) =>
           pickArea(1, areaNum, call).flatMap(_ =>
             selection(rowNum, colNum, values.rows, values.cols, call).map { (rows, cols) =>
               Left(ArrayResult(rows.map(r => cols.map(c => values(r, c)))))
             }
           )
-        case _ =>
+        case None =>
           for
             areas <- ReferenceOperators.areas(array, ctx)
             _ <- pickArea(areas.size, areaNum, call)
@@ -205,7 +211,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         lookup = normalizeLookupValue(lookupValueEval)
         _ <- lookupValueError("MATCH", lookup)
         matchType <- ctx.evalExpr(matchTypeExpr)
-        resolved <- Evaluator.resolveRangeLocation(lookupArray, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(lookupArray)
         (targetSheet, lookupRange) = resolved
         // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed
         values <- lookupRangeValues(lookupRange, targetSheet, ctx)
@@ -281,7 +287,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
           s"XMATCH(${renderLookupValue(lookup)}, ${lookupLoc.toA1}, $matchMode, $searchMode)"
         _ <- matchModeError("XMATCH", matchMode, call)
         _ <- searchModeError("XMATCH", searchMode, call)
-        resolved <- Evaluator.resolveRangeLocation(lookupLoc, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(lookupLoc)
         (targetSheet, lookupRange) = resolved
         _ <-
           if lookupRange.width == 1 || lookupRange.height == 1 then Right(())
