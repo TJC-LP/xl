@@ -774,9 +774,23 @@ object WriteCommands:
         policy,
         warn,
         OffGridHit.of(sheet.name, offGrid),
-        intersectionAdvisory(range.cellsRowMajor.map(sheet.name -> _).toVector)
+        intersectionAdvisory(dragTargets(sheet.name, range, parsedExpr))
       )
     yield result
+
+  /**
+   * GH-714: the cells of a drag the `IMPLICIT_INTERSECTION` check must look at. A drag shifts
+   * references but keeps the formula's shape — a reference stays a reference of its kind or becomes
+   * `#REF!` — so a source that cannot diverge ([[ImplicitIntersection.mayDiverge]]) has no dragged
+   * copy that can: one test of the source instead of a parse per target cell.
+   */
+  private[cli] def dragTargets(
+    sheet: SheetName,
+    range: CellRange,
+    source: TExpr[?]
+  ): Vector[(SheetName, ARef)] =
+    if ImplicitIntersection.mayDiverge(source) then range.cellsRowMajor.map(sheet -> _).toVector
+    else Vector.empty
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(

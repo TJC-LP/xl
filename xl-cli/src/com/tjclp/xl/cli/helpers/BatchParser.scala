@@ -27,7 +27,7 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.Clock
-import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, ImplicitIntersection}
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -1723,7 +1723,10 @@ object BatchParser:
     scoped.flatMap { s =>
       val refs = s.op match
         case BatchOp.PutFormula(ref, _, _, false) => Vector(ref)
-        case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
+        // a drag keeps its source's shape: a source that cannot diverge has no copy that can
+        case BatchOp.PutFormulaDragging(range, formula, _, _)
+            if dragExpression(formula).exists(ImplicitIntersection.mayDiverge) =>
+          Vector(range)
         case BatchOp.PutFormulas(range, _, _) => Vector(range)
         case _ => Vector.empty
       if refs.isEmpty then Vector.empty

@@ -20,9 +20,10 @@ object IntersectionHit:
   private def where(d: Divergence): String =
     s"${SheetName.quoteForFormula(d.sheet.value)}!${d.cell.toA1}"
 
+  /** A value as Excel writes it in a formula: text quoted, its own quotes doubled (`"a""b"`). */
   private def show(v: CellValue): String = v match
     case CellValue.Number(n) => n.bigDecimal.stripTrailingZeros.toPlainString
-    case CellValue.Text(s) => s"\"$s\""
+    case CellValue.Text(s) => s"\"${s.replace("\"", "\"\"")}\""
     case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
     case CellValue.Error(e) =>
       import CellError.toExcel

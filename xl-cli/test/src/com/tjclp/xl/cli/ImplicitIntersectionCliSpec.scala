@@ -9,8 +9,12 @@ import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.contract.{CliHarness, CliRun}
+import com.tjclp.xl.cli.commands.WriteCommands
+import com.tjclp.xl.cli.contract.{CliHarness, CliRun, IntersectionHit}
+import com.tjclp.xl.cli.helpers.BatchParser
+import com.tjclp.xl.formula.eval.ImplicitIntersection
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.macros.ref
 
 /**
  * GH-714: the informational `IMPLICIT_INTERSECTION` warning — an in-memory putf or batch putf whose
@@ -221,6 +225,77 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assert(run.stdout.contains("\"ref\": \"C5\""), run.stdout)
       assert(!warned(overwritten), overwritten.stdout)
       assert(!warned(arrayOp), arrayOp.stdout)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // PR #721 review follow-ups
+
+  private val clock = com.tjclp.xl.formula.Clock.fixed(
+    java.time.LocalDate.of(2026, 1, 2),
+    java.time.LocalDateTime.of(2026, 1, 2, 3, 4, 5)
+  )
+
+  private def parsed(formula: String) =
+    com.tjclp.xl.formula.FormulaParser.parse(formula).fold(e => fail(e.toString), identity)
+
+  test("a drag whose source cannot diverge is not checked cell by cell; one that can is") {
+    val range = CellRange.parse("C1:C3").fold(fail(_), identity)
+    val S = SheetName.unsafe("S")
+    assertEquals(WriteCommands.dragTargets(S, range, parsed("=SUM($A$1:A1)")), Vector.empty)
+    assertEquals(WriteCommands.dragTargets(S, range, parsed("=A1+1")), Vector.empty)
+    assertEquals(
+      WriteCommands.dragTargets(S, range, parsed("=A$1:A$10*2")),
+      range.cellsRowMajor.map(S -> _).toVector
+    )
+    val ops =
+      """[{"op":"putf","ref":"C1:C3","value":"=SUM($A$1:A1)","from":"C1"},
+        |{"op":"putf","ref":"D1:D3","value":"=A$1:A$10*2","from":"D1"}]""".stripMargin
+    val sheet = Sheet("S")
+    BatchParser.parseBatchOperations(ops).map { result =>
+      val targets = BatchParser.putfTargets(Workbook(sheet), Some(sheet), result.scoped)
+      assertEquals(targets.map(_._2.toA1), Vector("D1", "D2", "D3"))
+    }
+  }
+
+  test("pinned: a sampled check with no hit in its sample warns nothing") {
+    // 3 candidates, budget 2: only the third diverges (the IF picks the range in row 3)
+    val sheet = (1 to 10)
+      .foldLeft(Sheet("Sheet1")) { (s, i) =>
+        s.put(ARef.from0(0, i - 1), CellValue.Number(BigDecimal(i)))
+      }
+      .put(ref"C1", CellValue.Formula("IF(ROW()>2,A$1:A$10*2,1)"))
+      .put(ref"C2", CellValue.Formula("IF(ROW()>2,A$1:A$10*2,1)"))
+      .put(ref"C3", CellValue.Formula("IF(ROW()>2,A$1:A$10*2,1)"))
+    val wb = Workbook(sheet)
+    val cells = Vector(ref"C1", ref"C2", ref"C3").map(sheet.name -> _)
+    val full = ImplicitIntersection.check(wb, cells, clock)
+    assertEquals(full.hits.map(_.cell), Vector(ref"C3"))
+    val sampled = ImplicitIntersection.check(wb, cells, clock, budget = 2)
+    assertEquals((sampled.hits, sampled.checked, sampled.candidates), (Vector.empty, 2, 3))
+    assert(sampled.sampled)
+    // the blind spot the PR notes: a sample with no hit says nothing, not even that it sampled
+    assertEquals(IntersectionHit.warning(sampled), None)
+  }
+
+  test("a text value in the warning doubles its quotes, as a formula literal does") {
+    val report = ImplicitIntersection.Report(
+      Vector(
+        ImplicitIntersection.Divergence(
+          SheetName.unsafe("S"),
+          ref"C1",
+          "A1:A2&\"\"",
+          CellValue.Text("say \"hi\""),
+          CellValue.Text("x"),
+          2,
+          1
+        )
+      ),
+      checked = 1,
+      candidates = 1
+    )
+    val message = IntersectionHit.warning(report).fold(fail("no warning"))(_.message)
+    assert(message.contains("is \"say \"\"hi\"\"\" as a plain cell"), message)
+    assert(message.contains("(top-left \"x\")"), message)
   }
 
   test("streaming writes and dry runs stay silent") {
