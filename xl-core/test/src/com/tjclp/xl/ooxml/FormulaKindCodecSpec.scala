@@ -1,13 +1,15 @@
 package com.tjclp.xl.ooxml
 
-import munit.FunSuite
+import munit.ScalaCheckSuite
+import org.scalacheck.Prop.forAll
 
+import com.tjclp.xl.Generators
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{ArrayMode, FormulaKind}
 import com.tjclp.xl.macros.ref
 
 /** GH-714: the codec's dynamic-array arms — `cm` resolution, `cm` rendering, the bare 1x1 ref. */
-class FormulaKindCodecSpec extends FunSuite:
+class FormulaKindCodecSpec extends ScalaCheckSuite:
 
   private val sortRange = CellRange(ref"B1", ref"B5")
   private val legacy: FormulaKind.ArrayFormula =
@@ -94,4 +96,22 @@ class FormulaKindCodecSpec extends FunSuite:
     assert(!legacy.isDynamicArray)
     assert(!FormulaKind.Normal().isDynamicArray)
     assertEquals(FormulaKind.dynamicArray(sortRange).ref.start, ARef.from0(1, 0))
+  }
+
+  property(
+    "toAttrs + cellAttrs, then fromAttrs + withCellMetadata, is the identity on every kind"
+  ) {
+    // the writer's cm allocation for both dynamic variants, and the reader's index for it
+    val cmOf: ArrayMode.Dynamic => Option[Int] = d => Some(if d.collapsed then 2 else 1)
+    val index = CellMetadataIndex(Map(1 -> ArrayMode.Dynamic(), 2 -> ArrayMode.Dynamic(true)))
+    forAll(Generators.genFormulaKind) { kind =>
+      val f = FormulaKindCodec.toAttrs(kind).toMap
+      val cm = FormulaKindCodec.cellAttrs(kind, cmOf).toMap.get("cm")
+      val read =
+        FormulaKindCodec.withCellMetadata(FormulaKindCodec.fromAttrs(f.get("t"), f.get), cm, index)
+      kind match
+        // an unflagged plain formula has no record to read back
+        case FormulaKind.Normal(false, false) => assertEquals(read, None)
+        case _ => assertEquals(read, Some(kind))
+    }
   }
