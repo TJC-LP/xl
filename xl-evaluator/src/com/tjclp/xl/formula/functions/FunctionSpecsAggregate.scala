@@ -1406,9 +1406,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * first use, so a SUMPRODUCT without a name reference never walks the name table.
    */
   private def drawsViaName(ctx: EvalContext): (Option[SheetName], String) => Boolean =
-    lazy val reach = ctx.workbook.map(
-      WorkbookAudit.namesReaching(_, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
-    )
+    def build(wb: com.tjclp.xl.workbooks.Workbook) =
+      WorkbookAudit.namesReaching(wb, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
+    // a recalculation generation builds the verdicts once for every formula; a lone evaluation
+    // builds them for its own use
+    lazy val reach =
+      ctx.workbook.map(wb => ctx.aggregateMemo.fold(build(wb))(_.namesReachingDraw(wb, build)))
     (qualifier, name) =>
       reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
 

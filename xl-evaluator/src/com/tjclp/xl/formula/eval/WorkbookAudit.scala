@@ -376,7 +376,7 @@ object WorkbookAudit:
    * one volatility predicate. A defined-name reference (an expression, or a range slot) is answered
    * by `viaName(qualifier, name)`, which applies this same predicate to the name's parsed body.
    */
-  private[formula] def callsVolatile(
+  private def callsVolatile(
     expr: TExpr[?],
     viaName: (Option[SheetName], String) => Boolean
   ): Boolean = callsWhere(expr, viaName, _.flags.volatile)

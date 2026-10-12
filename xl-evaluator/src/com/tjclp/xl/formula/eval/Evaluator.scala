@@ -883,6 +883,31 @@ object Evaluator:
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /**
+     * GH-711: SUMPRODUCT's blank tail asks whether a defined name reaches a random draw. Building
+     * that verdict walks the name table (a resolver, a sheet canonicaliser, a parse of every body
+     * reached), so the generation builds it once and every formula reuses it. A generation never
+     * changes the name table or the sheet list, only cells; the entry is still keyed on both, so a
+     * memo that meets another workbook rebuilds instead of answering for the wrong one. The walk
+     * memoizes verdicts in a mutable map, so a parallel wave queries it under the entry's monitor.
+     */
+    private val drawingNames =
+      new java.util.concurrent.atomic.AtomicReference[Option[NameVerdicts]](None)
+
+    def namesReachingDraw(
+      wb: Workbook,
+      build: Workbook => (SheetName, Option[SheetName], String) => NameWalk.Reach
+    ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
+      val names = wb.metadata.definedNames
+      val sheets = wb.sheets.map(_.name)
+      val entry = drawingNames.get() match
+        case Some(known) if known.matches(names, sheets) => known
+        case _ =>
+          val built = NameVerdicts(names, sheets, build(wb))
+          drawingNames.set(Some(built))
+          built
+      entry.verdict
+
+    /**
      * GH-695: each spill anchor's raw evaluation as this generation's fold computed it — an array
      * is its spill, a scalar is not a spill anchor, an error is that error, exactly as `x#` reads
      * an anchor it evaluates itself. The threaded sheet caches only the anchor's top-left element,
@@ -971,6 +996,18 @@ object Evaluator:
     case Bypass
 
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  /** One workbook's name verdicts, as [[AggregateMemo.namesReachingDraw]] caches them. */
+  private final class NameVerdicts(
+    names: Vector[DefinedName],
+    sheets: Vector[SheetName],
+    walk: (SheetName, Option[SheetName], String) => NameWalk.Reach
+  ):
+    def matches(otherNames: Vector[DefinedName], otherSheets: Vector[SheetName]): Boolean =
+      ((names eq otherNames) || names == otherNames) && sheets == otherSheets
+
+    val verdict: (SheetName, Option[SheetName], String) => NameWalk.Reach =
+      (from, qualifier, name) => synchronized(walk(from, qualifier, name))
+
   private final class AggregateMemoEntry:
     private var state: AggregateMemoState = AggregateMemoState.Unchecked
 

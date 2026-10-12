@@ -259,6 +259,39 @@ class WholeColumnBlankTailSpec extends FunSuite:
     assertEquals(e("=SUMPRODUCT(--(A:A<asof))"), Right(num(1048576)))
   }
 
+  test("a generation builds the name verdicts once and rebuilds for another name table") {
+    val memo = new com.tjclp.xl.formula.eval.Evaluator.AggregateMemo
+    var builds = 0
+    val absent: (SheetName, Option[SheetName], String) => com.tjclp.xl.formula.eval.NameWalk.Reach =
+      (_, _, _) => com.tjclp.xl.formula.eval.NameWalk.Reach.Absent
+    def build(wb: Workbook) =
+      builds += 1
+      absent
+    val wb = Workbook(Vector(sheet)).withDefinedName("draw", "RAND()")
+    memo.namesReachingDraw(wb, build)
+    // the same names and sheets with other cells: the same generation's table
+    memo.namesReachingDraw(wb.put(sheet.put(ref"Z9", num(1))), build)
+    assertEquals(builds, 1)
+    memo.namesReachingDraw(wb.withDefinedName("five", "5"), build)
+    assertEquals(builds, 2)
+    // a recalculation reads the cached verdicts: a name that draws still rules the tail out
+    val book = Workbook(
+      Vector(
+        sheet,
+        Sheet(SheetName.unsafe("Out"))
+          .put(ref"A1", CellValue.Formula("SUMPRODUCT((T!A:A=\"\")*(draw>=0))", None))
+          .put(ref"A2", CellValue.Formula("SUMPRODUCT(--(T!A:A<five))", None))
+          .put(ref"A3", CellValue.Formula("SUMPRODUCT((T!A:A=\"\")*(draw>=0))", None))
+      )
+    ).withDefinedName("draw", "RAND()").withDefinedName("five", "5")
+    val result = book.recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val out = SheetName.unsafe("Out")
+    assertEquals(result.evaluated(out)(ref"A1"), num(0))
+    assertEquals(result.evaluated(out)(ref"A2"), num(1048575))
+    assertEquals(result.evaluated(out)(ref"A3"), num(0))
+  }
+
   test("whole rows: the blank line can sit before the used columns") {
     // C1:D1 filled, row 2 empty: the bound keeps columns C:D, so the blank line is column A
     val right = Sheet(SheetName.unsafe("R")).put(ref"C1", num(1)).put(ref"D1", num(2))
