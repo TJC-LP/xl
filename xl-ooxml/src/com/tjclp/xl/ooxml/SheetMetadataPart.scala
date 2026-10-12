@@ -76,14 +76,10 @@ private[xl] object SheetMetadataPart:
   object CellMetadataPlan:
     val none: CellMetadataPlan = CellMetadataPlan(Map.empty, MetadataOutput.Untouched)
 
-  /**
-   * The package path of the metadata part, found by relationship type (never by name). A
-   * relationship that names no part of this package — external, or resolving above its root
-   * ([[Relationships.namesPackagePart]]) — is ignored, so no such path is read or written.
-   */
+  /** The package path of the metadata part, found by relationship type (never by name). */
   def locate(workbookRels: Relationships): Option[String] =
     workbookRels.relationships
-      .find(rel => rel.`type` == relType && Relationships.namesPackagePart(rel))
+      .find(rel => rel.`type` == relType && !rel.targetMode.exists(_.equalsIgnoreCase("External")))
       .map(rel => Relationships.resolveWorkbookTarget(rel.target))
 
   /** Resolve every dynamic-array `cm` index of a part; malformed XML reads as none. */

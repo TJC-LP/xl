@@ -248,37 +248,14 @@ object XlsxWriter:
    * What a write decided that its caller may need to report — taken from the plan the write
    * actually used, so a report can never disagree with the bytes written.
    *
-   * `cellMetadataDowngrade` (GH-714): the cell-metadata part the write could not extend, and why,
-   * when the sheets it regenerated hold dynamic arrays the plan allocated no `cm` for. Today that
-   * happens when the source part is present but cannot be read or is not XML: it is kept as it is
-   * (a second part would orphan whatever else it holds, such as images-in-cells data), and those
-   * records are written without `cm`, so Excel opens them as legacy CSE arrays (`{=...}`). None
-   * when nothing was lost — including a relationship naming a missing part, whose part is generated
-   * at that target.
+   * `cellMetadataDowngrade` (GH-714): the cell-metadata part the write could not extend, when the
+   * sheets it regenerated hold dynamic arrays the plan allocated no `cm` for. That happens when the
+   * source part is present but not readable XML: it is kept as it is (a second part would orphan
+   * whatever else it holds, such as images-in-cells data), and those records are written without
+   * `cm`, so Excel opens them as legacy CSE arrays (`{=...}`). None when nothing was lost —
+   * including a relationship naming a missing part, whose part is generated at that target.
    */
-  private[xl] final case class WriteReport(cellMetadataDowngrade: Option[MetadataDowngrade])
-      derives CanEqual
-
-  /** A cell-metadata part a write could not extend: its package path and the reason. */
-  private[xl] final case class MetadataDowngrade(path: String, reason: DowngradeReason)
-      derives CanEqual
-
-  /** Why a write could not extend the source's cell-metadata part. */
-  private[xl] enum DowngradeReason derives CanEqual:
-    /** The part's entry could not be read from the package. */
-    case Unreadable
-
-    /** The part's bytes are not well-formed (or not safely parseable) XML. */
-    case NotXml
-
-    /** The plan allocated no `cm` for some other reason (no such path exists today). */
-    case NotExtended
-
-    /** The clause a message puts after the part's path. */
-    def describe: String = this match
-      case Unreadable => "could not be read from the workbook package"
-      case NotXml => "is not readable XML"
-      case NotExtended => "could not be extended"
+  private[xl] final case class WriteReport(cellMetadataDowngrade: Option[String]) derives CanEqual
 
   private[xl] object WriteReport:
     val empty: WriteReport = WriteReport(None)
@@ -2304,15 +2281,10 @@ object XlsxWriter:
         )
       case _ => None
     // GH-714: the report's downgrade is read off this plan — a needed variant it allocated no `cm`
-    val metadataDowngrade: Option[MetadataDowngrade] =
-      Option.when(neededDynamic.exists(v => !metadataPlan.cmOf.contains(v))) {
-        val path = sourceMetadataPath.getOrElse(SheetMetadataPart.defaultPath)
-        val reason = sourceMetadataXml match
-          case None if sourceMetadataPresent => DowngradeReason.Unreadable
-          case Some(xml) if XmlSecurity.parseSafe(xml, path).isLeft => DowngradeReason.NotXml
-          case _ => DowngradeReason.NotExtended
-        MetadataDowngrade(path, reason)
-      }
+    val metadataDowngrade: Option[String] =
+      Option.when(neededDynamic.exists(v => !metadataPlan.cmOf.contains(v)))(
+        sourceMetadataPath.getOrElse(SheetMetadataPart.defaultPath)
+      )
     // the source path whose bytes this write replaces (skipped by the verbatim copy loop)
     val appendedMetadataPath: Option[String] = metadataPlan.output match
       case SheetMetadataPart.MetadataOutput.Appended(_) => sourceMetadataPath

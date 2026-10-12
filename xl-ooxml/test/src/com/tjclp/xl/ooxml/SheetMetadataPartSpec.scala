@@ -236,17 +236,6 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
   test("external sheetMetadata relationships do not identify a package part") {
     val external = Relationship("rId2", SheetMetadataPart.relType, "metadata.xml", Some("External"))
     assertEquals(SheetMetadataPart.locate(Relationships(Seq(external))), None)
-    // a target resolving above the package root names no part: never read, never written
-    Vector("../../evil.xml", "../../../x/evil.xml", "/../../evil.xml", "..").foreach { target =>
-      val escaping = Relationship("rId4", SheetMetadataPart.relType, target, None)
-      assertEquals(SheetMetadataPart.locate(Relationships(Seq(escaping))), None, target)
-    }
-    // one that climbs and comes back stays inside: xl/custom/../metadata.xml is xl/metadata.xml,
-    // and ../evil.xml (from xl/) is the package-root part evil.xml
-    val inside = Relationship("rId5", SheetMetadataPart.relType, "custom/../metadata.xml", None)
-    assertEquals(SheetMetadataPart.locate(Relationships(Seq(inside))), Some("xl/metadata.xml"))
-    val root = Relationship("rId6", SheetMetadataPart.relType, "../evil.xml", None)
-    assertEquals(SheetMetadataPart.locate(Relationships(Seq(root))), Some("evil.xml"))
     val internal = external.copy(id = "rId3", targetMode = None)
     assertEquals(
       SheetMetadataPart.locate(Relationships(Seq(external, internal))),

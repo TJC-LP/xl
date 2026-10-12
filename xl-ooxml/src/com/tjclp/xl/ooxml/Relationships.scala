@@ -170,18 +170,6 @@ object Relationships extends XmlReadable[Relationships]:
       else Paths.get("xl").resolve(cleaned)
     resolvedPath.normalize().toString.replace('\\', '/')
 
-  /**
-   * Whether a workbook relationship names a part inside this package: not `TargetMode="External"`,
-   * and a target that resolves to a path inside the package (`../../evil.xml` resolves to
-   * `../evil.xml`, above its root, and `..` to nothing: no part of this package is either, and xl
-   * must never write one as an entry).
-   */
-  def namesPackagePart(rel: Relationship): Boolean =
-    !rel.targetMode.exists(_.equalsIgnoreCase("External")) && {
-      val path = resolveWorkbookTarget(rel.target)
-      path.nonEmpty && path != ".." && !path.startsWith("../") && !path.startsWith("/")
-    }
-
   /** A package path as a workbook-rels target (relative to xl/). */
   private def workbookTargetOf(packagePath: String): String =
     packagePath.stripPrefix("xl/")
@@ -261,15 +249,10 @@ object Relationships extends XmlReadable[Relationships]:
     val withStyles = ensure(base, present = true, relTypeStyles, "styles.xml")
     val withSst =
       ensure(withStyles, ensureSharedStrings, relTypeSharedStrings, "sharedStrings.xml")
-    // GH-714: a generated cell-metadata part gains its relationship; a source one naming a part is
-    // never removed, but one that names none (external, or resolving outside the package) gives
-    // way to the generated part's, so the part is never left unreferenced
+    // GH-714: a generated cell-metadata part gains its relationship; a source one is never removed
     val (finalRels, _) = ensureSheetMetadata match
       case Some(path) =>
-        val (rels, maxId) = withSst
-        val kept =
-          rels.filterNot(r => r.`type` == relTypeSheetMetadata && !namesPackagePart(r))
-        ensure((kept, maxId), present = true, relTypeSheetMetadata, workbookTargetOf(path))
+        ensure(withSst, present = true, relTypeSheetMetadata, workbookTargetOf(path))
       case None => withSst
 
     (sheetRels.map(_.id), Relationships(finalRels))

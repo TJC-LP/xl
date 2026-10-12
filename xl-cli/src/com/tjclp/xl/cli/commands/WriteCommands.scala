@@ -788,11 +788,10 @@ object WriteCommands:
    */
   private[cli] def downgradeWarning(report: XlsxWriter.WriteReport): Vector[Warning] =
     report.cellMetadataDowngrade
-      .map { downgrade =>
+      .map { path =>
         Warning(
           WarningCode.DYNAMIC_ARRAY_DOWNGRADED,
-          s"the workbook's cell-metadata part '${downgrade.path}' ${downgrade.reason.describe}, " +
-            "so xl cannot extend it: " +
+          s"the workbook's cell-metadata part '$path' is not readable XML, so xl cannot extend it: " +
             "the dynamic arrays on the rewritten sheets were saved without their dynamic-array " +
             "marker, and Excel opens them as legacy array formulas ({=...}); the part was kept as " +
             "it was (repair or remove it in Excel, then write again)"

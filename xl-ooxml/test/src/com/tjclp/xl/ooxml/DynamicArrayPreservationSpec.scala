@@ -40,8 +40,7 @@ class DynamicArrayPreservationSpec extends FunSuite:
   ): (Array[Byte], XlsxWriter.WriteReport) =
     XlsxWriter.writeToBytesWithReport(wb, config).fold(err => fail(err.message), identity)
 
-  private def downgradeOf(wb: Workbook): Option[XlsxWriter.MetadataDowngrade] =
-    reported(wb)._2.cellMetadataDowngrade
+  private def downgradeOf(wb: Workbook): Option[String] = reported(wb)._2.cellMetadataDowngrade
 
   private def sheet1(bytes: Array[Byte]): String =
     entryText(bytes, "xl/worksheets/sheet1.xml").getOrElse(fail("no sheet1"))
@@ -289,11 +288,7 @@ class DynamicArrayPreservationSpec extends FunSuite:
     backends.foreach { case (name, config) =>
       val (out, report) = reported(edited, config)
       // the report is read off the plan this very write used
-      assertEquals(
-        report.cellMetadataDowngrade,
-        Some(XlsxWriter.MetadataDowngrade("xl/metadata.xml", XlsxWriter.DowngradeReason.NotXml)),
-        name
-      )
+      assertEquals(report.cellMetadataDowngrade, Some("xl/metadata.xml"), name)
       // the part rides through untouched (a second one would orphan whatever else it holds) ...
       assertEquals(entryText(out, "xl/metadata.xml"), Some(broken))
       // ... and the anchor is written in its legacy shape, as the signal warned
@@ -304,41 +299,6 @@ class DynamicArrayPreservationSpec extends FunSuite:
       assertEquals(
         kindAt(read(out), ref"E1"),
         Some(FormulaKind.ArrayFormula(CellRange(ref"E1", ref"E1")))
-      )
-    }
-  }
-
-  test("a relationship escaping the package is ignored: the part is generated inside, rewired") {
-    val escaping = parts().collect {
-      case ("xl/metadata.xml", _) => None
-      case ("xl/_rels/workbook.xml.rels", xml) =>
-        Some(
-          "xl/_rels/workbook.xml.rels" -> xml.replace(
-            "Target=\"metadata.xml\"",
-            "Target=\"../../evil.xml\""
-          )
-        )
-      case other => Some(other)
-    }.flatten
-    assert(escaping.exists(_._2.contains("../../evil.xml")), "fixture edit missed")
-    val wb = read(xlsx(escaping))
-    // B1's cm names nothing readable: it reads as the legacy array it then is
-    assertEquals(kindAt(wb, ref"B1"), Some(FormulaKind.ArrayFormula(sortRange)))
-    val edited = withAnchorAt(wb, ref"E1")
-    backends.foreach { case (name, config) =>
-      val (out, report) = reported(edited, config)
-      assertEquals(report.cellMetadataDowngrade, None, name)
-      // nothing is written above the package root, the part is generated at the default path
-      assert(entries(out).forall((n, _) => !n.startsWith("..") && !n.startsWith("/")), name)
-      assertEquals(entryText(out, "xl/metadata.xml"), Some(metadataXml), name)
-      // the escaping relationship gives way to one that names the generated part
-      val rels = entryText(out, "xl/_rels/workbook.xml.rels").getOrElse(fail("no rels"))
-      assert(!rels.contains("evil.xml"), s"$name: $rels")
-      assertEquals(occurrences(out, "xl/_rels/workbook.xml.rels", "relationships/sheetMetadata"), 1)
-      assertEquals(
-        kindAt(read(out), ref"E1"),
-        Some(FormulaKind.dynamicArray(CellRange(ref"E1", ref"E1"))),
-        name
       )
     }
   }
