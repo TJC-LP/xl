@@ -439,3 +439,25 @@ class CriteriaRangeDependencySpec extends FunSuite:
       assertEquals(seededValue, Some(n(expected)), at.toA1)
     }
   }
+
+  test("#733: a computed name is static without a workbook, dynamic with one") {
+    val reader = sheet.put(ref"E1", CellValue.Formula("SUMIF(criteria,\">0\",C1)", None))
+    assertEquals(DependencyGraph.dynamicCells(reader), Set.empty[ARef])
+    assertEquals(DependencyGraph.dynamicCells(names(Workbook(reader))), Set(q(ref"E1")))
+  }
+
+  test("the 0.22.0 three-argument resizedArgs still resizes, in any case") {
+    import com.tjclp.xl.formula.ast.TExpr
+    import com.tjclp.xl.formula.functions.ArgValue
+    val args = List(
+      ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"A1", ref"A3"))),
+      ArgValue.Expr(TExpr.Lit(BigDecimal(0))),
+      ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"C1", ref"C1")))
+    )
+    val resized = CriteriaRangeResize.resizedArgs("sumif", args, _.staticRange)
+    assertEquals(
+      resized.lift(2),
+      Some(ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"C1", ref"C3"))))
+    )
+    assertEquals(CriteriaRangeResize.resizedArgs("SUMIF", args), resized)
+  }

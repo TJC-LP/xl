@@ -122,6 +122,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **`TExpr.RangeLocation` gains a `Binding(name)` case** (#710): a LET name in a range slot.
+  Constructing and matching the existing cases is unchanged; a downstream exhaustive match on
+  `RangeLocation` needs the new arm (the compiler warns until it has one).
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend

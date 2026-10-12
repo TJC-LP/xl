@@ -124,6 +124,11 @@ object CriteriaRangeResize:
       !(end < text.length && text.charAt(end) == '!') &&
       !nextNonSpace(text, end).exists(c => c == '(' || c == ':')
 
+  /**
+   * Whether `text`, from `from`, holds a token that could parse as a defined or LET name (see
+   * [[mayResizeThroughName]]). A structured reference's table (`Table1[Col]`) counts as one: a
+   * harmless false positive that costs one parse.
+   */
   @scala.annotation.tailrec
   private def hasNameShapedToken(text: String, from: Int = 0): Boolean =
     if from >= text.length then false
@@ -221,3 +226,15 @@ object CriteriaRangeResize:
               first :: criterion :: ArgValue.Range(resizeLocation(targetOf(target), shape)) :: rest
             case None => values
         case _ => values
+
+  /**
+   * [[resizedArgs]] without `targetOf`: the published 0.22.0 signature, kept so code compiled
+   * against it still links (the default getter for `shapeOf` keeps its name too). A call that
+   * passes three arguments picks this one: an alternative applicable without defaults wins.
+   */
+  def resizedArgs(
+    name: String,
+    values: List[ArgValue],
+    shapeOf: TExpr.RangeLocation => Option[CellRange]
+  ): List[ArgValue] =
+    resizedArgs(name, values, shapeOf, identity)
