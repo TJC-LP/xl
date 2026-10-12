@@ -32,7 +32,12 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
-  /** The operators' spec names — never identifiers, so no formula can call them by name. */
+  /**
+   * The operators' spec names — never identifiers, so no formula can call them by name. Keep them
+   * `final val` string literals: `Evaluator.referenceFunctions` and
+   * `ArgSpec.computedReferenceCalls` read them as folded constants, which is what keeps those sets
+   * from initializing this object.
+   */
   final val UnionName = "(union)"
   final val IntersectionName = "(intersection)"
   final val RangeName = "(range)"

@@ -263,6 +263,17 @@ class XLookupReferenceSpec extends FunSuite:
     assert(horizontal(3).isLeft)
   }
 
+  test("GH-713: the arrays' shape is checked before the lookup value (as in 0.23.1)") {
+    // XLOOKUP validates lookup_array against return_array before it reads lookup_value, so an
+    // error key over mismatched arrays is the shape's #VALUE!. Released 0.23.1 answers the same
+    // (its dimension check also came first); Excel's order is unconfirmed (LibreOffice 24.2 has no
+    // XLOOKUP). Over matching arrays the key's own error wins.
+    assertEquals(plain("H1", "XLOOKUP(#N/A,A1:B3,C1:C3)"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "XLOOKUP(1/0,A1:B3,C1:C3)"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "XLOOKUP(#N/A,A1:A3,C1:C3)"), Right(E("#N/A")))
+    assertEquals(plain("H1", "XLOOKUP(1/0,A1:A3,C1:C3)"), Right(E("#DIV/0!")))
+  }
+
   test("GH-713: an if_not_found value is not a reference, so a `:` over it is #VALUE!") {
     // the miss returns if_not_found, a value: the range operator refuses it as an operand; an
     // error value there keeps its own code

@@ -429,20 +429,30 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
             rangeCalls(expr).foreach { call =>
               assertEquals(FormulaPrinter.printFileForm(call), oracleRange(call, inLet), formula)
             }
-            // the dynamic pre-filter admits every formula whose computed range the classifier
-            // flags, written or printed
-            val dynamicRange = rangeCalls(expr).exists(call =>
-              functions.ReferenceOperators
-                .isComputedRangeDynamic(call, functions.ReferenceOperators.staticShape)
+            // (the pre-filter law over these trees is its own property below)
+      }
+      true
+    }
+  }
+
+  property("GH-713: the pre-filter admits every formula whose parse holds a dynamic `:`") {
+    // mayContainComputedRange's law, over the same generated trees: wherever
+    // isComputedRangeDynamic holds in a parse, the formula's text — as written and as printed —
+    // passes the pre-filter, so a dynamic computed range is never skipped by dynamicCells
+    forAllNoShrink(Gen.listOfN(10, genChainFormula)) { cases =>
+      cases.foreach { (formula, _) =>
+        FormulaParser.parse(formula).foreach { expr =>
+          val dynamic = rangeCalls(expr).exists(call =>
+            functions.ReferenceOperators
+              .isComputedRangeDynamic(call, functions.ReferenceOperators.staticShape)
+          )
+          if dynamic then
+            assert(functions.ReferenceOperators.mayContainComputedRange(formula), formula)
+            assert(
+              functions.ReferenceOperators.mayContainComputedRange(FormulaPrinter.print(expr)),
+              formula
             )
-            if dynamicRange then
-              assert(functions.ReferenceOperators.mayContainComputedRange(formula), formula)
-              assert(
-                functions.ReferenceOperators.mayContainComputedRange(
-                  FormulaPrinter.printFileForm(expr)
-                ),
-                formula
-              )
+        }
       }
       true
     }
@@ -500,6 +510,11 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     // the static names the parser consults are exactly the registry's reference-computing specs:
     // a new FunctionSpec.Referencing fails here until ReferenceFunctionNames.computing lists it
     assertEquals(functions.ReferenceFunctionNames.computing, referencing)
+    // the selectors are not Referencing specs, so nothing above would notice a rename: each name
+    // must still be a registered function, or its `:` operands would silently become parse errors
+    functions.ReferenceFunctionNames.selecting.foreach { name =>
+      assert(functions.FunctionRegistry.lookup(name).isDefined, s"$name is not registered")
+    }
     assertEquals(
       Evaluator.referenceFunctions,
       referencing ++ Set("IF", "IFS", "CHOOSE", "SWITCH") ++

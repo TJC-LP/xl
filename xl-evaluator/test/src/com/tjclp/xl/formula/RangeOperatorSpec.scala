@@ -511,6 +511,57 @@ class RangeOperatorSpec extends FunSuite:
     assertEquals(cached(targeted), Some(N("4020")))
   }
 
+  test("GH-713: a defined name spelled like a column is refused after a token's `:`") {
+    // `Rev` is also column REV, so `Start:Rev` keeps the lexical reading's diagnostic, as `A1:B`
+    // does. Excel cannot define such a name (it collides with a column reference); only books
+    // from other tools hold one. Grouped, the operator's own loop takes it as a name.
+    refused("=SUM(Start:Rev)") match
+      case ParseError.InvalidCellRef("Start:Rev", _, _) => ()
+      case other => fail(s"Start:Rev: $other")
+    refused("=SUM(Start:(Rev))") match
+      case ParseError.InvalidCellRef("Start:", _, _) => ()
+      case other => fail(s"Start:(Rev): $other")
+    val named = book.withDefinedName("Rev", "Sheet1!$B$3")
+    val placed = sheet1.put(ref"H1", CellValue.Formula("SUM((Start):Rev)", None))
+    // Start = A1, Rev = B3: A1:B3 = 1+2+3+10+20+30
+    assertEquals(
+      placed.evaluateCell(ref"H1", Clock.system, Some(named.put(placed))).left.map(_.message),
+      Right(N("66"))
+    )
+    assertEquals(FormulaPrinter.printFileForm(parsed("=SUM((Start):Rev)")), "SUM((Start):Rev)")
+  }
+
+  test("GH-713: A1:INDEX(A:A,D1) follows an edit to D1 under targeted recalculation") {
+    // D1 picks the extent; the formula is static (INDEX's array A:A covers the range), so the
+    // edit reaches it through its edges, not as a dynamic cell
+    val name = SheetName.unsafe("Sheet1")
+    val placed = sheet1
+      .put(ref"D1", N("2"))
+      .put(ref"E1", CellValue.Formula("SUM(A1:INDEX(A:A,D1))", None))
+    assert(!DependencyGraph.dynamicCells(placed).contains(ref"E1"))
+    def cached(wb: Workbook): Option[CellValue] =
+      wb(name).toOption.flatMap(_.cells.get(ref"E1")).map(_.value) match
+        case Some(CellValue.Formula(_, value, _)) => value
+        case other => other
+    def edit(wb: Workbook, at: ARef, value: CellValue): Workbook =
+      val edited = wb.put(wb(name).fold(e => fail(e.message), identity).put(at, value))
+      edited.recalculateAfterEdit(name, Set(at), RecalcOptions()).workbook
+    val settled = book.put(placed).recalculate().workbook
+    assertEquals(cached(settled), Some(N("3")))
+    val grown = edit(settled, ref"D1", N("3"))
+    assertEquals(cached(grown), Some(N("6")))
+    // and an edit inside the new extent reaches it too
+    assertEquals(cached(edit(grown, ref"A3", N("30"))), Some(N("33")))
+  }
+
+  test("GH-713: B5 =SUM(B1:INDEX(B:B,ROW()-1)) is a false cycle today (expected to change: #743)") {
+    // the running total above B5 reads B1:B4 only, but INDEX's edges cover its whole array B:B,
+    // which holds B5 itself, so the graph reports a cycle Excel does not. When #743 narrows
+    // INDEX's edges, flip this to `isRight`.
+    val placed = sheet1.put(ref"B5", CellValue.Formula("SUM(B1:INDEX(B:B,ROW()-1))", None))
+    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(placed)).isLeft)
+  }
+
   test("GH-713: a cross-sheet computed range through the workbook graph, covered and not") {
     val sheet1Name = SheetName.unsafe("Sheet1")
     val otherName = SheetName.unsafe("Other")
