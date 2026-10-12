@@ -60,7 +60,10 @@ private[xl] object ValueDependencies:
    *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
-   * not thread-safe, so never share one across fibers or threads (`recalc --parallel`).
+   * not thread-safe, so never share one across fibers or threads (`recalc --parallel`). Its cache
+   * keys on a range's corners alone, so the expansion is only right for this reader's `bounds`:
+   * never reuse a reader where other bounds apply; build another, as the cycle check does for the
+   * one-cell bound around the placement.
    */
   final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]

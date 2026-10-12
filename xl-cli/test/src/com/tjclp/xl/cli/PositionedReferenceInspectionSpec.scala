@@ -25,6 +25,35 @@ class PositionedReferenceInspectionSpec extends CatsEffectSuite:
     }
   }
 
+  // Static and run-time agreement: in a reference-only position (ROWS, COLUMNS, AREAS) each
+  // ValueDependencies.referencePassing entry passes its reference through unread, so the static
+  // check lets the placement through; the run-time guard must agree and read no value either.
+  // Excel gives no cycle for any of these.
+  private val lookup = sheet
+    .put(ref"A1", CellValue.Number(BigDecimal(9)))
+    .put(ref"A2", CellValue.Number(BigDecimal(1)))
+    .put(ref"D1", CellValue.Number(BigDecimal(7)))
+
+  List(
+    ("ROWS(XLOOKUP(9,A1:A2,D1:D2))", "D1", 1),
+    ("ROWS(OFFSET(D5,0,0,2,1))", "D5", 2),
+    ("ROWS(IF(TRUE,D5:D6,A1))", "D5", 2),
+    ("ROWS(CHOOSE(1,D5:D6))", "D5", 2),
+    ("ROWS(IFS(TRUE,D5:D6))", "D5", 2),
+    ("ROWS(SWITCH(1,1,D5:D6,A1))", "D5", 2),
+    ("ROWS(SWITCH(2,1,A1,D5:D6))", "D5", 2),
+    ("ROWS(INDEX(D5:D6,0))", "D5", 2),
+    ("ROWS(INDEX(D5:D6,A2))", "D5", 1),
+    ("ROWS(D4:D6 D5:E9)", "D5", 2),
+    ("AREAS((D5,A1))", "D5", 2)
+  ).foreach { (formula, at, expected) =>
+    test(s"positioned $formula at $at passes its reference through without reading it") {
+      ReadCommands.evalData(Workbook(lookup), Some(lookup), formula, Some(at), Nil).map { text =>
+        assertEquals(ujson.read(text)("result")("value").num, expected.toDouble)
+      }
+    }
+  }
+
   test("positioned ordinary scalar reference still refuses a real circular read") {
     ReadCommands.evalData(wb, Some(sheet), "D5+1", Some("D5"), Nil).attempt.map { result =>
       assert(result.isLeft, result.toString)

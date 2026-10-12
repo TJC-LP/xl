@@ -877,16 +877,18 @@ object Evaluator:
      */
     def guard(sheet: Sheet, at: ARef): Option[EvalError] =
       val guarded = placement.exists((name, cell) => cell == at && sheet.name == name)
-      if guarded then placementReads.set(true)
+      if guarded then placementReads = true
       Option.when(guarded)(EvalError.CircularRef(List(at)))
 
     /**
      * Whether anything read the guarded placement. The error a read returns can be swallowed
      * (IFERROR takes any failure), but the read itself still made the plain cell circular.
      */
-    def placementRead: Boolean = placementReads.get
+    def placementRead: Boolean = placementReads
 
-    private val placementReads = new java.util.concurrent.atomic.AtomicBoolean(false)
+    // Local mutation like `bySheet`: the memo is single-threaded and never escapes its pass
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private var placementReads = false
 
     private def memoized(
       sheet: Sheet,
