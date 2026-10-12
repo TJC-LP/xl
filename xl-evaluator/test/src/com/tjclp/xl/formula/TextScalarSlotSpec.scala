@@ -325,7 +325,7 @@ class TextScalarSlotSpec extends FunSuite:
     // the decoder's refusal is the one sentinel instance the evaluator recognises (by identity)
     List(T("-5"), N("-5"), CellValue.Formula("x", Some(T("3000000")))).foreach { v =>
       TExpr.decodeAsDateScalar(Cell(ref"A1", v)) match
-        case Left(err) => assert(err eq TExpr.DateSerialOutOfRange, s"$v: $err")
+        case Left(err) => assert(err eq ScalarCoercion.DateSerialOutOfRange, s"$v: $err")
         case other => fail(s"$v: expected the out-of-range refusal, got $other")
     }
     assertEquals(TExpr.decodeAsDateScalar(Cell(ref"A1", T("45000"))).map(_.getYear), Right(2023))
@@ -335,7 +335,7 @@ class TextScalarSlotSpec extends FunSuite:
     // decodeOrCarried recognises the date and integer out-of-range refusals by instance, not by
     // their text: an equal ParseError from another decoder over a number cell stays CodecFailed.
     val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", N("5"))
-    List(TExpr.DateSerialOutOfRange, TExpr.IntOutOfRange).foreach { sentinel =>
+    List(ScalarCoercion.DateSerialOutOfRange, ScalarCoercion.IntOutOfRange).foreach { sentinel =>
       val forged = sentinel match
         case CodecError.ParseError(v, t, d) => CodecError.ParseError(v, t, d)
         case CodecError.TypeMismatch(e, a) => CodecError.TypeMismatch(e, a)
@@ -426,13 +426,39 @@ class TextScalarSlotSpec extends FunSuite:
   }
 
   test("#709: a formula's cached non-numeric text is #VALUE! in a numeric slot") {
+    val rich = (s: String) => CellValue.RichText(RichText.plain(s))
     val sheet = Sheet(SheetName.unsafe("Sheet1"))
       .put(ref"A1", CellValue.Formula("IF(TRUE,\"n/a\")", Some(T("n/a"))))
       .put(ref"A2", CellValue.Formula("\"5\"", Some(T("5"))))
+      // a formula whose cached value is rich text reads through its plain text, like plain text
+      .put(ref"A3", CellValue.Formula("IF(TRUE,\"n/a\")", Some(rich("n/a"))))
+      .put(ref"A4", CellValue.Formula("\"5\"", Some(rich("5"))))
     val wb = Workbook(Vector(sheet))
     assertEquals(plainIn(wb, "B1", "ABS(A1)"), Right(Value))
     assertEquals(plainIn(wb, "B2", "ABS(A2)"), Right(N("5")))
     assertEquals(plainIn(wb, "B3", "IFERROR(ABS(A1),\"caught\")"), Right(T("caught")))
+    assertEquals(plainIn(wb, "B4", "ABS(A3)"), Right(Value))
+    assertEquals(plainIn(wb, "B5", "ABS(A4)"), Right(N("5")))
+  }
+
+  test("#709: a caller decoder's own refusal reason survives in the #VALUE! diagnostic") {
+    val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", T("abc"))
+    def message(decode: Cell => Either[CodecError, BigDecimal]): String =
+      Evaluator.instance.eval(TExpr.ref(ref"A1", decode), sheet) match
+        case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) => msg
+        case other => fail(s"expected #VALUE! with a message, got $other")
+    // the built-in decoder's wording is unchanged: nothing appended
+    assertEquals(message(TExpr.decodeNumericScalar), "A1: text 'abc' in a typed argument")
+    // a caller's reason is kept
+    val widget = message(_ => Left(CodecError.ParseError("abc", "Widget", "not a widget code")))
+    assertEquals(
+      widget,
+      "A1: text 'abc' in a typed argument (cannot parse 'abc' as Widget: not a widget code)"
+    )
+    // and bounded: a 500-character reason is cut at 120 code points
+    val long = message(_ => Left(CodecError.ParseError("abc", "Widget", "z" * 500)))
+    assert(long.endsWith("…)"), long)
+    assert(!long.contains("z" * 121), long)
   }
 
   test("#709: the diagnostic cut never splits a surrogate pair") {

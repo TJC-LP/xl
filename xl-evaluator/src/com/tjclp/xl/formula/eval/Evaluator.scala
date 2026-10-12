@@ -2127,10 +2127,11 @@ private class EvaluatorImpl(
    * reach the fallback.
    *
    * The date slot's out-of-range serial and the integer slot's out-of-range value are matched
-   * first, by instance (TExpr.DateSerialOutOfRange, TExpr.IntOutOfRange — produced only by
-   * decodeAsDateScalar and decodeAsInt): they are error values over numbers too, and the text
-   * fallback would discard the reason. `sheet` names a sheet-qualified reference's sheet in the
-   * diagnostic (`Other!C5`).
+   * first, by instance (ScalarCoercion.DateSerialOutOfRange, ScalarCoercion.IntOutOfRange —
+   * produced only by decodeAsDateScalar and decodeAsInt): they are error values over numbers too,
+   * and the text fallback would discard the reason. Over text, a caller decoder's own reason is
+   * kept in the diagnostic, bounded (ScalarCoercion.decoderReason); the built-in decoders' wording
+   * is unchanged. `sheet` names a sheet-qualified reference's sheet in the diagnostic (`Other!C5`).
    */
   private def decodeOrCarried[B](
     at: ARef,
@@ -2141,9 +2142,9 @@ private class EvaluatorImpl(
     def label: String =
       sheet.fold(at.toA1)(s => s"${SheetName.quoteForFormula(s.value)}!${at.toA1}")
     decode(cell).left.map { codecErr =>
-      if codecErr eq TExpr.DateSerialOutOfRange then
+      if codecErr eq ScalarCoercion.DateSerialOutOfRange then
         ScalarCoercion.dateSerialOutOfRange(label, ScalarCoercion.shownValue(cell.value))
-      else if codecErr eq TExpr.IntOutOfRange then
+      else if codecErr eq ScalarCoercion.IntOutOfRange then
         ScalarCoercion.intOutOfRange(label, ScalarCoercion.shownValue(cell.value))
       else
         ArrayArithmetic.carriedError(cell.value) match
@@ -2151,9 +2152,12 @@ private class EvaluatorImpl(
           case None =>
             ScalarCoercion.cellText(cell.value) match
               case Some(text) =>
+                val because = ScalarCoercion.decoderReason(codecErr).fold("")(r => s" ($r)")
                 EvalError.ErrorValue(
                   CellError.Value,
-                  Some(s"$label: text '${ScalarCoercion.quotedText(text)}' in a typed argument")
+                  Some(
+                    s"$label: text '${ScalarCoercion.quotedText(text)}' in a typed argument$because"
+                  )
                 )
               case None => EvalError.CodecFailed(at, codecErr)
     }

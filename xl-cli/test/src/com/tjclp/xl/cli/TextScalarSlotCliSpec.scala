@@ -52,7 +52,8 @@ class TextScalarSlotCliSpec extends CatsEffectSuite:
       for
         run <- CliHarness.run("-f", src.toString, "-o", out.toString, "--strict", "recalc")
         _ <- assertIO(IO.pure(run.exit), 0, run.toString)
-        _ <- assertIOBoolean(IO.pure(!run.toString.contains("RECALC_ERRORS")), run.toString)
+        _ <- assertIOBoolean(IO.pure(!run.stdout.contains("RECALC_ERRORS")), run.stdout)
+        _ <- assertIOBoolean(IO.pure(!run.stderr.contains("RECALC_ERRORS")), run.stderr)
         _ <- assertIOBoolean(IO.pure(!run.stdout.contains("STRICT FAILURE")), run.stdout)
         _ <- assertIO(cached(out, ref"D5"), Some(CellValue.Error(CellError.Value)))
         _ <- assertIO(cached(out, ref"E5"), Some(CellValue.Error(CellError.Value)))
