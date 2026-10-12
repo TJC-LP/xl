@@ -182,6 +182,29 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
     assert(appended.contains("""<x:rc t="1" v="1"/>"""), appended)
   }
 
+  test("a collapsed-only XLDAPR part gains the plain block under its existing type") {
+    val plan = SheetMetadataPart.plan(Some(collapsedOnly), Set(plain))
+    val xml = plan.output match
+      case MetadataOutput.Appended(x) => x
+      case other => fail(s"expected Appended, got $other")
+    // the existing type is reused (no second XLDAPR type), its block list grows by one
+    assert(xml.contains(s"""<metadataTypes count="1">$xldaprType</metadataTypes>"""), xml)
+    assert(xml.contains("""<futureMetadata name="XLDAPR" count="2">"""), xml)
+    assert(
+      xml.contains(
+        """<cellMetadata count="2"><bk><rc t="1" v="0"/></bk><bk><rc t="1" v="1"/></bk></cellMetadata>"""
+      ),
+      xml
+    )
+    assertEquals(plan.cmOf, Map(plain -> 2))
+    // cm 1 still names the collapsed block; cm 2 the new plain one
+    assertEquals(resolve(xml), Map(1 -> collapsed, 2 -> plain))
+    assertEquals(
+      SheetMetadataPart.plan(Some(xml), Set(plain, collapsed)).output,
+      MetadataOutput.Untouched
+    )
+  }
+
   test("external sheetMetadata relationships do not identify a package part") {
     val external = Relationship("rId2", SheetMetadataPart.relType, "metadata.xml", Some("External"))
     assertEquals(SheetMetadataPart.locate(Relationships(Seq(external))), None)

@@ -237,6 +237,27 @@ class DynamicArrayPreservationSpec extends FunSuite:
     })
   }
 
+  test("a collapsed-only source part gains the plain variant: both anchors round-trip") {
+    val collapsedXml = metadataXml.replace("fCollapsed=\"0\"", "fCollapsed=\"1\"")
+    val collapsedB1 =
+      FormulaKind.ArrayFormula(sortRange, mode = ArrayMode.Dynamic(collapsed = true))
+    val wb = read(xlsx(parts(metadata = Some(collapsedXml))))
+    assertEquals(kindAt(wb, ref"B1"), Some(collapsedB1))
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val plainE1 = FormulaKind.dynamicArray(CellRange(ref"E1", ref"E1"))
+    val edited = wb.put(sheet.put(ref"E1", CellValue.Formula("SEQUENCE(1)", None, plainE1)))
+    backends.foreach { case (_, config) =>
+      val out = write(edited, config)
+      val back = read(out)
+      assertEquals(kindAt(back, ref"B1"), Some(collapsedB1))
+      assertEquals(kindAt(back, ref"E1"), Some(plainE1))
+      val part = entryText(out, "xl/metadata.xml").getOrElse(fail("no metadata part"))
+      assert(part.contains("""<futureMetadata name="XLDAPR" count="2">"""), part)
+      assert(sheet1(out).contains("""<c r="B1" t="n" cm="1">"""), sheet1(out))
+      assertWiredOnce(out)
+    }
+  }
+
   test("a newly authored variant extends the relationship's renamed metadata part") {
     val path = "xl/custom/state.xml"
     val wb = read(xlsx(relocatedMetadataParts(path)))

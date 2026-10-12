@@ -302,13 +302,15 @@ private[xl] object SheetMetadataPart:
       case None =>
         val typeElem = el("metadataType", scope, xldaprTypeAttrs)()
         children(root0, "metadataTypes").headOption match
-          case Some(_) =>
+          case Some(types) =>
             val r = replaceChild(
               root0,
               _.label == "metadataTypes",
               appendChildren(_, "metadataType", Seq(typeElem))
             )
-            (r, children(children(r, "metadataTypes").headOption.getOrElse(r), "metadataType").size)
+            // the appended type is the last child of that first block: its 1-based index is the
+            // block's new size, the old size plus one
+            (r, children(types, "metadataType").size + 1)
           case None =>
             (insertInOrder(root0, el("metadataTypes", scope, List("count" -> "1"))(typeElem)), 1)
     // 2. the XLDAPR future-metadata blocks
