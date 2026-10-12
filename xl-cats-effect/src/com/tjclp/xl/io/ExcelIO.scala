@@ -554,8 +554,10 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   /**
    * GH-714: the package's dynamic-array `cm` indices, following its sheetMetadata relationship.
    * Both parts use the same inflation-size and compression-ratio guard as the SST. Validate them
-   * before worksheet resolution, which also reads workbook.xml.rels. Missing or malformed XML keeps
-   * the existing empty-index fallback; exceeding a ZIP limit is a typed security failure.
+   * before worksheet resolution, which also reads workbook.xml.rels. Missing or malformed XML, and
+   * an entry that cannot be inflated (a `ZipException` from a damaged entry, a truncated stream),
+   * keep the existing empty-index fallback: the index is optional, and these reads never failed on
+   * it before. Exceeding a ZIP limit is a typed security failure.
    */
   private[io] def loadCellMetadataIndexSync(
     zipFile: ZipFile,
@@ -565,10 +567,14 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       Option(zipFile.getEntry(path)) match
         case None => Right(None)
         case Some(entry) =>
-          val in = ZipEntryGuard.open(zipFile, entry, config)
-          try Right(Some(new String(in.readAllBytes(), StandardCharsets.UTF_8)))
-          catch case limit: ZipEntryGuard.LimitExceeded => Left(new XLException(limit.error))
-          finally in.close()
+          try
+            val in = ZipEntryGuard.open(zipFile, entry, config)
+            try Right(Some(new String(in.readAllBytes(), StandardCharsets.UTF_8)))
+            finally in.close()
+          catch
+            case limit: ZipEntryGuard.LimitExceeded => Left(new XLException(limit.error))
+            // a damaged optional part reads as absent, like unparseable XML
+            case _: java.io.IOException => Right(None)
     for
       rels <- text("xl/_rels/workbook.xml.rels")
       path = rels

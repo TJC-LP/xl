@@ -148,6 +148,59 @@ class CellMetadataSecuritySpec extends CatsEffectSuite:
     }
   }
 
+  /** `bytes` with the first byte of `name`'s compressed data set to an invalid deflate block. */
+  private def corrupted(bytes: Array[Byte], name: String): Array[Byte] =
+    val copy = bytes.clone()
+    val needle = name.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+    def u16(i: Int): Int = (copy(i) & 0xff) | ((copy(i + 1) & 0xff) << 8)
+    // the entry's local header: PK\u0003\u0004, the name at offset 30
+    val at = (0 until copy.length - 30 - needle.length)
+      .find { i =>
+        copy(i) == 0x50 && copy(i + 1) == 0x4b && copy(i + 2) == 3 && copy(i + 3) == 4 &&
+        java.util.Arrays.equals(copy.slice(i + 30, i + 30 + needle.length), needle)
+      }
+      .getOrElse(fail(s"no local header for $name"))
+    // BFINAL=1, BTYPE=11: a reserved block type, which the inflater rejects
+    copy(at + 30 + u16(at + 26) + u16(at + 28)) = 0xff.toByte
+    copy
+
+  test("a damaged metadata entry reads as no index, and streamed reads go on") {
+    val bytes =
+      corrupted(DynamicArrayFixtures.xlsx(DynamicArrayFixtures.parts()), "xl/metadata.xml")
+    val written = Resource.make(IO.blocking {
+      val path = Files.createTempFile("xl-metadata-corrupt-", ".xlsx")
+      Files.write(path, bytes)
+      path
+    })(path => IO.blocking(Files.deleteIfExists(path)).void)
+    written.use { path =>
+      for
+        // the entry really is damaged: inflating it fails
+        raw <- IO.blocking {
+          val zip = new ZipFile(path.toFile)
+          try
+            val in = zip.getInputStream(zip.getEntry("xl/metadata.xml"))
+            try in.readAllBytes().length
+            finally in.close()
+          finally zip.close()
+        }.attempt
+        index <- IO.blocking {
+          val zip = new ZipFile(path.toFile)
+          try excel.loadCellMetadataIndexSync(zip)
+          finally zip.close()
+        }
+        rows <- excel.readStream(path).compile.toVector
+        named <- excel.readSheetStream(path, "Sheet1", None).compile.toVector
+        cell <- excel.streamCellDetails(path, "Sheet1", ref"B1")
+      yield
+        assert(raw.left.exists(_.isInstanceOf[java.util.zip.ZipException]), raw.toString)
+        assertEquals(index, Right(com.tjclp.xl.ooxml.CellMetadataIndex.empty))
+        assert(rows.nonEmpty)
+        assertEquals(named.size, rows.size)
+        // without its index, B1's cm resolves to nothing: the legacy array it then reads as
+        assert(!cell.value.toString.contains("Dynamic"), cell.value.toString)
+    }
+  }
+
   test("pinned: a metadata part over the ratio limit fails a streamed read of sound worksheets") {
     // Today's behaviour (PR #721 review): the whole read fails, though only the dynamic-array
     // index is at stake; withStreamLimits (above) is the caller's way through.
