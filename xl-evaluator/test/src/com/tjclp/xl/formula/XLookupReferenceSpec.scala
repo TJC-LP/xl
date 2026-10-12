@@ -137,6 +137,40 @@ class XLookupReferenceSpec extends FunSuite:
     assertEquals(plain("H1", "SUM(INDEX(B1:B3,{1;2}))"), Right(N("30")))
   }
 
+  test("GH-713: an array key over a 2-D return array keeps each match's first cell") {
+    // Excel lifts XLOOKUP over the array key, and an element that is itself an array (the matched
+    // row {10,100}) is not a value of the lifted array: Excel keeps its first element, as
+    // SEQUENCE({2;3}) is {1;1}. So the result is {10;20} and the sum 30, not 330.
+    // Excel and LibreOffice differ here. LibreOffice 24.2.7 cannot answer (no XLOOKUP: #NAME?),
+    // and where it lifts a row-returning call — the INDEX analogue SUM(INDEX(B1:C3,{1;2},0)) — it
+    // keeps every cell of each selected row (330), where Excel keeps one element per key.
+    assertEquals(plain("H1", "SUM(XLOOKUP({1;2},A1:A3,B1:C3))"), Right(N("30")))
+    assertEquals(plain("H1", "SUMPRODUCT(XLOOKUP({1;2},A1:A3,B1:C3))"), Right(N("30")))
+    assertEquals(
+      array("=XLOOKUP({1;2},A1:A3,B1:C3)"),
+      Right(ArrayResult(Vector(Vector(N("10")), Vector(N("20")))))
+    )
+  }
+
+  test("GH-713: the matched strip is total — a position outside the return array is #REF!") {
+    val column = CellRange.parse("A1:A3").fold(msg => fail(msg), identity)
+    val block = CellRange.parse("B1:C3").fold(msg => fail(msg), identity)
+    val strip =
+      functions.FunctionSpecs.xlookupStrip(column, block).fold(e => fail(e.toString), identity)
+    assertEquals(strip(1).map(_.toA1), Right("B2:C2"))
+    List(-1, 3).foreach { i =>
+      strip(i) match
+        case Left(EvalError.ErrorValue(CellError.Ref, _)) => ()
+        case other => fail(s"row $i: expected #REF!, got $other")
+    }
+    val keys = CellRange.parse("A5:C5").fold(msg => fail(msg), identity)
+    val grid = CellRange.parse("A1:C3").fold(msg => fail(msg), identity)
+    val horizontal =
+      functions.FunctionSpecs.xlookupStrip(keys, grid).fold(e => fail(e.toString), identity)
+    assertEquals(horizontal(2).map(_.toA1), Right("C1:C3"))
+    assert(horizontal(3).isLeft)
+  }
+
   test("GH-713: the result keeps round-tripping as _xlfn.XLOOKUP") {
     val expr =
       FormulaParser.parse("=SUM(B1:XLOOKUP(2,A1:A3,B1:B3))").fold(e => fail(e.toString), identity)

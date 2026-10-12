@@ -193,6 +193,19 @@ object EvalContext:
    * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
    * (the evaluator sets it for every call; None only for a context built outside the evaluator).
    * `selectsReference`: the call feeds a reference position.
+   *
+   * `arrayRangeBounds`, `boundedArrayArg` — SUMPRODUCT's shared extent, ambient state with a fixed
+   * scope. SUMPRODUCT sets it (through `boundedArrayArg`) for each expression argument it
+   * evaluates; it then rides on every evaluator derived inside that argument — nested calls of any
+   * function, LET scopes, a defined name's formula — so a computed whole-column reference there
+   * (`INDEX(A:A,0)`, `XLOOKUP(k,ids,B:B)`, `A1:INDEX(A:A,n)`) stops where the argument's written
+   * ranges do, exactly as SUMPRODUCT's rewrite already clips every range written inside the
+   * argument, nested calls included. Three things end it: a nested SUMPRODUCT, which sets its own
+   * extent for its own arguments; another formula cell read on the way (a precedent, a spill
+   * anchor), which evaluates on a fresh evaluator with none; and the end of the top-level
+   * evaluation, since every public entry point starts without one. Only
+   * `FunctionSpecsBase.boundedReferenceValues` reads it, and only for an axis that runs to the
+   * sheet's edge, so a finite reference keeps its declared shape under it.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,

@@ -68,14 +68,23 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
    * one-column lookup array of the return array's height selects row i (tried first, so a 1×1
    * lookup array beside a one-row return array returns that row); a one-row lookup array of its
    * width selects column i. Anything else, a 2-D lookup array included, is `#VALUE!`.
+   *
+   * The strip is total: a position outside the return array — which the shape check above keeps any
+   * match from reaching — is `#REF!`, never a silently wrong-shaped reference.
    */
-  private[functions] def xlookupStrip(
+  private[formula] def xlookupStrip(
     lookup: CellRange,
     ret: CellRange
-  ): Either[EvalError, Int => CellRange] =
-    if lookup.width == 1 && ret.height == lookup.height then Right(i => ret.row(i).getOrElse(ret))
+  ): Either[EvalError, Int => Either[EvalError, CellRange]] =
+    def outside(i: Int, axis: String): EvalError =
+      EvalError.ErrorValue(
+        CellError.Ref,
+        Some(s"XLOOKUP: match position ${i + 1} is outside return_array's $axis (${ret.toA1})")
+      )
+    if lookup.width == 1 && ret.height == lookup.height then
+      Right(i => ret.row(i).toRight(outside(i, "rows")))
     else if lookup.height == 1 && ret.width == lookup.width then
-      Right(i => ret.column(i).getOrElse(ret))
+      Right(i => ret.column(i).toRight(outside(i, "columns")))
     else
       // #670: Excel's #VALUE!, a cached error value rather than a host failure
       Left(
@@ -294,7 +303,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       matchMode <- toIntArg("XLOOKUP", matchModeRaw)
       searchMode <- toIntArg("XLOOKUP", searchModeRaw)
       result <- xlookupIndex(lookupValueEval, lookupSheet, lookupArray, matchMode, searchMode) match
-        case Some(i) => Right(Right(RangeOperand(returnSheet, strip(i))))
+        case Some(i) => strip(i).map(selected => Right(RangeOperand(returnSheet, selected)))
         case None =>
           ifNotFoundOpt match
             case Some(expr) =>

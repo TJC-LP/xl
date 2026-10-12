@@ -296,25 +296,29 @@ trait FunctionSpecsBase:
   ): Either[EvalError, ArrayResult] =
     val RangeOperand(targetSheet, original) = ref
     val reference = ctx.boundArrayRange(original)
-    val used = targetSheet.usedRange
-    def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
-      if hi < sheetLast then hi
-      else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
-    val rowEnd = end(
-      reference.rowStart.index0,
-      reference.rowEnd.index0,
-      Row.MaxIndex0,
-      used.map(_.rowEnd.index0)
-    )
-    val colEnd = end(
-      reference.colStart.index0,
-      reference.colEnd.index0,
-      Column.MaxIndex0,
-      used.map(_.colEnd.index0)
-    )
-    val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
+    // SUMPRODUCT's shared extent can leave no cells: a whole axis bounded by static ranges that
+    // hold none is `CellRange.empty` (start past end, a non-positive height or width). Decided
+    // first, before any corner is computed from it.
     if reference.height <= 0 || reference.width <= 0 then Right(ArrayResult.empty)
-    else extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
+    else
+      val used = targetSheet.usedRange
+      def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
+        if hi < sheetLast then hi
+        else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
+      val rowEnd = end(
+        reference.rowStart.index0,
+        reference.rowEnd.index0,
+        Row.MaxIndex0,
+        used.map(_.rowEnd.index0)
+      )
+      val colEnd = end(
+        reference.colStart.index0,
+        reference.colEnd.index0,
+        Column.MaxIndex0,
+        used.map(_.colEnd.index0)
+      )
+      val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
+      extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
