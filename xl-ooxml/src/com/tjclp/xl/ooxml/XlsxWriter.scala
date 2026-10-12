@@ -2207,7 +2207,12 @@ object XlsxWriter:
       (sourceMetadataPath, sourceMetadataXml) match
         // a relationship naming a part the package lacks: nothing to extend or to point at
         case (Some(_), None) => SheetMetadataPart.CellMetadataPlan.none
-        case _ => SheetMetadataPart.plan(sourceMetadataXml, neededDynamic)
+        case _ =>
+          SheetMetadataPart.plan(
+            sourceMetadataXml,
+            neededDynamic,
+            sourceMetadataPath.getOrElse(SheetMetadataPart.defaultPath)
+          )
     val generatedMetadataPath: Option[String] = metadataPlan.output match
       case SheetMetadataPart.MetadataOutput.Generated(_) =>
         val claimed = sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)

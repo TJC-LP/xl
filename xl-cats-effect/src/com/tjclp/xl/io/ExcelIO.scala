@@ -560,8 +560,12 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         .flatMap(xml => XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption)
         .flatMap(elem => Relationships.fromXml(elem).toOption)
         .flatMap(SheetMetadataPart.locate)
-      metadata <- path.fold[Either[Throwable, Option[String]]](Right(None))(text)
-    yield metadata.map(SheetMetadataPart.parse).getOrElse(CellMetadataIndex.empty)
+      metadata <- path.fold[Either[Throwable, Option[(String, String)]]](Right(None))(p =>
+        text(p).map(_.map(p -> _))
+      )
+    yield metadata
+      .map((p, xml) => SheetMetadataPart.parse(xml, p))
+      .getOrElse(CellMetadataIndex.empty)
 
   // Helper: Parse formula dependencies (referenced cells)
   private def parseFormulaDependencies(formula: String): Vector[String] =

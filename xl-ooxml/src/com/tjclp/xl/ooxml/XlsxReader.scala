@@ -596,7 +596,7 @@ object XlsxReader:
           case (Some(xml), _) => Right(Some(xml))
           case (None, Some(expected)) => readSourcePart(source, path, config, expected)
           case (None, None) => Right(None)
-        text.map(_.map(SheetMetadataPart.parse).getOrElse(CellMetadataIndex.empty))
+        text.map(_.map(SheetMetadataPart.parse(_, path)).getOrElse(CellMetadataIndex.empty))
 
   /**
    * Reread one part the scan met. The bytes must be the ones the scan read — same length and CRC-32
@@ -633,15 +633,24 @@ object XlsxReader:
     source match
       case None => Right(None)
       case Some(SourceHandle.OnDisk(file, _, _)) =>
-        val zip = new ZipFile(file.toFile)
+        // the file can change or vanish after the scan: an IO failure here names the part
         try
-          Option(zip.getEntry(path)) match
-            case None => Right(None)
-            case Some(entry) =>
-              val in = zip.getInputStream(entry)
-              try readText(in)
-              finally in.close()
-        finally zip.close()
+          val zip = new ZipFile(file.toFile)
+          try
+            Option(zip.getEntry(path)) match
+              case None => Right(None)
+              case Some(entry) =>
+                val in = zip.getInputStream(entry)
+                try readText(in)
+                finally in.close()
+          finally zip.close()
+        catch
+          case e: java.io.IOException =>
+            Left(
+              XLError.IOError(
+                s"Metadata part '$path' could not be reread from the source: ${e.getMessage}"
+              )
+            )
       case Some(SourceHandle.InMemory(bytes)) =>
         val zip = new ZipInputStream(new ByteArrayInputStream(SourceContent.rawArray(bytes)))
         @annotation.tailrec

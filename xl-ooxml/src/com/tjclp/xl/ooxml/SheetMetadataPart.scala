@@ -83,8 +83,8 @@ private[xl] object SheetMetadataPart:
       .map(rel => Relationships.resolveWorkbookTarget(rel.target))
 
   /** Resolve every dynamic-array `cm` index of a part; malformed XML reads as none. */
-  def parse(xml: String): CellMetadataIndex =
-    XmlSecurity.parseSafe(xml, defaultPath).toOption match
+  def parse(xml: String, path: String = defaultPath): CellMetadataIndex =
+    XmlSecurity.parseSafe(xml, path).toOption match
       case Some(root) => index(root)
       case None => CellMetadataIndex.empty
 
@@ -167,7 +167,11 @@ private[xl] object SheetMetadataPart:
    * Plan the part for a write whose regenerated sheets hold dynamic records of the `needed`
    * variants. A pure function of the source bytes and the set: never of cell order.
    */
-  def plan(source: Option[String], needed: Set[ArrayMode.Dynamic]): CellMetadataPlan =
+  def plan(
+    source: Option[String],
+    needed: Set[ArrayMode.Dynamic],
+    path: String = defaultPath
+  ): CellMetadataPlan =
     val ordered = variantOrder.filter(needed.contains)
     if ordered.isEmpty then CellMetadataPlan.none
     else
@@ -178,7 +182,7 @@ private[xl] object SheetMetadataPart:
             MetadataOutput.Generated(generate(ordered))
           )
         case Some(xml) =>
-          XmlSecurity.parseSafe(xml, defaultPath).toOption match
+          XmlSecurity.parseSafe(xml, path).toOption match
             // an unreadable part cannot be extended: write the records without `cm`
             case None => CellMetadataPlan.none
             case Some(root) =>
