@@ -126,7 +126,7 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
-- **Breaking (source and binary): XLOOKUP is typed `ArrayResult`** (#713): `TExpr.xlookup` returns
+- **Breaking: XLOOKUP is typed `ArrayResult` (source and binary)** (#713): `TExpr.xlookup` returns
   `TExpr[ArrayResult]` (it was `TExpr[CellValue]`), and the public spec `FunctionSpecs.xlookup`
   (exported as `com.tjclp.xl.formula.FunctionSpecs`) is a `FunctionSpec[ArrayResult] { type Args =
   XLookupArgs }` (it was `FunctionSpec[CellValue]`). XLOOKUP now returns a reference, typed like
