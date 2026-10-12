@@ -462,7 +462,7 @@ object Evaluator:
     def refusal(name: String, node: NameWalk.Node): Option[EvalError] =
       val refused =
         if path.contains(node) then
-          Some(EvalError.EvalFailed(s"Defined name cycle detected while resolving '$name'.", None))
+          Some(EvalError.EvalFailed(s"$NameCycleDetected while resolving '$name'.", None))
         else if path.sizeIs >= NameWalk.MaxDepth then
           Some(
             EvalError.EvalFailed(
@@ -663,6 +663,22 @@ object Evaluator:
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
+  // The failures a cycle with no placement guard surfaces as, shared with [[isCycleFailure]]
+  private val CrossSheetDepthExceeded = "Cross-sheet formula recursion depth exceeded"
+  private val SpillDepthExceeded = "Spill reference recursion depth exceeded"
+  private val NameCycleDetected = "Defined name cycle detected"
+
+  /**
+   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: a recursion
+   * depth guard (cells, or a spill reference, reading each other) or a defined-name cycle. Each is
+   * an `EvalFailed` the cycle's readers see; it is not an internal failure.
+   */
+  private[formula] def isCycleFailure(error: EvalError): Boolean = error match
+    case EvalError.EvalFailed(message, _) =>
+      message.startsWith(CrossSheetDepthExceeded) || message.startsWith(SpillDepthExceeded) ||
+      message.startsWith(NameCycleDetected)
+    case _ => false
+
   /** Resolve range cells with the same cache, recursion and context rules as scalar references. */
   private[formula] def cellValueReader(
     targetSheet: Sheet,
@@ -740,7 +756,7 @@ object Evaluator:
         break(
           Left(
             EvalError.EvalFailed(
-              s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
+              s"$CrossSheetDepthExceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
               None
             )
           )
@@ -802,7 +818,7 @@ object Evaluator:
     if depth > MaxCrossSheetRecursionDepth then
       Left(
         EvalError.EvalFailed(
-          s"Spill reference recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). " +
+          s"$SpillDepthExceeded (max: $MaxCrossSheetRecursionDepth). " +
             s"Possible circular reference through ${anchor.toA1}#.",
           None
         )
@@ -888,10 +904,7 @@ object Evaluator:
    * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
    * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo(val placement: Option[PlacementGuard]):
-    /** The ordinary memo: no cell is guarded. */
-    def this() = this(None)
-
+  private[formula] final class EvalMemo(val placement: Option[PlacementGuard] = None):
     private val bySheet =
       new java.util.IdentityHashMap[
         Sheet,

@@ -293,8 +293,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
   only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
   a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
-  reference it is. A VLOOKUP/HLOOKUP result cell that fails to evaluate shows its error (`#DIV/0!`,
-  or `#VALUE!`) as the cell would, rather than failing the formula.
+  reference it is. A VLOOKUP/HLOOKUP result cell that computes an Excel error shows it (`#DIV/0!`)
+  as the cell would, and one in a cycle is `#VALUE!`; any other failure there (an unknown
+  function) fails the lookup as a reference to the cell would, never a `#VALUE!`.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
   case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported").
   Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the

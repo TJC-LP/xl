@@ -766,6 +766,65 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(array.contains("20"), array)
   }
 
+  test("GH-715: a range read through implicit intersection still counts every cell: deliberate") {
+    // Pinned over-report: the plain cell =B:B+1 at D5 reads only B5, but the static check counts
+    // the whole column as read, so B10 = D5 closes a cycle. A false cycle is safer than a stale
+    // value; without B10's read-back, the same formula is B5 + 1.
+    val base = pairedColumns(Sheet("Test"))
+    val readBack = base.put(ref"B10", CellValue.Formula("=D5"))
+    for
+      plain <- ReadCommands.eval(Workbook(base), Some(base), "=B:B+1", Some("D5"), Nil)
+      _ <- circularAt(readBack, "=B:B+1", "D5", "D5 → B10 → D5")
+      _ <- circularAt(readBack, "=B1:B10+1", "D5", "D5 → B10 → D5")
+    yield assert(plain.contains("Result: 6 (number)"), plain)
+  }
+
+  test("GH-715 known gap (#742): XLOOKUP's return cell reaching the placement at run time") {
+    // keys = A1:A10 and rets = C1:C10 (defined names, out of the static check's sight); the match
+    // A5 = 5 returns C5 = INDIRECT("D5"), a run-time read of the placement. XLOOKUP reads its return
+    // cell as stored, so the guard never sees it; VLOOKUP over the same cells reports it. Fixing
+    // #742 flips the XLOOKUP case to readsPlacement.
+    val returning = staleTest.put(ref"C5", CellValue.Formula("=INDIRECT(\"D5\")"))
+    val book = stale.put(returning)
+    val named = book.copy(metadata =
+      book.metadata.copy(definedNames =
+        Vector(
+          DefinedName("keys", "Test!$A$1:$A$10"),
+          DefinedName("rets", "Test!$C$1:$C$10"),
+          DefinedName("tbl", "Test!$A$1:$C$10")
+        )
+      )
+    )
+    for
+      _ <- readsPlacement(named, "=VLOOKUP(5,tbl,3,FALSE)", "D5", "D5")
+      xlookup <- ReadCommands.eval(named, Some(returning), "=XLOOKUP(5,keys,rets)", Some("D5"), Nil)
+    yield assert(xlookup.contains("Result: =INDIRECT(\"D5\") (formula)"), xlookup)
+  }
+
+  test("GH-715: --at outside the used range with --with on a sheet with no cells") {
+    // Other has no cells until --with puts A1 there, so its used range is A1 alone and Z100 lies
+    // outside it: the placement still bounds the whole-column reads, and the override still applies
+    val wb = Workbook(Vector(pairedColumns(Sheet("Test")), Sheet("Other")))
+    val test = wb.sheets.headOption
+    def at(formula: String): IO[String] =
+      ReadCommands.eval(wb, test, formula, Some("Other!Z100"), List("A1=5"))
+    def circular(formula: String, cycle: String): IO[Unit] =
+      at(formula).attempt.map {
+        case Left(e: XLException) =>
+          assert(e.getMessage.contains(s"Circular reference detected: $cycle"), e.getMessage)
+        case other => fail(s"$formula: expected a circular reference, got $other")
+      }
+    for
+      scaled <- at("=A1*2")
+      column <- at("=SUM(A:A)")
+      _ <- circular("=Z100+A1", "Z100 → Z100")
+      _ <- circular("=SUM(Z:Z)+A1", "Z100 → Z100")
+    yield
+      assert(scaled.contains("Result: 10 (number)"), scaled)
+      assert(scaled.contains("At: Other!Z100"), scaled)
+      assert(column.contains("Result: 5 (number)"), column)
+  }
+
   test("GH-715: --with on the --at cell itself is USAGE: the formula is that cell") {
     def refused(at: String, overrides: List[String]): IO[Unit] =
       ReadCommands.eval(stale, Some(staleTest), "=A5+1", Some(at), overrides).attempt.map {

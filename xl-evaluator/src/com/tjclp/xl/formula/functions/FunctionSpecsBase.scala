@@ -378,16 +378,35 @@ trait FunctionSpecsBase:
           )
 
   /**
-   * A lookup's read of a key or result cell, as the cell shows: a failure to evaluate it is the
-   * Excel error it carries, or `#VALUE!` for any other failure, as a formula returning a cell that
-   * holds `#DIV/0!` shows `#DIV/0!`. A `CircularRef` stays a failure: it is a positioned
-   * evaluation's guard reporting a read of its placement (see [[LookupLine]]).
+   * A lookup's read of a key cell: a failure to evaluate it is the Excel error it carries, or
+   * `#VALUE!` for any other failure, so a failing key is a non-match and never fails the lookup. A
+   * `CircularRef` stays a failure: it is a positioned evaluation's guard reporting a read of its
+   * placement (see [[LookupLine]]). The result cell is narrower ([[lookupResultValue]]).
    */
   protected def lookupCellValue(read: Either[EvalError, CellValue]): Either[EvalError, CellValue] =
     read match
       case Left(cycle: EvalError.CircularRef) => Left(cycle)
       case Left(other) =>
         Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
+      case value => value
+
+  /**
+   * GH-715: the value VLOOKUP and HLOOKUP return from their result cell, read as a reference reads
+   * it. An Excel error the cell computes is that error (`=1/0` there is `#DIV/0!`). A result cell
+   * in a cycle (no placement guard: [[Evaluator.isCycleFailure]]) is `#VALUE!`, as a key in a cycle
+   * is a non-match. Every other failure propagates, the placement guard's `CircularRef` included: a
+   * failure with no Excel error of its own (an unknown function, an internal failure) is never
+   * laundered into a spreadsheet `#VALUE!`, exactly as a plain reference to the cell would fail.
+   */
+  protected def lookupResultValue(
+    read: Either[EvalError, CellValue]
+  ): Either[EvalError, CellValue] =
+    read match
+      case Left(error) =>
+        EvalError.toErrorValue(error) match
+          case Some(code) => Right(CellValue.Error(code))
+          case None if Evaluator.isCycleFailure(error) => Right(CellValue.Error(CellError.Value))
+          case None => Left(error)
       case value => value
 
   /**

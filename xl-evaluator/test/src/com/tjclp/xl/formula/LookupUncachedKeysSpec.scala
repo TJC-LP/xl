@@ -85,21 +85,43 @@ class LookupUncachedKeysSpec extends FunSuite:
     assertEquals(eval(tall, "=XLOOKUP(500,A:A,B:B)"), CellValue.Error(CellError.NA))
   }
 
-  test("a result cell that fails to evaluate shows its error, as the cell would") {
-    // Excel: a lookup returning a cell that holds #DIV/0! shows #DIV/0!; a failure with no Excel
-    // error of its own (an unknown function) is #VALUE!, never a failure of the lookup
-    List("=1/0" -> CellError.Div0, "=NOSUCHFN(1)" -> CellError.Value).foreach { (broken, error) =>
-      assertEquals(
-        eval(column.put(ref"B2", CellValue.Formula(broken)), "=VLOOKUP(7,A1:B3,2,FALSE)"),
-        CellValue.Error(error),
-        broken
-      )
-      assertEquals(
-        eval(row.put(ref"B2", CellValue.Formula(broken)), "=HLOOKUP(7,A1:C2,2,FALSE)"),
-        CellValue.Error(error),
-        broken
-      )
+  test("a result cell computing an Excel error shows that error, as the cell would") {
+    // Excel: a lookup returning a cell that holds #DIV/0! shows #DIV/0!
+    assertEquals(
+      eval(column.put(ref"B2", CellValue.Formula("=1/0")), "=VLOOKUP(7,A1:B3,2,FALSE)"),
+      CellValue.Error(CellError.Div0)
+    )
+    assertEquals(
+      eval(row.put(ref"B2", CellValue.Formula("=1/0")), "=HLOOKUP(7,A1:C2,2,FALSE)"),
+      CellValue.Error(CellError.Div0)
+    )
+  }
+
+  test("a result cell failing with no Excel error of its own fails the lookup, as a reference") {
+    // An unknown function is a host failure, never laundered into #VALUE!: the lookup fails the
+    // way the plain reference =B2 does, so an evaluator failure there is never a spreadsheet error
+    val broken = "=NOSUCHFN(1)"
+    List(
+      column.put(ref"B2", CellValue.Formula(broken)) -> "=VLOOKUP(7,A1:B3,2,FALSE)",
+      row.put(ref"B2", CellValue.Formula(broken)) -> "=HLOOKUP(7,A1:C2,2,FALSE)"
+    ).foreach { (sheet, formula) =>
+      val viaLookup = sheet.evaluateFormula(formula)
+      assert(viaLookup.isLeft, s"$formula: $viaLookup")
+      assert(sheet.evaluateFormula("=B2").isLeft, "the plain reference fails too")
     }
+  }
+
+  test("a result cell in a cycle is #VALUE!, as a key in a cycle is a non-match") {
+    // No placement guard: the cycle trips the recursion guard, an EvalFailed the lookup shows as
+    // #VALUE! rather than failing (Excel flags the cycle and shows the cycle's value)
+    val cyclicColumn = column
+      .put(ref"B2", CellValue.Formula("=C2"))
+      .put(ref"C2", CellValue.Formula("=B2"))
+    assertEquals(eval(cyclicColumn, "=VLOOKUP(7,A1:B3,2,FALSE)"), CellValue.Error(CellError.Value))
+    val cyclicRow = row
+      .put(ref"B2", CellValue.Formula("=B3"))
+      .put(ref"B3", CellValue.Formula("=B2"))
+    assertEquals(eval(cyclicRow, "=HLOOKUP(7,A1:C2,2,FALSE)"), CellValue.Error(CellError.Value))
   }
 
   test("XLOOKUP searching backward over a whole column for an empty text key") {

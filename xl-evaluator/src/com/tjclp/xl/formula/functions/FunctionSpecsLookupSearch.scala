@@ -144,7 +144,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             legacyLookupIndex(line, normalizedLookup, rangeMatch).flatMap {
               case Some(rowIndex) =>
                 // the result as the cell shows: its error, not a failure of the lookup
-                lookupCellValue(read(ARef.from0(resultCol0, rowStart0 + rowIndex)))
+                lookupResultValue(read(ARef.from0(resultCol0, rowStart0 + rowIndex)))
                   .map(unwrapCachedValue)
               case None =>
                 // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
@@ -212,7 +212,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val line = lookupLine(keyLine, targetSheet, ctx)
             legacyLookupIndex(line, normalizedLookup, rangeMatch).flatMap {
               case Some(colIdx) =>
-                lookupCellValue(read(ARef.from0(colStart0 + colIdx, resultRow0)))
+                lookupResultValue(read(ARef.from0(colStart0 + colIdx, resultRow0)))
                   .map(unwrapCachedValue)
               case None =>
                 // GH-662: the typed #N/A, as VLOOKUP above
