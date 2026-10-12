@@ -186,6 +186,29 @@ class XLookupReferenceSpec extends FunSuite:
     )
   }
 
+  test(
+    "GH-713: approximate modes keep the first of equal keys in search order (lastOnTie = false)"
+  ) {
+    // A1:A4 = 1,2,2,3 over a whole column: the blank tail's one stand-in is sound only because a
+    // tie keeps the first candidate the search meets, forward or reverse (see xlookupIndex)
+    val ties = Sheet(SheetName.unsafe("Ties"))
+      .put(ref"A1", N("1"))
+      .put(ref"A2", N("2"))
+      .put(ref"A3", N("2"))
+      .put(ref"A4", N("3"))
+    def row(formula: String): Either[String, CellValue] =
+      val placed = ties.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))).left.map(_.message)
+    for
+      (lookup, values) <- List(("A1:A4", "B1:B4"), ("A:A", "B:B"))
+      // next smaller (2.5 finds 2), next larger (1.5 finds 2), exact: rows 2 and 3 tie
+      (key, matchMode) <- List(("2.5", "-1"), ("1.5", "1"), ("2", "0"))
+      (searchMode, expected) <- List(("1", "2"), ("-1", "3"))
+    do
+      val formula = s"ROWS(B1:XLOOKUP($key,$lookup,$values,,$matchMode,$searchMode))"
+      assertEquals(row(formula), Right(N(expected)), formula)
+  }
+
   test("GH-713: a whole-column lookup reads the data, and matches past it as before") {
     // the data
     assertEquals(tall("XLOOKUP(2,A:A,B:B)"), Right(N("20")))
