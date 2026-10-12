@@ -303,7 +303,7 @@ trait FunctionSpecsBase:
     else
       // `usedRange` scans every populated cell: read it only for an axis that reaches the sheet's
       // edge, never for a bounded reference (as SUMPRODUCT's computeBounds keeps it off that path)
-      lazy val used = targetSheet.usedRange
+      val used = if readsUsedRange(reference) then targetSheet.usedRange else None
       def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: => Option[Int]): Int =
         if hi < sheetLast then hi
         else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
@@ -320,7 +320,55 @@ trait FunctionSpecsBase:
         used.map(_.colEnd.index0)
       )
       val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
-      extractRangeAsMatrixEval(selected, targetSheet, ctx).map(ArrayResult(_))
+      referenceMatrix(selected, targetSheet, ctx).map(ArrayResult(_))
+
+  /**
+   * Whether [[boundedReferenceValues]] reads the sheet's used range for `reference`: only when an
+   * axis runs to the sheet's last row or column, the one place its result depends on it. A bounded
+   * reference never pays for the scan (b65bde0: 10k bounded XLOOKUPs on a 210k-cell sheet went from
+   * 93.5 s to 0.27 s); `ComputedReferenceSpec` pins this predicate.
+   */
+  private[formula] def readsUsedRange(reference: CellRange): Boolean =
+    reference.rowEnd.index0 == Row.MaxIndex0 || reference.colEnd.index0 == Column.MaxIndex0
+
+  /**
+   * A reference's values at its full shape. A range with no more positions than the sheet has cells
+   * is read position by position, as always (a bounded `$A$2:$A$50` never scans the sheet). A
+   * larger one — the generous `INDEX($A$1:$A$100000,0)` over a few hundred rows — is read from the
+   * other side: one pass over the sheet's cells finds the box of populated cells inside it, only
+   * that box is read, and every other position is the shared blank row or cell, which reads exactly
+   * as an absent cell does (`CellValue.Empty`). Either way the cost is the smaller of the range and
+   * the sheet, never more than the position-by-position read.
+   */
+  private def referenceMatrix(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
+    val area = range.height.toLong * range.width.toLong
+    if area <= targetSheet.cells.size.toLong then extractRangeAsMatrixEval(range, targetSheet, ctx)
+    else
+      // (row min, row max, col min, col max) of the populated cells inside the range
+      val bounds = targetSheet.cells.keysIterator
+        .filter(at => range.contains(at))
+        .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, at) =>
+          val (r, c) = (at.row.index0, at.col.index0)
+          Some(acc.fold((r, r, c, c)) { case (r0, r1, c0, c1) =>
+            (math.min(r0, r), math.max(r1, r), math.min(c0, c), math.max(c1, c))
+          })
+        }
+      val blankRow = Vector.fill(range.width)(CellValue.Empty: CellValue)
+      bounds match
+        case None => Right(Vector.fill(range.height)(blankRow))
+        case Some((rowStart, rowEnd, colStart, colEnd)) =>
+          val box = CellRange(ARef.from0(colStart, rowStart), ARef.from0(colEnd, rowEnd))
+          extractRangeAsMatrixEval(box, targetSheet, ctx).map { boxRows =>
+            val left = Vector.fill(colStart - range.colStart.index0)(CellValue.Empty: CellValue)
+            val right = Vector.fill(range.colEnd.index0 - colEnd)(CellValue.Empty: CellValue)
+            Vector.fill(rowStart - range.rowStart.index0)(blankRow) ++
+              boxRows.map(row => left ++ row ++ right) ++
+              Vector.fill(range.rowEnd.index0 - rowEnd)(blankRow)
+          }
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
@@ -586,6 +634,10 @@ trait FunctionSpecsBase:
    * keys: the binary-search family (VLOOKUP/HLOOKUP/MATCH/LOOKUP over sorted data) lands on the
    * last of a run of duplicates, the linear XLOOKUP/XMATCH on the first in search order
    * (LibreOffice: `MATCH(20,{10,20,20,30},1)` is 3, `XMATCH(20,{10,20,20,30},-1)` 2).
+   *
+   * XLOOKUP's whole-column search (`xlookupIndex`) relies on `lastOnTie = false` keeping the FIRST
+   * equal key in search order: it lets one blank stand for every position past the used range.
+   * Change the tie rule and that stand-in must change with it.
    */
   protected def approximateMatch(
     keys: Seq[(Int, CellValue)],

@@ -38,11 +38,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     // that runs to the sheet's edge (`A:A`, `2:2`) is clamped: `usedRange` scans every populated
     // cell, so a bounded lookup (`$A$2:$A$50`) — the common case — never pays for it, as in
     // SUMPRODUCT's computeBounds
-    val reachesEdge =
-      if vertical then lookupArray.rowEnd.index0 == Row.MaxIndex0
-      else lookupArray.colEnd.index0 == Column.MaxIndex0
     val read =
-      if !reachesEdge then size
+      if !lookupReadsUsedRange(lookupArray) then size
       else
         lookupSheet.usedRange.fold(0) { used =>
           val (start, usedEnd) =
@@ -100,6 +97,15 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }
       case _ => None
+
+  /**
+   * Whether XLOOKUP's search reads the sheet's used range for `lookup` (one row or column): only
+   * when the vector runs to the sheet's edge along its own axis. Pinned by `ComputedReferenceSpec`
+   * with [[readsUsedRange]].
+   */
+  private[formula] def lookupReadsUsedRange(lookup: CellRange): Boolean =
+    if lookup.width == 1 then lookup.rowEnd.index0 == Row.MaxIndex0
+    else lookup.colEnd.index0 == Column.MaxIndex0
 
   /**
    * GH-713: the strip of `return_array` a match at position i selects — Excel's shape rule. A

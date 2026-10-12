@@ -219,6 +219,17 @@ class XLookupReferenceSpec extends FunSuite:
     assertEquals(tall("COLUMNS(A2:XLOOKUP(\"*\",2:2,2:2,,2,-1))"), Right(N("2")))
     assertEquals(tall("XLOOKUP(20,2:2,2:2)"), Right(N("20")))
     assertEquals(tall("XLOOKUP(Z9,2:2,2:2,,0,-1)"), Right(E("#N/A")))
+    // the matched address itself, read through `:` (ROW does not take a computed reference yet):
+    // a reverse search lands on the LAST match, a forward one on the first
+    assertEquals(tall("ROWS(B1:XLOOKUP(2,A:A,B:B,,0,-1))"), Right(N("2")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A:A,B:B,,2,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A:A,B:B,,2))"), Right(N("1")))
+    // `""` matches no blank here, so a reverse search over A:A is #N/A — not B1048576, the
+    // address it would be if `""` matched the blanks past the data (the stand-in's position).
+    // 0.23.1's full read answered the same; Excel's answer is unconfirmed (LibreOffice 24.2 has no
+    // XLOOKUP).
+    assertEquals(tall("ROWS(B1:XLOOKUP(\"\",A:A,B:B,,,-1))"), Right(E("#N/A")))
+    assertEquals(tall("XLOOKUP(\"\",A:A,B:B,,,-1)"), Right(E("#N/A")))
   }
 
   test("GH-713: an array key still lifts under an aggregate (no reference collapse)") {

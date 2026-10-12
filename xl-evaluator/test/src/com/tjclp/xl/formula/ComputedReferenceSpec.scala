@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -17,6 +18,7 @@ import munit.FunSuite
  *     ranges beside it — leading blanks, an empty sheet, a range on another sheet — so its values
  *     line up element by element; without written ranges it keeps its own materialization.
  */
+@SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class ComputedReferenceSpec extends FunSuite:
   // the pinned edge-range gap below reads a written A2:A1048576 whole (a million cells), which
   // can pass munit's 30 s default on a loaded machine
@@ -180,4 +182,82 @@ class ComputedReferenceSpec extends FunSuite:
     // at a million cells each — left out to keep this suite fast)
     assertEquals(at("SUMPRODUCT(A:A*INDEX(B:B,0))"), Right(number(140)))
     assertEquals(at("SUMPRODUCT(INDEX(A2:A1048576,0)*INDEX(B2:B1048576,0))"), Right(number(140)))
+  }
+
+  test("a large computed reference reads only its populated cells, at its full shape") {
+    // B3 = 5, C4 = 7, D6 an uncached formula (=B3*2): a range with more positions than the sheet
+    // has cells is read from the cells' side, every other position the shared blank — the same
+    // values, position for position, as reading the written range cell by cell
+    val g = Sheet(SheetName.unsafe("G"))
+      .put(ref"B3", number(5))
+      .put(ref"C4", number(7))
+      .put(ref"D6", CellValue.Formula("B3*2", None))
+    val book = Workbook(Vector(g))
+    def evala(formula: String): Either[EvalError, Any] =
+      FormulaParser
+        .parse(formula)
+        .fold(
+          e => fail(e.toString),
+          expr =>
+            Evaluator.arrayInstance.eval(expr.asInstanceOf[TExpr[Any]], g, workbook = Some(book))
+        )
+    List(
+      ("=INDEX($A$1:$E$40,0)", "=$A$1:$E$40"),
+      ("=INDEX($C$2:$F$30,0)", "=$C$2:$F$30"),
+      ("=INDEX($A$1:$H$20,0,4)", "=$D$1:$D$20"),
+      ("=INDEX($A$1:$H$20,4,0)", "=$A$4:$H$4"),
+      ("=INDEX($J$1:$K$30,0)", "=$J$1:$K$30"),
+      ("=A1:INDEX($A$1:$E$40,40,5)", "=A1:E40"),
+      ("=XLOOKUP(7,C1:C9,$A$1:$Z$9)", "=$A$4:$Z$4")
+    ).foreach { (computed, written) =>
+      assertEquals(evala(computed), evala(written), computed)
+    }
+    // the uncached formula inside is evaluated, not blanked: D6 is row 6, column 4
+    evala("=INDEX($A$1:$E$40,0)") match
+      case Right(array: ArrayResult) =>
+        assertEquals((array.rows, array.cols), (40, 5))
+        assertEquals(array(5, 3), CellValue.Number(BigDecimal(10)))
+        assertEquals(array(2, 1), CellValue.Number(BigDecimal(5)))
+        assertEquals(array(39, 4), CellValue.Empty)
+      case other => fail(s"INDEX($$A$$1:$$E$$40,0): $other")
+  }
+
+  test("only a reference reaching the sheet's edge reads the used range (bounded never does)") {
+    def range(a1: String): CellRange = CellRange.parse(a1).fold(msg => fail(msg), identity)
+    // INDEX, XLOOKUP's return strip and `:` read a reference's values through this gate
+    List("$A$2:$A$50", "A1:XFC1048575", "B2:M100000").foreach { a1 =>
+      assert(!functions.FunctionSpecs.readsUsedRange(range(a1)), a1)
+    }
+    List("A:A", "2:2", "B5:B1048576", "XFD1:XFD3").foreach { a1 =>
+      assert(functions.FunctionSpecs.readsUsedRange(range(a1)), a1)
+    }
+    // XLOOKUP's lookup vector, along its own axis only
+    List("$A$2:$A$50", "A1:A1048575", "A1:XFC1", "XFD1:XFD3").foreach { a1 =>
+      assert(!functions.FunctionSpecs.lookupReadsUsedRange(range(a1)), a1)
+    }
+    List("A:A", "B5:B1048576", "2:2", "C1:XFD1").foreach { a1 =>
+      assert(functions.FunctionSpecs.lookupReadsUsedRange(range(a1)), a1)
+    }
+  }
+
+  test("SUMPRODUCT's extent ends at a nested SUMPRODUCT, a precedent cell and the entry point") {
+    // S!B1:B2 = 1,1, S!H2 = SUM(INDEX(tcol,0)); T!A1:A5 = 1..5, tcol = T!$A:$A. Inside the outer
+    // SUMPRODUCT the extent is S's rows 1-2 (it clips SUM(INDEX(tcol,0)) to 3, see above).
+    val s = Sheet(SheetName.unsafe("S"))
+      .put(ref"B1", number(1))
+      .put(ref"B2", number(1))
+      .put(ref"H2", CellValue.Formula("SUM(INDEX(tcol,0))", None))
+    val t = (1 to 5).foldLeft(Sheet(SheetName.unsafe("T")))((acc, i) =>
+      acc.put(ARef.from0(0, i - 1), number(i))
+    )
+    def at(formula: String): XLResult[CellValue] =
+      val placed = s.put(ref"H1", CellValue.Formula(formula, None))
+      val book = Workbook(Vector(placed, t)).withDefinedName("tcol", "T!$A:$A")
+      placed.evaluateCell(ref"H1", Clock.system, Some(book))
+    // a nested SUMPRODUCT sets its own extent (T's rows 1-5 from T!A:A): 1+4+9+16+25 = 55, × 2
+    assertEquals(at("SUMPRODUCT(SUMPRODUCT(INDEX(tcol,0)*T!A:A)*B:B)"), Right(number(110)))
+    // a precedent cell evaluates on a fresh evaluator: H2 is the whole 15, × (1+1)
+    assertEquals(at("SUMPRODUCT(H2*B:B)"), Right(number(30)))
+    // and every top-level evaluation starts without one
+    assertEquals(at("SUM(INDEX(tcol,0))"), Right(number(15)))
   }
