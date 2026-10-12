@@ -30,9 +30,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `@` formula. A file's existing `cm` and metadata part now survive every in-memory and `--stream`
   write, where they were dropped (Excel then read the formula as a legacy `{=…}` array). As in
   Excel, an in-memory `put`, `putf`, `copy`, `fill` or `clear` over a dynamic anchor (batch
-  included) clears its spill, and one into a spill cell, whose anchor stays, is refused
-  (`FORMULA_ERROR`) rather than leaving a `#SPILL!` or values Excel would overwrite; a blocked
-  spill's hint names its own remedy (unmerge a merge, clear an occupied cell). A spill of more
+  included) clears its spill, and a write into a spill cell, whose anchor stays, is refused
+  (`FORMULA_ERROR`) rather than leaving a `#SPILL!` or values Excel would overwrite, while a
+  contents clear there leaves those cells, clears the rest of its range and warns
+  `SPILL_CELLS_SKIPPED`; a blocked spill's hint names its own remedy (unmerge a merge, clear an
+  occupied cell). A formula that reads its own spill range (`putf --array A1 "=A1:A3"`) is circular,
+  as in Excel: it is written uncached and not spilled. A spill of more
   than 1,048,576 cells (one full column) is refused before anything is written, and a `copy` of a
   whole spill onto a merge or table is refused as the `#SPILL!` it would be. The streaming reads
   (`readStream`, `readSheetStream`, `streamCellDetails`) now also read `xl/_rels/workbook.xml.rels`
@@ -150,6 +153,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   constructor calls still compile). A pattern match must name the new field —
   `ArrayFormula(r, a, c)` → `ArrayFormula(r, a, c, _)` — and code compiled against an earlier
   release must be recompiled (`apply`, `copy` and `unapply` changed).
+- **Writes into a spilled cell of an Excel-authored book are refused** (#714): xl now reads Excel
+  365's dynamic arrays as such, so an in-memory `put`, `putf`, `copy` or `fill` into a cell of a
+  live spill whose anchor stays is `FORMULA_ERROR` (`BATCH_OP_FAILED` in a batch) and writes
+  nothing, where it used to succeed (every array read as legacy). Write over the anchor (its spill
+  goes with it) or outside the spill. A contents `clear` there is not refused: it leaves the spill's
+  cells and warns `SPILL_CELLS_SKIPPED`.
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend

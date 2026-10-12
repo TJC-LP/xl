@@ -374,13 +374,6 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       hint(SpillBlocker.Overwritten(Vector(ref"A2"))) ->
         "overwrite or clear A1 first (its spill goes with it), or write outside A1:A3"
     )
-    // a clear of a live spill's cells changes nothing in Excel: no #SPILL! either
-    val cleared = hint(SpillBlocker.Cleared(Vector(ref"A2")))
-    assertEquals(cleared.code, "FORMULA_ERROR")
-    assertEquals(
-      cleared.hint,
-      Some("clear A1 to remove the whole spill, or clear outside A1:A3")
-    )
     // xl's own size guard: no #SPILL! in Excel, so its message says so plainly
     val tooLarge = hint(SpillBlocker.TooLarge(2000000, 1, 1048576L), None)
     assertEquals(tooLarge.code, "FORMULA_ERROR")
@@ -695,32 +688,55 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       assertEquals(selfKind, Some(FormulaKind.dynamicArray(CellRange(ref"F1", ref"F3"))))
   }
 
-  test("clear: the anchor takes its spill, a spill cell alone is refused, styles are free") {
+  private def warningsOf(run: CliRun): Vector[ujson.Value] =
+    ujson.read(run.stdout).obj.get("warnings").fold(Vector.empty)(_.arr.toVector)
+
+  private def skipped(run: CliRun): Vector[String] =
+    warningsOf(run).filter(_("code").str == "SPILL_CELLS_SKIPPED").map(_("message").str)
+
+  test("clear: the anchor takes its spill; cells of a spill whose anchor stays are kept") {
     for
       src <- withSpill()
       anchor <- outPath()
-      whole <- run(src, anchor, "clear", "F1")
+      whole <- run(src, anchor, "clear", "F1:F2", "--json")
       f3 <- valueAt(anchor, ref"F3")
+      // D3:F3 crosses F1's spill at F3, its anchor outside the range
       out <- outPath()
-      cell <- run(src, out, "clear", "F2", "--json")
+      partial <- run(src, out, "clear", "D3:F3", "--json")
+      d3 <- valueAt(out, ref"D3")
+      keptF3 <- valueAt(out, ref"F3")
+      anchorKind <- kindAt(out, ref"F1")
       styled <- outPath()
       styles <- run(src, styled, "clear", "F2", "--styles")
       kept <- valueAt(styled, ref"F2")
+      everything <- outPath()
+      all <- run(src, everything, "clear", "F2", "--all", "--json")
+      keptAll <- valueAt(everything, ref"F2")
     yield
       ok(whole)
       assertEquals(f3, CellValue.Empty)
-      assertRefused(cell, "FORMULA_ERROR", "clearing them alone would change nothing")
-      assertEquals(
-        errorOf(cell)("hint").str,
-        "clear F1 to remove the whole spill, or clear outside F1:F3"
+      assertEquals(skipped(whole), Vector.empty)
+      // the rest of the range is cleared, the spill cell is left, and the warning says so
+      ok(partial)
+      assertEquals(d3, CellValue.Empty)
+      assertEquals(keptF3, CellValue.Number(3))
+      assertEquals(anchorKind, Some(FormulaKind.dynamicArray(CellRange(ref"F1", ref"F3"))))
+      assertEquals(skipped(partial).size, 1, partial.stdout)
+      assert(
+        skipped(partial).forall(_.contains("Sheet1!F3 (the spill of =SORT(D1:D3) at Sheet1!F1)")),
+        partial.stdout
       )
       ok(styles)
       assertEquals(kept, CellValue.Number(2))
+      // --all: the contents part skips the spill cell (styles and comments clear as anywhere)
+      ok(all)
+      assertEquals(keptAll, CellValue.Number(2))
+      assertEquals(skipped(all).size, 1, all.stdout)
   }
 
   test("batch copy and clear follow the same rule") {
     val copyInto = """[{"op":"copy","source":"D2","target":"F3"}]"""
-    val clearInto = """[{"op":"clear","range":"F2:F3"}]"""
+    val clearInto = """[{"op":"clear","range":"D2:F3"},{"op":"put","ref":"A1","value":1}]"""
     val clearAnchor =
       """[{"op":"clear","range":"F1"},{"op":"copy","source":"D1:D2","target":"F2"}]"""
     for
@@ -730,10 +746,13 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
         List("-f", src.toString, "-o", out.toString, "batch", "-", "--json"),
         copyInto
       )
+      cleared <- outPath()
       clear <- CliHarness.run(
-        List("-f", src.toString, "-o", out.toString, "batch", "-", "--json"),
+        List("-f", src.toString, "-o", cleared.toString, "batch", "-", "--json"),
         clearInto
       )
+      d2 <- valueAt(cleared, ref"D2")
+      keptF2 <- valueAt(cleared, ref"F2")
       released <- outPath()
       both <- CliHarness.run(
         List("-f", src.toString, "-o", released.toString, "batch", "-"),
@@ -743,7 +762,12 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       f3 <- valueAt(released, ref"F3")
     yield
       assertRefused(copy, "BATCH_OP_FAILED", "F3: it is in the spill range F1:F3")
-      assertRefused(clear, "BATCH_OP_FAILED", "clearing them alone would change nothing")
+      // the clear skips F1's spill cells, clears the rest and the batch goes on
+      ok(clear)
+      assertEquals(d2, CellValue.Empty)
+      assertEquals(keptF2, CellValue.Number(2))
+      assertEquals(skipped(clear).size, 1, clear.stdout)
+      assert(skipped(clear).forall(_.contains("Sheet1!F2:F3")), clear.stdout)
       ok(both)
       // the clear took the spill, so the later copy writes plain constants where it was
       assertEquals((f2, f3), (CellValue.Number(3), CellValue.Number(1)))
@@ -1035,4 +1059,67 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
     yield
       ok(batch)
       assert(batch.stdout.contains("DYNAMIC_ARRAY_DOWNGRADED"), batch.stdout)
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // Seventh #721 review: a circular spill; the batch spill index per sheet
+
+  test("putf --array A1 \"=A1:A3\" reads its own anchor: written uncached, not spilled") {
+    for
+      src <- numbers()
+      out <- outPath()
+      self <- putfArray(src, out, "A1", "=A1:A3")
+      kind <- kindAt(out, ref"A1")
+      a2 <- valueAt(out, ref"A2")
+    yield
+      // as Excel, which reports a circular reference rather than spilling
+      ok(self)
+      assert(self.stdout.contains("uncached: it could not be evaluated ("), self.stdout)
+      assert(self.stdout.contains("circular reference"), self.stdout)
+      assertEquals(kind, Some(FormulaKind.dynamicArray(CellRange(ref"A1", ref"A1"))))
+      // A2 keeps its own value: nothing spilled over it
+      assertEquals(a2, CellValue.Number(2))
+  }
+
+  test("a batch drops only the sheet an op changed from its spill index") {
+    import java.util.concurrent.atomic.AtomicInteger
+    import com.tjclp.xl.cli.helpers.BatchParser
+    def spilled(sheet: Sheet): Sheet =
+      sheet
+        .put(ref"D1", CellValue.Number(3))
+        .put(ref"D2", CellValue.Number(1))
+        .put(ref"D3", CellValue.Number(2))
+    val wb = Workbook(spilled(Sheet("One")), spilled(Sheet("Two")))
+    // a copy on One between writes on Two: Two is never rescanned; One is, after the copy
+    val ops = Vector(
+      """{"op":"put","ref":"One!A1","value":1}""",
+      """{"op":"put","ref":"Two!A1","value":1}""",
+      """{"op":"copy","source":"One!D1","target":"One!B1"}""",
+      """{"op":"put","ref":"Two!A2","value":2}""",
+      """{"op":"put","ref":"One!A2","value":2}""",
+      """{"op":"copy","source":"One!D2","target":"One!B2"}""",
+      """{"op":"put","ref":"Two!A3","value":3}"""
+    ).mkString("[", ",", "]")
+    val scans = scala.collection.mutable.Map.empty[String, AtomicInteger]
+    val counting: Sheet => Vector[DynamicArrayAuthoring.Spill] = s =>
+      scans.getOrElseUpdate(s.name.value, new AtomicInteger(0)).incrementAndGet()
+      DynamicArrayAuthoring.spillsOf(s)
+    for
+      parsed <- BatchParser.parseBatchOperations(ops)
+      result <- BatchParser.applyScopedReporting(
+        wb,
+        wb.sheets.headOption,
+        parsed.scoped,
+        recalcDependents = false,
+        scanSpills = counting
+      )
+    yield
+      assertEquals(scans.get("Two").map(_.get), Some(1))
+      // One: its first put, then the put after the first copy dropped it (each copy reads the
+      // index it was given); dropping the whole index would rescan Two after each copy as well
+      assertEquals(scans.get("One").map(_.get), Some(2), scans.toString)
+      assertEquals(
+        result._1.sheets.find(_.name.value == "Two").map(_(ref"A3").value),
+        Some(CellValue.Number(3))
+      )
   }

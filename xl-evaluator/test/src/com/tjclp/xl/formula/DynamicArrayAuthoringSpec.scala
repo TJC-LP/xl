@@ -131,6 +131,8 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     val a = authored(base, ref"A1", "=NoSuchName*2")
     assertEquals(a.extent, range("A1"))
     assert(!a.cached)
+    // the host's reason rides along, for the caller's message
+    assert(a.failure.exists(_.message.contains("NoSuchName")), a.failure.toString)
     assertEquals(
       a.sheet(ref"A1").value,
       CellValue.Formula("NoSuchName*2", None, FormulaKind.dynamicArray(range("A1")))
@@ -161,7 +163,6 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(merged.blocker, SpillBlocker.Merged(Vector(range("A2:B4"))))
     assertEquals(merged.hint, "unmerge A2:B4 or choose another anchor")
     assert(!merged.hint.contains("clear"), merged.hint)
-    assert(merged.message.contains("unmerge them or choose another anchor"), merged.message)
 
     val cse = base.put(
       ref"E3",
@@ -193,9 +194,11 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     )
     assert(offGrid.message.contains("XFD1048576"), offGrid.message)
 
-    // every message keeps Excel's word for it; the domain error carries the formula and message
+    // every message keeps Excel's word for it and leaves the remedy to the hint (the CLI prints
+    // both); the domain error carries the formula and message
     Vector(occupied, merged, array, table, offGrid).foreach { b =>
-      assert(b.message.contains("(Excel shows #SPILL!)"), b.message)
+      assert(b.message.endsWith("(Excel shows #SPILL!)"), b.message)
+      assert(!b.message.contains("choose another anchor"), b.message)
       assertEquals(b.toXLError, XLError.FormulaError("=SORT(B1:B3)", b.message))
     }
   }
@@ -289,20 +292,75 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(com.tjclp.xl.formula.eval.ArrayResult.MaxCells, 1048576L)
   }
 
-  test("a contents clear into a live spill is refused as Cleared, over the anchor it releases") {
-    release(sorted, ref"A2") match
-      case Left(_) => ()
-      case Right(_) => fail("a write into a live spill must be refused")
-    DynamicArrayAuthoring.releaseForWrite(sorted, Set(ref"A3"), clearing = true) match
-      case Left(b) =>
-        assertEquals(b.blocker, SpillBlocker.Cleared(Vector(ref"A3")))
-        assert(b.message.contains("clearing them alone would change nothing"), b.message)
-        assertEquals(b.hint, "clear A1 to remove the whole spill, or clear outside A1:A3")
-      case Right(_) => fail("a clear of a live spill's cells must be refused")
-    assertEquals(
-      DynamicArrayAuthoring.releaseForWrite(sorted, Set(ref"A1"), clearing = true).map(_._2),
-      Right(Set(ref"A2", ref"A3"))
+  private def clearOf(sheet: Sheet, ranges: String*) =
+    DynamicArrayAuthoring.clearContents(
+      sheet,
+      DynamicArrayAuthoring.spillsOf(sheet),
+      ranges.toVector.map(range)
     )
+
+  test("a contents clear reaching into a live spill keeps its cells and clears the rest") {
+    import DynamicArrayAuthoring.KeptSpill
+    // A2:B3 holds two spill cells (A1's anchor stays) and B2:B3 = 1, 2
+    val c = clearOf(sorted, "A2:B3")
+    assertEquals(
+      c.kept,
+      Vector(KeptSpill(ref"A1", "SORT(B1:B3)", range("A1:A3"), Vector(range("A2:A3"))))
+    )
+    assertEquals(c.released, Set.empty[ARef])
+    // the spill is untouched; everything else in the range is gone
+    assertEquals(c.sheet(ref"A2").value, num(2))
+    assertEquals(c.sheet(ref"A3").value, num(3))
+    assertEquals(c.sheet.cells.get(ref"B2"), None)
+    assertEquals(c.sheet.cells.get(ref"B3"), None)
+    assertEquals(c.sheet(ref"B1").value, num(3))
+    // a write there is still refused
+    assert(release(sorted, ref"A2").isLeft)
+  }
+
+  test("a contents clear over an anchor takes its whole spill, inside the range or not") {
+    val c = clearOf(sorted, "A1:B1")
+    assertEquals(c.kept, Vector.empty)
+    assertEquals(c.released, Set(ref"A2", ref"A3"))
+    Vector(ref"A1", ref"A2", ref"A3", ref"B1").foreach(r =>
+      assertEquals(c.sheet.cells.get(r), None, r.toA1)
+    )
+    // the spill's own ranges as one target: the anchor goes, nothing is kept
+    assertEquals(clearOf(sorted, "A1:A3").kept, Vector.empty)
+    // two ranges, one into a spill and one elsewhere: only the overlap is kept, never expanded
+    val wide = clearOf(sorted, "A3:A1048576", "C1:C3")
+    assertEquals(wide.kept.flatMap(_.kept), Vector(range("A3")))
+    assertEquals(wide.sheet.cells.get(ref"C2"), None)
+    // no spill on the sheet: a plain clear
+    assertEquals(
+      DynamicArrayAuthoring.clearContents(base, Vector.empty, Vector(range("B1:B2"))).sheet,
+      base.removeRange(range("B1:B2"))
+    )
+  }
+
+  test("a formula reading its own anchor is circular: an uncached 1x1 record, not a spill") {
+    // =A1:A3 at A1 reads A1 itself: Excel reports a circular reference rather than spilling
+    val self = authored(base.put(ref"A2", num(7)), ref"A1", "=A1:A3")
+    assertEquals(self.extent, range("A1"))
+    assert(!self.cached)
+    assert(self.failure.exists(_.message.contains("circular reference")), self.failure.toString)
+    assertEquals(
+      self.sheet(ref"A1").value,
+      CellValue.Formula("A1:A3", None, FormulaKind.dynamicArray(range("A1")))
+    )
+    // A2 is left as it was: nothing spilled over it
+    assertEquals(self.sheet(ref"A2").value, num(7))
+  }
+
+  test("a formula whose spill would cover cells it reads is circular too") {
+    // =B1:B3 at A2 is fine; =A2:A4+0 at A1 spills A1:A3 over A2 and A3, which it reads
+    assert(authored(base, ref"A2", "=B1:B3").cached)
+    val over = authored(base, ref"A1", "=A2:A4+0")
+    assert(!over.cached)
+    assert(over.failure.exists(_.message.contains("A1:A3")), over.failure.toString)
+    assertEquals(over.extent, range("A1"))
+    // a whole-column read of another column is not circular (checked within the extent only)
+    assert(authored(base, ref"D1", "=SUM(B:B)").cached)
   }
 
   test("spillsOf lists multi-cell anchors; releaseRanges agrees with releaseForWrite") {
@@ -312,7 +370,7 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     // a range over the anchor and its spill releases, without expanding the range
     assertEquals(
       DynamicArrayAuthoring
-        .releaseRanges(sorted, spills, Vector(range("A1:A1048576")), false)
+        .releaseRanges(sorted, spills, Vector(range("A1:A1048576")))
         .map(_._2),
       release(sorted, ref"A1").map(_._2)
     )
@@ -320,14 +378,13 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     DynamicArrayAuthoring.releaseRanges(
       sorted,
       spills,
-      Vector(range("A2:D2"), range("A3")),
-      false
+      Vector(range("A2:D2"), range("A3"))
     ) match
       case Left(b) => assertEquals(b.blocker, SpillBlocker.Overwritten(Vector(ref"A2", ref"A3")))
       case Right(_) => fail("a write into a live spill must be refused")
     // no known spill: nothing to scan or release
     assertEquals(
-      DynamicArrayAuthoring.releaseRanges(sorted, Vector.empty, Vector(range("A2")), false),
+      DynamicArrayAuthoring.releaseRanges(sorted, Vector.empty, Vector(range("A2"))),
       Right((sorted, Set.empty[ARef]))
     )
   }

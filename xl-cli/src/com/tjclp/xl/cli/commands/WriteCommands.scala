@@ -226,12 +226,11 @@ object WriteCommands:
   private[cli] def releaseSpills(
     wb: Workbook,
     sheet: Sheet,
-    targets: Set[ARef],
-    clearing: Boolean = false
+    targets: Set[ARef]
   ): IO[(Workbook, Sheet, Set[ARef])] =
     IO.fromEither(
       DynamicArrayAuthoring
-        .releaseForWrite(sheet, targets, clearing)
+        .releaseForWrite(sheet, targets)
         .map((released, cleared) => (wb.put(released), released, cleared))
         .left
         .map(spill => CliException(CliError.fromSpillBlocked(spill)))
@@ -732,7 +731,9 @@ object WriteCommands:
       // an uncached record has no extent yet: its spill is sized when it first evaluates
       spills =
         if authored.cached then s"spills ${authored.extent.toA1}"
-        else "uncached: it could not be evaluated, so its spill is not sized yet"
+        else
+          val reason = authored.failure.fold("")(e => s" (${e.message})")
+          s"uncached: it could not be evaluated$reason, so its spill is not sized yet"
       result <- writeAfterRefresh(
         wb.put(finalSheet),
         sheet.name,
@@ -781,6 +782,29 @@ object WriteCommands:
       }
       .toList
       .toVector
+
+  /**
+   * GH-714: `SPILL_CELLS_SKIPPED` for the live spills a contents clear left in place (their anchors
+   * stayed): one warning per command naming the ranges kept and each spill's anchor; None when
+   * there were none.
+   */
+  private[cli] def spillsKeptWarning(
+    kept: Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)]
+  ): Option[Warning] =
+    Option.when(kept.nonEmpty) {
+      val shown = kept.take(10).map { (sheet, k) =>
+        def a1(r: CellRange) = if r.start == r.end then r.start.toA1 else r.toA1
+        val ranges = k.kept.map(r => s"${sheet.value}!${a1(r)}").mkString(", ")
+        s"$ranges (the spill of =${k.formula} at ${sheet.value}!${k.anchor.toA1})"
+      }
+      val more = if kept.size > 10 then s", ... (+${kept.size - 10} more)" else ""
+      Warning(
+        WarningCode.SPILL_CELLS_SKIPPED,
+        s"left ${shown.mkString("; ")}$more as they were: Excel keeps a dynamic array's spill " +
+          "while its anchor stays, so the clear skipped those cells and cleared the rest " +
+          "(clearing the anchor removes its whole spill)"
+      )
+    }
 
   /** One reading of the system clock, taken in IO: a command's single notion of now. */
   private[cli] val commandClock: IO[Clock] =
@@ -1753,7 +1777,7 @@ object WriteCommands:
         (result.warnings.traverse_(warn) *> commandClock).flatMap { clock =>
           BatchParser
             .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc, clock = clock)
-            .flatMap { (updatedWb, offGrid) =>
+            .flatMap { (updatedWb, offGrid, kept) =>
               val nameEdit = result.ops.exists {
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
@@ -1774,6 +1798,7 @@ object WriteCommands:
                     val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
                     IO.blocking(
                       intersectionAdvisory(targets, known, clock)(finalWb) ++
+                        spillsKeptWarning(kept).toList.toVector ++
                         downgradeWarning(finalWb, config)
                     ).flatMap { extra =>
                       strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)

@@ -153,7 +153,7 @@ object CopyOps:
     else
       val written = writtenCells(sourceSheet, sourceRange, targetRange)
       DynamicArrayAuthoring
-        .releaseCells(targetSheet, spills, written, clearing = false)
+        .releaseCells(targetSheet, spills, written)
         .map(_._2 -- written)
 
   /**

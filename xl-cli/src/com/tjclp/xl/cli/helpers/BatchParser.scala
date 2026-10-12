@@ -1211,7 +1211,8 @@ object BatchParser:
   /**
    * GH-628: [[applyScoped]], also reporting every cell a `putf … from` drag or a `copy` wrote
    * `#REF!` into for a reference that left the grid — the batch verb's `OFF_GRID_REF` warning and
-   * `--strict` reason.
+   * `--strict` reason — and (GH-714) every live spill a contents `clear` left in place, for its
+   * `SPILL_CELLS_SKIPPED` warning.
    */
   def applyScopedReporting(
     wb: Workbook,
@@ -1220,25 +1221,33 @@ object BatchParser:
     recalcDependents: Boolean = true,
     scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill] = DynamicArrayAuthoring.spillsOf,
     clock: Clock = Clock.system
-  ): IO[(Workbook, Vector[OffGridHit])] =
-    val start = (wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit], SpillIndex.empty)
+  ): IO[(Workbook, Vector[OffGridHit], Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])] =
+    val start = (
+      wb,
+      defaultSheetOpt.map(_.name),
+      Vector.empty[OffGridHit],
+      SpillIndex.empty,
+      Vector.empty[(SheetName, DynamicArrayAuthoring.KeptSpill)]
+    )
     scoped
       .foldLeft(IO.pure(start)) { (stateIO, op) =>
-        stateIO.flatMap { (currentWb, default, offGrid, spills) =>
+        stateIO.flatMap { (currentWb, default, offGrid, spills, kept) =>
           applyOne(currentWb, default, op, recalcDependents, spills, scanSpills, clock)
             .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
-            .map((next, hits, index) => (next, retarget(default, op.op), offGrid ++ hits, index))
+            .map((next, hits, index, skipped) =>
+              (next, retarget(default, op.op), offGrid ++ hits, index, kept ++ skipped)
+            )
         }
       }
-      .map((book, _, offGrid, _) => (book, offGrid))
+      .map((book, _, offGrid, _, kept) => (book, offGrid, kept))
 
   /**
    * GH-714: a batch's dynamic spills by sheet ([[DynamicArrayAuthoring.spillsOf]]), so the spill
    * guard does not rescan a sheet for every op. A sheet is scanned the first time an op needs it,
    * then kept current: a plain write or contents clear removes the anchors it overwrites (it can
-   * create none), an op that touches no cell value keeps the index, and any other op (an `"array":
-   * true` putf, a `copy`, a sheet added or renamed, a merge) drops it, to be rescanned on next
-   * need.
+   * create none), an op that touches no cell value keeps the index, an op that can change the
+   * anchors on its own sheets (an `"array": true` putf, a `copy`, a merge, a rename) drops just
+   * those sheets, to be rescanned on next need, and any other op drops the whole index.
    */
   private type SpillIndex = Map[SheetName, Vector[DynamicArrayAuthoring.Spill]]
 
@@ -1263,9 +1272,28 @@ object BatchParser:
         Some((areas, true))
       case _ => None
 
-  /** The index after `op` (see [[SpillIndex]]). */
+  /**
+   * The sheets whose anchors `op` can change without being a plain write or clear, when they are
+   * known from the op itself; None when they are not (the whole index is then dropped).
+   */
+  private def touchedSheets(sheetName: Option[SheetName], op: BatchOp): Option[Set[SheetName]] =
+    def sheetsOf(refs: Vector[String]): Option[Set[SheetName]] =
+      val areas = targetAreas(sheetName, refs)
+      Option.when(areas.nonEmpty)(areas.map(_._1).toSet ++ sheetName)
+    op match
+      case BatchOp.CopyRange(_, target, _) => sheetsOf(Vector(target))
+      case _: BatchOp.PutFormula | _: BatchOp.Merge | _: BatchOp.Unmerge =>
+        sheetsOf(OpRegistry.targetRefs(op))
+      // a new sheet has no spills; a renamed one is rescanned under its new name
+      case _: BatchOp.AddSheet => Some(Set.empty)
+      case BatchOp.RenameSheet(from, to) =>
+        Some(Set(from, to).flatMap(n => SheetName(n).toOption))
+      case _ => None
+
+  /** The index after `op` on `sheetName` (see [[SpillIndex]]). */
   private def nextSpills(
     spills: SpillIndex,
+    sheetName: Option[SheetName],
     op: BatchOp,
     released: Option[(Vector[(SheetName, CellRange)], Boolean)]
   ): SpillIndex =
@@ -1288,7 +1316,7 @@ object BatchParser:
               _: BatchOp.SetPageSetup | _: BatchOp.SetHeaderFooter |
               _: BatchOp.AddConditionalFormat | _: BatchOp.Clear =>
             spills
-          case _ => SpillIndex.empty
+          case _ => touchedSheets(sheetName, op).fold(SpillIndex.empty)(spills -- _)
 
   /**
    * GH-714: a plain value or formula write applied to the dynamic arrays it touches, before the
@@ -1297,15 +1325,14 @@ object BatchParser:
    * — one an earlier op of this batch authored included — fails the op with the `#SPILL!` refusal
    * (`BATCH_OP_FAILED`, the blockers in the message, the remedy as the hint). `"array": true`
    * re-authors its own anchor, and a ref that does not resolve is left for the applier to report. A
-   * contents `clear` follows the clear verb: an anchor's whole spill goes, a live spill's cells
-   * alone are refused. `copy` applies the rule itself ([[CopyOps.releasedBy]]). The spills come
-   * from the batch's [[SpillIndex]], so a sheet with none costs nothing, and the target ranges are
-   * matched against them as ranges ([[DynamicArrayAuthoring.releaseRanges]]).
+   * contents `clear` follows the clear verb instead ([[applyClear]]), and `copy` applies the rule
+   * itself ([[CopyOps.releasedBy]]). The spills come from the batch's [[SpillIndex]], so a sheet
+   * with none costs nothing, and the target ranges are matched against them as ranges
+   * ([[DynamicArrayAuthoring.releaseRanges]]).
    */
   private def releaseSpills(
     wb: Workbook,
     areas: Vector[(SheetName, CellRange)],
-    clearing: Boolean,
     spills: SpillIndex
   ): IO[Workbook] =
     areas.groupMap(_._1)(_._2).toVector.foldLeft(IO.pure(wb)) { case (acc, (name, ranges)) =>
@@ -1315,7 +1342,7 @@ object BatchParser:
           sheet =>
             IO.fromEither(
               DynamicArrayAuthoring
-                .releaseRanges(sheet, known, ranges, clearing)
+                .releaseRanges(sheet, known, ranges)
                 .map((released, _) => current.put(released))
                 .left
                 .map(spill => CliException(CliError.fromSpillBlocked(spill)))
@@ -1378,7 +1405,8 @@ object BatchParser:
   /**
    * One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier —
    * with the off-grid report of the two ops that shift formulas (GH-628). When the batch can meet a
-   * dynamic spill (`spills`), a plain write first goes through [[releaseSpills]] (GH-714).
+   * dynamic spill (`spills`), a plain write first goes through [[releaseSpills]], and a contents
+   * clear reports the spills it left in place (GH-714).
    */
   private def applyOne(
     wb: Workbook,
@@ -1388,7 +1416,9 @@ object BatchParser:
     spills: SpillIndex,
     scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill],
     clock: Clock
-  ): IO[(Workbook, Vector[OffGridHit], SpillIndex)] =
+  ): IO[
+    (Workbook, Vector[OffGridHit], SpillIndex, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])
+  ] =
     IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
       val areas = releaseAreas(sheetName, scoped.op)
       // the sheets this op releases on, scanned once if the index does not know them yet
@@ -1398,12 +1428,18 @@ object BatchParser:
       }
       def spillsOn(name: SheetName): Vector[DynamicArrayAuthoring.Spill] =
         known.getOrElse(name, wb.sheets.find(_.name == name).fold(Vector.empty)(scanSpills))
-      val released =
-        areas.fold(IO.pure(wb))((as, clearing) => releaseSpills(wb, as, clearing, known))
+      val released = areas match
+        case Some((as, false)) => releaseSpills(wb, as, known)
+        case _ => IO.pure(wb)
       released.flatMap { currentWb =>
+        val none = Vector.empty[(SheetName, DynamicArrayAuthoring.KeptSpill)]
         val applied = scoped.op match
           case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
             applyPutFormulaDragging(currentWb, sheetName, rangeStr, formula, fromRef, format)
+              .map((next, hits) => (next, hits, none))
+          case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
+            applyClear(currentWb, sheetName, rangeStr, all, stylesFlag, commentsFlag, spillsOn)
+              .map((next, kept) => (next, Vector.empty, kept))
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
             applyCopyRange(
               currentWb,
@@ -1413,10 +1449,13 @@ object BatchParser:
               valuesOnly,
               recalcDependents,
               spillsOn
-            )
+            ).map((next, hits) => (next, hits, none))
           case _ =>
-            dispatch(currentWb, sheetName, scoped, recalcDependents, clock).map((_, Vector.empty))
-        applied.map((next, hits) => (next, hits, nextSpills(known, scoped.op, areas)))
+            dispatch(currentWb, sheetName, scoped, recalcDependents, clock)
+              .map((_, Vector.empty, none))
+        applied.map((next, hits, kept) =>
+          (next, hits, nextSpills(known, sheetName, scoped.op, areas), kept)
+        )
       }
     }
 
@@ -1531,7 +1570,10 @@ object BatchParser:
         applyAddChart(currentWb, defaultSheetName, op)
 
       case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
-        applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
+        def spillsOn(name: SheetName) =
+          currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
+        applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag, spillsOn)
+          .map(_._1)
 
       case BatchOp.ColHide(colStr) =>
         applyColVisibility(currentWb, defaultSheetName, colStr, hidden = true)
@@ -2265,23 +2307,36 @@ object BatchParser:
     }
 
   /** Clear contents, styles, and/or comments from a range. */
+  /**
+   * A `clear`, as the clear verb does it: GH-714 — a contents clear takes a cleared anchor's whole
+   * spill and leaves the cells of a live spill whose anchor stays as they were, returned for the
+   * `SPILL_CELLS_SKIPPED` warning ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
+   */
   private def applyClear(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     rangeStr: String,
     all: Boolean,
     stylesFlag: Boolean,
-    commentsFlag: Boolean
-  ): IO[Workbook] =
+    commentsFlag: Boolean,
+    spillsOn: SheetName => Vector[DynamicArrayAuthoring.Spill]
+  ): IO[(Workbook, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])] =
+    val clearContents = all || (!stylesFlag && !commentsFlag)
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
+      contents = Option
+        .when(clearContents)(
+          wb.sheets
+            .find(_.name == sheetName)
+            .map(s => DynamicArrayAuthoring.clearContents(s, spillsOn(sheetName), Vector(range)))
+        )
+        .flatten
       result <- updateSheet(wb, sheetName) { sheet =>
-        val clearContents = all || (!stylesFlag && !commentsFlag)
         val clearStyles = all || stylesFlag
         val clearComments = all || commentsFlag
 
-        val s1 = if clearContents then sheet.removeRange(range) else sheet
+        val s1 = contents.fold(sheet)(_.sheet)
         val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
 
@@ -2291,7 +2346,7 @@ object BatchParser:
           overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
         else s3
       }
-    yield result
+    yield (result, contents.fold(Vector.empty)(_.kept).map(sheetName -> _))
 
   /** Set column visibility (hide/show). */
   private def applyColVisibility(

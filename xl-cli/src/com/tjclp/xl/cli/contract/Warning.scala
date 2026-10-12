@@ -87,6 +87,14 @@ object WarningCode:
    */
   val DYNAMIC_ARRAY_DOWNGRADED: String = "DYNAMIC_ARRAY_DOWNGRADED"
 
+  /**
+   * GH-714: a contents clear (`clear`, batch `clear`) reached into a live dynamic array's spill
+   * without its anchor. Excel keeps a spill's cells while its anchor stays, so those cells were
+   * left as they were and the rest of the range was cleared; the warning names each anchor and the
+   * ranges kept. Clearing the anchor removes the whole spill. Informational: never gates.
+   */
+  val SPILL_CELLS_SKIPPED: String = "SPILL_CELLS_SKIPPED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -104,5 +112,6 @@ object WarningCode:
     LINT_HYGIENE,
     CF_NOT_RENDERED,
     IMPLICIT_INTERSECTION,
-    DYNAMIC_ARRAY_DOWNGRADED
+    DYNAMIC_ARRAY_DOWNGRADED,
+    SPILL_CELLS_SKIPPED
   )

@@ -1170,14 +1170,21 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   table, or the grid edge.
 - **Re-authoring** a dynamic anchor clears its previous spill first, so a shrinking spill leaves no
   stale cells. A plain `put`, `putf`, `copy`, `fill` or contents `clear` over the anchor (batch
-  included) clears its spill too, as Excel does. One into a spill cell whose anchor stays is
+  included) clears its spill too, as Excel does. A write into a spill cell whose anchor stays is
   refused as `FORMULA_ERROR`, nothing written: Excel would keep the value and show `#SPILL!` at
-  the anchor (and a clear of a spill's cells alone would change nothing). The hint says to
-  overwrite or clear the anchor first; in a batch, an earlier op's spill counts. `sort` and
+  the anchor. The hint says to overwrite or clear the anchor first; in a batch, an earlier op's
+  spill counts. A contents `clear` into such a spill is not refused: Excel keeps a spill's cells
+  while its anchor stays, so xl leaves them as they were, clears the rest of the range and warns
+  `SPILL_CELLS_SKIPPED`, naming the anchor and the ranges kept (`--styles` and `--comments` apply
+  to spill cells as to any other). `sort` and
   `--stream` writes do not apply this rule yet. A spill of more than 1,048,576 cells (one full
   column, as many as SEQUENCE allows) is refused before anything is written. A later recalculation
   re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
   values until Excel recalculates on open.
+- **A circular spill is not spilled**: a formula that reads its own anchor or a cell its spill
+  would fill (`putf --array A1 "=A1:A3"`) is a circular reference in Excel, which shows 0 rather
+  than spilling. xl writes it as an uncached 1×1 record and says why (`uncached: it could not be
+  evaluated (… circular reference …)`).
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with
   `"array": true` is refused by index before anything is written (`x-streamRefusedFields` in
   `xl batch --schema`). A streamed `put`/`putf` over an existing anchor writes a plain cell and
@@ -1311,6 +1318,9 @@ Clear cell contents, styles, or comments from a range.
 - **`--comments`**: Clears comments but keeps contents and styles
 - Flags can be combined: `--styles --comments` clears both
 - Merged regions overlapping the cleared range are automatically unmerged
+- Dynamic arrays (GH-714): clearing an anchor clears its whole spill; the cells of a spill whose
+  anchor lies outside the range keep their values, as in Excel, while the rest of the range is
+  cleared, with a `SPILL_CELLS_SKIPPED` warning naming the anchor and the ranges kept
 
 **Examples**:
 ```bash

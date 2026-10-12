@@ -86,3 +86,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `CF_NOT_RENDERED` |
 | `IMPLICIT_INTERSECTION` |
 | `DYNAMIC_ARRAY_DOWNGRADED` |
+| `SPILL_CELLS_SKIPPED` |
