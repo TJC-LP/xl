@@ -300,6 +300,15 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `lookup_array` is now `#VALUE!`, as in Excel: a same-shaped 2-D pair (`XLOOKUP(k,A1:B2,C1:D2)`)
   used to be searched cell by cell and return a value, so a workbook relying on that now shows
   `#VALUE!`.
+- **Fraction patterns take an exact absolute value at the bottom of the scale range** (#707): a
+  negative value with more than 34 significant digits and a scale near `Int.MinValue` (within the
+  number of digits past 34) threw `ArithmeticException: Underflow` under a `?/?`-style code: the
+  formatter took Scala's `BigDecimal.abs` eagerly on every path, and it rounds under DECIMAL128
+  before negating. The absolute value is now computed only in the convergent-search branch that
+  needs it, exactly, through Java's `abs`. The `ExtremeExponentFormatSpec` generators and the
+  `DisplaySpec` General sign-law oracle negated through the same Scala operator, which hid the
+  defect (negative samples were rounded to 34 digits first) and made both suites flake; they now
+  negate the unscaled value or use Java's `negate()`.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
