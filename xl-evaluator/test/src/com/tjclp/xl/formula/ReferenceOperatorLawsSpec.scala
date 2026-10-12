@@ -499,6 +499,9 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     val referencing = functions.FunctionRegistry.all.collect {
       case spec: functions.FunctionSpec.Referencing[?, ?] => spec.name
     }.toSet
+    // the static names the parser consults are exactly the registry's reference-computing specs:
+    // a new FunctionSpec.Referencing fails here until ReferenceFunctionNames.computing lists it
+    assertEquals(functions.ReferenceFunctionNames.computing, referencing)
     assertEquals(
       Evaluator.referenceFunctions,
       referencing ++ Set("IF", "IFS", "CHOOSE", "SWITCH") ++

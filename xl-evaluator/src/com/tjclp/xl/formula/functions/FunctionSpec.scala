@@ -453,14 +453,14 @@ object ArgSpec:
 
   /**
    * GH-713: the calls a range slot names as "a computed reference" rather than reporting an
-   * argument count — every registered reference-computing function and the `:` operator, derived
-   * from [[ReferenceOperators.computingFunctions]]. It differs from `Evaluator.referenceFunctions`
-   * on purpose: a selector (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an
-   * intersection is not a computed reference. A drift law ties the two sets together.
+   * argument count — every registered reference-computing function
+   * ([[ReferenceFunctionNames.computing]], tied to the registry by the drift law) and the `:`
+   * operator. It differs from `Evaluator.referenceFunctions` on purpose: a selector
+   * (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an intersection is not a
+   * computed reference. The drift law ties the two sets together.
    */
-  // lazy: reads FunctionRegistry.all, so never touch it while FunctionSpecs initializes
-  private[formula] lazy val computedReferenceCalls: Set[String] =
-    ReferenceOperators.computingFunctions + ReferenceOperators.RangeName
+  private[formula] val computedReferenceCalls: Set[String] =
+    ReferenceFunctionNames.computing + ReferenceOperators.RangeName
 
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")

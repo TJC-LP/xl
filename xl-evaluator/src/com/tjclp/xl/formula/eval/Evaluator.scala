@@ -9,6 +9,7 @@ import com.tjclp.xl.formula.functions.{
   FunctionSpec,
   FunctionSpecs,
   LiftSlot,
+  ReferenceFunctionNames,
   ReferenceOperators
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
@@ -566,12 +567,13 @@ object Evaluator:
    * they select; OFFSET, INDIRECT, INDEX and, GH-713, XLOOKUP compute one; GH-669: so does the
    * intersection operator ` `, and GH-713 the range operator `:`): in a reference position their
    * result reaches the consumer whole, in a plain cell's value position it is implicitly
-   * intersected. Derived: the selectors, every registered `FunctionSpec.Referencing`, and the two
-   * operators, which are unregistered (a drift law pins the result).
+   * intersected. Built from `ReferenceFunctionNames` (the selectors, and every registered
+   * `FunctionSpec.Referencing`, which the drift law ties to the registry) and the two operators,
+   * which are unregistered. Static, so the parser's reference-shape check never initializes the
+   * registry.
    */
-  // lazy: reads FunctionRegistry.all, so never touch it while FunctionSpecs initializes
-  private[formula] lazy val referenceFunctions: Set[String] =
-    ReferenceOperators.selectingFunctions ++ ReferenceOperators.computingFunctions +
+  private[formula] val referenceFunctions: Set[String] =
+    ReferenceFunctionNames.selecting ++ ReferenceFunctionNames.computing +
       ReferenceOperators.IntersectionName + ReferenceOperators.RangeName
 
   /**
