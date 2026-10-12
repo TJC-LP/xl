@@ -132,10 +132,18 @@ private[xl] object ValueDependencies:
             case Some(b) => loop(b.expr, addressOnly, b.env)
             case None if addressOnly => Set.empty
             case None =>
+              // Exhaustive, no wildcard, as the expression match below
               location match
                 case TExpr.RangeLocation.Local(r, _) => if localReads then cells(r) else Set.empty
-                case TExpr.RangeLocation.CrossSheet(sheet, r, _) if local(sheet) => cells(r)
-                case _ => Set.empty
+                case TExpr.RangeLocation.CrossSheet(sheet, r, _) =>
+                  if local(sheet) then cells(r) else Set.empty
+                // a defined name in a range slot (`SUMIF(rng,…)`) is not followed, unlike one
+                // read as a value (`named`): `eval --at`'s run-time guard sees its read
+                case TExpr.RangeLocation.Name(_, _) => Set.empty
+                // GH-710: a LET name in a range slot; one in scope was followed above
+                case TExpr.RangeLocation.Binding(_) => Set.empty
+                case TExpr.RangeLocation.External(_, _, _, _) | TExpr.RangeLocation.Error(_, _) =>
+                  Set.empty
         case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 
       // Exhaustive, no wildcard: a new TExpr case is a compiler warning here, never a silent
