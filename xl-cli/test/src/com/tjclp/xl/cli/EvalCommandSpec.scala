@@ -6,8 +6,8 @@ import cats.effect.IO
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.commands.ReadCommands
 import com.tjclp.xl.cli.contract.{CliException, CliHarness, ErrorCode}
 import com.tjclp.xl.error.XLException
@@ -937,6 +937,109 @@ class EvalCommandSpec extends CatsEffectSuite:
       ReadCommands.evalArray(cachedReadBacks, data, "=Other!A1+Third!A1", None, overrides).map {
         array => assert(array.contains("1601"), array)
       }
+  }
+
+  /**
+   * Data: A1 = 77, B1 = 10, C1 = rate+1 (11). Other: A1 = rate*2 (20), A2 = base*3 (30), A3 =
+   * loc+100 (110), A4 = other (a stale 99 no override reaches), A5 = ubase (a stale 42: ubase is
+   * `$B$1` unqualified, so from Other it reads Other!B1, empty). Names: rate = Data!$B$1, base =
+   * rate, other = Data!$A$1, ubase = $B$1, and loc = Data!$B$1 scoped to Other.
+   */
+  private val namedReadBacks: Workbook =
+    val book = Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", CellValue.Number(BigDecimal(77)))
+          .put(ref"B1", CellValue.Number(BigDecimal(10)))
+          .put(ref"C1", cachedFormula("=rate+1", 11)),
+        Sheet("Other")
+          .put(ref"A1", cachedFormula("=rate*2", 20))
+          .put(ref"A2", cachedFormula("=base*3", 30))
+          .put(ref"A3", cachedFormula("=loc+100", 110))
+          .put(ref"A4", cachedFormula("=other", 99))
+          .put(ref"A5", cachedFormula("=ubase", 42))
+      )
+    )
+    book.copy(metadata =
+      book.metadata.copy(definedNames =
+        Vector(
+          DefinedName("rate", "Data!$B$1"),
+          DefinedName("base", "rate"),
+          DefinedName("other", "Data!$A$1"),
+          DefinedName("ubase", "$B$1"),
+          DefinedName("loc", "Data!$B$1", localSheetId = Some(1))
+        )
+      )
+    )
+
+  test("GH-715: --with reaches cached read-backs through defined names, on any sheet") {
+    // B1 = 5: rate = 5, so Other!A1 = 10, A2 = 15 (through base), A3 = 105 (a name scoped to
+    // Other), and Data!C1 = 6, read at run time so the closure fold does not compute it
+    val data = namedReadBacks.sheets.headOption
+    val overrides = List("B1=5")
+    val cases = List(
+      "=Other!A1" -> 10,
+      "=Other!A2" -> 15,
+      "=Other!A3" -> 105,
+      "=INDIRECT(\"C1\")" -> 6,
+      // untouched: other names Data!A1, and ubase resolves from Other to Other!B1
+      "=Other!A4" -> 99,
+      "=Other!A5" -> 42
+    )
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(namedReadBacks, data, formula, at, overrides).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _) >>
+      ReadCommands.evalArray(namedReadBacks, data, "=Other!A1+Other!A2", None, overrides).map {
+        array => assert(array.contains("25"), array)
+      }
+  }
+
+  test("GH-715: evala --with sees another sheet's cached read-back without its cache") {
+    // evala goes through the same stale-reader search as eval: Other!A1 is 800, not its 20
+    val data = cachedReadBacks.sheets.headOption
+    for array <- ReadCommands.evalArray(
+        cachedReadBacks,
+        data,
+        "=Other!A1*{1,2}",
+        None,
+        List("A1=200")
+      )
+    yield
+      assert(array.contains("800"), array)
+      assert(array.contains("1600"), array)
+      assert(!array.contains("20 "), array)
+  }
+
+  test("GH-715: --at inside another anchor's spill range answers as the plain cell there") {
+    // Pinned: C1 holds SEQUENCE(3) spilling over C1:C3 (cached). Excel would show #SPILL! in C1
+    // once C2 holds a formula; --at answers what C2 itself would show and does not model that.
+    val spilled = Sheet("Data")
+      .put(
+        ref"C1",
+        CellValue.Formula(
+          "SEQUENCE(3)",
+          Some(CellValue.Number(BigDecimal(1))),
+          FormulaKind.ArrayFormula(CellRange(ref"C1", ref"C3"))
+        )
+      )
+      .put(ref"C2", CellValue.Number(BigDecimal(2)))
+      .put(ref"C3", CellValue.Number(BigDecimal(3)))
+    val wb = Workbook(Vector(spilled))
+    for
+      inside <- ReadCommands.eval(wb, Some(spilled), "=7", Some("C2"), Nil)
+      outside <- ReadCommands.eval(wb, Some(spilled), "=SUM(C1#)", Some("E5"), Nil)
+      readsSpill <- ReadCommands.eval(wb, Some(spilled), "=SUM(C1#)", Some("C2"), Nil).attempt
+    yield
+      assert(inside.contains("Result: 7 (number)"), inside)
+      assert(outside.contains("Result: 6 (number)"), outside)
+      // reading the spill it sits in answers from C1's cached spill (Excel: #SPILL! and a cycle)
+      readsSpill match
+        case Right(result) => assert(result.contains("Result: 6 (number)"), result)
+        case Left(e) => fail(s"pinned: =SUM(C1#) at C2 evaluates, got $e")
   }
 
   test("GH-715 CLI: --with reaches another sheet's cached read-back in a saved file") {

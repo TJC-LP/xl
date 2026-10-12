@@ -948,10 +948,10 @@ Without `--at` the formula has no cell of its own, so it evaluates as it would t
 - another sheet's formula that holds a cached value is read as that value, not re-evaluated, so its read of `<ref>` is missed and the answer uses `<ref>`'s current content ([#729](https://github.com/TJC-LP/xl/issues/729));
 - XLOOKUP reads its return cell as stored, so an uncached formula there that reaches `<ref>` only at run time (`=INDIRECT("D5")`) is returned as its record, not reported ([#742](https://github.com/TJC-LP/xl/issues/742)).
 
-**With `--with`.** The overrides apply with or without `--at`, in `eval` and `evala` alike.
+**With `--with`.** The overrides apply with or without `--at`, in `eval` and `evala` alike, to the sheet the formula evaluates on: the `--at` sheet, else `-s`. So `-s Data eval … --at Other!D5 --with B1=5` sets Other!B1, and an override qualified with another sheet's name is `INVALID_REFERENCE`.
 - On the `--at` cell itself an override is `USAGE` (exit 2): the formula is that cell, so `--at D5 --with D5=3` would set a cell nothing could read.
 - A sheet qualifier matches the evaluated sheet's name in any case (`--with data!D5=1` overrides Data!D5).
-- Every formula in the book that reads an overridden cell, directly or through other formulas on any sheet, drops its cached value, so every read sees the overrides: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that name a sheet holding an overridden or stale cell; without `--with`, `eval --at` touches only the formula's own precedents.
+- Every formula in the book that reads an overridden cell, directly, through a defined name or through other formulas on any sheet, drops its cached value, so every read sees the overrides: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that qualify a reference with a sheet holding an overridden or stale cell, or mention a defined name; without `--with`, `eval --at` touches only the formula's own precedents.
 
 **Output.** The text output adds an `At:` line, and the JSON payload's `at` carries the cell as evaluated (`"Data!D5"`; `null` without `--at`).
 
@@ -960,7 +960,7 @@ Without `--at` the formula has no cell of its own, so it evaluates as it would t
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Formula to evaluate |
 | `--at` | string | No | Evaluate as the plain cell at this ref (implicit intersection included; nothing is written). Without it the formula evaluates as an array, showing its top-left value |
-| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) |
+| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) on the sheet the formula evaluates on: the `--at` sheet, else `-s` |
 
 **Examples**:
 ```bash

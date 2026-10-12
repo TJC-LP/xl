@@ -1205,7 +1205,12 @@ USAGE:
   private val formulaArg = Opts.argument[String]("formula")
   private val withOpts =
     Opts
-      .options[String]("with", "Cell overrides (e.g., A1=100,B2=200). Repeatable.", "w")
+      .options[String](
+        "with",
+        "Cell overrides (e.g., A1=100,B2=200) on the sheet the formula evaluates on: " +
+          "the --at sheet, else -s. Repeatable.",
+        "w"
+      )
       .map(_.toList)
       .withDefault(Nil)
 

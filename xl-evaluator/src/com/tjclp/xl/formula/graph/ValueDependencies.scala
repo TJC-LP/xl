@@ -2,8 +2,10 @@ package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
-import com.tjclp.xl.formula.eval.Evaluator
+import com.tjclp.xl.formula.eval.{Evaluator, NameWalk}
 import com.tjclp.xl.formula.functions.{ArgValue, CriteriaRangeResize, ReferenceOperators}
+import com.tjclp.xl.formula.parser.FormulaParser
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
 /**
  * Value reads for the positioned-evaluation cycle check. Reference inspection (ROW, COLUMN, ROWS,
@@ -64,6 +66,10 @@ private[xl] object ValueDependencies:
    * `home` read `home`, and its unqualified ones read its own sheet, so nothing here (`--with`'s
    * search for another sheet's formulas that read back into the overridden one).
    *
+   * With `names`, a defined name read as a value reads what its definition reads ([[Names]]), as
+   * resolved from `current`, the sheet the formula sits on (`home` when it is not given). Without,
+   * a name reads nothing: the placement guard catches a read through one at run time.
+   *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
    * not thread-safe, so never share one across fibers or threads (`recalc --parallel`). Its cache
@@ -74,7 +80,9 @@ private[xl] object ValueDependencies:
   private[xl] final class Reader(
     bounds: Option[CellRange],
     home: Option[SheetName],
-    localReads: Boolean = true
+    localReads: Boolean = true,
+    names: Option[Names] = None,
+    current: Option[SheetName] = None
   ):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
@@ -105,6 +113,14 @@ private[xl] object ValueDependencies:
       def cell(at: ARef): Set[CellRange] =
         if referenceOnly then Set.empty else Set(CellRange(at, at))
       def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
+      // a defined name read as a value: what its definition reads on `home`
+      def named(qualifier: Option[SheetName], name: String): Set[CellRange] =
+        if referenceOnly then Set.empty
+        else
+          (names, home, current.orElse(home)) match
+            case (Some(resolver), Some(target), Some(from)) =>
+              resolver.reads(qualifier, name, from, target, bounds)
+            case _ => Set.empty
       // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
       def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
       def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
@@ -177,12 +193,74 @@ private[xl] object ValueDependencies:
               passes.exists(_(index, args.size))
             acc ++ arg(a, addressOnly)
           }
-        // literals, defined names (their targets live in workbook metadata; the placement guard
-        // catches a read through one) and external references: no cell of this sheet
-        case TExpr.Lit(_) | TExpr.ErrorLit(_, _) | TExpr.Missing | TExpr.NameRef(_) |
-            TExpr.SheetNameRef(_, _) | TExpr.ExternalRef(_, _, _, _) |
+        // defined names: their targets live in workbook metadata ([[Names]] when given)
+        case TExpr.NameRef(name) => named(None, name)
+        case TExpr.SheetNameRef(sheet, name) => named(Some(sheet), name)
+        // literals and external references: no cell of this sheet
+        case TExpr.Lit(_) | TExpr.ErrorLit(_, _) | TExpr.Missing | TExpr.ExternalRef(_, _, _, _) |
             TExpr.ExternalRange(_, _, _, _) =>
           Set.empty
+
+  /**
+   * GH-715: what the defined names of `wb` read, for `--with`'s stale-reader search. A reference
+   * resolves as the evaluator resolves it: from the qualifier's sheet, else the referencing
+   * formula's, a sheet-scoped name shadowing a workbook-scoped one, its body read from its scope
+   * sheet, else from the referencing formula's. The body's value reads count as the referencing
+   * formula's own, through further names. A body that does not parse, a name that does not resolve,
+   * and a chain past [[NameWalk.MaxDepth]] names read nothing, as the evaluator resolves none of
+   * them; a name in a cycle reads what its chain found before the cycle closed, and its readers
+   * evaluate to an error whatever the overrides.
+   *
+   * Single-use, like [[Reader]]: one analysis of one workbook, never shared across threads. Its
+   * memo keys on the target sheet, so every reader it serves for one target must share `bounds`.
+   */
+  private[xl] final class Names(wb: Workbook):
+    private val positions: Map[String, Int] =
+      wb.sheets.zipWithIndex.reverseIterator.map((sheet, i) => fold(sheet.name) -> i).toMap
+    private val bodies = scala.collection.mutable.HashMap.empty[DefinedName, Option[TExpr[?]]]
+    // (definition, sheet its body resolves from, target) → what it reads there
+    private val memo =
+      scala.collection.mutable.HashMap.empty[(DefinedName, String, String), Set[CellRange]]
+    private val open = scala.collection.mutable.Set.empty[(DefinedName, String, String)]
+
+    /** Whether `wb` defines any name: without one, no formula reads through a name. */
+    def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty
+
+    /** The lower-cased names `wb` defines, for a text prefilter. */
+    lazy val keys: Set[String] =
+      wb.metadata.definedNames.iterator.map(_.name.toLowerCase(java.util.Locale.ROOT)).toSet
+
+    def reads(
+      qualifier: Option[SheetName],
+      name: String,
+      current: SheetName,
+      target: SheetName,
+      bounds: Option[CellRange]
+    ): Set[CellRange] =
+      Evaluator
+        .lookupDefinedNameAt(wb, positions.get(fold(qualifier.getOrElse(current))), name)
+        .fold(Set.empty[CellRange]) { definition =>
+          val from = Evaluator.definedNameScope(wb, definition).fold(current)(_.name)
+          val key = (definition, fold(from), fold(target))
+          memo.get(key) match
+            case Some(found) => found
+            case None if open.contains(key) || open.sizeIs >= NameWalk.MaxDepth => Set.empty
+            case None =>
+              open += key
+              val body = bodies.getOrElseUpdate(
+                definition,
+                FormulaParser.parse(definition.formula).toOption
+              )
+              val read = body.fold(Set.empty[CellRange]) { expr =>
+                Reader(bounds, Some(target), fold(from) == fold(target), Some(this), Some(from))
+                  .readRanges(expr)
+              }
+              open -= key
+              memo.update(key, read)
+              read
+        }
+
+    private def fold(sheet: SheetName): String = sheet.value.toLowerCase(java.util.Locale.ROOT)
 
   private def referenceDefinition(expr: TExpr[?]): Boolean = expr match
     // Literal range bindings are substituted by the parser and skipped by LET evaluation.

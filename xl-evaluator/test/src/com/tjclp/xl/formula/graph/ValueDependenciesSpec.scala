@@ -14,6 +14,7 @@ import com.tjclp.xl.formula.functions.{
   ReferenceOperators
 }
 import com.tjclp.xl.formula.parser.FormulaParser
+import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import munit.FunSuite
 
 class ValueDependenciesSpec extends FunSuite:
@@ -203,6 +204,58 @@ class ValueDependenciesSpec extends FunSuite:
     assertEquals(reader.reads(inspected), Set(ref"A1"))
     // Reading the range as a value must still retain those cell dependencies.
     assertEquals(reader.reads(computed), Set(ref"A1", ref"D5", ref"D6"))
+  }
+
+  /**
+   * GH-715: Data and Other, with rate = Data!$B$1, base = rate, ubase = $B$1 (unqualified), loc =
+   * Data!$A$1 for the workbook and loc = Data!$B$1 scoped to Other, ping and pong naming each
+   * other.
+   */
+  private val named: Workbook =
+    val book = Workbook(Vector(Sheet("Data"), Sheet("Other")))
+    book.copy(metadata =
+      book.metadata.copy(definedNames =
+        Vector(
+          DefinedName("rate", "Data!$B$1"),
+          DefinedName("base", "rate"),
+          DefinedName("ubase", "$B$1"),
+          DefinedName("loc", "Data!$A$1"),
+          DefinedName("loc", "Data!$B$1", localSheetId = Some(1)),
+          DefinedName("ping", "pong+1"),
+          DefinedName("pong", "ping+Data!$C$1")
+        )
+      )
+    )
+
+  /** What `formula`, sitting on `from`, reads on Data through `named`'s names. */
+  private def readsOnData(formula: String, from: String): Set[ARef] =
+    ValueDependencies
+      .Reader(
+        Some(ref"A1:F10"),
+        Some(SheetName.unsafe("Data")),
+        localReads = from == "Data",
+        names = Some(ValueDependencies.Names(named)),
+        current = Some(SheetName.unsafe(from))
+      )
+      .readRanges(parsed(formula))
+      .flatMap(_.cells)
+
+  test("GH-715: a defined name read as a value reads its definition's reads, through names") {
+    assertEquals(readsOnData("=rate*2", "Other"), Set(ref"B1"))
+    assertEquals(readsOnData("=base*2", "Other"), Set(ref"B1"))
+    // an unqualified body resolves from the referencing sheet: from Other it reads Other!B1
+    assertEquals(readsOnData("=ubase", "Other"), Set.empty[ARef])
+    assertEquals(readsOnData("=ubase", "Data"), Set(ref"B1"))
+    // a sheet-scoped name shadows the workbook's on its own sheet only
+    assertEquals(readsOnData("=loc", "Other"), Set(ref"B1"))
+    assertEquals(readsOnData("=loc", "Data"), Set(ref"A1"))
+    // inspecting a name is not a read; an unknown name reads nothing
+    assertEquals(readsOnData("=ROWS(rate)", "Other"), Set.empty[ARef])
+    assertEquals(readsOnData("=nosuchname", "Other"), Set.empty[ARef])
+  }
+
+  test("GH-715: names in a cycle terminate and read what their chain reaches") {
+    assertEquals(readsOnData("=ping", "Other"), Set(ref"C1"))
   }
 
 object ValueDependenciesSpec:

@@ -885,9 +885,12 @@ object SheetEvaluator:
     )
     new Placement(evaluator, guard)
 
-  /** `sheet` with `formula` placed, uncached, at `at`: what a [[Placement]] needs there. */
+  /**
+   * `sheet` with `formula` placed, uncached, at `at`: what a [[Placement]] needs there. Stored
+   * without its leading `=`, as every formula record is.
+   */
   private[xl] def placed(sheet: Sheet, at: ARef, formula: String): Sheet =
-    sheet.put(at, CellValue.Formula(formula, None))
+    sheet.put(at, CellValue.Formula(formula.stripPrefix("="), None))
 
   /** GH-695: whether a sheet-level fold should record anchors' results for `x#` readers. */
   private def readsSpills(sheet: Sheet, workbook: Option[Workbook]): Boolean =

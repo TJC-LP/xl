@@ -687,8 +687,11 @@ object ReadCommands:
    * (`B{n} = SUM($A$1:A{n})`) has a distinct range per row, and expanding them would cost the
    * square of the row count. One index per sheet a stale cell lands on, built when the first one
    * does: it holds that sheet's formulas with their unqualified and own-name reads, and another
-   * sheet's formulas with their reads qualified with its name; a formula whose text never names the
-   * sheet cannot read it that way and is not parsed for it. Each range registers in the grid blocks
+   * sheet's formulas with their reads qualified with its name. A defined name read as a value reads
+   * what its definition reads, resolved as the evaluator resolves it ([[ValueDependencies.Names]]),
+   * so `rate*2` with `rate` naming `Data!$B$1` reads Data!B1. A formula on another sheet whose text
+   * neither qualifies a reference with the sheet's name (`Data!`, `'Data'!`) nor holds a defined
+   * name's token cannot read it and is not parsed for it. Each range registers in the grid blocks
    * it overlaps (one column by [[StaleBlockRows]] rows); a range spanning more than
    * [[StaleBlockLimit]] blocks is checked against every stale cell of its sheet instead. The walk
    * asks each stale cell's block for candidate formulas and keeps those with a range containing the
@@ -700,6 +703,9 @@ object ReadCommands:
    * a formula is checked only while still cached, at most once per cell of a block it registered
    * in: [[StaleBlockRows]] checks per registration at worst, bounded by the indexes' own size, not
    * by the square of the sheet. A wide reader is checked against each stale cell, as before.
+   *
+   * The maps, sets and bit set below are local to one call and never escape it: the result is a
+   * new, immutable workbook.
    */
   private[cli] def uncacheReaders(book: Workbook, home: SheetName, changed: Set[ARef]): Workbook =
     import scala.collection.mutable
@@ -731,22 +737,43 @@ object ReadCommands:
             do blocks.getOrElseUpdate((col, block), mutable.Set.empty[Int]) += id
         }
 
+    // defined names, resolved as the evaluator resolves them: `rate*2` reads what `rate` names
+    val names = ValueDependencies.Names(book)
+    // whether a formula's text holds a token that could be a defined name, asked once per formula
+    val namesAName = mutable.HashMap.empty[(Int, ARef), Boolean]
+    def mentionsName(node: (Int, ARef), text: String): Boolean =
+      names.nonEmpty && namesAName.getOrElseUpdate(
+        node,
+        NameToken
+          .findAllIn(text)
+          .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
+      )
+
     def readersOf(target: Int): Readers =
       val readers = Readers()
       val name = sheets(target).name
       val bounds = sheets(target).usedRange
-      val own = ValueDependencies.Reader(bounds, Some(name))
-      val elsewhere = ValueDependencies.Reader(bounds, Some(name), localReads = false)
-      // a qualified reference spells the name, its quotes doubled, in any case
-      val spelled = name.value.toLowerCase(java.util.Locale.ROOT).replace("'", "''")
+      // a reference qualified with the target spells its name, perhaps quoted, then `!`, in any
+      // case; a name may hide one, so a formula mentioning a name is read too
+      val qualified = java.util.regex.Pattern.compile(
+        "'?" + java.util.regex.Pattern.quote(name.value.replace("'", "''")) + "'?!",
+        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
+      )
       sheets.indices.foreach { at =>
-        val reader = if at == target then own else elsewhere
+        val reader = ValueDependencies.Reader(
+          bounds,
+          Some(name),
+          localReads = at == target,
+          names = Some(names),
+          current = Some(sheets(at).name)
+        )
         sheets(at).cells.foreach { (ref, cell) =>
           cell.value match
             // GH-430: a data table's cells are pinned value sources
             case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
             case CellValue.Formula(text, _, _)
-                if at == target || text.toLowerCase(java.util.Locale.ROOT).contains(spelled) =>
+                if at == target || qualified.matcher(text).find() ||
+                  mentionsName((at, ref), text) =>
               parse((at, ref), text).foreach { expr =>
                 val read = reader.readRanges(expr).toVector
                 if read.nonEmpty then readers.register(idOf((at, ref)), read)
@@ -783,6 +810,9 @@ object ReadCommands:
               case _ => s
           })
         }
+
+  /** A token of formula text that could be a defined name, for [[uncacheReaders]]'s prefilter. */
+  private val NameToken = """[\p{L}_\\][\p{L}\p{N}_.\\?]*""".r
 
   /** The rows in one block of [[uncacheReaders]]'s index. */
   private val StaleBlockRows = 1024

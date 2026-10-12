@@ -28,8 +28,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   positionless `eval` gives the array sum), read-only, with `--with`, under the one-sheet rule. A
   placement that would read itself is a `FORMULA_ERROR` naming the cycle, whose path, like any
   long cycle path from positionless `eval` and `evala`, now elides its middle. Contract:
-  `eval --json` gains an `at` field, the cell as evaluated (`"Data!D5"`), `null` without `--at`;
-  the change is additive.
+  `eval --json` gains an `at` field, the cell as evaluated (`"Data!D5"`), `null` without `--at`.
+  For JSON consumers the change is additive: every existing field keeps its name and shape.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
@@ -302,11 +302,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the
   evaluated sheet threaded in, so a formula on another sheet that reads back into it sees the
   overrides and the computed closure. Every cached formula in the book that reads an overridden
-  cell, directly or through other formulas on any sheet, drops its stale cache, so `Data!B1`,
+  cell, directly, through a defined name (`rate*2` with `rate` naming `Data!$B$1`) or through
+  other formulas on any sheet, drops its stale cache, so `Data!B1`,
   `INDIRECT("B1")` and another sheet's read-back (`Other!A1` holding `=Data!B1*2`, cached as
   Excel saves it) see the override too. This costs one parse of the sheet's formulas, and of each
-  other sheet's formulas that name a sheet holding an overridden or stale cell, when `--with` is
-  given.
+  other sheet's formulas that qualify a reference with a sheet holding an overridden or stale
+  cell or mention a defined name, when `--with` is given. The overrides apply to the sheet the
+  formula evaluates on: the `--at` sheet, else `-s`.
 - **`eval` and `evala` analyse only the formula's own precedents** (#715): the closure they
   evaluate first is walked from the formula's value reads, as `eval --at` does, instead of from a
   dependency graph of the whole sheet. A cycle elsewhere on the sheet no longer fails them, a
