@@ -1448,4 +1448,10 @@ class FormatCodeParserSpec extends FunSuite:
     assertEquals(fmt("0#.00", BigDecimal("0.5")), "0.50")
     assertEquals(fmt("0,000", 0), "0,000")
     assertEquals(fmt("?,??0", 0), "    0")
+    // Padding sits left of the digits, so a separator after a blanked `?` is blanked with it
+    assertEquals(fmt("?,??0", 5), "    5")
+    assertEquals(fmt("??,???", 1234), " 1,234")
+    // `\"` is an escaped quote, not the start of a literal: the `;` after it still splits
+    assertEquals(fmt("0\\\"x;-0", 5), "5\"x")
+    assertEquals(fmt("0\\\"x;-0", -5), "-5")
   }

@@ -1089,7 +1089,8 @@ object FormatCodeParser:
   /**
    * Align digits within a placeholder run: unfilled `?` positions become spaces, `0` becomes zeros,
    * `#` adds nothing. Numerators/wholes right-align (pad left), denominators left-align (pad
-   * right).
+   * right). Shared by the integer, numerator and denominator paths; a zero part is passed as `""`
+   * so that every placeholder is unfilled (`?` → space, `0` → "0", `#` → nothing).
    */
   private def padPlaceholders(digits: String, placeholders: String, alignRight: Boolean): String =
     val diff = placeholders.length - digits.length

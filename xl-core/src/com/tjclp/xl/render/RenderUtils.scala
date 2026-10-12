@@ -626,7 +626,7 @@ object RenderUtils:
   private[render] def largestFontPt(
     value: CellValue,
     cellFontPt: Double,
-    numFmt: NumFmt = NumFmt.General
+    numFmt: NumFmt
   ): Double =
     value match
       case CellValue.RichText(rt) =>

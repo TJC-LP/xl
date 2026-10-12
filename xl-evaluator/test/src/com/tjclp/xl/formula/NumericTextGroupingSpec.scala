@@ -18,7 +18,7 @@ import munit.FunSuite
 class NumericTextGroupingSpec extends FunSuite:
   private val sheet = Sheet("Review")
 
-  test("VALUE accepts a long leading group before valid thousands groups") {
+  test("#693: VALUE accepts a long leading group before valid thousands groups") {
     List("1234,567", "12345,678", "+1234,567", "-1234,567", "$1234,567").foreach { input =>
       val expected = BigDecimal(input.replace(",", "").replace("$", ""))
       assertEquals(
@@ -29,14 +29,14 @@ class NumericTextGroupingSpec extends FunSuite:
     }
   }
 
-  test("TEXT converts a partially grouped numeric string before applying numeric format") {
+  test("#693: TEXT converts a partially grouped numeric string before applying numeric format") {
     assertEquals(
       sheet.evaluateFormula("=TEXT(\"1234,567\",\"0.00\")"),
       Right(CellValue.Text("1234567.00"))
     )
   }
 
-  test("TEXT and VALUE keep rejecting malformed non-leading thousands groups") {
+  test("#693: TEXT and VALUE keep rejecting malformed non-leading thousands groups") {
     List("1,23", "12,34,567", "1.2,3", "1e3,0", "1$2", "$$123").foreach { input =>
       assertEquals(
         sheet.evaluateFormula(s"=VALUE(\"$input\")"),
@@ -51,14 +51,14 @@ class NumericTextGroupingSpec extends FunSuite:
     }
   }
 
-  test("rich text uses the same text section in scalar display and render content") {
+  test("#693: rich text uses the same text section in scalar display and render content") {
     val value = CellValue.RichText(RichText.plain("abc"))
     val format = NumFmt.Custom("0;-0;0;\"T:\"@")
     assertEquals(NumFmtFormatter.formatValue(value, format), "T:abc")
     assertEquals(RenderUtils.renderedContent(value, format).text, "T:abc")
   }
 
-  test("TEXT numeric-string coercion is independent of rich-text storage") {
+  test("#693: TEXT numeric-string coercion is independent of rich-text storage") {
     val cells = sheet
       .put(ref"A1", CellValue.Text("123"))
       .put(ref"A2", CellValue.RichText(RichText.plain("123")))
