@@ -220,6 +220,7 @@ Array contexts keep dynamic-array semantics: array formulas (CSE `{=…}` record
 Where xl differs from legacy Excel (as Excel 365 recalculates the plain `<f>` xl writes):
 - SUMPRODUCT passes the array class down into IF, IFERROR and TRANSPOSE: `=SUMPRODUCT(IF(A1:A10>2,1,0))` counts, as LibreOffice and a formula typed into Excel 365 do, while legacy Excel — and Excel 365 opening this plain `<f>` — needs CSE there and computes the formula row's value. Inside SUMPRODUCT write conditions as factors: `=SUMPRODUCT(--(A1:A10>2))`, `=SUMPRODUCT((A1:A10>2)*A1:A10)`.
 - TRANSPOSE's argument reads its whole range.
+- In SUMPRODUCT, a range that reaches the sheet's last row or column without starting at its first (`A2:A1048576`) gets no shared extent: written, it keeps its full height, while INDEX or XLOOKUP over such a range stops at the used rows, so `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is `#N/A` and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` `#VALUE!` where LibreOffice sums (this predates GH-713; 0.23.1 answers the same). Write whole columns (`A:A*INDEX(B:B,0)`) or bounded ranges.
 - `A1#` in a plain cell is an array value, read at its top-left in a value position.
 - ROW and COLUMN over a multi-cell range return its first row or column number in every context: `=SUM(ROW(A1:A10))` in a plain cell is 1, as in legacy Excel, but `=SUMPRODUCT(ROW(A1:A10))` is 1 where Excel folds 55.
 - An intersected error criterion is `#VALUE!` in COUNTIF, as in LibreOffice; Excel may count the matching error cells.

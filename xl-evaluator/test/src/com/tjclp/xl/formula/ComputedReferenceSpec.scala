@@ -18,6 +18,10 @@ import munit.FunSuite
  *     line up element by element; without written ranges it keeps its own materialization.
  */
 class ComputedReferenceSpec extends FunSuite:
+  // the pinned edge-range gap below reads a written A2:A1048576 whole (a million cells), which
+  // can pass munit's 30 s default on a loaded machine
+  override val munitTimeout = scala.concurrent.duration.Duration(120, "s")
+
   private def number(n: Int): CellValue = CellValue.Number(BigDecimal(n))
   private val sheet = (1 to 3).foldLeft(Sheet(SheetName.unsafe("Data"))) { (s, i) =>
     s.put(ARef.from0(0, i - 1), number(i))
@@ -124,4 +128,30 @@ class ComputedReferenceSpec extends FunSuite:
     // the computed column itself, aligned with B:B: 3 (1×1 + 2×1) either way, as LibreOffice
     assertEquals(at("SUMPRODUCT(INDEX(T!A:A,0)*B:B)"), Right(number(3)))
     assertEquals(at("SUMPRODUCT(INDEX(tcol,0)*B:B)"), Right(number(3)))
+  }
+
+  test("an edge-reaching range that starts below row 1 gets no shared extent (pinned gap)") {
+    // A2:A4 = 1,2,3 and B2:B4 = 10,20,30. A range reaching row 1048576 but not starting at row 1
+    // is not a whole column, so SUMPRODUCT gives it no shared extent: written, A2:A1048576 keeps
+    // all its rows, while INDEX over B2:B1048576 stops at the used rows — the shapes differ.
+    // LibreOffice 24.2.7 answers 140 for both. This predates GH-713 (0.23.1 gives the same
+    // #N/A and #VALUE!); docs/LIMITATIONS.md lists it.
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(
+      at("SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))"),
+      Right(CellValue.Error(CellError.NA))
+    )
+    assertEquals(
+      at("SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))"),
+      Right(CellValue.Error(CellError.Value))
+    )
+    // what does line up: whole columns, or INDEX on both sides (two written edge ranges do too,
+    // at a million cells each — left out to keep this suite fast)
+    assertEquals(at("SUMPRODUCT(A:A*INDEX(B:B,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(INDEX(A2:A1048576,0)*INDEX(B2:B1048576,0))"), Right(number(140)))
   }
