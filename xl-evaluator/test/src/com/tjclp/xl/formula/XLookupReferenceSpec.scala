@@ -140,6 +140,52 @@ class XLookupReferenceSpec extends FunSuite:
     val placed = data.put(ref"H1", CellValue.Formula(formula, None))
     placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))).left.map(_.message)
 
+  /**
+   * The same data, A1:A3 = 1,2,3 and B1:B3 = 10,20,30, on a sheet whose used range runs to row 20
+   * (Z20 holds a value), so a lookup over A1:A20 reads every one of its blank cells — the full read
+   * the whole-column clamp must agree with.
+   */
+  private def short(formula: String): Either[String, CellValue] =
+    val data = (1 to 3).foldLeft(Sheet(SheetName.unsafe("Short"))) { (s, i) =>
+      s.put(ARef.from1(1, i), N(i.toString)).put(ARef.from1(2, i), N((i * 10).toString))
+    }
+    val placed = data.put(ref"Z20", N("0")).put(ref"H1", CellValue.Formula(formula, None))
+    placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))).left.map(_.message)
+
+  test("GH-713: every match × search mode lands where a full read does, blank tail included") {
+    // A:A on Tall reads rows 1-3 and lets one blank stand for rows 4-1048576; A1:A20 on Short reads
+    // all 20 rows. A hit on Short's first blank (row 4) is Tall's too; a hit on Short's last row
+    // (20, a reverse search's first blank) is Tall's last row, 1048576.
+    val cases =
+      for
+        key <- List("Z9", "\"\"", "0", "0.5", "-1", "1", "2.5", "3", "5", "\"a\"")
+        matchMode <- List("-1", "1", "0", "2")
+        searchMode <- List("1", "-1", "2", "-2")
+      yield (key, matchMode, searchMode)
+    def fullRead(k: String, m: String, s: String): Either[String, CellValue] =
+      short(s"ROWS(B1:XLOOKUP($k,A1:A20,B1:B20,,$m,$s))") match
+        case Right(CellValue.Number(n)) if n == BigDecimal(20) => Right(N("1048576"))
+        case other => other
+    val expected = cases.map((k, m, s) => (s"$k,$m,$s", fullRead(k, m, s)))
+    val clamped =
+      cases.map((k, m, s) => (s"$k,$m,$s", tall(s"ROWS(B1:XLOOKUP($k,A:A,B:B,,$m,$s))")))
+    assertEquals(clamped, expected)
+    // Today no mode lands on a blank — exact, wildcard and approximate matching all skip blank
+    // cells, whatever the key — so the full read and the clamp agree because the stand-in never
+    // wins. Pinned: if a change ever lets a blank match, this fails first, and the comparison
+    // above then checks the stand-in's position (it relies on first-tie-wins, see blankTail).
+    assert(
+      !expected.exists((_, r) => r == Right(N("4")) || r == Right(N("1048576"))),
+      expected.mkString("\n")
+    )
+    // the matrix does reach both ends of the data in every search direction
+    assert(
+      expected.count((_, r) => r == Right(N("1"))) >= 8 && expected.count((_, r) =>
+        r == Right(N("3"))
+      ) >= 8
+    )
+  }
+
   test("GH-713: a whole-column lookup reads the data, and matches past it as before") {
     // the data
     assertEquals(tall("XLOOKUP(2,A:A,B:B)"), Right(N("20")))

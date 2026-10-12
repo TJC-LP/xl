@@ -130,12 +130,38 @@ class ComputedReferenceSpec extends FunSuite:
     assertEquals(at("SUMPRODUCT(INDEX(tcol,0)*B:B)"), Right(number(3)))
   }
 
+  test("a computed edge range that starts below row 1 gets no shared extent (pinned, #746)") {
+    // A1:A10 = 1, B1:B10 = 1..10. `B5:INDEX(B:B,1048576)` computes B5:B1048576, which is not a
+    // whole column, so SUMPRODUCT gives it no shared extent; it stops at B's used rows, unlike a
+    // written A5:A1048576 (all its rows) or a shared-bounded A:A — the lengths differ. Bounding it
+    // like a whole column would not help (the written range beside it keeps its height); the fix
+    // bounds edge ranges, written and computed, the same way: #746. LibreOffice 24.2.7 answers
+    // 45, 45, 55 and 45.
+    val f = (1 to 10).foldLeft(Sheet(SheetName.unsafe("F"))) { (acc, r) =>
+      acc.put(ARef.from1(1, r), number(1)).put(ARef.from1(2, r), number(r))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = f.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(
+      at("SUMPRODUCT((A:A>0)*(B5:INDEX(B:B,1048576)))"),
+      Right(CellValue.Error(CellError.NA))
+    )
+    assertEquals(
+      at("SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))"),
+      Right(CellValue.Error(CellError.NA))
+    )
+    // a computed whole column takes the extent; alone, the edge range is just its data
+    assertEquals(at("SUMPRODUCT((A:A>0)*(B1:INDEX(B:B,1048576)))"), Right(number(55)))
+    assertEquals(at("SUMPRODUCT(B5:INDEX(B:B,1048576))"), Right(number(45)))
+  }
+
   test("an edge-reaching range that starts below row 1 gets no shared extent (pinned gap)") {
     // A2:A4 = 1,2,3 and B2:B4 = 10,20,30. A range reaching row 1048576 but not starting at row 1
     // is not a whole column, so SUMPRODUCT gives it no shared extent: written, A2:A1048576 keeps
     // all its rows, while INDEX over B2:B1048576 stops at the used rows — the shapes differ.
     // LibreOffice 24.2.7 answers 140 for both. This predates GH-713 (0.23.1 gives the same
-    // #N/A and #VALUE!); docs/LIMITATIONS.md lists it.
+    // #N/A and #VALUE!); docs/LIMITATIONS.md lists it, and #746 tracks the fix.
     val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
       case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
     }
