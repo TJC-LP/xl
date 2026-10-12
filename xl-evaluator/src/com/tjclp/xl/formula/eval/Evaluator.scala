@@ -141,9 +141,44 @@ object Evaluator:
    * computed values like a recalculation but never had the aggregate memo.
    */
   private[formula] def spillTrackingInstance(rng: Rng, trackSpills: Boolean): Evaluator =
+    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(spillTracking(trackSpills))))
+
+  private def spillTracking(trackSpills: Boolean): AggregateMemo =
     val memo = new AggregateMemo(cachesAggregates = false)
     if trackSpills then memo.trackSpills()
-    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(memo)))
+    memo
+
+  /**
+   * GH-715: [[spillTrackingInstance]] for a formula placed at `at` on the sheet named `sheet`: the
+   * evaluator carries a [[PlacementGuard]] for that cell, which every memo of the evaluation
+   * inherits, so a read of the placement by any path is a `CircularRef`, and the returned guard
+   * records the read even when IFERROR swallows that error (IFERROR takes any failure). The caller
+   * puts an uncached formula at `at`, in the sheet it evaluates on and in the workbook it passes,
+   * so reads reach a memo.
+   */
+  private[formula] def placedInstance(
+    rng: Rng,
+    trackSpills: Boolean,
+    sheet: SheetName,
+    at: ARef
+  ): (Evaluator, PlacementGuard) =
+    val guard = new PlacementGuard(sheet, at)
+    // No depth-0 memo: one would outlive every evaluation it serves (the CLI's fold makes a new
+    // Sheet per step, and the memo keys by Sheet identity). Each read starts its own memo, which
+    // inherits the guard, and the guard's one record of a read outlives them all. The trade-off: an
+    // uncached precedent two top-level reads share evaluates once per read, not once per pass. The
+    // CLI fold has already evaluated and cached the precedents the static check sees, so only
+    // run-time reads (INDIRECT, OFFSET, names, other sheets) can pay it.
+    val evaluator = TotalEvaluator(
+      new EvaluatorWithDepth(
+        0,
+        rng = rng,
+        memo = None,
+        aggregateMemo = Some(spillTracking(trackSpills)),
+        guard = Some(guard)
+      )
+    )
+    (evaluator, guard)
 
   /**
    * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
@@ -567,7 +602,7 @@ object Evaluator:
     def refusal(name: String, node: NameWalk.Node): Option[EvalError] =
       val refused =
         if path.contains(node) then
-          Some(EvalError.EvalFailed(s"Defined name cycle detected while resolving '$name'.", None))
+          Some(EvalError.EvalFailed(s"$NameCycleDetected while resolving '$name'.", None))
         else if path.sizeIs >= NameWalk.MaxDepth then
           Some(
             EvalError.EvalFailed(
@@ -858,6 +893,28 @@ object Evaluator:
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
+  // The failures a cycle with no placement guard surfaces as, shared with [[isCycleFailure]]
+  private val CrossSheetDepthExceeded = "Cross-sheet formula recursion depth exceeded"
+  private val SpillDepthExceeded = "Spill reference recursion depth exceeded"
+  private val NameCycleDetected = "Defined name cycle detected"
+
+  /**
+   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: a recursion
+   * depth guard (cells, or a spill reference, reading each other) or a defined-name cycle. Each is
+   * an `EvalFailed` the cycle's readers see; it is not an internal failure.
+   *
+   * Matched by message prefix, the three raise sites sharing the constants above: a dedicated
+   * marker would be a new case or field on the published `EvalError`, a binary break.
+   * LookupUncachedKeysSpec pins each raise site, so a rewording that loses the match fails there.
+   * TODO(#751): a structured cycle marker on `EvalError` replaces the prefixes at the next
+   * binary-breaking release.
+   */
+  private[formula] def isCycleFailure(error: EvalError): Boolean = error match
+    case EvalError.EvalFailed(message, _) =>
+      message.startsWith(CrossSheetDepthExceeded) || message.startsWith(SpillDepthExceeded) ||
+      message.startsWith(NameCycleDetected)
+    case _ => false
+
   /** Resolve range cells with the same cache, recursion and context rules as scalar references. */
   private[formula] def cellValueReader(
     targetSheet: Sheet,
@@ -911,6 +968,9 @@ object Evaluator:
    *   Workbook context for nested cross-sheet references
    * @param depth
    *   Current recursion depth (for cycle protection)
+   * @param memo
+   *   the evaluation's memo, which carries its placement guard (GH-715). No default: a fresh memo
+   *   here would carry no guard, and the placement could evaluate as a precedent of itself
    * @param arrayRecord
    *   the cell is an ArrayFormula record: it evaluates in array mode and reads as element (0,0)
    * @return
@@ -923,7 +983,7 @@ object Evaluator:
     workbook: Option[Workbook],
     depth: Int = 0,
     rng: Rng = Rng.system,
-    memo: EvalMemo = new EvalMemo,
+    memo: EvalMemo,
     workbookPath: Option[String] = None,
     aggregateMemo: Option[AggregateMemo] = None,
     currentCell: Option[ARef] = None,
@@ -935,11 +995,13 @@ object Evaluator:
         break(
           Left(
             EvalError.EvalFailed(
-              s"Cross-sheet formula recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
+              s"$CrossSheetDepthExceeded (max: $MaxCrossSheetRecursionDepth). Possible circular reference.",
               None
             )
           )
         )
+      // GH-715: a positioned evaluation's placement is never evaluated as a precedent of itself
+      currentCell.flatMap(memo.guard(targetSheet, _)).foreach(error => break(Left(error)))
 
       FormulaParser.parse(formulaStr) match
         case Left(parseErr) =>
@@ -961,7 +1023,8 @@ object Evaluator:
             rng = rng,
             memo = Some(memo),
             workbookPath = workbookPath,
-            aggregateMemo = aggregateMemo
+            aggregateMemo = aggregateMemo,
+            guard = memo.placement
           )
             .eval(expr, targetSheet, clock, workbook, currentCell) match
             case Right(result) => Right(EvalResult.toCellValue(result))
@@ -994,11 +1057,14 @@ object Evaluator:
     if depth > MaxCrossSheetRecursionDepth then
       Left(
         EvalError.EvalFailed(
-          s"Spill reference recursion depth exceeded (max: $MaxCrossSheetRecursionDepth). " +
+          s"$SpillDepthExceeded (max: $MaxCrossSheetRecursionDepth). " +
             s"Possible circular reference through ${anchor.toA1}#.",
           None
         )
       )
+    else if memo.guard(targetSheet, anchor).isDefined then
+      // GH-715: the placement's own spill, `D5#` placed at D5, reads the placement
+      Left(EvalError.CircularRef(List(anchor)))
     else
       FormulaParser.parse(formulaStr) match
         case Left(parseErr) =>
@@ -1016,8 +1082,31 @@ object Evaluator:
             rng = rng,
             memo = Some(memo),
             workbookPath = workbookPath,
-            aggregateMemo = aggregateMemo
+            aggregateMemo = aggregateMemo,
+            guard = memo.placement
           ).eval(expr, targetSheet, clock, workbook, Some(anchor))
+
+  /**
+   * GH-715: the cell a positioned evaluation places its formula in (`at` on the sheet named
+   * `sheet`), and whether anything read it. The evaluator carries it (every derived evaluator gets
+   * it, a required constructor argument of [[EvaluatorWithDepth]]) as well as the memo, so a reader
+   * that has to start a fresh memo still guards the placement, and every memo of the evaluation
+   * shares the one record of the read. Single-threaded, like the memo.
+   */
+  private[formula] final class PlacementGuard(sheet: SheetName, at: ARef):
+    // Local mutation like EvalMemo's map: one evaluation pass, one thread
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private var wasRead = false
+
+    /** Whether anything read the placement. */
+    def read: Boolean = wasRead
+
+    /** The read's error when `ref` on `onSheet` is the placement, recording the read. */
+    def check(onSheet: Sheet, ref: ARef): Option[EvalError] =
+      // case-insensitive, as Excel compares sheet names and as the rest of GH-715 does
+      val guarded = ref == at && onSheet.name.value.equalsIgnoreCase(sheet.value)
+      if guarded then wasRead = true
+      Option.when(guarded)(EvalError.CircularRef(List(ref)))
 
   /**
    * GH-346: per-pass memo for recursively evaluated uncached formula cells.
@@ -1047,8 +1136,14 @@ object Evaluator:
    * that is observable only on chains deeper than the guard, where results were already
    * path-dependent (and where whole-workbook `recalculate()`, which orders iteratively, is the
    * supported path).
+   *
+   * GH-715: `placement` guards one cell, the cell a positioned evaluation places its formula in
+   * ([[placedInstance]]). That cell holds an uncached formula, so every read of it, whatever
+   * computed it (INDIRECT, OFFSET, a defined name, another sheet's formula), comes here, and is the
+   * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
+   * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo:
+  private[formula] final class EvalMemo(val placement: Option[PlacementGuard] = None):
     private val bySheet =
       new java.util.IdentityHashMap[
         Sheet,
@@ -1056,6 +1151,20 @@ object Evaluator:
       ]()
 
     def getOrCompute(sheet: Sheet, at: ARef)(
+      compute: => Either[EvalError, CellValue]
+    ): Either[EvalError, CellValue] =
+      guard(sheet, at).fold(memoized(sheet, at, compute))(Left(_))
+
+    /**
+     * The guarded placement's error when `at` on `sheet` is it. Reads that evaluate an uncached
+     * formula without this memo's lookup ([[evalCrossSheetFormula]], [[evalSpillFormula]]) ask too.
+     */
+    def guard(sheet: Sheet, at: ARef): Option[EvalError] =
+      placement.flatMap(_.check(sheet, at))
+
+    private def memoized(
+      sheet: Sheet,
+      at: ARef,
       compute: => Either[EvalError, CellValue]
     ): Either[EvalError, CellValue] =
       val forSheet =
@@ -1350,6 +1459,16 @@ private class EvaluatorImpl(
    */
   protected def memoOpt: Option[Evaluator.EvalMemo] = None
 
+  /** GH-715: the placement a positioned evaluation guards; None outside one. */
+  protected def placementGuard: Option[Evaluator.PlacementGuard] = None
+
+  /**
+   * The pass's memo, or a fresh one where recursion begins here. GH-715: a fresh memo inherits the
+   * evaluator's placement guard, so the guard never depends on a memo having been threaded.
+   */
+  protected def passMemo: Evaluator.EvalMemo =
+    memoOpt.getOrElse(new Evaluator.EvalMemo(placementGuard))
+
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
 
@@ -1429,7 +1548,7 @@ private class EvaluatorImpl(
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
                     // GH-346: memoized per pass — a cell evaluates once, not once per path
-                    val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+                    val memo = passMemo
                     memo
                       .getOrCompute(targetSheet, at) {
                         // at its own position: an implicit intersection there reads its own row
@@ -1509,7 +1628,7 @@ private class EvaluatorImpl(
             decodeOrCarried(at, cell, decode)
           case CellValue.Formula(formulaStr, None, kind) =>
             // GH-346: memoized per pass — a cell evaluates once, not once per path
-            val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+            val memo = passMemo
             memo
               .getOrCompute(sheet, at) {
                 // at its own position: an implicit intersection there reads its own row
@@ -1782,6 +1901,7 @@ private class EvaluatorImpl(
       resolvingNames,
       workbookPath,
       aggregateMemoOpt,
+      placementGuard,
       arrayRangeBounds = None
     )
 
@@ -1823,7 +1943,7 @@ private class EvaluatorImpl(
     // recurse through the same memo, so a shared precedent evaluates once per pass. Created
     // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
     // top-level evaluations.
-    val callMemo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+    val callMemo = passMemo
     // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
     // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
     // (e.g. SUM over a range-valued binding) still resolve in-scope names.
@@ -1840,6 +1960,7 @@ private class EvaluatorImpl(
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
         aggregateMemoOpt,
+        placementGuard,
         arrayRangeBounds = bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
@@ -1857,6 +1978,7 @@ private class EvaluatorImpl(
       Some(callMemo),
       workbookPath,
       aggregateMemoOpt,
+      placementGuard = placementGuard,
       operands = EvalContext.Operands(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),
@@ -2067,7 +2189,7 @@ private class EvaluatorImpl(
         workbook,
         currentDepth,
         rng,
-        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        passMemo,
         workbookPath,
         aggregateMemoOpt
       )(at)
@@ -2157,6 +2279,7 @@ private class EvaluatorImpl(
         resolvingNames,
         workbookPath,
         aggregateMemoOpt,
+        placementGuard,
         arrayRangeBounds = arrayRangeBounds
       )
     // An array evaluation binds references when a range slot reads a LET name (GH-710) or when
@@ -2373,6 +2496,7 @@ private class EvaluatorImpl(
               trail,
               workbookPath,
               aggregateMemoOpt,
+              placementGuard,
               arrayRangeBounds = None
             )
             // Keep references through name aliases and LET bodies too. Materializing
@@ -2425,7 +2549,7 @@ private class EvaluatorImpl(
       workbook,
       currentDepth,
       rng,
-      memoOpt.getOrElse(new Evaluator.EvalMemo),
+      passMemo,
       workbookPath,
       aggregateMemoOpt
     )
@@ -2699,7 +2823,7 @@ private class EvaluatorImpl(
         workbook,
         currentDepth,
         rng,
-        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        passMemo,
         workbookPath,
         aggregateMemoOpt
       )
@@ -2985,6 +3109,8 @@ private class EvaluatorWithDepth(
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  // GH-715: required, so every derived evaluator decides it; see Evaluator.PlacementGuard
+  guard: Option[Evaluator.PlacementGuard],
   arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends EvaluatorImpl(
       allowArrayResults,
@@ -2997,6 +3123,7 @@ private class EvaluatorWithDepth(
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
+  override protected def placementGuard: Option[Evaluator.PlacementGuard] = guard
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorWithDepth(
       depth,
@@ -3007,5 +3134,6 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
+      guard,
       arrayRangeBounds = arrayRangeBounds
     )

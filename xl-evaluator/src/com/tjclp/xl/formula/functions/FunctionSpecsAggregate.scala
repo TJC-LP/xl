@@ -171,7 +171,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.workbook,
             ctx.depth + 1,
             ctx.rng,
-            ctx.memo.getOrElse(new Evaluator.EvalMemo),
+            ctx.passMemo,
             ctx.workbookPath,
             ctx.aggregateMemo,
             currentCell = Some(at),
@@ -213,6 +213,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * of coercing it to a genuine 0 through the scalar decode boundary.
    */
   private def triageCellForAggregate[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
+    ctx: EvalContext,
+    acc: A
+  ): Either[EvalError, A] =
+    // GH-715: COUNTA and COUNTBLANK read the cell's record without evaluating it; a positioned
+    // evaluation's placement is still read, so its guard decides
+    ctx.placementGuard match
+      case Some(guard) =>
+        guard.check(targetSheet, at) match
+          case Some(error) => Left(error)
+          case None => triageRecord(agg, targetSheet, at, ctx, acc)
+      case None => triageRecord(agg, targetSheet, at, ctx, acc)
+
+  private def triageRecord[A](
     agg: Aggregator[A],
     targetSheet: com.tjclp.xl.sheets.Sheet,
     at: ARef,

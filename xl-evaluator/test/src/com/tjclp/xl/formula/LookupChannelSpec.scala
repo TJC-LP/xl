@@ -138,9 +138,10 @@ class LookupChannelSpec extends FunSuite:
     check(keys, "=LOOKUP(20,A1:A3,B1:B3)", text("b2"))
   }
 
-  test("#692: an exact lookup stops at the first hit and never evaluates the cells past it") {
-    // A5 is a formula that cannot even parse: reading it is a host failure (a Left), so a search
-    // that reached it would fail the whole lookup. The hit at A2 comes first in a forward walk.
+  test("#692: an exact lookup finds the first hit; a key that fails to evaluate is a non-match") {
+    // A5 is a formula that cannot even parse. A key that fails to evaluate is a non-matching key
+    // (GH-715, LookupLine), as Excel reads an error in the lookup array: the hit at A2 comes
+    // first in a forward walk, and a walk that reaches A5 reads past it.
     val keys = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(10))
       .put(ref"A2", num(20))
@@ -156,13 +157,13 @@ class LookupChannelSpec extends FunSuite:
     check(keys, "=MATCH(20,A1:A5,0)", num(2))
     check(keys, "=XMATCH(20,A1:A5)", num(2))
     check(keys, "=XMATCH(\"b*\",B1:B5,2)", num(2))
-    // a reverse search reads A5 first, and the first evaluation failure ends the search
-    assert(keys.evaluateFormula("=XLOOKUP(30,A1:A5,B1:B5,,0,-1)").isLeft)
-    assert(keys.evaluateFormula("=XMATCH(30,A1:A5,0,-1)").isLeft)
-    // so does a miss, which has to read every key; and the approximate modes read them all
-    assert(keys.evaluateFormula("=XLOOKUP(99,A1:A5,B1:B5)").isLeft)
-    assert(keys.evaluateFormula("=MATCH(25,A1:A5,1)").isLeft)
-    assert(keys.evaluateFormula("=XLOOKUP(25,A1:A5,B1:B5,,-1)").isLeft)
+    // a reverse search reads A5 first and reads past it
+    check(keys, "=XLOOKUP(30,A1:A5,B1:B5,,0,-1)", text("c"))
+    check(keys, "=XMATCH(30,A1:A5,0,-1)", num(3))
+    // so does a miss, which reads every key; and the approximate modes read them all
+    check(keys, "=XLOOKUP(99,A1:A5,B1:B5)", err(CellError.NA))
+    check(keys, "=MATCH(25,A1:A5,1)", num(2))
+    check(keys, "=XLOOKUP(25,A1:A5,B1:B5,,-1)", text("b"))
     // the walk is row-major over a 2-D lookup_array, positions the range's own
     val grid = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(1))
@@ -175,7 +176,7 @@ class LookupChannelSpec extends FunSuite:
     // XLOOKUP's keys are one row or column; preserve each orientation's own position.
     check(grid, "=XLOOKUP(4,A2:B2,C2:D2)", text("dd"))
     check(grid, "=XLOOKUP(4,B1:B2,D1:D2)", text("dd"))
-    assert(grid.evaluateFormula("=MATCH(9,A1:B3,0)").isLeft)
+    check(grid, "=MATCH(9,A1:B3,0)", err(CellError.NA))
   }
 
   test("#692: XLOOKUP over a horizontal pair walks the columns in search_mode's direction") {
@@ -193,11 +194,11 @@ class LookupChannelSpec extends FunSuite:
     check(keys, "=XLOOKUP(10,A1:E1,A4:E4,,0,-1)", num(100))
     check(keys, "=XLOOKUP(\"?\",A2:E2,A1:E1,,2,-1)", num(50))
     check(keys, "=XMATCH(20,A1:E1,0,-1)", num(4))
-    // the reversed column walk stops at its first hit: an unparseable key in A1 is never read
+    // an unparseable key in A1 is a non-match in either direction
     val broken = keys.put(ref"A1", CellValue.Formula("1+", None))
     check(broken, "=XLOOKUP(20,A1:E1,A2:E2,,0,-1)", text("d"))
     check(broken, "=XLOOKUP(50,A1:E1,A2:E2,,0,-1)", text("e"))
-    assert(broken.evaluateFormula("=XLOOKUP(20,A1:E1,A2:E2)").isLeft)
+    check(broken, "=XLOOKUP(20,A1:E1,A2:E2)", text("b"))
     // a miss walks every column and raises through the one channel
     check(keys, "=XLOOKUP(99,A1:E1,A2:E2,,0,-1)", err(CellError.NA))
   }
@@ -230,10 +231,9 @@ class LookupChannelSpec extends FunSuite:
     )
   }
 
-  test("#692: a reverse exact search evaluates the cells below the hit, never the ones above") {
+  test("#692: a reverse exact search walks up from the last row; failing keys are non-matches") {
     // A1 and B1 cannot parse: a reverse walk (search_mode -1, and -2 the same walk) reads row 5,
-    // 4, 3 and stops at the hit in row 3, so row 1 is never evaluated — while a forward walk
-    // reads it first
+    // 4, 3 and stops at the hit in row 3; a forward walk reads row 1 first and reads past it
     val keys = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", CellValue.Formula("1+", None))
       .put(ref"A2", num(20))
@@ -253,31 +253,31 @@ class LookupChannelSpec extends FunSuite:
       // a hit in row 2 is reached before row 1 too, so row 1 is still never read
       check(keys, s"=XLOOKUP(20,A1:A5,B1:B5,,0,$mode)", text("b"))
     }
-    // the broken cell AFTER the hit in reverse order, i.e. below it, ends the search instead
+    // the broken cells below the hit, read first in reverse order, are read past too
     val broken = keys
       .put(ref"A1", num(10))
       .put(ref"B1", text("a"))
       .put(ref"A5", CellValue.Formula("1+", None))
       .put(ref"B5", CellValue.Formula("1+", None))
     List(-1, -2).foreach { mode =>
-      assert(broken.evaluateFormula(s"=XLOOKUP(30,A1:A5,B1:B5,,0,$mode)").isLeft, mode)
-      assert(broken.evaluateFormula(s"=XLOOKUP(\"c*\",B1:B5,A1:A5,,2,$mode)").isLeft, mode)
-      assert(broken.evaluateFormula(s"=XMATCH(30,A1:A5,0,$mode)").isLeft, mode)
-      assert(broken.evaluateFormula(s"=XMATCH(\"c*\",B1:B5,2,$mode)").isLeft, mode)
+      check(broken, s"=XLOOKUP(30,A1:A5,B1:B5,,0,$mode)", text("c"))
+      check(broken, s"=XLOOKUP(\"c*\",B1:B5,A1:A5,,2,$mode)", num(30))
+      check(broken, s"=XMATCH(30,A1:A5,0,$mode)", num(3))
+      check(broken, s"=XMATCH(\"c*\",B1:B5,2,$mode)", num(3))
     }
     // while the forward walk over the same sheet stops at row 3 and never reads row 5
     check(broken, "=XLOOKUP(30,A1:A5,B1:B5)", text("c"))
     check(broken, "=XMATCH(\"c*\",B1:B5,2)", num(3))
     check(broken, "=MATCH(30,A1:A5,0)", num(3))
-    // the forward walk over the same keys reads A1 first and fails there
-    assert(keys.evaluateFormula("=XLOOKUP(30,A1:A5,B1:B5)").isLeft)
-    assert(keys.evaluateFormula("=XMATCH(30,A1:A5)").isLeft)
-    assert(keys.evaluateFormula("=MATCH(30,A1:A5,0)").isLeft)
+    // the forward walk over the same keys reads A1 first and reads past it
+    check(keys, "=XLOOKUP(30,A1:A5,B1:B5)", text("c"))
+    check(keys, "=XMATCH(30,A1:A5)", num(3))
+    check(keys, "=MATCH(30,A1:A5,0)", num(3))
   }
 
-  test("#692: a forward exact search surfaces a host-failing key before the hit, as XMATCH did") {
-    // the old MATCH/XLOOKUP readers skipped a formula they could not evaluate; now it fails the
-    // search with its own error, in the exact modes only when it sits before the hit
+  test("#692: a key that fails to evaluate is a non-match in every lookup and mode") {
+    // GH-715: a formula key that cannot be evaluated (a parse failure, an unknown function) reads
+    // as an error value, which no lookup value matches, as Excel reads #NAME? in a lookup array
     def failing(formula: String): Sheet =
       Sheet(SheetName.unsafe("S"))
         .put(ref"A1", num(10))
@@ -288,17 +288,17 @@ class LookupChannelSpec extends FunSuite:
         .put(ref"B3", text("c"))
     List("1+", "NOSUCHFUNCTION(1)").foreach { formula =>
       val keys = failing(formula)
-      assert(keys.evaluateFormula("=MATCH(30,A1:A3,0)").isLeft, formula)
-      assert(keys.evaluateFormula("=XLOOKUP(30,A1:A3,B1:B3)").isLeft, formula)
+      check(keys, "=MATCH(30,A1:A3,0)", num(3))
+      check(keys, "=XLOOKUP(30,A1:A3,B1:B3)", text("c"))
       // the return cell past the broken key is read without evaluating the key column's A2
       check(keys, "=XLOOKUP(\"c\",B1:B3,A1:A3,,2)", num(30))
-      assert(keys.evaluateFormula("=XMATCH(30,A1:A3)").isLeft, formula)
+      check(keys, "=XMATCH(30,A1:A3)", num(3))
       // the hit before the broken cell is still found
       check(keys, "=MATCH(10,A1:A3,0)", num(1))
       check(keys, "=XLOOKUP(10,A1:A3,B1:B3)", text("a"))
-      // the approximate modes read the whole used range
-      assert(keys.evaluateFormula("=MATCH(10,A1:A3,1)").isLeft, formula)
-      assert(keys.evaluateFormula("=XLOOKUP(10,A1:A3,B1:B3,,-1)").isLeft, formula)
+      // the approximate modes read the whole used range, past the broken key
+      check(keys, "=MATCH(10,A1:A3,1)", num(1))
+      check(keys, "=XLOOKUP(10,A1:A3,B1:B3,,-1)", text("a"))
     }
     // a key that EVALUATES to an error is a value the search skips past, as Excel does
     val errorKey = failing("1/0")

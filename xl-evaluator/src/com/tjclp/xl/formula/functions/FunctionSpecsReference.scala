@@ -525,7 +525,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           ctx.workbook,
           ctx.depth,
           ctx.rng,
-          ctx.memo.getOrElse(new Evaluator.EvalMemo),
+          ctx.passMemo,
           ctx.workbookPath,
           ctx.aggregateMemo,
           anchor

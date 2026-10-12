@@ -44,7 +44,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `new` | — | `refused` | 0 2 3 | — | 0.1.0 | Create a blank xlsx file (--sheet <name> repeatable) |
 | `diff` | `-f` | `refused` | 0 1 2 3 | — | 0.11.3 | Compare two workbooks (-g <file2>) and report cell, style and structure differences |
 | `lint` | `-f` `--stream` | `o1` | 0 1 2 3 | — | 0.15.0 | Validate the raw package against the Excel-repair classes: child order, r:id resolution, content-type coverage, over-max refs, data-table integrity, <f> canon, external refs, defined names, calc chain, empty inline strings, mc:Ignorable prefixes, dxf ids, package reachability, shared-string orphans (read-only) |
-| `eval` | `-s` | `refused` | 0 2 3 | — | 0.4.2 | Evaluate a formula without modifying the sheet (--with overrides; no -f for constants) |
+| `eval` | `-s` | `refused` | 0 2 3 | — | 0.4.2 | Evaluate a formula without modifying the sheet (--at evaluates it as the plain cell there; --with overrides; no -f for constants) |
 | `evala` | `-f` `-s` | `refused` | 0 2 3 | — | 0.9.0 | Evaluate an array formula and display the result grid (--at anchors it) |
 | `sheets` | `-f` `--stream` | `o1` (refuses `--stats`) | 0 2 3 | — | 0.1.0 | List sheets with visibility state and dimension (--stats loads the book for counts) |
 | `sheets hide` | `-f` `-o`/`-i` | `backend` | 0 2 3 | — | 0.9.2 | Hide a sheet from the sheet tabs (--very for VBA-only) |

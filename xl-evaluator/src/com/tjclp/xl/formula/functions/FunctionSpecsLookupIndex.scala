@@ -187,35 +187,36 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
         // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
         matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
-        // #692: the evaluating reader, as LOOKUP/XMATCH — an uncached formula key is computed.
-        // RANGE positions (row-major, 1-based), blanks included, never compacted.
-        positionOpt <- matchTypeInt match
-          // the exact match walks the range lazily and stops at the first hit
-          case 0 =>
-            findLookupPosition(lookupRange, targetSheet, ctx, descending = false)(
-              matchesLookupExact(_, lookup)
-            ).map(_.map(_ + 1))
+        // the keys as references read them, lazily (GH-715: see LookupLine)
+        line = lookupLine(lookupRange, targetSheet, ctx)
+        found <- matchTypeInt match
+          case 0 => line.find(forward = true)(matchesLookupExact(_, lookup))
           // #670(g): 1 is the largest key ≤ the value over ascending keys, -1 the smallest key ≥
           // it over descending keys — numbers or text (case-insensitive), the last of a run of
-          // equal keys as Excel's binary search lands; the whole (used) range is read
+          // equal keys as Excel's binary search lands
           case sign =>
-            lookupRangeValues(lookupRange, targetSheet, ctx).map { values =>
-              val cells: Vector[(Int, CellValue)] =
-                values.zipWithIndex.flatMap { (row, r) =>
-                  row.zipWithIndex.map { (cv, c) => (r * lookupRange.width + c + 1, cv) }
-                }
-              approximateMatch(cells, lookup, -sign, lastOnTie = true)
-            }
-        result <- positionOpt match
-          case Some(pos) => Right(BigDecimal(pos))
-          case None =>
-            // GH-662: the typed #N/A (Left channel: MATCH is a FunctionSpec[BigDecimal]), with
-            // the real call rendered as its diagnostic context
-            Left(
-              lookupNotFound(
-                s"MATCH: no match found for lookup value: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, $matchTypeInt)"
+            line.storedKeys.map(keys =>
+              approximateMatch(
+                keys.zipWithIndex.map(_.swap),
+                lookup,
+                if sign > 0 then -1 else 1,
+                lastOnTie = true
               )
             )
+        result <- {
+          // positions are 1-based
+          val positionOpt = found.map(_ + 1)
+          positionOpt match
+            case Some(pos) => Right(BigDecimal(pos))
+            case None =>
+              // GH-662: the typed #N/A (Left channel: MATCH is a FunctionSpec[BigDecimal]), with
+              // the real call rendered as its diagnostic context
+              Left(
+                lookupNotFound(
+                  s"MATCH: no match found for lookup value: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, $matchTypeInt)"
+                )
+              )
+        }
       yield result
     }
 

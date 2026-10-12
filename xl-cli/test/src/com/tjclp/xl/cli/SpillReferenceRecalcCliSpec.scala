@@ -87,6 +87,29 @@ class SpillReferenceRecalcCliSpec extends CatsEffectSuite:
       assert(qualified.stdout.contains("Result: 15 (number)"), qualified.stdout)
   }
 
+  test("GH-715: eval --at reads the spill the precedent pass computed, as the plain cell would") {
+    for
+      src <- excelShapedSource()
+      at <- CliHarness.run("-f", src.toString, "eval", "=SUM(B1#)", "--at", "D3")
+      // A1 5 → 0 re-spills B1 to {0;1;2;3;4} only through the fold's spill-tracking evaluator
+      respilled <- CliHarness.run(
+        "-f",
+        src.toString,
+        "eval",
+        "=SUM(B1#)",
+        "--at",
+        "D3",
+        "--with",
+        "A1=0"
+      )
+    yield
+      assertEquals(at.exit, 0, at.toString)
+      assert(at.stdout.contains("Result: 15 (number)"), at.stdout)
+      assert(at.stdout.contains("At: Sheet1!D3"), at.stdout)
+      assertEquals(respilled.exit, 0, respilled.toString)
+      assert(respilled.stdout.contains("Result: 10 (number)"), respilled.toString)
+  }
+
   test("recalc keeps C1's correct value") {
     for
       src <- excelShapedSource()

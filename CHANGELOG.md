@@ -23,6 +23,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **`xl eval --at <ref>`** (#715): evaluates the formula as the plain (legacy) cell it would be at
+  `<ref>`, implicit intersection included (`=SUM(A1:A10*B1:B10) --at D5` is A5*B5 where a
+  positionless `eval` gives the array sum), read-only, with `--with`, under the one-sheet rule. A
+  placement that would read itself is a `FORMULA_ERROR` naming the cycle, whose path, like any
+  long cycle path from positionless `eval` and `evala`, now elides its middle. Contract:
+  `eval --json` gains an `at` field, the cell as evaluated (`"Data!D5"`), `null` without `--at`.
+  For JSON consumers the change is additive: every existing field keeps its name and shape.
 - **The recalc summary names its error-valued cells, with the evaluator's reason** (#692):
   `Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found:
   VLOOKUP(42, A1:B3, 2, FALSE))` — the first three (`RecalcResult.MaxSummaryErrorCells`) in the
@@ -336,6 +343,39 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **MATCH, VLOOKUP, HLOOKUP and XLOOKUP read uncached formulas in their lookup ranges** (#715):
+  MATCH's lookup_array, the VLOOKUP/HLOOKUP key line and result cell, and XLOOKUP's lookup_array
+  read each cell the way a reference to it does, so an uncached formula evaluates. Before, they
+  read its bare record and matched it as blank. XLOOKUP's return cell is read as a reference
+  reads it too (#713 makes XLOOKUP return one), so an uncached formula there evaluates (#742).
+  XMATCH and LOOKUP read their keys the same way. Keys are read lazily, in search order: a key whose evaluation fails is a non-match, so a broken
+  cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
+  only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
+  a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
+  reference it is. A VLOOKUP/HLOOKUP result cell that computes an Excel error shows it (`#DIV/0!`)
+  as the cell would, and one in a cycle is `#VALUE!`.
+  **Behaviour change:** a VLOOKUP/HLOOKUP result cell holding an unknown function now fails the
+  lookup, as a reference to that cell does, instead of giving `#VALUE!`.
+- **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
+  case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported").
+  Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the
+  evaluated sheet threaded in, so a formula on another sheet that reads back into it sees the
+  overrides and the computed closure. Every cached formula in the book that reads an overridden
+  cell, directly, through a defined name (`rate*2` with `rate` naming `Data!$B$1`) or through
+  other formulas on any sheet, drops its stale cache, so `Data!B1`,
+  `INDIRECT("B1")` and another sheet's read-back (`Other!A1` holding `=Data!B1*2`, cached as
+  Excel saves it) see the override too. This costs one parse of the sheet's formulas, and of each
+  other sheet's formulas that qualify a reference with a sheet holding an overridden or stale
+  cell or mention a defined name, when `--with` is given. The overrides apply to the sheet the
+  formula evaluates on: the `--at` sheet, else `-s`.
+- **`eval` and `evala` analyse only the formula's own precedents** (#715): the closure they
+  evaluate first is walked from the formula's value reads, as `eval --at` does, instead of from a
+  dependency graph of the whole sheet. A cycle elsewhere on the sheet no longer fails them, a
+  formula that inspects its own address (`ROW(A1)` in A1) is no longer taken for a cycle, a read
+  qualified with the sheet's own name is followed, and a sheet of running totals
+  (`SUM($A$1:A{n})`) is no longer quadratic to analyse. A precedent the formula reads only as a
+  reference (`B1:B3` in `ROWS(B1:B3)`) is no longer evaluated first, so which errors surface can
+  change: only a formula whose value the evaluation reads can fail it.
 - **One error channel for the lookups, `#VALUE!` for a bad XLOOKUP mode, and the evaluating
   reader everywhere** (#692, the #670 remainder): an XLOOKUP miss now raises the typed `#N/A`
   through `lookupNotFound` like VLOOKUP/HLOOKUP/MATCH/LOOKUP/XMATCH, so its call is the cell's
@@ -352,14 +392,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `XLOOKUP` + 200 `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s
   is reading and writing the book); the approximate modes read the used range as before. XLOOKUP's
   `return_array` cell is read through the same evaluating reader, so an uncached formula there is
-  computed instead of returning the raw formula record — and an uncached return-cell formula that
-  fails, or a host error in that cell, now fails the XLOOKUP where it used to yield the stale or
-  empty value. A key cell whose formula cannot be
-  evaluated at all (unparseable, or an unknown function) is a host failure, not a value: MATCH and
-  XLOOKUP's exact searches now surface it when it sits before the hit in search order, as
-  LOOKUP/XMATCH already did (the old readers skipped it silently); the cells after the hit are
-  never evaluated, while the approximate modes read the whole used range and so fail on such a
-  cell anywhere in it.
+  computed instead of returning the raw formula record. A key cell whose formula cannot be
+  evaluated (unparseable, or an unknown function) is a non-matching key in every lookup and mode,
+  as Excel reads an error in a lookup array (#715); LOOKUP and XMATCH, which failed the lookup on
+  such a key, now read past it too.
 - **XLOOKUP returns a reference, and a whole matched row or column** (#713):
   `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
   folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).
