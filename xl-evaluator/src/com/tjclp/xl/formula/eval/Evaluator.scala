@@ -770,10 +770,21 @@ object Evaluator:
     case TExpr.Coerced(inner, _) => denotesReference(inner)
     case _ => false
 
+  /** Functions whose expression argument must be a reference (readsBindingAsRange). */
+  private val ReferenceBaseFunctions: Set[String] = Set("OFFSET")
+
   /**
-   * GH-710: whether an expression reads a LET name in a range slot (`COUNTIF(r, ">2")`). An array
-   * evaluation's LET binds a reference-denoting value as the reference itself only then — the range
-   * slot needs the reference, and every other read of the name materializes it as before.
+   * GH-710: whether an expression reads a LET name in a range slot (`COUNTIF(r, ">2")`), or holds a
+   * call whose expression argument must be a reference (OFFSET's base: `OFFSET(c, 1, 0)` with `c`
+   * bound to B5). An array evaluation's LET binds a reference-denoting value as the reference
+   * itself only then — those positions need the reference, and every other read of the name
+   * materializes it as before. Excel's LET always binds the reference, so binding it is never
+   * wrong: without the OFFSET clause, `LET(c,B5,OFFSET(c,1,0))` was `#VALUE!` in array mode unless
+   * an unrelated range slot in the same LET read a LET name.
+   *
+   * PR #719's `inspectsReference` (ROW, COLUMN, ROWS, COLUMNS through `requiresReferenceArguments`)
+   * is a second trigger of the same kind: when the two meet, `evalLet` binds references when either
+   * walk answers true.
    *
    * The walk tracks neither which name a slot reads nor shadowing: a range-slot read of any LET
    * name in the subtree, an inner LET's own or one that shadows an outer name, makes the outer LET
@@ -788,11 +799,14 @@ object Evaluator:
    * and could be computed once per `Let` node at parse time if profiling ever shows the cost.
    */
   private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean =
-    // TODO(#733): cache per Let node (or compute at parse time) instead of walking per evaluation.
+    // TODO(#733): cache per Let node (or compute at parse time) instead of walking per evaluation;
+    // and memoize a computed name's reference per recalculation, rather than evaluating it again
+    // at every range slot that reads it (resolveRangeSlot).
     // Exhaustive on purpose, with no wildcard: a new TExpr case is a "match may not be exhaustive"
     // warning here until it is classified as a wrapper to descend through or a leaf.
     expr match
       case call: TExpr.Call[?] =>
+        ReferenceBaseFunctions.contains(call.spec.name) ||
         call.spec.argSpec.toValues(call.args).exists {
           case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
           case ArgValue.Expr(arg) => readsBindingAsRange(arg)

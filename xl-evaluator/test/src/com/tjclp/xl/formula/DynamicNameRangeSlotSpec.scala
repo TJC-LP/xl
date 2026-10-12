@@ -396,16 +396,42 @@ class DynamicNameRangeSlotSpec extends FunSuite:
   }
 
   test("a range-slot read of one LET name leaves the other bindings' array values unchanged") {
-    // r is read by COUNTIF's range slot, so the array-mode LET binds references; s, an OFFSET read
+    // r is read by COUNTIF's range slot, so the array-mode LET binds references; s, an INDEX read
     // by FILTER as an array, must give the same values as when nothing makes the LET bind them
     val withSlot =
-      "LET(r,IF(TRUE,A1:A3,B1:B3),s,OFFSET(A1,0,0,3,1),COUNTIF(r,\">0\")+SUM(FILTER(s,s>1)))"
-    val withoutSlot = "LET(r,IF(TRUE,A1:A3,B1:B3),s,OFFSET(A1,0,0,3,1),SUM(FILTER(s,s>1)))"
+      "LET(r,IF(TRUE,A1:A3,B1:B3),s,INDEX(A1:B3,0,1),COUNTIF(r,\">0\")+SUM(FILTER(s,s>1)))"
+    val withoutSlot = "LET(r,IF(TRUE,A1:A3,B1:B3),s,INDEX(A1:B3,0,1),SUM(FILTER(s,s>1)))"
     // A1:A3 is 1, -2, 3.5: two are positive, and 3.5 is the only one above 1
     agree(unplaced(withoutSlot), N("3.5"))
     agree(unplaced("COUNTIF(A1:A3,\">0\")"), N("2"))
     agree(unplaced(withSlot), N("5.5"))
     agree(plain("Sheet1", "H1", withSlot), N("5.5"))
+  }
+
+  // ----- a reference-reading position sees a LET name as its reference, whatever else the LET reads -----
+
+  // Each pair: the LET with an unrelated range-slot read of another LET name, and the same LET
+  // alone plus that read outside it. Excel's LET always binds the reference, so both forms agree
+  // in array mode too (B5:B6 hold 2, COUNTIF(dyn,">2") is 5). OFFSET's base was #VALUE! in array
+  // mode without the unrelated read before the LET bound references for it.
+  List(
+    ("OFFSET(c,1,0)", "B5", N("7")),
+    ("SUM(OFFSET(c,0,0,2,1))", "B5", N("9")),
+    ("SUM(OFFSET(IF(TRUE,c,c),1,0))", "B5", N("7")),
+    ("ROWS(c)", "B5:B6", N("7")),
+    ("COLUMNS(c)", "B5:B6", N("6")),
+    ("AREAS(c)", "B5", N("6")),
+    ("INDEX(c,1)", "B5", N("7")),
+    ("@c", "B5", N("7"))
+  ).foreach { case (read, bound, expected) =>
+    val together = s"LET(c,$bound,r,dyn,$read+COUNTIF(r,\">2\"))"
+    val apart = s"LET(c,$bound,$read)+COUNTIF(dyn,\">2\")"
+    test(s"$read over a LET name agrees with and without an unrelated range-slot read") {
+      agree(unplaced(together), expected)
+      agree(unplaced(apart), expected)
+      agree(plain("Sheet1", "H1", together), expected)
+      agree(plain("Sheet1", "H1", apart), expected)
+    }
   }
 
   // ----- a LET name as an operand of the reference operators -----
