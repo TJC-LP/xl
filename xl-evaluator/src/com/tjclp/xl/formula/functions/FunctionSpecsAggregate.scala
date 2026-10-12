@@ -42,10 +42,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * mismatched lengths after constraining while preserving performance.
    *
    * This is the bound for several ranges that must line up (SUMPRODUCT's arrays, a criteria range
-   * and its sum or average range), and for the criteria functions over one range: a blank criterion
-   * (`COUNTIF(B:B,"")`) counts the blanks this rectangle walks, the documented GH-192 divergence,
-   * so its shape is behaviour there. A reference folded on its own by an aggregate, AND or OR reads
-   * [[usedArea]] instead, whose dropped cells no fold observes.
+   * and its sum or average range), and for the criteria functions over one range. What it drops is
+   * blank in every range, and added back where it counts: a blank criterion (`COUNTIF(B:B,"")`)
+   * counts the dropped cells through [[blankCriteriaCount]], and SUMPRODUCT reads one dropped row
+   * for all of them (`SumProductTail`). A reference folded on its own by an aggregate, AND or OR
+   * reads [[usedArea]] instead, whose dropped cells only COUNTBLANK observes ([[blanksTrimmed]]).
    */
   private def computeBounds(
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
@@ -1412,58 +1413,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
-  /**
-   * GH-711/GH-192: what SUMPRODUCT's shared bound trimmed off its whole columns (or whole rows):
-   * how many rows (columns) it dropped, and how to read any one of them, a one-row (one-column)
-   * range in place of each whole column (row). Every dropped row lies outside every involved
-   * sheet's used range, so it is blank in every argument, and every one contributes the same
-   * product.
-   */
-  private final case class BlankTail(count: Long, alongRows: Boolean, line: CellRange => CellRange)
-
-  /**
-   * The [[BlankTail]] of SUMPRODUCT's `ranges` under `bounds`: None when nothing was dropped, or
-   * when whole columns and whole rows mix (the dropped cells then form no whole rows).
-   */
-  private def blankTail(
-    ranges: List[CellRange],
-    bounds: (Option[RowBounds], Option[ColBounds])
-  ): Option[BlankTail] =
-    val columns = ranges.exists(_.isFullColumn)
-    val rows = ranges.exists(_.isFullRow)
-    // the first index outside the kept [lo, hi], and how many of `total` lie outside it
-    def outside(kept: Option[(Int, Int)], total: Int): Option[(Int, Long)] =
-      kept match
-        case None => Some((0, total.toLong))
-        case Some((lo, hi)) =>
-          val dropped = total.toLong - (hi - lo + 1)
-          Option.when(dropped > 0L)((if lo > 0 then 0 else hi + 1, dropped))
-    if columns == rows then None
-    else if columns then
-      outside(bounds._1.map((lo, hi) => (lo.index0, hi.index0)), Row.MaxIndex0 + 1).map {
-        (blank, dropped) =>
-          BlankTail(
-            dropped,
-            alongRows = true,
-            r =>
-              if r.isFullColumn then
-                CellRange(ARef.from0(r.colStart.index0, blank), ARef.from0(r.colEnd.index0, blank))
-              else r
-          )
-      }
-    else
-      outside(bounds._2.map((lo, hi) => (lo.index0, hi.index0)), Column.MaxIndex0 + 1).map {
-        (blank, dropped) =>
-          BlankTail(
-            dropped,
-            alongRows = false,
-            r =>
-              if r.isFullRow then
-                CellRange(ARef.from0(blank, r.rowStart.index0), ARef.from0(blank, r.rowEnd.index0))
-              else r
-          )
-      }
-
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -1561,45 +1510,45 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // argument spans the trimmed axis and reads one row there at the trimmed width; any
             // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
             def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
-              blankTail(rangesWithSheets.map(_._1), bounds) match
-                case None => Right(BigDecimal(0))
-                case Some(tail) =>
-                  def spans(range: CellRange): Boolean =
-                    if tail.alongRows then range.isFullColumn else range.isFullRow
-                  val everyArgSpans = args.forall {
-                    case Left(loc) =>
+              val planned = SumProductTail.of(rangesWithSheets.map(_._1), bounds).flatMap { tail =>
+                SumProductTail
+                  .plan(
+                    tail,
+                    args,
+                    if tail.alongRows then rows else cols,
+                    loc =>
                       Evaluator
                         .resolveRangeLocation(loc, ctx.sheet, ctx.workbook)
-                        .exists((_, range) => spans(range))
-                    case Right(expr) => TExpr.collectRanges(expr).exists((_, range) => spans(range))
-                  }
-                  if !everyArgSpans then Right(BigDecimal(0))
-                  else
-                    args
-                      .foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
-                        case (Left(err), _) => Left(err)
-                        case (Right(acc), Left(loc)) =>
-                          Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                            case (sheet, range) => acc :+ RangeArray(sheet, tail.line(range))
-                          }
-                        case (Right(acc), Right(expr)) =>
-                          ctx
-                            .evalArrayExpr(TExpr.transformRanges(expr, (_, r) => tail.line(r)))
-                            .flatMap(sumProductArray)
-                            .map(acc :+ _)
-                      }
-                      .flatMap { lines =>
-                        val lineRows = lines.headOption.map(_.rows).getOrElse(0)
-                        val lineCols = lines.headOption.map(_.cols).getOrElse(0)
-                        val aligned =
-                          lines.forall(a => a.rows == lineRows && a.cols == lineCols) &&
-                            (if tail.alongRows then lineRows == 1 && (rows == 0 || lineCols == cols)
-                             else lineCols == 1 && (cols == 0 || lineRows == rows))
-                        if aligned then
-                          sumOfProducts(lines, lineRows, lineCols, ctx)
-                            .map(_ * BigDecimal(tail.count))
-                        else Right(BigDecimal(0))
-                      }
+                        .exists((_, range) => tail.spans(range))
+                  )
+                  .map((tail, _))
+              }
+              planned match
+                case None => Right(BigDecimal(0))
+                case Some((tail, lineArgs)) =>
+                  lineArgs
+                    .foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+                      case (Left(err), _) => Left(err)
+                      case (Right(acc), Left(loc)) =>
+                        Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
+                          case (sheet, range) => acc :+ RangeArray(sheet, tail.line(range))
+                        }
+                      case (Right(acc), Right(line)) =>
+                        ctx.evalArrayExpr(line).flatMap(sumProductArray).map(acc :+ _)
+                    }
+                    .flatMap { lines =>
+                      val lineRows = lines.headOption.map(_.rows).getOrElse(0)
+                      val lineCols = lines.headOption.map(_.cols).getOrElse(0)
+                      val aligned =
+                        lines.forall(a => a.rows == lineRows && a.cols == lineCols) &&
+                          (if tail.alongRows then lineRows == 1 && (rows == 0 || lineCols == cols)
+                           else lineCols == 1 && (cols == 0 || lineRows == rows))
+                      if aligned then
+                        sumOfProducts(lines, lineRows, lineCols, ctx).map(
+                          _ * BigDecimal(tail.count)
+                        )
+                      else Right(BigDecimal(0))
+                    }
 
             resolvedResult.flatMap { resolved =>
               resolved match

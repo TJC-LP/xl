@@ -136,8 +136,9 @@ trait TExprAnalysis:
     case SheetRange(sheet, range, _) => List((Some(sheet), range))
     // Every argument of every call contributes, including the shape-sensitive ones
     // transformRanges leaves untrimmed (ROWS(Other!A:A)). Such a range can only widen the shared
-    // extent with its sheet's used range, adding blank rows that every element but a
-    // blank-counting one (`--(A:A="")`, the GH-192 divergence) reads as nothing
+    // extent with its sheet's used range, adding blank rows inside the bound; a blank-counting
+    // element (`--(A:A="")`) counts them there, and the rows past the bound through
+    // SumProductTail, so they count either way
     case call: Call[?] =>
       call.spec.argSpec
         .toValues(call.args)

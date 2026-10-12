@@ -1,8 +1,11 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{CellRange, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.functions.{ArgSpec, SumProductTail}
+import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
@@ -124,4 +127,75 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // shared extent rows 1-4: A3, A4 here are blank inside it, rows 5 on are blank in both
     assertEquals(e("=SUMPRODUCT(--(A:A=\"\"),--(O!A:A>0))"), Right(num(2)))
     assertEquals(e("=SUMPRODUCT(--(A:A=\"\"),--(O!A:A=\"\"))"), Right(num(1048572)))
+  }
+
+  test("a zero or blank-cell criterion adds no trimmed cell; a not-equal-to-value one adds all") {
+    // "<>x": a blank is not x, so every blank cell counts (LibreOffice: 1048576). The trimmed
+    // cells follow the matcher's verdict on a blank, the same as a blank inside the used range
+    assertEquals(eval("=COUNTIF(A:A,\"<>x\")"), Right(num(1048576)))
+    assertEquals(eval("=COUNTIF(A1:A3,\"<>x\")"), Right(num(3)))
+    // a blank criterion cell counts zeros, never blanks (LibreOffice: 0 and 0)
+    assertEquals(eval("=COUNTIF(A:A,C99)"), Right(num(0)))
+    assertEquals(eval("=COUNTIF(A:A,0)"), Right(num(0)))
+    val zero = sheet.put(ref"A3", num(0))
+    assertEquals(eval("=COUNTIF(A:A,C99)", zero), Right(num(1)))
+    assertEquals(eval("=COUNTIF(A:A,0)", zero), Right(num(1)))
+  }
+
+  test("COUNTIFS takes the trimmed count from a first range on another sheet") {
+    // O!A1:A4 filled, T!A1:A2 filled: the shared bound is rows 1-4 (LibreOffice: 1048572 both ways)
+    val other = (1 to 4).foldLeft(Sheet(SheetName.unsafe("O"))) { (s, i) =>
+      s.put(com.tjclp.xl.addressing.ARef.from0(0, i - 1), num(i.toDouble))
+    }
+    val e = evalIn(Workbook(Vector(sheet, other)), sheet)
+    assertEquals(e("=COUNTIFS(O!A:A,\"\",A:A,\"\")"), Right(num(1048572)))
+    assertEquals(e("=COUNTIFS(A:A,\"\",O!A:A,\"\")"), Right(num(1048572)))
+  }
+
+  test("shapes the tail does not apply to keep their value") {
+    // a whole column only under an aggregate is no element source: SUM(A:A) once, not per row
+    // (LibreOffice: 9)
+    assertEquals(eval("=SUMPRODUCT(SUM(A:A))"), Right(num(9)))
+    // ...while beside one that is, it repeats on every blank row: 1048574 * SUM(B:B)
+    // (LibreOffice: 1048574)
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(B:B))"), Right(num(1048574)))
+    // ROW of a range is its first row in xl (documented in LIMITATIONS; Excel and LibreOffice
+    // fold every row: 1048571), so ROW(A:A) is no element source and nothing is read twice
+    assertEquals(eval("=SUMPRODUCT(--(ROW(A:A)>5))"), Right(num(0)))
+    // whole columns mixed with whole rows: no tail, the used-range blanks only (B2), where
+    // Excel counts every blank cell of the sheet (documented in LIMITATIONS)
+    assertEquals(eval("=SUMPRODUCT(--(A:XFD=\"\"))"), Right(num(1)))
+  }
+
+  test("the tail's plan rebuilds no argument that already read every row (structural)") {
+    @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+    def args(inner: String): List[ArgSpec.SumProductArg] =
+      FormulaParser.parse(s"=SUMPRODUCT($inner)") match
+        case Right(call: TExpr.Call[?]) => call.args.asInstanceOf[List[ArgSpec.SumProductArg]]
+        case other => fail(s"not a SUMPRODUCT call: $other")
+    val column = CellRange.parse("A:A").fold(e => fail(e), identity)
+    val tail = SumProductTail
+      .of(List(column), (Some((Row.from0(0), Row.from0(1))), None))
+      .getOrElse(fail("rows 1-2 kept, so a tail"))
+    assertEquals((tail.count, tail.kept), (1048574L, 2L))
+    def plan(inner: String, extent: Int) = SumProductTail.plan(tail, args(inner), extent, _ => true)
+    // an argument whose whole column no transform moved is never read over the blank row: ROW
+    // keeps A:A (its value, the first row, is a scalar), and at any extent the plan is empty
+    assertEquals(plan("--(ROW(A:A)>5)", 1), None)
+    assertEquals(plan("--(ROW(A:A)>5)", 2), None)
+    // an argument that came back at another extent than the kept rows (a whole column a
+    // shape-sensitive call read whole) is never read again either
+    assertEquals(plan("--(A:A=\"\")", 1048576), None)
+    // (A:A="")*ROW(B:B) reads A:A as an element source and ROW(B:B) as its scalar 1, so the line
+    // is one row: 1048574 blank rows times 1 (Excel sums the blank rows' numbers; ROW above)
+    assert(plan("(A:A=\"\")*ROW(B:B)", 2).isDefined)
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(B:B))"), Right(num(1048574)))
+    assertEquals(plan("SUM(A:A)", 1), None)
+    assert(plan("--(A:A=\"\")", 2).isDefined)
+    assert(plan("(A:A=\"\")*SUM(B:B)", 2).isDefined)
+    // the planned line reads row 3, the first one past the kept rows
+    assertEquals(
+      plan("--(A:A=\"\")", 2).map(_.map(_.fold(_ => Nil, TExpr.collectRanges(_).map(_._2.toA1)))),
+      Some(List(List("A3:A3")))
+    )
   }

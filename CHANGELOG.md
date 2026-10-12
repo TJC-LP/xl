@@ -270,7 +270,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   for an ArrayFormula record), whether a reference or an aggregate, criteria or SUMPRODUCT range
   walk reads it.
 - **`FunctionFlags` gains two fields (`lift`, `selector`)**: source-compatible, binary-incompatible for positional
-  construction (the `volatile` precedent, #597).
+  construction and for `unapply` / positional pattern matches on `FunctionFlags(...)` (the
+  `volatile` precedent, #597).
+- **`SUMPRODUCT(1/COUNTIF(A:A,A:A))` over a whole column is `#DIV/0!` when the column holds no
+  zeros** (#711): SUMPRODUCT now reads the blank rows past the used range, as Excel does, and each
+  divides by `COUNTIF(A:A,<blank>)`, which counts zeros. The distinct count it used to return
+  needs a bounded range (`SUMPRODUCT(1/COUNTIF(A1:A100,A1:A100))`) or the blank-safe idiom
+  `SUMPRODUCT((A:A<>"")/COUNTIF(A:A,A:A&""))`.
 - **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.
 - **A contained evaluator defect in `xl eval` / `evala` is `FORMULA_ERROR`** (still exit 3) with
