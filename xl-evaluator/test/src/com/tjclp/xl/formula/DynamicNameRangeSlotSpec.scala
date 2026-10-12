@@ -462,6 +462,94 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     }
   }
 
+  // ----- a LET name through the reference operators' operand slots (union, intersection, AREAS) -----
+
+  // A LET name in an operand slot of `,`, ` ` or AREAS parses as a range location (Binding) and
+  // resolves to the reference it is bound to. LibreOffice 24.2 has no LET: each value is its
+  // recalculation of the same formula with the bound reference written in place (`~` is its union).
+  List(
+    "LET(a,OFFSET(A1,0,0,3,1),AREAS((a,B1)))" -> N("2"),
+    "LET(a,OFFSET(A1,0,0,3,1),SUM((a,B1)))" -> N("4.5"),
+    "LET(a,OFFSET(A1,0,0,3,1),COUNT((a,B1)))" -> N("4"),
+    "LET(a,dynTab,AREAS((a,B1,C1)))" -> N("3"),
+    "LET(a,dynTab,SUM(a B1:B3))" -> N("6"),
+    "LET(a,dynTab,COUNT(a B1:B3))" -> N("3"),
+    "LET(a,dynTab,ROWS(a B1:B3))" -> N("3"),
+    "LET(a,dyn,SUM(a A2:B3))" -> N("1.5"),
+    "LET(a,dyn,AREAS(a A2:B3))" -> N("1")
+  ).foreach { case (formula, expected) =>
+    test(s"=$formula reads the LET name's reference through the operator, in both modes") {
+      agree(plain("Sheet1", "H1", formula), expected)
+      agree(unplaced(formula), expected)
+    }
+  }
+
+  // ----- name scope through a range slot -----
+
+  test("a sheet-scoped name shadows the workbook name in a range slot, per reading sheet") {
+    // `amt` is Other!A1:A3 for the workbook and Sheet1!A1:A3 on Sheet1: SUMIF on each sheet reads
+    // its own, and a sheet-qualified read from Empty reads Sheet1's
+    val scoped = book
+      .withDefinedName("amt", "Other!$A$1:$A$3")
+      .withDefinedName("amt", "Sheet1!$A$1:$A$3", sheet1Name)
+      .fold(error => fail(error.message), identity)
+    def at(sheet: String, formula: String): Either[String, CellValue] =
+      val ref = ref"H1"
+      scoped.sheets.find(_.name.value == sheet) match
+        case None => Left(s"no sheet $sheet")
+        case Some(target) =>
+          val placed = target.put(ref, CellValue.Formula(formula, None))
+          placed.evaluateCell(ref, Clock.system, Some(scoped.put(placed))).left.map(_.message)
+    // Sheet1!A1:A3 is 1, -2, 3.5; Other!A1:A3 is 10, 20, 30
+    agree(at("Sheet1", "SUMIF(amt,\">0\")"), N("4.5"))
+    agree(at("Other", "SUMIF(amt,\">0\")"), N("60"))
+    agree(at("Empty", "SUMIF(amt,\">0\")"), N("60"))
+    agree(at("Empty", "SUMIF(Sheet1!amt,\">0\")"), N("4.5"))
+    // the resized form reads the same scope: A1:A3's shape from B1 on the reading sheet's name
+    agree(at("Sheet1", "SUMIF(amt,\">0\",B1)"), N("4"))
+
+    // the graph's name memos key on the reading sheet: each reader gets its own sheet's cells
+    val readers = scoped
+      .put(sheet1.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
+      .put(other.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
+    val graph = com.tjclp.xl.formula.graph.DependencyGraph.fromWorkbook(readers)
+    def deps(sheet: SheetName) = graph.getOrElse(
+      com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef(sheet, ref"H1"),
+      Set.empty
+    )
+    assert(deps(sheet1Name).forall(_.sheet == sheet1Name), deps(sheet1Name).toString)
+    assert(
+      deps(SheetName.unsafe("Other")).forall(_.sheet == SheetName.unsafe("Other")),
+      deps(SheetName.unsafe("Other")).toString
+    )
+    assertEquals(
+      com.tjclp.xl.formula.graph.DependencyGraph.dynamicCells(readers),
+      Set.empty[com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef]
+    )
+    val result = readers.recalculate()
+    assertEquals(result.errors, Vector.empty)
+    assertEquals(result.evaluated(sheet1Name)(ref"H1"), N("4"))
+    // Other's B column is empty: A1:A3's positives pair with nothing there
+    assertEquals(result.evaluated(SheetName.unsafe("Other"))(ref"H1"), N("0"))
+  }
+
+  test("a sheet-qualified computed name in a range slot evaluates in its sheet's scope") {
+    // a sheet-scoped `dynLocal` on Other computes an OFFSET from Other!A1; read qualified from Empty
+    val scoped = book
+      .withDefinedName("dynLocal", "OFFSET($A$1,0,0,10,1)", SheetName.unsafe("Other"))
+      .fold(error => fail(error.message), identity)
+    val placed = Sheet(emptyName)
+      .put(ref"A1", CellValue.Formula("COUNTIF(Other!dynLocal,\">20\")", None))
+      .put(ref"A2", CellValue.Formula("MATCH(30,Other!dynLocal,0)", None))
+    val wb = scoped.put(placed)
+    agree(placed.evaluateCell(ref"A1", Clock.system, Some(wb)).left.map(_.message), N("8"))
+    agree(placed.evaluateCell(ref"A2", Clock.system, Some(wb)).left.map(_.message), N("3"))
+    agree(
+      scoped.evaluateFormula("=COUNTIF(Other!dynLocal,\">20\")", emptyName).left.map(_.message),
+      N("8")
+    )
+  }
+
   // ----- a LET name as an operand of the reference operators -----
 
   List(

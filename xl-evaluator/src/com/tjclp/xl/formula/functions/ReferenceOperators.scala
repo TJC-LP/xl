@@ -57,6 +57,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    */
   def isReferenceShape(e: TExpr[?]): Boolean = e match
     case TExpr.Coerced(inner, _) => isReferenceShape(inner)
+    // BindingRef: an operand slot now parses a LET name as a location (GH-710), but union's
+    // `areas.forall(isReferenceShape)` still sees it as an expression, so the arm stays
     case _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ExternalRange | _: TExpr.PolyRef |
         _: TExpr.Ref[?] | _: TExpr.SheetPolyRef | _: TExpr.SheetRef[?] | _: TExpr.ExternalRef |
         _: TExpr.NameRef | _: TExpr.SheetNameRef | _: TExpr.ErrorLit | _: TExpr.BindingRef |

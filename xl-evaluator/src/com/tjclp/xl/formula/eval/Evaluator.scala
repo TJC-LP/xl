@@ -779,9 +779,8 @@ object Evaluator:
    * wrong: without the OFFSET clause, `LET(c,B5,OFFSET(c,1,0))` was `#VALUE!` in array mode unless
    * an unrelated range slot in the same LET read a LET name.
    *
-   * PR #719's `inspectsReference` (ROW, COLUMN, ROWS, COLUMNS through `requiresReferenceArguments`)
-   * is a second trigger of the same kind: when the two meet, `evalLet` binds references when either
-   * walk answers true.
+   * TODO(#719): a walk for functions that inspect a reference's position or shape (ROW, COLUMN) is
+   * a trigger of the same kind; `evalLet` should bind references when either answers true.
    *
    * The walk tracks neither which name a slot reads nor shadowing: a range-slot read of any LET
    * name in the subtree, an inner LET's own or one that shadows an outer name, makes the outer LET
