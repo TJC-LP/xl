@@ -90,6 +90,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
               sliceOf(values, rows, cols).map(Left(_))
             }
           )
+        // a LET name bound to a scalar falls through to `areas` and is #VALUE! there, where Excel
+        // gives the value (`LET(x,5,INDEX(x,1))` is 5): a known gap, not yet fixed
         case None =>
           for
             areas <- ReferenceOperators.areas(array, ctx)

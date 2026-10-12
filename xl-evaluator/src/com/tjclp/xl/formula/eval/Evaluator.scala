@@ -371,7 +371,7 @@ object Evaluator:
    * or a chain too deep (#691), a name bound to an error literal, a missing sheet — is a `Left`, so
    * [[resolveRangeSlot]] evaluates a name only when its definition really computes something.
    */
-  private[formula] enum NameRangeTarget:
+  private[formula] enum NameRangeTarget derives CanEqual:
     case Range(target: Sheet, range: CellRange)
 
     /**
