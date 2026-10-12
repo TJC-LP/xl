@@ -630,6 +630,13 @@ class EvalCommandSpec extends CatsEffectSuite:
     ).foldLeft(IO.unit)((acc, formula) => acc >> readsPlacement(named, formula, "D5", "D5"))
   }
 
+  test("GH-715: a call SUMPRODUCT evaluates outside its shared extent still sees the guard") {
+    // #718/#719: under SUMPRODUCT's whole-column extent, MAX evaluates through a derived evaluator
+    // without that extent; the placement guard must carry over to it
+    readsPlacement(stale, "=SUMPRODUCT((A:A>0)*MAX(INDIRECT(\"D5\")))", "D5", "D5") >>
+      readsPlacement(stale, "=IFERROR(SUMPRODUCT((A:A>0)*MAX(INDIRECT(\"D5\"))),0)", "D5", "D5")
+  }
+
   test(
     "GH-715: a lookup whose result cell is the placement reports the cycle, not an error value"
   ) {
@@ -996,6 +1003,30 @@ class EvalCommandSpec extends CatsEffectSuite:
       ReadCommands.evalArray(namedReadBacks, data, "=Other!A1+Other!A2", None, overrides).map {
         array => assert(array.contains("25"), array)
       }
+  }
+
+  test("GH-715 known gap: --with keeps a cache that reads the override only at run time") {
+    // C1 = INDIRECT("B1")*2 and D1 = OFFSET(A1,0,1)*2, both cached 20 over B1 = 10. The stale
+    // search follows static reads and defined names, not a computed reference: read at run time,
+    // each answers from its cache (20, where B1 = 5 makes it 10). Read through the closure, C1 is
+    // re-evaluated and right. Fixing the gap flips the first two cases to 10.
+    val data = Sheet("Data")
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ref"B1", CellValue.Number(BigDecimal(10)))
+      .put(ref"C1", cachedFormula("=INDIRECT(\"B1\")*2", 20))
+      .put(ref"D1", cachedFormula("=OFFSET(A1,0,1)*2", 20))
+    val wb = Workbook(Vector(data))
+    val overrides = List("B1=5")
+    val cases = List(
+      "=INDIRECT(\"C1\")" -> 20,
+      "=INDIRECT(\"D1\")" -> 20,
+      "=C1" -> 10
+    )
+    cases.foldLeft(IO.unit) { case (acc, (formula, expected)) =>
+      acc >> ReadCommands.eval(wb, Some(data), formula, None, overrides).map { result =>
+        assert(result.contains(s"Result: $expected (number)"), s"$formula: $result")
+      }
+    }
   }
 
   test("GH-715: evala --with sees another sheet's cached read-back without its cache") {
