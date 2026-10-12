@@ -153,6 +153,13 @@ xl batch --schema                                  # JSON Schema of the batch do
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
 > work under `--stream` writes.
 
+> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
+> without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
+> cell) but leaves the old spill cells behind as orphaned constants, and one into a spill cell is
+> not refused, though Excel will not keep it as written. The in-memory writes apply Excel's rule
+> instead (see Dynamic arrays under `putf`); the streamed rule is
+> [#738](https://github.com/TJC-LP/xl/issues/738).
+
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
 Every write verb that changes cell content ends with a recalculation scoped to the edit's **dirty
@@ -1005,6 +1012,12 @@ legacy formula, and xl computes it the same way:
   at most the first 1000 such cells of a command are checked, and a warning from a longer drag says
   `(first 1000 of N cells checked)`. Streaming writes and `--dry-run` do not evaluate and stay
   silent; `put`, `fill` and `copy` do not check.
+- **The `DYNAMIC_ARRAY_DOWNGRADED` warning** (GH-714). When the workbook's cell-metadata part
+  (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, xl cannot extend it
+  without risking the indices other cells use: a `putf --array` (or batch `"array": true`) still
+  writes, but the new anchor is saved without its `cm` marker, so Excel opens it as a legacy
+  `{=…}` array, and the warning says so. The part is kept as it was. A relationship that names a
+  part missing from the package is not a downgrade: xl writes the part at that target.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").

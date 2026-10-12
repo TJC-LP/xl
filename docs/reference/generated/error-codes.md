@@ -85,3 +85,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `LINT_HYGIENE` |
 | `CF_NOT_RENDERED` |
 | `IMPLICIT_INTERSECTION` |
+| `DYNAMIC_ARRAY_DOWNGRADED` |

@@ -79,6 +79,14 @@ object WarningCode:
    */
   val IMPLICIT_INTERSECTION: String = "IMPLICIT_INTERSECTION"
 
+  /**
+   * GH-714: a write regenerated sheets holding dynamic arrays, but the workbook's cell-metadata
+   * part (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, so xl cannot
+   * extend it: those records were written without their `cm` marker and Excel opens them as legacy
+   * CSE arrays (`{=...}`). The part is kept as it was. Informational: never gates.
+   */
+  val DYNAMIC_ARRAY_DOWNGRADED: String = "DYNAMIC_ARRAY_DOWNGRADED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -95,5 +103,6 @@ object WarningCode:
     OFF_GRID_REF,
     LINT_HYGIENE,
     CF_NOT_RENDERED,
-    IMPLICIT_INTERSECTION
+    IMPLICIT_INTERSECTION,
+    DYNAMIC_ARRAY_DOWNGRADED
   )

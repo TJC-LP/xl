@@ -57,6 +57,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ops.{Edit, OffGridRef}
 import com.tjclp.xl.sheets.{styleSyntax, SheetEdits}
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.ooxml.XlsxWriter
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.cli.{
   CliIO,
@@ -197,7 +198,7 @@ object WriteCommands:
           case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
             ""
           case Some(r) => "\n" + formatRecalcSummary(r)
-        IO.blocking(advisories(finalWb)).flatMap { extra =>
+        IO.blocking(advisories(finalWb) ++ downgradeWarning(finalWb, config)).flatMap { extra =>
           strictGate(
             policy,
             s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
@@ -761,6 +762,25 @@ object WriteCommands:
   ): Workbook => Vector[Warning] = finalWb =>
     val report = ImplicitIntersection.check(finalWb, targets, clock, known = known)
     IntersectionHit.warning(report).toList.toVector
+
+  /**
+   * GH-714: `DYNAMIC_ARRAY_DOWNGRADED` when the write just made could not keep its dynamic arrays'
+   * `cm` marker (`XlsxWriter.cellMetadataDowngrade`: the source metadata part does not parse).
+   */
+  private[cli] def downgradeWarning(wb: Workbook, config: WriterConfig): Vector[Warning] =
+    XlsxWriter
+      .cellMetadataDowngrade(wb, config)
+      .map { path =>
+        Warning(
+          WarningCode.DYNAMIC_ARRAY_DOWNGRADED,
+          s"the workbook's cell-metadata part '$path' is not readable XML, so xl cannot extend it: " +
+            "the dynamic arrays on the rewritten sheets were saved without their dynamic-array " +
+            "marker, and Excel opens them as legacy array formulas ({=...}); the part was kept as " +
+            "it was (repair or remove it in Excel, then write again)"
+        )
+      }
+      .toList
+      .toVector
 
   /** One reading of the system clock, taken in IO: a command's single notion of now. */
   private[cli] val commandClock: IO[Clock] =
@@ -1752,9 +1772,11 @@ object WriteCommands:
                     val areas = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
                     val targets = areas.view.flatMap((name, r) => r.cellsRowMajor.map(name -> _))
                     val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
-                    IO.blocking(intersectionAdvisory(targets, known, clock)(finalWb)).flatMap {
-                      extra =>
-                        strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
+                    IO.blocking(
+                      intersectionAdvisory(targets, known, clock)(finalWb) ++
+                        downgradeWarning(finalWb, config)
+                    ).flatMap { extra =>
+                      strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
                     }
                   }
               }

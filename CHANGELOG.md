@@ -38,7 +38,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   (`readStream`, `readSheetStream`, `streamCellDetails`) now also read `xl/_rels/workbook.xml.rels`
   and the metadata part, under the default ZIP size and ratio limits; `ExcelIO.withStreamLimits`
   sets others (the CLI passes its `--max-size` limits), and the shared-string table keeps its own
-  policy.
+  policy. A metadata part that is not readable XML is kept, and new anchors are written in the
+  legacy shape with a `DYNAMIC_ARRAY_DOWNGRADED` warning (`XlsxWriter.cellMetadataDowngrade` for
+  library callers); a relationship naming a missing part gets the part generated at its target.
 - **`IMPLICIT_INTERSECTION` warning** (#714): an in-memory `putf` or batch `putf` whose plain-cell
   value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
   row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy

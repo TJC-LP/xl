@@ -964,3 +964,75 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       )
       assertEquals(sheet(ref"H500").value, CellValue.Number(500))
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Sixth #721 review: one refusal for an anchor inside a spill; a metadata part xl cannot extend
+
+  test("putf --array inside another spill gets the Overwritten refusal a plain putf gets") {
+    for
+      src <- withSpill()
+      out <- outPath()
+      array <- putfArray(src, out, "F2", "=SORT(D1:D3)", "--json")
+      plain <- run(src, out, "putf", "F2", "=SORT(D1:D3)", "--json")
+      exists <- IO.blocking(Files.exists(out))
+    yield
+      assertRefused(array, "FORMULA_ERROR", "F2: it is in the spill range F1:F3")
+      assertEquals(
+        errorOf(array)("hint").str,
+        "overwrite or clear F1 first (its spill goes with it), or write outside F1:F3"
+      )
+      assertEquals(errorOf(array), errorOf(plain))
+      assert(!exists, "a refused write must not write the output")
+  }
+
+  test("an unreadable metadata part: the write succeeds and warns DYNAMIC_ARRAY_DOWNGRADED") {
+    for
+      src <- source(DynamicArrayFixtures.parts(metadata = Some("<metadata")))
+      out <- outPath()
+      array <- putfArray(src, out, "E1", "=SORT(A1:A5)", "--json")
+      b <- bytes(out)
+      kind <- kindAt(out, ref"E1")
+      plainOut <- outPath()
+      plain <- run(src, plainOut, "put", "D1", "9", "--json")
+    yield
+      ok(array)
+      assert(array.stdout.contains("DYNAMIC_ARRAY_DOWNGRADED"), array.stdout)
+      assert(array.stdout.contains("'xl/metadata.xml' is not readable XML"), array.stdout)
+      // the part is kept as it was, and the anchor reads back as the legacy array it was saved as
+      assertEquals(DynamicArrayFixtures.entryText(b, "xl/metadata.xml"), Some("<metadata"))
+      assertEquals(kind, Some(FormulaKind.ArrayFormula(CellRange(ref"E1", ref"E5"))))
+      // a write that authors no dynamic array loses nothing, so it does not warn
+      ok(plain)
+      assert(!plain.stdout.contains("DYNAMIC_ARRAY_DOWNGRADED"), plain.stdout)
+  }
+
+  test("a sheetMetadata relationship naming a missing part: the part is generated, no warning") {
+    for
+      src <- source(DynamicArrayFixtures.parts().filterNot(_._1 == "xl/metadata.xml"))
+      out <- outPath()
+      array <- putfArray(src, out, "E1", "=SORT(A1:A5)", "--json")
+      b <- bytes(out)
+      kind <- kindAt(out, ref"E1")
+    yield
+      ok(array)
+      assert(!array.stdout.contains("DYNAMIC_ARRAY_DOWNGRADED"), array.stdout)
+      assertEquals(
+        DynamicArrayFixtures.entryText(b, "xl/metadata.xml"),
+        Some(DynamicArrayFixtures.metadataXml)
+      )
+      assertEquals(kind, Some(FormulaKind.dynamicArray(CellRange(ref"E1", ref"E5"))))
+  }
+
+  test("batch: an unreadable metadata part warns DYNAMIC_ARRAY_DOWNGRADED too") {
+    val ops = """[{"op":"putf","ref":"E1","value":"=SORT(A1:A5)","array":true}]"""
+    for
+      src <- source(DynamicArrayFixtures.parts(metadata = Some("<metadata")))
+      out <- outPath()
+      batch <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "batch", "-", "--json"),
+        ops
+      )
+    yield
+      ok(batch)
+      assert(batch.stdout.contains("DYNAMIC_ARRAY_DOWNGRADED"), batch.stdout)
+  }
