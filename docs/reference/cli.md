@@ -59,6 +59,7 @@ xl -f model.xlsx cell B5                   # Get single cell details (single-she
 xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
 xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
 xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
+xl -f model.xlsx -s "P&L" eval "=B1:B10*2" --at D5  # ...as the plain cell at D5 would
 xl -f model.xlsx -s "P&L" evala "=TRANSPOSE(A1:C2)"  # Evaluate array formula (spill grid)
 
 # Mutations (require -o or -i)
@@ -152,6 +153,13 @@ xl batch --schema                                  # JSON Schema of the batch do
 > that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
 > work under `--stream` writes.
+
+> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
+> without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
+> cell) but leaves the old spill cells behind as orphaned constants, and one into a spill cell is
+> not refused, though Excel will not keep it as written. The in-memory writes apply Excel's rule
+> instead (see Dynamic arrays under `putf`); the streamed rule is
+> [#738](https://github.com/TJC-LP/xl/issues/738).
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
@@ -927,22 +935,46 @@ sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the
 
 ---
 
-### `xl eval <formula> [--with overrides]`
+### `xl eval <formula> [--at <ref>] [--with overrides]`
 
 Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
-The formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+Without `--at` the formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+
+`--at <ref>` answers the second question without writing the file: the formula evaluates as the plain cell at `<ref>` would. With A1:A10 and B1:B10 holding 1..10, `eval "=SUM(A1:A10*B1:B10)"` is 385, `--at D5` is 25 (`A5*B5`) and `--at D20` is `#VALUE!` (row 20 crosses neither range). The ref follows the one sheet rule: a qualified ref (`--at Data!D5`) names the sheet the formula evaluates on, else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` (exit 3). It must be one cell: a range or a malformed ref is `INVALID_REFERENCE` (exit 3). It needs no `-f` for a formula that reads no cell (`xl eval "=ROW()" --at D5` is 5), and, like `eval` itself, is refused under `--stream`. `evala --at` is different: it only anchors where the displayed spill starts.
+
+**Cycles.** A formula that reads `<ref>`'s value would make the plain cell a circular reference, so `eval --at` fails with `FORMULA_ERROR` (exit 3) rather than answering with the cell's current content.
+- A read the formula or its precedents on that sheet make is named with its path, as a cycle among the precedents is: `eval "=SUM(A1:A10)" --at A5` is `A5 → A5`, and `--at D5` when C1 holds `=D5*2` and the formula reads C1 is `Circular reference detected: D5 → C1 → D5`. A path longer than ten cells keeps its ends and counts the cells between (`D5 → C1 → C2 → … (37 more) … → C40 → D5`).
+- A reference qualified with the placement's own sheet is a read of that sheet: `eval "=Data!D5" --at Data!D5` is circular (sheet names compare case-insensitively).
+- Inspecting an address is not a read: `ROW(D5)`, `ROWS(D5:D6)` and `CELL("row",D5)` evaluate at D5.
+- The check that names the path follows only the formulas on the placement's sheet, and only the formula's own precedents: a cycle elsewhere on the sheet does not stop it.
+- It counts every cell of a range read as a value, even where the plain cell reads only one of them by implicit intersection: when B10 holds `=D5`, `eval "=B:B+1" --at D5` reports `D5 → B10 → D5`, though the plain cell at D5 reads only B5. That over-report is deliberate, as a dependency graph tracks the range rather than the one cell it yields: a false cycle is safer than an answer computed from a stale value.
+- A read the check cannot see is caught when the evaluation makes it: a reference computed at run time (`INDIRECT("D5")`, `OFFSET(A1,4,0)` at A5, a defined name naming `<ref>`) or another sheet's formula that reads `<ref>` fails as `Circular reference detected: the formula reads its own placement D5 at run time (…)`.
+
+**Known gaps.** Two reads still go unseen:
+- another sheet's formula that holds a cached value is read as that value, not re-evaluated, so its read of `<ref>` is missed and the answer uses `<ref>`'s current content ([#729](https://github.com/TJC-LP/xl/issues/729));
+- XLOOKUP reads its return cell as stored, so an uncached formula there that reaches `<ref>` only at run time (`=INDIRECT("D5")`) is returned as its record, not reported ([#742](https://github.com/TJC-LP/xl/issues/742)).
+
+**With `--with`.** The overrides apply with or without `--at`, in `eval` and `evala` alike, to the sheet the formula evaluates on: the `--at` sheet, else `-s`. So `-s Data eval … --at Other!D5 --with B1=5` sets Other!B1, and an override qualified with another sheet's name is `INVALID_REFERENCE`.
+- On the `--at` cell itself an override is `USAGE` (exit 2): the formula is that cell, so `--at D5 --with D5=3` would set a cell nothing could read.
+- A sheet qualifier matches the evaluated sheet's name in any case (`--with data!D5=1` overrides Data!D5).
+- Every formula in the book that reads an overridden cell, directly, through a defined name or through other formulas on any sheet, drops its cached value, so every read sees the overrides: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that qualify a reference with a sheet holding an overridden or stale cell, or mention a defined name; without `--with`, `eval --at` touches only the formula's own precedents.
+
+**Output.** The text output adds an `At:` line, and the JSON payload's `at` carries the cell as evaluated (`"Data!D5"`; `null` without `--at`).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Formula to evaluate |
-| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) |
+| `--at` | string | No | Evaluate as the plain cell at this ref (implicit intersection included; nothing is written). Without it the formula evaluates as an array, showing its top-left value |
+| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) on the sheet the formula evaluates on: the `--at` sheet, else `-s` |
 
 **Examples**:
 ```bash
 xl -f model.xlsx -s Sheet1 eval "=SUM(B1:B10)"
 xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
+xl -f model.xlsx -s Sheet1 eval "=SUM(A1:A10*B1:B10)" --at D5   # what putf D5 would show
+xl -f model.xlsx eval "=A1:A10*2" --at Data!E3 --with "A3=7"     # qualified ref names the sheet
 ```
 
 ---
@@ -989,7 +1021,31 @@ legacy formula, and xl computes it the same way:
   does.
 - **Array math.** For array math in one cell, write SUMPRODUCT: `=SUMPRODUCT(A1:A10*B1:B10)`, with
   conditions as factors (`=SUMPRODUCT((A1:A10>2)*A1:A10)`) rather than IF, which Excel evaluates
-  as legacy inside a plain SUMPRODUCT.
+  as legacy inside a plain SUMPRODUCT. Or store the formula as Excel 365 stores a typed one —
+  `putf --array` (below): `putf --array C5 "=SUM(A1:A10*B1:B10)"` is the array sum in any row, and
+  `putf --array A1 "=SORT(B1:B3)"` spills.
+- **The `IMPLICIT_INTERSECTION` warning** (GH-714). An in-memory `putf` or batch `putf` whose plain
+  cell evaluates differently from the same formula as an array formula says so — the cell, both
+  values and the remedy: `Sheet1!C5: =SUM(A1:A10*B1:B10) is 25 as a plain cell (implicit
+  intersection) but 385 as an array formula; use SUMPRODUCT, putf --array (batch "array": true), or
+  an explicit @`. A formula that cannot spill as a plain cell (`=A1:A10*2`, `=SORT(B1:B3)`) names the
+  array's shape. One warning per command lists the first ten cells, located at the first; it is
+  informational and never gates (`--strict` exits 0 on it). Only a formula with an array source in
+  a value position is evaluated twice — a multi-cell reference or name used as an operand or scalar
+  argument, an array constant, an array function (SORT, SEQUENCE, INDEX…) — so a range a function
+  takes whole (`=SUM($A$1:A1)`, `COUNTIF`, `VLOOKUP`'s table, `SUMPRODUCT`) costs nothing to check;
+  at most the first 1000 such cells of a command are checked, and a warning from a longer drag says
+  `(first 1000 of N cells checked)`; a sample that finds no divergence says so with the
+  informational `INTERSECTION_SAMPLED` note, so silence is never a sampled "all clear". A failure
+  to compute the check (an exhausted heap included) means no advisory: the write and its exit code
+  stand. Streaming writes and `--dry-run` do not evaluate and stay
+  silent; `put`, `fill` and `copy` do not check.
+- **The `DYNAMIC_ARRAY_DOWNGRADED` warning** (GH-714). When the workbook's cell-metadata part
+  (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, xl cannot extend it
+  without risking the indices other cells use: a `putf --array` (or batch `"array": true`) still
+  writes, but the new anchor is saved without its `cm` marker, so Excel opens it as a legacy
+  `{=…}` array, and the warning says so. The part is kept as it was. A relationship that names a
+  part missing from the package is not a downgrade: xl writes the part at that target.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").
@@ -1103,6 +1159,7 @@ Write formula(s) to a cell or range with Excel-style dragging.
 | Single | `putf C1 "=A1+B1"` | One formula, one cell |
 | Drag | `putf B2:B10 "=A2*1.1"` | Single formula + range: references shift per cell (`$` anchors pin) |
 | Batch | `putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"` | One formula per cell, applied as-is (no dragging) |
+| Dynamic array | `putf --array A1 "=SORT(B1:B3)"` | One cell: an Excel 365 dynamic array anchored at the cell, spilling (GH-714) |
 
 **Anchor modes** (`$` controls shifting when dragging): `$A$1` absolute, `$A1` column-absolute, `A$1` row-absolute, `A1` fully relative.
 
@@ -1116,9 +1173,65 @@ xl -f input.xlsx -s S1 -o output.xlsx putf C2:C10 "=SUM(\$B\$2:B2)"   # Running 
 
 (The batch JSON `putf` op additionally accepts a `"from"` field to drag from an explicit source cell.)
 
+**Dynamic arrays (`--array`, GH-714)**: a plain `putf` cell is a legacy formula — Excel 365 opens
+`=SORT(B1:B3)` as `=@SORT(B1:B3)` (one value) and intersects `=SUM(A1:A10*B1:B10)` with the cell's
+row. `--array` stores the formula as Excel 365 stores one typed into the cell: a dynamic-array
+anchor (`<f t="array" ref="…">` plus the `cm` cell attribute and its `xl/metadata.xml` block) that
+spills. The formula is evaluated as an array at `<ref>`: the anchor's `ref` is the spill extent,
+cached at the array's top-left value, and the other cells of the extent hold the spilled values (a
+scalar result is a 1×1 record). Dependents of the spill cells refresh in the same command;
+`--no-recalc` suppresses that refresh but still evaluates the formula, which defines the extent.
+`cell` and `view --formulas` show it without braces (`=SORT(B1:B3)`, as Excel 365 does) and JSON
+carries `"formulaKind": "dynamicArray"`.
+
+```bash
+xl -f in.xlsx -s S1 -o out.xlsx putf --array A1 "=SORT(B1:B3)"           # Put dynamic array =SORT(B1:B3) at A1 (spills A1:A3)
+xl -f in.xlsx -s S1 -o out.xlsx putf --array C5 "=SUM(A1:A10*B1:B10)"    # 1x1: the array sum, any row
+echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in.xlsx -o out.xlsx batch -
+```
+
+- **One cell, one formula**: `--array` over a range or with several formulas is `USAGE`; batch
+  `"array": true` with `from`, `values` or a range `ref` is `BATCH_OP_INVALID` (`--dry-run` too).
+- **A blocked spill is refused**, as `FORMULA_ERROR` naming the blockers, and nothing is written —
+  Excel would show `#SPILL!`: a cell of the extent other than the anchor holding a value or formula
+  (an empty string counts; a style-only cell does not), a merge, another array formula's range, a
+  table, or the grid edge.
+- **Re-authoring** a dynamic anchor clears its previous spill first, so a shrinking spill leaves no
+  stale cells. A plain `put`, `putf`, `copy`, `fill` or contents `clear` over the anchor (batch
+  included) clears its spill too, as Excel does. A write into a spill cell whose anchor stays is
+  refused as `FORMULA_ERROR`, nothing written: Excel would keep the value and show `#SPILL!` at
+  the anchor. The hint says to overwrite or clear the anchor first; in a batch, an earlier op's
+  spill counts. A contents `clear` into such a spill is not refused: Excel keeps a spill's cells
+  while its anchor stays, so xl leaves them as they were, clears the rest of the range and warns
+  `SPILL_CELLS_SKIPPED`, naming the anchor and the ranges kept (`--styles` and `--comments` apply
+  to spill cells as to any other). `sort` and
+  `--stream` writes do not apply this rule yet. A spill of more than 1,048,576 cells (one full
+  column, as many as SEQUENCE allows) is refused before anything is written. A later recalculation
+  re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
+  values until Excel recalculates (#737). Excel does so on open for a book xl created (no
+  `calcId`); a book Excel saved keeps its `calcPr`, so Excel may trust those values until F9.
+- **A circular spill is not spilled**: a formula that reads its own anchor or a cell its spill
+  would fill (`putf --array A1 "=A1:A3"`, or `=Sheet1!A1:A3` on Sheet1, in any case) is a
+  circular reference in Excel, which shows 0 rather than spilling. xl writes it as an uncached 1×1
+  record and says why (`uncached: it could not be evaluated (… circular reference …)`). Only
+  static reads are checked: an `INDIRECT`/`OFFSET` that resolves into the spill is not seen.
+- **Structural edits and fills**: deleting the row or column of an anchor removes its spill, as
+  in Excel (the spill cells outside the deleted band are emptied, styles kept). A `fill` that
+  copies a dynamic anchor whose last spill runs along the fill direction warns
+  `FILLED_SPILLS_OVERLAP`: each copy is its own anchor one cell from the next, so in Excel their
+  spills overlap and all but the last show `#SPILL!`; xl writes each copy's top-left value (#737).
+- **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with
+  `"array": true` is refused by index before anything is written (`x-streamRefusedFields` in
+  `xl batch --schema`). A streamed `put`/`putf` over an existing anchor writes a plain cell and
+  drops its `cm`, but leaves its spill cells as constants.
+- Dynamic-array anchors read from Excel files keep their `cm` through every in-memory write; the
+  metadata part is reused, extended (never renumbered, so images-in-cells metadata stays valid) or
+  generated.
+
 **Formula records (GH-430)**: legacy CSE array formulas (`{=...}`) and Data Table cells read from a file
 survive all rewrites — `view --formulas` and `cell` render them braced (`{=SUM(A1:A3*10)}`,
-`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dataTable"` field.
+`{=TABLE(A1,A2)}`) and JSON output carries an additive `"formulaKind": "array" | "dynamicArray" | "dataTable"`
+field (dynamic arrays: GH-714 above).
 An array record evaluates as an array (`recalc`, `view --eval`) and its anchor caches the array's
 top-left element, Excel's anchor value; the record's other cells keep their cached constants.
 `putf` rejects a top-level `TABLE(` expression: `TABLE(...)` is a data-table record's derived display
@@ -1240,6 +1353,9 @@ Clear cell contents, styles, or comments from a range.
 - **`--comments`**: Clears comments but keeps contents and styles
 - Flags can be combined: `--styles --comments` clears both
 - Merged regions overlapping the cleared range are automatically unmerged
+- Dynamic arrays (GH-714): clearing an anchor clears its whole spill; the cells of a spill whose
+  anchor lies outside the range keep their values, as in Excel, while the rest of the range is
+  cleared, with a `SPILL_CELLS_SKIPPED` warning naming the anchor and the ranges kept
 
 **Examples**:
 ```bash
@@ -2378,7 +2494,8 @@ otherwise:
 - Typed verbs build `data` directly: `sheets` → `{sheets: [{name, index, state, dimension}]}`
   (`--stats` adds `cells`, `formulas` to each element; the elements are `describe`'s
   `data.sheets`); `names` → `{names: [{name, refersTo, scope, hidden}]}`; `bounds` →
-  `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
+  `{sheet, range, dimension}`; `eval` → `{formula, at, result: {type, value, formatted},
+  overrides}` (`at` is the `--at` cell as evaluated, `null` without it);
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `{functions: [{name, minArgs, maxArgs, args, returnsDate, returnsTime,
   dynamicDeps, volatile, specialForm}]}`; `rasterizers` → `{backends: [{name, status, note}],

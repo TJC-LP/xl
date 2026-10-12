@@ -379,11 +379,22 @@ object WorkbookAudit:
   private def callsVolatile(
     expr: TExpr[?],
     viaName: (Option[SheetName], String) => Boolean
+  ): Boolean = callsWhere(expr, viaName, _.flags.volatile)
+
+  /**
+   * Whether the expression calls a function whose spec satisfies `p`, at any depth, through the
+   * same walk as [[callsVolatile]] (GH-711: SUMPRODUCT's blank tail asks it of the specs that draw
+   * a random number).
+   */
+  private[formula] def callsWhere(
+    expr: TExpr[?],
+    viaName: (Option[SheetName], String) => Boolean,
+    p: com.tjclp.xl.formula.functions.FunctionSpec[?] => Boolean
   ): Boolean =
-    def go(e: TExpr[?]): Boolean = callsVolatile(e, viaName)
+    def go(e: TExpr[?]): Boolean = callsWhere(e, viaName, p)
     expr match
       case call: TExpr.Call[?] =>
-        call.spec.flags.volatile ||
+        p(call.spec) ||
         call.spec.argSpec.toValues(call.args).exists {
           case ArgValue.Expr(e) => go(e)
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) => viaName(scope, name)
@@ -424,6 +435,16 @@ object WorkbookAudit:
   private def volatileNames(
     wb: Workbook
   ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
+    namesReaching(wb, callsVolatile)
+
+  /**
+   * [[volatileNames]] for any predicate `direct(expr, viaName)` over one expression: whether a
+   * defined name, referenced from a formula on `from`, reaches an expression satisfying it.
+   */
+  private[formula] def namesReaching(
+    wb: Workbook,
+    direct: (TExpr[?], (Option[SheetName], String) => Boolean) => Boolean
+  ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
     if wb.metadata.definedNames.isEmpty then (_, _, _) => NameWalk.Reach.Absent
     else
       val resolve = NameWalk.resolver(wb, DependencyGraph.sheetCanonicaliser(wb))
@@ -435,7 +456,7 @@ object WorkbookAudit:
             node.definition.formula,
             FormulaParser.parse(node.definition.formula).toOption
           )
-          .fold(NameWalk.Step.empty)(NameWalk.Step.of(_, node.sheet, resolve, callsVolatile))
+          .fold(NameWalk.Step.empty)(NameWalk.Step.of(_, node.sheet, resolve, direct))
       val walk = NameWalk.Walk(step)
       (from, qualifier, name) =>
         resolve(qualifier, name, from).fold(NameWalk.Reach.Absent)(walk(_).reach)

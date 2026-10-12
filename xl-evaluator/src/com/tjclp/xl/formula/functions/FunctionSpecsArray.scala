@@ -29,10 +29,9 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
    */
   val transpose: FunctionSpec[ArrayResult] { type Args = UnaryRange } =
     FunctionSpec.simple[ArrayResult, UnaryRange]("TRANSPOSE", Arity.one) { (location, ctx) =>
-      Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-        case (targetSheet, range) =>
-          extractRangeAsMatrixEval(range, targetSheet, ctx)
-            .map(values => ArrayResult(values.transpose))
+      ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+        extractRangeAsMatrixEval(range, targetSheet, ctx)
+          .map(values => ArrayResult(values.transpose))
       }
     }
 
@@ -169,10 +168,6 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case None => Right(ArrayResult.empty)
       case Some(r) => extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
 
-  private def boundedToUsed(range: CellRange, target: Sheet): Option[CellRange] =
-    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
-    else Some(range)
-
   /**
    * INDIRECT(ref_text, [a1])
    *
@@ -221,7 +216,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     yield result
 
   /** Maximum number of cells INDIRECT will materialize (SEQUENCE-guard parity). */
-  private val MaxIndirectCells = 1048576L
+  private val MaxIndirectCells = ArrayResult.MaxCells
 
   /** The #REF! VALUE result (Excel parity for unresolvable ref_text — not an eval failure). */
   private def indirectRefError: Either[EvalError, Either[ArrayResult, RangeOperand]] =
@@ -307,7 +302,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         result <-
           if nRows < 1 || nCols < 1 then
             Left(EvalError.EvalFailed("SEQUENCE: rows and columns must be >= 1", None))
-          else if nRows.toLong * nCols.toLong > 1048576L then
+          else if nRows.toLong * nCols.toLong > ArrayResult.MaxCells then
             Left(EvalError.EvalFailed("SEQUENCE: result exceeds 1,048,576 cells", None))
           else
             val values = (0 until nRows).toVector.map { r =>
@@ -336,7 +331,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         sortIndex <- idxOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
         sortOrder <- orderOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(1))
-        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(location)
         (targetSheet, range) = resolved
         matrix <- extractRangeAsMatrixEval(range, targetSheet, ctx)
         result <-
@@ -374,7 +369,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       for
         byCol <- byColOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
         exactlyOnce <- onceOpt.map(e => ctx.evalExpr(e)).getOrElse(Right(false))
-        resolved <- Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(location)
         (targetSheet, range) = resolved
         matrix0 <- extractRangeAsMatrixEval(range, targetSheet, ctx)
       yield
@@ -418,14 +413,13 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
           case Some(expr) => evalValue(ctx, expr).map(v => ArrayResult.single(toCellValue(v)))
           case None => Right(ArrayResult.single(CellValue.Error(CellError.NA)))
       for
-        resolvedArray <- Evaluator.resolveRangeLocation(arrayLoc, ctx.sheet, ctx.workbook)
+        resolvedArray <- ctx.resolveRange(arrayLoc)
         (arraySheet, arrayRange) = resolvedArray
         matrix <- extractRangeAsMatrixEval(arrayRange, arraySheet, ctx)
         include <- includeArg match
           case Left(includeLoc) =>
-            Evaluator.resolveRangeLocation(includeLoc, ctx.sheet, ctx.workbook).flatMap {
-              case (includeSheet, includeRange) =>
-                extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
+            ctx.resolveRange(includeLoc).flatMap { case (includeSheet, includeRange) =>
+              extractRangeAsMatrixEval(includeRange, includeSheet, ctx)
             }
           // GH-654: a bare cell (`=FILTER(A1:C1,D1)`) arrives as an unresolved PolyRef —
           // evalMaybeArrayArg resolves it to its 1×1 value like every other array-aware slot

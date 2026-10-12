@@ -165,7 +165,9 @@ object StreamingSource:
    * The source over `path`, its three shared parts memoised: `workbook.xml` (the input read of
    * every streaming verb, so a missing or unreadable file is `IO_READ` here as on every other
    * verb), the shared-string table under `config`'s limits, and `styles.xml`. Each is read on first
-   * use, at most once per source.
+   * use, at most once per source. The row and cell streams read the workbook relationships and the
+   * cell-metadata part under `excel`'s own `streamLimits` (GH-714; the CLI's interpreter carries
+   * the run's `--max-size` limits, see `MemoryGuard.excel`).
    */
   def apply(path: Path, excel: ExcelIO[IO], config: ReaderConfig): IO[StreamingSource] =
     (

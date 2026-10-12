@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
+import com.tjclp.xl.cli.commands.SheetCommands
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -26,6 +26,8 @@ import com.tjclp.xl.formula.{
   SheetEvaluator,
   TExpr
 }
+import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, ImplicitIntersection}
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -82,8 +84,16 @@ object BatchParser:
     /** Put a single value to a cell with optional format */
     case Put(ref: String, value: CellValue, format: Option[NumFmt])
 
-    /** Put a formula to a single cell with optional number format (GH-356) */
-    case PutFormula(ref: String, formula: String, format: Option[NumFmt] = None)
+    /**
+     * Put a formula to a single cell with optional number format (GH-356). `array` (GH-714) writes
+     * an Excel 365 dynamic-array anchor at `ref` instead of a plain (legacy) formula.
+     */
+    case PutFormula(
+      ref: String,
+      formula: String,
+      format: Option[NumFmt] = None,
+      array: Boolean = false
+    )
 
     /** Put a formula to a range with dragging (from anchor cell) */
     case PutFormulaDragging(
@@ -223,8 +233,9 @@ object BatchParser:
     op match
       case BatchOp.Put(ref, value, fmt) =>
         s"  PUT $ref = $value${formatSuffix(fmt)}"
-      case BatchOp.PutFormula(ref, formula, fmt) =>
-        s"  PUTF $ref = $formula${formatSuffix(fmt)}"
+      case BatchOp.PutFormula(ref, formula, fmt, array) =>
+        val kind = if array then " (dynamic array)" else ""
+        s"  PUTF $ref = $formula$kind${formatSuffix(fmt)}"
       case BatchOp.PutFormulaDragging(range, formula, from, fmt) =>
         s"  PUTF $range = $formula (from $from)${formatSuffix(fmt)}"
       case BatchOp.PutFormulas(range, formulas, fmt) =>
@@ -446,6 +457,27 @@ object BatchParser:
             // GH-663: the ONLY constructor of the three putf ops is this branch, so parsing here
             // is the invariant — no apply-time re-parse (PR #679 review: a second gate was
             // unreachable, cost a parse per formula, and would have reported the wrong code)
+            // GH-714: `array` writes one dynamic-array anchor; its spill extent comes from
+            // evaluation, so it never combines with a range, `values` or a `from` drag
+            val array = objMap.get("array") match
+              case None => false
+              case Some(v) =>
+                v.boolOpt.getOrElse(throw invalid(idx, "'array' must be true or false"))
+            if array then
+              if objMap.contains("values") || objMap.contains("from") then
+                throw invalid(
+                  idx,
+                  "'array' anchors one cell: it cannot combine with 'values' or 'from' " +
+                    "(the spill extent comes from evaluation)"
+                )
+              RefType.parse(ref) match
+                case Right(RefType.Range(_)) | Right(RefType.QualifiedRange(_, _)) =>
+                  throw invalid(
+                    idx,
+                    s"'array' anchors one cell, not a range: $ref (the spill extent comes from " +
+                      "evaluation)"
+                  )
+                case _ => ()
             objMap.get("values") match
               case Some(arr) if arr.arrOpt.isDefined =>
                 val formulas = arr.arr.toVector.zipWithIndex.map { case (v, i) =>
@@ -464,7 +496,7 @@ object BatchParser:
                 // Check for 'from' field for formula dragging
                 objMap.get("from").flatMap(_.strOpt) match
                   case Some(fromRef) => BatchOp.PutFormulaDragging(ref, formula, fromRef, format)
-                  case None => BatchOp.PutFormula(ref, formula, format)
+                  case None => BatchOp.PutFormula(ref, formula, format, array)
 
           case "style" =>
             collectStyleNumFmtWarning(objMap, idx).foreach(warnings += _)
@@ -1179,24 +1211,162 @@ object BatchParser:
   /**
    * GH-628: [[applyScoped]], also reporting every cell a `putf … from` drag or a `copy` wrote
    * `#REF!` into for a reference that left the grid — the batch verb's `OFF_GRID_REF` warning and
-   * `--strict` reason.
+   * `--strict` reason — and (GH-714) every live spill a contents `clear` left in place, for its
+   * `SPILL_CELLS_SKIPPED` warning.
    */
   def applyScopedReporting(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp],
-    recalcDependents: Boolean = true
-  ): IO[(Workbook, Vector[OffGridHit])] =
+    recalcDependents: Boolean = true,
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill] = DynamicArrayAuthoring.spillsOf,
+    clock: Clock = Clock.system
+  ): IO[(Workbook, Vector[OffGridHit], Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])] =
+    val start = (
+      wb,
+      defaultSheetOpt.map(_.name),
+      Vector.empty[OffGridHit],
+      SpillIndex.empty,
+      Vector.empty[(SheetName, DynamicArrayAuthoring.KeptSpill)]
+    )
     scoped
-      .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit]))) {
-        (stateIO, op) =>
-          stateIO.flatMap { (currentWb, default, offGrid) =>
-            applyOne(currentWb, default, op, recalcDependents)
-              .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
-              .map((next, hits) => (next, retarget(default, op.op), offGrid ++ hits))
-          }
+      .foldLeft(IO.pure(start)) { (stateIO, op) =>
+        stateIO.flatMap { (currentWb, default, offGrid, spills, kept) =>
+          applyOne(currentWb, default, op, recalcDependents, spills, scanSpills, clock)
+            .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
+            .map((next, hits, index, skipped) =>
+              (next, retarget(default, op.op), offGrid ++ hits, index, kept ++ skipped)
+            )
+        }
       }
-      .map((book, _, offGrid) => (book, offGrid))
+      .map((book, _, offGrid, _, kept) => (book, offGrid, kept))
+
+  /**
+   * GH-714: a batch's dynamic spills by sheet ([[DynamicArrayAuthoring.spillsOf]]), so the spill
+   * guard does not rescan a sheet for every op. A sheet is scanned the first time an op needs it,
+   * then kept current: a plain write or contents clear removes the anchors it overwrites (it can
+   * create none), an op that touches no cell value keeps the index, an op that can change the
+   * anchors on its own sheets (an `"array": true` putf, a `copy`, a merge, a rename) drops just
+   * those sheets, to be rescanned on next need, and any other op drops the whole index.
+   */
+  private type SpillIndex = Map[SheetName, Vector[DynamicArrayAuthoring.Spill]]
+
+  private object SpillIndex:
+    val empty: SpillIndex = Map.empty
+
+  /**
+   * The areas a plain write or a contents clear targets, each on its sheet (never expanded into
+   * cells), and whether it is a clear; None for every other op.
+   */
+  private def releaseAreas(
+    sheetName: Option[SheetName],
+    op: BatchOp
+  ): Option[(Vector[(SheetName, CellRange)], Boolean)] =
+    def areas = targetAreas(sheetName, OpRegistry.targetRefs(op))
+    op match
+      case BatchOp.PutFormula(_, _, _, true) => None
+      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
+          _: BatchOp.PutFormulas | _: BatchOp.PutValues =>
+        Some((areas, false))
+      case BatchOp.Clear(_, all, styles, comments) if all || (!styles && !comments) =>
+        Some((areas, true))
+      case _ => None
+
+  /**
+   * The sheets whose anchors `op` can change without being a plain write or clear, when they are
+   * known from the op itself; None when they are not (the whole index is then dropped).
+   */
+  private def touchedSheets(sheetName: Option[SheetName], op: BatchOp): Option[Set[SheetName]] =
+    def sheetsOf(refs: Vector[String]): Option[Set[SheetName]] =
+      val areas = targetAreas(sheetName, refs)
+      Option.when(areas.nonEmpty)(areas.map(_._1).toSet ++ sheetName)
+    op match
+      case BatchOp.CopyRange(_, target, _) => sheetsOf(Vector(target))
+      case _: BatchOp.PutFormula | _: BatchOp.Merge | _: BatchOp.Unmerge =>
+        sheetsOf(OpRegistry.targetRefs(op))
+      // a new sheet has no spills; a renamed one is rescanned under its new name
+      case _: BatchOp.AddSheet => Some(Set.empty)
+      case BatchOp.RenameSheet(from, to) =>
+        Some(Set(from, to).flatMap(n => SheetName(n).toOption))
+      case _ => None
+
+  /** The index after `op` on `sheetName` (see [[SpillIndex]]). */
+  private def nextSpills(
+    spills: SpillIndex,
+    sheetName: Option[SheetName],
+    op: BatchOp,
+    released: Option[(Vector[(SheetName, CellRange)], Boolean)]
+  ): SpillIndex =
+    released match
+      case Some((areas, _)) =>
+        areas.groupMap(_._1)(_._2).foldLeft(spills) { case (ix, (name, ranges)) =>
+          ix.get(name).fold(ix) { known =>
+            ix.updated(name, known.filterNot(s => ranges.exists(_.contains(s.anchor))))
+          }
+        }
+      case None =>
+        op match
+          case _: BatchOp.Style | _: BatchOp.ColWidth | _: BatchOp.RowHeight |
+              _: BatchOp.AddComment | _: BatchOp.RemoveComment | _: BatchOp.Hyperlink |
+              _: BatchOp.ColHide | _: BatchOp.ColShow | _: BatchOp.RowHide | _: BatchOp.RowShow |
+              _: BatchOp.GroupRows | _: BatchOp.GroupCols | _: BatchOp.UngroupRows |
+              _: BatchOp.UngroupCols | _: BatchOp.AutoFit | _: BatchOp.DefineName |
+              _: BatchOp.RemoveName | _: BatchOp.Freeze | BatchOp.Unfreeze | _: BatchOp.AddChart |
+              _: BatchOp.SetSheetView | _: BatchOp.SetTabColor | _: BatchOp.SetAutoFilter |
+              _: BatchOp.SetPageSetup | _: BatchOp.SetHeaderFooter |
+              _: BatchOp.AddConditionalFormat | _: BatchOp.Clear =>
+            spills
+          case _ => touchedSheets(sheetName, op).fold(SpillIndex.empty)(spills -- _)
+
+  /**
+   * GH-714: a plain value or formula write applied to the dynamic arrays it touches, before the
+   * op's applier runs ([[DynamicArrayAuthoring.releaseForWrite]], the putf/put verbs' rule): a
+   * write over an anchor clears the rest of its spill, and a write into a spill whose anchor stays
+   * — one an earlier op of this batch authored included — fails the op with the `#SPILL!` refusal
+   * (`BATCH_OP_FAILED`, the blockers in the message, the remedy as the hint). `"array": true`
+   * re-authors its own anchor, and a ref that does not resolve is left for the applier to report. A
+   * contents `clear` follows the clear verb instead ([[applyClear]]), and `copy` applies the rule
+   * itself ([[CopyOps.releasedBy]]). The spills come from the batch's [[SpillIndex]], so a sheet
+   * with none costs nothing, and the target ranges are matched against them as ranges
+   * ([[DynamicArrayAuthoring.releaseRanges]]).
+   */
+  private def releaseSpills(
+    wb: Workbook,
+    areas: Vector[(SheetName, CellRange)],
+    spills: SpillIndex
+  ): IO[Workbook] =
+    areas.groupMap(_._1)(_._2).toVector.foldLeft(IO.pure(wb)) { case (acc, (name, ranges)) =>
+      acc.flatMap { current =>
+        val known = spills.getOrElse(name, Vector.empty)
+        current.sheets.find(_.name == name).filter(_ => known.nonEmpty).fold(IO.pure(current)) {
+          sheet =>
+            IO.fromEither(
+              DynamicArrayAuthoring
+                .releaseRanges(sheet, known, ranges)
+                .map((released, _) => current.put(released))
+                .left
+                .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+            )
+        }
+      }
+    }
+
+  /**
+   * The areas named by an op's target ref strings: a qualified ref on its own sheet, an unqualified
+   * one on `sheet`; a cell is a 1x1 range. A ref that does not parse names none.
+   */
+  private def targetAreas(
+    sheet: Option[SheetName],
+    refs: Vector[String]
+  ): Vector[(SheetName, CellRange)] =
+    refs.flatMap { r =>
+      RefType.parse(r).toOption.toList.toVector.flatMap {
+        case RefType.Cell(ref) => sheet.map(_ -> CellRange(ref, ref)).toList.toVector
+        case RefType.QualifiedCell(name, ref) => Vector(name -> CellRange(ref, ref))
+        case RefType.Range(range) => sheet.map(_ -> range).toList.toVector
+        case RefType.QualifiedRange(name, range) => Vector(name -> range)
+      }
+    }
 
   /** A `rename-sheet` of the batch's default sheet moves the default with it. */
   private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
@@ -1234,22 +1404,59 @@ object BatchParser:
 
   /**
    * One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier —
-   * with the off-grid report of the two ops that shift formulas (GH-628).
+   * with the off-grid report of the two ops that shift formulas (GH-628). When the batch can meet a
+   * dynamic spill (`spills`), a plain write first goes through [[releaseSpills]], and a contents
+   * clear reports the spills it left in place (GH-714).
    */
   private def applyOne(
-    currentWb: Workbook,
+    wb: Workbook,
     default: Option[SheetName],
     scoped: ScopedOp,
-    recalcDependents: Boolean
-  ): IO[(Workbook, Vector[OffGridHit])] =
-    IO.fromEither(opSheet(currentWb, default, scoped).left.map(CliException(_))).flatMap {
-      sheetName =>
-        scoped.op match
+    recalcDependents: Boolean,
+    spills: SpillIndex,
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill],
+    clock: Clock
+  ): IO[
+    (Workbook, Vector[OffGridHit], SpillIndex, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])
+  ] =
+    IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
+      val areas = releaseAreas(sheetName, scoped.op)
+      // the sheets this op releases on, scanned once if the index does not know them yet
+      val known = areas.toList.flatMap(_._1.map(_._1)).distinct.foldLeft(spills) { (ix, name) =>
+        if ix.contains(name) then ix
+        else wb.sheets.find(_.name == name).fold(ix)(s => ix.updated(name, scanSpills(s)))
+      }
+      def spillsOn(name: SheetName): Vector[DynamicArrayAuthoring.Spill] =
+        known.getOrElse(name, wb.sheets.find(_.name == name).fold(Vector.empty)(scanSpills))
+      val released = areas match
+        case Some((as, false)) => releaseSpills(wb, as, known)
+        case _ => IO.pure(wb)
+      released.flatMap { currentWb =>
+        val none = Vector.empty[(SheetName, DynamicArrayAuthoring.KeptSpill)]
+        val applied = scoped.op match
           case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
             applyPutFormulaDragging(currentWb, sheetName, rangeStr, formula, fromRef, format)
+              .map((next, hits) => (next, hits, none))
+          case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
+            applyClear(currentWb, sheetName, rangeStr, all, stylesFlag, commentsFlag, spillsOn)
+              .map((next, kept) => (next, Vector.empty, kept))
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
-            applyCopyRange(currentWb, sheetName, sourceStr, targetStr, valuesOnly, recalcDependents)
-          case _ => dispatch(currentWb, sheetName, scoped, recalcDependents).map((_, Vector.empty))
+            applyCopyRange(
+              currentWb,
+              sheetName,
+              sourceStr,
+              targetStr,
+              valuesOnly,
+              recalcDependents,
+              spillsOn
+            ).map((next, hits) => (next, hits, none))
+          case _ =>
+            dispatch(currentWb, sheetName, scoped, recalcDependents, clock)
+              .map((_, Vector.empty, none))
+        applied.map((next, hits, kept) =>
+          (next, hits, nextSpills(known, sheetName, scoped.op, areas), kept)
+        )
+      }
     }
 
   /**
@@ -1312,13 +1519,17 @@ object BatchParser:
     currentWb: Workbook,
     defaultSheetName: Option[SheetName],
     scoped: ScopedOp,
-    recalcDependents: Boolean
+    recalcDependents: Boolean,
+    clock: Clock
   ): IO[Workbook] =
     scoped.op match
       case BatchOp.Put(refStr, cellValue, format) =>
         applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format, scoped.hint)
 
-      case BatchOp.PutFormula(refStr, formula, format) =>
+      case BatchOp.PutFormula(refStr, formula, format, true) =>
+        applyPutDynamicArray(currentWb, defaultSheetName, refStr, formula, format, clock)
+
+      case BatchOp.PutFormula(refStr, formula, format, false) =>
         applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
 
       case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
@@ -1359,7 +1570,10 @@ object BatchParser:
         applyAddChart(currentWb, defaultSheetName, op)
 
       case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
-        applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag)
+        def spillsOn(name: SheetName) =
+          currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
+        applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag, spillsOn)
+          .map(_._1)
 
       case BatchOp.ColHide(colStr) =>
         applyColVisibility(currentWb, defaultSheetName, colStr, hidden = true)
@@ -1460,7 +1674,10 @@ object BatchParser:
           sourceStr,
           targetStr,
           valuesOnly,
-          recalcDependents
+          recalcDependents,
+          // applyOne routes copy itself; here, scan the target sheet
+          name =>
+            currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
         ).map(_._1)
 
       case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
@@ -1605,6 +1822,146 @@ object BatchParser:
             )
           )
       }
+
+  /**
+   * GH-714: the areas a batch's plain (non-array) putf ops wrote, sheet-qualified by THE sheet rule
+   * on `wb`, in op order — the input of the `IMPLICIT_INTERSECTION` check, which expands them
+   * lazily and only as far as its budget ([[ImplicitIntersection.check]]). An op whose sheet does
+   * not resolve contributes nothing (the check is advisory).
+   */
+  def putfTargets(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp]
+  ): Vector[(SheetName, CellRange)] =
+    scoped.flatMap { s =>
+      val refs = s.op match
+        case BatchOp.PutFormula(ref, _, _, false) => Vector(ref)
+        // a drag keeps its source's shape: a source that cannot diverge has no copy that can
+        case BatchOp.PutFormulaDragging(range, formula, _, _)
+            if dragExpression(formula).exists(ImplicitIntersection.mayDiverge) =>
+          Vector(range)
+        case BatchOp.PutFormulas(range, _, _) => Vector(range)
+        case _ => Vector.empty
+      if refs.isEmpty then Vector.empty
+      else targetAreas(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
+    }
+
+  /**
+   * GH-714: which of the [[putfTargets]] cells the `IMPLICIT_INTERSECTION` check need not parse
+   * again — the cells of a `putf … from` drag whose source may diverge, since a shift keeps a
+   * formula's shape. A drag counts only when no reference left the grid at any of its range's
+   * corners (a shift's extremes, so then at no cell), and only for the cells no later op writes: a
+   * later put, putf or contents clear takes its targets out, a later `copy` the whole drag (its
+   * target is not known here). The ops are walked once, last to first, collecting what later ops
+   * write as areas — a single cell in a set, a range as a range — so nothing is expanded into
+   * cells; the result is a membership test, asked only for the cells the check walks.
+   */
+  def putfKnownCandidates(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp]
+  ): ((SheetName, ARef)) => Boolean =
+    def sheetOf(s: ScopedOp) = opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten
+    val (drags, _) = scoped.reverseIterator.foldLeft(
+      (Vector.empty[(SheetName, CellRange, LaterWrites)], LaterWrites.empty)
+    ) { case ((acc, later), s) =>
+      val withDrag = s.op match
+        case BatchOp.PutFormulaDragging(range, formula, from, _) if !later.copied =>
+          val drag = for
+            expr <- dragExpression(formula).toOption
+            if ImplicitIntersection.mayDiverge(expr)
+            origin <- RefType.parse(from).toOption.collect {
+              case RefType.Cell(ref) => ref
+              case RefType.QualifiedCell(_, ref) => ref
+            }
+            area <- RefType.parse(range).toOption.collect {
+              case RefType.Range(r) => r
+              case RefType.QualifiedRange(_, r) => r
+            }
+            corners = Vector(
+              area.start,
+              area.end,
+              ARef.from0(area.colEnd.index0, area.rowStart.index0),
+              ARef.from0(area.colStart.index0, area.rowEnd.index0)
+            )
+            if corners.forall { c =>
+              val colDelta = c.col.index0 - origin.col.index0
+              val rowDelta = c.row.index0 - origin.row.index0
+              !FormulaShifter.shiftReporting(expr, colDelta, rowDelta).anyVoided
+            }
+          yield targetAreas(sheetOf(s), Vector(range)).map((name, r) => (name, r, later))
+          acc ++ drag.toList.flatten
+        case _ => acc
+      (withDrag, later.after(s.op, targetAreas(sheetOf(s), OpRegistry.targetRefs(s.op))))
+    }
+    (key: (SheetName, ARef)) =>
+      val (name, ref) = key
+      drags.exists((n, area, later) => n == name && area.contains(ref) && !later.covers(name, ref))
+
+  /**
+   * What the ops after some point of a batch write, for [[putfKnownCandidates]]: single cells as a
+   * set, ranges as ranges, and whether a `copy` follows (its target is not resolved here).
+   */
+  private final case class LaterWrites(
+    cells: Set[(SheetName, ARef)],
+    ranges: Vector[(SheetName, CellRange)],
+    copied: Boolean
+  ):
+    def covers(name: SheetName, ref: ARef): Boolean =
+      cells.contains(name -> ref) || ranges.exists((n, r) => n == name && r.contains(ref))
+
+    /** These writes, preceded by `op` writing `areas`. */
+    def after(op: BatchOp, areas: Vector[(SheetName, CellRange)]): LaterWrites = op match
+      case _: BatchOp.CopyRange => copy(copied = true)
+      case BatchOp.Clear(_, all, styles, comments) if !(all || (!styles && !comments)) => this
+      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
+          _: BatchOp.PutFormulas | _: BatchOp.PutValues | _: BatchOp.Clear =>
+        val (single, multi) = areas.partition((_, r) => r.start == r.end)
+        LaterWrites(cells ++ single.map((n, r) => n -> r.start), ranges ++ multi, copied)
+      case _ => this
+
+  private object LaterWrites:
+    val empty: LaterWrites = LaterWrites(Set.empty, Vector.empty, copied = false)
+
+  /**
+   * GH-714: a putf with `"array": true` — a dynamic-array anchor at the op's cell, its spill
+   * computed now ([[DynamicArrayAuthoring]]); a `format` covers the whole spill. A spill Excel
+   * would block fails the op (the batch's `BATCH_OP_FAILED`, the blockers in the message).
+   */
+  private def applyPutDynamicArray(
+    wb: Workbook,
+    defaultSheetName: Option[SheetName],
+    refStr: String,
+    formula: String,
+    format: Option[NumFmt],
+    clock: Clock
+  ): IO[Workbook] =
+    def at(sheetName: SheetName, ref: ARef): IO[Workbook] =
+      wb.sheets.find(_.name == sheetName).fold(IO.raiseError(sheetNotFound(wb, sheetName))) {
+        sheet =>
+          IO.fromEither(
+            DynamicArrayAuthoring
+              .author(wb, sheet, ref, formula, clock)
+              .left
+              .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
+          ).map(authored => wb.put(format.fold(authored)(authored.withNumFmt).sheet))
+      }
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) =>
+        sheetFor(wb, defaultSheetName, "putf").flatMap(at(_, ref))
+      case RefType.QualifiedCell(sheetName, ref) => at(sheetName, ref)
+      case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
+        IO.raiseError(
+          CliException(
+            CliError.fromXLError(
+              XLError
+                .InvalidReference(s"batch putf with 'array' requires a single cell ref: $refStr"),
+              None
+            )
+          )
+        )
+    }
 
   /**
    * The expression a putf drag shifts: the op's formula, canonicalised and parsed. Total (GH-681):
@@ -1949,24 +2306,37 @@ object BatchParser:
         )
     }
 
-  /** Clear contents, styles, and/or comments from a range. */
+  /**
+   * A `clear` of contents, styles and/or comments, as the clear verb does it: GH-714 — a contents
+   * clear takes a cleared anchor's whole spill and leaves the cells of a live spill whose anchor
+   * stays as they were, returned for the `SPILL_CELLS_SKIPPED` warning
+   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
+   */
   private def applyClear(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     rangeStr: String,
     all: Boolean,
     stylesFlag: Boolean,
-    commentsFlag: Boolean
-  ): IO[Workbook] =
+    commentsFlag: Boolean,
+    spillsOn: SheetName => Vector[DynamicArrayAuthoring.Spill]
+  ): IO[(Workbook, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])] =
+    val clearContents = all || (!stylesFlag && !commentsFlag)
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
+      contents = Option
+        .when(clearContents)(
+          wb.sheets
+            .find(_.name == sheetName)
+            .map(s => DynamicArrayAuthoring.clearContents(s, spillsOn(sheetName), Vector(range)))
+        )
+        .flatten
       result <- updateSheet(wb, sheetName) { sheet =>
-        val clearContents = all || (!stylesFlag && !commentsFlag)
         val clearStyles = all || stylesFlag
         val clearComments = all || commentsFlag
 
-        val s1 = if clearContents then sheet.removeRange(range) else sheet
+        val s1 = contents.fold(sheet)(_.sheet)
         val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
 
@@ -1976,7 +2346,7 @@ object BatchParser:
           overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
         else s3
       }
-    yield result
+    yield (result, contents.fold(Vector.empty)(_.kept).map(sheetName -> _))
 
   /** Set column visibility (hide/show). */
   private def applyColVisibility(
@@ -2149,7 +2519,8 @@ object BatchParser:
     sourceStr: String,
     targetStr: String,
     valuesOnly: Boolean,
-    recalcDependents: Boolean
+    recalcDependents: Boolean,
+    spillsOn: SheetName => Vector[DynamicArrayAuthoring.Spill]
   ): IO[(Workbook, Vector[OffGridHit])] =
 
     def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
@@ -2195,6 +2566,17 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
+      // GH-714: the copy onto the target's dynamic arrays, as the copy verb applies it: a copied
+      // whole spill must have room, an overwritten anchor's spill is released
+      _ <- CopyOps
+        .copiedSpillBlocked(sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+        .fold(IO.unit)(spill => IO.raiseError(CliException(CliError.fromSpillBlocked(spill))))
+      release <- IO.fromEither(
+        CopyOps
+          .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange, spillsOn(targetSheetName))
+          .left
+          .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+      )
       // GH-628: the copy reports every target cell the displacement wrote #REF! into
       copied <- IO.fromEither(
         CopyOps
@@ -2205,7 +2587,8 @@ object BatchParser:
             targetSheet,
             targetRange,
             valuesOnly,
-            recalcDependents
+            recalcDependents,
+            release = release
           )
           .left
           .map(e => new Exception(e.message))

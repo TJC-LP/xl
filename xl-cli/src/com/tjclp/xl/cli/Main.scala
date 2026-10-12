@@ -584,6 +584,15 @@ RUNNING TOTALS:
 BATCH (explicit, no dragging):
   putf D1:D3 "=A1+B1" "=A2*B2" "=A3-B3"  → Formulas applied as-is
 
+DYNAMIC ARRAYS (--array, in-memory only):
+  A plain putf is a legacy formula: Excel 365 opens =SORT(B1:B3) as =@SORT(B1:B3) (one value)
+  and =SUM(A1:A10*B1:B10) as row-by-row implicit intersection. --array stores the formula as
+  Excel 365 stores a typed one: a dynamic array anchored at <ref> that spills, with the spill
+  extent and its values computed now. One cell, one formula; a spill into occupied cells, a
+  merge, another array or a table is refused (Excel would show #SPILL!).
+  putf --array A1 "=SORT(B1:B3)"          → A1:A3 spill
+  putf --array C1 "=SUM(A1:A10*B1:B10)"   → one value, no implicit intersection
+
 EXAMPLES:
   xl -f f.xlsx -s S1 -o o.xlsx putf C1 "=A1+B1"
   xl -f f.xlsx -s S1 -o o.xlsx putf B2:B100 "=A2*1.1"
@@ -1205,17 +1214,31 @@ USAGE:
   private val formulaArg = Opts.argument[String]("formula")
   private val withOpts =
     Opts
-      .options[String]("with", "Cell overrides (e.g., A1=100,B2=200). Repeatable.", "w")
+      .options[String](
+        "with",
+        "Cell overrides (e.g., A1=100,B2=200) on the sheet the formula evaluates on: " +
+          "the --at sheet, else -s. Repeatable.",
+        "w"
+      )
       .map(_.toList)
       .withDefault(Nil)
 
   private def parseOverrides(withStrs: List[String]): List[String] =
     withStrs.flatMap(_.split(",").map(_.trim).filter(_.nonEmpty))
 
+  private val evalAtOpt =
+    Opts
+      .option[String](
+        "at",
+        "Evaluate as the plain cell at this ref would, implicit intersection included " +
+          "(nothing is written); without it the formula has no cell and evaluates as an array"
+      )
+      .orNone
+
   val evalCmd: Opts[CliCommand] =
     Opts.subcommand("eval", "Evaluate formula without modifying sheet") {
-      (formulaArg, withOpts).mapN { (formula, withStrs) =>
-        CliCommand.Eval(formula, parseOverrides(withStrs))
+      (formulaArg, evalAtOpt, withOpts).mapN { (formula, at, withStrs) =>
+        CliCommand.Eval(formula, at, parseOverrides(withStrs))
       }
     }
 
@@ -1263,9 +1286,17 @@ USAGE:
   // Variadic formulas for putf (supports single formula, dragging, or batch formulas)
   private val formulasArg = Opts.arguments[String]("formula")
 
+  private val arrayOpt = Opts
+    .flag(
+      "array",
+      "Store as an Excel 365 dynamic-array formula anchored at <ref>; it spills from that cell, " +
+        "with no implicit intersection (in-memory only)"
+    )
+    .orFalse
+
   val putfCmd: Opts[CliCommand] = Opts.subcommand("putf", putfHelp) {
-    (refArg, formulasArg).mapN { (ref, formulas) =>
-      CliCommand.PutFormula(ref, formulas.toList)
+    (refArg, formulasArg, arrayOpt).mapN { (ref, formulas, array) =>
+      CliCommand.PutFormula(ref, formulas.toList, array)
     }
   }
 
@@ -2198,12 +2229,17 @@ EXAMPLES:
    * refused up front, one that may not fit is announced as `MEMORY_PRESSURE` in the same sink, and
    * a load that exhausts the heap is `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError`.
    */
-  private def readerCollecting(warnings: Ref[IO, Vector[Warning]], heap: Long): ExcelIO[IO] =
+  private def readerCollecting(
+    warnings: Ref[IO, Vector[Warning]],
+    heap: Long,
+    streamLimits: ReaderConfig
+  ): ExcelIO[IO] =
     MemoryGuard.excel(
       handler =
         warning => warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString)),
       warn = warning => warnings.update(_ :+ warning),
-      heap = heap
+      heap = heap,
+      streamLimits = streamLimits
     )
 
   /**
@@ -2584,8 +2620,11 @@ EXAMPLES:
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      val excel =
-        readerCollecting(warnings, filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor))
+      val excel = readerCollecting(
+        warnings,
+        filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor),
+        readerConfig
+      )
       val workbookIO: IO[Workbook] = filePathOpt match
         case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
         case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
@@ -2594,10 +2633,10 @@ EXAMPLES:
         wb <- workbookIO
         sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, w => warnings.update(_ :+ w))
         payload <- (cmd, mode) match
-          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Text) =>
-            ReadCommands.eval(wb, sheet, formulaStr, overrides).map(Payload.text)
-          case (CliCommand.Eval(formulaStr, overrides), OutputMode.Json) =>
-            ReadCommands.evalData(wb, sheet, formulaStr, overrides).map(Payload.Raw(_))
+          case (CliCommand.Eval(formulaStr, at, overrides), OutputMode.Text) =>
+            ReadCommands.eval(wb, sheet, formulaStr, at, overrides).map(Payload.text)
+          case (CliCommand.Eval(formulaStr, at, overrides), OutputMode.Json) =>
+            ReadCommands.evalData(wb, sheet, formulaStr, at, overrides).map(Payload.Raw(_))
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Text) =>
             ReadCommands.evalArray(wb, sheet, formulaStr, targetRef, overrides).map(Payload.text)
           case (CliCommand.EvalArray(formulaStr, targetRef, overrides), OutputMode.Json) =>
@@ -2855,8 +2894,8 @@ EXAMPLES:
     warnings: Ref[IO, Vector[Warning]],
     mode: OutputMode
   ): IO[Payload] =
-    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath))
     val readerConfig = buildReaderConfig(maxSizeOpt)
+    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath), readerConfig)
     val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)
     cmd match
@@ -3233,12 +3272,21 @@ EXAMPLES:
               detect
             )
 
-    case CliCommand.PutFormula(refStr, formulas) =>
-      outputOpt match
-        case None =>
-          IO.raiseError(outputRequired("--output is required for putf command"))
-        case Some(outputPath) =>
-          StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
+    case CliCommand.PutFormula(refStr, formulas, array) =>
+      if array then
+        IO.raiseError(
+          unsupportedInStream(
+            "putf --array is not supported with --stream (the spill extent comes from evaluating " +
+              "the formula, which needs the workbook in memory)",
+            "omit --stream; use --max-size <MB> to load a large file in memory"
+          )
+        )
+      else
+        outputOpt match
+          case None =>
+            IO.raiseError(outputRequired("--output is required for putf command"))
+          case Some(outputPath) =>
+            StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
 
     // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
@@ -3315,8 +3363,8 @@ EXAMPLES:
             CliException(CliError(ErrorCode.INTERNAL, s"no read query for ${cmd.verb}"))
           )
 
-    case CliCommand.Eval(formulaStr, overrides) =>
-      ReadCommands.eval(wb, sheetOpt, formulaStr, overrides)
+    case CliCommand.Eval(formulaStr, at, overrides) =>
+      ReadCommands.eval(wb, sheetOpt, formulaStr, at, overrides)
 
     case CliCommand.EvalArray(formulaStr, targetRef, overrides) =>
       ReadCommands.evalArray(wb, sheetOpt, formulaStr, targetRef, overrides)
@@ -3327,9 +3375,9 @@ EXAMPLES:
         WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy, warn)
       )
 
-    case CliCommand.PutFormula(refStr, formulas) =>
+    case CliCommand.PutFormula(refStr, formulas, array) =>
       requireOutput("putf", outputOpt, backendOpt, stream)(
-        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn)
+        WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn, array)
       )
 
     case CliCommand.Style(
@@ -3521,7 +3569,7 @@ EXAMPLES:
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
       requireOutput("clear", outputOpt, backendOpt, stream)(
-        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _)
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn)
       )
 
     case CliCommand.Fill(source, target, direction) =>

@@ -14,9 +14,11 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.Comment
 import com.tjclp.xl.ooxml.{
+  CellMetadataIndex,
   OoxmlComments,
   OoxmlStyles,
   Relationships,
+  SheetMetadataPart,
   SstPolicy,
   XlsxReader,
   XlsxWriter,
@@ -69,14 +71,37 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Instances are cheap, so this doubles as the per-call form: build one at the call site that
    * needs a different directory and leave the rest of the program on the default.
    *
-   * Carries the warning handler over, but nothing else: the result is a plain `ExcelIO`, so a
-   * subclass calling this would silently lose its own overrides. Subclasses should override
-   * [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by overriding
-   * this method too.
+   * Carries the warning handler and [[streamLimits]] over, but nothing else: the result is a plain
+   * `ExcelIO`, so a subclass calling this would silently lose its own overrides. Subclasses should
+   * override [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by
+   * overriding this method too.
    */
   final def withSpillDir(dir: Path): ExcelIO[F] =
+    val limits = streamLimits
     new ExcelIO[F](warningHandler):
       override def spillDir: Option[Path] = Some(dir)
+      override def streamLimits: XlsxReader.ReaderConfig = limits
+
+  /**
+   * GH-714: the ZIP inflation-size and compression-ratio limits the streaming reads (`readStream`,
+   * `readSheetStream`, `streamCellDetails` and their variants) apply to the two small parts they
+   * read whole besides the shared-string table: `xl/_rels/workbook.xml.rels` and the cell-metadata
+   * part it names. The default limits (a metadata part is a few KB); the shared-string table keeps
+   * its own policy, set by [[loadSharedStrings]]'s config. A member, like [[spillDir]], so the
+   * constructor's signature is unchanged.
+   */
+  def streamLimits: XlsxReader.ReaderConfig = XlsxReader.ReaderConfig.default
+
+  /**
+   * An interpreter identical to this one but reading those parts under `config`'s limits — the same
+   * config a caller hands [[loadSharedStrings]], so a lifted limit (`--max-size 0`) reaches every
+   * part a streaming read holds. Carries the warning handler and [[spillDir]] over.
+   */
+  final def withStreamLimits(config: XlsxReader.ReaderConfig): ExcelIO[F] =
+    val dir = spillDir
+    new ExcelIO[F](warningHandler):
+      override def spillDir: Option[Path] = dir
+      override def streamLimits: XlsxReader.ReaderConfig = config
 
   /**
    * Create a scratch file for a two-pass write, honoring [[spillDir]].
@@ -147,6 +172,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Shared formulas are expanded when their master appears first. A dependent with no active master
    * is emitted as a `#REF!` formula with its cached value preserved. Use `read` when shared formula
    * cells may appear in arbitrary physical order.
+   *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
    */
   def readStream(path: Path): Stream[F, RowData] =
     Stream
@@ -176,6 +206,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    *
    * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml. The
    * shared-formula ordering constraint documented on `readStream` also applies.
+   *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
     Stream
@@ -318,6 +353,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Time: O(position of cell in file). Memory: the table plus the styles, whatever the worksheet's
    * size.
    *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
+   *
    * @param path
    *   Path to XLSX file
    * @param sheetName
@@ -360,10 +400,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         try streamCellDetailsSync(zipFile, sheetName, targetRef, preloaded)
         finally zipFile.close()
       }
-      .flatMap {
-        case Right(details) => Async[F].pure(details)
-        case Left(err) => Async[F].raiseError(new Exception(err))
-      }
+      .flatMap(Sync[F].fromEither)
 
   // Sync helper for streamCellDetails - pure function using open ZipFile
   private def streamCellDetailsSync(
@@ -371,27 +408,29 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetName: String,
     targetRef: ARef,
     preloaded: Option[(Option[SharedStrings], WorkbookStyles)]
-  ): Either[String, StreamingCellDetails] =
+  ): Either[Throwable, StreamingCellDetails] =
     for
+      // Validate the relationship part and its metadata before any worksheet lookup reads them.
+      cellMetadata <- loadCellMetadataIndexSync(zipFile, streamLimits)
       // 1. Resolve worksheet path from workbook metadata
-      worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName)
+      worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
 
       // 2. Load styles.xml (0.2-1.5MB), unless the caller holds them
-      styles <- preloaded.fold(loadStylesSync(zipFile))(p => Right(p._2))
+      styles <- preloaded.fold(loadStylesSync(zipFile))(p => Right(p._2)).leftMap(new Exception(_))
 
       // 3. Load sharedStrings.xml through the SAX reader, unless the caller holds it. The
       // library's own entry point applies no limit, like the row streams; a caller with a limit to
       // enforce loads the table through `loadSharedStrings` and passes it in
       sst <- preloaded.fold(
-        loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive).left
-          .map(_.getMessage)
+        loadSharedStringsSaxSync(zipFile, XlsxReader.ReaderConfig.permissive)
       )(p => Right(p._1))
 
       // 4. Load comments for this sheet (10-100KB)
-      comments <- loadCommentsSync(zipFile, worksheetPath)
+      comments <- loadCommentsSync(zipFile, worksheetPath).leftMap(new Exception(_))
 
       // 5. Stream worksheet with early-abort to find target cell
-      cellResult <- extractCellSync(zipFile, worksheetPath, targetRef, sst)
+      cellResult <- extractCellSync(zipFile, worksheetPath, targetRef, sst, cellMetadata)
+        .leftMap(new Exception(_))
 
       // 6. Resolve style from styleId
       resolvedStyle = cellResult.flatMap(_.styleId).flatMap(styles.styleAt)
@@ -497,15 +536,57 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     zipFile: ZipFile,
     worksheetPath: String,
     targetRef: ARef,
-    sst: Option[SharedStrings]
+    sst: Option[SharedStrings],
+    cellMetadata: CellMetadataIndex
   ): Either[String, Option[SaxSingleCellReader.CellResult]] =
     val sheetEntry = Option(zipFile.getEntry(worksheetPath))
     sheetEntry match
       case None => Left(s"Worksheet not found: $worksheetPath")
       case Some(entry) =>
         val stream = zipFile.getInputStream(entry)
-        try Right(SaxSingleCellReader.extractCell(stream, targetRef, sst))
+        try
+          Right(
+            SaxSingleCellReader
+              .extractCell(stream, targetRef, sst, cellMetadata)
+          )
         finally stream.close()
+
+  /**
+   * GH-714: the package's dynamic-array `cm` indices, following its sheetMetadata relationship.
+   * Both parts use the same inflation-size and compression-ratio guard as the SST. Validate them
+   * before worksheet resolution, which also reads workbook.xml.rels. Missing or malformed XML, and
+   * an entry that cannot be inflated (a `ZipException` from a damaged entry, a truncated stream),
+   * keep the existing empty-index fallback: the index is optional, and these reads never failed on
+   * it before. Exceeding a ZIP limit is a typed security failure.
+   */
+  private[io] def loadCellMetadataIndexSync(
+    zipFile: ZipFile,
+    config: XlsxReader.ReaderConfig = XlsxReader.ReaderConfig.default
+  ): Either[Throwable, CellMetadataIndex] =
+    def text(path: String): Either[Throwable, Option[String]] =
+      Option(zipFile.getEntry(path)) match
+        case None => Right(None)
+        case Some(entry) =>
+          try
+            val in = ZipEntryGuard.open(zipFile, entry, config)
+            try Right(Some(new String(in.readAllBytes(), StandardCharsets.UTF_8)))
+            finally in.close()
+          catch
+            case limit: ZipEntryGuard.LimitExceeded => Left(new XLException(limit.error))
+            // a damaged optional part reads as absent, like unparseable XML
+            case _: java.io.IOException => Right(None)
+    for
+      rels <- text("xl/_rels/workbook.xml.rels")
+      path = rels
+        .flatMap(xml => XmlSecurity.parseSafe(xml, "xl/_rels/workbook.xml.rels").toOption)
+        .flatMap(elem => Relationships.fromXml(elem).toOption)
+        .flatMap(SheetMetadataPart.locate)
+      metadata <- path.fold[Either[Throwable, Option[(String, String)]]](Right(None))(p =>
+        text(p).map(_.map(p -> _))
+      )
+    yield metadata
+      .map((p, xml) => SheetMetadataPart.parse(xml, p))
+      .getOrElse(CellMetadataIndex.empty)
 
   // Helper: Parse formula dependencies (referenced cells)
   private def parseFormulaDependencies(formula: String): Vector[String] =
@@ -529,13 +610,25 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     range: Option[CellRange]
   ): Stream[F, RowData] =
     Stream
-      .eval(
-        Sync[F].fromEither(
-          resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
-        )
-      )
-      .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range, loadSharedStringsForStream(zipFile))
+      .eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile, streamLimits)).rethrow)
+      .flatMap { metadata =>
+        Stream
+          .eval(
+            Sync[F]
+              .blocking(
+                resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
+              )
+              .rethrow
+          )
+          .flatMap { worksheetPath =>
+            readWorksheetStream(
+              zipFile,
+              worksheetPath,
+              range,
+              loadSharedStringsForStream(zipFile),
+              metadata
+            )
+          }
       }
 
   private def readStreamByName(
@@ -553,20 +646,27 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sst: F[Option[SharedStrings]]
   ): Stream[F, RowData] =
     Stream
-      .eval(
-        Sync[F].fromEither(
-          resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
-        )
-      )
-      .flatMap { worksheetPath =>
-        readWorksheetStream(zipFile, worksheetPath, range, sst)
+      .eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile, streamLimits)).rethrow)
+      .flatMap { metadata =>
+        Stream
+          .eval(
+            Sync[F]
+              .blocking(
+                resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
+              )
+              .rethrow
+          )
+          .flatMap { worksheetPath =>
+            readWorksheetStream(zipFile, worksheetPath, range, sst, metadata)
+          }
       }
 
   private def readWorksheetStream(
     zipFile: ZipFile,
     worksheetPath: String,
     range: Option[CellRange],
-    sst: F[Option[SharedStrings]]
+    sst: F[Option[SharedStrings]],
+    cellMetadata: CellMetadataIndex
   ): Stream[F, RowData] =
     Stream
       .eval(sst)
@@ -582,7 +682,13 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
               .flatMap { stream =>
                 val rowBounds = range.map(r => (r.start.row.index1, r.end.row.index1))
                 val colBounds = range.map(r => (r.start.col.index0, r.end.col.index0))
-                SaxStreamingReader.parseWorksheetStream[F](stream, sst, rowBounds, colBounds)
+                SaxStreamingReader.parseWorksheetStream[F](
+                  stream,
+                  sst,
+                  rowBounds,
+                  colBounds,
+                  cellMetadata
+                )
               }
           case None =>
             Stream.raiseError[F](
@@ -1361,11 +1467,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     path: Path,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[Unit] =
-    if wb.sheets.isEmpty then
-      Async[F].raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
-    else
-      val saxConfig = config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax)
-      writeWith(wb, path, saxConfig)
+    ExcelIO
+      .workbookStreamConfig(wb, config)
+      .fold(refused => Async[F].raiseError[Unit](refused), writeWith(wb, path, _))
 
   // Helper: Assemble multi-sheet ZIP with dimension elements
   private def assembleMultiSheetZip(
@@ -1549,6 +1653,20 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     yield sheet
 
 object ExcelIO:
+
+  /**
+   * The config [[ExcelIO.writeWorkbookStream]] writes `wb` with — the SAX/StAX backend forced — or
+   * the refusal of a workbook without a sheet. Shared with a caller that serialises the same way
+   * under its own guard (the CLI's reporting write), so the two cannot drift.
+   */
+  private[xl] def workbookStreamConfig(
+    wb: Workbook,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Either[IllegalArgumentException, com.tjclp.xl.ooxml.WriterConfig] =
+    if wb.sheets.isEmpty then
+      Left(new IllegalArgumentException("Workbook must have at least one sheet"))
+    else Right(config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax))
+
   /** Create default ExcelIO instance */
   def instance[F[_]: Async]: ExcelIO[F] = new ExcelIO[F](_ => Async[F].unit)
 

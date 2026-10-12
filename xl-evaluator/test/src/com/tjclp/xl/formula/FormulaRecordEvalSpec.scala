@@ -381,6 +381,114 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("A1*2", None))
   }
 
+  private def kindAt(out: Workbook, at: ARef): FormulaKind =
+    sheetNamed(out, "S")(at).value match
+      case CellValue.Formula(_, _, kind) => kind
+      case other => fail(s"expected a formula, got $other")
+
+  private def sortSheet: Sheet =
+    Sheet(S).put(
+      ref"C8",
+      CellValue.Formula("=SORT(A1:A4)", Some(num(1)), FormulaKind.dynamicArray(range("C8:C11")))
+    )
+
+  test("GH-714: a delete inside a dynamic array shrinks its extent and keeps the mode") {
+    // delete row 10 (index0 9), strictly inside C8:C11
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 1)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C10")))
+  }
+
+  test("GH-714: a delete band swallowing a dynamic array's end stops it at the last survivor") {
+    // delete rows 10..13 (index0 9..12): the end C11 falls in the band
+    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 4)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C9")))
+  }
+
+  test("GH-714: an insert inside a dynamic array grows it; an insert before shifts it") {
+    val grown = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 9, count = 2)
+    assertEquals(kindAt(grown, ref"C8"), FormulaKind.dynamicArray(range("C8:C13")))
+    val shifted = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 0, count = 1)
+    assertEquals(kindAt(shifted, ref"C9"), FormulaKind.dynamicArray(range("C9:C12")))
+  }
+
+  test("GH-714: an insert inside a spill widens it by an empty band; nothing re-spills (pinned)") {
+    // C8:C11 holds SORT's {1;2;3;4}: the anchor caches 1, the other cells are constants
+    val spilled = sortSheet
+      .put(ref"C9", num(2))
+      .put(ref"C10", num(3))
+      .put(ref"C11", num(4))
+    // insert one row at row 10 (index0 9), inside the spill
+    val out = StructuralEditor.insertRows(Workbook(Vector(spilled)), S, at = 9, count = 1)
+    val sheet = sheetNamed(out, "S")
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C12")))
+    assertEquals(sheet(ref"C9").value, num(2))
+    // the inserted band is empty until Excel recalculates the book and re-spills the anchor
+    assertEquals(sheet.cells.get(ref"C10").map(_.value), None)
+    assertEquals(sheet(ref"C11").value, num(3))
+    assertEquals(sheet(ref"C12").value, num(4))
+  }
+
+  test("GH-714: deleting a dynamic array's anchor clears the rest of its spill, as Excel does") {
+    // C8:C11 holds SORT's {1;2;3;4}; C12 is the user's own value below it
+    val spilled = sortSheet
+      .put(ref"C9", num(2))
+      .put(ref"C10", num(3))
+      .put(ref"C11", num(4))
+      .put(ref"C12", num(99))
+    // delete row 8 (index0 7), the anchor's: C9:C11 would survive as constants at C8:C10
+    val row = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 7, 1), "S")
+    Vector(ref"C8", ref"C9", ref"C10").foreach(r => assertEquals(row.cells.get(r), None, r.toA1))
+    assertEquals(row(ref"C11").value, num(99))
+    // a band through the anchor and part of the spill: the tail outside it goes too
+    val band = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 6, 3), "S")
+    Vector(ref"C7", ref"C8").foreach(r => assertEquals(band.cells.get(r), None, r.toA1))
+    assertEquals(band(ref"C9").value, num(99))
+    // the column axis: B2 spills B2:D2; deleting column B empties what moves to B2:C2
+    val across = Sheet(S)
+      .put(
+        ref"B2",
+        CellValue.Formula("=SEQUENCE(1,3)", Some(num(1)), FormulaKind.dynamicArray(range("B2:D2")))
+      )
+      .put(ref"C2", num(2))
+      .put(ref"D2", num(3))
+      .put(ref"E2", num(42))
+    val col = sheetNamed(StructuralEditor.deleteColumns(Workbook(Vector(across)), S, 1, 1), "S")
+    Vector(ref"B2", ref"C2").foreach(r => assertEquals(col.cells.get(r), None, r.toA1))
+    assertEquals(col(ref"D2").value, num(42))
+    // a delete that keeps the anchor still only shrinks the spill (above)
+    val kept = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 9, 1), "S")
+    assertEquals(kept(ref"C9").value, num(2))
+  }
+
+  test("GH-714: an insert inside a spill at the grid edge clamps its end to the last row") {
+    // C1048574:C1048576 already reaches the last row; one more row inside cannot grow it past it
+    val anchor = ARef.from0(2, Row.MaxIndex0 - 2)
+    val edge = Sheet(S).put(
+      anchor,
+      CellValue.Formula(
+        "=SEQUENCE(3)",
+        Some(num(1)),
+        FormulaKind.dynamicArray(CellRange(anchor, ARef.from0(2, Row.MaxIndex0)))
+      )
+    )
+    val out = StructuralEditor.insertRows(Workbook(Vector(edge)), S, at = Row.MaxIndex0 - 1, 1)
+    // Pinned behaviour: the extent is clamped at row 1048576, not refused and not grown off the
+    // grid. The true size is the anchor's to recompute; re-spilling on recalculation is #737.
+    assertEquals(
+      kindAt(out, anchor),
+      FormulaKind.dynamicArray(CellRange(anchor, ARef.from0(2, Row.MaxIndex0)))
+    )
+  }
+
+  test("GH-714: a legacy (CSE) record torn by the same delete still degrades") {
+    val cse = Sheet(S).put(
+      ref"C8",
+      CellValue.Formula("=SUM(A1:A4*2)", Some(num(1)), FormulaKind.ArrayFormula(range("C8:C11")))
+    )
+    val out = StructuralEditor.deleteRows(Workbook(Vector(cse)), S, at = 9, count = 1)
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.Normal())
+  }
+
   test("GH-495 round-trip gate: a refused tear leaves the record in the written XML, lint clean") {
     import com.tjclp.xl.sheets.dataTableSyntax.*
     val authored = Sheet("Data")

@@ -34,20 +34,31 @@ private[xl] object SheetEdits:
    *
    * A single-cell array formula (a 1x1 CSE record) stays one, re-anchored at `target`: Excel pastes
    * and fills `{=...}` as `{=...}`, and a plain paste would be a legacy formula computing another
-   * value. A multi-cell array anchor pastes a plain formula, since its record claims cells the
-   * paste does not write.
+   * value. A multi-cell CSE anchor pastes a plain formula, since its record claims cells the paste
+   * does not write. A dynamic-array anchor of any size pastes as a 1x1 dynamic array at `target`
+   * (GH-714), unless the copy includes its entire spill. A complete copied spill keeps its shifted
+   * extent so Excel recognizes the copied constants as spill members, not occupied cells.
    */
   private def shifted(
     value: CellValue,
     target: ARef,
     colDelta: Int,
-    rowDelta: Int
+    rowDelta: Int,
+    copiedSource: Option[CellRange] = None
   )(using fs: FormulaSupport): XLResult[(CellValue, Vector[String])] =
     value match
       case CellValue.Formula(_, cachedOpt, _: FormulaKind.DataTable) =>
         Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
       case CellValue.Formula(expr, _, kind) =>
         val pastedKind = kind match
+          case arr: FormulaKind.ArrayFormula if arr.isDynamicArray =>
+            val extent = for
+              source <- copiedSource
+              if source.contains(arr.ref.start) && source.contains(arr.ref.end)
+              start <- arr.ref.start.tryShift(colDelta, rowDelta)
+              end <- arr.ref.end.tryShift(colDelta, rowDelta)
+            yield CellRange(start, end)
+            arr.copy(ref = extent.getOrElse(CellRange(target, target)))
           case arr: FormulaKind.ArrayFormula if arr.ref.width == 1 && arr.ref.height == 1 =>
             arr.copy(ref = CellRange(target, target))
           case _ => FormulaKind.Normal()
@@ -121,36 +132,70 @@ private[xl] object SheetEdits:
   )(using FormulaSupport): XLResult[(Sheet, Vector[OffGridRef])] =
     validateFill(source, target, direction).flatMap { _ =>
       val zero: Reporting = (sheet, Vector.empty)
-      direction match
-        case Edit.FillDir.Down =>
-          val sourceStartRow = source.rowStart.index0
-          val sourceRowCount = source.rowEnd.index0 - sourceStartRow + 1
-          val targetStartRow = target.rowStart.index0
-          val cols = source.colStart.index0 to source.colEnd.index0
-          foldE((targetStartRow to target.rowEnd.index0).iterator)(zero) { (acc, targetRow) =>
-            val sourceRow = sourceStartRow + (targetRow - targetStartRow) % sourceRowCount
-            val rowDelta = targetRow - sourceRow
-            if rowDelta == 0 then Right(acc)
-            else
-              foldE(cols.iterator)(acc) { (acc2, col) =>
-                copyCell(acc2, ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
-              }
-          }
-        case Edit.FillDir.Right =>
-          val sourceStartCol = source.colStart.index0
-          val sourceColCount = source.colEnd.index0 - sourceStartCol + 1
-          val targetStartCol = target.colStart.index0
-          val rows = source.rowStart.index0 to source.rowEnd.index0
-          foldE((targetStartCol to target.colEnd.index0).iterator)(zero) { (acc, targetCol) =>
-            val sourceCol = sourceStartCol + (targetCol - targetStartCol) % sourceColCount
-            val colDelta = targetCol - sourceCol
-            if colDelta == 0 then Right(acc)
-            else
-              foldE(rows.iterator)(acc) { (acc2, row) =>
-                copyCell(acc2, ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
-              }
-          }
+      foldE(fillSteps(source, target, direction))(zero) { (acc, step) =>
+        copyCell(acc, step.source, step.target, step.colDelta, step.rowDelta)
+      }
     }
+
+  /**
+   * GH-714: the cells a fill writes — the target of each step whose source cell exists, exactly as
+   * [[fillReporting]] walks them (source rows or columns are never written) — so a caller guarding
+   * the write cannot drift from the fill.
+   */
+  def fillTargets(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: Edit.FillDir
+  ): XLResult[Set[ARef]] =
+    validateFill(source, target, direction).map { _ =>
+      fillSteps(source, target, direction)
+        .filter(step => sheet.cells.contains(step.source))
+        .map(_.target)
+        .toSet
+    }
+
+  /** One fill step: copy `source` onto `target`, shifted by the deltas. */
+  private final case class FillStep(source: ARef, target: ARef, colDelta: Int, rowDelta: Int)
+
+  /**
+   * The fill's walk: target rows (down) or columns (right) in order, each from its cyclically
+   * repeated source row or column, the source's own rows or columns skipped.
+   */
+  private def fillSteps(
+    source: CellRange,
+    target: CellRange,
+    direction: Edit.FillDir
+  ): Iterator[FillStep] =
+    direction match
+      case Edit.FillDir.Down =>
+        val sourceStartRow = source.rowStart.index0
+        val sourceRowCount = source.rowEnd.index0 - sourceStartRow + 1
+        val targetStartRow = target.rowStart.index0
+        val cols = source.colStart.index0 to source.colEnd.index0
+        (targetStartRow to target.rowEnd.index0).iterator.flatMap { targetRow =>
+          val sourceRow = sourceStartRow + (targetRow - targetStartRow) % sourceRowCount
+          val rowDelta = targetRow - sourceRow
+          if rowDelta == 0 then Iterator.empty
+          else
+            cols.iterator.map { col =>
+              FillStep(ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
+            }
+        }
+      case Edit.FillDir.Right =>
+        val sourceStartCol = source.colStart.index0
+        val sourceColCount = source.colEnd.index0 - sourceStartCol + 1
+        val targetStartCol = target.colStart.index0
+        val rows = source.rowStart.index0 to source.rowEnd.index0
+        (targetStartCol to target.colEnd.index0).iterator.flatMap { targetCol =>
+          val sourceCol = sourceStartCol + (targetCol - targetStartCol) % sourceColCount
+          val colDelta = targetCol - sourceCol
+          if colDelta == 0 then Iterator.empty
+          else
+            rows.iterator.map { row =>
+              FillStep(ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
+            }
+        }
 
   /** One fill step: the source cell's value, shifted, onto the target (styles are not copied). */
   private def copyCell(
@@ -175,8 +220,10 @@ private[xl] object SheetEdits:
    * sheet when the names agree). Source cells are snapshotted before any write, so an overlapping
    * same-sheet copy reads the pre-copy state whatever the iteration order. Empty source cells leave
    * their target unchanged; styles travel with their cells (looked up in the source registry,
-   * registered in the target's). `valuesOnly` pastes a formula's cached value — an uncached formula
-   * pastes `Empty`; callers with an evaluator cache the source first.
+   * registered in the target's). A fully included dynamic spill keeps its shifted array extent; an
+   * anchor copied without its whole spill keeps a 1x1 record. `valuesOnly` pastes a formula's
+   * cached value — an uncached formula pastes `Empty`; callers with an evaluator cache the source
+   * first.
    */
   def copyRange(
     target: Sheet,
@@ -203,6 +250,7 @@ private[xl] object SheetEdits:
     val colDelta = targetRange.colStart.index0 - sourceRange.colStart.index0
     val rowDelta = targetRange.rowStart.index0 - sourceRange.rowStart.index0
     val working = if sourceSheet.name == target.name then sourceSheet else target
+    val copiedSource = Some(sourceRange)
     val zero: Reporting = (working, Vector.empty)
     foldE(sourceRange.cells)(zero) { case ((s, offGrid), srcRef) =>
       val tgtRef = ARef.from0(srcRef.col.index0 + colDelta, srcRef.row.index0 + rowDelta)
@@ -214,7 +262,7 @@ private[xl] object SheetEdits:
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
             case CellValue.Formula(_, cachedOpt, _) if valuesOnly =>
               Right((cachedOpt.getOrElse(CellValue.Empty), Vector.empty))
-            case other => shifted(other, tgtRef, colDelta, rowDelta)
+            case other => shifted(other, tgtRef, colDelta, rowDelta, copiedSource)
           copied.map { (v, voided) =>
             val withValue = s.put(tgtRef, v)
             val styled = srcCell.styleId.flatMap(sourceSheet.styleRegistry.get) match

@@ -229,7 +229,8 @@ object Schema:
     ),
     VerbDoc(
       Vector("eval"),
-      "Evaluate a formula without modifying the sheet (--with overrides; no -f for constants)",
+      "Evaluate a formula without modifying the sheet (--at evaluates it as the plain cell there; " +
+        "--with overrides; no -f for constants)",
       Needs(file = false, sheet = true, output = false, streaming = false),
       plain,
       None,
@@ -369,7 +370,7 @@ object Schema:
     ),
     write(
       "putf",
-      "Write formula(s) to a cell or range; one formula over a range drags with $ anchoring",
+      "Write formula(s) to a cell or range; one formula over a range drags with $ anchoring; --array stores a spilling dynamic array",
       sheet = true,
       Some("putf"),
       "0.1.0",
@@ -827,7 +828,7 @@ object Schema:
     "sheets" -> Vector("--stats"),
     "describe" -> Vector("--full"),
     "put" -> Vector("--csv", "--strict"),
-    "putf" -> Vector("--strict"),
+    "putf" -> Vector("--strict", "--array"),
     "style" -> Vector("--strict"),
     "batch" -> Vector("--strict")
   )

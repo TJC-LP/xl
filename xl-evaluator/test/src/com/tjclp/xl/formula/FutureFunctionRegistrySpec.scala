@@ -57,3 +57,15 @@ class FutureFunctionRegistrySpec extends FunSuite:
       assertEquals(FormulaStorage.toStored(FormulaStorage.fromStored(stored)), stored, name)
     }
   }
+
+  test("GH-713: the range operator is unregistered; RANGE is an unknown function") {
+    assertEquals(FunctionRegistry.lookup("(range)"), None)
+    assert(!FunctionRegistry.allNames.contains("(range)"))
+    FormulaParser.parse("=RANGE(1)") match
+      case Left(_: parser.ParseError.UnknownFunction) => ()
+      case other => fail(s"RANGE(1) should be an unknown function, got $other")
+    // the stored form of a computed range keeps XLOOKUP's prefix and reads back bare
+    val model = "SUM(B1:XLOOKUP(2,A1:A3,B1:B3))"
+    assertEquals(FormulaStorage.toStored(model), "SUM(B1:_xlfn.XLOOKUP(2,A1:A3,B1:B3))")
+    assertEquals(FormulaStorage.fromStored(FormulaStorage.toStored(model)), model)
+  }

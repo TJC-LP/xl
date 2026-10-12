@@ -204,7 +204,8 @@ object Relationships extends XmlReadable[Relationships]:
     preserved: Relationships,
     sheetSourcePaths: Vector[Option[String]],
     sheetOutputPaths: Vector[String],
-    ensureSharedStrings: Boolean
+    ensureSharedStrings: Boolean,
+    ensureSheetMetadata: Option[String] = None
   ): (Vector[String], Relationships) =
     val worksheetRelByPath: Map[String, Relationship] =
       preserved.relationships.iterator
@@ -246,8 +247,13 @@ object Relationships extends XmlReadable[Relationships]:
 
     val base = (nonSheet ++ sheetRels, afterSheets)
     val withStyles = ensure(base, present = true, relTypeStyles, "styles.xml")
-    val (finalRels, _) =
+    val withSst =
       ensure(withStyles, ensureSharedStrings, relTypeSharedStrings, "sharedStrings.xml")
+    // GH-714: a generated cell-metadata part gains its relationship; a source one is never removed
+    val (finalRels, _) = ensureSheetMetadata match
+      case Some(path) =>
+        ensure(withSst, present = true, relTypeSheetMetadata, workbookTargetOf(path))
+      case None => withSst
 
     (sheetRels.map(_.id), Relationships(finalRels))
 

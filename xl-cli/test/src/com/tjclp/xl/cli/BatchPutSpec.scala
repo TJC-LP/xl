@@ -463,7 +463,7 @@ class BatchPutSpec extends FunSuite:
             BatchOp.Put(_, _, Some(NumFmt.Percent)),
             BatchOp.Put(_, _, Some(NumFmt.Percent)),
             BatchOp.PutFormulaDragging("B1:B2", "=A1", "B1", None),
-            BatchOp.PutFormula("B3", "=A1", None),
+            BatchOp.PutFormula("B3", "=A1", None, false),
             BatchOp.Hyperlink("C1", Some("https://example.com")),
             BatchOp.Style("A1", props),
             BatchOp.SetPageSetup(None, None, Some(1), Some(0), None),
@@ -544,7 +544,7 @@ class BatchPutSpec extends FunSuite:
     assert(message.startsWith("Object 2 (putf): format must be a string"), message)
     assert(message.contains("got 1"), message)
     number.ops match
-      case Vector(_, BatchOp.PutFormula(_, _, format)) => assertEquals(format, None)
+      case Vector(_, BatchOp.PutFormula(_, _, format, _)) => assertEquals(format, None)
       case other => fail(s"unexpected ops: $other")
     // A real name or code is silent
     assertEquals(

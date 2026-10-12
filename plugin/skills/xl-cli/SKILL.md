@@ -101,8 +101,8 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Find text or a number | `search <regex>` | all sheets unless `-s`; `--limit` stops the scan (`total` is then a lower bound, `totalExact: false`); `--total` for the exact count |
 | Rows matching a predicate | `filter --where "B > 100 AND D = TRUE"` | `--header` uses row 1 names; `--columns A,C:E` |
 | Used range, numeric summary | `bounds`, `stats <range>` | |
-| What-if without writing | `eval "=…" --with "A1=5"`, `evala "=…"` (arrays; `--at B2` anchors the displayed result at B2) | no `-f` for constants. Both are reads: `evala --at` writes nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — `putf` writes a plain formula, which Excel evaluates with implicit intersection (see `reference/FORMULAS.md`; use SUMPRODUCT for array math in one cell, with conditions as `--(r>0)` factors rather than IF) |
-| Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring |
+| What-if without writing | `eval "=…" --with "A1=5"` (`--at D5`: the value the plain cell at D5 would show), `evala "=…"` (arrays; `--at B2` anchors the displayed result at B2) | no `-f` for constants. Both are reads: `eval --at` and `evala --at` write nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — `putf` writes a plain formula, which Excel evaluates with implicit intersection (see `reference/FORMULAS.md`; use SUMPRODUCT for array math in one cell, with conditions as `--(r>0)` factors rather than IF, or `putf --array`) |
+| Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring; `putf --array A1 "=SORT(B1:B3)"` (batch `"array": true`) stores an Excel 365 dynamic array that spills |
 | Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `fill` and `sort` have no batch twin |
 | Rows and columns | `row <n>`, `col <letter>`, `autofit [--columns A:F]`, `group-rows <10:20>`/`group-cols <E:H>` (`--level n`, `--collapsed`), `insert-rows <at-row> [count]`/`delete-rows <at-row> [count]`, `insert-cols <at-col\|C:E> [count]`/`delete-cols <at-col\|C:E> [count]` | `at-row` is one 1-based row and `count` defaults to 1: `delete-rows 7 5` deletes rows 7-11 — there is **no** `7:11` form (only the column verbs take `C:E`). Structural edits rewrite formulas on every sheet, `#REF!` on loss; they have no batch twin |
@@ -126,6 +126,7 @@ xl -f data.xlsx -s Sheet1 view A1:E20       # preview (markdown; add --limit 0 f
 xl -f data.xlsx -s Sheet1 stats B2:B100
 xl -f data.xlsx -s Sheet1 deps C5 --depth all
 xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10)" --with "A1=500,A5=0"
+xl -f data.xlsx -s Sheet1 eval "=SUM(A1:A10*B1:B10)" --at D5   # what putf D5 would show (A5*B5)
 ```
 
 ### Build a formatted report in one atomic batch
@@ -294,6 +295,18 @@ interiors).
 - **Use `--show-labels` whenever row numbers matter** in CSV output: hidden rows shift positional
   counting. `view` renders hidden rows and marks them (`--skip-hidden` to omit).
 - **`putf` for formulas only.** `putf A1 "Total Revenue"` is a parse error; use `put`.
+- **A spilling or array formula needs `--array`.** A plain `putf A1 "=SORT(B1:B3)"` is a legacy
+  formula: Excel 365 shows `=@SORT(B1:B3)` (one value, no spill), and `=SUM(A1:A10*B1:B10)` in row 5
+  is `A5*B5`. `putf --array <cell> <formula>` stores what Excel stores when the formula is typed:
+  a dynamic array anchored at the cell, spilling its computed values (one cell, one formula; in
+  memory only). A spill into occupied cells, a merge, another array or a table is refused
+  (`FORMULA_ERROR`, nothing written; the hint names the remedy). Writing over the anchor clears its
+  spill. Writing into a spill cell is refused — overwrite or clear the anchor first. That refusal is
+  xl's policy, not Excel's behaviour: Excel accepts the value and shows `#SPILL!` at the anchor,
+  which xl cannot keep across a recalculation. A `clear` into a spill leaves its cells, clears the
+  rest and warns `SPILL_CELLS_SKIPPED` (that one is Excel's behaviour). An in-memory
+  `putf` whose plain value differs from its array value says so with an `IMPLICIT_INTERSECTION`
+  warning (both values and the remedy; it never fails the run, `--strict` included).
 - **`format` replaces, detection defers.** An explicit `format` on `put`/`putf` overwrites the
   cell's number format; a detected one (`"$1,234"`) leaves an existing non-General format alone.
 - **Batch keys are forgiving, unknown keys are warnings.** camelCase and kebab-case both work and

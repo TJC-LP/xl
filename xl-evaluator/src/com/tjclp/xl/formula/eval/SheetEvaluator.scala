@@ -7,7 +7,7 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -47,6 +47,13 @@ import java.time.{LocalDate, LocalDateTime}
  * }}}
  */
 object SheetEvaluator:
+  /**
+   * #692: a formula cell's computed value and, when that value is an Excel error the evaluator
+   * raised with a diagnostic, the reason — what [[com.tjclp.xl.formula.eval.RecalcResult]] names
+   * the cell with.
+   */
+  private[formula] final case class CellOutcome(value: CellValue, reason: Option[String])
+
   extension (sheet: Sheet)
     /**
      * Evaluate formula string against this sheet.
@@ -566,11 +573,24 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): XLResult[CellValue] =
+    evaluateCellOutcome(sheet, ref, evaluator, clock, workbook).map(_.value)
+
+  /**
+   * #692: [[evaluateCellWithEvaluator]] with the evaluator's reason kept beside an Excel error
+   * value — the diagnostic the GH-344 promotion would otherwise drop, for the recalc summary.
+   */
+  private[formula] def evaluateCellOutcome(
+    sheet: Sheet,
+    ref: ARef,
+    evaluator: => Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[CellOutcome] =
     sheet(ref).value match
       case value @ CellValue.Formula(expr, _, kind) =>
         pinnedCache(value) match
           // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
-          case Some(cached) => scala.util.Right(cached)
+          case Some(cached) => scala.util.Right(CellOutcome(cached, None))
           case None =>
             // an ArrayFormula record (CSE or dynamic-array anchor) evaluates as an array and the
             // anchor holds element (0,0); a plain formula evaluates as a scalar cell
@@ -579,7 +599,7 @@ object SheetEvaluator:
                 val arrayEvaluator = evaluator.withArrayResults
                 parseFormula(expr).flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
-                  val result = cellResult(expr, raw)
+                  val result = cellOutcome(expr, raw)
                   // GH-695: the raw result goes to the generation memo for this generation's `x#`
                   // readers, which read it as they read an anchor they evaluate themselves; the
                   // threaded sheet keeps only element (0,0) as the anchor's cache
@@ -588,8 +608,8 @@ object SheetEvaluator:
                   result
                 }
               // Pass the current cell ref for ROW()/COLUMN() without arguments
-              case _ => evaluateFormulaWith(sheet, expr, evaluator, clock, workbook, Some(ref))
-      case other => scala.util.Right(other)
+              case _ => evaluateFormulaOutcome(sheet, expr, evaluator, clock, workbook, Some(ref))
+      case other => scala.util.Right(CellOutcome(other, None))
 
   private def evaluateArrayFormulaImpl(
     sheet: Sheet,
@@ -600,25 +620,7 @@ object SheetEvaluator:
     workbook: Option[Workbook]
   ): XLResult[(Sheet, CellRange)] =
     for
-      // Parse formula string to TExpr AST
-      expr <- FormulaParser
-        .parse(formula)
-        .left
-        .map(parseError =>
-          XLError.FormulaError(
-            formula,
-            s"Parse error: ${ParseError.describe(parseError)}"
-          )
-        )
-
-      // Evaluate TExpr against sheet. GH-344: a Left carrying an Excel error VALUE promotes to
-      // a 1x1 CellValue.Error spilled at the origin; host failures stay loud Lefts.
-      result <- evaluator.eval(expr, sheet, clock, workbook, Some(originRef)) match
-        case scala.util.Right(value) => scala.util.Right(value)
-        case scala.util.Left(evalError) =>
-          EvalError.toErrorValue(evalError) match
-            case Some(code) => scala.util.Right(CellValue.Error(code): Any)
-            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
+      result <- evaluateArrayRaw(sheet, formula, originRef, evaluator, clock, workbook)
 
       // Handle array vs scalar result
       updated <- result match
@@ -630,6 +632,69 @@ object SheetEvaluator:
           val cv = EvalResult.toCellValue(other)
           scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
     yield updated
+
+  /**
+   * Parse and evaluate `formula` at `originRef` with `evaluator` (array mode for the callers here),
+   * without touching the sheet. GH-344: a Left carrying an Excel error VALUE promotes to that error
+   * as the result; host failures stay loud Lefts.
+   */
+  private def evaluateArrayRaw(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[Any] =
+    parseFormula(formula).flatMap { expr =>
+      evaluator.eval(expr, sheet, clock, workbook, Some(originRef)) match
+        case scala.util.Right(value) => scala.util.Right(value)
+        case scala.util.Left(evalError) =>
+          EvalError.toErrorValue(evalError) match
+            case Some(code) => scala.util.Right(CellValue.Error(code): Any)
+            case None => scala.util.Left(evalErrorToXLError(evalError, Some(formula)))
+    }
+
+  /**
+   * GH-714: the array value of `formula` entered at `originRef` — what Excel 365 computes for the
+   * formula typed into that cell (no implicit intersection) — as the row-major grid of values its
+   * spill would show, without patching anything. A scalar result is a 1x1 grid. Each element is the
+   * value a spill cell stores: a cached formula record reads as its cache, and an empty element
+   * reads 0 (a formula cell is never blank, the [[cellResult]] rule).
+   */
+  private[xl] def evaluateArrayValues(
+    sheet: Sheet,
+    formula: String,
+    originRef: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[Vector[Vector[CellValue]]] =
+    evaluateArrayRaw(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
+      .map {
+        case ar: ArrayResult => ar.values.map(_.map(spillValue))
+        case other => Vector(Vector(spillValue(EvalResult.toCellValue(other))))
+      }
+
+  /**
+   * GH-714: `formula` evaluated as the plain (legacy) cell at `ref` would be — references in value
+   * positions intersected with the cell — with an explicit evaluator (randomness source).
+   */
+  private[xl] def evaluatePlainAt(
+    sheet: Sheet,
+    formula: String,
+    ref: ARef,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  ): XLResult[CellValue] =
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, Some(ref))
+
+  /** The value one element of an evaluated array stores in its cell (see [[cellResult]]). */
+  private def spillValue(value: CellValue): CellValue =
+    effectiveValue(value) match
+      case CellValue.Empty => CellValue.Number(BigDecimal(0))
+      case other => other
 
   // ========== Helper Functions ==========
 
@@ -682,13 +747,24 @@ object SheetEvaluator:
     workbook: Option[Workbook],
     currentCell: Option[ARef]
   ): XLResult[CellValue] =
+    evaluateFormulaOutcome(sheet, formula, evaluator, clock, workbook, currentCell).map(_.value)
+
+  /** [[evaluateFormulaWith]] keeping the reason beside an error value (#692). */
+  private def evaluateFormulaOutcome(
+    sheet: Sheet,
+    formula: String,
+    evaluator: Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef]
+  ): XLResult[CellOutcome] =
     // A formula with a cell position evaluates as that plain cell would: Excel's legacy formula,
     // references in value positions implicitly intersected. Without one there is no cell to
     // intersect with, so it evaluates as the same formula typed into a new Excel 365 cell would:
     // as an array, showing its top-left value. `@range` still needs the position.
     val positioned = if currentCell.isDefined then evaluator else evaluator.withArrayResults
     parseFormula(formula).flatMap(expr =>
-      evaluateParsedWith(sheet, formula, expr, positioned, clock, workbook, currentCell)
+      cellOutcome(formula, positioned.eval(expr, sheet, clock, workbook, currentCell))
     )
 
   /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
@@ -728,6 +804,13 @@ object SheetEvaluator:
 
   /** A formula's raw evaluation as the cell value it stores (the GH-344 boundary promotion). */
   private def cellResult(formulaText: String, raw: Either[EvalError, Any]): XLResult[CellValue] =
+    cellOutcome(formulaText, raw).map(_.value)
+
+  /**
+   * [[cellResult]] with the reason an error value was raised with (#692): the context of a Left
+   * promoted here — a lookup's miss, a division's operands — which the value alone cannot carry.
+   */
+  private def cellOutcome(formulaText: String, raw: Either[EvalError, Any]): XLResult[CellOutcome] =
     raw match
       case scala.util.Right(value) =>
         // A formula cell is never blank in Excel: a result that is a reference to an empty cell
@@ -737,11 +820,13 @@ object SheetEvaluator:
         // can hand back a cached formula record — a threaded spill anchor, or a precedent this
         // pass did not re-evaluate; the cell stores that record's value, never the record.
         effectiveValue(EvalResult.toCellValue(value)) match
-          case CellValue.Empty => scala.util.Right(CellValue.Number(BigDecimal(0)))
-          case other => scala.util.Right(other)
+          case CellValue.Empty =>
+            scala.util.Right(CellOutcome(CellValue.Number(BigDecimal(0)), None))
+          case other => scala.util.Right(CellOutcome(other, None))
       case scala.util.Left(evalError) =>
         EvalError.toErrorValue(evalError) match
-          case Some(code) => scala.util.Right(CellValue.Error(code))
+          case Some(code) =>
+            scala.util.Right(CellOutcome(CellValue.Error(code), EvalError.reason(evalError)))
           case None => scala.util.Left(evalErrorToXLError(evalError, Some(formulaText)))
 
   /** Shared dependency-ordered evaluation, optionally with an explicit rng (GH-115). */
@@ -854,6 +939,44 @@ object SheetEvaluator:
       Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook)
     )
 
+  /**
+   * GH-715: an evaluation of a formula placed at `at` on the sheet named `sheet`: `evaluator` is
+   * [[spillTrackingEvaluator]] with that cell guarded. Any read of it during the evaluation, by
+   * whatever path computed it (INDIRECT, OFFSET, a defined name, another sheet's formula), fails
+   * instead of answering with the cell's old content, and [[wasRead]] records it even when the
+   * failure is swallowed (IFERROR takes any failure). For the reads to reach the guard, the caller
+   * puts an uncached formula at `at` ([[placed]]) in the sheet it evaluates on and in the workbook
+   * it passes. Single-use, like the guard it holds.
+   */
+  private[xl] final class Placement private[SheetEvaluator] (
+    val evaluator: Evaluator,
+    guard: Evaluator.PlacementGuard
+  ):
+    /** Whether the evaluation read the placement: the plain cell there would be circular. */
+    def wasRead: Boolean = guard.read
+
+  /** A [[Placement]] for `formula` at `at` on the sheet named `sheet` of `workbook`. */
+  private[xl] def placement(
+    formula: String,
+    workbook: Workbook,
+    sheet: SheetName,
+    at: ARef
+  ): Placement =
+    val (evaluator, guard) = Evaluator.placedInstance(
+      Rng.system,
+      Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook),
+      sheet,
+      at
+    )
+    new Placement(evaluator, guard)
+
+  /**
+   * `sheet` with `formula` placed, uncached, at `at`: what a [[Placement]] needs there. Stored
+   * without its leading `=`, as every formula record is.
+   */
+  private[xl] def placed(sheet: Sheet, at: ARef, formula: String): Sheet =
+    sheet.put(at, CellValue.Formula(formula.stripPrefix("="), None))
+
   /** GH-695: whether a sheet-level fold should record anchors' results for `x#` readers. */
   private def readsSpills(sheet: Sheet, workbook: Option[Workbook]): Boolean =
     workbook.fold(Evaluator.mayReadSpills(sheet))(Evaluator.mayReadSpills)
@@ -867,14 +990,16 @@ object SheetEvaluator:
   ): XLResult[CellValue] =
     evaluateCellWithEvaluator(sheet, ref, evaluator, clock, workbook)
 
+  /** `currentCell` as in the public `evaluateFormula`: `Some(cell)` is the plain cell there. */
   private[xl] def evaluateFormulaUsing(
     sheet: Sheet,
     formula: String,
     evaluator: Evaluator,
     workbook: Option[Workbook],
-    clock: Clock = Clock.system
+    clock: Clock = Clock.system,
+    currentCell: Option[ARef] = None
   ): XLResult[CellValue] =
-    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, None)
+    evaluateFormulaWith(sheet, formula, evaluator, clock, workbook, currentCell)
 
   private[xl] def evaluateArrayFormulaUsing(
     sheet: Sheet,

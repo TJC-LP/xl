@@ -261,6 +261,8 @@ object StreamingXmlWriter:
       case CellValue.Formula(expr, cachedValue, kind) =>
         // <c r="A1"><f>SUM(A1:A10)</f><v>100</v></c>
         // GH-430: record attrs via the shared codec; dataTable records carry no formula text.
+        // GH-714: the row stream ships no metadata part, so a dynamic-array record comes out in
+        // its legacy (CSE) shape — no `cm` to point at nothing. Streaming authoring is a follow-up.
         val recordAttrs = FormulaKindCodec.toAttrs(kind).map { case (name, value) =>
           Attr(QName(name), List(XmlString(value, false)))
         }

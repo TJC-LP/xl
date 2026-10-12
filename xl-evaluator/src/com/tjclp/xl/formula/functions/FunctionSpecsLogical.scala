@@ -23,8 +23,9 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
    * Array-shaped arguments (range comparisons like A1:A10>0, array-returning calls, NOT over an
    * array) fold elementwise from `seed` with `combine` (AND = TRUE/&&, OR = FALSE/||) using the
    * broadcastIf condition conventions — GH-344: an error element propagates as its Excel error
-   * VALUE, text elements refuse with a loud Left. Scalars follow the shared Excel-truthiness table
-   * (numbers zero/non-zero, empty FALSE, error values propagate, text refuses).
+   * VALUE, a text element is `#VALUE!` (#709). Scalars follow the shared Excel-truthiness table
+   * (numbers zero/non-zero, empty FALSE, error values propagate, text other than TRUE/FALSE is
+   * `#VALUE!`).
    *
    * GH-564: bare ranges (`=AND(K9:K21)`, the house check-row idiom) follow Excel's REFERENCE rule
    * instead: logical cells count as themselves, numeric and date cells as zero/non-zero, text and
@@ -37,19 +38,25 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
     combine: (Boolean, Boolean) => Boolean
   ): Either[EvalError, Option[Boolean]] =
     val label = s"$fnName condition"
-    // AND's and OR's arguments are Excel's reference class: a bare range arrives whole as an
-    // ArrayResult and folds by Excel's reference rule; any other expression evaluates in the
+    // AND's and OR's arguments are Excel's reference class: a bare range arrives whole as a
+    // reference and folds by Excel's reference rule; any other expression evaluates in the
     // formula's mode (in a plain cell its references intersect) and an array result folds by the
     // array-condition rule.
     val range = bareRange(expr)
     val isRange = range.isDefined
-    range
-      .fold(ctx.evalReferenceArg(expr.asInstanceOf[TExpr[Any]]))(evalMaybeArrayArg(ctx, _))
+    ctx
+      .evalReferenceArg(range.getOrElse(expr).asInstanceOf[TExpr[Any]])
       .flatMap {
-        // a reference IF/CHOOSE selected, or a range name: Excel's reference rule, as for a range
+        // a range, a reference IF/CHOOSE selected, or a range name: Excel's reference rule, which
+        // ignores blanks, so a whole column or row reads only the used range (GH-711)
         case RangeOperand(target, selected) =>
-          extractRangeAsMatrixEval(selected, target, ctx)
-            .flatMap(m => rangeFold(label, ArrayResult(m), combine))
+          boundedToUsed(selected, target).fold(Right(None))(used =>
+            extractRangeAsMatrixEval(used, target, ctx)
+              .flatMap(m => rangeFold(label, ArrayResult(m), combine))
+          )
+        // a bare range read as its values: only a context built outside the evaluator, without
+        // a reference operand (`EvalContext.Operands.array`), evaluates it so; the reference rule
+        // still applies
         case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
         case arr: ArrayResult =>
           ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
@@ -138,9 +145,8 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
       // GH-338: array arguments aggregate across every element (Excel AND is n-ary over
       // arrays). GH-344: Excel does NOT short-circuit logical functions — EVERY argument
       // evaluates left-to-right, the first failure (error value or refusal) wins, and only
-      // then does the decisive fold apply: =AND(FALSE,1/0) is #DIV/0!, not FALSE. Known
-      // residual: =AND(FALSE,"abc") is a loud Left (full #VALUE! arrives with the deferred
-      // TypeMismatch boundary demotion follow-up). GH-564: bare ranges fold their logical cells.
+      // then does the decisive fold apply: =AND(FALSE,1/0) is #DIV/0!, not FALSE, and
+      // =AND(FALSE,"abc") is #VALUE! (#709). GH-564: bare ranges fold their logical cells.
       foldLogical("AND", args, ctx, seed = true, _ && _)
     }
 

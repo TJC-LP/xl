@@ -118,10 +118,10 @@ trait TExprCoercions:
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def asDateExpr(expr: TExpr[?]): TExpr[java.time.LocalDate] = expr match
-    case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDate)
+    case PolyRef(at, anchor) => Ref(at, anchor, decodeAsDateScalar)
     // GH-374: push through the transparent unary-plus wrapper (see asStringExpr)
     case UnaryPlus(inner) => UnaryPlus(asDateExpr(inner))
-    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsDate)
+    case SheetPolyRef(sheet, at, anchor) => SheetRef(sheet, at, anchor, decodeAsDateScalar)
     // GH-193: LET bindings are Any-typed — coerce totally at evaluation time (bound dates from
     // cells are stored as Excel serial numbers, which the Date target converts back)
     case BindingRef(name) => CoercedBindingRef[java.time.LocalDate](name, BindingCoercion.Date)

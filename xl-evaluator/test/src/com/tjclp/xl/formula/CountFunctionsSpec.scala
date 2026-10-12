@@ -2,6 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.addressing.SheetName
 import munit.FunSuite
@@ -155,6 +156,41 @@ class CountFunctionsSpec extends FunSuite:
     assertEquals(
       filled.evaluateFormula("=COUNTBLANK(A1)"),
       Right(CellValue.Number(BigDecimal(0)))
+    )
+  }
+
+  test("GH-711: COUNTBLANK over a whole column or row counts every blank cell, as Excel does") {
+    def blanks(sheet: Sheet, formula: String) =
+      sheet.evaluateFormula(formula, Clock.system, Some(Workbook(Vector(sheet))), None)
+    val filled = sheetWith(
+      ref"B1" -> CellValue.Number(1),
+      ref"B2" -> CellValue.Number(2),
+      ref"B3" -> CellValue.Number(3)
+    )
+    // the cells past the used range are blank: B:B has 1048576 cells, three of them filled
+    assertEquals(filled.evaluateFormula("=COUNTBLANK(B:B)"), Right(CellValue.Number(1048573)))
+    assertEquals(blanks(filled, "=COUNTBLANK(B:B)"), Right(CellValue.Number(1048573)))
+    assertEquals(filled.evaluateFormula("=COUNTBLANK(A:A)"), Right(CellValue.Number(1048576)))
+    assertEquals(filled.evaluateFormula("=COUNTBLANK(A:B)"), Right(CellValue.Number(2097149)))
+    assertEquals(filled.evaluateFormula("=COUNTBLANK(1:1)"), Right(CellValue.Number(16383)))
+    assertEquals(blanks(filled, "=COUNTBLANK(Test!B:B)"), Right(CellValue.Number(1048573)))
+    assertEquals(
+      emptySheet.evaluateFormula("=COUNTBLANK(B:B)"),
+      Right(CellValue.Number(1048576))
+    )
+    // a whole column a function returns, or a union's area, is a reference like a written one
+    assertEquals(
+      filled.evaluateFormula("=COUNTBLANK(INDEX(A:B,0,2))"),
+      Right(CellValue.Number(1048573))
+    )
+    assertEquals(
+      filled.evaluateFormula("=COUNTBLANK(B:B B:B)"),
+      Right(CellValue.Number(1048573))
+    )
+    // a whole sheet overflows Int: 17179869184 cells, three filled
+    assertEquals(
+      filled.evaluateFormula("=COUNTBLANK(A:XFD)"),
+      Right(CellValue.Number(BigDecimal(17179869181L)))
     )
   }
 
