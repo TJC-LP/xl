@@ -462,6 +462,13 @@ object ArgSpec:
   private[formula] val computedReferenceCalls: Set[String] =
     ReferenceFunctionNames.computing + ReferenceOperators.RangeName
 
+  /** A call to one of [[computedReferenceCalls]], looking through the parser's coercion wrapper. */
+  private object ComputedReferenceCall:
+    def unapply(e: TExpr[?]): Option[TExpr.Call[?]] = e match
+      case TExpr.Coerced(inner, _) => unapply(inner)
+      case call: TExpr.Call[?] if computedReferenceCalls.contains(call.spec.name) => Some(call)
+      case _ => None
+
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")
 
@@ -515,7 +522,7 @@ object ArgSpec:
           )
         // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
         // is named, never reported as a wrong argument count — accepting it here is #723's
-        case (call: TExpr.Call[?]) :: _ if computedReferenceCalls.contains(call.spec.name) =>
+        case ComputedReferenceCall(call) :: _ =>
           // named after the call itself, so the message follows the derived set
           val computed =
             if call.spec.name == ReferenceOperators.RangeName then "the range operator `:`"
