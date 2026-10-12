@@ -5,9 +5,11 @@ import java.nio.file.Path
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.cli.contract.Warning
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
@@ -108,7 +110,8 @@ object CellCommands:
     comments: Boolean,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "clear")
@@ -125,8 +128,19 @@ object CellCommands:
       clearStyles = all || styles
       clearComments = all || comments
 
+      // GH-714: clearing a dynamic anchor clears its whole spill, as in Excel; the cells of a live
+      // spill whose anchor stays are left as they were (Excel keeps them) and the rest is cleared,
+      // with SPILL_CELLS_SKIPPED. Styles and comments do not touch a spill: they clear everywhere.
+      contents = Option.when(clearContents)(
+        DynamicArrayAuthoring.clearContents(
+          targetSheet,
+          DynamicArrayAuthoring.spillsOf(targetSheet),
+          Vector(range)
+        )
+      )
+
       // Apply clearing operations
-      sheet1 = if clearContents then targetSheet.removeRange(range) else targetSheet
+      sheet1 = contents.fold(targetSheet)(_.sheet)
       sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
 
@@ -140,6 +154,8 @@ object CellCommands:
 
       updatedWb = wb.put(sheet4)
       _ <- writeWorkbook(updatedWb, outputPath, config, stream)
+      kept = contents.fold(Vector.empty)(_.kept).map(targetSheet.name -> _)
+      _ <- WriteCommands.spillsKeptWarning(kept).fold(IO.unit)(warn)
 
       // Build description of what was cleared
       clearedItems = Vector(

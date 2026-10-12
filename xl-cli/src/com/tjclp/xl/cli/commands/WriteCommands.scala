@@ -26,6 +26,7 @@ import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
   Diagnostics,
+  IntersectionHit,
   OffGridHit,
   Warning,
   WarningCode
@@ -43,7 +44,12 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.EvalFormulaSupport
-import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.formula.eval.{
+  DynamicArrayAuthoring,
+  ImplicitIntersection,
+  StructuralCachePolicy,
+  StructuralEditor
+}
 import com.tjclp.xl.formula.graph.NameChanges
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -51,6 +57,7 @@ import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.ops.{Edit, OffGridRef}
 import com.tjclp.xl.sheets.{styleSyntax, SheetEdits}
 import com.tjclp.xl.styles.CellStyle
+import com.tjclp.xl.ooxml.XlsxWriter
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.cli.{
   CliIO,
@@ -139,11 +146,10 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean
-  ): IO[Unit] =
-    // GH-636: the one guarded instance, so serialisation exhausting the heap is RESOURCE_LIMIT
-    val excel = MemoryGuard.writer
-    if stream then excel.writeWorkbookStream(wb, outputPath, config)
-    else excel.writeWith(wb, outputPath, config)
+  ): IO[XlsxWriter.WriteReport] =
+    // GH-636: the one guarded write, so serialisation exhausting the heap is RESOURCE_LIMIT;
+    // GH-714: it hands back the writer's report, which the callers that warn read
+    MemoryGuard.writeReporting(wb, outputPath, config, stream)
 
   /**
    * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
@@ -159,7 +165,9 @@ object WriteCommands:
     stream: Boolean,
     policy: WritePolicy,
     warn: Warning => IO[Unit],
-    offGrid: Vector[OffGridHit] = Vector.empty
+    offGrid: Vector[OffGridHit] = Vector.empty,
+    advisories: Workbook => Vector[Warning] = _ => Vector.empty,
+    clock: Option[Clock] = None
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -168,36 +176,66 @@ object WriteCommands:
         MemoryGuard.blocking(outputPath, "recalc") {
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
-              val full = recalcHonoringCalcPr(wb).result
+              val full = recalcHonoringCalcPr(wb, clock = clock.getOrElse(Clock.system)).result
               val cone = dirtyCone(wb, Map(sheetName -> modifiedRefs))
               val written = applyConeCaches(wb, full.workbook, cone)
               scopeToCone(full, cone, written).copy(workbook = written)
             else
-              DependentRecalculation.recalculateAfterEdit(wb, sheetName, modifiedRefs, Clock.system)
+              DependentRecalculation.recalculateAfterEdit(
+                wb,
+                sheetName,
+                modifiedRefs,
+                clock.getOrElse(Clock.system)
+              )
           Some(result)
         }
     calculation.flatMap { result =>
       val finalWb = result.fold(wb)(_.workbook)
-      writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+      writeWorkbook(finalWb, outputPath, config, stream).flatMap { report =>
         val note = result match
           case None => noRecalcSuffix(policy)
           case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
             ""
           case Some(r) => "\n" + formatRecalcSummary(r)
-        strictGate(
-          policy,
-          s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
-          result,
-          Vector.empty,
-          warn,
-          offGrid
-        )
+        advisoriesAfterWrite(outputPath)(advisories(finalWb))
+          .map(_ ++ downgradeWarning(report))
+          .flatMap { extra =>
+            strictGate(
+              policy,
+              s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
+              result,
+              Vector.empty,
+              warn,
+              offGrid,
+              extra
+            )
+          }
       }
     }
 
   /** Note appended to a write's message when `--no-recalc` suppressed its dependent refresh. */
   private def noRecalcSuffix(policy: WritePolicy): String =
     if policy.noRecalc then s"\n$noRecalcNote" else ""
+
+  /**
+   * GH-714: what a plain (non-array) write of `targets` does to the dynamic arrays on `sheet`, as
+   * Excel 365 does it ([[DynamicArrayAuthoring.releaseForWrite]]): writing over an anchor clears
+   * the rest of its spill first, and writing into a spill whose anchor stays is refused as the
+   * `#SPILL!` it would cause (`FORMULA_ERROR`, nothing written). Returns the released book and
+   * sheet and the cells cleared, which join the write's dependent-refresh seeds.
+   */
+  private[cli] def releaseSpills(
+    wb: Workbook,
+    sheet: Sheet,
+    targets: Set[ARef]
+  ): IO[(Workbook, Sheet, Set[ARef])] =
+    IO.fromEither(
+      DynamicArrayAuthoring
+        .releaseForWrite(sheet, targets)
+        .map((released, cleared) => (wb.put(released), released, cleared))
+        .left
+        .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+    )
 
   /**
    * Validate that the count of values/formulas matches the cell count in a range.
@@ -358,18 +396,19 @@ object WriteCommands:
     warn: Warning => IO[Unit]
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
-    val updatedSheet = putFormatted(sheet, ref, formatted)
-    writeAfterRefresh(
-      wb.put(updatedSheet),
-      sheet.name,
-      Set(ref),
-      Format.putSuccess(ref, formatted.value),
-      outputPath,
-      config,
-      stream,
-      policy,
-      warn
-    )
+    releaseSpills(wb, sheet, Set(ref)).flatMap { (wb, sheet, cleared) =>
+      writeAfterRefresh(
+        wb.put(putFormatted(sheet, ref, formatted)),
+        sheet.name,
+        cleared + ref,
+        Format.putSuccess(ref, formatted.value),
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /** Apply a detected number format without creating a redundant General style. */
   private def putFormatted(sheet: Sheet, ref: ARef, formatted: Formatted): Sheet =
@@ -419,18 +458,20 @@ object WriteCommands:
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
-    val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
-    writeAfterRefresh(
-      wb.put(updatedSheet),
-      sheet.name,
-      modifiedRefs,
-      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}",
-      outputPath,
-      config,
-      stream,
-      policy,
-      warn
-    )
+    releaseSpills(wb, sheet, modifiedRefs).flatMap { (wb, sheet, cleared) =>
+      val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
+      writeAfterRefresh(
+        wb.put(updatedSheet),
+        sheet.name,
+        modifiedRefs ++ cleared,
+        s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /** Mode 3: Put different values to each cell (row-major order) */
   private def putBatchValues(
@@ -456,18 +497,19 @@ object WriteCommands:
           }
           .toVector
         val modifiedRefs = updates.map(_._1).toSet
-        val updatedSheet = sheet.put(updates*)
-        writeAfterRefresh(
-          wb.put(updatedSheet),
-          sheet.name,
-          modifiedRefs,
-          s"Put ${values.length} values to ${range.toA1} (row-major)",
-          outputPath,
-          config,
-          stream,
-          policy,
-          warn
-        )
+        releaseSpills(wb, sheet, modifiedRefs).flatMap { (wb, sheet, cleared) =>
+          writeAfterRefresh(
+            wb.put(sheet.put(updates*)),
+            sheet.name,
+            modifiedRefs ++ cleared,
+            s"Put ${values.length} values to ${range.toA1} (row-major)",
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+        }
 
   /**
    * Write formula to cell(s).
@@ -484,7 +526,8 @@ object WriteCommands:
     config: WriterConfig,
     stream: Boolean = false,
     policy: WritePolicy = WritePolicy.default,
-    warn: Warning => IO[Unit] = _ => IO.unit
+    warn: Warning => IO[Unit] = _ => IO.unit,
+    array: Boolean = false
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
@@ -501,6 +544,25 @@ object WriteCommands:
 
       // Determine mode based on ref type and formula count
       result <- (refOrRange, formulas) match
+        // GH-714: one dynamic-array anchor; its spill extent comes from evaluation
+        case (Left(ref), List(singleFormula)) if array =>
+          putfDynamicArray(
+            wb,
+            targetSheet,
+            ref,
+            singleFormula,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+
+        case (_, _ :: _) if array =>
+          IO.raiseError(
+            usage("--array anchors at one cell; the spill extent comes from evaluation")
+          )
+
         case (Left(ref), List(singleFormula)) =>
           // Mode 1: Single cell
           putfSingleCell(
@@ -576,14 +638,22 @@ object WriteCommands:
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
+      released <- releaseSpills(wb, sheet, Set(ref))
+      (releasedWb, releasedSheet, cleared) = released
+      clock <- commandClock
       cachedValue =
         if policy.noRecalc then
           // evaluated as the plain cell it becomes: at its position (a legacy formula)
           SheetEvaluator
-            .evaluateFormula(sheet)(fullFormula, workbook = Some(wb), currentCell = Some(ref))
+            .evaluateFormula(releasedSheet)(
+              fullFormula,
+              clock = clock,
+              workbook = Some(releasedWb),
+              currentCell = Some(ref)
+            )
             .toOption
         else None
-      sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
+      sheetWithFormula = releasedSheet.put(ref, CellValue.Formula(formula, cachedValue))
       // Auto-apply date format if formula involves date functions
       finalSheet =
         if TExpr.containsDateFunction(parsedExpr) then
@@ -598,17 +668,164 @@ object WriteCommands:
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
       result <- writeAfterRefresh(
-        wb.put(finalSheet),
+        releasedWb.put(finalSheet),
         sheet.name,
-        Set(ref),
+        cleared + ref,
         Format.putSuccess(ref, CellValue.Formula(formula)),
         outputPath,
         config,
         stream,
         policy,
-        warn
+        warn,
+        advisories = intersectionAdvisory(Vector(sheet.name -> ref), clock = clock),
+        clock = Some(clock)
       )
     yield result
+
+  /**
+   * GH-714: `putf --array` — store the formula as Excel 365 stores a typed one: a dynamic-array
+   * anchor at `ref` whose spill extent and values come from evaluating it as an array now
+   * ([[DynamicArrayAuthoring]]). The evaluation runs under `--no-recalc` too (it defines the
+   * extent); `--no-recalc` still suppresses the dependent refresh. A spill Excel would block is
+   * refused as `FORMULA_ERROR`, writing nothing.
+   */
+  private def putfDynamicArray(
+    wb: Workbook,
+    sheet: Sheet,
+    ref: ARef,
+    formulaStr: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    val formula = CellValue.canonicalFormulaText(formulaStr)
+    val fullFormula = s"=$formula"
+    for
+      // one reading: the spill and the dependent refresh see the same NOW()
+      clock <- commandClock
+      authored <- IO.fromEither(
+        DynamicArrayAuthoring
+          .author(wb, sheet, ref, formula, clock)
+          .left
+          .map {
+            // the parse failure keeps the putf caret diagnostic (parsed again only to report it)
+            case refusal @ DynamicArrayAuthoring.Refusal.Invalid(_) =>
+              FormulaParser
+                .parse(fullFormula)
+                .fold(
+                  formulaError(_, fullFormula),
+                  _ => CliException(CliError.fromSpillRefusal(refusal))
+                )
+            case refusal => CliException(CliError.fromSpillRefusal(refusal))
+          }
+      )
+      // Auto-apply a date format over the spill when the formula involves date functions; the
+      // expression is the one authoring parsed
+      finalSheet =
+        if TExpr.containsDateFunction(authored.expr) then
+          val numFmt =
+            if TExpr.containsTimeFunction(authored.expr) then NumFmt.DateTime else NumFmt.Date
+          authored.withNumFmt(numFmt).sheet
+        else authored.sheet
+      // an uncached record has no extent yet: its spill is sized when it first evaluates
+      spills =
+        if authored.cached then s"spills ${authored.extent.toA1}"
+        else
+          val reason = authored.failure.fold("")(e => s" (${e.message})")
+          s"uncached: it could not be evaluated$reason, so its spill is not sized yet"
+      result <- writeAfterRefresh(
+        wb.put(finalSheet),
+        sheet.name,
+        authored.touched,
+        s"Put dynamic array $fullFormula at ${ref.toA1} ($spills)",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn,
+        clock = Some(clock)
+      )
+    yield result
+
+  /**
+   * GH-714: the `IMPLICIT_INTERSECTION` advisory for the plain formulas a putf wrote, evaluated on
+   * the final workbook (both evaluations share one clock reading). Only formulas with an array
+   * source in a value position are evaluated, at most [[ImplicitIntersection.DefaultBudget]] of
+   * them; `known` cells (a drag's copies of a source that may diverge) are candidates without a
+   * parse. `clock` is the command's one reading ([[commandClock]]), so both evaluations, and the
+   * write's own refresh, see the same `NOW()`. Informational: never gates.
+   */
+  private[cli] def intersectionAdvisory(
+    targets: Iterable[(SheetName, ARef)],
+    known: ((SheetName, ARef)) => Boolean = _ => false,
+    clock: Clock
+  ): Workbook => Vector[Warning] = finalWb =>
+    val report = ImplicitIntersection.check(finalWb, targets, clock, known = known)
+    IntersectionHit.warning(report).orElse(IntersectionHit.sampledNote(report)).toList.toVector
+
+  /**
+   * GH-714: the informational advisories a write ends with (`IMPLICIT_INTERSECTION` evaluates up to
+   * its budget of cells twice), computed after the output is staged. They never gate, so they can
+   * never sink the write: the computation runs under the memory guard, and any failure — an
+   * exhausted heap (`RESOURCE_LIMIT`), a stack overflow, any other error — degrades to no advisory,
+   * so the exit code and the staged file are exactly what they would have been without it.
+   */
+  private[cli] def advisoriesAfterWrite(outputPath: Path)(
+    compute: => Vector[Warning]
+  ): IO[Vector[Warning]] =
+    MemoryGuard
+      .blocking(outputPath, "check") {
+        try compute
+        catch case _: StackOverflowError => Vector.empty
+      }
+      .handleError(_ => Vector.empty)
+
+  /**
+   * GH-714: `DYNAMIC_ARRAY_DOWNGRADED` when the write just made could not keep its dynamic arrays'
+   * `cm` marker — read off the writer's own report (the source metadata part does not parse).
+   */
+  private[cli] def downgradeWarning(report: XlsxWriter.WriteReport): Vector[Warning] =
+    report.cellMetadataDowngrade
+      .map { path =>
+        Warning(
+          WarningCode.DYNAMIC_ARRAY_DOWNGRADED,
+          s"the workbook's cell-metadata part '$path' is not readable XML, so xl cannot extend it: " +
+            "the dynamic arrays on the rewritten sheets were saved without their dynamic-array " +
+            "marker, and Excel opens them as legacy array formulas ({=...}); the part was kept as " +
+            "it was (repair or remove it in Excel, then write again)"
+        )
+      }
+      .toList
+      .toVector
+
+  /**
+   * GH-714: `SPILL_CELLS_SKIPPED` for the live spills a contents clear left in place (their anchors
+   * stayed): one warning per command naming the ranges kept and each spill's anchor; None when
+   * there were none.
+   */
+  private[cli] def spillsKeptWarning(
+    kept: Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)]
+  ): Option[Warning] =
+    Option.when(kept.nonEmpty) {
+      val shown = kept.take(10).map { (sheet, k) =>
+        def a1(r: CellRange) = if r.start == r.end then r.start.toA1 else r.toA1
+        val ranges = k.kept.map(r => s"${sheet.value}!${a1(r)}").mkString(", ")
+        s"$ranges (the spill of =${k.formula} at ${sheet.value}!${k.anchor.toA1})"
+      }
+      val more = if kept.size > 10 then s", ... (+${kept.size - 10} more)" else ""
+      Warning(
+        WarningCode.SPILL_CELLS_SKIPPED,
+        s"left ${shown.mkString("; ")}$more as they were: Excel keeps a dynamic array's spill " +
+          "while its anchor stays, so the clear skipped those cells and cleared the rest " +
+          "(clearing the anchor removes its whole spill)"
+      )
+    }
+
+  /** One reading of the system clock, taken in IO: a command's single notion of now. */
+  private[cli] val commandClock: IO[Clock] =
+    IO(java.time.LocalDateTime.now()).map(now => Clock.fixed(now.toLocalDate, now))
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -628,24 +845,50 @@ object WriteCommands:
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
+      modifiedRefs = range.cells.toSet
+      released <- releaseSpills(wb, sheet, modifiedRefs)
+      (releasedWb, releasedSheet, cleared) = released
       // Apply formula with Excel-style dragging (existing logic)
       (updatedSheet, offGrid) =
-        putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
-      modifiedRefs = range.cells.toSet
+        putfDraggingLogic(releasedSheet, releasedWb, range, formula, parsedExpr, policy.noRecalc)
       cellCount = range.cellCount
+      targets = dragTargets(sheet.name, range, parsedExpr)
+      // a copy whose shift voided a reference may have lost its array source: parsed again
+      voided = offGrid.map(_.cell).toSet
+      known = (key: (SheetName, ARef)) =>
+        key._1 == sheet.name && range.contains(key._2) && !voided.contains(key._2)
+      clock <- commandClock
       result <- writeAfterRefresh(
-        wb.put(updatedSheet),
+        releasedWb.put(updatedSheet),
         sheet.name,
-        modifiedRefs,
+        modifiedRefs ++ cleared,
         s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)",
         outputPath,
         config,
         stream,
         policy,
         warn,
-        OffGridHit.of(sheet.name, offGrid)
+        OffGridHit.of(sheet.name, offGrid),
+        intersectionAdvisory(targets, known, clock),
+        clock = Some(clock)
       )
     yield result
+
+  /**
+   * GH-714: the cells of a drag the `IMPLICIT_INTERSECTION` check must look at. A drag shifts
+   * references but keeps the formula's shape — a reference stays a reference of its kind or becomes
+   * `#REF!` — so a source that cannot diverge ([[ImplicitIntersection.mayDiverge]]) has no dragged
+   * copy that can: one test of the source instead of a parse per target cell.
+   */
+  private[cli] def dragTargets(
+    sheet: SheetName,
+    range: CellRange,
+    source: TExpr[?]
+  ): Iterable[(SheetName, ARef)] =
+    // a lazy view: the check expands it only as far as its budget
+    if ImplicitIntersection.mayDiverge(source) then
+      Vector(range).view.flatMap(r => r.cellsRowMajor.map(sheet -> _))
+    else Vector.empty
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
   private def putfBatchFormulas(
@@ -664,8 +907,9 @@ object WriteCommands:
       case Some(error) => IO.raiseError(error)
       case None =>
         for
-          // Parse and apply each formula (using iterator to avoid toList)
-          updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
+          // Parse every formula first (using iterator to avoid toList): a malformed one reports
+          // before a spill refusal, as in the other putf modes
+          parsed <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
             (ref, formulaStr) =>
               val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
@@ -674,32 +918,40 @@ object WriteCommands:
                   .parse(fullFormula)
                   .left
                   .map(formulaError(_, fullFormula, s"Formula for ${ref.toA1}: "))
-              ).map { _ =>
-                val cachedValue =
-                  if policy.noRecalc then
-                    SheetEvaluator
-                      .evaluateFormula(sheet)(
-                        fullFormula,
-                        workbook = Some(wb),
-                        currentCell = Some(ref)
-                      )
-                      .toOption
-                  else None
-                (ref, CellValue.Formula(formula, cachedValue))
-              }
+              ).as((ref, formula))
+          }
+          released <- releaseSpills(wb, sheet, range.cells.toSet)
+          (releasedWb, releasedSheet, cleared) = released
+          clock <- commandClock
+          updates = parsed.map { (ref, formula) =>
+            val cachedValue =
+              if policy.noRecalc then
+                SheetEvaluator
+                  .evaluateFormula(releasedSheet)(
+                    s"=$formula",
+                    clock = clock,
+                    workbook = Some(releasedWb),
+                    currentCell = Some(ref)
+                  )
+                  .toOption
+              else None
+            (ref, CellValue.Formula(formula, cachedValue))
           }
           modifiedRefs = updates.map(_._1).toSet
-          updatedSheet = sheet.put(updates*)
+          updatedSheet = releasedSheet.put(updates*)
           result <- writeAfterRefresh(
-            wb.put(updatedSheet),
+            releasedWb.put(updatedSheet),
             sheet.name,
-            modifiedRefs,
+            modifiedRefs ++ cleared,
             s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)",
             outputPath,
             config,
             stream,
             policy,
-            warn
+            warn,
+            advisories =
+              intersectionAdvisory(updates.map((r, _) => sheet.name -> r).toVector, clock = clock),
+            clock = Some(clock)
           )
         yield result
 
@@ -1154,12 +1406,13 @@ object WriteCommands:
 
   private def recalcHonoringCalcPr(
     wb: Workbook,
-    parallel: Option[Int] = None
+    parallel: Option[Int] = None,
+    clock: Clock = Clock.system
   ): RecalcRun =
     wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr) match
       case Some(iterative) =>
         RecalcRun(
-          wb.recalculate(Clock.system, iterative),
+          wb.recalculate(clock, iterative),
           parallel.map(_ =>
             "NOTE: --parallel ignored — the book declares iterative calculation " +
               "(<calcPr iterate=\"1\"/>), which fixpoints sequentially"
@@ -1167,7 +1420,7 @@ object WriteCommands:
         )
       case None =>
         RecalcRun(
-          parallel.fold(wb.recalculate())(wb.recalculateParallel),
+          parallel.fold(wb.recalculate(clock))(n => wb.recalculateParallel(clock, n)),
           None
         )
 
@@ -1361,8 +1614,12 @@ object WriteCommands:
    * outside the cone they keep the generation the file already carried. `xl recalc` remains the
    * verb that refreshes an entire book on purpose.
    */
-  private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
-    val result = recalcHonoringCalcPr(edited).result
+  private def scopedRecalc(
+    before: Workbook,
+    edited: Workbook,
+    clock: Clock = Clock.system
+  ): (Workbook, RecalcResult) =
+    val result = recalcHonoringCalcPr(edited, clock = clock).result
     val changed = changedRefs(before, edited)
     // A name's binding can change while every cell retains its text and cache. Seed its readers
     // explicitly before closing the cell graph, including readers of removed names and aliases.
@@ -1395,10 +1652,11 @@ object WriteCommands:
     edited: Workbook,
     mutating: Boolean,
     outputPath: Path,
-    policy: WritePolicy
+    policy: WritePolicy,
+    clock: Clock = Clock.system
   ): IO[(Workbook, Option[RecalcResult], Option[String])] =
     if mutating && !policy.noRecalc then
-      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited)).map {
+      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited, clock)).map {
         (written, result) => (written, Some(result), Some(formatRecalcSummary(result)))
       }
     else IO.pure((edited, None, Option.when(mutating)(noRecalcNote)))
@@ -1449,7 +1707,8 @@ object WriteCommands:
     recalc: Option[RecalcResult],
     warnings: Vector[SeedTableWarning],
     warn: Warning => IO[Unit],
-    offGrid: Vector[OffGridHit] = Vector.empty
+    offGrid: Vector[OffGridHit] = Vector.empty,
+    extraWarnings: Vector[Warning] = Vector.empty
   ): IO[String] =
     val recalcReasons = recalc.toList.flatMap { r =>
       List(
@@ -1462,10 +1721,13 @@ object WriteCommands:
     val reasons = recalcReasons ++
       Option.when(warnings.nonEmpty)(s"${warnings.size} data-table seeding warning(s)").toList ++
       OffGridHit.strictReason(offGrid).toList
+    // GH-714: informational advisories (IMPLICIT_INTERSECTION) are emitted on both paths and are
+    // never a reason — `--strict` does not gate on them
     if policy.strict && reasons.nonEmpty then
-      IO.raiseError(
-        new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
-      )
+      extraWarnings.traverse_(warn) *>
+        IO.raiseError(
+          new StrictFailure(s"$summary\nSTRICT FAILURE (--strict): ${reasons.mkString("; ")}")
+        )
     else
       // Advisory: the summary names the failing cells; the warning is the machine-readable flag
       // (`RECALC_ERRORS` on stderr, or in `warnings[]` under --json) that some formulas were left
@@ -1478,7 +1740,7 @@ object WriteCommands:
             "left uncached (see the recalculation summary; --strict makes this exit 1)"
         )
       }
-      (OffGridHit.warning(offGrid).toList ++ advisory).traverse_(warn).as(summary)
+      (OffGridHit.warning(offGrid).toList ++ advisory ++ extraWarnings).traverse_(warn).as(summary)
 
   /**
    * One-line recalculation summary: formula count plus the first few failing refs (GH-352). Formula
@@ -1527,27 +1789,43 @@ object WriteCommands:
   ): IO[String] =
     BatchParser.readBatchInput(source, stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
-        result.warnings.traverse_(warn) *>
+        // GH-714: one reading for the whole batch — an `"array": true` spill of a volatile
+        // formula, the dependent refresh and the IMPLICIT_INTERSECTION check see one instant
+        (result.warnings.traverse_(warn) *> commandClock).flatMap { clock =>
           BatchParser
-            .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
-            .flatMap { (updatedWb, offGrid) =>
+            .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc, clock = clock)
+            .flatMap { (updatedWb, offGrid, kept) =>
               val nameEdit = result.ops.exists {
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
               } && changesNames(wb, updatedWb)
               val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
-              refreshDependents(wb, updatedWb, mutating, outputPath, policy).flatMap {
+              refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
                 (finalWb, recalcOpt, refreshLine) =>
-                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { written =>
                     val ops = result.ops
                     val summary = BatchParser.formatScopedSummary(result.scoped)
                     val recalcLine = refreshLine.fold("")(line => s"$line\n")
                     val rendered =
                       s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                    strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid)
+                    // GH-714: the batch's plain putf cells, checked once on the final workbook;
+                    // the written areas are expanded lazily, only as far as the check's budget
+                    advisoriesAfterWrite(outputPath) {
+                      val areas = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
+                      val targets =
+                        areas.view.flatMap((name, r) => r.cellsRowMajor.map(name -> _))
+                      val known =
+                        BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
+                      intersectionAdvisory(targets, known, clock)(finalWb)
+                    }.map(
+                      _ ++ spillsKeptWarning(kept).toList.toVector ++ downgradeWarning(written)
+                    ).flatMap { extra =>
+                      strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
+                    }
                   }
               }
             }
+        }
       }
     }
 
@@ -1718,7 +1996,7 @@ object WriteCommands:
       // The fill semantics live in Sheet.fill (ADR-017 §2.12, W2.1); the direction rule's refusal
       // keeps its INVALID_REFERENCE code and text
       // GH-628: the fill reports every target cell a displacement wrote #REF! into
-      (filledSheet, offGrid) <- IO.fromEither(
+      (filled, offGrid) <- IO.fromEither(
         targetSheet
           .fillReporting(sourceRange, targetRange, fillDir(direction))(using EvalFormulaSupport)
           .left
@@ -1727,11 +2005,23 @@ object WriteCommands:
             case other => domain(other)
           }
       )
+      // GH-714: the fill onto the target's dynamic arrays, by the put/putf rule — checked on the
+      // sheet before the fill, released after it (the fill reads what a release would clear)
+      written <- IO.fromEither(
+        SheetEdits
+          .fillTargets(targetSheet, sourceRange, targetRange, fillDir(direction))
+          .left
+          .map(domain)
+      )
+      released <- releaseSpills(wb, targetSheet, written)
+      release = released._3 -- written
+      filledSheet = DynamicArrayAuthoring.clearValues(filled, release)
       // A --no-recalc write leaves every other cache alone but still caches what it wrote
       updatedSheet =
         if policy.noRecalc then cacheFilledFormulas(filledSheet, wb, targetRange) else filledSheet
-      modifiedRefs = targetRange.cells.toSet
+      modifiedRefs = targetRange.cells.toSet ++ release
       dirLabel = if direction == FillDirection.Right then "right" else "down"
+      overlap = filledSpillsWarning(sourceResolved._1, sourceRange, targetRange, direction)
       result <- writeAfterRefresh(
         wb.put(updatedSheet),
         targetSheet.name,
@@ -1742,9 +2032,49 @@ object WriteCommands:
         stream,
         policy,
         warn,
-        OffGridHit.of(targetSheet.name, offGrid)
+        OffGridHit.of(targetSheet.name, offGrid),
+        advisories = _ => overlap.toList.toVector
       )
     yield result
+
+  /**
+   * GH-714: `FILLED_SPILLS_OVERLAP` when the fill source holds a dynamic-array anchor whose last
+   * spill (its cached extent) runs more than one cell along the fill direction and the target
+   * places two or more copies along it: each copy is an anchor one cell from the next, so in Excel
+   * their spills block each other. The first such anchor is named; None when there is none.
+   */
+  private[cli] def filledSpillsWarning(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: FillDirection
+  ): Option[Warning] =
+    val down = direction == FillDirection.Down
+    def along(r: CellRange): Int = if down then r.height else r.width
+    Option
+      .when(along(target) >= 2)(
+        source.cellsRowMajor
+          .flatMap { at =>
+            sheet.cells.get(at).map(_.value) match
+              case Some(CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula))
+                  if arr.isDynamicArray && arr.ref.start == at && along(arr.ref) > 1 =>
+                Some((at, text, arr.ref))
+              case _ => None
+          }
+          .nextOption()
+      )
+      .flatten
+      .map { (at, text, extent) =>
+        val unit = if down then "rows" else "columns"
+        Warning(
+          WarningCode.FILLED_SPILLS_OVERLAP,
+          s"${sheet.name.value}!${at.toA1}: the dynamic array =$text last spilled ${extent.toA1} " +
+            s"(${along(extent)} $unit); filled ${if down then "down" else "right"} over " +
+            s"${target.toA1}, each copy is its own anchor one cell from the next, so in Excel " +
+            "their spills overlap and every copy but the last shows #SPILL! (xl writes each " +
+            "copy's top-left value and does not re-spill, #737)"
+        )
+      }
 
   /** The CLI's fill direction as the algebra's. */
   private def fillDir(direction: FillDirection): Edit.FillDir = direction match
@@ -2418,6 +2748,18 @@ object WriteCommands:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
+      // GH-714: the copy onto the target's dynamic arrays — a copied whole spill must have room,
+      // an overwritten anchor's spill is released, a write into a live one refused
+      _ <- CopyOps
+        .copiedSpillBlocked(sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+        .fold(IO.unit)(spill => IO.raiseError(CliException(CliError.fromSpillBlocked(spill))))
+      release <- IO.fromEither(
+        CopyOps
+          .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange)
+          .left
+          .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+      )
+
       // Delegate to shared helper (Sheet.copyRange plus the CLI's cache/recalc phases); GH-628:
       // it reports every target cell the displacement wrote #REF! into
       (copiedWb, offGrid) <- IO.fromEither(
@@ -2430,15 +2772,13 @@ object WriteCommands:
             targetRange,
             valuesOnly,
             recalcDependents = false,
-            cacheCopiedFormulas = policy.noRecalc
+            cacheCopiedFormulas = policy.noRecalc,
+            release = release
           )
           .left
           .map(domain)
       )
-      modifiedRefs = sourceRange.cellsRowMajor
-        .zip(targetRange.cellsRowMajor)
-        .collect { case (source, target) if sourceSheet.cells.contains(source) => target }
-        .toSet
+      modifiedRefs = CopyOps.writtenCells(sourceSheet, sourceRange, targetRange) ++ release
 
       crossSheetLabel =
         if sourceSheet.name != targetSheet.name then

@@ -183,6 +183,26 @@ class OpRegistrySpec extends FunSuite:
     }
   }
 
+  test("GH-714: an op sets only stream-refused fields its spec declares; putf's array is one") {
+    (sample :+ BatchOp.PutFormula("A1", "=SORT(B1:B3)", None, array = true)).foreach { op =>
+      val set = OpRegistry.streamRefusedFieldsSet(op)
+      assert(set.forall(OpRegistry.specOf(op).streamRefusedFields.contains), label(op))
+      // a refused field is a field of the op
+      assert(set.forall(f => OpRegistry.specOf(op).field(f).isDefined), label(op))
+    }
+    assertEquals(
+      OpRegistry.streamRefusedFieldsSet(BatchOp.PutFormula("A1", "=1", None, array = true)),
+      Vector("array")
+    )
+    assertEquals(OpRegistry.streamRefusedFieldsSet(BatchOp.PutFormula("A1", "=1")), Vector.empty)
+    assertEquals(OpRegistry.find("putf").map(_.streamRefusedFields), Some(Vector("array")))
+    // every other op declares none
+    assertEquals(
+      OpRegistry.all.filter(_.streamRefusedFields.nonEmpty).map(_.name),
+      Vector("putf")
+    )
+  }
+
   test("dragging putf streams: the streaming writer shifts exactly like the in-memory path") {
     // StreamingWriteSpec pins the shifted formulas; the registry must not refuse what it honours.
     assert(StreamingWriteCommands.isStreamable(BatchOp.PutFormulaDragging("B1:B5", "=A1*2", "B1")))

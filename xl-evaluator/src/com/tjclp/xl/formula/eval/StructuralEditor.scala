@@ -496,9 +496,10 @@ object StructuralEditor:
         if s.name == target then
           (isRow, delta >= 0) match
             case (true, true) => s.insertRows(at, delta)
-            case (true, false) => s.deleteRows(at, -delta)
+            case (true, false) => releaseDeletedAnchors(s, isRow, at, delta).deleteRows(at, -delta)
             case (false, true) => s.insertColumns(at, delta)
-            case (false, false) => s.deleteColumns(at, -delta)
+            case (false, false) =>
+              releaseDeletedAnchors(s, isRow, at, delta).deleteColumns(at, -delta)
         else
           // GH-222: typed charts on OTHER sheets track the edited sheet's geometry (no
           // double-shift: the edited sheet's charts were already shifted above).
@@ -757,17 +758,36 @@ object StructuralEditor:
     else if delta < 0 then at <= e && (at - delta - 1) >= s
     else at > s && at <= e
 
+  /**
+   * GH-714: a delete band that removes a dynamic array's anchor removes its spill too, as in Excel:
+   * the spill cells outside the band, which would otherwise survive the shift as plain constants
+   * that look like the user's data, are emptied first (values only — a style or hyperlink stays, as
+   * when an anchor is overwritten). Every one of them sits at or past the band on the edited axis
+   * (an extent starts at its anchor), so the edit's dirty cone already covers their readers.
+   */
+  private def releaseDeletedAnchors(sheet: Sheet, isRow: Boolean, at: Int, delta: Int): Sheet =
+    val last = at - delta - 1
+    def deleted(ref: ARef): Boolean =
+      val i = if isRow then ref.row.index0 else ref.col.index0
+      i >= at && i <= last
+    val children = DynamicArrayAuthoring
+      .spillsOf(sheet)
+      .filter(s => deleted(s.anchor))
+      .flatMap(s => s.extent.cellsRowMajor.filterNot(r => r == s.anchor || deleted(r)))
+      .toSet
+    if children.isEmpty then sheet else DynamicArrayAuthoring.clearValues(sheet, children)
+
   /** The range's inclusive 0-based bounds on the edited axis. */
   private def axisBounds(range: CellRange, isRow: Boolean): (Int, Int) =
     if isRow then (range.start.row.index0, range.end.row.index0)
     else (range.start.col.index0, range.end.col.index0)
 
   /**
-   * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing the range
-   * degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation analog).
-   * The degraded cell keeps `ca` (GH-435: volatile marking is legal on a plain formula) and drops
-   * the array-only `aca`. DataTable kinds never reach here (dedicated branch above); Normal is
-   * identity.
+   * GH-430: shift an ArrayFormula record's anchor range with the edit; a band tearing a legacy
+   * (CSE) range degrades the kind to Normal (the shifted TEXT is kept — Excel's visible-degradation
+   * analog). The degraded cell keeps `ca` (GH-435: volatile marking is legal on a plain formula)
+   * and drops the array-only `aca`. DataTable kinds never reach here (dedicated branch above);
+   * Normal is identity.
    */
   private def shiftedArrayKind(
     kind: FormulaKind,
@@ -777,6 +797,21 @@ object StructuralEditor:
     delta: Int
   ): FormulaKind =
     kind match
+      case arr: FormulaKind.ArrayFormula if shiftLocal && arr.isDynamicArray =>
+        // GH-714: a dynamic array is never degraded — Excel resizes the spill instead of turning
+        // `=SORT(..)` into its implicit-intersection form. The extent follows the anchor; its end
+        // shifts with the edit, or stops at the last surviving index when a delete band swallows it.
+        val max = if isRow then Row.MaxIndex0 else Column.MaxIndex0
+        val (s, e) = axisBounds(arr.ref, isRow)
+        shiftedIndex0(s, at, delta, max) match
+          case None => arr // the anchor itself left the grid: its cell goes with the record
+          case Some(newStart) =>
+            val newEnd = shiftedIndex0(e, at, delta, max)
+              .getOrElse(if delta < 0 then at - 1 else max)
+              .max(newStart)
+            def place(ref: ARef, i: Int): ARef =
+              if isRow then ARef.from0(ref.col.index0, i) else ARef.from0(i, ref.row.index0)
+            arr.copy(ref = CellRange(place(arr.ref.start, newStart), place(arr.ref.end, newEnd)))
       case arr: FormulaKind.ArrayFormula if shiftLocal =>
         val degraded = FormulaKind.Normal(ca = arr.ca)
         if editIntersects(arr.ref, isRow, at, delta) then degraded

@@ -70,6 +70,46 @@ object WarningCode:
    */
   val CF_NOT_RENDERED: String = "CF_NOT_RENDERED"
 
+  /**
+   * GH-714: an in-memory `putf` or batch `putf` left a plain formula whose value as a plain cell —
+   * Excel's legacy implicit intersection — differs from its value as an array formula
+   * (`=SUM(A1:A10*B1:B10)` in row 5 is `A5*B5`; `=A1:A10*2` cannot spill). Names the cells, both
+   * values and the remedy: SUMPRODUCT, `putf --array`, or an explicit `@`. Informational: never
+   * gates, `--strict` included.
+   */
+  val IMPLICIT_INTERSECTION: String = "IMPLICIT_INTERSECTION"
+
+  /**
+   * GH-714: a write regenerated sheets holding dynamic arrays, but the workbook's cell-metadata
+   * part (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, so xl cannot
+   * extend it: those records were written without their `cm` marker and Excel opens them as legacy
+   * CSE arrays (`{=...}`). The part is kept as it was. Informational: never gates.
+   */
+  val DYNAMIC_ARRAY_DOWNGRADED: String = "DYNAMIC_ARRAY_DOWNGRADED"
+
+  /**
+   * GH-714: a contents clear (`clear`, batch `clear`) reached into a live dynamic array's spill
+   * without its anchor. Excel keeps a spill's cells while its anchor stays, so those cells were
+   * left as they were and the rest of the range was cleared; the warning names each anchor and the
+   * ranges kept. Clearing the anchor removes the whole spill. Informational: never gates.
+   */
+  val SPILL_CELLS_SKIPPED: String = "SPILL_CELLS_SKIPPED"
+
+  /**
+   * GH-714: a `fill` copied a dynamic-array anchor whose last spill runs more than one cell along
+   * the fill direction. Each filled cell is its own anchor, one cell from the next, so their spills
+   * overlap: Excel shows `#SPILL!` in every copy but the last when it recalculates. xl writes each
+   * copy with its own top-left value and does not re-spill (#737). Informational.
+   */
+  val FILLED_SPILLS_OVERLAP: String = "FILLED_SPILLS_OVERLAP"
+
+  /**
+   * GH-714 (#739): the `IMPLICIT_INTERSECTION` check stopped at its budget and found no divergence
+   * among the cells it evaluated. The note says how many it checked of how many candidates, so an
+   * empty sample is not read as "all clear": the rest were not checked. Informational.
+   */
+  val INTERSECTION_SAMPLED: String = "INTERSECTION_SAMPLED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -85,5 +125,10 @@ object WarningCode:
     NO_NUMERIC_VALUES,
     OFF_GRID_REF,
     LINT_HYGIENE,
-    CF_NOT_RENDERED
+    CF_NOT_RENDERED,
+    IMPLICIT_INTERSECTION,
+    DYNAMIC_ARRAY_DOWNGRADED,
+    SPILL_CELLS_SKIPPED,
+    FILLED_SPILLS_OVERLAP,
+    INTERSECTION_SAMPLED
   )

@@ -8,7 +8,7 @@ import org.xml.sax.{InputSource, Attributes}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import com.tjclp.xl.cells.{CellValue, CellError, FormulaKind}
-import com.tjclp.xl.ooxml.{FormulaKindCodec, SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{CellMetadataIndex, FormulaKindCodec, SharedStrings, XmlSecurity, XmlUtil}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 import com.tjclp.xl.addressing.{ARef, CellRange}
@@ -59,7 +59,8 @@ object SaxStreamingReader:
     stream: InputStream,
     sst: Option[SharedStrings],
     rowBounds: Option[(Int, Int)],
-    colBounds: Option[(Int, Int)]
+    colBounds: Option[(Int, Int)],
+    cellMetadata: CellMetadataIndex = CellMetadataIndex.empty
   ): Stream[F, RowData] =
     Stream
       .bracket {
@@ -67,7 +68,7 @@ object SaxStreamingReader:
           val queue: BlockingQueue[ChunkEvent] = new ArrayBlockingQueue(queueCapacity)
           val cancelled = new AtomicBoolean(false)
           val parserThread = new Thread(
-            () => runParser(stream, sst, rowBounds, colBounds, queue, cancelled),
+            () => runParser(stream, sst, rowBounds, colBounds, cellMetadata, queue, cancelled),
             "xl-sax-stream"
           )
           parserThread.setDaemon(true)
@@ -100,6 +101,7 @@ object SaxStreamingReader:
     sst: Option[SharedStrings],
     rowBounds: Option[(Int, Int)],
     colBounds: Option[(Int, Int)],
+    cellMetadata: CellMetadataIndex,
     queue: BlockingQueue[ChunkEvent],
     cancelled: AtomicBoolean
   ): Unit =
@@ -123,7 +125,8 @@ object SaxStreamingReader:
     try
       // GH-350: shared XXE hardening + benign-doctype strip, matching the in-memory parseSafe path
       val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-      val handler = new WorksheetHandler(sst, rowBounds, colBounds, emitRow, cancelled)
+      val handler =
+        new WorksheetHandler(sst, rowBounds, colBounds, cellMetadata, emitRow, cancelled)
       parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
       // Flush any remaining rows
       flushBuffer()
@@ -153,6 +156,7 @@ object SaxStreamingReader:
     sst: Option[SharedStrings],
     rowBounds: Option[(Int, Int)],
     colBounds: Option[(Int, Int)],
+    cellMetadata: CellMetadataIndex,
     emitRow: RowData => Unit,
     cancelled: AtomicBoolean
   ) extends DefaultHandler:
@@ -169,6 +173,8 @@ object SaxStreamingReader:
     var currentCellType: Option[String] = None
     var currentCellColIdx: Option[Int] = None
     var currentCellStyleId: Option[Int] = None
+    // GH-714: the cell's raw `cm` (resolved through the metadata index)
+    var currentCellMetadata: Option[String] = None
     var skipCell = false
     var inValue = false
     var inFormula = false
@@ -230,6 +236,7 @@ object SaxStreamingReader:
           currentCellARef.foreach(evictExpiredSharedMasters)
           currentCellType = Option(attributes.getValue("t"))
           currentCellStyleId = Option(attributes.getValue("s")).flatMap(_.toIntOption)
+          currentCellMetadata = Option(attributes.getValue("cm"))
           currentCellColIdx = currentCellRef.flatMap(parseCellColumn)
           skipCell = skipRow || colBounds.exists { case (startCol, endCol) =>
             currentCellColIdx.forall(colIdx => colIdx < startCol || colIdx > endCol)
@@ -372,7 +379,10 @@ object SaxStreamingReader:
               // a dataTable record IS the formula — no text, display expression derived.
               // GH-435: a plain formula keeps its own ca/aca flags.
               val textKind = formulaRecordKind match
-                case Some(arr: FormulaKind.ArrayFormula) if formulaText.nonEmpty => arr
+                case Some(arr: FormulaKind.ArrayFormula) if formulaText.nonEmpty =>
+                  FormulaKindCodec
+                    .withCellMetadata(Some(arr), currentCellMetadata, cellMetadata)
+                    .getOrElse(arr)
                 case Some(plain: FormulaKind.Normal) => plain
                 case _ => FormulaKind.Normal()
               val cellValue = formulaRecordKind match

@@ -15,7 +15,9 @@ case class OoxmlCell(
   ref: ARef,
   value: CellValue,
   styleIndex: Option[Int] = None,
-  cellType: String = "inlineStr" // "s" for SST, "inlineStr" for inline, "n" for number, etc.
+  cellType: String = "inlineStr", // "s" for SST, "inlineStr" for inline, "n" for number, etc.
+  // GH-714: the `cm` cell-metadata index (a dynamic-array anchor's XLDAPR block, 1-based)
+  cellMetadata: Option[Int] = None
 ):
   def toA1: String = ref.toA1
 
@@ -27,7 +29,9 @@ case class OoxmlCell(
     styleIndex.foreach(s => attrs += ("s" -> s.toString))
     if cellType.nonEmpty then attrs += ("t" -> cellType)
 
+    // withAttributes sorts by name (r, s, t happen to be CT_Cell order); GH-714: `cm` follows `t`
     SaxWriter.withAttributes(writer, attrs.result()*) {
+      cellMetadata.foreach(cm => writer.writeAttribute("cm", cm.toString))
       value match
         case CellValue.Empty => ()
 
@@ -184,11 +188,12 @@ case class OoxmlCell(
     writer.endElement() // rPr
 
   def toXml: Elem =
-    // Excel expects attributes in specific order: r, s, t
+    // Excel expects attributes in specific order: r, s, t, cm (CT_Cell)
     val attrs = Seq.newBuilder[(String, String)]
     attrs += ("r" -> toA1)
     styleIndex.foreach(s => attrs += ("s" -> s.toString))
     if cellType.nonEmpty then attrs += ("t" -> cellType)
+    cellMetadata.foreach(cm => attrs += ("cm" -> cm.toString))
 
     val finalAttrs = attrs.result()
 

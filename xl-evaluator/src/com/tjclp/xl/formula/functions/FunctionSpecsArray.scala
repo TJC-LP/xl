@@ -216,7 +216,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     yield result
 
   /** Maximum number of cells INDIRECT will materialize (SEQUENCE-guard parity). */
-  private val MaxIndirectCells = 1048576L
+  private val MaxIndirectCells = ArrayResult.MaxCells
 
   /** The #REF! VALUE result (Excel parity for unresolvable ref_text — not an eval failure). */
   private def indirectRefError: Either[EvalError, Either[ArrayResult, RangeOperand]] =
@@ -302,7 +302,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         result <-
           if nRows < 1 || nCols < 1 then
             Left(EvalError.EvalFailed("SEQUENCE: rows and columns must be >= 1", None))
-          else if nRows.toLong * nCols.toLong > 1048576L then
+          else if nRows.toLong * nCols.toLong > ArrayResult.MaxCells then
             Left(EvalError.EvalFailed("SEQUENCE: result exceeds 1,048,576 cells", None))
           else
             val values = (0 until nRows).toVector.map { r =>

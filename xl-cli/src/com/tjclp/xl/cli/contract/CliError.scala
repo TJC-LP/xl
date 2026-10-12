@@ -10,6 +10,7 @@ import org.xml.sax.SAXParseException
 import com.tjclp.xl.cli.{CliIO, MemoryGuard, StrictFailure}
 import com.tjclp.xl.cli.raster.RasterError
 import com.tjclp.xl.error.{XLError, XLException}
+import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
 
 /** Where a failure happened, as far as the raising site knows. Every field is optional. */
 final case class Location(
@@ -64,6 +65,21 @@ object CliError:
    */
   def fromXLError(e: XLError, at: Option[Location]): CliError =
     CliError(e.code, e.message, e.hint, e.candidates, at, Some(e))
+
+  /**
+   * GH-714: a dynamic-array spill Excel would block (`putf --array`, batch `"array": true`, or a
+   * plain write into a live spill) as the CLI reports it: `FORMULA_ERROR` whose message names the
+   * blockers and whose hint is that blocker kind's remedy — both read off the typed
+   * [[DynamicArrayAuthoring.SpillBlocked]], never parsed back out of prose.
+   */
+  def fromSpillBlocked(spill: DynamicArrayAuthoring.SpillBlocked): CliError =
+    val domain = spill.toXLError
+    CliError(domain.code, spill.message, Some(spill.hint), cause = Some(domain))
+
+  /** An authoring refusal: an unparseable formula as its domain error, a blocked spill as above. */
+  def fromSpillRefusal(refusal: DynamicArrayAuthoring.Refusal): CliError = refusal match
+    case DynamicArrayAuthoring.Refusal.Invalid(error) => fromXLError(error, None)
+    case DynamicArrayAuthoring.Refusal.Blocked(spill) => fromSpillBlocked(spill)
 
   /**
    * Classify anything a handler can raise: a [[CliException]] is its error; a [[StrictFailure]] is

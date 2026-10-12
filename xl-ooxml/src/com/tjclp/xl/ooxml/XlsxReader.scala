@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.sheets.{
   ColumnProperties,
@@ -19,7 +19,7 @@ import com.tjclp.xl.tables.TableSpec
 import scala.xml.*
 import java.io.{ByteArrayInputStream, FileInputStream, FilterInputStream, InputStream}
 import java.nio.file.{Files, Path, Paths}
-import java.util.zip.ZipInputStream
+import java.util.zip.{ZipFile, ZipInputStream}
 import scala.collection.mutable
 import scala.collection.immutable.ArraySeq
 import com.tjclp.xl.platform.Sha256
@@ -204,8 +204,23 @@ object XlsxReader:
   private case class RetainedDrawingParts(
     xml: Map[String, String], // drawingN.xml and drawingN.xml.rels, as UTF-8
     charts: Map[String, String], // chartN.xml and chartN.xml.rels (GH-222), as UTF-8
-    media: Map[String, ArraySeq[Byte]] // xl/media/*
+    media: Map[String, ArraySeq[Byte]], // xl/media/*
+    // GH-714: cell-metadata candidates (xl/metadata.xml), resolved by workbook rel type
+    cellMetadata: Map[String, String] = Map.empty,
+    // GH-714: each scanned entry's (uncompressed size, CRC-32) as ZipInputStream verified them —
+    // what a later reread of one part from the source must match
+    scanned: Map[String, (Long, Long)] = Map.empty
   )
+
+  /**
+   * The cell-metadata part retained at scan time (GH-714): Excel's own `xl/metadata.xml`. Which
+   * part is the workbook's metadata part is decided by the `sheetMetadata` workbook relationship
+   * ([[SheetMetadataPart.locate]]); this is only a fast path — a target with any other filename is
+   * reread from the source after the scan ([[readSourcePart]]), so no other XML is held. The part
+   * stays UNPARSED in the manifest — it rides the verbatim copy loop unless a write must extend it.
+   */
+  private def isCellMetadataCandidatePart(path: String): Boolean =
+    path == SheetMetadataPart.defaultPath
 
   private def isDrawingXmlPart(path: String): Boolean =
     path.matches("xl/drawings/drawing\\d+\\.xml") ||
@@ -320,6 +335,8 @@ object XlsxReader:
     val drawingXml = mutable.Map[String, String]()
     val chartXml = mutable.Map[String, String]()
     val mediaBytes = mutable.Map[String, ArraySeq[Byte]]()
+    val cellMetadataXml = mutable.Map[String, String]()
+    val scanned = mutable.Map[String, (Long, Long)]()
     val manifestBuilder = PartManifestBuilder.empty
 
     // Security tracking
@@ -357,6 +374,8 @@ object XlsxReader:
             val content = zip.readAllBytes()
             val uncompressedSize = content.length.toLong
             totalUncompressedSize += uncompressedSize
+            // fully read, the entry's CRC is final (a data descriptor's included) and verified
+            scanned(entryName) = (uncompressedSize, entry.getCrc)
 
             // Security check: Total uncompressed size
             if config.maxUncompressedSize > 0 && totalUncompressedSize > config.maxUncompressedSize
@@ -398,6 +417,8 @@ object XlsxReader:
                   parts(entryName) = new String(content, "UTF-8")
                 else if entryName.startsWith("xl/media/") then
                   mediaBytes(entryName) = ArraySeq.unsafeWrapArray(content)
+                else if isCellMetadataCandidatePart(entryName) then
+                  cellMetadataXml(entryName) = new String(content, "UTF-8")
                 // Unknown part - index but don't store content
                 builder = builder.recordUnparsed(entryName)
 
@@ -428,7 +449,13 @@ object XlsxReader:
           // Parse workbook structure from known parts
           parseWorkbook(
             parts.toMap,
-            RetainedDrawingParts(drawingXml.toMap, chartXml.toMap, mediaBytes.toMap),
+            RetainedDrawingParts(
+              drawingXml.toMap,
+              chartXml.toMap,
+              mediaBytes.toMap,
+              cellMetadataXml.toMap,
+              scanned.toMap
+            ),
             source,
             manifest,
             fingerprint,
@@ -482,6 +509,9 @@ object XlsxReader:
       // Parse theme (optional, falls back to Office theme)
       theme = parseTheme(parts)
 
+      // GH-714: the dynamic-array `cm` indices, resolved through the metadata part
+      cellMetadata <- readCellMetadata(workbookRels, parts, retainedDrawings, source, config)
+
       // Parse sheets and collect comment/drawing mappings (GH-221)
       parsedSheets <- parseSheets(
         parts,
@@ -489,7 +519,8 @@ object XlsxReader:
         ooxmlWb.sheets,
         sst,
         styles,
-        workbookRels
+        workbookRels,
+        cellMetadata
       )
       (sheets, commentPathMapping) = (parsedSheets.sheets, parsedSheets.commentPathMapping)
 
@@ -542,6 +573,99 @@ object XlsxReader:
         sheetPathMapping = parsedSheets.sheetPathMapping
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
+
+  /**
+   * Resolve metadata by relationship even when its filename is unfamiliar or it precedes the
+   * workbook relationships in ZIP order. Only that one part is reread; unknown XML is never all
+   * retained in memory. The complete archive has already passed the reader's security checks, and
+   * only a part that scan read is reread: a central-directory entry the sequential scan never met
+   * reads as absent.
+   */
+  private def readCellMetadata(
+    workbookRels: Relationships,
+    parts: Map[String, String],
+    retained: RetainedDrawingParts,
+    source: Option[SourceHandle],
+    config: ReaderConfig
+  ): XLResult[CellMetadataIndex] =
+    SheetMetadataPart.locate(workbookRels) match
+      case None => Right(CellMetadataIndex.empty)
+      case Some(path) =>
+        val cached = parts.get(path).orElse(retained.cellMetadata.get(path))
+        val text = (cached, retained.scanned.get(path)) match
+          case (Some(xml), _) => Right(Some(xml))
+          case (None, Some(expected)) => readSourcePart(source, path, config, expected)
+          case (None, None) => Right(None)
+        text.map(_.map(SheetMetadataPart.parse(_, path)).getOrElse(CellMetadataIndex.empty))
+
+  /**
+   * Reread one part the scan met. The bytes must be the ones the scan read — same length and CRC-32
+   * (`expected`) — so a crafted archive cannot show the scan one part and this reader another (a
+   * second local entry of the name, or a central directory pointing elsewhere): a mismatch is a
+   * [[XLError.SecurityError]].
+   */
+  private def readSourcePart(
+    source: Option[SourceHandle],
+    path: String,
+    config: ReaderConfig,
+    expected: (Long, Long)
+  ): XLResult[Option[String]] =
+    def readText(in: InputStream): XLResult[Option[String]] =
+      // Bound the second read as well, including a file replaced since the initial ZIP scan.
+      val bytes =
+        if config.maxUncompressedSize > 0 && config.maxUncompressedSize < Int.MaxValue then
+          in.readNBytes(config.maxUncompressedSize.toInt + 1)
+        else in.readAllBytes()
+      if config.maxUncompressedSize > 0 && bytes.length.toLong > config.maxUncompressedSize then
+        Left(XLError.SecurityError(s"Metadata part '$path' exceeds uncompressed size limit"))
+      else
+        val crc = new java.util.zip.CRC32()
+        crc.update(bytes)
+        if expected != (bytes.length.toLong, crc.getValue) then
+          Left(
+            XLError.SecurityError(
+              s"Metadata part '$path' differs from the entry the archive scan read " +
+                "(inconsistent ZIP directory)"
+            )
+          )
+        else Right(Some(new String(bytes, "UTF-8")))
+
+    // an IO failure on either source names the part, as a typed error
+    def failed(e: java.io.IOException): XLResult[Option[String]] =
+      Left(
+        XLError.IOError(
+          s"Metadata part '$path' could not be reread from the source: ${e.getMessage}"
+        )
+      )
+
+    source match
+      case None => Right(None)
+      case Some(SourceHandle.OnDisk(file, _, _)) =>
+        // the file can change or vanish after the scan
+        try
+          val zip = new ZipFile(file.toFile)
+          try
+            Option(zip.getEntry(path)) match
+              case None => Right(None)
+              case Some(entry) =>
+                val in = zip.getInputStream(entry)
+                try readText(in)
+                finally in.close()
+          finally zip.close()
+        catch case e: java.io.IOException => failed(e)
+      case Some(SourceHandle.InMemory(bytes)) =>
+        // the scan read these bytes already, but a damaged entry still fails as a typed IO error
+        val zip = new ZipInputStream(new ByteArrayInputStream(SourceContent.rawArray(bytes)))
+        @annotation.tailrec
+        def find(): XLResult[Option[String]] =
+          Option(zip.getNextEntry) match
+            case None => Right(None)
+            case Some(entry) if entry.getName == path => readText(zip)
+            case Some(_) => find()
+        try
+          try find()
+          finally zip.close()
+        catch case e: java.io.IOException => failed(e)
 
   /**
    * Parse docProps/core.xml + app.xml into the modeled metadata fields (GH-242).
@@ -900,7 +1024,8 @@ object XlsxReader:
     sheetRefs: Seq[SheetRef],
     sst: Option[SharedStrings],
     styles: WorkbookStyles,
-    relationships: Relationships
+    relationships: Relationships,
+    cellMetadata: CellMetadataIndex
   ): XLResult[ParsedSheets] =
     val relMap = relationships.relationships.map(rel => rel.id -> rel).toMap
     val commentPathBuilder = Map.newBuilder[SheetName, String]
@@ -982,7 +1107,8 @@ object XlsxReader:
             comments,
             tables,
             hyperlinkRels,
-            drawings
+            drawings,
+            cellMetadata
           )
         yield domainSheet
       }
@@ -1062,7 +1188,8 @@ object XlsxReader:
     comments: Map[ARef, com.tjclp.xl.cells.Comment],
     tables: Map[String, TableSpec],
     hyperlinkRels: Map[String, String],
-    drawings: Vector[com.tjclp.xl.drawings.Drawing]
+    drawings: Vector[com.tjclp.xl.drawings.Drawing],
+    cellMetadata: CellMetadataIndex
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
@@ -1074,8 +1201,15 @@ object XlsxReader:
       row <- ooxmlSheet.rows
       ooxmlCell <- row.cells
     do
-      // SST resolution already done in OoxmlWorksheet.fromXml
-      val value = ooxmlCell.value
+      // SST resolution already done in OoxmlWorksheet.fromXml. GH-714: an array record whose `cm`
+      // resolves to XLDAPR dynamic-array properties is a dynamic array.
+      val value = ooxmlCell.value match
+        case f @ CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
+            if ooxmlCell.cellMetadata.isDefined =>
+          FormulaKindCodec
+            .withCellMetadata(Some(arr), ooxmlCell.cellMetadata.map(_.toString), cellMetadata)
+            .fold(f)(k => f.copy(kind = k))
+        case other => other
       val styleIdOpt = ooxmlCell.styleIndex.flatMap(styleMapping.get)
       val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
       builder += (cell.ref -> cell)

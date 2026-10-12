@@ -327,9 +327,14 @@ object MemoryGuard:
     parse: (Path, ReaderConfig) => XLResult[ReadResult] = XlsxReader.readWithWarnings(_, _),
     heap: Long = maxHeapBytes,
     admitLoads: Boolean = true,
-    spill: Either[CliError, Option[Path]] = Right(None)
+    spill: Either[CliError, Option[Path]] = Right(None),
+    streamLimits: ReaderConfig = ReaderConfig.default
   ): ExcelIO[IO] =
+    val limits = streamLimits
     new ExcelIO[IO](handler):
+      // GH-714: the run's --max-size limits for the parts a streaming read holds besides the SST
+      override def streamLimits: ReaderConfig = limits
+
       override def readWith(path: Path, config: ReaderConfig): IO[Workbook] =
         (if admitLoads then admit(path, config, heap, warn) else IO.unit) *>
           blocking(path, "load")(parse(path, config)).flatMap {
@@ -342,12 +347,10 @@ object MemoryGuard:
           }
 
       // Serialisation builds every part's XML; `writeWorkbookStream` and `write` route through
-      // here, so one override covers the three. Same failure text as `ExcelIO.writeWith`.
+      // here, so one override covers the three — and it is [[serialise]], the same guarded write
+      // [[writeReporting]] makes.
       override def writeWith(wb: Workbook, path: Path, config: WriterConfig): IO[Unit] =
-        blocking(path, "write")(XlsxWriter.writeWith(wb, path, config)).flatMap {
-          case Right(_) => IO.unit
-          case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
-        }
+        serialise(wb, path, config).void
 
       // GH-517: the spill directory is an override, never `withSpillDir` — that rebuilds a PLAIN
       // ExcelIO and would silently drop the two guards above. A malformed setting is not a
@@ -482,6 +485,37 @@ object MemoryGuard:
    * spill goes where `XL_SPILL_DIR` points.
    */
   val writer: ExcelIO[IO] = excel(_ => IO.unit, spill = spill)
+
+  /**
+   * GH-714: the in-memory write a command makes — [[writer]]'s `writeWith`, or with `stream` its
+   * SAX/StAX `writeWorkbookStream`, under the same guard and failure text — returning the writer's
+   * report, so a warning about what the write did (`DYNAMIC_ARRAY_DOWNGRADED`) is read off the plan
+   * it actually used rather than recomputed.
+   */
+  def writeReporting(
+    wb: Workbook,
+    path: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[XlsxWriter.WriteReport] =
+    val effective =
+      if stream then IO.fromEither(ExcelIO.workbookStreamConfig(wb, config)) else IO.pure(config)
+    effective.flatMap(serialise(wb, path, _))
+
+  /**
+   * The one guarded serialisation: [[blocking]] (an exhausted heap is `RESOURCE_LIMIT`) around the
+   * writer, with `ExcelIO.writeWith`'s failure text. [[excel]]'s `writeWith` and [[writeReporting]]
+   * both go through it.
+   */
+  private def serialise(
+    wb: Workbook,
+    path: Path,
+    config: WriterConfig
+  ): IO[XlsxWriter.WriteReport] =
+    blocking(path, "write")(XlsxWriter.writeWithReport(wb, path, config)).flatMap {
+      case Right(report) => IO.pure(report)
+      case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
+    }
 
   /** Binary units with one decimal (`8.0 GB`, `512.0 MB`), the way `-Xmx` counts. */
   def human(bytes: Long): String =

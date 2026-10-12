@@ -23,6 +23,37 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **Dynamic-array authoring** (#714): `putf --array` and batch `putf` with `"array": true` write
+  an Excel 365 dynamic-array formula (`cm="1"` and the `xl/metadata.xml` dynamic-array properties)
+  anchored at the target, with its spill cached (in memory only; `--stream --array` is refused, and a
+  spill Excel would block is refused without writing), so Excel opens it spilling instead of as a legacy
+  `@` formula. A file's existing `cm` and metadata part now survive every in-memory and `--stream`
+  write, where they were dropped (Excel then read the formula as a legacy `{=…}` array). As in
+  Excel, an in-memory `put`, `putf`, `copy`, `fill` or `clear` over a dynamic anchor (batch
+  included) clears its spill, and a write into a spill cell, whose anchor stays, is refused
+  (`FORMULA_ERROR`) rather than leaving a `#SPILL!` or values Excel would overwrite, while a
+  contents clear there leaves those cells, clears the rest of its range and warns
+  `SPILL_CELLS_SKIPPED`; a blocked spill's hint names its own remedy (unmerge a merge, clear an
+  occupied cell). A formula that reads its own spill range (`putf --array A1 "=A1:A3"`) is circular,
+  as in Excel: it is written uncached and not spilled. Deleting an anchor's row or column removes
+  its spill, and a `fill` of a dynamic anchor whose copies' spills would overlap warns
+  `FILLED_SPILLS_OVERLAP`. A spill of more
+  than 1,048,576 cells (one full column) is refused before anything is written, and a `copy` of a
+  whole spill onto a merge or table is refused as the `#SPILL!` it would be. The streaming reads
+  (`readStream`, `readSheetStream`, `streamCellDetails`) now also read `xl/_rels/workbook.xml.rels`
+  and the metadata part, under the default ZIP size and ratio limits; `ExcelIO.withStreamLimits`
+  sets others (the CLI passes its `--max-size` limits), and the shared-string table keeps its own
+  policy. A metadata part that is not readable XML is kept, and new anchors are written in the
+  legacy shape with a CLI `DYNAMIC_ARRAY_DOWNGRADED` warning; a relationship naming a missing part
+  gets the part generated at its target.
+- **`IMPLICIT_INTERSECTION` warning** (#714): an in-memory `putf` or batch `putf` whose plain-cell
+  value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
+  row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy
+  (SUMPRODUCT, `--array`, or `@`). It never gates, `--strict` included; `--stream` writes do not
+  evaluate and never warn; the check samples at most 1,000 candidate cells per command, and a sample
+  that finds no divergence says so with an informational `INTERSECTION_SAMPLED` note (#739). The
+  advisories never sink a write: a failure to compute one (an exhausted heap included) means no
+  advisory, never a different exit code or a discarded output.
 - **`xl eval --at <ref>`** (#715): evaluates the formula as the plain (legacy) cell it would be at
   `<ref>`, implicit intersection included (`=SUM(A1:A10*B1:B10) --at D5` is A5*B5 where a
   positionless `eval` gives the array sum), read-only, with `--with`, under the one-sheet rule. A
@@ -153,6 +184,19 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking: `FormulaKind.ArrayFormula` gains a fourth field, `mode: ArrayMode`** (#714): it tells
+  a legacy CSE record from an Excel 365 dynamic array (`ArrayMode.Legacy` by default, so
+  constructor calls still compile). A pattern match must name the new field —
+  `ArrayFormula(r, a, c)` → `ArrayFormula(r, a, c, _)` — and code compiled against an earlier
+  release must be recompiled (`apply`, `copy` and `unapply` changed). To build or test a dynamic
+  array, use `FormulaKind.dynamicArray(extent)` and `kind.isDynamicArray` rather than matching on
+  `mode`.
+- **Writes into a spilled cell of an Excel-authored book are refused** (#714): xl now reads Excel
+  365's dynamic arrays as such, so an in-memory `put`, `putf`, `copy` or `fill` into a cell of a
+  live spill whose anchor stays is `FORMULA_ERROR` (`BATCH_OP_FAILED` in a batch) and writes
+  nothing, where it used to succeed (every array read as legacy). Write over the anchor (its spill
+  goes with it) or outside the spill. A contents `clear` there is not refused: it leaves the spill's
+  cells and warns `SPILL_CELLS_SKIPPED`.
 - **The recalc summary line gains a suffix** (#692): every mutation verb's
   `Recalculated N formulas (K error values)` is now `Recalculated N formulas (K error values:
   Sheet!A1 #N/A — …; …)`, naming up to three cells (`… and N more` past that). A regex over that

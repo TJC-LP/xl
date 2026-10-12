@@ -455,7 +455,9 @@ extension (sheet: Sheet)
 ```
 
 **Adding a FunctionSpec invalidates the registry macro**: `FunctionRegistry.all` is
-`FunctionRegistryMacro.collect[FunctionSpecs.type]`, so editing any `FunctionSpecs*` trait can leave
+`FunctionRegistryMacro.collect[FunctionSpecs.type]`, and `FunctionRegistry.arrayResultNames` is a
+second call site over the same traits (`collectReturning[FunctionSpecs.type, ArrayResult]`), so
+editing any `FunctionSpecs*` trait can leave
 Zinc's incremental state inconsistent — you get `Cyclic reference involving trait TExprReferenceOps`
 (and TExprLookupOps / TExprAggregateOps), pointing at files you never touched. It is not your code:
 `./mill clean xl-evaluator.compile` then recompile. New specs auto-register from the trait; there is

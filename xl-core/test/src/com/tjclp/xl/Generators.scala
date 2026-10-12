@@ -2,7 +2,7 @@ package com.tjclp.xl
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue, Comment, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, Cell, CellError, CellValue, Comment, FormulaKind}
 import com.tjclp.xl.cf.{CfOperator, CfPoint, CfRule, CfTextOp, Cfvo, ConditionalFormat}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.context.ModificationTracker
@@ -565,6 +565,14 @@ object Generators:
       val input2 = ARef.from0(startCol + width + 2, startRow + height + 2)
       (interior, orientation, input1, input2)
 
+  /** GH-714: an array record's mode — CSE, or a dynamic array (plain or collapsed). */
+  val genArrayMode: Gen[ArrayMode] =
+    Gen.frequency(
+      2 -> Gen.const(ArrayMode.Legacy),
+      2 -> Gen.const(ArrayMode.Dynamic()),
+      1 -> Gen.const(ArrayMode.Dynamic(collapsed = true))
+    )
+
   /**
    * GH-430: CT_CellFormula record kind (Normal / CSE array anchor / data table). The Normal arm
    * draws the plain-formula calc flags too (GH-435).
@@ -579,7 +587,8 @@ object Generators:
         range <- genCellRange
         aca <- Gen.oneOf(true, false)
         ca <- Gen.oneOf(true, false)
-      yield FormulaKind.ArrayFormula(range, aca, ca): FormulaKind),
+        mode <- genArrayMode
+      yield FormulaKind.ArrayFormula(range, aca, ca, mode): FormulaKind),
       3 -> genDataTableKind.map(dt => dt: FormulaKind)
     )
 

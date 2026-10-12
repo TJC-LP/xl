@@ -61,7 +61,7 @@ makes the same edit; `since` is the release the verb is documented from. Run
 | `deps` | `-f` `-s` | `refused` | 0 2 3 | — | 0.20.0 | Trace one cell's precedents and dependents, hop by hop (--direction, --depth, --expand) |
 | `batch` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`) | 0 1 2 3 | — | 0.1.0 | Apply multiple operations atomically from JSON (--dry-run validates; --schema prints the op schema) |
 | `put` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--csv`, `--strict`) | 0 1 2 3 | `put` | 0.1.0 | Write value(s) to a cell or range with smart type detection (--no-detect, --csv) |
-| `putf` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`) | 0 1 2 3 | `putf` | 0.1.0 | Write formula(s) to a cell or range; one formula over a range drags with $ anchoring |
+| `putf` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`, `--array`) | 0 1 2 3 | `putf` | 0.1.0 | Write formula(s) to a cell or range; one formula over a range drags with $ anchoring; --array stores a spilling dynamic array |
 | `style` | `-f` `-s` `-o`/`-i` `--stream` | `o1` (refuses `--strict`) | 0 2 3 | `style` | 0.2.0 | Apply formatting to cells; styles merge by default (--replace to overwrite) |
 | `row` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `rowheight` | 0.3.0 | Set row properties: height, hide/show |
 | `col` | `-f` `-s` `-o`/`-i` | `backend` | 0 2 3 | `colwidth` | 0.3.0 | Set column properties: width, hide/show, auto-fit (ranges like A:F) |

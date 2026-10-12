@@ -961,7 +961,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormula(ref, formula, None) =>
+      case BatchOp.PutFormula(ref, formula, None, _) =>
         assertEquals(ref, "D14")
         assertEquals(formula, "=SUM(D5:D12)")
       case other => fail(s"Expected PutFormula, got $other")
@@ -988,7 +988,7 @@ class MainSpec extends CatsEffectSuite:
     assert(result.isRight, s"Should parse: $result")
     val op = result.toOption.get.ops.head
     op match
-      case BatchOp.PutFormula(_, formula, _) =>
+      case BatchOp.PutFormula(_, formula, _, _) =>
         assertEquals(formula, "=B1")
       case other => fail(s"Expected PutFormula with 'value' winning, got $other")
   }
@@ -1011,7 +1011,7 @@ class MainSpec extends CatsEffectSuite:
 
     assert(result.isRight, s"Should parse: $result")
     result.toOption.get.ops.head match
-      case BatchOp.PutFormula(ref, formula, Some(NumFmt.Custom(code))) =>
+      case BatchOp.PutFormula(ref, formula, Some(NumFmt.Custom(code)), _) =>
         assertEquals(ref, "C1")
         assertEquals(formula, "=A1*2")
         assertEquals(code, "#,##0.0")

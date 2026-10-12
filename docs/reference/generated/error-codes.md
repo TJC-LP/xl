@@ -84,3 +84,8 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `OFF_GRID_REF` |
 | `LINT_HYGIENE` |
 | `CF_NOT_RENDERED` |
+| `IMPLICIT_INTERSECTION` |
+| `DYNAMIC_ARRAY_DOWNGRADED` |
+| `SPILL_CELLS_SKIPPED` |
+| `FILLED_SPILLS_OVERLAP` |
+| `INTERSECTION_SAMPLED` |

@@ -115,7 +115,7 @@ enum CliCommand derives CanEqual:
     csvSplit: Boolean = false,
     detect: Boolean = true
   )
-  case PutFormula(ref: String, formulas: List[String])
+  case PutFormula(ref: String, formulas: List[String], array: Boolean = false)
   case Style(
     range: String,
     bold: Boolean,
@@ -274,7 +274,7 @@ enum CliCommand derives CanEqual:
     case Stats(ref) => List(ref)
     case Deps(ref, _, _, _) => List(ref)
     case p: Put => List(p.ref)
-    case PutFormula(ref, _) => List(ref)
+    case PutFormula(ref, _, _) => List(ref)
     case s: Style => List(s.range)
     case Merge(range) => List(range)
     case Unmerge(range) => List(range)
@@ -338,7 +338,7 @@ enum CliCommand derives CanEqual:
     case Eval(_, _, _) => "eval"
     case EvalArray(_, _, _) => "evala"
     case _: Put => "put"
-    case PutFormula(_, _) => "putf"
+    case PutFormula(_, _, _) => "putf"
     case _: Style => "style"
     case _: RowOp => "row"
     case _: ColOp => "col"
