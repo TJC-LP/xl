@@ -503,6 +503,19 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     assertEquals(spill("OFFSET(B1,1,0)+INDEX(A1:B3,0,1)*2"), expected)
   }
 
+  test("a range-slot read of r leaves c, an IF-selected reference, materializing in SUMPRODUCT") {
+    // COUNTIF(r,…) makes the array-mode LET bind c as the reference IF selects; SUMPRODUCT(c*1)
+    // must still read its three values. LibreOffice 24.2 (no LET), the same formula with the
+    // bindings written in place: SUMPRODUCT(IF(TRUE(),A1:A3,0)*1)+COUNTIF(OFFSET(A1,0,0,10,1),">2")
+    // is 7.5, and SUMPRODUCT(IF(TRUE(),A1:A3,0)*1) alone 2.5.
+    val bound = "LET(c,IF(TRUE,A1:A3,0),r,dyn,SUMPRODUCT(c*1)+COUNTIF(r,\">2\"))"
+    val inlined = "LET(c,IF(TRUE,A1:A3,0),SUMPRODUCT(c*1))+COUNTIF(dyn,\">2\")"
+    agree(unplaced(bound), N("7.5"))
+    agree(unplaced(inlined), N("7.5"))
+    agree(unplaced("LET(c,IF(TRUE,A1:A3,0),SUMPRODUCT(c*1))"), N("2.5"))
+    agree(plain("Sheet1", "H1", bound), N("7.5"))
+  }
+
   // ----- one smoke case per family whose range slot now resolves dynamically -----
 
   /** H: B1:B2 holidays, C1:C3 cash flows, D1:D3 their dates, E1:E3 keys, F1:F3 results. */
