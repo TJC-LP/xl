@@ -119,6 +119,25 @@ class SheetEditsSpec extends FunSuite:
     def renameSheet(wb: Workbook, from: SheetName, to: SheetName): XLResult[Workbook] =
       FormulaSupport.textOnly.renameSheet(wb, from, to)
 
+  test("GH-714: fillTargets names exactly the cells the fill writes, both directions") {
+    // B2 is empty: its cyclic copies (B4, B6) are not written
+    val down = Sheet(name).put(a1("B1"), num(1)).put(a1("C1"), num(2)).put(a1("C2"), num(3))
+    val src = rng("B1:C2")
+    val tgt = rng("B1:C6")
+    val filled = ok(SheetEdits.fill(down, src, tgt, Edit.FillDir.Down))
+    val changed = tgt.cells.filter(r => filled.cells.get(r) != down.cells.get(r)).toSet
+    assertEquals(ok(SheetEdits.fillTargets(down, src, tgt, Edit.FillDir.Down)), changed)
+    assertEquals(changed, Set("B3", "B5", "C3", "C4", "C5", "C6").map(a1))
+    val right = Sheet(name).put(a1("A1"), num(1))
+    val across = rng("A1:D1")
+    assertEquals(
+      ok(SheetEdits.fillTargets(right, rng("A1"), across, Edit.FillDir.Right)),
+      Set("B1", "C1", "D1").map(a1)
+    )
+    // the fill's own direction rule refuses the same way
+    assert(SheetEdits.fillTargets(right, rng("A1"), rng("A1:B2"), Edit.FillDir.Right).isLeft)
+  }
+
   test("GH-628: fillReporting names each target cell whose formula gained a #REF!, in order") {
     val s = Sheet(name).put(a1("A1"), formula("X1")).put(a1("B1"), formula("B9"))
     val (filled, offGrid) =

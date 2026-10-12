@@ -42,49 +42,69 @@ private[xl] object ImplicitIntersection:
 
   /**
    * What [[check]] found: the diverging cells among the first `checked` of the `candidates` cells
-   * whose formula [[mayDiverge]]; `sampled` when the budget stopped it before the last.
+   * whose formula [[mayDiverge]]; `sampled` when the budget stopped it before the last. When it
+   * stopped, `candidates` is a lower bound (`exact` false): the check does not walk past the first
+   * candidate it will not evaluate.
    */
-  final case class Report(hits: Vector[Divergence], checked: Int, candidates: Int) derives CanEqual:
+  final case class Report(
+    hits: Vector[Divergence],
+    checked: Int,
+    candidates: Int,
+    exact: Boolean = true
+  ) derives CanEqual:
     def sampled: Boolean = checked < candidates
 
   /** How many candidate cells one check evaluates both ways at most. */
   val DefaultBudget: Int = 1000
 
   /**
-   * The cells of `cells` that still hold a plain formula in `wb` and diverge, in sheet then
-   * row-major order, checking at most `budget` candidates. A cell of `known` is a candidate the
-   * caller already proved [[mayDiverge]] for — a drag's copy of a source that may diverge, whose
-   * shape a shift preserves — and is not parsed again, so the candidate count stays exact while a
-   * long drag costs no parse per cell.
+   * The cells of `cells` that still hold a plain formula in `wb` and diverge, hits in sheet then
+   * row-major order. `cells` is walked lazily in the caller's order (a putf writes row-major, a
+   * batch in op order) and only until `budget` candidates are gathered plus one more: a long drag
+   * or batch is never expanded past what is checked. The count is then a lower bound
+   * ([[Report.exact]] false: "at least budget + 1"). A cell `known` to be a candidate — a drag's
+   * copy of a source that may diverge, whose shape a shift preserves — is not parsed again.
    */
   def check(
     wb: Workbook,
-    cells: Vector[(SheetName, ARef)],
+    cells: IterableOnce[(SheetName, ARef)],
     clock: Clock,
     budget: Int = DefaultBudget,
-    known: Set[(SheetName, ARef)] = Set.empty
+    known: ((SheetName, ARef)) => Boolean = _ => false
   ): Report =
     val sheets = wb.sheets.map(s => s.name -> s).toMap
     val sheetOrder = wb.sheets.map(_.name).zipWithIndex.toMap
-    val candidates = cells.distinct
-      .flatMap { (name, ref) => sheetOrder.get(name).map(i => (i, name, ref)) }
-      .sortBy((i, _, ref) => (i, ref.row.index0, ref.col.index0))
-      .flatMap { (_, name, ref) =>
-        sheets.get(name).flatMap { sheet =>
-          sheet.cells.get(ref).map(_.value) match
-            case Some(CellValue.Formula(text, _, _: FormulaKind.Normal))
-                if known.contains(name -> ref) ||
-                  FormulaParser.parse(s"=$text").exists(mayDiverge) =>
-              Some((sheet, ref, text))
-            case _ => None
-        }
+    val limit = math.max(budget, 0)
+    def candidate(name: SheetName, ref: ARef): Option[(Sheet, ARef, String)] =
+      sheets.get(name).flatMap { sheet =>
+        sheet.cells.get(ref).map(_.value) match
+          case Some(CellValue.Formula(text, _, _: FormulaKind.Normal))
+              if known(name -> ref) || FormulaParser.parse(s"=$text").exists(mayDiverge) =>
+            Some((sheet, ref, text))
+          case _ => None
       }
-    val checked = candidates.take(math.max(budget, 0))
-    Report(
-      checked.flatMap((sheet, ref, text) => divergenceAt(wb, sheet, ref, text, clock)),
-      checked.size,
-      candidates.size
-    )
+    val it = cells.iterator
+    @annotation.tailrec
+    def gather(
+      seen: Set[(SheetName, ARef)],
+      acc: Vector[(Sheet, ARef, String)]
+    ): (Vector[(Sheet, ARef, String)], Boolean) =
+      if !it.hasNext then (acc, false)
+      else
+        val (name, ref) = it.next()
+        if seen.contains(name -> ref) then gather(seen, acc)
+        else
+          candidate(name, ref) match
+            case Some(_) if acc.size >= limit => (acc, true)
+            case Some(c) => gather(seen + (name -> ref), acc :+ c)
+            case None => gather(seen + (name -> ref), acc)
+    val (checked, more) = gather(Set.empty, Vector.empty)
+    val hits = checked
+      .flatMap((sheet, ref, text) => divergenceAt(wb, sheet, ref, text, clock))
+      .sortBy(d =>
+        (sheetOrder.getOrElse(d.sheet, Int.MaxValue), d.cell.row.index0, d.cell.col.index0)
+      )
+    Report(hits, checked.size, checked.size + (if more then 1 else 0), exact = !more)
 
   private def divergenceAt(
     wb: Workbook,

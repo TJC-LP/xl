@@ -247,7 +247,7 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(release(cse, ref"E1", ref"E2"), Right((cse, Set.empty[ARef])))
   }
 
-  test("a spill of the array-cell guard or more is refused before any cell is written") {
+  test("a spill over the array-cell guard is refused before any cell is written") {
     // the guard is ArrayResult.MaxCells (one full column); a small limit shows the rule cheaply
     DynamicArrayAuthoring.author(
       Workbook(Vector(base)),
@@ -255,18 +255,19 @@ class DynamicArrayAuthoringSpec extends FunSuite:
       ref"A1",
       "=SORT(B1:B3)",
       clock,
-      3
+      2
     ) match
       case Left(Refusal.Blocked(b)) =>
-        assertEquals(b.blocker, SpillBlocker.TooLarge(3, 1, 3L))
+        assertEquals(b.blocker, SpillBlocker.TooLarge(3, 1, 2L))
         assertEquals(b.extent, None)
         assert(b.message.contains("a 3x1 spill from A1 is 3 cells"), b.message)
-        assert(b.message.contains("fewer than 3 cells"), b.message)
+        assert(b.message.contains("at most 2 cells"), b.message)
         assert(b.hint.contains("A1:A1000, not A:A"), b.hint)
       case other => fail(s"expected TooLarge, got $other")
+    // inclusive, as SEQUENCE's guard is: exactly the limit spills
     assert(
       DynamicArrayAuthoring
-        .author(Workbook(Vector(base)), base, ref"A1", "=SORT(B1:B3)", clock, 4)
+        .author(Workbook(Vector(base)), base, ref"A1", "=SORT(B1:B3)", clock, 3)
         .isRight
     )
     assertEquals(com.tjclp.xl.formula.eval.ArrayResult.MaxCells, 1048576L)
@@ -313,6 +314,16 @@ class DynamicArrayAuthoringSpec extends FunSuite:
       DynamicArrayAuthoring.releaseRanges(sorted, Vector.empty, Vector(range("A2")), false),
       Right((sorted, Set.empty[ARef]))
     )
+  }
+
+  test("a spill of exactly ArrayResult.MaxCells cells fills a whole column, as Excel does") {
+    val empty = Sheet(S)
+    val a = DynamicArrayAuthoring
+      .author(Workbook(Vector(empty)), empty, ref"A1", "=SEQUENCE(1048576)", clock)
+      .fold(r => fail(r.message), identity)
+    assertEquals(a.extent, range("A1:A1048576"))
+    assertEquals(a.extent.cellCount, com.tjclp.xl.formula.eval.ArrayResult.MaxCells)
+    assertEquals(a.sheet(ARef.from0(0, 1048575)).value, num(1048576))
   }
 
   test("author returns the expression it parsed") {

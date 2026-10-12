@@ -132,13 +132,33 @@ class ImplicitIntersectionCheckSpec extends FunSuite:
     assertEquals((report.hits, report.checked, report.candidates), (Vector.empty, 0, 0))
   }
 
+  test("the walk stops one candidate past the budget: a long target list is never expanded") {
+    val drag = (1 to 50).map(i => ARef.from0(2, i - 1) -> "A$1:A$10*2")
+    val wb = book(drag*)
+    val pulled = new java.util.concurrent.atomic.AtomicInteger(0)
+    // 50 candidates, then a million cells the check must not reach
+    val tail = Iterator.range(0, 1000000).map(i => S -> ARef.from0(5, i))
+    val cells = drag.iterator.map((r, _) => S -> r) ++ tail
+    val counted = cells.map { c =>
+      pulled.incrementAndGet()
+      c
+    }
+    val report = ImplicitIntersection.check(wb, counted, clock, budget = 10)
+    assertEquals((report.checked, report.candidates, report.exact), (10, 11, false))
+    assertEquals(pulled.get(), 11)
+    // under the budget the count is exact
+    val all = ImplicitIntersection.check(wb, drag.map((r, _) => S -> r), clock)
+    assertEquals((all.checked, all.candidates, all.exact), (50, 50, true))
+  }
+
   test("known candidates skip the parse; the count stays what the parse would give") {
     val drag = (1 to 12).map(i => ARef.from0(2, i - 1) -> "A$1:A$10*2")
     val targets = drag.map((r, _) => S -> r).toVector
     val parsed = ImplicitIntersection.check(book(drag*), targets, clock, budget = 5)
     val known = ImplicitIntersection.check(book(drag*), targets, clock, 5, targets.toSet)
     assertEquals(known, parsed)
-    assertEquals((known.checked, known.candidates), (5, 12))
+    // stopped at the budget: at least one more candidate, never walked past it
+    assertEquals((known.checked, known.candidates, known.exact), (5, 6, false))
     // a known cell is taken on trust (never parsed), but must still hold a plain formula
     val plain = book(ref"C1" -> "A1+1").sheets.headOption.getOrElse(fail("no sheet"))
     val trusted = ImplicitIntersection.check(Workbook(Vector(plain)), Vector(S -> ref"C1"), clock)
@@ -165,7 +185,8 @@ class ImplicitIntersectionCheckSpec extends FunSuite:
     val drag = (1 to 12).map(i => ARef.from0(2, i - 1) -> "A$1:A$10*2")
     val targets = drag.map((r, _) => S -> r).toVector
     val report = ImplicitIntersection.check(book(drag*), targets, clock, budget = 5)
-    assertEquals((report.hits.size, report.checked, report.candidates), (5, 5, 12))
+    assertEquals((report.hits.size, report.checked, report.candidates), (5, 5, 6))
+    assert(!report.exact)
     assert(report.sampled)
     assertEquals(report.hits.map(_.cell), (1 to 5).map(i => ARef.from0(2, i - 1)).toVector)
     val full = ImplicitIntersection.check(book(drag*), targets, clock)

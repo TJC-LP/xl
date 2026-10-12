@@ -106,6 +106,41 @@ object CopyOps:
       DynamicArrayAuthoring.spillsOf(targetSheet)
     )
 
+  /**
+   * GH-714: a copy that includes a dynamic spill whole pastes it with its shifted extent
+   * (`SheetEdits`), so the target extent must be one Excel can spill into: the authoring blockers
+   * ([[DynamicArrayAuthoring.blocked]]) — a merge, a table, another array record, a cell the copy
+   * does not overwrite — are checked on the target before anything is written. A blocked one is
+   * refused, as authoring it would be: degrading it to a 1x1 record would still leave Excel a
+   * `#SPILL!` (its copied constants and the merge or table would block the re-spill). A values-only
+   * copy pastes no record.
+   */
+  def copiedSpillBlocked(
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetSheet: Sheet,
+    targetRange: CellRange,
+    valuesOnly: Boolean
+  ): Option[DynamicArrayAuthoring.SpillBlocked] =
+    if valuesOnly then None
+    else
+      val colDelta = Column.index0(targetRange.start.col) - Column.index0(sourceRange.start.col)
+      val rowDelta = Row.index0(targetRange.start.row) - Row.index0(sourceRange.start.row)
+      lazy val written = writtenCells(sourceSheet, sourceRange, targetRange)
+      DynamicArrayAuthoring
+        .spillsOf(sourceSheet)
+        .iterator
+        .filter(s => sourceRange.contains(s.extent.start) && sourceRange.contains(s.extent.end))
+        .flatMap { s =>
+          for
+            start <- s.extent.start.tryShift(colDelta, rowDelta)
+            end <- s.extent.end.tryShift(colDelta, rowDelta)
+            extent = CellRange(start, end)
+            blocker <- DynamicArrayAuthoring.blocked(targetSheet, extent, written.contains)
+          yield DynamicArrayAuthoring.SpillBlocked(s"=${s.formula}", start, Some(extent), blocker)
+        }
+        .nextOption()
+
   /** [[releasedBy]] against the target sheet's spills already known (a batch's index). */
   def releasedBy(
     sourceSheet: Sheet,

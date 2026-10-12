@@ -176,7 +176,7 @@ object WriteCommands:
         MemoryGuard.blocking(outputPath, "recalc") {
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
-              val full = recalcHonoringCalcPr(wb).result
+              val full = recalcHonoringCalcPr(wb, clock = clock.getOrElse(Clock.system)).result
               val cone = dirtyCone(wb, Map(sheetName -> modifiedRefs))
               val written = applyConeCaches(wb, full.workbook, cone)
               scopeToCone(full, cone, written).copy(workbook = written)
@@ -639,12 +639,14 @@ object WriteCommands:
       )
       released <- releaseSpills(wb, sheet, Set(ref))
       (releasedWb, releasedSheet, cleared) = released
+      clock <- commandClock
       cachedValue =
         if policy.noRecalc then
           // evaluated as the plain cell it becomes: at its position (a legacy formula)
           SheetEvaluator
             .evaluateFormula(releasedSheet)(
               fullFormula,
+              clock = clock,
               workbook = Some(releasedWb),
               currentCell = Some(ref)
             )
@@ -664,7 +666,6 @@ object WriteCommands:
           val mergedStyle = existingStyle.withNumFmt(numFmt)
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
-      clock <- commandClock
       result <- writeAfterRefresh(
         releasedWb.put(finalSheet),
         sheet.name,
@@ -754,8 +755,8 @@ object WriteCommands:
    * write's own refresh, see the same `NOW()`. Informational: never gates.
    */
   private[cli] def intersectionAdvisory(
-    targets: Vector[(SheetName, ARef)],
-    known: Set[(SheetName, ARef)] = Set.empty,
+    targets: Iterable[(SheetName, ARef)],
+    known: ((SheetName, ARef)) => Boolean = _ => false,
     clock: Clock
   ): Workbook => Vector[Warning] = finalWb =>
     val report = ImplicitIntersection.check(finalWb, targets, clock, known = known)
@@ -792,7 +793,9 @@ object WriteCommands:
       cellCount = range.cellCount
       targets = dragTargets(sheet.name, range, parsedExpr)
       // a copy whose shift voided a reference may have lost its array source: parsed again
-      known = targets.toSet -- offGrid.map(hit => sheet.name -> hit.cell)
+      voided = offGrid.map(_.cell).toSet
+      known = (key: (SheetName, ARef)) =>
+        key._1 == sheet.name && range.contains(key._2) && !voided.contains(key._2)
       clock <- commandClock
       result <- writeAfterRefresh(
         releasedWb.put(updatedSheet),
@@ -820,8 +823,10 @@ object WriteCommands:
     sheet: SheetName,
     range: CellRange,
     source: TExpr[?]
-  ): Vector[(SheetName, ARef)] =
-    if ImplicitIntersection.mayDiverge(source) then range.cellsRowMajor.map(sheet -> _).toVector
+  ): Iterable[(SheetName, ARef)] =
+    // a lazy view: the check expands it only as far as its budget
+    if ImplicitIntersection.mayDiverge(source) then
+      Vector(range).view.flatMap(r => r.cellsRowMajor.map(sheet -> _))
     else Vector.empty
 
   /** Mode 3: Batch formulas (no dragging, apply as-is) */
@@ -856,12 +861,14 @@ object WriteCommands:
           }
           released <- releaseSpills(wb, sheet, range.cells.toSet)
           (releasedWb, releasedSheet, cleared) = released
+          clock <- commandClock
           updates = parsed.map { (ref, formula) =>
             val cachedValue =
               if policy.noRecalc then
                 SheetEvaluator
                   .evaluateFormula(releasedSheet)(
                     s"=$formula",
+                    clock = clock,
                     workbook = Some(releasedWb),
                     currentCell = Some(ref)
                   )
@@ -869,7 +876,6 @@ object WriteCommands:
               else None
             (ref, CellValue.Formula(formula, cachedValue))
           }
-          clock <- commandClock
           modifiedRefs = updates.map(_._1).toSet
           updatedSheet = releasedSheet.put(updates*)
           result <- writeAfterRefresh(
@@ -1339,12 +1345,13 @@ object WriteCommands:
 
   private def recalcHonoringCalcPr(
     wb: Workbook,
-    parallel: Option[Int] = None
+    parallel: Option[Int] = None,
+    clock: Clock = Clock.system
   ): RecalcRun =
     wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr) match
       case Some(iterative) =>
         RecalcRun(
-          wb.recalculate(Clock.system, iterative),
+          wb.recalculate(clock, iterative),
           parallel.map(_ =>
             "NOTE: --parallel ignored — the book declares iterative calculation " +
               "(<calcPr iterate=\"1\"/>), which fixpoints sequentially"
@@ -1352,7 +1359,7 @@ object WriteCommands:
         )
       case None =>
         RecalcRun(
-          parallel.fold(wb.recalculate())(wb.recalculateParallel),
+          parallel.fold(wb.recalculate(clock))(n => wb.recalculateParallel(clock, n)),
           None
         )
 
@@ -1546,8 +1553,12 @@ object WriteCommands:
    * outside the cone they keep the generation the file already carried. `xl recalc` remains the
    * verb that refreshes an entire book on purpose.
    */
-  private def scopedRecalc(before: Workbook, edited: Workbook): (Workbook, RecalcResult) =
-    val result = recalcHonoringCalcPr(edited).result
+  private def scopedRecalc(
+    before: Workbook,
+    edited: Workbook,
+    clock: Clock = Clock.system
+  ): (Workbook, RecalcResult) =
+    val result = recalcHonoringCalcPr(edited, clock = clock).result
     val changed = changedRefs(before, edited)
     // A name's binding can change while every cell retains its text and cache. Seed its readers
     // explicitly before closing the cell graph, including readers of removed names and aliases.
@@ -1580,10 +1591,11 @@ object WriteCommands:
     edited: Workbook,
     mutating: Boolean,
     outputPath: Path,
-    policy: WritePolicy
+    policy: WritePolicy,
+    clock: Clock = Clock.system
   ): IO[(Workbook, Option[RecalcResult], Option[String])] =
     if mutating && !policy.noRecalc then
-      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited)).map {
+      MemoryGuard.blocking(outputPath, "recalc")(scopedRecalc(before, edited, clock)).map {
         (written, result) => (written, Some(result), Some(formatRecalcSummary(result)))
       }
     else IO.pure((edited, None, Option.when(mutating)(noRecalcNote)))
@@ -1716,16 +1728,18 @@ object WriteCommands:
   ): IO[String] =
     BatchParser.readBatchInput(source, stdin).flatMap { input =>
       BatchParser.parseBatchOperations(input).flatMap { result =>
-        result.warnings.traverse_(warn) *>
+        // GH-714: one reading for the whole batch — an `"array": true` spill of a volatile
+        // formula, the dependent refresh and the IMPLICIT_INTERSECTION check see one instant
+        (result.warnings.traverse_(warn) *> commandClock).flatMap { clock =>
           BatchParser
-            .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc)
+            .applyScopedReporting(wb, sheetOpt, result.scoped, !policy.noRecalc, clock = clock)
             .flatMap { (updatedWb, offGrid) =>
               val nameEdit = result.ops.exists {
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
               } && changesNames(wb, updatedWb)
               val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
-              refreshDependents(wb, updatedWb, mutating, outputPath, policy).flatMap {
+              refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
                 (finalWb, recalcOpt, refreshLine) =>
                   writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
                     val ops = result.ops
@@ -1733,19 +1747,19 @@ object WriteCommands:
                     val recalcLine = refreshLine.fold("")(line => s"$line\n")
                     val rendered =
                       s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
-                    // GH-714: the batch's plain putf cells, checked once on the final workbook
-                    val targets = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
+                    // GH-714: the batch's plain putf cells, checked once on the final workbook;
+                    // the written areas are expanded lazily, only as far as the check's budget
+                    val areas = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
+                    val targets = areas.view.flatMap((name, r) => r.cellsRowMajor.map(name -> _))
                     val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
-                    commandClock
-                      .flatMap { clock =>
-                        IO.blocking(intersectionAdvisory(targets, known, clock)(finalWb))
-                      }
-                      .flatMap { extra =>
+                    IO.blocking(intersectionAdvisory(targets, known, clock)(finalWb)).flatMap {
+                      extra =>
                         strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
-                      }
+                    }
                   }
               }
             }
+        }
       }
     }
 
@@ -1917,7 +1931,12 @@ object WriteCommands:
       )
       // GH-714: the fill onto the target's dynamic arrays, by the put/putf rule — checked on the
       // sheet before the fill, released after it (the fill reads what a release would clear)
-      written = fillWritten(targetSheet, sourceRange, targetRange, direction)
+      written <- IO.fromEither(
+        SheetEdits
+          .fillTargets(targetSheet, sourceRange, targetRange, fillDir(direction))
+          .left
+          .map(domain)
+      )
       released <- releaseSpills(wb, targetSheet, written)
       release = released._3 -- written
       filledSheet = DynamicArrayAuthoring.clearValues(filled, release)
@@ -1939,29 +1958,6 @@ object WriteCommands:
         OffGridHit.of(targetSheet.name, offGrid)
       )
     yield result
-
-  /**
-   * GH-714: the cells a fill writes, as `Sheet.fill` walks them: each target cell outside the
-   * source rows (down) or columns (right) whose cyclically repeated source cell exists.
-   */
-  private def fillWritten(
-    sheet: Sheet,
-    source: CellRange,
-    target: CellRange,
-    direction: FillDirection
-  ): Set[ARef] =
-    target.cells.filter { t =>
-      val sourceRef =
-        if direction == FillDirection.Right then
-          val count = source.colEnd.index0 - source.colStart.index0 + 1
-          val col = source.colStart.index0 + (t.col.index0 - target.colStart.index0) % count
-          ARef.from0(col, t.row.index0)
-        else
-          val count = source.rowEnd.index0 - source.rowStart.index0 + 1
-          val row = source.rowStart.index0 + (t.row.index0 - target.rowStart.index0) % count
-          ARef.from0(t.col.index0, row)
-      sourceRef != t && sheet.cells.contains(sourceRef)
-    }.toSet
 
   /** The CLI's fill direction as the algebra's. */
   private def fillDir(direction: FillDirection): Edit.FillDir = direction match
@@ -2635,8 +2631,11 @@ object WriteCommands:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
-      // GH-714: the copy onto the target's dynamic arrays — release an overwritten anchor's spill,
-      // refuse a write into a live one
+      // GH-714: the copy onto the target's dynamic arrays — a copied whole spill must have room,
+      // an overwritten anchor's spill is released, a write into a live one refused
+      _ <- CopyOps
+        .copiedSpillBlocked(sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+        .fold(IO.unit)(spill => IO.raiseError(CliException(CliError.fromSpillBlocked(spill))))
       release <- IO.fromEither(
         CopyOps
           .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange)

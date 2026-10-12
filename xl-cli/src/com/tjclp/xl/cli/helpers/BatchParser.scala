@@ -1218,13 +1218,14 @@ object BatchParser:
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp],
     recalcDependents: Boolean = true,
-    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill] = DynamicArrayAuthoring.spillsOf
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill] = DynamicArrayAuthoring.spillsOf,
+    clock: Clock = Clock.system
   ): IO[(Workbook, Vector[OffGridHit])] =
     val start = (wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit], SpillIndex.empty)
     scoped
       .foldLeft(IO.pure(start)) { (stateIO, op) =>
         stateIO.flatMap { (currentWb, default, offGrid, spills) =>
-          applyOne(currentWb, default, op, recalcDependents, spills, scanSpills)
+          applyOne(currentWb, default, op, recalcDependents, spills, scanSpills, clock)
             .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
             .map((next, hits, index) => (next, retarget(default, op.op), offGrid ++ hits, index))
         }
@@ -1340,23 +1341,6 @@ object BatchParser:
       }
     }
 
-  /**
-   * The cells named by an op's target ref strings: a qualified ref on its own sheet, an unqualified
-   * one on `sheet` (THE sheet rule's answer for the op). A ref that does not parse names none.
-   */
-  private def targetCells(
-    sheet: Option[SheetName],
-    refs: Vector[String]
-  ): Vector[(SheetName, ARef)] =
-    refs.flatMap { r =>
-      RefType.parse(r).toOption.toList.toVector.flatMap {
-        case RefType.Cell(ref) => sheet.map(_ -> ref).toList.toVector
-        case RefType.QualifiedCell(name, ref) => Vector(name -> ref)
-        case RefType.Range(range) => sheet.toList.toVector.flatMap(n => range.cells.map(n -> _))
-        case RefType.QualifiedRange(name, range) => range.cells.map(name -> _).toVector
-      }
-    }
-
   /** A `rename-sheet` of the batch's default sheet moves the default with it. */
   private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
     case BatchOp.RenameSheet(from, to) =>
@@ -1402,7 +1386,8 @@ object BatchParser:
     scoped: ScopedOp,
     recalcDependents: Boolean,
     spills: SpillIndex,
-    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill]
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill],
+    clock: Clock
   ): IO[(Workbook, Vector[OffGridHit], SpillIndex)] =
     IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
       val areas = releaseAreas(sheetName, scoped.op)
@@ -1429,7 +1414,8 @@ object BatchParser:
               recalcDependents,
               spillsOn
             )
-          case _ => dispatch(currentWb, sheetName, scoped, recalcDependents).map((_, Vector.empty))
+          case _ =>
+            dispatch(currentWb, sheetName, scoped, recalcDependents, clock).map((_, Vector.empty))
         applied.map((next, hits) => (next, hits, nextSpills(known, scoped.op, areas)))
       }
     }
@@ -1494,14 +1480,15 @@ object BatchParser:
     currentWb: Workbook,
     defaultSheetName: Option[SheetName],
     scoped: ScopedOp,
-    recalcDependents: Boolean
+    recalcDependents: Boolean,
+    clock: Clock
   ): IO[Workbook] =
     scoped.op match
       case BatchOp.Put(refStr, cellValue, format) =>
         applyPutTyped(currentWb, defaultSheetName, refStr, cellValue, format, scoped.hint)
 
       case BatchOp.PutFormula(refStr, formula, format, true) =>
-        applyPutDynamicArray(currentWb, defaultSheetName, refStr, formula, format)
+        applyPutDynamicArray(currentWb, defaultSheetName, refStr, formula, format, clock)
 
       case BatchOp.PutFormula(refStr, formula, format, false) =>
         applyPutFormula(currentWb, defaultSheetName, refStr, formula, format)
@@ -1795,15 +1782,16 @@ object BatchParser:
       }
 
   /**
-   * GH-714: the cells a batch's plain (non-array) putf ops wrote, sheet-qualified by THE sheet rule
-   * on `wb` — the input of the `IMPLICIT_INTERSECTION` check. An op whose sheet does not resolve
-   * contributes nothing (the check is advisory).
+   * GH-714: the areas a batch's plain (non-array) putf ops wrote, sheet-qualified by THE sheet rule
+   * on `wb`, in op order — the input of the `IMPLICIT_INTERSECTION` check, which expands them
+   * lazily and only as far as its budget ([[ImplicitIntersection.check]]). An op whose sheet does
+   * not resolve contributes nothing (the check is advisory).
    */
   def putfTargets(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp]
-  ): Vector[(SheetName, ARef)] =
+  ): Vector[(SheetName, CellRange)] =
     scoped.flatMap { s =>
       val refs = s.op match
         case BatchOp.PutFormula(ref, _, _, false) => Vector(ref)
@@ -1814,34 +1802,30 @@ object BatchParser:
         case BatchOp.PutFormulas(range, _, _) => Vector(range)
         case _ => Vector.empty
       if refs.isEmpty then Vector.empty
-      else targetCells(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
+      else targetAreas(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
     }
 
   /**
-   * GH-714: the [[putfTargets]] the `IMPLICIT_INTERSECTION` check need not parse again — the cells
-   * of a `putf … from` drag whose source may diverge, since a shift keeps a formula's shape. A drag
-   * counts only when no reference left the grid at any of its range's corners (a shift's extremes,
-   * so then at no cell), and only the cells no later op writes: a later put, putf or contents clear
-   * drops its targets, a later `copy` drops the drag entirely (its target is not known here). What
-   * remains is parsed as before, so the candidate count stays exact.
+   * GH-714: which of the [[putfTargets]] cells the `IMPLICIT_INTERSECTION` check need not parse
+   * again — the cells of a `putf … from` drag whose source may diverge, since a shift keeps a
+   * formula's shape. A drag counts only when no reference left the grid at any of its range's
+   * corners (a shift's extremes, so then at no cell), and only for the cells no later op writes: a
+   * later put, putf or contents clear takes its targets out, a later `copy` the whole drag (its
+   * target is not known here). The ops are walked once, last to first, collecting what later ops
+   * write as areas — a single cell in a set, a range as a range — so nothing is expanded into
+   * cells; the result is a membership test, asked only for the cells the check walks.
    */
   def putfKnownCandidates(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp]
-  ): Set[(SheetName, ARef)] =
+  ): ((SheetName, ARef)) => Boolean =
     def sheetOf(s: ScopedOp) = opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten
-    def writes(s: ScopedOp): Option[Set[(SheetName, ARef)]] = s.op match
-      case _: BatchOp.CopyRange => None
-      case BatchOp.Clear(_, all, styles, comments) if !(all || (!styles && !comments)) =>
-        Some(Set.empty)
-      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
-          _: BatchOp.PutFormulas | _: BatchOp.PutValues | _: BatchOp.Clear =>
-        Some(targetCells(sheetOf(s), OpRegistry.targetRefs(s.op)).toSet)
-      case _ => Some(Set.empty)
-    scoped.zipWithIndex.flatMap { (s, i) =>
-      s.op match
-        case BatchOp.PutFormulaDragging(range, formula, from, _) =>
+    val (drags, _) = scoped.reverseIterator.foldLeft(
+      (Vector.empty[(SheetName, CellRange, LaterWrites)], LaterWrites.empty)
+    ) { case ((acc, later), s) =>
+      val withDrag = s.op match
+        case BatchOp.PutFormulaDragging(range, formula, from, _) if !later.copied =>
           val drag = for
             expr <- dragExpression(formula).toOption
             if ImplicitIntersection.mayDiverge(expr)
@@ -1864,11 +1848,39 @@ object BatchParser:
               val rowDelta = c.row.index0 - origin.row.index0
               !FormulaShifter.shiftReporting(expr, colDelta, rowDelta).anyVoided
             }
-            later <- scoped.drop(i + 1).traverse(writes)
-          yield targetCells(sheetOf(s), Vector(range)).toSet -- later.flatten
-          drag.getOrElse(Set.empty)
-        case _ => Set.empty
-    }.toSet
+          yield targetAreas(sheetOf(s), Vector(range)).map((name, r) => (name, r, later))
+          acc ++ drag.toList.flatten
+        case _ => acc
+      (withDrag, later.after(s.op, targetAreas(sheetOf(s), OpRegistry.targetRefs(s.op))))
+    }
+    (key: (SheetName, ARef)) =>
+      val (name, ref) = key
+      drags.exists((n, area, later) => n == name && area.contains(ref) && !later.covers(name, ref))
+
+  /**
+   * What the ops after some point of a batch write, for [[putfKnownCandidates]]: single cells as a
+   * set, ranges as ranges, and whether a `copy` follows (its target is not resolved here).
+   */
+  private final case class LaterWrites(
+    cells: Set[(SheetName, ARef)],
+    ranges: Vector[(SheetName, CellRange)],
+    copied: Boolean
+  ):
+    def covers(name: SheetName, ref: ARef): Boolean =
+      cells.contains(name -> ref) || ranges.exists((n, r) => n == name && r.contains(ref))
+
+    /** These writes, preceded by `op` writing `areas`. */
+    def after(op: BatchOp, areas: Vector[(SheetName, CellRange)]): LaterWrites = op match
+      case _: BatchOp.CopyRange => copy(copied = true)
+      case BatchOp.Clear(_, all, styles, comments) if !(all || (!styles && !comments)) => this
+      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
+          _: BatchOp.PutFormulas | _: BatchOp.PutValues | _: BatchOp.Clear =>
+        val (single, multi) = areas.partition((_, r) => r.start == r.end)
+        LaterWrites(cells ++ single.map((n, r) => n -> r.start), ranges ++ multi, copied)
+      case _ => this
+
+  private object LaterWrites:
+    val empty: LaterWrites = LaterWrites(Set.empty, Vector.empty, copied = false)
 
   /**
    * GH-714: a putf with `"array": true` — a dynamic-array anchor at the op's cell, its spill
@@ -1880,14 +1892,15 @@ object BatchParser:
     defaultSheetName: Option[SheetName],
     refStr: String,
     formula: String,
-    format: Option[NumFmt]
+    format: Option[NumFmt],
+    clock: Clock
   ): IO[Workbook] =
     def at(sheetName: SheetName, ref: ARef): IO[Workbook] =
       wb.sheets.find(_.name == sheetName).fold(IO.raiseError(sheetNotFound(wb, sheetName))) {
         sheet =>
           IO.fromEither(
             DynamicArrayAuthoring
-              .author(wb, sheet, ref, formula, Clock.system)
+              .author(wb, sheet, ref, formula, clock)
               .left
               .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
           ).map(authored => wb.put(format.fold(authored)(authored.withNumFmt).sheet))
@@ -2498,7 +2511,11 @@ object BatchParser:
       _ <- IO.fromEither(
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
-      // GH-714: the copy onto the target's dynamic arrays, as the copy verb applies it
+      // GH-714: the copy onto the target's dynamic arrays, as the copy verb applies it: a copied
+      // whole spill must have room, an overwritten anchor's spill is released
+      _ <- CopyOps
+        .copiedSpillBlocked(sourceSheet, sourceRange, targetSheet, targetRange, valuesOnly)
+        .fold(IO.unit)(spill => IO.raiseError(CliException(CliError.fromSpillBlocked(spill))))
       release <- IO.fromEither(
         CopyOps
           .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange, spillsOn(targetSheetName))

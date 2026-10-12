@@ -374,6 +374,21 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       hint(SpillBlocker.Overwritten(Vector(ref"A2"))) ->
         "overwrite or clear A1 first (its spill goes with it), or write outside A1:A3"
     )
+    // a clear of a live spill's cells changes nothing in Excel: no #SPILL! either
+    val cleared = hint(SpillBlocker.Cleared(Vector(ref"A2")))
+    assertEquals(cleared.code, "FORMULA_ERROR")
+    assertEquals(
+      cleared.hint,
+      Some("clear A1 to remove the whole spill, or clear outside A1:A3")
+    )
+    // xl's own size guard: no #SPILL! in Excel, so its message says so plainly
+    val tooLarge = hint(SpillBlocker.TooLarge(2000000, 1, 1048576L), None)
+    assertEquals(tooLarge.code, "FORMULA_ERROR")
+    assert(tooLarge.message.contains("at most 1,048,576 cells"), tooLarge.message)
+    assertEquals(
+      tooLarge.hint,
+      Some("bound the formula's ranges to the data (A1:A1000, not A:A), or write a plain formula")
+    )
     cases.foreach { (error, expected) =>
       assertEquals(error.code, "FORMULA_ERROR")
       assertEquals(error.hint, Some(expected))
@@ -734,17 +749,94 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       assertEquals((f2, f3), (CellValue.Number(3), CellValue.Number(1)))
   }
 
-  test("a spill of a whole column or more is refused before it is written") {
+  test("copying a whole spill onto a merge or a table is refused, as Excel's #SPILL!") {
+    import com.tjclp.xl.tables.{TableColumn, TableSpec}
+    val table = TableSpec(
+      name = "T1",
+      displayName = "T1",
+      range = CellRange(ref"L2", ref"M4"),
+      columns = Vector(TableColumn(1, "a"), TableColumn(2, "b"))
+    )
+    def rewritten(src: Path)(f: Sheet => Sheet): IO[Path] =
+      for
+        wb <- ExcelIO.instance[IO].read(src)
+        p <- IO.blocking(Files.createTempFile("xl-gh714-target-", ".xlsx"))
+        _ <- ExcelIO
+          .instance[IO]
+          .write(wb.put(f(wb.sheets.headOption.getOrElse(fail("no sheet")))), p)
+      yield p
+    for
+      src <- withSpill()
+      merged <- rewritten(src)(_.merge(CellRange(ref"K2", ref"K3")))
+      tabled <- rewritten(src)(s => s.copy(tables = Map("T1" -> table)))
+      out <- outPath()
+      ontoMerge <- run(merged, out, "copy", "F1:F3", "K1", "--json")
+      ontoTable <- run(tabled, out, "copy", "F1:F3", "L1", "--json")
+      batch <- CliHarness.run(
+        List("-f", merged.toString, "-o", out.toString, "batch", "-", "--json"),
+        """[{"op":"copy","source":"F1:F3","target":"K1"}]"""
+      )
+      exists <- IO.blocking(Files.exists(out))
+      // the same spill copied to open cells keeps its extent there (665f2b9)
+      clear <- outPath()
+      open <- run(merged, clear, "copy", "F1:F3", "N1")
+      kind <- kindAt(clear, ref"N1")
+    yield
+      assertRefused(
+        ontoMerge,
+        "FORMULA_ERROR",
+        "spill range K1:K3 is blocked by merged cells K2:K3"
+      )
+      assertEquals(errorOf(ontoMerge)("hint").str, "unmerge K2:K3 or choose another anchor")
+      assertRefused(ontoTable, "FORMULA_ERROR", "overlaps table T1 (L2:M4)")
+      assertRefused(batch, "BATCH_OP_FAILED", "blocked by merged cells K2:K3")
+      assert(!exists, "a refused copy must not write the output")
+      ok(open)
+      assertEquals(kind, Some(FormulaKind.dynamicArray(CellRange(ref"N1", ref"N3"))))
+  }
+
+  test("batch: the batch's clock is the one an array spill is authored with") {
+    import com.tjclp.xl.cli.helpers.BatchParser
+    import com.tjclp.xl.formula.Clock
+    val at = java.time.LocalDateTime.of(2020, 1, 2, 3, 4, 5)
+    val fixed = Clock.fixed(at.toLocalDate, at)
+    val ops = """[{"op":"putf","ref":"F1","value":"=NOW()+SEQUENCE(3)","array":true}]"""
+    for
+      src <- numbers()
+      wb <- ExcelIO.instance[IO].read(src)
+      parsed <- BatchParser.parseBatchOperations(ops)
+      result <- BatchParser.applyScopedReporting(
+        wb,
+        wb.sheets.headOption,
+        parsed.scoped,
+        recalcDependents = false,
+        clock = fixed
+      )
+    yield
+      val sheet = result._1.sheets.headOption.getOrElse(fail("no sheet"))
+      val expected =
+        sheet.evaluateFormula("=NOW()+3", clock = fixed).fold(e => fail(e.message), identity)
+      // F3 = NOW()+3 at the batch's instant, not at whatever time the op happened to run
+      assertEquals(sheet(ref"F3").value, expected)
+  }
+
+  test("batch: one clock for an array spill of NOW(), its refresh and the check") {
+    val ops = """[{"op":"putf","ref":"F1","value":"=NOW()+SEQUENCE(3)","array":true}]"""
     for
       src <- numbers()
       out <- outPath()
-      run <- putfArray(src, out, "D1", "=A:A*2", "--json")
-      exists <- IO.blocking(Files.exists(out))
+      run <- CliHarness.run(List("-f", src.toString, "-o", out.toString, "batch", "-"), ops)
+      f1 <- cachedNumber(out, ref"F1")
+      f2 <- valueAt(out, ref"F2")
+      f3 <- valueAt(out, ref"F3")
     yield
-      assertRefused(run, "FORMULA_ERROR", "a 1048576x1 spill from D1 is 1,048,576 cells")
-      assert(errorOf(run)("message").str.contains("fewer than 1,048,576 cells"), run.stdout)
-      assert(errorOf(run)("hint").str.contains("A1:A1000, not A:A"), run.stdout)
-      assert(!exists, "nothing may be written")
+      ok(run)
+      // the refresh recomputed the anchor; its cache and the authored spill agree exactly
+      (f2, f3) match
+        case (CellValue.Number(two), CellValue.Number(three)) =>
+          assertEquals(two - f1, BigDecimal(1))
+          assertEquals(three - f1, BigDecimal(2))
+        case other => fail(s"F2:F3 should hold numbers, got $other")
   }
 
   test("--stream put elsewhere keeps an untouched cell's vm and cm") {

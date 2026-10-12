@@ -132,36 +132,70 @@ private[xl] object SheetEdits:
   )(using FormulaSupport): XLResult[(Sheet, Vector[OffGridRef])] =
     validateFill(source, target, direction).flatMap { _ =>
       val zero: Reporting = (sheet, Vector.empty)
-      direction match
-        case Edit.FillDir.Down =>
-          val sourceStartRow = source.rowStart.index0
-          val sourceRowCount = source.rowEnd.index0 - sourceStartRow + 1
-          val targetStartRow = target.rowStart.index0
-          val cols = source.colStart.index0 to source.colEnd.index0
-          foldE((targetStartRow to target.rowEnd.index0).iterator)(zero) { (acc, targetRow) =>
-            val sourceRow = sourceStartRow + (targetRow - targetStartRow) % sourceRowCount
-            val rowDelta = targetRow - sourceRow
-            if rowDelta == 0 then Right(acc)
-            else
-              foldE(cols.iterator)(acc) { (acc2, col) =>
-                copyCell(acc2, ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
-              }
-          }
-        case Edit.FillDir.Right =>
-          val sourceStartCol = source.colStart.index0
-          val sourceColCount = source.colEnd.index0 - sourceStartCol + 1
-          val targetStartCol = target.colStart.index0
-          val rows = source.rowStart.index0 to source.rowEnd.index0
-          foldE((targetStartCol to target.colEnd.index0).iterator)(zero) { (acc, targetCol) =>
-            val sourceCol = sourceStartCol + (targetCol - targetStartCol) % sourceColCount
-            val colDelta = targetCol - sourceCol
-            if colDelta == 0 then Right(acc)
-            else
-              foldE(rows.iterator)(acc) { (acc2, row) =>
-                copyCell(acc2, ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
-              }
-          }
+      foldE(fillSteps(source, target, direction))(zero) { (acc, step) =>
+        copyCell(acc, step.source, step.target, step.colDelta, step.rowDelta)
+      }
     }
+
+  /**
+   * GH-714: the cells a fill writes — the target of each step whose source cell exists, exactly as
+   * [[fillReporting]] walks them (source rows or columns are never written) — so a caller guarding
+   * the write cannot drift from the fill.
+   */
+  def fillTargets(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: Edit.FillDir
+  ): XLResult[Set[ARef]] =
+    validateFill(source, target, direction).map { _ =>
+      fillSteps(source, target, direction)
+        .filter(step => sheet.cells.contains(step.source))
+        .map(_.target)
+        .toSet
+    }
+
+  /** One fill step: copy `source` onto `target`, shifted by the deltas. */
+  private final case class FillStep(source: ARef, target: ARef, colDelta: Int, rowDelta: Int)
+
+  /**
+   * The fill's walk: target rows (down) or columns (right) in order, each from its cyclically
+   * repeated source row or column, the source's own rows or columns skipped.
+   */
+  private def fillSteps(
+    source: CellRange,
+    target: CellRange,
+    direction: Edit.FillDir
+  ): Iterator[FillStep] =
+    direction match
+      case Edit.FillDir.Down =>
+        val sourceStartRow = source.rowStart.index0
+        val sourceRowCount = source.rowEnd.index0 - sourceStartRow + 1
+        val targetStartRow = target.rowStart.index0
+        val cols = source.colStart.index0 to source.colEnd.index0
+        (targetStartRow to target.rowEnd.index0).iterator.flatMap { targetRow =>
+          val sourceRow = sourceStartRow + (targetRow - targetStartRow) % sourceRowCount
+          val rowDelta = targetRow - sourceRow
+          if rowDelta == 0 then Iterator.empty
+          else
+            cols.iterator.map { col =>
+              FillStep(ARef.from0(col, sourceRow), ARef.from0(col, targetRow), 0, rowDelta)
+            }
+        }
+      case Edit.FillDir.Right =>
+        val sourceStartCol = source.colStart.index0
+        val sourceColCount = source.colEnd.index0 - sourceStartCol + 1
+        val targetStartCol = target.colStart.index0
+        val rows = source.rowStart.index0 to source.rowEnd.index0
+        (targetStartCol to target.colEnd.index0).iterator.flatMap { targetCol =>
+          val sourceCol = sourceStartCol + (targetCol - targetStartCol) % sourceColCount
+          val colDelta = targetCol - sourceCol
+          if colDelta == 0 then Iterator.empty
+          else
+            rows.iterator.map { row =>
+              FillStep(ARef.from0(sourceCol, row), ARef.from0(targetCol, row), colDelta, 0)
+            }
+        }
 
   /** One fill step: the source cell's value, shifted, onto the target (styles are not copied). */
   private def copyCell(

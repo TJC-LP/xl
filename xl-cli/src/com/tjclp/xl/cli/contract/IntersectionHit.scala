@@ -44,7 +44,9 @@ object IntersectionHit:
   def warning(report: Report): Option[Warning] =
     val hits = report.hits
     val sampled =
-      if report.sampled then s" (first ${report.checked} of ${report.candidates} cells checked)"
+      if report.sampled then
+        val of = if report.exact then s"${report.candidates}" else s"at least ${report.candidates}"
+        s" (first ${report.checked} of $of cells checked)"
       else ""
     hits.headOption.map { first =>
       val message =

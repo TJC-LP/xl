@@ -128,7 +128,8 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assertEquals(run.exit, 0, run.toString)
       assert(run.stdout.contains("1000 formulas evaluate differently"), run.stdout)
       assert(run.stdout.contains("(+990 more)"), run.stdout)
-      assert(run.stdout.contains("(first 1000 of 1100 cells checked)"), run.stdout)
+      // the check stops one candidate past its budget: the count is a lower bound
+      assert(run.stdout.contains("(first 1000 of at least 1001 cells checked)"), run.stdout)
     }
   }
 
@@ -241,10 +242,13 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
   test("a drag whose source cannot diverge is not checked cell by cell; one that can is") {
     val range = CellRange.parse("C1:C3").fold(fail(_), identity)
     val S = SheetName.unsafe("S")
-    assertEquals(WriteCommands.dragTargets(S, range, parsed("=SUM($A$1:A1)")), Vector.empty)
-    assertEquals(WriteCommands.dragTargets(S, range, parsed("=A1+1")), Vector.empty)
     assertEquals(
-      WriteCommands.dragTargets(S, range, parsed("=A$1:A$10*2")),
+      WriteCommands.dragTargets(S, range, parsed("=SUM($A$1:A1)")).toVector,
+      Vector.empty
+    )
+    assertEquals(WriteCommands.dragTargets(S, range, parsed("=A1+1")).toVector, Vector.empty)
+    assertEquals(
+      WriteCommands.dragTargets(S, range, parsed("=A$1:A$10*2")).toVector,
       range.cellsRowMajor.map(S -> _).toVector
     )
     val ops =
@@ -253,15 +257,18 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
     val sheet = Sheet("S")
     BatchParser.parseBatchOperations(ops).map { result =>
       val targets = BatchParser.putfTargets(Workbook(sheet), Some(sheet), result.scoped)
-      assertEquals(targets.map(_._2.toA1), Vector("D1", "D2", "D3"))
+      // areas, never expanded: the check walks them lazily
+      assertEquals(targets.map(_._2.toA1), Vector("D1:D3"))
     }
   }
 
   test("batch drag copies are known candidates unless a later op writes them or a ref voids") {
     val sheet = Sheet("S")
+    val probe = Vector("C1", "C2", "C3", "D1", "D2", "D3", "D4", "D5")
     def known(ops: String): IO[Set[String]] =
       BatchParser.parseBatchOperations(ops).map { result =>
-        BatchParser.putfKnownCandidates(Workbook(sheet), Some(sheet), result.scoped).map(_._2.toA1)
+        val isKnown = BatchParser.putfKnownCandidates(Workbook(sheet), Some(sheet), result.scoped)
+        probe.filter(r => isKnown(sheet.name -> ARef.parse(r).fold(fail(_), identity))).toSet
       }
     for
       plain <- known(
@@ -279,6 +286,46 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assertEquals(plain, Set("D1", "D3"))
       assertEquals(copied, Set.empty[String])
       assertEquals(voided, Set.empty[String])
+  }
+
+  test("a large batch: known candidates in one walk, targets never expanded past the budget") {
+    // 2,000 drags of 5,000 cells each (10M cells) and 2,000 later puts: the old per-drag
+    // `drop(i + 1)` over expanded cells was O(ops² x cells)
+    val drags = (0 until 2000).map { i =>
+      val col = Column.from0(i % 50).toLetter
+      val top = (i / 50) * 5000 + 1
+      s"""{"op":"putf","ref":"$col$top:$col${top + 4999}","value":"=A$$1:A$$10*2","from":"$col$top"}"""
+    }
+    val puts = (1 to 2000).map(i => s"""{"op":"put","ref":"B$i","value":$i}""")
+    val ops = (drags ++ puts).mkString("[", ",", "]")
+    // only the first area holds formulas: the check must stop inside it
+    val sheet = (1 to 2000).foldLeft(Sheet("S")) { (s, row) =>
+      s.put(ARef.from0(0, row - 1), CellValue.Formula("A$1:A$10*2"))
+    }
+    val wb = Workbook(sheet)
+    for
+      result <- BatchParser.parseBatchOperations(ops)
+      start <- IO.monotonic
+      areas = BatchParser.putfTargets(wb, Some(sheet), result.scoped)
+      isKnown = BatchParser.putfKnownCandidates(wb, Some(sheet), result.scoped)
+      built <- IO.monotonic
+      pulled = new java.util.concurrent.atomic.AtomicInteger(0)
+      targets = areas.view.flatMap((n, r) =>
+        r.cellsRowMajor.map { c =>
+          pulled.incrementAndGet()
+          n -> c
+        }
+      )
+      report = ImplicitIntersection.check(wb, targets, clock, known = isKnown)
+    yield
+      assertEquals(areas.size, 2000)
+      assert(isKnown(sheet.name -> ARef.from0(0, 0)))
+      assert(!isKnown(sheet.name -> ARef.from0(1, 0)), "B1 is written by a later put")
+      assert(isKnown(sheet.name -> ARef.from0(1, 5000)), "B5001: a later drag, no later write")
+      assertEquals((report.checked, report.candidates, report.exact), (1000, 1001, false))
+      // one past the budget, out of ten million target cells
+      assertEquals(pulled.get(), 1001)
+      assert((built - start).toSeconds < 20, s"building took ${(built - start).toMillis}ms")
   }
 
   test("pinned: a sampled check with no hit in its sample warns nothing") {

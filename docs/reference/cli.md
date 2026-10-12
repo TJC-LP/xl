@@ -1161,8 +1161,8 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   refused as `FORMULA_ERROR`, nothing written: Excel would keep the value and show `#SPILL!` at
   the anchor (and a clear of a spill's cells alone would change nothing). The hint says to
   overwrite or clear the anchor first; in a batch, an earlier op's spill counts. `sort` and
-  `--stream` writes do not apply this rule yet. A spill of a whole column (1,048,576 cells) or
-  more is refused before anything is written. A later recalculation
+  `--stream` writes do not apply this rule yet. A spill of more than 1,048,576 cells (one full
+  column, as many as SEQUENCE allows) is refused before anything is written. A later recalculation
   re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
   values until Excel recalculates on open.
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with

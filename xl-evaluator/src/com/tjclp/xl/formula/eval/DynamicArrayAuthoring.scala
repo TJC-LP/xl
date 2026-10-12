@@ -70,9 +70,9 @@ private[xl] object DynamicArrayAuthoring:
     case OffGrid(rows: Int, cols: Int)
 
     /**
-     * A `rows`x`cols` spill of `limit` cells or more ([[ArrayResult.MaxCells]], one full column):
-     * xl's own guard, not Excel's — Excel would spill it — refused rather than materialise that
-     * many constants (and their styles) in memory.
+     * A `rows`x`cols` spill of more than `limit` cells ([[ArrayResult.MaxCells]], one full column —
+     * SEQUENCE's and INDIRECT's own bound): xl's guard, not Excel's, refused rather than
+     * materialise that many constants (and their styles) in memory.
      */
     case TooLarge(rows: Int, cols: Int, limit: Long)
 
@@ -122,7 +122,7 @@ private[xl] object DynamicArrayAuthoring:
           "XFD1048576 (Excel shows #SPILL!); choose another anchor"
       case SpillBlocker.TooLarge(rows, cols, limit) =>
         s"a ${rows}x$cols spill from ${anchor.toA1} is ${count(rows.toLong * cols)} cells; xl " +
-          s"authors a dynamic array of fewer than ${count(limit)} cells (one full column, the " +
+          s"authors a dynamic array of at most ${count(limit)} cells (one full column, the " +
           "SEQUENCE and INDIRECT guard), so nothing was written"
       case SpillBlocker.Overwritten(cells) =>
         val they = if cells.size == 1 then "it is" else "they are"
@@ -210,13 +210,13 @@ private[xl] object DynamicArrayAuthoring:
           def refuse(extent: Option[CellRange], blocker: SpillBlocker) =
             Left(Refusal.Blocked(SpillBlocked(full, anchor, extent, blocker)))
           // checked from the result's dimensions, before a cell of the spill is written
-          if rows.toLong * cols.toLong >= maxCells then
+          if rows.toLong * cols.toLong > maxCells then
             refuse(None, SpillBlocker.TooLarge(rows, cols, maxCells))
           else
             spillExtent(anchor, rows, cols) match
               case None => refuse(None, SpillBlocker.OffGrid(rows, cols))
               case Some(extent) =>
-                blocked(placed, anchor, extent) match
+                blocked(placed, extent, _ == anchor) match
                   case Some(blocker) => refuse(Some(extent), blocker)
                   case None =>
                     val kind = FormulaKind.dynamicArray(extent)
@@ -392,15 +392,17 @@ private[xl] object DynamicArrayAuthoring:
 
   /**
    * Why Excel would show `#SPILL!` for `extent`, in Excel's own order of checks; None when clear.
+   * `replaced` names the cells the write itself fills (the anchor; for a copied spill, every cell
+   * the copy writes): their old values and array records do not block.
    */
-  private def blocked(sheet: Sheet, anchor: ARef, extent: CellRange): Option[SpillBlocker] =
+  def blocked(sheet: Sheet, extent: CellRange, replaced: ARef => Boolean): Option[SpillBlocker] =
     val occupied = extent.cellsRowMajor
-      .filter(_ != anchor)
+      .filterNot(replaced)
       .filter(r => sheet.cells.get(r).exists(_.value != CellValue.Empty))
       .toVector
     lazy val merges = sheet.mergedRanges.filter(_.intersects(extent)).toVector.sortBy(rowMajor)
     lazy val arrays = sheet.cells.valuesIterator
-      .filter(_.ref != anchor)
+      .filterNot(cell => replaced(cell.ref))
       .flatMap(cell =>
         cell.value match
           case CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
