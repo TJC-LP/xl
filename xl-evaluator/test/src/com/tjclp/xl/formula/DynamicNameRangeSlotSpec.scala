@@ -408,6 +408,18 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     agree(plain("Sheet1", "H1", withSlot), N("5.5"))
   }
 
+  test("OFFSET's reference binding leaves another binding's value read unchanged") {
+    // OFFSET makes the array-mode LET bind references; x, an array value, must still read as one.
+    // Array mode: x is {1,-2,3.5}, SUM 2.5, plus B6's 2. A plain cell is Excel's legacy formula:
+    // A1:A3*1 is intersected at row 1 (1), plus 2 — with or without the OFFSET, in both modes.
+    val withOffset = "LET(c,B5,x,A1:A3*1,OFFSET(c,1,0)+SUM(x))"
+    val withoutOffset = "LET(x,A1:A3*1,SUM(x))+Sheet1!B6"
+    agree(unplaced(withOffset), N("4.5"))
+    agree(unplaced(withoutOffset), N("4.5"))
+    agree(plain("Sheet1", "H1", withOffset), N("3"))
+    agree(plain("Sheet1", "H1", withoutOffset), N("3"))
+  }
+
   // ----- a reference-reading position sees a LET name as its reference, whatever else the LET reads -----
 
   // Each pair: the LET with an unrelated range-slot read of another LET name, and the same LET

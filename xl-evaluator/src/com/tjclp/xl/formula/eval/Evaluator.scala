@@ -796,7 +796,8 @@ object Evaluator:
    * `COUNTIF(r, …)` into `#VALUE!` in array mode. DynamicNameRangeSlotSpec pins one formula per
    * wrapper. `evalLet` runs it once per LET evaluation, over that LET's subtree, so nested LETs
    * walk their inner subtrees again (size × depth per evaluation). It is a pure function of the AST
-   * and could be computed once per `Let` node at parse time if profiling ever shows the cost.
+   * and could be computed once per `Let` node at parse time if profiling ever shows the cost
+   * (#733).
    */
   private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean =
     // TODO(#733): cache per Let node (or compute at parse time) instead of walking per evaluation;

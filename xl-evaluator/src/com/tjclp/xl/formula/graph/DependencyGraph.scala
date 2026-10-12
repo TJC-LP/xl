@@ -2260,7 +2260,7 @@ object DependencyGraph:
           // shape, or a defined name's resolved through the workbook when one is at hand
           // GH-669: an intersection of static locations depends only on the cells they share
           // #733: a defined name bound to a range resizes like the range itself — its target's
-          // resized cells are static edges, kept with the name's own (its definition's) edges
+          // resized cells are static edges
           val raw = call.spec.argSpec.toValues(call.args)
           val values = ReferenceOperators.dependencyValues(
             call.spec.name,
@@ -2277,16 +2277,13 @@ object DependencyGraph:
               }
             )
           )
-          // the name's own edges stay (its definition's cells and the names it reaches). Only
-          // when the resize replaced it: an unresolved name is still in `values` and the fold
-          // below visits it — adding it here too would double the walk, dropping it the edges
-          val namedTarget = raw match
-            case _ :: _ :: ArgValue.Range(named: TExpr.RangeLocation.Name) :: _
-                if !values.lift(2).contains(ArgValue.Range(named)) =>
-              locCells(named)
-            case _ => Set.empty[QualifiedRef]
+          // A name the resize replaced resolved statically to a range or a cell, through any chain
+          // of names: its resized CrossSheet is everything the call reads, so the name's full
+          // range adds no edge — it would make `C5 = SUMIF(A1:A3,">0",amt)` with amt = C1:C10 a
+          // false cycle, where the written `C1:C10` is not. A name that did not resolve is still in
+          // `values`, and the fold visits it as before.
           val selected = lookupCells(call.spec.name, values)
-          values.zipWithIndex.foldLeft(namedTarget) { case (acc, (value, index)) =>
+          values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>
             value match
               case ArgValue.Expr(expr) => union(acc, go(expr))
               case ArgValue.Range(_) if index == 1 && selected.isDefined =>

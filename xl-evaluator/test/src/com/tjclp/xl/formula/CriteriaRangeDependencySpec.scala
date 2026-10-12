@@ -340,6 +340,33 @@ class CriteriaRangeDependencySpec extends FunSuite:
     }
   }
 
+  test("#733: a named target records only the resized cells, as the written range does") {
+    // amt names C1:C10, but SUMIF(A1:A3,…) reads C1:C3 of it: C5 holding the call is no cycle,
+    // exactly as when the range is written out
+    List(
+      "SUMIF(A1:A3,\">0\",amt)",
+      "SUMIF(A1:A3,\">0\",amtAlias)",
+      "SUMIF(A1:A3,\">0\",C1:C10)"
+    ).foreach { formula =>
+      val wb = Workbook(sheet.put(ref"C5", CellValue.Formula(formula, None)))
+        .withDefinedName("amt", "S!$C$1:$C$10")
+        .withDefinedName("amtAlias", "amt")
+      val graph = DependencyGraph.fromWorkbook(wb)
+      assertEquals(
+        graph.getOrElse(q(ref"C5"), Set.empty).filter(_.ref.col == ref"C1".col),
+        Set(q(ref"C1"), q(ref"C2"), q(ref"C3")),
+        formula
+      )
+      val result = wb.recalculate()
+      assertEquals(result.errors, Vector.empty, formula)
+      assertEquals(cache(resultSheet(result.workbook), ref"C5"), Some(n(60)), formula)
+      val updated = result.workbook
+        .put(resultSheet(result.workbook).put(ref"C2", n(200)))
+        .recalculateDependents(S, Set(ref"C2"))
+      assertEquals(cache(resultSheet(updated), ref"C5"), Some(n(240)), formula)
+    }
+  }
+
   test("#733: a static self-read through a resized name is a cycle") {
     val looped = staticNames(
       Workbook(
