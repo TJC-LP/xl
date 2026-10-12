@@ -293,9 +293,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
   reference it is.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
-  case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported"), and
-  positionless `eval` and `evala` now see the overrides through a formula on another sheet that
-  reads back into the evaluated one, as `eval --at` does.
+  case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported").
+  Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the
+  evaluated sheet threaded in, so a formula on another sheet that reads back into it sees the
+  overrides and the computed closure. A cached formula that reads an overridden cell drops its
+  stale cache, so `Data!B1`, `INDIRECT("B1")` and other sheets' read-backs see the override too.
+  This costs one parse of the sheet's formulas when `--with` is given.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

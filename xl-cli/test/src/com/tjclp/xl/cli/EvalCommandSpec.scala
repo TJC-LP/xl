@@ -659,7 +659,15 @@ class EvalCommandSpec extends CatsEffectSuite:
     val other = Sheet("Other").put(ref"A1", CellValue.Formula("=Data!B1*2"))
     val wb = Workbook(Vector(data, other))
     val overrides = List("A1=200")
-    val cases = List("=B1" -> 400, "=Data!B1" -> 400, "=B1+Data!B1" -> 800, "=Other!A1" -> 800)
+    // `=INDIRECT("B1")` and `=Other!A1` reach B1 only at run time or through another sheet: the
+    // shapes that make --with uncache stale readers sheet-wide, not just in the closure
+    val cases = List(
+      "=B1" -> 400,
+      "=Data!B1" -> 400,
+      "=B1+Data!B1" -> 800,
+      "=Other!A1" -> 800,
+      "=INDIRECT(\"B1\")" -> 400
+    )
     val checks = for
       (formula, expected) <- cases
       at <- List(Some("D5"), None)

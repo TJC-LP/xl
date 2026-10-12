@@ -265,8 +265,9 @@ object ReadCommands:
       case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
         // INVALID_REFERENCE: the parser's own text, a range, or another sheet's cell
         Resolve.ref(refStr.trim).left.map(CliException(_)).flatMap {
-          case (qualifier, Resolve.Target.Cell(ref))
-              if qualifier.forall(_.value.equalsIgnoreCase(sheet.value)) =>
+          case (None, Resolve.Target.Cell(ref)) =>
+            Right((ref, ValueParser.parseValue(valueStr.trim)))
+          case (Some(own), Resolve.Target.Cell(ref)) if own.value.equalsIgnoreCase(sheet.value) =>
             Right((ref, ValueParser.parseValue(valueStr.trim)))
           case (Some(other), Resolve.Target.Cell(_)) =>
             Left(
@@ -360,7 +361,9 @@ object ReadCommands:
      * `result` as the CLI raises it. If the evaluation read the placement, by any path and even
      * when IFERROR swallowed the guard's failure, the plain cell would be circular: a read the
      * static check could not see, computed at run time by INDIRECT, OFFSET or a defined name, or
-     * made by another sheet's formula.
+     * made by another sheet's formula. The error is the evaluator's for the one-cell cycle
+     * `CircularRef(List(cell))`, with only its reason text replaced: the guard sees the read, not
+     * the path that made it, so any structured cycle field names the placement alone.
      */
     def checked[A](result: XLResult[A], formula: String): Either[XLException, A] =
       placement.filter(_._2.wasRead) match
@@ -657,17 +660,20 @@ object ReadCommands:
   /**
    * `sheet` with the `--with` overrides applied, and every formula on it that reads an overridden
    * cell, directly or through other formulas, without its cache: the cache predates the override.
-   * However the formula is then read (in the closure, qualified with its own sheet's name, or back
-   * from another sheet's formula), it evaluates with the overrides. Value reads only
-   * ([[ValueDependencies]]): `ROW(A1)` does not go stale when A1 changes.
+   * However the formula is then read, it evaluates with the overrides.
+   *
+   * This is the one step of `eval` (and of `--at`) that is not O(k) in the formula's closure: with
+   * overrides, every formula on the sheet is parsed once to find its value reads
+   * ([[ValueDependencies]], so `ROW(A1)` does not go stale when A1 changes). The closure alone
+   * would not do. The fold re-evaluates the closure's formulas anyway; the stale formulas it cannot
+   * see are the ones read only at run time (`INDIRECT("B1")`) or back from another sheet's formula
+   * (`Other!A1` holding `=Data!B1*2`), and finding those statically would mean parsing every sheet
+   * a read could reach. EvalCommandSpec pins both shapes. Without overrides nothing is parsed.
    */
   private def overridden(sheet: Sheet, overrides: List[String]): IO[Sheet] =
     if overrides.isEmpty then IO.pure(sheet)
     else
-      applyOverrides(sheet, overrides).map { applied =>
-        val changed = overrides.flatMap(parseOverride(_, sheet.name).toOption.map(_._1)).toSet
-        uncacheReaders(applied, changed)
-      }
+      applyOverrides(sheet, overrides).map((applied, changed) => uncacheReaders(applied, changed))
 
   /** `sheet` with every cached formula that reads `changed`, transitively, made uncached. */
   private def uncacheReaders(sheet: Sheet, changed: Set[ARef]): Sheet =
@@ -698,11 +704,15 @@ object ReadCommands:
         case _ => s
     }
 
-  private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[Sheet] =
+  /** `sheet` with the `--with` overrides applied, and the cells they set. */
+  private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[(Sheet, Set[ARef])] =
     IO.fromEither(
-      overrides.foldLeft[Either[CliException, Sheet]](Right(sheet)) { (acc, override_) =>
-        acc.flatMap(s =>
-          parseOverride(override_, sheet.name).map((ref, value) => s.put(ref, value))
-        )
+      overrides.foldLeft[Either[CliException, (Sheet, Set[ARef])]](Right((sheet, Set.empty))) {
+        case (acc, override_) =>
+          acc.flatMap { (s, changed) =>
+            parseOverride(override_, sheet.name).map((ref, value) =>
+              (s.put(ref, value), changed + ref)
+            )
+          }
       }
     )

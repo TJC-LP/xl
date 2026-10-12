@@ -104,8 +104,13 @@ private[xl] object ValueDependencies:
                 case _ => Set.empty
         case ArgValue.Cells(r) => if addressOnly then Set.empty else cells(r)
 
+      // Exhaustive, no wildcard: a new TExpr case is a compiler warning here, never a silent
+      // structural fallback that would lose referenceOnly and own-sheet qualified reads.
       e match
-        case chain if BinarySpine.isBinary(chain) =>
+        // GH-680: a chain's left spine in one loop; unary minus is `0 - x`, so it lands here too
+        case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+            _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+            _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
           BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ value(_))
         case TExpr.Ref(at, _, _) => cell(at)
         case TExpr.PolyRef(at, _) => cell(at)
@@ -151,10 +156,12 @@ private[xl] object ValueDependencies:
               passes.exists(_(index, args.size))
             acc ++ arg(a, addressOnly)
           }
-        // literals, names and external references: no cell of this sheet
-        case _ =>
-          if referenceOnly then Set.empty
-          else DependencyGraph.extractDependenciesBounded(e, bounds)
+        // literals, defined names (their targets live in workbook metadata; the placement guard
+        // catches a read through one) and external references: no cell of this sheet
+        case TExpr.Lit(_) | TExpr.ErrorLit(_, _) | TExpr.Missing | TExpr.NameRef(_) |
+            TExpr.SheetNameRef(_, _) | TExpr.ExternalRef(_, _, _, _) |
+            TExpr.ExternalRange(_, _, _, _) =>
+          Set.empty
 
   private def referenceDefinition(expr: TExpr[?]): Boolean = expr match
     // Literal range bindings are substituted by the parser and skipped by LET evaluation.

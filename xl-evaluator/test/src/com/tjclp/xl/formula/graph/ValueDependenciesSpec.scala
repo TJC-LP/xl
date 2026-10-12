@@ -82,7 +82,13 @@ class ValueDependenciesSpec extends FunSuite:
     "LET(chosen,Test!D5,chosen+1)" -> Set(ref"D5"),
     "ROW(Test!D5)+ROWS(Test!D4:D5)" -> Set.empty[ARef],
     "LET(chosen,Test!D5,ROW(chosen))" -> Set.empty[ARef],
-    "Other!D5+SUM(Other!D4:D5)" -> Set.empty[ARef]
+    "Other!D5+SUM(Other!D4:D5)" -> Set.empty[ARef],
+    // unary wrappers keep both the own-sheet qualifier and reference-only inspection
+    "-Test!D5" -> Set(ref"D5"),
+    "Test!D5%" -> Set(ref"D5"),
+    "+Test!D5" -> Set(ref"D5"),
+    "-ROW(D5)" -> Set.empty[ARef],
+    "-ROW(Test!D5)%" -> Set.empty[ARef]
   ).foreach { (formula, expected) =>
     test(s"$formula on sheet Test reads its own sheet's qualified references as local") {
       assertEquals(readsOnTest(formula), expected)

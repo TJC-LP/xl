@@ -100,6 +100,29 @@ class LookupUncachedKeysSpec extends FunSuite:
     assertEquals(eval(cyclic, "=XLOOKUP(7,A1:A3,B1:B3)"), num(70))
   }
 
+  test("a key reading a defined-name cycle, with no placement, is a non-match, not a CircularRef") {
+    // Pins the invariant LookupLine relies on: outside `eval --at` no cell read raises a
+    // CircularRef, so only the placement guard can make a lookup fail that way
+    val names = Vector(
+      com.tjclp.xl.workbooks.DefinedName("ping", "=pong"),
+      com.tjclp.xl.workbooks.DefinedName("pong", "=ping")
+    )
+    val sheet = column.put(ref"A1", CellValue.Formula("=ping"))
+    val book = Workbook(sheet)
+    val named = book.copy(metadata = book.metadata.copy(definedNames = names))
+    def evalIn(formula: String): Either[String, CellValue] =
+      SheetEvaluator
+        .evaluateFormula(sheet)(formula, workbook = Some(named))
+        .left
+        .map(_.toString)
+    List("=MATCH(7,A1:A3,0)" -> num(2), "=VLOOKUP(7,A1:B3,2,FALSE)" -> num(20)).foreach {
+      (formula, expected) =>
+        val result = evalIn(formula)
+        assert(!result.left.exists(_.contains("Circular reference")), s"$formula: $result")
+        assertEquals(result, Right(expected), formula)
+    }
+  }
+
   test("recalculation leaves a lookup that reads a cycle as the cycle's dependent") {
     // Pinned: recalculation finds the A1-A2 cycle in the dependency graph first and reports every
     // formula reading it, the lookup included, before any lookup runs
