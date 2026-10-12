@@ -41,12 +41,29 @@ object IntersectionHit:
     s"${where(d)}: =${d.formula} is ${show(d.plain)} as a plain cell (implicit intersection) " +
       s"but ${arrayValue(d)} as an array formula"
 
+  /** `1001` or `at least 1001`: how many candidates there were, as far as the check counted. */
+  private def candidates(report: Report): String =
+    if report.exact then s"${report.candidates}" else s"at least ${report.candidates}"
+
+  /**
+   * #739: the `INTERSECTION_SAMPLED` note for a check that stopped at its budget with no divergence
+   * among the cells it evaluated — silence would read as "all clear". None when the check found a
+   * divergence (the warning says it sampled) or evaluated every candidate.
+   */
+  def sampledNote(report: Report): Option[Warning] =
+    Option.when(report.sampled && report.hits.isEmpty)(
+      Warning(
+        WarningCode.INTERSECTION_SAMPLED,
+        s"implicit-intersection check: the first ${report.checked} of ${candidates(report)} " +
+          "candidate cells were checked and none evaluates differently as a plain cell than as " +
+          "an array formula; the rest were not checked"
+      )
+    )
+
   def warning(report: Report): Option[Warning] =
     val hits = report.hits
     val sampled =
-      if report.sampled then
-        val of = if report.exact then s"${report.candidates}" else s"at least ${report.candidates}"
-        s" (first ${report.checked} of $of cells checked)"
+      if report.sampled then s" (first ${report.checked} of ${candidates(report)} cells checked)"
       else ""
     hits.headOption.map { first =>
       val message =

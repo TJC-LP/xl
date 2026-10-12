@@ -103,6 +103,13 @@ object WarningCode:
    */
   val FILLED_SPILLS_OVERLAP: String = "FILLED_SPILLS_OVERLAP"
 
+  /**
+   * GH-714 (#739): the `IMPLICIT_INTERSECTION` check stopped at its budget and found no divergence
+   * among the cells it evaluated. The note says how many it checked of how many candidates, so an
+   * empty sample is not read as "all clear": the rest were not checked. Informational.
+   */
+  val INTERSECTION_SAMPLED: String = "INTERSECTION_SAMPLED"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -122,5 +129,6 @@ object WarningCode:
     IMPLICIT_INTERSECTION,
     DYNAMIC_ARRAY_DOWNGRADED,
     SPILL_CELLS_SKIPPED,
-    FILLED_SPILLS_OVERLAP
+    FILLED_SPILLS_OVERLAP,
+    INTERSECTION_SAMPLED
   )

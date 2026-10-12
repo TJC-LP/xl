@@ -1467,11 +1467,9 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     path: Path,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default
   ): F[Unit] =
-    if wb.sheets.isEmpty then
-      Async[F].raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
-    else
-      val saxConfig = config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax)
-      writeWith(wb, path, saxConfig)
+    ExcelIO
+      .workbookStreamConfig(wb, config)
+      .fold(refused => Async[F].raiseError[Unit](refused), writeWith(wb, path, _))
 
   // Helper: Assemble multi-sheet ZIP with dimension elements
   private def assembleMultiSheetZip(
@@ -1655,6 +1653,20 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     yield sheet
 
 object ExcelIO:
+
+  /**
+   * The config [[ExcelIO.writeWorkbookStream]] writes `wb` with — the SAX/StAX backend forced — or
+   * the refusal of a workbook without a sheet. Shared with a caller that serialises the same way
+   * under its own guard (the CLI's reporting write), so the two cannot drift.
+   */
+  private[xl] def workbookStreamConfig(
+    wb: Workbook,
+    config: com.tjclp.xl.ooxml.WriterConfig
+  ): Either[IllegalArgumentException, com.tjclp.xl.ooxml.WriterConfig] =
+    if wb.sheets.isEmpty then
+      Left(new IllegalArgumentException("Workbook must have at least one sheet"))
+    else Right(config.copy(backend = com.tjclp.xl.ooxml.XmlBackend.SaxStax))
+
   /** Create default ExcelIO instance */
   def instance[F[_]: Async]: ExcelIO[F] = new ExcelIO[F](_ => Async[F].unit)
 

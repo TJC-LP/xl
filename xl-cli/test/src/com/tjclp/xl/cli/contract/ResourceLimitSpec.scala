@@ -5,6 +5,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import cats.effect.{IO, Resource}
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
@@ -121,6 +122,58 @@ class ResourceLimitSpec extends CatsEffectSuite:
         EnvelopeSchema.assertValid(envelope)
         assertEquals(envelope("error")("code").str, ErrorCode.INTERNAL)
         assertEquals(envelope("error")("message").str, "boom")
+    }
+  }
+
+  test("an advisory that fails, or exhausts the heap, never sinks the write it follows") {
+    // SUM(A1:A2*2) in row 5 is an IMPLICIT_INTERSECTION candidate that diverges (#VALUE! as a
+    // plain cell, 20 as an array): without a fault the check warns; with one — a host error, or
+    // an exhausted heap — the write still lands and exits 0, with no advisory
+    def putf(src: Path, out: Path) =
+      run(
+        List("--json", "-f", src.toString, "-o", out.toString, "putf", "C5", "=SUM(A1:A2*2)"),
+        IO.pure("")
+      )
+    def batch(src: Path, out: Path) =
+      run(
+        List("--json", "-f", src.toString, "-o", out.toString, "batch", "-"),
+        IO.pure("""[{"op":"putf","ref":"C5","value":"=SUM(A1:A2*2)"}]""")
+      )
+    fixture("advisory.xlsx").flatMap { src =>
+      val clean = dir().resolve("advisory-clean.xlsx")
+      for
+        (cleanExit, cleanOut, _) <- putf(src, clean)
+        faults = Vector(new IllegalStateException("host error"), new OutOfMemoryError("test"))
+        results <- faults.traverse { fault =>
+          val (verbOut, batchOut) =
+            (
+              dir().resolve(s"verb-${fault.getClass.getSimpleName}.xlsx"),
+              dir().resolve(s"batch-${fault.getClass.getSimpleName}.xlsx")
+            )
+          withFault("check", fault) {
+            for
+              verb <- putf(src, verbOut)
+              viaBatch <- batch(src, batchOut)
+              written <- IO.blocking((Files.exists(verbOut), Files.exists(batchOut)))
+            yield (fault, verb, viaBatch, written)
+          }
+        }
+      yield
+        assertEquals(cleanExit, 0, cleanOut)
+        assert(cleanOut.contains("IMPLICIT_INTERSECTION"), cleanOut)
+        results.foreach {
+          case (fault, (verbExit, verbJson, _), (batchExit, batchJson, _), written) =>
+            val name = fault.getClass.getSimpleName
+            assertEquals(verbExit, 0, s"$name: $verbJson")
+            assertEquals(batchExit, 0, s"$name: $batchJson")
+            assertEquals(written, (true, true), name)
+            Vector(verbJson, batchJson).foreach { json =>
+              val envelope = ujson.read(json)
+              assertEquals(envelope("ok"), ujson.True, json)
+              assert(!json.contains("IMPLICIT_INTERSECTION"), json)
+              assert(!json.contains(ErrorCode.RESOURCE_LIMIT), json)
+            }
+        }
     }
   }
 

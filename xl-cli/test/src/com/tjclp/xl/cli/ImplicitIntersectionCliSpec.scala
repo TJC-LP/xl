@@ -328,7 +328,7 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assert((built - start).toSeconds < 20, s"building took ${(built - start).toMillis}ms")
   }
 
-  test("pinned: a sampled check with no hit in its sample warns nothing") {
+  test("#739: a sampled check with no hit in its sample says it sampled, not all clear") {
     // 3 candidates, budget 2: only the third diverges (the IF picks the range in row 3)
     val sheet = (1 to 10)
       .foldLeft(Sheet("Sheet1")) { (s, i) =>
@@ -344,8 +344,28 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
     val sampled = ImplicitIntersection.check(wb, cells, clock, budget = 2)
     assertEquals((sampled.hits, sampled.checked, sampled.candidates), (Vector.empty, 2, 3))
     assert(sampled.sampled)
-    // the blind spot the PR notes: a sample with no hit says nothing, not even that it sampled
+    // no divergence to warn about, but an informational note that the check sampled
     assertEquals(IntersectionHit.warning(sampled), None)
+    val note = IntersectionHit.sampledNote(sampled).getOrElse(fail("expected a sampled note"))
+    assertEquals(note.code, "INTERSECTION_SAMPLED")
+    assert(note.message.contains("the first 2 of at least 3 candidate cells"), note.message)
+    assert(note.message.contains("the rest were not checked"), note.message)
+    // a full check, or one with a hit, adds no note
+    assertEquals(IntersectionHit.sampledNote(full), None)
+    assertEquals(
+      IntersectionHit.sampledNote(ImplicitIntersection.check(wb, cells, clock, budget = 3)),
+      None
+    )
+  }
+
+  test("#739: a long drag with no divergence in its sample says it sampled") {
+    // every copy is a candidate (a range in a value position) and none diverges below row 5000
+    putf("C1:C1100", "=IF(ROW()>5000,A$1:A$10*2,1)").map { run =>
+      assertEquals(run.exit, 0, run.toString)
+      assert(!run.stdout.contains("\"IMPLICIT_INTERSECTION\""), run.stdout)
+      assert(run.stdout.contains("INTERSECTION_SAMPLED"), run.stdout)
+      assert(run.stdout.contains("the first 1000 of at least 1001 candidate cells"), run.stdout)
+    }
   }
 
   test("a text value in the warning doubles its quotes, as a formula literal does") {

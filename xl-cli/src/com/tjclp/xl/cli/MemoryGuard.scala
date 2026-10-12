@@ -15,7 +15,7 @@ import fs2.{Pipe, Stream}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.io.{ExcelIO, RowData, StyledRowData}
-import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter, XmlBackend}
+import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.workbooks.Workbook
@@ -347,12 +347,10 @@ object MemoryGuard:
           }
 
       // Serialisation builds every part's XML; `writeWorkbookStream` and `write` route through
-      // here, so one override covers the three. Same failure text as `ExcelIO.writeWith`.
+      // here, so one override covers the three — and it is [[serialise]], the same guarded write
+      // [[writeReporting]] makes.
       override def writeWith(wb: Workbook, path: Path, config: WriterConfig): IO[Unit] =
-        blocking(path, "write")(XlsxWriter.writeWith(wb, path, config)).flatMap {
-          case Right(_) => IO.unit
-          case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
-        }
+        serialise(wb, path, config).void
 
       // GH-517: the spill directory is an override, never `withSpillDir` — that rebuilds a PLAIN
       // ExcelIO and would silently drop the two guards above. A malformed setting is not a
@@ -500,14 +498,24 @@ object MemoryGuard:
     config: WriterConfig,
     stream: Boolean
   ): IO[XlsxWriter.WriteReport] =
-    if stream && wb.sheets.isEmpty then
-      IO.raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
-    else
-      val effective = if stream then config.copy(backend = XmlBackend.SaxStax) else config
-      blocking(path, "write")(XlsxWriter.writeWithReport(wb, path, effective)).flatMap {
-        case Right(report) => IO.pure(report)
-        case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
-      }
+    val effective =
+      if stream then IO.fromEither(ExcelIO.workbookStreamConfig(wb, config)) else IO.pure(config)
+    effective.flatMap(serialise(wb, path, _))
+
+  /**
+   * The one guarded serialisation: [[blocking]] (an exhausted heap is `RESOURCE_LIMIT`) around the
+   * writer, with `ExcelIO.writeWith`'s failure text. [[excel]]'s `writeWith` and [[writeReporting]]
+   * both go through it.
+   */
+  private def serialise(
+    wb: Workbook,
+    path: Path,
+    config: WriterConfig
+  ): IO[XlsxWriter.WriteReport] =
+    blocking(path, "write")(XlsxWriter.writeWithReport(wb, path, config)).flatMap {
+      case Right(report) => IO.pure(report)
+      case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
+    }
 
   /** Binary units with one decimal (`8.0 GB`, `512.0 MB`), the way `-Xmx` counts. */
   def human(bytes: Long): String =

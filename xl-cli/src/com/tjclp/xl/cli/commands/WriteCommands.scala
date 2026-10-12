@@ -197,17 +197,19 @@ object WriteCommands:
           case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
             ""
           case Some(r) => "\n" + formatRecalcSummary(r)
-        IO.blocking(advisories(finalWb) ++ downgradeWarning(report)).flatMap { extra =>
-          strictGate(
-            policy,
-            s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
-            result,
-            Vector.empty,
-            warn,
-            offGrid,
-            extra
-          )
-        }
+        advisoriesAfterWrite(outputPath)(advisories(finalWb))
+          .map(_ ++ downgradeWarning(report))
+          .flatMap { extra =>
+            strictGate(
+              policy,
+              s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
+              result,
+              Vector.empty,
+              warn,
+              offGrid,
+              extra
+            )
+          }
       }
     }
 
@@ -761,7 +763,24 @@ object WriteCommands:
     clock: Clock
   ): Workbook => Vector[Warning] = finalWb =>
     val report = ImplicitIntersection.check(finalWb, targets, clock, known = known)
-    IntersectionHit.warning(report).toList.toVector
+    IntersectionHit.warning(report).orElse(IntersectionHit.sampledNote(report)).toList.toVector
+
+  /**
+   * GH-714: the informational advisories a write ends with (`IMPLICIT_INTERSECTION` evaluates up to
+   * its budget of cells twice), computed after the output is staged. They never gate, so they can
+   * never sink the write: the computation runs under the memory guard, and any failure — an
+   * exhausted heap (`RESOURCE_LIMIT`), a stack overflow, any other error — degrades to no advisory,
+   * so the exit code and the staged file are exactly what they would have been without it.
+   */
+  private[cli] def advisoriesAfterWrite(outputPath: Path)(
+    compute: => Vector[Warning]
+  ): IO[Vector[Warning]] =
+    MemoryGuard
+      .blocking(outputPath, "check") {
+        try compute
+        catch case _: StackOverflowError => Vector.empty
+      }
+      .handleError(_ => Vector.empty)
 
   /**
    * GH-714: `DYNAMIC_ARRAY_DOWNGRADED` when the write just made could not keep its dynamic arrays'
@@ -1791,13 +1810,15 @@ object WriteCommands:
                       s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
                     // GH-714: the batch's plain putf cells, checked once on the final workbook;
                     // the written areas are expanded lazily, only as far as the check's budget
-                    val areas = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
-                    val targets = areas.view.flatMap((name, r) => r.cellsRowMajor.map(name -> _))
-                    val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
-                    IO.blocking(
-                      intersectionAdvisory(targets, known, clock)(finalWb) ++
-                        spillsKeptWarning(kept).toList.toVector ++
-                        downgradeWarning(written)
+                    advisoriesAfterWrite(outputPath) {
+                      val areas = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
+                      val targets =
+                        areas.view.flatMap((name, r) => r.cellsRowMajor.map(name -> _))
+                      val known =
+                        BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
+                      intersectionAdvisory(targets, known, clock)(finalWb)
+                    }.map(
+                      _ ++ spillsKeptWarning(kept).toList.toVector ++ downgradeWarning(written)
                     ).flatMap { extra =>
                       strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
                     }
