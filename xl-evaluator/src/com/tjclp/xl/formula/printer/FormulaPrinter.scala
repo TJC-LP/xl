@@ -376,7 +376,7 @@ object FormulaPrinter:
   /**
    * Format RangeLocation (local, cross-sheet, or external-workbook) to A1 notation.
    */
-  private[printer] def formatLocation(location: TExpr.RangeLocation): String =
+  private[formula] def formatLocation(location: TExpr.RangeLocation): String =
     location match
       case TExpr.RangeLocation.Local(range, form) => formatRange(range, form)
       case TExpr.RangeLocation.CrossSheet(sheet, range, form) =>

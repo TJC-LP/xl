@@ -8,6 +8,7 @@ import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.Gen
 import org.scalacheck.Prop.*
+import org.scalacheck.rng.Seed
 
 /**
  * GH-669: the laws the union and intersection operators obey over static areas.
@@ -289,6 +290,197 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
         caches(full),
         s"${formulas.mkString("; ")} after ${edited.toA1}"
       )
+      true
+    }
+  }
+
+  // ===== GH-713: printing `:` — the structural parenthesization rule, against the parser =====
+
+  /**
+   * The operands a `:` chain is built from, as written: every shape the printer tells apart — bare
+   * cells and names (one spelled like a column, `Jan`), qualified cells and names, lexical and
+   * qualified ranges (whole columns and rows too), external references, error literals, calls, a
+   * union and an intersection. Inside the LET context `x` is a LET name bound to a cell and `r` one
+   * bound to a range.
+   */
+  private val chainLeaves: List[String] = List(
+    "A1",
+    "$B$2",
+    "C3",
+    "Start",
+    "Finish",
+    "Jan",
+    "Sheet1!A1",
+    "'My Sheet'!B2",
+    "Sheet1!Start",
+    "Other!Jan",
+    "B2:C3",
+    "A:A",
+    "1:3",
+    "$A$1:$B$2",
+    "Sheet1!B2:C3",
+    "'My Sheet'!A:A",
+    "Other!1:2",
+    "[1]Book!A1",
+    "[1]Book!A1:B2",
+    "#REF!",
+    "Sheet1!#REF!",
+    "INDEX(A:A,3)",
+    "OFFSET(A1,1,1)",
+    "XLOOKUP(2,A1:A3,B1:B3)",
+    "_xlfn.XLOOKUP(2,A1:A3,B1:B3)",
+    "INDEX(Sheet1!A:A,3)",
+    "IF(TRUE,A1,B2)",
+    "INDIRECT(\"A1\")",
+    "CHOOSE(1,A1,B2)",
+    "(A1,B2)",
+    "(A1:C3 B2:D4)"
+  )
+
+  private val letPrefix = "LET(x,A1,r,B1:B3,"
+
+  /** A `:` tree over the leaves, each node and leaf grouped at random. */
+  private def genChain(depth: Int, leaves: List[String]): Gen[String] =
+    val leaf = Gen.oneOf(leaves)
+    def grouped(text: String): Gen[String] = Gen.frequency(3 -> text, 1 -> s"($text)")
+    if depth <= 0 then leaf.flatMap(grouped)
+    else
+      Gen.frequency(
+        1 -> leaf.flatMap(grouped),
+        3 -> (for
+          l <- genChain(depth - 1, leaves)
+          r <- genChain(depth - 1, leaves)
+          node <- grouped(s"$l:$r")
+        yield node)
+      )
+
+  /** A whole formula: a `:` tree in a reference position, in or out of a LET. */
+  private val genChainFormula: Gen[(String, Boolean)] =
+    for
+      inLet <- Gen.oneOf(false, true)
+      depth <- Gen.choose(1, 5)
+      tree <- genChain(depth, if inLet then "x" :: "r" :: chainLeaves else chainLeaves)
+      consumer <- Gen.oneOf("SUM", "ROWS", "COUNTA")
+    yield if inLet then (s"=$letPrefix$consumer($tree))", true) else (s"=$consumer($tree)", false)
+
+  /** Every range-operator call in `expr` (call arguments, LET bindings and bodies, coercions). */
+  private def rangeCalls(expr: TExpr[?]): List[TExpr.Call[?]] =
+    def operandCalls(value: functions.ArgValue): List[TExpr.Call[?]] = value match
+      case functions.ArgValue.Expr(e) => rangeCalls(e)
+      case _ => Nil
+    expr match
+      case TExpr.Coerced(inner, _) => rangeCalls(inner)
+      case TExpr.Let(bindings, body) =>
+        bindings.flatMap((_, value) => rangeCalls(value)) ++ rangeCalls(body)
+      case call: TExpr.Call[?] =>
+        val own =
+          if call.spec.name == functions.ReferenceOperators.RangeName then List(call) else Nil
+        own ++ call.spec.argSpec.toValues(call.args).flatMap(operandCalls)
+      case _ => Nil
+
+  /**
+   * The parse-probing printer the structural rule replaced, kept as the oracle: for `l:r`, the
+   * first of `l:r`, `l:(r)`, `(l):r` that the parser reads back as this very call, else `(l):(r)`.
+   * Unlike the old printer it reads each candidate in the formula's LET scope, so a LET name reads
+   * as one.
+   */
+  private def oracleRange(call: TExpr.Call[?], inLet: Boolean): String =
+    val (l, r) =
+      call.args
+        .asInstanceOf[(functions.ReferenceOperators.Operand, functions.ReferenceOperators.Operand)]
+    def text(op: functions.ReferenceOperators.Operand): String =
+      op.fold(FormulaPrinter.formatLocation, e => FormulaPrinter.printFileForm(e))
+    val (left, right) = (text(l), text(r))
+    def reads(candidate: String): Option[TExpr.Call[?]] =
+      val formula = if inLet then s"=$letPrefix$candidate)" else s"=$candidate"
+      FormulaParser.parse(formula).toOption.flatMap {
+        case TExpr.Let(_, body) if inLet =>
+          functions.ReferenceOperators.RangeOperatorCall.unapply(body)
+        case other if !inLet => functions.ReferenceOperators.RangeOperatorCall.unapply(other)
+        case _ => None
+      }
+    List(s"$left:$right", s"$left:($right)", s"($left):$right")
+      .find(candidate => reads(candidate).contains(call))
+      .getOrElse(s"($left):($right)")
+
+  property("GH-713: parse(print(t)) == t for `:` chains, with the parser's own choice of parens") {
+    // ten formulas a case: the suite's 60 cases are 600 trees, about half of which parse
+    forAllNoShrink(Gen.listOfN(10, genChainFormula)) { cases =>
+      cases.foreach { (formula, inLet) =>
+        FormulaParser.parse(formula) match
+          case Left(_) => () // a tree the parser refuses (two bare cells fold, 3-D ends, …)
+          case Right(expr) =>
+            assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr), formula)
+            assertEquals(
+              FormulaParser.parse("=" + FormulaPrinter.printFileForm(expr)),
+              Right(expr),
+              formula
+            )
+            // minimal, in the old printer's order: each `:` prints as the first candidate that
+            // the parser reads back as itself
+            rangeCalls(expr).foreach { call =>
+              assertEquals(FormulaPrinter.printFileForm(call), oracleRange(call, inLet), formula)
+            }
+            // the dynamic pre-filter admits every formula whose computed range the classifier
+            // flags, written or printed
+            val dynamicRange = rangeCalls(expr).exists(call =>
+              functions.ReferenceOperators
+                .isComputedRangeDynamic(call, functions.ReferenceOperators.staticShape)
+            )
+            if dynamicRange then
+              assert(functions.ReferenceOperators.mayContainComputedRange(formula), formula)
+              assert(
+                functions.ReferenceOperators.mayContainComputedRange(
+                  FormulaPrinter.printFileForm(expr)
+                ),
+                formula
+              )
+      }
+      true
+    }
+  }
+
+  test("GH-713: the chain generator reaches the parser (the property above is not vacuous)") {
+    val params = Gen.Parameters.default
+    val samples = (0L until 400L).flatMap(i => genChainFormula(params, Seed(i)))
+    def calls(formula: String): Int =
+      FormulaParser.parse(formula).fold(_ => 0, expr => rangeCalls(expr).size)
+    val parsedCount = samples.count((formula, _) => FormulaParser.parse(formula).isRight)
+    val withRange = samples.count((formula, _) => calls(formula) > 0)
+    assert(parsedCount >= samples.size / 4, s"$parsedCount of ${samples.size} parse")
+    assert(withRange >= samples.size / 5, s"$withRange of ${samples.size} hold a `:` call")
+  }
+
+  property("GH-713: a long `:` chain parses or hits a nesting guard — never overflows") {
+    // short operands any neighbour accepts, so a chain past both guards (128 levels, 1024
+    // operators) fits the 8192-character limit (`x` only where it is a LET name: elsewhere it is
+    // a name spelled like column X, which a token's `:` refuses)
+    val operands = List("A1", "INDEX(B1,1)", "Start", "B2:C3", "(A1,B2)", "#REF!", "IF(1,A1,B1)")
+    val genLong =
+      for
+        // under the nesting budget (each `:` takes a level) and far past it
+        n <- Gen.frequency(1 -> Gen.choose(2, 60), 1 -> Gen.choose(61, 1200))
+        inLet <- Gen.oneOf(false, true)
+        first <- Gen.oneOf(operands)
+        rest <- Gen.listOfN(n - 1, Gen.oneOf(if inLet then "x" :: operands else operands))
+        nested <- Gen.oneOf(false, true)
+      yield
+        val all = first :: rest
+        val chain =
+          if nested then
+            all.dropRight(1).foldRight(all.lastOption.getOrElse(first))((p, acc) => s"$p:($acc)")
+          else all.mkString(":")
+        if inLet then s"=LET(x,A1,SUM($chain))" else s"=SUM($chain)"
+    forAllNoShrink(genLong) { formula =>
+      FormulaParser.parse(formula) match
+        case Right(expr) =>
+          assertEquals(FormulaParser.parse(FormulaPrinter.print(expr)), Right(expr), formula)
+        case Left(
+              _: ParseError.NestingTooDeep | _: ParseError.TooManyOperators |
+              _: ParseError.FormulaTooLong
+            ) =>
+          ()
+        case Left(other) => fail(s"${formula.take(80)}…: $other")
       true
     }
   }

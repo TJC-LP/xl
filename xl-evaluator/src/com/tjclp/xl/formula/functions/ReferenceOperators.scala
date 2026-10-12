@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.Arity
 import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
-import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
+import com.tjclp.xl.formula.parser.ParseError
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -208,23 +208,206 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     }(using ArgSpec.tuple(using referenceOperand, ArgSpec.tuple(using referenceOperand)))
 
   /**
-   * `l:r` with the fewest grouping parentheses that re-parse to this very tree. The `:` is both a
-   * lexical range (`A1:B2`) and this operator, and a reference token before a `:` absorbs what
-   * follows it (`INDEX(r,1):B5:C6` is `INDEX(r,1):(B5:C6)`), so whether an operand needs its
-   * parentheses depends on the neighbouring text: the candidates are checked against the parser
-   * itself, and the fully parenthesized form — always faithful — is the fallback. Every
-   * unparenthesized text the parser accepts prints back byte-for-byte.
+   * `l:r` with the fewest grouping parentheses that re-parse to this very tree, decided from the
+   * operands' shapes alone — the printer never runs the parser. The `:` is both a lexical range
+   * (`A1:B2`) and this operator, and the parser reads a reference token before a `:` together with
+   * what follows it, so:
+   *
+   *   - the right operand is grouped when it is not one primary: an intersection (looser than `:`),
+   *     or a range whose text does not open with a bare token (`:` folds left, so
+   *     `INDEX(r,1):(INDEX(r,2):B5)`) — one that does is read whole by that token's own reading of
+   *     its `:` (`A1:Start:Finish` is `A1:(Start:Finish)`, [[readsAsPrimary]]);
+   *   - the left operand is grouped when it is an intersection, or when the text it ends with would
+   *     take the `:` ([[leftReadsBack]]): a bare token whose reading of `:` is not this very
+   *     operator (`(A1):Jan`, `A1:(B2:C3)` or `(INDEX(r,1):B5):C6`), an external reference, a
+   *     sheet-qualified range before another qualifier.
+   *
+   * Grouping the right operand is tried before grouping the left one, as the candidates `l:r`,
+   * `l:(r)`, `(l):r`, `(l):(r)` are, in that order; every unparenthesized text the parser accepts
+   * prints back byte-for-byte. `ReferenceOperatorLawsSpec` checks the rule against the parser
+   * itself: `parse(print(t)) == t`, and the choice is the first candidate that re-parses to `t`.
    */
   private def renderRange(args: (Operand, Operand), printer: ArgPrinter): String =
-    val left = operandText(args._1, printer)
-    val right = operandText(args._2, printer)
-    val grouped = s"($left):($right)"
-    FormulaParser.parse(grouped) match
-      case Right(target) =>
-        List(s"$left:$right", s"$left:($right)", s"($left):$right")
-          .find(candidate => FormulaParser.parse(candidate) == Right(target))
-          .getOrElse(grouped)
-      case Left(_) => grouped
+    val (l, r) = args
+    val left = operandText(l, printer)
+    val right = operandText(r, printer)
+    val rightAlone = kind(r) match
+      case Shape.Loose => false
+      case Shape.Chain => readsAsPrimary(r, right)
+      case _ => true
+    val (groupLeft, groupRight) =
+      if rightAlone && leftReadsBack(l, left, r, right) then (false, false)
+      else if leftReadsBack(l, left, r, s"($right)") then (false, true)
+      else (true, !rightAlone)
+    val leftText = if groupLeft then s"($left)" else left
+    val rightText = if groupRight then s"($right)" else right
+    s"$leftText:$rightText"
+
+  /**
+   * How an operand's printed text meets a neighbouring `:` (see [[renderRange]]).
+   *
+   *   - `Closed`: a call, a parenthesized union, an error literal, an unqualified lexical range
+   *     (`B2:C3`, `A:A`, `1:3`): its reading stops at its own last character.
+   *   - `Token`: a bare cell, name or LET name (`A1`, `Start`, `x`), read with the `:` after it.
+   *   - `QualifiedToken`: the same behind a sheet (`Sheet1!A1`, `'Q 1'!Start`).
+   *   - `QualifiedRange`: `Sheet1!A1:B2` — closed unless another qualifier follows its `:`.
+   *   - `External`: `[1]Book!A1` — its reader takes every `:` and token after it.
+   *   - `Chain`: a range-operator call; `Loose`: an intersection, looser than `:`.
+   */
+  private enum Shape derives CanEqual:
+    case Closed, Token, QualifiedToken, QualifiedRange, External, Chain, Loose
+
+  private def kind(op: Operand): Shape = op match
+    case Left(TExpr.RangeLocation.Local(_, RangeForm.Cell)) => Shape.Token
+    case Left(TExpr.RangeLocation.Local(_, _)) => Shape.Closed
+    case Left(TExpr.RangeLocation.CrossSheet(_, _, RangeForm.Cell)) => Shape.QualifiedToken
+    case Left(TExpr.RangeLocation.CrossSheet(_, _, _)) => Shape.QualifiedRange
+    case Left(_: TExpr.RangeLocation.External) => Shape.External
+    case Left(TExpr.RangeLocation.Name(_, None)) => Shape.Token
+    case Left(TExpr.RangeLocation.Name(_, Some(_))) => Shape.QualifiedToken
+    case Left(_: TExpr.RangeLocation.Error) => Shape.Closed
+    case Right(expr) => expressionKind(expr)
+
+  private def expressionKind(expr: TExpr[?]): Shape = expr match
+    case TExpr.Coerced(inner, _) => expressionKind(inner)
+    case _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] | _: TExpr.NameRef | _: TExpr.PolyRef |
+        _: TExpr.Ref[?] =>
+      Shape.Token
+    case TExpr.RangeRef(_, RangeForm.Cell) => Shape.Token
+    case _: TExpr.RangeRef => Shape.Closed
+    case _: TExpr.SheetNameRef | _: TExpr.SheetPolyRef | _: TExpr.SheetRef[?] =>
+      Shape.QualifiedToken
+    case TExpr.SheetRange(_, _, RangeForm.Cell) => Shape.QualifiedToken
+    case _: TExpr.SheetRange => Shape.QualifiedRange
+    case _: TExpr.ExternalRef | _: TExpr.ExternalRange => Shape.External
+    case RangeOperatorCall(_) => Shape.Chain
+    case OperatorCall(call) if call.spec.name == IntersectionName => Shape.Loose
+    case _ => Shape.Closed
+
+  /**
+   * Whether the text `l:r` (`left` and `right` as printed, `right` possibly grouped) reads back as
+   * `l`, then this operator, then `r` — the parser's grammar at a `:`, restated over the operands'
+   * shapes:
+   *
+   *   - after a closed text the operator's own loop reads `r` (one primary);
+   *   - a sheet-qualified reader reads every reference character after its `!`, `:` included, so
+   *     one whose run reaches the end of `left` (`Sheet1!A1:B2`, `Sheet1!B2:A:A`) takes the `:` and
+   *     fails on a qualifier opening `r` (`Sheet1!A1:B2:Sheet1!C3` is one malformed range);
+   *   - a bare token is read with the `:` after it: a lexical range when the next token pairs with
+   *     it (`A1:B2`, unless a call follows), refused when that token is qualified, otherwise this
+   *     operator over the token and one primary — unless either side is a name spelled like a
+   *     column or row (`A1:B` stays a typo) or, after an unqualified token, `r` is qualified
+   *     (`A1:Sheet2!B2` stays refused, as the 3-D reference it spells);
+   *   - a token ending a chain takes the `:` that follows the chain, as does an external
+   *     reference's reader.
+   */
+  private def leftReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
+    // a sheet-qualified reader whose run reaches the end of `left` (`Sheet1!B2:A:A`) reads on
+    // through the `:` into `right`, and a qualifier there is its repeated or 3-D end
+    !(qualifiedRunReachesEnd(left) && qualifierAhead(right)) && (kind(l) match
+      case Shape.Closed | Shape.QualifiedRange => true
+      case Shape.Token => tokenReadsBack(l, left, r, right)
+      case Shape.QualifiedToken => qualifiedTokenReadsBack(l, left, r, right)
+      case Shape.External | Shape.Loose => false
+      case Shape.Chain =>
+        // a chain ending in `)` (a call, a grouped operand) is closed; otherwise it ends with its
+        // last operand, ungrouped
+        left.endsWith(")") || (lastOperand(l) match
+          case Shape.Closed | Shape.QualifiedRange => true
+          case _ => false))
+
+  /**
+   * Whether `left` ends inside a sheet-qualified reference whose reader runs to its last character:
+   * the longest suffix of reader characters is preceded by a qualifier's `!` (an error literal's
+   * `!` is followed by `:`, never by a reference).
+   */
+  private def qualifiedRunReachesEnd(left: String): Boolean =
+    val suffix = left.reverseIterator.takeWhile(qualifiedRefChar).length
+    suffix > 0 && left.charAt(left.length - suffix) != ':' &&
+    left.lift(left.length - suffix - 1).contains('!')
+
+  /** The shape of the operand a chain's text ends with: its rightmost, through nested ranges. */
+  @annotation.tailrec
+  private def lastOperand(op: Operand): Shape = op match
+    case Right(RangeOperatorCall(call)) =>
+      lastOperand(call.args.asInstanceOf[(Operand, Operand)]._2)
+    case other => kind(other)
+
+  /**
+   * Whether a range-operator operand's printed text is ONE primary to the parser: it opens with a
+   * bare token, ungrouped (`Start:Finish`, `Sheet1!A1:INDEX(…)`), so the token's own reading of its
+   * `:` takes the whole range, its right operand being one primary by its own rule. A range opening
+   * with anything else (a call, a group, a lexical range) is read one operand at a time.
+   */
+  private def readsAsPrimary(op: Operand, text: String): Boolean =
+    !text.startsWith("(") && (op match
+      case Right(RangeOperatorCall(call)) =>
+        kind(call.args.asInstanceOf[(Operand, Operand)]._1) match
+          case Shape.Token | Shape.QualifiedToken => true
+          case _ => false
+      case _ => false)
+
+  /** `T:r` with `T` an unqualified token: what `parseRange` and its fallback read. */
+  private def tokenReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
+    val end = right.takeWhile(c => c.isLetterOrDigit || c == '$' || c == '!')
+    val lexical = CellRange.parse(s"$left:$end").isRight && !right.lift(end.length).contains('(')
+    !end.contains('!') && !lexical && !namesAxis(l) && !namesAxis(r) && !isQualified(r)
+
+  /** `Q!T:r`: what the sheet-qualified reader and its fallback read. */
+  private def qualifiedTokenReadsBack(
+    l: Operand,
+    left: String,
+    r: Operand,
+    right: String
+  ): Boolean =
+    val token = left.substring(left.lastIndexOf('!') + 1)
+    val second = right.takeWhile(c => qualifiedRefChar(c) && c != ':')
+    val lexical = CellRange.parse(s"$token:$second").isRight &&
+      !right.lift(second.length).exists(c => c == '(' || c == '!')
+    !qualifierAhead(right) && !lexical && !namesAxis(l) && !namesAxis(r)
+
+  /** The characters the sheet-qualified reader takes after `!` (`:` included). */
+  private def qualifiedRefChar(c: Char): Boolean =
+    c.isLetterOrDigit || c == '$' || c == ':' || c == '_' || c == '.' || c == '\\'
+
+  /**
+   * Whether, after a sheet-qualified reference and a `:`, `right` opens with a sheet qualifier the
+   * reader takes as the range's repeated (or 3-D) end: a token run then `!`, or a quoted name.
+   */
+  private def qualifierAhead(right: String): Boolean =
+    val run = right.takeWhile(qualifiedRefChar)
+    val next = right.lift(run.length)
+    val trailingColon = run.isEmpty || run.endsWith(":")
+    (next.contains('!') && !trailingColon) || (next.contains('\'') && trailingColon)
+
+  /** A name spelled like a column or row, as the operand reads (see [[spellsAxis]]). */
+  private def namesAxis(op: Operand): Boolean = op match
+    case Left(TExpr.RangeLocation.Name(name, _)) => spellsAxis(name)
+    case Right(expr) =>
+      expr match
+        case TExpr.Coerced(inner, _) => namesAxis(Right(inner.asInstanceOf[TExpr[Any]]))
+        case TExpr.NameRef(name) => spellsAxis(name)
+        case TExpr.SheetNameRef(_, name) => spellsAxis(name)
+        case _ => false
+    case _ => false
+
+  /** A sheet- or workbook-qualified location (`Sheet2!B2`, `'Q 1'!Start`, `[1]Book!A1`). */
+  private def isQualified(op: Operand): Boolean = op match
+    case Left(_: TExpr.RangeLocation.CrossSheet | _: TExpr.RangeLocation.External) => true
+    case Left(TExpr.RangeLocation.Name(_, scope)) => scope.isDefined
+    case Left(_) => false
+    case Right(expr) =>
+      expressionKind(expr) match
+        case Shape.QualifiedToken | Shape.QualifiedRange | Shape.External => true
+        case _ => false
+
+  /**
+   * A bare name spelled like a column (`B`, `Jan`) or a row: never an operand of a `:` read after a
+   * token (`A1:B` stays a typo, `A:IF(…)` a column range). The parser's fallback and the printer
+   * share it.
+   */
+  private[formula] def spellsAxis(name: String): Boolean =
+    (name.forall(_.isLetter) || name.forall(_.isDigit)) && CellRange.parse(s"$name:$name").isRight
 
   /**
    * GH-713: the area `a:b` denotes — the bounding range of every area of both operands, left to

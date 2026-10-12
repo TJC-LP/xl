@@ -141,6 +141,36 @@ class RangeOperatorSpec extends FunSuite:
     )
     assertEquals(FormulaPrinter.printFileForm(parsed("=SUM(A1:(B2:C3))")), "SUM(A1:(B2:C3))")
     assertEquals(parsed("=SUM((A1):B2)"), parsed("=SUM(A1:B2)"))
+    // a LET name is a bare token the operator takes as written — even one spelled like a column
+    // (`x`), which a defined name could not be — so it needs no grouping parentheses
+    List(
+      "LET(x,A1,SUM(x:INDEX(A:A,3)))",
+      "LET(x,A1,SUM(INDEX(A:A,3):x))",
+      "LET(x,A1,SUM(INDEX(B1:B3,1):x:C5))",
+      "LET(x,A1,SUM(x:Start:Finish))"
+    ).foreach { text =>
+      assertEquals(FormulaPrinter.printFileForm(parsed(s"=$text")), text, text)
+      assertEquals(FormulaPrinter.print(parsed(s"=$text")).filterNot(_ == ' '), s"=$text", text)
+    }
+    // a name spelled like a column is grouped on the side a token's `:` would refuse it
+    assertEquals(
+      FormulaPrinter.printFileForm(parsed("=SUM((Jan):INDEX(A:A,3))")),
+      "SUM((Jan):INDEX(A:A,3))"
+    )
+    assertEquals(
+      FormulaPrinter.printFileForm(parsed("=SUM(INDEX(A:A,3):Jan)")),
+      "SUM(INDEX(A:A,3):Jan)"
+    )
+    // a qualified operand after an unqualified token, and a qualifier after a qualified range
+    assertEquals(FormulaPrinter.printFileForm(parsed("=SUM((A1):Other!B2)")), "SUM((A1):Other!B2)")
+    assertEquals(
+      FormulaPrinter.printFileForm(parsed("=SUM(Sheet1!A1:B2:(Sheet1!Start))")),
+      "SUM(Sheet1!A1:B2:(Sheet1!Start))"
+    )
+    assertEquals(
+      FormulaPrinter.printFileForm(parsed("=SUM(Sheet1!A1:(Sheet1!Start))")),
+      "SUM(Sheet1!A1:(Sheet1!Start))"
+    )
     // `@` keeps its operand whole for the stored form's `_xlfn.SINGLE(…)`
     assertEquals(
       FormulaPrinter.printFileForm(parsed("=@A1:INDEX(B1:B3,3)")),

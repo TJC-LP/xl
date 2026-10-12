@@ -1646,13 +1646,10 @@ object FormulaParser:
     errPos.exists(_ > open)
 
   /** A bare name spelled like a column (`B`, `Jan`) or a row: never an operand of `:`. */
-  private def spellsAxisName(expr: TExpr[?]): Boolean =
-    def axis(name: String): Boolean =
-      (name.forall(_.isLetter) || name.forall(_.isDigit)) && CellRange.parse(s"$name:$name").isRight
-    expr match
-      case TExpr.NameRef(name) => axis(name)
-      case TExpr.SheetNameRef(_, name) => axis(name)
-      case _ => false
+  private def spellsAxisName(expr: TExpr[?]): Boolean = expr match
+    case TExpr.NameRef(name) => ReferenceOperators.spellsAxis(name)
+    case TExpr.SheetNameRef(_, name) => ReferenceOperators.spellsAxis(name)
+    case _ => false
 
   /** A sheet- or workbook-qualified location (`Sheet2!B2`, `'Q 1'!B2`, `[1]Book!A1`). */
   private def isQualifiedLocation(expr: TExpr[?]): Boolean = expr match
