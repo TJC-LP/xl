@@ -484,6 +484,94 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     }
   }
 
+  // ----- an unrelated OFFSET leaves a multi-cell binding's array value unchanged -----
+
+  test("an unrelated OFFSET in an array LET leaves a multi-cell binding's values as before") {
+    // OFFSET makes the array-mode LET bind x as its reference; x*2 must still be the array
+    // {2,-4,7}. LibreOffice 24.2 (no LET), element by element via SUMPRODUCT of the written form
+    // OFFSET(B1,1,0)+INDEX(A1:B3,0,1)*2: 4, -2, 9.
+    def spill(formula: String): List[CellValue] =
+      sheet1
+        .evaluateArrayFormula(s"=$formula", ref"J1", Clock.system, Some(book))
+        .fold(
+          error => fail(error.message),
+          (spilled, range) => range.cells.map(at => spilled(at).value).toList
+        )
+    val expected = List(N("4"), N("-2"), N("9"))
+    assertEquals(spill("LET(x,INDEX(A1:B3,0,1),OFFSET(B1,1,0)+x*2)"), expected)
+    assertEquals(spill("LET(x,INDEX(A1:B3,0,1),2+x*2)"), expected)
+    assertEquals(spill("OFFSET(B1,1,0)+INDEX(A1:B3,0,1)*2"), expected)
+  }
+
+  // ----- one smoke case per family whose range slot now resolves dynamically -----
+
+  /** H: B1:B2 holidays, C1:C3 cash flows, D1:D3 their dates, E1:E3 keys, F1:F3 results. */
+  private val familyBook: Workbook =
+    val hName = SheetName.unsafe("H")
+    def num(n: String) = CellValue.Number(BigDecimal(n))
+    val h = Sheet(hName)
+      .put(ref"B1", num("45293"))
+      .put(ref"B2", num("45294"))
+      .put(ref"C1", num("-1000"))
+      .put(ref"C2", num("600"))
+      .put(ref"C3", num("600"))
+      .put(ref"D1", num("45292"))
+      .put(ref"D2", num("45474"))
+      .put(ref"D3", num("45658"))
+      .put(ref"E1", num("1"))
+      .put(ref"E2", num("3"))
+      .put(ref"E3", num("5"))
+      .put(ref"F1", T("a"))
+      .put(ref"F2", T("b"))
+      .put(ref"F3", T("c"))
+    withNames(Workbook(Vector(sheet1, other, Sheet(emptyName), h)))
+      .withDefinedName("holsDyn", "OFFSET(H!$B$1,0,0,2,1)")
+      .withDefinedName("valsDyn", "OFFSET(H!$C$1,0,0,3,1)")
+      .withDefinedName("datesDyn", "OFFSET(H!$D$1,0,0,3,1)")
+      .withDefinedName("keysDyn", "OFFSET(H!$E$1,0,0,3,1)")
+      .withDefinedName("resDyn", "OFFSET(H!$F$1,0,0,3,1)")
+
+  private def family(formula: String): Either[String, CellValue] =
+    val placed = Sheet(emptyName).put(ref"A1", CellValue.Formula(formula, None))
+    placed.evaluateCell(ref"A1", Clock.system, Some(familyBook.put(placed))).left.map(_.message)
+
+  private def near(obtained: Either[String, CellValue], want: String, tolerance: String): Unit =
+    obtained match
+      case Right(CellValue.Number(got)) =>
+        assert((got - BigDecimal(want)).abs < BigDecimal(tolerance), s"$got is not $want")
+      case other => fail(s"$other is not $want")
+
+  test("SORT and UNIQUE take a dynamic name or a LET name like the written range") {
+    // a plain cell shows the sorted array's top-left element
+    agree(family("SORT(dyn)"), N("-4.25"))
+    agree(family("SORT(dyn,1,-1)"), N("100"))
+    agree(family("LET(r,dyn,SORT(r,1,-1))"), N("100"))
+    agree(family("SORT(Sheet1!A1:A10,1,-1)"), N("100"))
+    agree(family("SUM(UNIQUE(dynKey))"), N("6"))
+    agree(family("LET(k,dynKey,SUM(UNIQUE(k)))"), N("6"))
+    agree(family("SUM(UNIQUE(Sheet1!D1:D10))"), N("6"))
+  }
+
+  // LibreOffice 24.2 values for the same formulas with the OFFSET written in place of the name
+  test("NETWORKDAYS and WORKDAY take dynamic holidays") {
+    agree(family("NETWORKDAYS(DATE(2024,1,1),DATE(2024,1,12),holsDyn)"), N("8"))
+    agree(family("LET(h,holsDyn,NETWORKDAYS(DATE(2024,1,1),DATE(2024,1,12),h))"), N("8"))
+    agree(family("WORKDAY(DATE(2024,1,1),5,holsDyn)+0"), N("45301"))
+  }
+
+  test("XNPV, XIRR and IRR take dynamic values and dates") {
+    near(family("XNPV(0.1,valsDyn,datesDyn)"), "117.464382846325", "1e-9")
+    near(family("LET(v,valsDyn,d,datesDyn,XNPV(0.1,v,d))"), "117.464382846325", "1e-9")
+    near(family("XIRR(valsDyn,datesDyn)"), "0.278158944317214", "1e-7")
+    near(family("IRR(valsDyn)"), "0.130662386291808", "1e-9")
+  }
+
+  test("LOOKUP takes a dynamic lookup vector and result vector") {
+    agree(family("LOOKUP(4,keysDyn,resDyn)"), T("b"))
+    agree(family("LOOKUP(5,keysDyn,resDyn)"), T("c"))
+    agree(family("LET(k,keysDyn,r,resDyn,LOOKUP(4,k,r))"), T("b"))
+  }
+
   // ----- name scope through a range slot -----
 
   test("a sheet-scoped name shadows the workbook name in a range slot, per reading sheet") {

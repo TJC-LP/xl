@@ -212,7 +212,9 @@ object EvalContext:
    * `selectsReference`: the call feeds a reference position. `nameTrail`: the defined names being
    * resolved around this call (#691's cycle guard), so a range slot's name walk shares it.
    * `nameReference`: evaluates a defined name for the reference it computes, once the range slot's
-   * static walk has found it computed (the evaluator sets it; None falls back to `evalReference`).
+   * static walk has found it computed. The evaluator sets it. A hand-built context without it
+   * evaluates the name through `evalReference`, which without a `referenceArg` is the array
+   * evaluator: a name computing a reference then arrives as its values, and the slot is `#VALUE!`.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,

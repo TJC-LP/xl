@@ -285,7 +285,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   reference (`dyn = OFFSET(Sheet1!$A$1,0,0,10,1)`, or INDEX/INDIRECT/IF/CHOOSE over references) was
   `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
   `VLOOKUP(7,dyn,1,FALSE)` — and so was a LET name bound to one (`LET(r,dyn,COUNTIF(r,">2"))`). Every
-  range slot now resolves them through one evaluator-aware resolver, matching LibreOffice.
+  range slot now resolves them through one evaluator-aware resolver, matching LibreOffice. Each range
+  slot evaluates the name's formula when it reads it, so a book with many readers of one dynamic
+  name recalculates more slowly than the instant `#VALUE!` it used to get (caching: #744).
 - **SUMIF and AVERAGEIF resized through a named range recalculate correctly** (#710, #733):
   `SUMIF(A1:A3,">0",amt)` with `amt = S!C1` reads C1:C3, and an edit to C2 used to leave it stale.
   A name bound to a range now records its resized cells, so these readers, like

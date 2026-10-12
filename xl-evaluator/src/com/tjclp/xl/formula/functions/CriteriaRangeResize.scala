@@ -120,6 +120,9 @@ object CriteriaRangeResize:
     val at = skipWhile(text, from, _.isWhitespace)
     Option.when(at < text.length)(text.charAt(at))
 
+  // ARef.parse rejects what the parser reads as a cell. Any token it does not rule out counts as a
+  // name — `XFE1` past the grid, and anything else the parser may yet read as a cell. That is
+  // deliberate: a false positive costs one parse, a false negative a stale reader.
   private def isName(token: String, text: String, end: Int): Boolean =
     !token.contains('$') &&
       ARef.parse(token).isLeft &&

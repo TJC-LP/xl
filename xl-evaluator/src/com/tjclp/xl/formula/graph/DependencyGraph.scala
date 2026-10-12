@@ -547,8 +547,9 @@ object DependencyGraph:
     val keys = scala.collection.mutable.HashMap.empty[String, String]
 
     // #733: whether a name in a resizing call's range slot computes its reference, as seen from
-    // `current` — memoized per (name, qualifier, sheet): a book's SUMIFs share a few names. A
-    // mutable memo for this single-threaded pass; never share it with a parallel per-sheet loop
+    // `current` — memoized per (name, qualifier, sheet): a book's SUMIFs share a few names. NOT
+    // thread-safe: a mutable memo for this single-threaded pass; never share it with a parallel
+    // per-sheet loop
     val canonical = sheetCanonicaliser(workbook)
     val computedVerdicts =
       scala.collection.mutable.HashMap.empty[(String, Option[SheetName], SheetName), Boolean]
@@ -2083,8 +2084,9 @@ object DependencyGraph:
   /**
    * #733: a defined name's static (sheet, range), keyed on its [[resolutionKey]], its qualifier and
    * the sheet it is read from — shared across one graph build, so a book whose SUMIFs read the same
-   * few names resolves each once per sheet. Holds `None` for a name that does not resolve to one. A
-   * mutable map for one single-threaded build: never share it across a parallel per-sheet loop.
+   * few names resolves each once per sheet. Holds `None` for a name that does not resolve to one.
+   * NOT thread-safe: a mutable map for one single-threaded build; never share it across a parallel
+   * per-sheet loop.
    */
   private[graph] type NameRanges =
     scala.collection.mutable.HashMap[(String, Option[SheetName], SheetName), Option[
