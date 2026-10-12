@@ -2194,7 +2194,7 @@ object XlsxWriter:
           case CellValue.Formula(_, _, FormulaKind.ArrayFormula(_, _, _, d: ArrayMode.Dynamic)) => d
         }
         .distinct
-        .take(2)
+        .take(SheetMetadataPart.variantCount) // every variant found: no need to look further
         .toSet
     val sourceMetadataPath: Option[String] =
       if neededDynamic.isEmpty then None

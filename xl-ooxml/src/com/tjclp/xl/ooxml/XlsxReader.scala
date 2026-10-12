@@ -206,22 +206,21 @@ object XlsxReader:
     charts: Map[String, String], // chartN.xml and chartN.xml.rels (GH-222), as UTF-8
     media: Map[String, ArraySeq[Byte]], // xl/media/*
     // GH-714: cell-metadata candidates (xl/metadata.xml), resolved by workbook rel type
-    cellMetadata: Map[String, String] = Map.empty
+    cellMetadata: Map[String, String] = Map.empty,
+    // GH-714: each scanned entry's (uncompressed size, CRC-32) as ZipInputStream verified them —
+    // what a later reread of one part from the source must match
+    scanned: Map[String, (Long, Long)] = Map.empty
   )
 
   /**
-   * Cell-metadata candidates retained at scan time (GH-714), the comment-candidate pattern: which
+   * The cell-metadata part retained at scan time (GH-714): Excel's own `xl/metadata.xml`. Which
    * part is the workbook's metadata part is decided by the `sheetMetadata` workbook relationship
-   * ([[SheetMetadataPart.locate]]). This is only a fast path: a target with any other filename is
-   * loaded from the source after the scan, once its relationship and the archive's security limits
-   * have been checked. The part stays UNPARSED in the manifest — it rides the verbatim copy loop
-   * unless a write must extend it.
+   * ([[SheetMetadataPart.locate]]); this is only a fast path — a target with any other filename is
+   * reread from the source after the scan ([[readSourcePart]]), so no other XML is held. The part
+   * stays UNPARSED in the manifest — it rides the verbatim copy loop unless a write must extend it.
    */
   private def isCellMetadataCandidatePart(path: String): Boolean =
-    path.startsWith("xl/") && path.endsWith(".xml") && !path.contains("/_rels/") && {
-      val basename = path.substring(path.lastIndexOf('/') + 1)
-      basename.toLowerCase.contains("metadata")
-    }
+    path == SheetMetadataPart.defaultPath
 
   private def isDrawingXmlPart(path: String): Boolean =
     path.matches("xl/drawings/drawing\\d+\\.xml") ||
@@ -337,6 +336,7 @@ object XlsxReader:
     val chartXml = mutable.Map[String, String]()
     val mediaBytes = mutable.Map[String, ArraySeq[Byte]]()
     val cellMetadataXml = mutable.Map[String, String]()
+    val scanned = mutable.Map[String, (Long, Long)]()
     val manifestBuilder = PartManifestBuilder.empty
 
     // Security tracking
@@ -374,6 +374,8 @@ object XlsxReader:
             val content = zip.readAllBytes()
             val uncompressedSize = content.length.toLong
             totalUncompressedSize += uncompressedSize
+            // fully read, the entry's CRC is final (a data descriptor's included) and verified
+            scanned(entryName) = (uncompressedSize, entry.getCrc)
 
             // Security check: Total uncompressed size
             if config.maxUncompressedSize > 0 && totalUncompressedSize > config.maxUncompressedSize
@@ -451,7 +453,8 @@ object XlsxReader:
               drawingXml.toMap,
               chartXml.toMap,
               mediaBytes.toMap,
-              cellMetadataXml.toMap
+              cellMetadataXml.toMap,
+              scanned.toMap
             ),
             source,
             manifest,
@@ -574,7 +577,9 @@ object XlsxReader:
   /**
    * Resolve metadata by relationship even when its filename is unfamiliar or it precedes the
    * workbook relationships in ZIP order. Only that one part is reread; unknown XML is never all
-   * retained in memory. The complete archive has already passed the reader's security checks.
+   * retained in memory. The complete archive has already passed the reader's security checks, and
+   * only a part that scan read is reread: a central-directory entry the sequential scan never met
+   * reads as absent.
    */
   private def readCellMetadata(
     workbookRels: Relationships,
@@ -587,15 +592,23 @@ object XlsxReader:
       case None => Right(CellMetadataIndex.empty)
       case Some(path) =>
         val cached = parts.get(path).orElse(retained.cellMetadata.get(path))
-        val text = cached match
-          case Some(xml) => Right(Some(xml))
-          case None => readSourcePart(source, path, config)
+        val text = (cached, retained.scanned.get(path)) match
+          case (Some(xml), _) => Right(Some(xml))
+          case (None, Some(expected)) => readSourcePart(source, path, config, expected)
+          case (None, None) => Right(None)
         text.map(_.map(SheetMetadataPart.parse).getOrElse(CellMetadataIndex.empty))
 
+  /**
+   * Reread one part the scan met. The bytes must be the ones the scan read — same length and CRC-32
+   * (`expected`) — so a crafted archive cannot show the scan one part and this reader another (a
+   * second local entry of the name, or a central directory pointing elsewhere): a mismatch is a
+   * [[XLError.SecurityError]].
+   */
   private def readSourcePart(
     source: Option[SourceHandle],
     path: String,
-    config: ReaderConfig
+    config: ReaderConfig,
+    expected: (Long, Long)
   ): XLResult[Option[String]] =
     def readText(in: InputStream): XLResult[Option[String]] =
       // Bound the second read as well, including a file replaced since the initial ZIP scan.
@@ -605,7 +618,17 @@ object XlsxReader:
         else in.readAllBytes()
       if config.maxUncompressedSize > 0 && bytes.length.toLong > config.maxUncompressedSize then
         Left(XLError.SecurityError(s"Metadata part '$path' exceeds uncompressed size limit"))
-      else Right(Some(new String(bytes, "UTF-8")))
+      else
+        val crc = new java.util.zip.CRC32()
+        crc.update(bytes)
+        if (bytes.length.toLong, crc.getValue) != expected then
+          Left(
+            XLError.SecurityError(
+              s"Metadata part '$path' differs from the entry the archive scan read " +
+                "(inconsistent ZIP directory)"
+            )
+          )
+        else Right(Some(new String(bytes, "UTF-8")))
 
     source match
       case None => Right(None)

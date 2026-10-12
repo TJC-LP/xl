@@ -52,6 +52,9 @@ private[xl] object SheetMetadataPart:
   private val variantOrder: Vector[ArrayMode.Dynamic] =
     Vector(ArrayMode.Dynamic(), ArrayMode.Dynamic(collapsed = true))
 
+  /** How many dynamic variants a part can need: a writer collecting them stops at this many. */
+  val variantCount: Int = variantOrder.size
+
   /** What the writer does with the part. */
   enum MetadataOutput derives CanEqual:
     /** Ship the source part as it is (or no part at all when none is needed). */
@@ -93,7 +96,10 @@ private[xl] object SheetMetadataPart:
       case a: UnprefixedAttribute if a.key == name => a.value.text
     }
 
-  /** 1-based positions of the XLDAPR metadataType. */
+  /**
+   * 1-based positions of the XLDAPR metadataType in the first `metadataTypes` block (CT_Metadata
+   * allows one); [[append]] numbers a new type against the same block.
+   */
   private def xldaprTypeIndices(root: Elem): Set[Int] =
     children(root, "metadataTypes")
       .take(1)
@@ -288,7 +294,9 @@ private[xl] object SheetMetadataPart:
     missing: Vector[ArrayMode.Dynamic]
   ): (Elem, Vector[(ArrayMode.Dynamic, Int)]) =
     val scope = root0.scope
-    // 1. the XLDAPR metadata type
+    // 1. the XLDAPR metadata type. A type index is 1-based into the FIRST `metadataTypes` block:
+    // xldaprTypeIndices reads only that one (`.take(1)`), so a type appended to it is numbered by
+    // its new size. Both must keep reading the same block, or a `t` would name the wrong type.
     val (root1, typeIdx) = xldaprTypeIndices(root0).minOption match
       case Some(t) => (root0, t)
       case None =>

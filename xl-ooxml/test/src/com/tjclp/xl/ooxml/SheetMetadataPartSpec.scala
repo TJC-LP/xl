@@ -134,6 +134,54 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
     }
   }
 
+  /**
+   * What each `vm` index (1-based `valueMetadata/bk`) resolves to: the name of the metadata type
+   * its `rc t` names and the `rvb i` of the `futureMetadata` block its `rc v` names.
+   */
+  private def vmTargets(xml: String): Vector[(String, String)] =
+    val root = XmlSecurity.parseSafe(xml, "metadata.xml").fold(e => fail(e.message), identity)
+    def kids(e: Elem, label: String): Vector[Elem] =
+      e.child.collect { case c: Elem if c.label == label => c }.toVector
+    def at(e: Elem, name: String): String = e.attributes.asAttrMap.getOrElse(name, "")
+    val types = kids(root, "metadataTypes").flatMap(kids(_, "metadataType")).map(at(_, "name"))
+    val future = kids(root, "futureMetadata").map(f => at(f, "name") -> kids(f, "bk")).toMap
+    kids(root, "valueMetadata").flatMap(kids(_, "bk")).flatMap(kids(_, "rc")).map { rc =>
+      val name = types.lift(at(rc, "t").toInt - 1).getOrElse(fail(s"no type ${at(rc, "t")}"))
+      val block = future.get(name).flatMap(_.lift(at(rc, "v").toInt)).getOrElse(fail("no block"))
+      val rvb = (block \\ "rvb").collectFirst { case e: Elem => at(e, "i") }
+      name -> rvb.getOrElse(fail("no rvb"))
+    }
+
+  test("appending to a prefix-bound rich-value part reparses and keeps every vm index") {
+    val namespace = XmlUtil.nsSpreadsheetML
+    def rich(i: Int) =
+      s"""<x:bk><x:extLst><x:ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="$i"/></x:ext></x:extLst></x:bk>"""
+    // SpreadsheetML bound only through the `x` prefix; two images in cells (vm 1 and vm 2)
+    val source =
+      s"""$head<x:metadata xmlns:x="$namespace" $xlrdNs><x:metadataTypes count="1">${richType
+          .replace(
+            "<metadataType",
+            "<x:metadataType"
+          )}</x:metadataTypes><x:futureMetadata name="XLRICHVALUE" count="2">${rich(
+          0
+        )}${rich(
+          1
+        )}</x:futureMetadata><x:valueMetadata count="2"><x:bk><x:rc t="1" v="0"/></x:bk><x:bk><x:rc t="1" v="1"/></x:bk></x:valueMetadata></x:metadata>"""
+    val before = vmTargets(source)
+    assertEquals(before, Vector("XLRICHVALUE" -> "0", "XLRICHVALUE" -> "1"))
+    val plan = SheetMetadataPart.plan(Some(source), Set(plain, collapsed))
+    val appended = plan.output match
+      case MetadataOutput.Appended(xml) => xml
+      case other => fail(s"expected Appended, got $other")
+    // reparses; the rich values' vm indices resolve exactly as before
+    assertEquals(vmTargets(appended), before)
+    assertEquals(plan.cmOf, Map(plain -> 1, collapsed -> 2))
+    assertEquals(resolve(appended), Map(1 -> plain, 2 -> collapsed))
+    // the source's own elements keep their prefix; nothing was renumbered or rebound
+    assert(appended.contains("""<x:valueMetadata count="2">"""), appended)
+    assert(appended.contains("""<x:rc t="1" v="1"/>"""), appended)
+  }
+
   test("external sheetMetadata relationships do not identify a package part") {
     val external = Relationship("rId2", SheetMetadataPart.relType, "metadata.xml", Some("External"))
     assertEquals(SheetMetadataPart.locate(Relationships(Seq(external))), None)

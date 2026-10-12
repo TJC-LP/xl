@@ -150,6 +150,81 @@ class DynamicArrayPreservationSpec extends FunSuite:
       finally Files.deleteIfExists(file)
     }
 
+  /**
+   * A STORED package written by hand: every `locals` entry gets a local header in order, but the
+   * central directory lists only the `central` indices — so a name can have a second local entry
+   * the sequential scan reads and the directory does not point at.
+   */
+  private def craftedZip(locals: Vector[(String, String)], central: Vector[Int]): Array[Byte] =
+    import java.nio.{ByteBuffer, ByteOrder}
+    import java.nio.charset.StandardCharsets.UTF_8
+    def le(size: Int)(fill: ByteBuffer => Unit): Array[Byte] =
+      val b = ByteBuffer.allocate(size).order(ByteOrder.LITTLE_ENDIAN)
+      fill(b)
+      b.array()
+    val encoded = locals.map((name, text) => (name.getBytes(UTF_8), text.getBytes(UTF_8)))
+    def crcOf(data: Array[Byte]): Int =
+      val crc = new java.util.zip.CRC32()
+      crc.update(data)
+      crc.getValue.toInt
+    val (localBytes, offsets) =
+      encoded.foldLeft((Vector.empty[Array[Byte]], Vector.empty[Int])) {
+        case ((acc, offs), (name, data)) =>
+          val header = le(30) { b =>
+            b.putInt(0x04034b50).putShort(20.toShort).putShort(0.toShort).putShort(0.toShort)
+            b.putShort(0.toShort).putShort(0x21.toShort).putInt(crcOf(data))
+            b.putInt(data.length).putInt(data.length).putShort(name.length.toShort)
+            b.putShort(0.toShort)
+          }
+          (acc :+ (header ++ name ++ data), offs :+ acc.map(_.length).sum)
+      }
+    val cdStart = localBytes.map(_.length).sum
+    val cd = central.map { i =>
+      val (name, data) = encoded(i)
+      le(46) { b =>
+        b.putInt(0x02014b50).putShort(20.toShort).putShort(20.toShort).putShort(0.toShort)
+        b.putShort(0.toShort).putShort(0.toShort).putShort(0x21.toShort).putInt(crcOf(data))
+        b.putInt(data.length).putInt(data.length).putShort(name.length.toShort)
+        b.putShort(0.toShort).putShort(0.toShort).putShort(0.toShort).putShort(0.toShort)
+        b.putInt(0).putInt(offsets(i))
+      } ++ name
+    }
+    val cdSize = cd.map(_.length).sum
+    val end = le(22) { b =>
+      b.putInt(0x06054b50).putShort(0.toShort).putShort(0.toShort)
+      b.putShort(central.size.toShort).putShort(central.size.toShort)
+      b.putInt(cdSize).putInt(cdStart).putShort(0.toShort)
+    }
+    (localBytes ++ cd :+ end).foldLeft(Array.emptyByteArray)(_ ++ _)
+
+  test("a reread metadata part must be the one the scan read (crafted second local entry)") {
+    val path = "xl/custom/state.xml"
+    val relocated = relocatedMetadataParts(path)
+    // the scan meets a second, non-dynamic copy of the part; the directory points at the first
+    val forged = metadataXml.replace("fDynamic=\"1\"", "fDynamic=\"0\"")
+    val bytes = craftedZip(relocated :+ (path -> forged), relocated.indices.toVector)
+    val consistent = craftedZip(relocated, relocated.indices.toVector)
+    val file = Files.createTempFile("xl-metadata-crafted-", ".xlsx")
+    val clean = Files.createTempFile("xl-metadata-consistent-", ".xlsx")
+    try
+      Files.write(file, bytes)
+      Files.write(clean, consistent)
+      def isSecurity(result: XLResult[Workbook]): Boolean = result.left.toOption.exists {
+        case XLError.SecurityError(message) => message.contains("differs from the entry")
+        case _ => false
+      }
+      assert(isSecurity(XlsxReader.read(file)), XlsxReader.read(file).toString.take(300))
+      assert(isSecurity(XlsxReader.readFromBytes(bytes)))
+      // the same hand-written package without the second entry reads, from disk and from bytes
+      val fromDisk = XlsxReader.read(clean).fold(e => fail(e.message), identity)
+      List(fromDisk, read(consistent)).foreach { wb =>
+        assertEquals(kindAt(wb, ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
+      }
+    finally
+      Files.deleteIfExists(file)
+      Files.deleteIfExists(clean)
+  }
+
   test("a renamed metadata part remains subject to the archive size limit") {
     val bytes = xlsx(relocatedMetadataParts())
     val result = XlsxReader.readFromBytes(
