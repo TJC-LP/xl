@@ -844,11 +844,11 @@ class EvalCommandSpec extends CatsEffectSuite:
     yield assert(plain.contains("Result: 6 (number)"), plain)
   }
 
-  test("GH-715 known gap (#742): XLOOKUP's return cell reaching the placement at run time") {
+  test("GH-715 (#742): XLOOKUP's return cell reaching the placement at run time") {
     // keys = A1:A10 and rets = C1:C10 (defined names, out of the static check's sight); the match
-    // A5 = 5 returns C5 = INDIRECT("D5"), a run-time read of the placement. XLOOKUP reads its return
-    // cell as stored, so the guard never sees it; VLOOKUP over the same cells reports it. Fixing
-    // #742 flips the XLOOKUP case to readsPlacement.
+    // A5 = 5 returns C5 = INDIRECT("D5"), a run-time read of the placement. XLOOKUP returns a
+    // reference (GH-713) whose cell is read as a reference reads it, so the guard sees the read,
+    // as it does for VLOOKUP over the same cells.
     val returning = staleTest.put(ref"C5", CellValue.Formula("=INDIRECT(\"D5\")"))
     val book = stale.put(returning)
     val named = book.copy(metadata =
@@ -862,8 +862,8 @@ class EvalCommandSpec extends CatsEffectSuite:
     )
     for
       _ <- readsPlacement(named, "=VLOOKUP(5,tbl,3,FALSE)", "D5", "D5")
-      xlookup <- ReadCommands.eval(named, Some(returning), "=XLOOKUP(5,keys,rets)", Some("D5"), Nil)
-    yield assert(xlookup.contains("Result: =INDIRECT(\"D5\") (formula)"), xlookup)
+      _ <- readsPlacement(named, "=XLOOKUP(5,keys,rets)", "D5", "D5")
+    yield ()
   }
 
   test("GH-715: --at outside the used range with --with on a sheet with no cells") {

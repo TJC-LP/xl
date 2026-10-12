@@ -247,10 +247,10 @@ class LookupUncachedKeysSpec extends FunSuite:
     assert(!Evaluator.isCycleFailure(unknown), unknown.toString)
   }
 
-  test("XLOOKUP returns an uncached formula in its return cell as stored (#742)") {
-    // Pinned until #742: VLOOKUP evaluates the result cell, XLOOKUP still reads it as stored, so
-    // an uncached `=3+4` there is not 7. The lookup itself, over evaluated keys, still matches.
+  test("XLOOKUP evaluates an uncached formula in its return cell, as VLOOKUP does (#742)") {
+    // XLOOKUP returns a reference (GH-713), whose cells read as a reference reads them, so an
+    // uncached `=3+4` in the return cell is 7, as VLOOKUP's result cell is
     val book = column.put(ref"B2", CellValue.Formula("=3+4"))
     assertEquals(eval(book, "=VLOOKUP(7,A1:B3,2,FALSE)"), num(7))
-    assertNotEquals(eval(book, "=XLOOKUP(7,A1:A3,B1:B3)"), num(7))
+    assertEquals(eval(book, "=XLOOKUP(7,A1:A3,B1:B3)"), num(7))
   }

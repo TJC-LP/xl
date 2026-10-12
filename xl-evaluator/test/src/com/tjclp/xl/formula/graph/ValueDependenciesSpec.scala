@@ -113,21 +113,23 @@ class ValueDependenciesSpec extends FunSuite:
     assertEquals(missing, Set.empty[String], "add them to ValueDependencies.referencePassing")
   }
 
-  test("every reference operator is in the table; (range) waits for GH-713's operator") {
+  test("every reference operator is in the table, and the table names no other operator") {
     val operators = ValueDependenciesSpec.referenceOperators.map(_.name).toSet
     // the walk must see the operators that exist, or the checks below are vacuous
     assert(
-      Set(ReferenceOperators.UnionName, ReferenceOperators.IntersectionName).subsetOf(operators),
+      Set(
+        ReferenceOperators.UnionName,
+        ReferenceOperators.IntersectionName,
+        ReferenceOperators.RangeName
+      ).subsetOf(operators),
       operators.toString
     )
     assertEquals(
       operators.filterNot(ValueDependencies.referencePassing.contains),
       Set.empty[String]
     )
-    // TODO(#713): "(range)" anticipates its operator. Registered under another name, that name is
-    // missing above; registered as "(range)", nothing is pending here.
-    val pending = ValueDependencies.referencePassing.keySet.filter(_.startsWith("(")) -- operators
-    assert(pending.subsetOf(Set("(range)")), s"operators no spec defines: $pending")
+    val stray = ValueDependencies.referencePassing.keySet.filter(_.startsWith("(")) -- operators
+    assertEquals(stray, Set.empty[String])
   }
 
   // --- the address-only rules hold only while those functions never read a value ---------------

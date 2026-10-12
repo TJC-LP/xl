@@ -481,7 +481,8 @@ trait FunctionSpecsBase:
 
   /**
    * A lookup range's values (rows of cells) over its [[lookupRangeExtent]]: a full column or row
-   * materialised up to the sheet's used range, a bounded range in full.
+   * materialised up to the sheet's used range, a bounded range in full. Each key reads as
+   * [[LookupLine]] reads it: a key that fails to evaluate is its error value, a non-match.
    */
   protected def lookupRangeValues(
     range: CellRange,
@@ -490,18 +491,20 @@ trait FunctionSpecsBase:
   ): Either[EvalError, Vector[Vector[CellValue]]] =
     lookupRangeExtent(range, targetSheet) match
       case None => Right(Vector.empty)
-      case Some(extent) => extractRangeAsMatrixEval(extent, targetSheet, ctx)
+      case Some(extent) =>
+        // each key as a lookup reads it (LookupLine.key, GH-715): a failing key is its error value
+        val keys = (extent.width.toLong * extent.height).toInt
+        LookupLine(extent, keys, targetSheet, rangeCellReader(targetSheet, ctx)).storedKeys
+          .map(_.grouped(extent.width).toVector)
 
   /**
-   * #692: the first position of a lookup range whose value satisfies `matches`, reading the range
-   * through the evaluating reader ONE CELL AT A TIME — an uncached formula key is computed when the
-   * search reaches it and never past the hit, so an exact XLOOKUP/XMATCH/MATCH over a 50k-row
-   * column whose key sits near the top costs the cells up to the hit, not the column (the
-   * materialised [[lookupRangeValues]] built and evaluated every cell first). Positions are the
-   * range's own row-major 0-based positions (blanks included, never compacted); the walk covers the
-   * range's [[lookupRangeExtent]] (a full column or row cut off at the sheet's used range, a
-   * bounded range in full), forward or — `descending` — from its last cell back. The first cell
-   * that fails to evaluate ends the search with its error.
+   * #692: the first position of a lookup range whose value satisfies `matches`, reading one key at
+   * a time through [[LookupLine]] (GH-715) — an uncached formula key is computed when the search
+   * reaches it and never past the hit, so an exact XLOOKUP/XMATCH/MATCH over a 50k-row column whose
+   * key sits near the top costs the cells up to the hit, not the column. A key that fails to
+   * evaluate is a non-matching key, as Excel reads an error in the lookup array. Positions are the
+   * range's own row-major 0-based positions; a row or column that runs to the sheet's edge stops at
+   * the used range ([[lookupLine]]), forward or — `descending` — from its last cell back.
    */
   protected def findLookupPosition(
     range: CellRange,
@@ -509,31 +512,7 @@ trait FunctionSpecsBase:
     ctx: EvalContext,
     descending: Boolean
   )(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
-    // The full-column clip relies on `matches` — `matchesLookupExact` and the wildcard criterion —
-    // never matching `Empty`: the cells past the used range are blank, so leaving them out cannot
-    // lose a hit. If blank matching is ever added (an XLOOKUP of ""), the clip must go with it.
-    lookupRangeExtent(range, targetSheet) match
-      case None => Right(None)
-      case Some(extent) =>
-        val rowStart = range.rowStart.index0
-        val colStart = range.colStart.index0
-        val rowEnd = extent.rowEnd.index0
-        val colEnd = extent.colEnd.index0
-        val rows = if descending then rowEnd to rowStart by -1 else rowStart to rowEnd
-        val cols = if descending then colEnd to colStart by -1 else colStart to colEnd
-        val cells = rows.iterator.flatMap(row => cols.iterator.map(col => (row, col)))
-        val read = rangeCellReader(targetSheet, ctx)
-        @annotation.tailrec
-        def search(): Either[EvalError, Option[Int]] =
-          if !cells.hasNext then Right(None)
-          else
-            val (row, col) = cells.next()
-            read(ARef.from0(col, row)) match
-              case Left(error) => Left(error)
-              case Right(cv) =>
-                if matches(cv) then Right(Some((row - rowStart) * range.width + (col - colStart)))
-                else search()
-        search()
+    lookupLine(range, targetSheet, ctx).find(forward = !descending)(matches)
 
   /**
    * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's

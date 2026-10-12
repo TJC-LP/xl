@@ -346,8 +346,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 - **MATCH, VLOOKUP, HLOOKUP and XLOOKUP read uncached formulas in their lookup ranges** (#715):
   MATCH's lookup_array, the VLOOKUP/HLOOKUP key line and result cell, and XLOOKUP's lookup_array
   read each cell the way a reference to it does, so an uncached formula evaluates. Before, they
-  read its bare record and matched it as blank. XLOOKUP's return cell is still read as stored.
-  Keys are read lazily, in search order: a key whose evaluation fails is a non-match, so a broken
+  read its bare record and matched it as blank. XLOOKUP's return cell is read as a reference
+  reads it too (#713 makes XLOOKUP return one), so an uncached formula there evaluates (#742).
+  XMATCH and LOOKUP read their keys the same way. Keys are read lazily, in search order: a key whose evaluation fails is a non-match, so a broken
   cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
   only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
   a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
@@ -391,14 +392,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `XLOOKUP` + 200 `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s
   is reading and writing the book); the approximate modes read the used range as before. XLOOKUP's
   `return_array` cell is read through the same evaluating reader, so an uncached formula there is
-  computed instead of returning the raw formula record — and an uncached return-cell formula that
-  fails, or a host error in that cell, now fails the XLOOKUP where it used to yield the stale or
-  empty value. A key cell whose formula cannot be
-  evaluated at all (unparseable, or an unknown function) is a host failure, not a value: MATCH and
-  XLOOKUP's exact searches now surface it when it sits before the hit in search order, as
-  LOOKUP/XMATCH already did (the old readers skipped it silently); the cells after the hit are
-  never evaluated, while the approximate modes read the whole used range and so fail on such a
-  cell anywhere in it.
+  computed instead of returning the raw formula record. A key cell whose formula cannot be
+  evaluated (unparseable, or an unknown function) is a non-matching key in every lookup and mode,
+  as Excel reads an error in a lookup array (#715); LOOKUP and XMATCH, which failed the lookup on
+  such a key, now read past it too.
 - **XLOOKUP returns a reference, and a whole matched row or column** (#713):
   `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
   folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).

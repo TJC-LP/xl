@@ -48,11 +48,8 @@ private[xl] object ValueDependencies:
     "XLOOKUP" -> ((index, _) => index == 2),
     ReferenceOperators.UnionName -> ((_, _) => true),
     ReferenceOperators.IntersectionName -> ((_, _) => true),
-    // GH-713 introduces this operator separately; retain its reference-only operand semantics
-    // before that branch lands so either merge order keeps positioned inspection correct.
-    // TODO(#713): its range operator's name constant replaces this literal once it lands;
-    // ValueDependenciesSpec turns red if the operator registers under another name.
-    "(range)" -> ((_, _) => true)
+    // GH-713: `:` between computed references reads its operands as references
+    ReferenceOperators.RangeName -> ((_, _) => true)
   )
 
   /**
