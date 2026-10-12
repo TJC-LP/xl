@@ -246,6 +246,40 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
   private def cachedCase(formula: String, expected: CellValue)(implicit loc: munit.Location): Unit =
     assertEquals(cached.evaluateFormula(formula), Right(expected), formula)
 
+  test("#693: TEXT coerces a numeric string before choosing a section (Excel 16)") {
+    assertScalar("=TEXT(\"123\",\"0;0;0;\")", text("123"))
+    assertScalar("=TEXT(\"123\",\"0.00\")", text("123.00"))
+    assertScalar("=TEXT(\"(5)\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\" \",\"0\")", text(" "))
+    assertScalar("=TEXT(\"TRUE\",\"0\")", text("TRUE"))
+    assertScalar("=TEXT(\"1$2\",\"0\")", text("1$2"))
+    assertScalar("=TEXT(\"$$123\",\"0\")", text("$$123"))
+    assertScalar("=TEXT(\"-$5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"$-5\",\"0\")", text("-5"))
+    assertScalar("=TEXT(\"1E-2147483647%\",\"0\")", text("1E-2147483647%"))
+    assertScalar("=TEXT(\"1,234.5\",\"0.0\")", text("1234.5"))
+    for s <- List("1.2,3", "1,23", ",123", "123,", "1,,234", "1e3,0") do
+      assertScalar(s"=TEXT(\"$s\",\"0\")", text(s))
+  }
+
+  test(
+    "#693: a numeric string is a number under a text-only `@` code too (Excel 16, LibreOffice)"
+  ) {
+    // TEXT takes its value as a number whenever the text converts, so the leading zeros and the
+    // E notation go before any section is chosen; only text that does not convert reaches `@`
+    assertScalar("=TEXT(\"007\",\"@\")", text("7"))
+    assertScalar("=TEXT(\"007\",\"0;0;0;\"\"T:\"\"@\")", text("7"))
+    assertScalar("=TEXT(\"1e3\",\"@\")", text("1000"))
+    assertScalar("=TEXT(\"00123\",\"0;0;0;@\")", text("123"))
+    assertScalar("=TEXT(\"abc\",\"@\")", text("abc"))
+    assertScalar("=TEXT(\"abc\",\"0;0;0;\"\"T:\"\"@\")", text("T:abc"))
+  }
+
+  test("#693: a numeric string beyond the double range stays text") {
+    assertScalar("=TEXT(\"1e999999999\",\"0\")", text("1e999999999"))
+    assertScalar("=TEXT(\"-1e309\",\"0\")", text("-1e309"))
+  }
+
   test("#671: a cached formula cell in a text position reads its cached value, not its text") {
     cachedCase("=\"\"&B1", text("0"))
     cachedCase("=B2&\"!\"", text("xy!"))

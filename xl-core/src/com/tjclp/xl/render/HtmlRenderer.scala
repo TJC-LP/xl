@@ -3,6 +3,7 @@ package com.tjclp.xl.render
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cf.{CfBar, CfOverlay}
+import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.richtext.TextRun
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.alignment.{HAlign, VAlign}
@@ -371,8 +372,11 @@ $headerRow$tableRows
   private def cellValueToHtml(cell: ResolvedCell, theme: ThemePalette): String =
     cell.cell.value match
       case CellValue.RichText(richText) =>
-        // Rich text has its own formatting, don't apply NumFmt
-        richText.runs.map(run => runToHtml(run, theme)).mkString
+        NumFmtFormatter
+          .formatRichText(richText, cell.numFmt)
+          .runs
+          .map(run => runToHtml(run, theme))
+          .mkString
 
       case _ =>
         // The resolved content: a cached formula's value formatted with the NumFmt (matches

@@ -1,6 +1,7 @@
 package com.tjclp.xl.display
 
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.numfmt.NumFmt
 
 import java.time.LocalDateTime
@@ -89,14 +90,27 @@ object NumFmtFormatter:
   def formatValue(value: CellValue, numFmt: NumFmt, rule: GeneralRule): String =
     value match
       case CellValue.Number(n) => formatNumber(n, numFmt, rule)
-      case CellValue.Text(s) => s
+      case CellValue.Text(s) => formatText(s, numFmt)
       case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
       case CellValue.DateTime(dt) => formatDateTime(dt, numFmt, rule)
       case CellValue.Empty => ""
       case CellValue.Error(err) => formatError(err)
       case CellValue.Formula(expr, _, _) =>
         s"=$expr" // Fallback - should be handled by FormulaDisplayStrategy
-      case CellValue.RichText(rt) => rt.toPlainText
+      case CellValue.RichText(rt) => formatText(rt.toPlainText, numFmt)
+
+  /** Text through the code's text section; only a custom code can carry one (#693). */
+  private def formatText(s: String, numFmt: NumFmt): String =
+    numFmt match
+      case NumFmt.Custom(code) =>
+        FormatCodeParser.parse(code).fold(_ => s, FormatCodeParser.applyTextFormat(s, _))
+      case _ => s
+
+  /** The text section with source runs preserved and literals inheriting the cell font. */
+  private[xl] def formatRichText(text: RichText, numFmt: NumFmt): RichText = numFmt match
+    case NumFmt.Custom(code) =>
+      FormatCodeParser.parse(code).fold(_ => text, FormatCodeParser.applyRichTextFormat(text, _))
+    case _ => text
 
   /**
    * Format a numeric value according to Excel number format.

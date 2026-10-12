@@ -6,6 +6,8 @@ import java.time.LocalDateTime
 import scala.collection.mutable.ArrayBuffer
 import scala.util.boundary, boundary.break
 
+import com.tjclp.xl.richtext.{RichText, TextRun}
+
 /**
  * Parser for Excel custom number format codes.
  *
@@ -219,6 +221,11 @@ object FormatCodeParser:
         case ']' if !inQuotes =>
           inBracket = false
           current += c
+        case '\\' | '_' | '*' if !inQuotes && !inBracket && i + 1 < code.length =>
+          // An escape, spacer or fill takes the next character as its operand, so neither
+          // `0\;;-0;0` nor `0_\;-0` splits at that `;` (#693)
+          current += c += code(i + 1)
+          i += 1
         case ';' if !inQuotes && !inBracket =>
           sections += current.toString
           current.clear()
@@ -716,11 +723,10 @@ object FormatCodeParser:
         }
       else 0
 
-    // Count minimum integer digits (0 placeholders)
-    val minIntDigits = tokens.count {
-      case FormatToken.Digit('0') => true
-      case _ => false
-    } - decimalDigits
+    // The integer part's placeholders: `0` pads with zeros, `?` with spaces, `#` with nothing
+    val intPlaceholders = (if hasDecimal then tokens.take(decimalIdx) else tokens).collect {
+      case FormatToken.Digit(c) => c
+    }.mkString
 
     def groupedLength(digits: Long): Long =
       if pattern.hasThousands then digits + (digits - 1) / 3 else digits
@@ -735,11 +741,11 @@ object FormatCodeParser:
         val digits = rounded.divide(unit).toString
         // a rounding carry can add the one digit the bound above did not count
         Option.when(groupedLength(digits.length.toLong) <= MaxDigitBlockLength) {
-          val intStr = if pattern.hasThousands then formatWithThousands(digits) else digits
-          val paddedInt =
-            if minIntDigits > 0 && intStr.length < minIntDigits then
-              "0" * (minIntDigits - intStr.length) + intStr
-            else intStr
+          // A zero integer part has no significant digit; the placeholders alone supply zeros
+          // and spaces, which group with it (#693: `0#` on 0 is `0`, `0,000` is `0,000`)
+          val padded =
+            padPlaceholders(if digits == "0" then "" else digits, intPlaceholders, true)
+          val paddedInt = if pattern.hasThousands then formatWithThousands(padded) else padded
           val decimals = rounded.remainder(unit).toString
           val decStr =
             if decimalDigits > 0 then "0" * (decimalDigits - decimals.length) + decimals
@@ -921,7 +927,8 @@ object FormatCodeParser:
     s.indices.foreach { i =>
       result += s(i)
       val posFromEnd = s.length - 1 - i
-      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += ','
+      // a separator after `?` padding is padding too (Excel: `?,??0` on 0 is `    0`)
+      if posFromEnd > 0 && posFromEnd % 3 == 0 then result += (if s(i) == ' ' then ' ' else ',')
     }
     result.toString
 
@@ -1084,7 +1091,8 @@ object FormatCodeParser:
   /**
    * Align digits within a placeholder run: unfilled `?` positions become spaces, `0` becomes zeros,
    * `#` adds nothing. Numerators/wholes right-align (pad left), denominators left-align (pad
-   * right).
+   * right). Shared by the integer, numerator and denominator paths; a zero part is passed as `""`
+   * so that every placeholder is unfilled (`?` → space, `0` → "0", `#` → nothing).
    */
   private def padPlaceholders(digits: String, placeholders: String, alignRight: Boolean): String =
     val diff = placeholders.length - digits.length
@@ -1105,6 +1113,18 @@ object FormatCodeParser:
    * than 4 sections (GH-285). Without either, text echoes unchanged.
    */
   def applyTextFormat(text: String, format: FormatCode): String =
+    textFormatParts(format).map(_.getOrElse(text)).mkString
+
+  /** Apply the same text section while retaining the font of each substituted text run. */
+  private[xl] def applyRichTextFormat(text: RichText, format: FormatCode): RichText =
+    RichText(textFormatParts(format).flatMap {
+      case None => text.runs
+      case Some(literal) if literal.nonEmpty => Vector(TextRun(literal))
+      case Some(_) => Vector.empty
+    })
+
+  /** None substitutes the source text; Some emits a literal in the cell's base font. */
+  private def textFormatParts(format: FormatCode): Vector[Option[String]] =
     val all = Vector(format.positive) ++ format.negative ++ format.zero ++ format.text
     val textSection = format.text.orElse(
       if all.sizeIs < 4 then
@@ -1114,11 +1134,12 @@ object FormatCodeParser:
     textSection match
       case Some(section) =>
         section.pattern.tokens.map {
-          case FormatToken.TextPlaceholder | FormatToken.General => text
-          case FormatToken.Literal(s) => s
-          case _ => ""
-        }.mkString
-      case None => text
+          case FormatToken.TextPlaceholder | FormatToken.General => None
+          case FormatToken.Literal(s) => Some(s)
+          case FormatToken.Spacer(_) => Some(" ")
+          case _ => Some("")
+        }.toVector
+      case None => Vector(None)
 
   // ========== Date/Time Formatter ==========
 

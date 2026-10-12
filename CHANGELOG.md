@@ -387,6 +387,22 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **Text cells render through their format's text section** (#693): `@,` showed `abc` for `abc,` and
+  `0;-0;0;"T:"@` ignored its prefix, in cell display and `TEXT` alike (rich text included; `_`
+  spacers pad, so `_(@_)` is ` abc `). `TEXT` reads a numeric string as its number first
+  (`TEXT("123","0.00")` is `123.00`), and an escaped `\;` (or the operand of `_`/`*`) no longer
+  splits a code into sections. `VALUE` and `TEXT` accept one `$`, leading or after the sign, and
+  commas only as thousands groups of the integer part: `VALUE("1$2")` and `VALUE("1,23")` are
+  `#VALUE!` (were 12 and 123), and a numeric string past the double range (`"1e999999999"`) is
+  no number (`VALUE` is `#VALUE!`, `TEXT` keeps the text). The coercion runs before any section is
+  chosen, so a code whose only section is `@` sees the number: `TEXT("007","@")` is `7`. HTML/SVG
+  rendering, column-width measurement and row-height autofit draw rich text through the text
+  section too: its literals take the cell's base font, and a text section that hides the text
+  collapses the row to the default height.
+- **Integer placeholders pad as Excel does** (#693): `?` pads with a space and a zero integer part
+  has no significant digit, so the accounting zero `_(* "-"??_)` is ` -   ` (was ` -0 `), `#.00` on
+  0.5 is `.50` (was `0.50`) and `0#` on 0 is `0` (was `00`). Padding zeros group: `0,000` on 0 is
+  `0,000` (was `0000`).
 - **MATCH, VLOOKUP, HLOOKUP and XLOOKUP read uncached formulas in their lookup ranges** (#715):
   MATCH's lookup_array, the VLOOKUP/HLOOKUP key line and result cell, and XLOOKUP's lookup_array
   read each cell the way a reference to it does, so an uncached formula evaluates. Before, they

@@ -142,18 +142,24 @@ object RenderUtils:
    * that is the string the renderers emit (GH-502).
    */
   def measureCellValueWidth(value: CellValue, numFmt: NumFmt, font: Option[Font]): Int =
-    measureContentWidth(value, renderedContent(value, numFmt), font)
+    measureContentWidth(value, renderedContent(value, numFmt), font, numFmt)
 
   /** [[measureCellValueWidth]] with the content already resolved (`content` is `value`'s). */
   private def measureContentWidth(
     value: CellValue,
     content: RenderedContent,
-    font: Option[Font]
+    font: Option[Font],
+    numFmt: NumFmt
   ): Int =
     value match
       case CellValue.RichText(rt) =>
-        rt.runs.map(run => measureTextWidth(run.text, run.font.orElse(font))).sum
-      case CellValue.Formula(_, Some(cached), _) => measureContentWidth(cached, content, font)
+        NumFmtFormatter
+          .formatRichText(rt, numFmt)
+          .runs
+          .map(run => measureTextWidth(run.text, run.font.orElse(font)))
+          .sum
+      case CellValue.Formula(_, Some(cached), _) =>
+        measureContentWidth(cached, content, font, numFmt)
       case _ => measureTextWidth(content.text, font)
 
   /** [[measureCellValueWidth]] under the General number format. */
@@ -223,7 +229,8 @@ object RenderUtils:
       // Size the span from what the renderers DRAW — the formatted text — never the raw value:
       // a rounding format must not claim neighbours for digits it never shows, and a widening
       // one must get the room its text needs (GH-502).
-      val textWidth = measureContentWidth(cell.cell.value, cell.content, style.map(_.font))
+      val textWidth =
+        measureContentWidth(cell.cell.value, cell.content, style.map(_.font), cell.numFmt)
       val (pastLeft, pastRight) = textOverhang(cell.align, style, cellWidth, textWidth)
       def side(step: Int, need: Double): Int =
         emptyNeighbours(cellRef, step, need, colWidths, sheet, startCol, endCol)
@@ -476,7 +483,8 @@ object RenderUtils:
    * neighbours, never `####` (GH-501). A 4-section code whose last arm is `@` is still Numeric.
    */
   def renderedContent(value: CellValue, numFmt: NumFmt): RenderedContent = value match
-    case CellValue.RichText(rt) => RenderedContent(RenderedKind.Text, rt.toPlainText)
+    case CellValue.RichText(_) =>
+      RenderedContent(RenderedKind.Text, NumFmtFormatter.formatValue(value, numFmt))
     case CellValue.Empty => RenderedContent(RenderedKind.Empty, "")
     case CellValue.Formula(_, Some(cached), _) => renderedContent(cached, numFmt)
     case CellValue.Formula(expr, None, _) => RenderedContent(RenderedKind.Text, s"=$expr")
@@ -614,11 +622,20 @@ object RenderUtils:
         math.min(autofit, excelRowHeightToPixels(stored))
       case _ => autofit
 
-  /** The largest font a value draws in: its largest rich-text run, else the cell's own font. */
-  private[render] def largestFontPt(value: CellValue, cellFontPt: Double): Double =
+  /** The largest font drawn after text-section substitution, else the cell's own font. */
+  private[render] def largestFontPt(
+    value: CellValue,
+    cellFontPt: Double,
+    numFmt: NumFmt
+  ): Double =
     value match
       case CellValue.RichText(rt) =>
-        rt.runs.map(_.font.fold(cellFontPt)(_.sizePt)).maxOption.getOrElse(cellFontPt)
+        NumFmtFormatter
+          .formatRichText(rt, numFmt)
+          .runs
+          .map(_.font.fold(cellFontPt)(_.sizePt))
+          .maxOption
+          .getOrElse(cellFontPt)
       case _ => cellFontPt
 
   /**
@@ -663,7 +680,11 @@ object RenderUtils:
       case _ if width <= 0 => None
       case value =>
         val style = cell.styleId.flatMap(sheet.styleRegistry.get)
-        val fontPt = largestFontPt(value, style.fold(baseFontPt(sheet))(_.font.sizePt))
+        val fontPt = largestFontPt(
+          value,
+          style.fold(baseFontPt(sheet))(_.font.sizePt),
+          style.fold(NumFmt.General)(_.numFmt)
+        )
         val lines = value match
           // SvgRenderer draws rich text on one line, wrapText or not
           case CellValue.RichText(_) => 1
