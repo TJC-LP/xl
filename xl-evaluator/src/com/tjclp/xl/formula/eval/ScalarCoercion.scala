@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.formula.ast.BindingCoercion
 
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.display.NumFmtFormatter
 import scala.math.BigDecimal
 
@@ -19,7 +20,9 @@ import scala.math.BigDecimal
  *   - number → text renders via numberText (Excel's General text conversion, GH-665 — the
  *     decodeAsString/concatText convention)
  *   - number → boolean is zero/non-zero (Excel: 0 = FALSE, anything else = TRUE)
- *   - numeric text → number/integer parses ("3" coerces, "abc" is a clean error — Excel #VALUE!)
+ *   - numeric text → number/integer/date parses ("3" coerces); any other text is Excel's #VALUE!
+ *     (#709), in a logical slot every text but TRUE/FALSE — an error value the cell caches and
+ *     IFERROR sees, never a host failure
  *   - fractional → integer TRUNCATES toward zero (Excel truncates months/days/num_chars)
  *   - boolean → number is TRUE=1/FALSE=0; dates ARE numbers (Excel serial)
  *   - Empty → ""/0/FALSE per target (the decodeResolvedValue zero convention)
@@ -31,8 +34,9 @@ import scala.math.BigDecimal
  * to the evaluation positions (scalar argument positions collapse to top-left through
  * [[collapseTo]], operand positions pass arrays through to the broadcasting machinery).
  *
- * Total: every input yields Right(coerced) or Left(TypeMismatch/EvalFailed); never a thrown
- * exception, never a ClassCastException deferred to the consuming function.
+ * Total: every input yields Right(coerced), Left(ErrorValue) for an Excel error value or text the
+ * slot refuses, or Left(TypeMismatch) for a runtime value with no Excel meaning there; never a
+ * thrown exception, never a ClassCastException deferred to the consuming function.
  */
 private[formula] object ScalarCoercion:
 
@@ -179,6 +183,19 @@ private[formula] object ScalarCoercion:
   private def mismatch(label: String, expected: String, value: Any): Either[EvalError, Any] =
     Left(EvalError.TypeMismatch(label, expected, s"$value"))
 
+  /**
+   * #709: text a typed scalar slot cannot read is Excel's `#VALUE!` — `=ABS("abc")`,
+   * `=IF("abc",1,0)` — the answer the operators and the lifted elements already give, not a host
+   * failure.
+   */
+  private def textRefused(label: String, expected: String, s: String): Either[EvalError, Any] =
+    Left(
+      EvalError.ErrorValue(
+        CellError.Value,
+        Some(s"$label: text '${quotedText(s)}' is not $expected")
+      )
+    )
+
   private def coerceText(label: String, value: Any): Either[EvalError, Any] = value match
     case s: String => Right(s)
     case bd: BigDecimal => Right(numberText(bd))
@@ -202,7 +219,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       parseNumericText(s) match
         case Some(bd) => truncateToInt(label, bd)
-        case None => mismatch(label, "integer", s)
+        case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(0)
     case other => mismatch(label, "integer", other)
 
@@ -219,7 +236,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       boolTextValue(s) match
         case Some(b) => Right(b)
-        case None => mismatch(label, "boolean", s)
+        case None => textRefused(label, "TRUE or FALSE", s)
     case CellValue.Empty => Right(false)
     case other => mismatch(label, "boolean", other)
 
@@ -234,7 +251,7 @@ private[formula] object ScalarCoercion:
     case s: String =>
       parseNumericText(s) match
         case Some(bd) => Right(bd)
-        case None => mismatch(label, "number", s)
+        case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(BigDecimal(0))
     case other => mismatch(label, "number", other)
 
@@ -248,6 +265,17 @@ private[formula] object ScalarCoercion:
     // GH-307: booleans are their Excel serial in date positions too (TRUE=1 → 1900-01-01,
     // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
     case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
+    // a serial outside 0..MaxExcelDateSerial (the in-range arms above took the rest) is an error
+    // value, as through a reference (#709); #726 makes it #NUM! in [[dateSerialOutOfRange]]
+    case bd: BigDecimal => Left(dateSerialOutOfRange(label, bd.toString))
+    case i: Int => Left(dateSerialOutOfRange(label, i.toString))
+    // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023); other text is
+    // #VALUE! (#709) — date-shaped text included, which Excel and LibreOffice read as a date here
+    // (not modeled, see docs/LIMITATIONS.md)
+    case s: String =>
+      parseNumericText(s) match
+        case Some(bd) => coerceDate(label, bd)
+        case None => textRefused(label, "a date serial", s)
     // GH-396: a blank in a date position renders like Excel's serial-0 year/month (see
     // [[BlankDate]]) — previously a clean error while decodeAsDate/other targets accepted Empty
     case CellValue.Empty => Right(BlankDate)
@@ -255,9 +283,25 @@ private[formula] object ScalarCoercion:
 
   /** Excel truncates fractional values toward zero in integer positions; guard the Int range. */
   private def truncateToInt(label: String, bd: BigDecimal): Either[EvalError, Any] =
-    val truncated = bd.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
-    if truncated.isValidInt then Right(truncated.toInt)
-    else mismatch(label, "valid integer", bd)
+    truncatedInt(bd).toRight(intOutOfRange(label, bd.toString))
+
+  /**
+   * #709: `bd` truncated toward zero as an Int, or None outside the Int range. The magnitude is
+   * read from precision and scale BEFORE any `setScale`: text like `1e2147483647` or
+   * `1e-2147483647` would otherwise make `setScale(0)` build a BigInteger beyond the supported
+   * range (an ArithmeticException) or spend seconds on `1e10000000`. Digits left of the point =
+   * precision - scale: 0 or fewer means |bd| < 1 (truncates to 0), more than 10 means |bd| >=
+   * 10^10, past Int.MaxValue. In between, the scale is at most the precision, so `setScale` is
+   * cheap. Shared by the literal path ([[coerce]]) and the reference decoder
+   * (TExprDecoders.decodeAsInt).
+   */
+  private[formula] def truncatedInt(bd: BigDecimal): Option[Int] =
+    val intDigits = bd.precision.toLong - bd.scale.toLong
+    if bd.signum == 0 || intDigits <= 0 then Some(0)
+    else if intDigits > 10 then None
+    else
+      val truncated = bd.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
+      Option.when(truncated.isValidInt)(truncated.toInt)
 
   /**
    * Numeric-text parse (the extractNumericForMatch convention): trimmed, total. Shared with
@@ -265,4 +309,113 @@ private[formula] object ScalarCoercion:
    * same text domain.
    */
   private[formula] def parseNumericText(s: String): Option[BigDecimal] =
-    scala.util.Try(BigDecimal(s.trim)).toOption
+    val t = s.trim
+    // A number's text starts with a digit (any Unicode digit, as the BigDecimal parser reads),
+    // a sign or a point; anything else is refused without building and catching the parser's
+    // NumberFormatException — a column of text placeholders read by `=ABS(C2)` filled down no
+    // longer throws once per cell. Same answers as the bare parse (TextScalarSlotLawsSpec).
+    if t.isEmpty then None
+    else
+      val c = t.charAt(0)
+      if c.isDigit || c == '+' || c == '-' || c == '.' then scala.util.Try(BigDecimal(t)).toOption
+      else None
+
+  /**
+   * #709: the text a cell holds — plain, rich (its plain text), or a formula's cached text — if it
+   * holds text. The one definition of "this cell is text" shared by the decode-time read
+   * (TExprDecoders.numericText) and the evaluator's `#VALUE!` fallback for refused text, so the two
+   * cannot drift when a text-bearing CellValue is added.
+   */
+  private[formula] def cellText(value: CellValue): Option[String] = value match
+    case CellValue.Text(s) => Some(s)
+    case CellValue.RichText(rt) => Some(rt.toPlainText)
+    case CellValue.Formula(_, Some(cached), _) => cellText(cached)
+    case _ => None
+
+  /**
+   * #709: a date slot's serial outside 0..[[MaxExcelDateSerial]] — `=YEAR(-5)`, `=YEAR("-5")`,
+   * `=YEAR(A1)` over `-5` or `'-5` — as one error value on every path. Excel's answer is `#NUM!`
+   * (#726, which changes the code here alone); `#VALUE!` until then, so the cell caches an error
+   * value instead of failing the recalculation.
+   */
+  private[formula] def dateSerialOutOfRange(label: String, serial: String): EvalError =
+    EvalError.ErrorValue(
+      CellError.Value,
+      Some(s"$label: serial ${quotedText(serial)} is outside the 1900 date range")
+    )
+
+  /**
+   * #709: the refusal TExpr.decodeAsDateScalar gives a serial outside 0..[[MaxExcelDateSerial]],
+   * and the only one it gives for that reason. A sentinel INSTANCE held by this object (not by the
+   * TExprDecoders trait, so it is one instance whatever mixes the trait in): the evaluator's
+   * reference boundary (decodeOrCarried) recognises it by identity (`eq`), never by its fields, so
+   * an equal `ParseError` built by any other decoder — a caller's, through `TExpr.ref(at, decode)`
+   * — is not mistaken for it. decodeOrCarried answers [[dateSerialOutOfRange]], the literal path's
+   * error value (`#VALUE!` until #726 makes it `#NUM!`). TextScalarSlotSpec pins both directions
+   * (the real refusal maps, a forged equal one does not).
+   */
+  private[formula] val DateSerialOutOfRange: CodecError =
+    CodecError.ParseError("serial", "Date", "serial outside the 1900 date range (0 to 2958465)")
+
+  /**
+   * #709: the refusal TExpr.decodeAsInt gives a value outside the Int range — a number, a formula's
+   * cached number or numeric text — recognised by identity like [[DateSerialOutOfRange]];
+   * decodeOrCarried answers [[intOutOfRange]], the literal path's error value.
+   */
+  private[formula] val IntOutOfRange: CodecError =
+    CodecError.ParseError("value", "Int", "value outside the integer range")
+
+  /** The slots whose built-in decoders refuse text with a plain `TypeMismatch` (TExprDecoders). */
+  private val BuiltinTextSlots: Set[String] = Set("Numeric", "Int", "Date", "Boolean", "String")
+
+  /** Longest run of a caller decoder's refusal reason quoted in a `#VALUE!` diagnostic. */
+  private[formula] val MaxQuotedReason: Int = 120
+
+  /**
+   * #709: what a decoder's refusal of a text cell adds to the `#VALUE!` diagnostic. A built-in
+   * decoder's refusal (a `TypeMismatch` naming one of [[BuiltinTextSlots]]) says nothing the
+   * diagnostic does not already say, so it adds nothing; any other refusal — a caller's decoder
+   * passed through `TExpr.ref(at, decode)`, refusing for its own reason — keeps that reason, cut to
+   * [[MaxQuotedReason]] code points, so the caller can still see why it refused.
+   */
+  private[formula] def decoderReason(err: CodecError): Option[String] = err match
+    case CodecError.TypeMismatch(expected, _) if BuiltinTextSlots.contains(expected) => None
+    case CodecError.TypeMismatch(expected, actual) =>
+      Some(boundedText(s"expected $expected, got ${shownValue(actual)}", MaxQuotedReason))
+    case CodecError.ParseError(value, target, detail) =>
+      Some(boundedText(s"cannot parse '$value' as $target: $detail", MaxQuotedReason))
+
+  /**
+   * #709: an integer slot's value outside the Int range — `=LEFT("abc",1E10)`, `=LEFT("abc",A1)`
+   * over `1E10` or `'1e10` — as one error value on every path, like any other value the slot cannot
+   * read (`#VALUE!`; LibreOffice refuses it too).
+   */
+  private[formula] def intOutOfRange(label: String, shown: String): EvalError =
+    EvalError.ErrorValue(
+      CellError.Value,
+      Some(s"$label: ${quotedText(shown)} is outside the integer range")
+    )
+
+  /**
+   * #709: a cell's value as a diagnostic shows it — a number in its plain scientific form (cheap
+   * for any exponent, unlike General formatting), text as written, a formula as its cached value.
+   */
+  private[formula] def shownValue(value: CellValue): String = value match
+    case CellValue.Number(n) => n.toString
+    case CellValue.Formula(_, Some(cached), _) => shownValue(cached)
+    case other => cellText(other).getOrElse(other.toString)
+
+  /** Longest run of a cell's text, in code points, quoted in a `#VALUE!` diagnostic. */
+  private[formula] val MaxQuotedText: Int = 40
+
+  /**
+   * #709: `s` as a diagnostic quotes it — at most [[MaxQuotedText]] code points, then an ellipsis —
+   * so a pasted paragraph in a cell does not become a paragraph-long error message. The cut counts
+   * code points, so it never leaves half a surrogate pair (an emoji) in the message.
+   */
+  private[formula] def quotedText(s: String): String = boundedText(s, MaxQuotedText)
+
+  /** `s` cut to at most `max` code points, then an ellipsis; never splits a surrogate pair. */
+  private[formula] def boundedText(s: String, max: Int): String =
+    if s.codePointCount(0, s.length) <= max then s
+    else s.substring(0, s.offsetByCodePoints(0, max)) + "…"

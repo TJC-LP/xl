@@ -389,11 +389,12 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     }
   }
 
-  test("lifting-law carve-out: numeric text through one reference; cached formulas agree (#671)") {
-    // The divergence is the scalar reference decoder's, and the lifted element is Excel's: a
-    // numeric-text cell coerces to its number element-wise, while one reference to it in a numeric
-    // slot is a type mismatch (as `=B2+0` is). #671: one reference to a cached formula cell in a
-    // text slot reads its cached value, as the lifted element does — no longer a carve-out
+  test(
+    "one reference agrees with the lifted element: numeric text (#709), cached formulas (#671)"
+  ) {
+    // #709: a numeric-text cell is its number through one reference in a numeric slot, as it is
+    // element-wise and as Excel reads it (`=B2+0` too). #671: one reference to a cached formula
+    // cell in a text slot reads its cached value, as the lifted element does
     val sheet = base
       .put(ref"B2", CellValue.Text("5"))
       .put(ref"B3", CellValue.Text("5"))
@@ -409,9 +410,8 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
 
     assertEquals(eval("=ABS(B2:B3)"), Right(column(5, 5)))
     assertEquals(eval("=SUMPRODUCT(ABS(B2:B3))"), Right(BigDecimal(10)))
-    eval("=ABS(B2)") match
-      case Left(EvalError.CodecFailed(_, _)) => ()
-      case other => fail(s"=ABS(B2) over the text 5: expected a type mismatch, got $other")
+    assertEquals(eval("=ABS(B2)"), Right(BigDecimal(5)))
+    assertEquals(eval("=B2+0"), Right(BigDecimal(5)))
 
     assertEquals(eval("=LEN(E2:E3)"), Right(column(1, 2)))
     assertEquals(eval("=LEN(E2)"), Right(BigDecimal(1)), "the cached value 2, not the text 1+1")
