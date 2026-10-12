@@ -39,7 +39,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    *
    * We still enforce Excel's dimension rules on the original ranges, but we constrain full
    * column/row ranges to the union of used ranges across all involved sheets. This prevents
-   * mismatched lengths after constraining while preserving performance.
+   * mismatched lengths after constraining while preserving performance. GH-712: SUMPRODUCT's
+   * `constrainComputedRange` relies on that union across sheets to bound a computed reference (ROW
+   * of `INDEX(Other!A:A,0)`) without knowing its sheet.
    */
   private def computeBounds(
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
@@ -1323,6 +1325,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               if rangesWithSheets.nonEmpty then computeBounds(rangesWithSheets)
               else (None, None)
 
+            // A computed reference takes the shared extent only for axes represented in the
+            // static inputs. No discovered whole axis is different from an empty used extent:
+            // INDEX(namedColumn,0) still materializes by its own reference rules. The extent is
+            // sheet-agnostic on purpose: computeBounds unions the used ranges of every sheet the
+            // operands name, and every operand takes that one extent, so a computed reference on
+            // any sheet (ROW(INDEX(Other!A:A,0))) lines up with A:A here; its sheet is not needed.
+            val boundsColumns = rangesWithSheets.exists(_._1.isFullColumn)
+            val boundsRows = rangesWithSheets.exists(_._1.isFullRow)
+            def constrainComputedRange(range: CellRange): CellRange =
+              if (range.isFullColumn && boundsColumns) || (range.isFullRow && boundsRows) then
+                constrainRange(range, bounds)
+              else range
+
             // Helper to constrain ranges in expressions
             def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
               TExpr.transformRanges(
@@ -1344,7 +1359,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support
                   val boundedExpr = constrainExprRanges(expr)
-                  ctx.evalArrayExpr(boundedExpr).flatMap {
+                  ctx.evalBoundedArrayExpr(boundedExpr, constrainComputedRange).flatMap {
                     case ar: ArrayResult =>
                       // Convert ArrayResult to numeric matrix with boolean coercion.
                       // GH-337: a carried error element fails loudly naming the code — the

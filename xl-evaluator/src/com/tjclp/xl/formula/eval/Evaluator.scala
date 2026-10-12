@@ -779,8 +779,8 @@ object Evaluator:
    * wrong: without the OFFSET clause, `LET(c,B5,OFFSET(c,1,0))` was `#VALUE!` in array mode unless
    * an unrelated range slot in the same LET read a LET name.
    *
-   * TODO(#719): a walk for functions that inspect a reference's position or shape (ROW, COLUMN) is
-   * a trigger of the same kind; `evalLet` should bind references when either answers true.
+   * A walk for functions that inspect a reference's position or shape (ROW, COLUMN) is a trigger of
+   * the same kind (`inspectsReference`); `evalLet` binds references when either answers true.
    *
    * The walk tracks neither which name a slot reads nor shadowing: a range-slot read of any LET
    * name in the subtree, an inner LET's own or one that shadows an outer name, makes the outer LET
@@ -832,6 +832,31 @@ object Evaluator:
           _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] | _: TExpr.NameRef |
           _: TExpr.SheetNameRef =>
         false
+
+  /**
+   * Whether `expr` reads a reference's position or shape anywhere (a call flagged
+   * `requiresReferenceArguments`: ROW, COLUMN, ROWS, COLUMNS), so an array-mode LET binds its
+   * reference-denoting values as references. The walk covers every node with children: calls, the
+   * binary operators (unary minus is `0 - x`), the unary wrappers, nested LETs and coercions; array
+   * constants are literals and hold no reference.
+   */
+  private[formula] def inspectsReference(expr: TExpr[?]): Boolean = expr match
+    case call: TExpr.Call[?] =>
+      call.spec.flags.requiresReferenceArguments || call.spec.argSpec.toValues(call.args).exists {
+        case ArgValue.Expr(arg) => inspectsReference(arg)
+        case _ => false
+      }
+    case chain if BinarySpine.isBinary(chain) =>
+      BinarySpine.operandList(chain).exists(inspectsReference)
+    case TExpr.Let(letBindings, body) =>
+      letBindings.exists((_, value) => inspectsReference(value)) || inspectsReference(body)
+    case TExpr.Coerced(inner, _) => inspectsReference(inner)
+    case TExpr.UnaryPlus(inner) => inspectsReference(inner)
+    case TExpr.Percent(inner) => inspectsReference(inner)
+    case TExpr.ToInt(inner) => inspectsReference(inner)
+    case TExpr.DateToSerial(inner) => inspectsReference(inner)
+    case TExpr.DateTimeToSerial(inner) => inspectsReference(inner)
+    case _ => false
 
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
@@ -1273,7 +1298,8 @@ private class EvaluatorImpl(
   rng: Rng = Rng.system,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -1297,7 +1323,8 @@ private class EvaluatorImpl(
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1678,9 +1705,49 @@ private class EvaluatorImpl(
   /**
    * A function call. `selectsReference`: the call's result feeds a reference position (an
    * aggregate's argument), so IF, IFS, CHOOSE and SWITCH keep the reference they select whole.
+   *
+   * GH-712: SUMPRODUCT's shared extent reaches a call only along the path its static trimming
+   * (`TExpr.transformRanges`) takes — operators, LET and the calls whose flags answer
+   * `entersArrayRangeBounds` (lifted calls; ROW, COLUMN). Any other call (MAX, COUNT, INDEX's
+   * shape, IF, a nested SUMPRODUCT) evaluates its arguments outside it, so
+   * `SUMPRODUCT((A:A>0)*MAX(ROW(A:A)))` reads MAX over every row, as Excel does, rather than over
+   * the used ones.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalCall(
+    call: TExpr.Call[?],
+    sheet: Sheet,
+    clock: Clock,
+    workbook: Option[Workbook],
+    currentCell: Option[ARef],
+    selectsReference: Boolean
+  ): Either[EvalError, Any] =
+    if arrayRangeBounds.isDefined && !call.spec.flags.entersArrayRangeBounds then
+      outsideArrayRangeBounds.evalCallNode(
+        call,
+        sheet,
+        clock,
+        workbook,
+        currentCell,
+        selectsReference
+      )
+    else evalCallNode(call, sheet, clock, workbook, currentCell, selectsReference)
+
+  /** This evaluator without SUMPRODUCT's shared extent (see [[evalCall]]). */
+  private lazy val outsideArrayRangeBounds: EvaluatorImpl =
+    new EvaluatorWithDepth(
+      currentDepth,
+      allowArrayResults,
+      bindings,
+      rng,
+      memoOpt,
+      resolvingNames,
+      workbookPath,
+      aggregateMemoOpt,
+      arrayRangeBounds = None
+    )
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def evalCallNode(
     call: TExpr.Call[?],
     sheet: Sheet,
     clock: Clock,
@@ -1721,7 +1788,10 @@ private class EvaluatorImpl(
     // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
     // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
     // (e.g. SUM over a range-valued binding) still resolve in-scope names.
-    def evalArrayArg(expr: TExpr[Any]): Either[EvalError, Any] =
+    def evalArrayArg(
+      expr: TExpr[Any],
+      bounds: Option[CellRange => CellRange] = arrayRangeBounds
+    ): Either[EvalError, Any] =
       new EvaluatorWithDepth(
         currentDepth,
         allowArrayResults = true,
@@ -1730,7 +1800,8 @@ private class EvaluatorImpl(
         Some(callMemo),
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -1739,7 +1810,7 @@ private class EvaluatorImpl(
       clock,
       workbook,
       [A] => (expr: TExpr[A]) => evalArg(expr),
-      evalArrayArg,
+      expr => evalArrayArg(expr),
       currentCell,
       currentDepth,
       bindings,
@@ -1753,7 +1824,9 @@ private class EvaluatorImpl(
         selectsReference = selectsReference,
         nameTrail = resolvingNames,
         nameReference =
-          Some(evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true))
+          Some(evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true)),
+        arrayRangeBounds = arrayRangeBounds,
+        boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
       )
     )
     // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX)
@@ -2043,12 +2116,20 @@ private class EvaluatorImpl(
         memoOpt,
         resolvingNames,
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        arrayRangeBounds
       )
-    // GH-710: an array evaluation binds references too when a range slot reads a LET name
+    // An array evaluation binds references when a range slot reads a LET name (GH-710) or when
+    // something inspects a reference's position or shape (GH-712). One flag for the whole LET,
+    // deliberately: a reference-denoting binding read as a value reads the same whether it is bound
+    // as the reference or as its array (an aggregate skips an array's text and logical elements as
+    // it skips a reference's — RowColumnArraySpec pins SUM, COUNT and COUNTA), and Excel's LET
+    // always binds the reference, so binding one is never wrong.
     lazy val bindsReferences = !allowArrayResults ||
-      letBindings.exists((_, value) => Evaluator.readsBindingAsRange(value)) ||
-      Evaluator.readsBindingAsRange(body)
+      letBindings.exists((_, value) =>
+        Evaluator.readsBindingAsRange(value) || Evaluator.inspectsReference(value)
+      ) ||
+      Evaluator.readsBindingAsRange(body) || Evaluator.inspectsReference(body)
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
       case (Right(env), (name, valueExpr)) =>
@@ -2056,7 +2137,7 @@ private class EvaluatorImpl(
           case _: TExpr.RangeRef | _: TExpr.SheetRange => Right(env)
           case _ =>
             val evaluated =
-              if Evaluator.denotesReference(valueExpr) && bindsReferences then
+              if bindsReferences && Evaluator.denotesReference(valueExpr) then
                 scoped(env).referenceArgument(
                   valueExpr.asInstanceOf[TExpr[Any]],
                   sheet,
@@ -2238,6 +2319,10 @@ private class EvaluatorImpl(
             // carries the cycle guard and a FRESH binding environment (LET
             // bindings never leak into a name's definition). A named formula is an
             // array context, as in Excel; one that computes a reference keeps it.
+            // GH-712: the definition is its own formula, outside SUMPRODUCT's static
+            // trimming, so it evaluates without the shared extent (a name computing
+            // `MAX(ROW(Sheet1!$A:$A))` is 1,048,576); a reference it returns is
+            // bounded by the ROW or COLUMN that reads it.
             val resolved = TExpr.asResolvedValueExpr(other)
             val derived: EvaluatorImpl = new EvaluatorWithDepth(
               currentDepth,
@@ -2247,7 +2332,8 @@ private class EvaluatorImpl(
               memoOpt,
               trail,
               workbookPath,
-              aggregateMemoOpt
+              aggregateMemoOpt,
+              arrayRangeBounds = None
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -2858,14 +2944,16 @@ private class EvaluatorWithDepth(
   memo: Option[Evaluator.EvalMemo] = None,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
       rng,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -2878,5 +2966,6 @@ private class EvaluatorWithDepth(
       memo,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      arrayRangeBounds
     )

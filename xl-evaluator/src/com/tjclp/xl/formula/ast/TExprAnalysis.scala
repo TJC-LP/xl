@@ -216,7 +216,9 @@ trait TExprAnalysis:
       case Coerced(inner, target) => Coerced(transformRanges(inner, f), target)
       // A lifted call evaluates element-wise over its lifted scalar slots, so a range there is an
       // element source like an operand's and takes the same bounds (SUMPRODUCT(--(A:A>0),ABS(B:B))
-      // must not mismatch its dimensions). Other calls are shape-sensitive (ROWS(A:A), INDEX).
+      // must not mismatch its dimensions), and so does the range of a call flagged
+      // `boundsReferenceAxis` (ROW, COLUMN), whose array has one number per row or column of it
+      // (GH-712: SUMPRODUCT((A:A>5)*ROW(A:A))). Other calls are shape-sensitive (ROWS(A:A), INDEX).
       case call: Call[?] => transformLiftedSlots(call, f)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other
@@ -226,11 +228,14 @@ trait TExprAnalysis:
     call: Call[A],
     f: (Option[SheetName], CellRange) => CellRange
   ): TExpr[A] =
-    call.spec.flags.lift match
-      case ArrayLift.Off => call
-      case ArrayLift.On(lifted, _) =>
-        val replacements =
-          call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
-            if lifted.forall(_.contains(position)) then transformRanges(slot, f) else slot
-          }
-        Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)
+    if !call.spec.flags.entersArrayRangeBounds then call
+    else
+      // a lifted call's lifted slots; every scalar slot of a boundsReferenceAxis call
+      def enters(position: Int): Boolean = call.spec.flags.lift match
+        case ArrayLift.On(lifted, _) => lifted.forall(_.contains(position))
+        case ArrayLift.Off => true
+      val replacements =
+        call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
+          if enters(position) then transformRanges(slot, f) else slot
+        }
+      Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)
