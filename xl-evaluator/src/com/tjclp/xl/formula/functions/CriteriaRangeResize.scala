@@ -47,9 +47,16 @@ object CriteriaRangeResize:
       case TExpr.RangeLocation.Binding(_) => true
       case _ => false
 
+    // GH-713: a range slot refuses a computed reference today (`SUMIF(A1:A3,">0",A1:dyn)` is a
+    // parse error naming the range operator; #723 tracks accepting it). Should one ever reach a
+    // resizing slot as an expression, its shape is known only at evaluation: dynamic
+    def unresolvedValue(value: ArgValue): Boolean = value match
+      case ArgValue.Range(location) => unresolved(location)
+      case ArgValue.Expr(_) => true
+      case ArgValue.Cells(_) => false
+
     resizingFunctions.contains(name) && (values match
-      case ArgValue.Range(criteria) :: _ :: ArgValue.Range(target) :: _ =>
-        unresolved(criteria) || unresolved(target)
+      case criteria :: _ :: target :: _ => unresolvedValue(criteria) || unresolvedValue(target)
       case _ => false)
 
   /**
@@ -73,8 +80,9 @@ object CriteriaRangeResize:
    * both name-shaped identifiers, as [[com.tjclp.xl.formula.parser.FormulaParser]] reads them: a
    * letter, an underscore or a backslash first, then letters, digits, underscores, dots and
    * backslashes, and not a cell reference. An identifier is not a name when it is a function (`(`
-   * follows), a sheet (`!` follows at once), a range corner (`:` follows or precedes it), holds `$`
-   * (an anchored reference), is a cell reference, or is `TRUE` or `FALSE`; string literals, quoted
+   * follows), a sheet (`!` follows at once), a column or row corner of `:` (`A` in `A:C`; a corner
+   * spelled otherwise may be a name since GH-713's range operator, `A1:myName`), holds `$` (an
+   * anchored reference), is a cell reference, or is `TRUE` or `FALSE`; string literals, quoted
    * sheet names, `[…]` and error literals hold no names. Anything else counts as a possible name: a
    * false positive costs one parse.
    */
@@ -123,12 +131,22 @@ object CriteriaRangeResize:
   // ARef.parse rejects what the parser reads as a cell. Any token it does not rule out counts as a
   // name — `XFE1` past the grid, and anything else the parser may yet read as a cell. That is
   // deliberate: a false positive costs one parse, a false negative a stale reader.
-  private def isName(token: String, text: String, end: Int): Boolean =
+  //
+  // GH-713: either corner of `:` may be a name (`A1:myName`, `myName:B3`), so a token beside `:`
+  // stays a possible name unless it spells a column or a row (`A` in `A:C`), the one spelling the
+  // parser never takes as a `:` operand (ReferenceOperators.spellsAxis, as FormulaParser applies
+  // it).
+  private def isName(token: String, text: String, start: Int, end: Int): Boolean =
     !token.contains('$') &&
       ARef.parse(token).isLeft &&
       !token.equalsIgnoreCase("TRUE") && !token.equalsIgnoreCase("FALSE") &&
       !(end < text.length && text.charAt(end) == '!') &&
-      !nextNonSpace(text, end).exists(c => c == '(' || c == ':')
+      !nextNonSpace(text, end).contains('(') &&
+      !(besideColon(text, start, end) && ReferenceOperators.spellsAxis(token))
+
+  /** Whether `:` touches the token spanning `start` until `end`, on either side. */
+  private def besideColon(text: String, start: Int, end: Int): Boolean =
+    (start > 0 && text.charAt(start - 1) == ':') || (end < text.length && text.charAt(end) == ':')
 
   /**
    * Whether `text`, from `from`, holds a token that could parse as a defined or LET name (see
@@ -151,17 +169,15 @@ object CriteriaRangeResize:
             text,
             skipWhile(text, from + 1, c => c.isLetterOrDigit || "/_!?".contains(c))
           )
-        // a range's second corner (A1:B2, A:C, 1:3) is never a name, as the parser reads it
-        // today. GH-713's range operator (`A1:myName`, `myName:B3`) will make both corners
-        // possible names: this arm, and the `:` look-ahead in isName, must accept them then
-        case ':' =>
-          hasNameShapedToken(text, skipWhile(text, from + 1, c => c.isLetterOrDigit || c == '$'))
+        // GH-713: a range's second corner is scanned like any token — a name there
+        // (`A1:myName`) is read by the range operator, so isName decides, not this arm
+        case ':' => hasNameShapedToken(text, from + 1)
         // a number (1, 2.5, 1E5): never a name
         case c if c.isDigit || c == '.' =>
           hasNameShapedToken(text, skipWhile(text, from, isIdentPart))
         case c if isIdentStart(c) || c == '$' =>
           val end = skipWhile(text, from, isIdentPart)
-          isName(text.substring(from, end), text, end) || hasNameShapedToken(text, end)
+          isName(text.substring(from, end), text, from, end) || hasNameShapedToken(text, end)
         case _ => hasNameShapedToken(text, from + 1)
 
   /**

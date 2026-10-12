@@ -212,7 +212,11 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "LET(t,C1,SUMIF(A1:A3,\">0\",t))",
     "_xlfn.LET(_xlpm.t,C1,SUMIF(A1:A3,\">0\",_xlpm.t))",
     "SUMIF(A1:A3,\"x\",C1)+LET(t,C1,SUMIF(A1:A3,\">0\",t))",
-    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)"
+    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)",
+    // GH-713's range operator makes a name a range corner: the pre-filter keeps it
+    "SUMIF(A1:A3,\">0\",A1:target)",
+    "SUMIF(target:C3,\">0\")",
+    "SUMIF(Sheet1!A1:target,\">0\")"
   ).foreach { formula =>
     test(s"pre-filter keeps =$formula, which may resize through a name") {
       assert(CriteriaRangeResize.mayResizeThroughName(formula))
@@ -236,7 +240,11 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "ROUND(SUMIF(A1:A3,\">0\",C1),2)",
     "SUMIF(A1:A3,#N/A,C1)+SUMIF(A1:A3,1.5E3,C1)",
     "SUMIF(A1:A3,\">0\",C1#)",
-    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)"
+    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)",
+    "SUMIF(A:XFD,\"x\",B:B)",
+    // a corner spelled like a column is a column to the parser, and GH-713's range operator
+    // refuses it as a name too
+    "SUMIF(A1:A3,\">0\",A1:t)"
   ).foreach { formula =>
     test(s"pre-filter skips =$formula, which cannot resize through a name") {
       assert(!CriteriaRangeResize.mayResizeThroughName(formula))
@@ -487,4 +495,64 @@ class CriteriaRangeDependencySpec extends FunSuite:
       Some(ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"C1", ref"C3"))))
     )
     assertEquals(CriteriaRangeResize.resizedArgs("SUMIF", args), resized)
+  }
+
+  // ----- GH-713: a name as a corner of the range operator -----
+
+  test("GH-713: a range operator in a resizing slot is refused, never a stale reader") {
+    // the range slot names the computed reference (#723); nothing parses to resize statically
+    List(
+      "SUMIF(A1:A3,\">0\",A1:target)",
+      "SUMIF(target:A3,\">0\",C1)",
+      "AVERAGEIF(A1:A3,\">0\",target:C3)"
+    ).foreach { formula =>
+      FormulaParser.parse(formula) match
+        case Left(err) => assert(err.toString.contains("range operator"), err.toString)
+        case Right(expr) => fail(s"$formula parsed as $expr")
+    }
+  }
+
+  test("GH-713: an expression in a resizing slot counts as a dynamic resize") {
+    import com.tjclp.xl.formula.ast.TExpr
+    import com.tjclp.xl.formula.functions.ArgValue
+    val criteria = ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"A1", ref"A3")))
+    val criterion = ArgValue.Expr(TExpr.Lit(BigDecimal(0)))
+    val computed = ArgValue.Expr(TExpr.NameRef("target"))
+    val written = ArgValue.Range(TExpr.RangeLocation.Local(CellRange(ref"C1", ref"C3")))
+    assert(
+      CriteriaRangeResize.hasDynamicResize("SUMIF", List(criteria, criterion, computed), _ => false)
+    )
+    assert(
+      CriteriaRangeResize.hasDynamicResize("SUMIF", List(computed, criterion, written), _ => false)
+    )
+    assert(
+      !CriteriaRangeResize.hasDynamicResize("SUMIF", List(criteria, criterion, written), _ => false)
+    )
+    assert(
+      !CriteriaRangeResize.hasDynamicResize(
+        "SUMIFS",
+        List(written, criteria, criterion),
+        _ => false
+      )
+    )
+  }
+
+  test("GH-713: a range with a computed-name corner is dynamic and recalculates after an edit") {
+    // target is C1, computed (IF over references): A1:target is A1:C1, target:A3 is A1:C3
+    val original = sheet
+      .put(ref"E1", CellValue.Formula("SUM(A1:target)", Some(n(11))))
+      .put(ref"E2", CellValue.Formula("SUM(target:A3)", Some(n(66))))
+      .put(ref"E3", CellValue.Formula("SUM(A1:C3)", Some(n(66))))
+    val wb = names(Workbook(original))
+    List((ref"E1", 11), (ref"E2", 66)).foreach { (at, expected) =>
+      assertEquals(original.evaluateCell(at, Clock.system, Some(wb)), Right(n(expected)), at.toA1)
+    }
+    // audit's dynamic list (WriteCommands reads DependencyGraph.dynamicCells)
+    assertEquals(DependencyGraph.dynamicCells(wb), Set(q(ref"E1"), q(ref"E2")))
+    val updated = wb
+      .put(original.put(ref"C1", n(100)).put(ref"B2", n(5)))
+      .recalculateDependents(original.name, Set(ref"C1", ref"B2"))
+    assertEquals(cache(resultSheet(updated), ref"E1"), Some(n(101)))
+    assertEquals(cache(resultSheet(updated), ref"E2"), Some(n(161)))
+    assertEquals(cache(resultSheet(updated), ref"E3"), Some(n(161)))
   }
