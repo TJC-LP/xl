@@ -192,7 +192,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     )((args, ctx) => singleArea(args, ctx)) { (args, ctx) =>
       singleArea(args, ctx).flatMap { case RangeOperand(sheet, range) =>
         referenceResult(range, sheet, ctx)(
-          extractRangeAsMatrixEval(range, sheet, ctx).map(ArrayResult(_))
+          readRangeArray(range, sheet, ctx)
         )
       }
     }(using ArgSpec.tuple(using referenceOperand, ArgSpec.tuple(using referenceOperand)))

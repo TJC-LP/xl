@@ -11,7 +11,8 @@ import com.tjclp.xl.formula.functions.{
   FunctionSpecs,
   LiftSlot,
   ReferenceFunctionNames,
-  ReferenceOperators
+  ReferenceOperators,
+  SumProductTail
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -208,6 +209,24 @@ object Evaluator:
   /** Array-result evaluator with an explicit randomness source (GH-115). */
   def arrayInstance(rng: Rng): Evaluator =
     TotalEvaluator(new EvaluatorImpl(allowArrayResults = true, rng = rng))
+
+  /**
+   * #750, for the sparse-equals-dense laws: [[arrayInstance]] whose ranges are all read one way
+   * ([[ArrayArithmetic.RangeRead]]: through their populated box, or position by position). The
+   * choice rides on the pass memo, which every derived evaluator of the evaluation shares, so it is
+   * an explicit value rather than ambient state. The memo is the evaluator's own: use the instance
+   * for one evaluation of one sheet.
+   */
+  private[formula] def arrayInstanceReading(rng: Rng, read: ArrayArithmetic.RangeRead): Evaluator =
+    TotalEvaluator(
+      new EvaluatorWithDepth(
+        0,
+        allowArrayResults = true,
+        rng = rng,
+        memo = Some(new EvalMemo(rangeRead = read)),
+        guard = None
+      )
+    )
 
   /**
    * Convenience method for direct evaluation (forwards to instance.eval).
@@ -1143,7 +1162,12 @@ object Evaluator:
    * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
    * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo(val placement: Option[PlacementGuard] = None):
+  private[formula] final class EvalMemo(
+    val placement: Option[PlacementGuard] = None,
+    // #750: how ArrayArithmetic.readRange reads a range in this pass; Auto (by its size) except in
+    // the sparse-equals-dense laws, through arrayInstanceReading
+    val rangeRead: ArrayArithmetic.RangeRead = ArrayArithmetic.RangeRead.Auto
+  ):
     private val bySheet =
       new java.util.IdentityHashMap[
         Sheet,
@@ -1154,6 +1178,22 @@ object Evaluator:
       compute: => Either[EvalError, CellValue]
     ): Either[EvalError, CellValue] =
       guard(sheet, at).fold(memoized(sheet, at, compute))(Left(_))
+
+    private val boxes =
+      new java.util.IdentityHashMap[
+        Sheet,
+        scala.collection.mutable.HashMap[CellRange, Option[CellRange]]
+      ]()
+
+    /**
+     * #750: the populated box of `range` on `sheet` ([[ArrayArithmetic.readRange]]), found once per
+     * pass: a formula that reads one whole column twice scans the sheet's keys once.
+     */
+    def populatedBox(sheet: Sheet, range: CellRange)(
+      compute: => Option[CellRange]
+    ): Option[CellRange] =
+      val forSheet = boxes.computeIfAbsent(sheet, _ => scala.collection.mutable.HashMap.empty)
+      forSheet.getOrElseUpdate(range, compute)
 
     /**
      * The guarded placement's error when `at` on `sheet` is it. Reads that evaluate an uncached
@@ -2151,7 +2191,28 @@ private class EvaluatorImpl(
         val arrays = plan.collect { case (_, _, SlotValue.Elements(array, _)) => array }
         if arrays.isEmpty then unlifted(argsFor(Vector.empty))
         else
-          ArrayArithmetic.broadcastN(arrays) { elements =>
+          // #750: a sparse array's fill cells share one call; a call that draws a random number
+          // (itself, or in an argument it evaluates per element) must draw for every cell instead
+          def drawsPerElement: Boolean =
+            val evaluatedOnce = plan.collect {
+              case (
+                    expr,
+                    _,
+                    SlotValue.Scalar(_, _) | SlotValue.Elements(_, _) | SlotValue.ErrorArg(_)
+                  ) =>
+                expr
+            }
+            lazy val nameDraws = namedDraws(sheet, workbook)
+            SumProductTail.draws(call.spec) ||
+            call.spec.argSpec.toValues(call.args).exists {
+              case ArgValue.Expr(e) =>
+                !evaluatedOnce.exists(_ eq e) &&
+                WorkbookAudit.callsWhere(e, nameDraws(_, _), SumProductTail.draws)
+              case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) => nameDraws(scope, name)
+              case _ => false
+            }
+          val perCell = !arrays.forall(_.isDense) && drawsPerElement
+          ArrayArithmetic.broadcastN(arrays, perCell) { elements =>
             ArrayLifting.elementResult(call.spec.eval(argsFor(elements), ctx))
           }
       }
@@ -2240,6 +2301,23 @@ private class EvaluatorImpl(
       case SlotValue.Keep => (kind, SlotValue.Keep)
       case other => (peeledKind, other)
     }
+
+  /**
+   * GH-711/#750: whether a defined name, referenced from `sheet`, reaches a call that draws a
+   * random number ([[SumProductTail.draws]]); built on first use, once per recalculation
+   * generation.
+   */
+  private def namedDraws(
+    sheet: Sheet,
+    workbook: Option[Workbook]
+  ): (Option[SheetName], String) => Boolean =
+    workbook match
+      case None => (_, _) => false
+      case Some(wb) =>
+        def build(book: Workbook) =
+          WorkbookAudit.namesReaching(book, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
+        val reach = aggregateMemoOpt.fold(build(wb))(_.namesReachingDraw(wb, build))
+        (scope, name) => reach(sheet.name, scope, name) != NameWalk.Reach.Absent
 
   // ===== GH-193: LET evaluation =====
 
@@ -2815,18 +2893,21 @@ private class EvaluatorImpl(
     clock: Clock,
     workbook: Option[Workbook]
   ): Either[EvalError, ArrayResult] =
-    ArrayArithmetic.rangeToArrayEval(
+    val memo = passMemo
+    ArrayArithmetic.readRange(
       range,
+      targetSheet,
       Evaluator.cellValueReader(
         targetSheet,
         clock,
         workbook,
         currentDepth,
         rng,
-        passMemo,
+        memo,
         workbookPath,
         aggregateMemoOpt
-      )
+      ),
+      Some(memo)
     )
 
   /**

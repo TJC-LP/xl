@@ -218,3 +218,81 @@ class EvaluationTotalitySpec extends FunSuite:
       case Right(value) => fail(s"a defect must not become a cell value: $value")
       case Left(_) => ()
   }
+
+  test("#750: whole-axis ranges in any position evaluate, never materialised, every factory") {
+    // array mode holds a whole-axis value as its populated box plus a fill: every one of these
+    // finishes in milliseconds whatever its declared size (R:KHI is 8 billion positions)
+    val ranges = List("A:A", "B:C", "R:KHI", "kHi:r", "A:XFD", "2:2", "1:1048576")
+    val shapes = List(
+      "=$R",
+      "=$R*2",
+      "=-$R",
+      "=$R>0",
+      "=$R=\"\"",
+      "=$R&\"\"",
+      "=$R+$R",
+      "=SUM($R)",
+      "=SUM(($R=\"\")*1)",
+      "=COUNT($R*1)",
+      "=MEDIAN($R*1)",
+      "=ROWS($R*1)",
+      "=AND($R>0)",
+      "=NOT($R)",
+      "=IF($R>0,1,0)",
+      "=SUMPRODUCT(($R>0)*1)",
+      "=TRANSPOSE($R)",
+      "=INDEX($R,1,1)",
+      "=($R $R)",
+      "=ABS($R)",
+      "=IFERROR($R/0,0)",
+      "=SUM($R*{1,2,3})",
+      "=SUM(($R=\"\")*{1;2;3})",
+      "=SUM((1:1=\"\")*($R=\"\"))",
+      "=MAX($R*{1,2,3})"
+    )
+    val started = System.nanoTime()
+    for
+      (label, evaluator) <- factories
+      r <- ranges
+      shape <- shapes
+      at <- List(None, Some(ref"B2"))
+    do
+      val formula = shape.replace("$R", r)
+      // any value or Left is total; only a throw (or an OOM) would fail here
+      evaluator.eval(parse(formula), sheet, Clock.system, Some(Workbook(sheet)), at): Unit
+    val seconds = (System.nanoTime() - started) / 1e9
+    assert(seconds < 60.0, s"took $seconds s")
+  }
+
+  test("#750: sparse SUMPRODUCT walks its boxes, not their bounding rectangle or the shape") {
+    // one-cell boxes in opposite corners of the sheet: their bounding rectangle is every cell
+    val corners = Sheet(name)
+      .put(ref"A1", CellValue.Number(BigDecimal(1)))
+      .put(ARef.from0(16383, 1048575), CellValue.Number(BigDecimal(1)))
+    val c3 = Sheet(name).put(ref"C3", CellValue.Number(BigDecimal(5)))
+    val cases = List(
+      // each box is one corner cell, the other shape's corner cell is blank in both halves
+      (corners, "=SUMPRODUCT((A1:XFD524288>0)*1,(A524289:XFD1048576>0)*1)", BigDecimal(0)),
+      (
+        corners,
+        "=SUMPRODUCT((A1:XFD524288=\"\")*1,(A524289:XFD1048576=\"\")*1)",
+        BigDecimal(524288L * 16384L - 2L)
+      ),
+      (
+        corners,
+        "=SUMPRODUCT((A1:XFD524288>0)*1+1,(A524289:XFD1048576>0)*2+1)",
+        BigDecimal(524288L * 16384L + 3L)
+      ),
+      // a raw range larger than its sheet beside a sparse argument (no whole axis, so nothing
+      // trims it to the used range) is read through its populated box, never position by position
+      (c3, "=SUMPRODUCT(A1:XFD1048575,(A1:XFD1048575<>\"\")*1)", BigDecimal(5)),
+      (c3, "=SUMPRODUCT(A1:XFD1048575,(A1:XFD1048575=\"\")*1)", BigDecimal(0)),
+      (corners, "=SUMPRODUCT(A1:XFD1048575,(A2:XFD1048576=\"\")*1)", BigDecimal(1))
+    )
+    for (target, formula, expected) <- cases do
+      val started = System.nanoTime()
+      val result = Evaluator.instance.eval(parse(formula), target, Clock.system, None, None)
+      val millis = (System.nanoTime() - started) / 1e6
+      assertEquals(result: Any, Right(expected): Any, formula)
+      assert(millis < 5000.0, s"$formula took $millis ms")
+  }

@@ -169,13 +169,13 @@ private[xl] object DynamicArrayAuthoring:
   /**
    * Author `formula` as a dynamic array anchored at `anchor` (see the object's doc).
    *
-   * `maxCells` bounds the WRITE, not evaluation memory: the formula is evaluated first and the
-   * result's dimensions are checked before a cell of the spill is written, so a result over the cap
-   * ([[SpillBlocker.TooLarge]]) is refused without materialising its constants and styles on the
-   * sheet — but the array itself was already built. A result's shape is not known before evaluation
-   * in general (SORT keeps its source's, FILTER and UNIQUE shrink it, SEQUENCE reads its
-   * arguments), so the evaluator's own guards (SEQUENCE, INDIRECT) and the CLI's memory guard
-   * (`RESOURCE_LIMIT`) are what bound a huge intermediate array.
+   * `maxCells` bounds the WRITE: the formula is evaluated first and the result's dimensions are
+   * checked before a cell of the spill is built or written, so a result over the cap
+   * ([[SpillBlocker.TooLarge]]) is refused without materialising its cells, constants or styles.
+   * Evaluation memory is bounded by the evaluator itself (#750): a whole-axis result (`=B:C`,
+   * `=A:A*2`, `=A:A*{1,2,3}`) is held as its populated box plus a fill (one value, or one per row
+   * or column), never cell by cell, and an array that must be built in full (SEQUENCE, INDIRECT, a
+   * box past the limit) is refused past [[ArrayResult.MaxCells]] cells.
    *
    * A formula that reads its own spill range — its anchor (`=A1:A3` at A1), or a cell the spill
    * fills — is a circular reference in Excel, which then shows 0 rather than spilling: it is
@@ -224,19 +224,17 @@ private[xl] object DynamicArrayAuthoring:
         ) match
           // a host failure (not an error value): an uncached 1x1 record, reported by the refresh
           case Left(error) => uncached(error)
-          case Right(grid0) =>
-            val grid =
-              if grid0.isEmpty || grid0.exists(_.isEmpty) then
-                Vector(Vector(CellValue.Error(CellError.Calc)))
-              else grid0
-            val rows = grid.size
-            // a ragged result is sized by its longest row: `blocked` checks the whole extent, and a
-            // short row's trailing extent cells are left unwritten (empty)
-            val cols = grid.map(_.size).maxOption.getOrElse(1)
+          case Right(array0) =>
+            val array =
+              if array0.isEmpty then ArrayResult.single(CellValue.Error(CellError.Calc))
+              else array0
+            val rows = array.rows
+            val cols = array.cols
             def refuse(extent: Option[CellRange], blocker: SpillBlocker) =
               Left(Refusal.Blocked(SpillBlocked(full, anchor, extent, blocker)))
-            // checked from the result's dimensions, before a cell of the spill is written
-            if rows.toLong * cols.toLong > maxCells then
+            // checked from the result's dimensions, before a cell of the spill is built or
+            // written (#750: a whole-axis result such as `=B:C` is held sparsely until here)
+            if array.cellCount > maxCells then
               refuse(None, SpillBlocker.TooLarge(rows, cols, maxCells))
             else
               spillExtent(anchor, rows, cols) match
@@ -249,6 +247,9 @@ private[xl] object DynamicArrayAuthoring:
                     case Some(blocker) => refuse(Some(extent), blocker)
                     case None =>
                       val kind = FormulaKind.dynamicArray(extent)
+                      // within maxCells: small enough to build cell by cell
+                      val grid =
+                        Vector.tabulate(rows)(r => Vector.tabulate(cols)(c => array(r, c)))
                       val written = grid.iterator.zipWithIndex.foldLeft(placed) {
                         case (s, (row, r)) =>
                           row.iterator.zipWithIndex.foldLeft(s) { case (acc, (v, c)) =>
@@ -472,7 +473,7 @@ private[xl] object DynamicArrayAuthoring:
     sheet.copy(cells = cells)
 
   /** The extent of a `rows`x`cols` spill from `anchor`; None when it runs past XFD1048576. */
-  private def spillExtent(anchor: ARef, rows: Int, cols: Int): Option[CellRange] =
+  private[formula] def spillExtent(anchor: ARef, rows: Int, cols: Int): Option[CellRange] =
     val lastCol = anchor.col.index0.toLong + cols - 1
     val lastRow = anchor.row.index0.toLong + rows - 1
     Option.when(lastCol <= Column.MaxIndex0 && lastRow <= Row.MaxIndex0)(

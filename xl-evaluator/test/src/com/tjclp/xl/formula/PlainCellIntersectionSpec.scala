@@ -468,3 +468,13 @@ class PlainCellIntersectionSpec extends FunSuite:
     agree(plain("Sheet1", "DB5", "SUM(ROW(A1:A10))"), N("1"))
     agree(plain("Sheet1", "DC5", "MAX(ROW(A1:A10))"), N("1"))
   }
+
+  test(
+    "#750: a whole-axis range a plain cell's column does not cross is #VALUE!, read in no time"
+  ) {
+    // R:KHI holds 8 billion positions; the plain cell B2 intersects it, so nothing is read
+    agree(plain("Sheet1", "B2", "R:KHI"), E("#VALUE!"))
+    agree(plain("Sheet1", "B2", "kHi:r"), E("#VALUE!"))
+    // an aggregate takes the reference whole: Z1 = 1 is the one number in it
+    agree(plain("Sheet1", "B2", "SUM(R:KHI)"), N("1"))
+  }

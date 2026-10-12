@@ -329,3 +329,82 @@ class WholeColumnBlankTailSpec extends FunSuite:
       .getOrElse(fail("rows 1-5 kept, so a tail"))
     assertEquals(SumProductTail.plan(tail, args, 5, _ => true), None)
   }
+
+  test("#750: a whole-axis array outside SUMPRODUCT keeps every blank cell, as Excel does") {
+    // A1 = 4, A2 = 5, B1 = 1: an array formula over whole columns has their declared shape, and
+    // every blank cell takes part (a blank is "" and 0)
+    assertEquals(eval("=SUM((A:B=\"\")*1)"), Right(num(2097149)))
+    assertEquals(eval("=SUM((A:XFD=\"\")*1)"), Right(num(17179869181d)))
+    assertEquals(eval("=ROWS(A:A*1)"), Right(num(1048576)))
+    assertEquals(eval("=COLUMNS(1:1*1)"), Right(num(16384)))
+    assertEquals(eval("=SUMPRODUCT((A:A>0)*1)"), Right(num(2)))
+    assertEquals(eval("=COUNT(A:A*1)"), Right(num(1048576)))
+    assertEquals(eval("=SUM(IF(A:A=\"\",1,0))"), Right(num(1048574)))
+    assertEquals(eval("=MAX(A:A-10)"), Right(num(-5)))
+    assertEquals(eval("=MIN(A:A-10)"), Right(num(-10)))
+    assertEquals(eval("=AND(A:A>=0)"), Right(CellValue.Bool(true)))
+    assertEquals(eval("=OR(A:B>4)"), Right(CellValue.Bool(true)))
+    // a positionless whole-axis array collapses to its top-left value, as `=A1:B3` does
+    assertEquals(eval("=A:XFD"), Right(num(4)))
+    assertEquals(eval("=R:KHI"), Right(num(0)))
+  }
+
+  test("#750: a whole axis times a vector keeps a fill by column (or row), exactly, as Excel") {
+    // A:A*{1,2,3} is 1,048,576 × 3 and varies by column outside the populated rows: its box (the
+    // two filled rows) and one fill value per column, never 3,145,728 cells. Every value is
+    // LibreOffice 24.2's (array-entered)
+    assertEquals(eval("=SUM(A:A*{1,2,3})"), Right(num(54)))
+    assertEquals(eval("=SUM((A:A=\"\")*{1,2,3})"), Right(num(6291444)))
+    assertEquals(eval("=SUM((A:A=\"\")*{10,20})"), Right(num(31457220)))
+    assertEquals(eval("=SUM(A:A+{1,2,3})"), Right(num(6291483)))
+    assertEquals(eval("=ROWS(A:A*{1,2,3})"), Right(num(1048576)))
+    assertEquals(eval("=COLUMNS(A:A*{1,2,3})"), Right(num(3)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*{1,2,3})"), Right(num(6291444)))
+    assertEquals(eval("=SUMPRODUCT(A:A*{1,2,3})"), Right(num(54)))
+    assertEquals(eval("=SUM({1;2;3}*(1:1))"), Right(num(30)))
+    assertEquals(eval("=AND(A:A*{1,2,3}>=0)"), Right(CellValue.Bool(true)))
+    assertEquals(eval("=OR(A:A*{1,2,3}>14)"), Right(CellValue.Bool(true)))
+    assertEquals(eval("=COUNT(A:A*{1,2,3})"), Right(num(3145728)))
+    assertEquals(eval("=COUNTBLANK(A:A*{1,2,3})"), Right(num(0)))
+    assertEquals(eval("=MAX(A:A*{1,2,3})"), Right(num(15)))
+    assertEquals(eval("=MIN(A:A*{1,2,3})"), Right(num(0)))
+    assertEquals(eval("=MAX((A:A=\"\")*{10,20})"), Right(num(20)))
+    assertEquals(eval("=AVERAGE(A:A*{1,2,3})"), Right(num(0.0000171661376953125)))
+    assertEquals(eval("=LET(x,A:A*{1,2,3},INDEX(x,2,3))"), Right(num(15)))
+    assertEquals(eval("=LET(x,A:A*{1,2,3},INDEX(x,1048576,3))"), Right(num(0)))
+    assertEquals(eval("=LET(x,A:A*{1,2,3},SUM(INDEX(x,0,3)))"), Right(num(27)))
+    // a positionless whole-axis array collapses to its top-left value
+    assertEquals(eval("=A:A*{1,2,3}"), Right(num(4)))
+    // the first error in row-major order wins, whichever part of the array holds it
+    assertEquals(eval("=SUM(A:A/{1,0,2})"), Right(CellValue.Error(CellError.Div0)))
+  }
+
+  test("#750: a whole row times a whole column is exact while its populated band fits") {
+    // (1:1="")*(A:A="") is 1,048,576 × 16,384: one value per column outside A's two filled rows,
+    // and those two rows (32,768 cells) cell by cell. 16,382 blank columns × 1,048,574 blank rows;
+    // LibreOffice 24.2 refuses the 17-billion-cell matrix (Err:538), Excel runs out of resources
+    assertEquals(eval("=SUM((1:1=\"\")*(A:A=\"\"))"), Right(num(17177739268d)))
+    // a band of 100 rows × 100 columns: A's 100 rows across every column (1,638,400 cells) are
+    // computed, one value per column below them; 16,284 blank columns × 1,048,476 blank rows
+    val wide = (0 until 100).foldLeft(sheet)((s, r) => s.put(ARef.from0(0, r), num(1)))
+    val square = (0 until 100).foldLeft(wide)((s, c) => s.put(ARef.from0(c, 0), num(1)))
+    assertEquals(eval("=SUM((1:1=\"\")*(A:A=\"\"))", square), Right(num(17073383184d)))
+    // past the box bound along both axes (1,100 rows × 16,384 columns, 20 columns × 1,048,576
+    // rows, both over 16,777,216 cells) it is refused, never built
+    val tall = (0 until 1100).foldLeft(sheet)((s, r) => s.put(ARef.from0(0, r), num(1)))
+    val wider = (0 until 20).foldLeft(tall)((s, c) => s.put(ARef.from0(c, 0), num(1)))
+    eval("=SUM((1:1=\"\")*(A:A=\"\"))", wider) match
+      case Left(err) =>
+        assert(err.message.contains("16,777,216-cell bound on its computed box"), err.message)
+      case Right(v) => fail(s"expected the loud bound, got $v")
+  }
+
+  test("#750: a lifted call that draws per element draws for every cell, never one fill") {
+    // IFERROR's fallback is evaluated per element: one shared draw would make every blank row's
+    // RAND() equal; a million independent draws sum to about half a million
+    eval("=SUM(IFERROR(A:A/0,RAND()))") match
+      case Right(CellValue.Number(n)) => assert(n > 1000 && n < 1048576, n.toString)
+      case other => fail(s"expected a sum, got $other")
+    // per cell past the limit is refused, never built
+    assert(eval("=SUM(IFERROR(A:B/0,RAND()))").isLeft)
+  }

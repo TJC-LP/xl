@@ -725,15 +725,72 @@ class CfEvaluatorSpec extends ScalaCheckSuite:
   // Bounded by the evaluator's own totality: a formula that makes it throw (the Weaver
   // SUMPRODUCT(--(r>0),ABS(r1+r2)) ClassCastException) escapes here too, and the CLI degrades it
   // to a CF_NOT_RENDERED warning (InMemorySource.conditionalPaint).
+  private val totalityFormula = Gen.oneOf(
+    FormulaTextGens.genRefText.map(r => s"$r>0"),
+    FormulaTextGens.genRangeText.map(r => s"SUM($r)"),
+    Gen.asciiPrintableStr
+  )
+
+  private def totalityHolds(f: String): Unit =
+    val sheet = withCf(column(num(1), text("x"), CellValue.Empty), block("A1:B3", expr(f)))
+    val ev = run(sheet, "A1:B3")
+    assert(ev.overlay.cells.keySet.forall(r => range("A1:B3").contains(r)))
+
   property("totality: any expression text yields an evaluation, never an exception") {
-    val genFormula = Gen.oneOf(
-      FormulaTextGens.genRefText.map(r => s"$r>0"),
-      FormulaTextGens.genRangeText.map(r => s"SUM($r)"),
-      Gen.asciiPrintableStr
-    )
-    forAll(genFormula) { f =>
-      val sheet = withCf(column(num(1), text("x"), CellValue.Empty), block("A1:B3", expr(f)))
-      val ev = run(sheet, "A1:B3")
-      assert(ev.overlay.cells.keySet.forall(r => range("A1:B3").contains(r)))
+    forAll(totalityFormula)(totalityHolds)
+  }
+
+  test("#750: the totality property under the seed that generated `kHi:r` finishes") {
+    val seed = org.scalacheck.rng.Seed
+      .fromBase64("YUxKsBBoIFa2kpv8Z_jOEg6kNRXUn83RVG0nYqtYWCK=")
+      .fold(e => fail(s"seed: $e"), identity)
+    // the property as munit runs it under `scalaCheckInitialSeed`: each sample drawn from the
+    // seed, the next sample from its successor
+    val current = new java.util.concurrent.atomic.AtomicReference(seed)
+    val seen = new java.util.concurrent.ConcurrentLinkedQueue[String]
+    val property = forAll(totalityFormula) { f =>
+      seen.add(f)
+      totalityHolds(f)
+      true
+    }
+    val replay = org.scalacheck.Prop { params =>
+      property(params.withInitialSeed(current.getAndUpdate(_.next)))
+    }
+    val result = org.scalacheck.Test.check(scalaCheckTestParameters, replay)
+    assert(result.passed, result.status.toString)
+    // the replay reaches the text that ran for 36 minutes and then out of memory
+    assert(seen.contains("kHi:r"), "the seed no longer generates kHi:r")
+  }
+
+  // #750: a whole-axis range in a rule is an array of its declared shape, held as its populated
+  // cells plus one blank fill: it evaluates in milliseconds and collapses to its top-left value, as
+  // a positionless `=A1:B3` does (the rule cell's own range, shifted with it, sits on the sheet's
+  // edge for every target but the anchor's column or row)
+  private val edge = column(num(1), text("x"), CellValue.Empty)
+
+  private def ruleOver(f: String): CfEvaluation =
+    run(withCf(edge, block("A1:B3", expr(f))), "A1:B3")
+
+  test("#750: whole-axis ranges in a rule evaluate without materialising, to their top-left") {
+    List(
+      "kHi:r" -> Set.empty[String], // R:KHI: R1 is blank
+      "R:KHI" -> Set.empty[String],
+      "R:KHI>0" -> Set.empty[String],
+      "SUM(R:KHI)>0" -> Set.empty[String],
+      "A:XFD" -> Set("A1", "A2", "A3"), // A1 = 1, read at every row
+      "1:1048576" -> Set("A1", "B1"),
+      "A:A=1" -> Set("A1", "A2", "A3"),
+      "A:B=\"\"" -> Set("B1", "B2", "B3"),
+      // a whole column times a row of constants: a fill by column, never 3,145,728 cells
+      "A:A*{1,2,3}>0" -> Set("A1", "A2", "A3"),
+      "(A:A=\"\")*{1,2,3}>0" -> Set("B1", "B2", "B3"),
+      "SUM((A:A=\"\")*{1,2,3})=6291444" -> Set("A1", "A2", "A3")
+    ).foreach { (f, expected) =>
+      val started = System.nanoTime()
+      val ev = ruleOver(f)
+      val millis = (System.nanoTime() - started) / 1000000L
+      assertEquals(painted(ev), expected, f)
+      assertEquals(ev.unevaluated, Vector.empty, f)
+      assert(millis < 5000L, s"$f took $millis ms")
     }
   }

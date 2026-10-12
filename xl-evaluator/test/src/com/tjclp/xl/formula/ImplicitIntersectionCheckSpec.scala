@@ -46,6 +46,15 @@ class ImplicitIntersectionCheckSpec extends FunSuite:
     assert(check(ref"D1" -> "SEQUENCE(3)").nonEmpty)
   }
 
+  test("#750: a whole-axis divergence is found from its shape, without building the array") {
+    val whole = check(ref"C5" -> "A:B*2").headOption.getOrElse(fail("no hit"))
+    // the plain cell reads its row: A5*2 is 10... over a 2-column range it is #VALUE!
+    assertEquals((whole.plain, whole.arrayTopLeft), (CellValue.Error(CellError.Value), num(2)))
+    assertEquals((whole.rows, whole.cols), (1048576, 2))
+    val column = check(ref"C5" -> "A:A*2").headOption.getOrElse(fail("no hit"))
+    assertEquals((column.plain, column.arrayTopLeft, column.rows), (num(10), num(2), 1048576))
+  }
+
   test("silent: scalar formulas, SUMPRODUCT, @, a whole-range aggregate, volatile scalars") {
     List("A1*2", "SUMPRODUCT(A1:A10*B1:B10)", "@A1:A10*2", "SUM(A1:A10)", "RAND()", "NOW()")
       .foreach(f => assertEquals(check(ref"C5" -> f), Vector.empty, f))
