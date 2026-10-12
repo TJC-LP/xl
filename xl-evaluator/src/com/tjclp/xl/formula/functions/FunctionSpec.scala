@@ -179,26 +179,22 @@ final case class EvalContext(
 
   /**
    * The (sheet, range) a range-typed argument slot names — the resolver every function's range slot
-   * uses (GH-710), [[Evaluator.resolveRangeSlot]] with this call's LET environment. A written range
-   * or cell and a name bound to one resolve statically ([[Evaluator.resolveRangeLocation]]). A name
-   * whose formula computes a reference (OFFSET, INDIRECT, INDEX, IF or CHOOSE over references — a
-   * dynamic range) is evaluated for it, and a LET name is the reference it is bound to. The error
-   * such a formula evaluates to is the slot's error (`#REF!` for an OFFSET off the grid); a name or
-   * LET name holding a value is `#VALUE!`, as in Excel.
+   * uses (GH-710), [[Evaluator.resolveRangeSlot]] with this call's LET environment and name trail.
+   * A written range or cell and a name bound to one resolve statically
+   * ([[Evaluator.resolveRangeLocation]]). A name whose formula computes a reference (OFFSET,
+   * INDIRECT, INDEX, IF or CHOOSE over references — a dynamic range) is evaluated for it, and a LET
+   * name is the reference it is bound to. The error such a formula evaluates to is the slot's error
+   * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
+   * Excel.
    */
   private[formula] def resolveRange(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange)] =
-    // An empty trail is safe here, though the typed Aggregate node passes its ambient one: the
-    // static walk guards its own name chain (each hop enters the trail, a revisit is a cycle, and
-    // the chain is bounded by NameWalk.MaxDepth), and any evaluation goes through `evalReference`,
-    // whose evaluator carries the ambient trail — so a name re-entered through its own range slot
-    // (`loop = OFFSET(…, COUNTIF(loop, …), …)`) is refused there as a cycle.
     Evaluator.resolveRangeSlot(
       location,
       sheet,
       workbook,
-      Evaluator.NameTrail.empty,
+      operands.nameTrail,
       bindings,
       evalReference
     )
@@ -208,12 +204,14 @@ object EvalContext:
    * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
    * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
    * (the evaluator sets it for every call; None only for a context built outside the evaluator).
-   * `selectsReference`: the call feeds a reference position.
+   * `selectsReference`: the call feeds a reference position. `nameTrail`: the defined names being
+   * resolved around this call (#691's cycle guard), so a range slot's name walk shares it.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
-    selectsReference: Boolean
+    selectsReference: Boolean,
+    nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty
   )
 
   private[formula] object Operands:

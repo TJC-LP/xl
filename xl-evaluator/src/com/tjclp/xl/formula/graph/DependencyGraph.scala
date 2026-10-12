@@ -272,8 +272,17 @@ object DependencyGraph:
         bindings.exists((_, value) => recurse(value)) || recurse(body)
       case TExpr.NameRef(name) => resolveName(name, None)
       case TExpr.SheetNameRef(sheet, name) => resolveName(name, Some(sheet))
-      case TExpr.Aggregate(_, TExpr.RangeLocation.Name(name, scope)) => resolveName(name, scope)
-      case _ => false
+      case TExpr.Aggregate(_, location) =>
+        location match
+          case TExpr.RangeLocation.Name(name, scope) => resolveName(name, scope)
+          case _ => false
+      // Leaves, listed rather than a wildcard: a new TExpr case is a "match may not be exhaustive"
+      // warning here until it is classified as a wrapper to descend through or a leaf
+      case _: TExpr.Lit[?] | _: TExpr.Ref[?] | _: TExpr.PolyRef | _: TExpr.SheetRef[?] |
+          _: TExpr.SheetPolyRef | _: TExpr.ExternalRef | _: TExpr.ExternalRange |
+          _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ErrorLit | TExpr.Missing |
+          _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] =>
+        false
 
   private def containsDynamicReferenceResolved[A](
     expr: TExpr[A],
@@ -551,15 +560,12 @@ object DependencyGraph:
 
     // #733: whether a name in a resizing call's range slot computes its reference, as seen from
     // `current` — memoized per (name, qualifier, sheet): a book's SUMIFs share a few names
-    val sheetsByName: Map[SheetName, Sheet] =
-      workbook.sheets.reverseIterator.map(sheet => sheet.name -> sheet).toMap
     val computedVerdicts =
       scala.collection.mutable.HashMap.empty[(String, Option[SheetName], SheetName), Boolean]
     def nameIsComputed(current: SheetName)(name: String, qualifier: Option[SheetName]): Boolean =
       computedVerdicts.getOrElseUpdate(
         (resolutionKey(name), qualifier, current),
-        sheetsByName
-          .get(current)
+        workbook(current).toOption
           .exists(Evaluator.nameComputesRange(name, qualifier, _, workbook))
       )
 
@@ -1451,6 +1457,7 @@ object DependencyGraph:
   ): Map[QualifiedRef, Set[QualifiedRef]] =
     // GH-522: expand any (sheet, range) once per build — see memoizedCells
     val cellsFor = memoizedCells(unboundedQualifiedCells)
+    val nameRanges = NameRanges.empty
     workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
@@ -1459,7 +1466,13 @@ object DependencyGraph:
           case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
+                extractQualifiedDependencies(
+                  expr,
+                  sheet.name,
+                  cellsFor,
+                  Some(workbook),
+                  nameRanges = nameRanges
+                )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1491,6 +1504,7 @@ object DependencyGraph:
         case _ => Set.empty // empty or missing sheet: nothing to depend on
     }
 
+    val nameRanges = NameRanges.empty
     val dependencies = workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
@@ -1499,7 +1513,13 @@ object DependencyGraph:
           case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
+                extractQualifiedDependencies(
+                  expr,
+                  sheet.name,
+                  cellsFor,
+                  Some(workbook),
+                  nameRanges = nameRanges
+                )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1552,6 +1572,7 @@ object DependencyGraph:
     }
 
     val canonicalSheet = sheetCanonicaliser(workbook)
+    val nameRanges = NameRanges.empty
     val dependencies = formulas.iterator.map { case (ref, expression) =>
       val deps = FormulaParser.parse(expression) match
         case scala.util.Right(expr) =>
@@ -1561,7 +1582,8 @@ object DependencyGraph:
             cellsFor,
             Some(workbook),
             preciseLookups = true,
-            canonicalSheet = canonicalSheet
+            canonicalSheet = canonicalSheet,
+            nameRanges = nameRanges
           )
             .filter(formulaNodes.contains)
         case scala.util.Left(_) => Set.empty[QualifiedRef]
@@ -1636,6 +1658,7 @@ object DependencyGraph:
     ]
 
     val canonicalSheet = sheetCanonicaliser(workbook)
+    val nameRanges = NameRanges.empty
     workbook.sheets.foreach { sheet =>
       sheet.cells.foreach { case (cellRef, cell) =>
         cell.value match
@@ -1655,7 +1678,8 @@ object DependencyGraph:
                   sheet.name,
                   recordRange,
                   Some(workbook),
-                  canonicalSheet = canonicalSheet
+                  canonicalSheet = canonicalSheet,
+                  nameRanges = nameRanges
                 )
                 points.foreach { point =>
                   pointBuilders.getOrElseUpdate(
@@ -2022,7 +2046,8 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
-    canonicalSheet: SheetName => SheetName = identity
+    canonicalSheet: SheetName => SheetName = identity,
+    nameRanges: NameRanges = NameRanges.empty
   ): Set[QualifiedRef] =
     // #691: defined names expand from a queue, breadth-first, never by recursion: the formula is
     // scanned, then each resolved name it reaches — keyed on the node (the definition and the sheet
@@ -2032,7 +2057,17 @@ object DependencyGraph:
     // NameWalk.MaxDepth contributes no edges, like an unresolvable name (evaluation fails it too).
     val names = new NameQueue
     def extract(e: TExpr[?], sheet: SheetName, depth: Int): Set[QualifiedRef] =
-      extractAt(e, sheet, depth, names, cellsFor, workbook, preciseLookups, canonicalSheet)
+      extractAt(
+        e,
+        sheet,
+        depth,
+        names,
+        cellsFor,
+        workbook,
+        preciseLookups,
+        canonicalSheet,
+        nameRanges
+      )
     @tailrec
     def drain(acc: Set[QualifiedRef]): Set[QualifiedRef] =
       names.next() match
@@ -2041,6 +2076,19 @@ object DependencyGraph:
           val body = FormulaParser.parse(node.definition.formula).toOption
           drain(body.fold(acc)(target => union(acc, extract(target, node.sheet, depth))))
     drain(extract(expr, currentSheet, 0))
+
+  /**
+   * #733: a defined name's static (sheet, range), keyed on the name as written, its qualifier and
+   * the sheet it is read from — shared across one graph build, so a book whose SUMIFs read the same
+   * few names resolves each once per sheet. Holds `None` for a name that does not resolve to one.
+   */
+  private[graph] type NameRanges =
+    scala.collection.mutable.HashMap[(String, Option[SheetName], SheetName), Option[
+      (Sheet, CellRange)
+    ]]
+
+  private[graph] object NameRanges:
+    def empty: NameRanges = scala.collection.mutable.HashMap.empty
 
   /**
    * #691: the defined names one [[extractQualifiedDependencies]] has reached and not yet expanded,
@@ -2078,8 +2126,20 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
     workbook: Option[Workbook],
     preciseLookups: Boolean,
-    canonicalSheet: SheetName => SheetName
+    canonicalSheet: SheetName => SheetName,
+    nameRanges: NameRanges
   ): Set[QualifiedRef] =
+    // the formula's own sheet, looked up once per expression (SUMIF/AVERAGEIF name resolution)
+    lazy val source: Option[Sheet] = workbook.flatMap(_(currentSheet).toOption)
+    // #733: a range slot's location as a (sheet, range), when the workbook can say statically —
+    // a defined name's answer memoized per build, since a book's SUMIFs share a few names
+    def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
+      def resolve: Option[(Sheet, CellRange)] =
+        source.flatMap(Evaluator.resolveRangeLocation(location, _, workbook).toOption)
+      location match
+        case TExpr.RangeLocation.Name(name, scope) =>
+          nameRanges.getOrElseUpdate((name, scope, currentSheet), resolve)
+        case _ => resolve
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
         case TExpr.RangeLocation.Local(range, _) => cellsFor(currentSheet, range)
@@ -2200,12 +2260,6 @@ object DependencyGraph:
           // GH-669: an intersection of static locations depends only on the cells they share
           // #733: a defined name bound to a range resizes like the range itself — its target's
           // resized cells are static edges, kept with the name's own (its definition's) edges
-          def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
-            for
-              wb <- workbook
-              source <- wb(currentSheet).toOption
-              target <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
-            yield target
           val raw = call.spec.argSpec.toValues(call.args)
           val values = ReferenceOperators.dependencyValues(
             call.spec.name,

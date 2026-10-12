@@ -283,19 +283,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
   `VLOOKUP(7,dyn,1,FALSE)` — and so was a LET name bound to one (`LET(r,dyn,COUNTIF(r,">2"))`). Every
   range slot now resolves them through one evaluator-aware resolver, matching LibreOffice.
-- **SUMIF and AVERAGEIF resized through a named range recalculate correctly** (#710, #733): the
-  cells summed take the criteria range's shape from the target's top-left cell, so
-  `SUMIF(A1:A3,">0",amt)` with `amt = S!C1` reads C1:C3, cells the dependency graph never
-  recorded, and an edit to C2 left the result stale. The graph now resolves a defined name bound to
-  a range or a cell and records the resized target, so these cells, and the everyday
-  `SUMIF(Categories,"Rent",Amounts)`, stay static: they are not listed under `dynamic` in
-  `xl audit`, `recalc --tables` seeds a data table over them, and an edit dirties only their
-  cone. Only geometry that evaluation alone can know is dynamic: a LET-bound range
-  (`LET(t,C1,SUMIF(A1:A3,">0",t))`) or a name computing its reference (`OFFSET`, `INDIRECT`, `IF`
-  over references). Such a cell is scheduled like an INDIRECT reader: `audit` lists it,
-  `recalc --tables` skips a table whose cone holds it (`Skipped`, naming the cell), and
-  `recalculateDependents` treats it as always dirty. SUMIFS/AVERAGEIFS never resize and are not
-  parsed for it.
+- **SUMIF and AVERAGEIF resized through a named range recalculate correctly** (#710, #733):
+  `SUMIF(A1:A3,">0",amt)` with `amt = S!C1` reads C1:C3, and an edit to C2 used to leave it stale.
+  A name bound to a range now records its resized cells, so these readers, like
+  `SUMIF(Categories,"Rent",Amounts)`, stay static. A resize through a LET name or a name computing
+  its reference (OFFSET, INDIRECT) is dynamic: `xl audit` lists it under `dynamic`,
+  `recalc --tables` skips a data table whose cone holds it, and `recalculateDependents` treats it
+  as always dirty.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

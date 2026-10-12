@@ -309,6 +309,21 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     )
   }
 
+  test("a hand-built LET name outside its LET is a clean failure, never an exception") {
+    // the parser never emits it: a Binding exists only inside the LET that binds it
+    assertEquals(
+      Evaluator.resolveRangeSlot(
+        TExpr.RangeLocation.Binding("nope"),
+        sheet1,
+        Some(book),
+        Evaluator.NameTrail.empty,
+        Map.empty,
+        unread
+      ),
+      Left(EvalError.EvalFailed("LET name 'nope' is not in scope", None))
+    )
+  }
+
   // ----- the typed Aggregate node resolves its slot like a function's range slot -----
 
   test("a typed Aggregate over a dynamic name or a LET name reads the reference it denotes") {

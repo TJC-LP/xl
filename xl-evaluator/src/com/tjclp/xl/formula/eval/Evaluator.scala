@@ -773,25 +773,40 @@ object Evaluator:
    * walk their inner subtrees again (size × depth per evaluation). It is a pure function of the AST
    * and could be computed once per `Let` node at parse time if profiling ever shows the cost.
    */
-  private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean = expr match
-    case call: TExpr.Call[?] =>
-      call.spec.argSpec.toValues(call.args).exists {
-        case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
-        case ArgValue.Expr(arg) => readsBindingAsRange(arg)
-        case _ => false
-      }
-    case chain if BinarySpine.isBinary(chain) =>
-      BinarySpine.operandList(chain).exists(readsBindingAsRange)
-    case TExpr.Let(letBindings, body) =>
-      letBindings.exists((_, value) => readsBindingAsRange(value)) || readsBindingAsRange(body)
-    case TExpr.Aggregate(_, TExpr.RangeLocation.Binding(_)) => true
-    case TExpr.Coerced(inner, _) => readsBindingAsRange(inner)
-    case TExpr.UnaryPlus(inner) => readsBindingAsRange(inner)
-    case TExpr.Percent(inner) => readsBindingAsRange(inner)
-    case TExpr.ToInt(inner) => readsBindingAsRange(inner)
-    case TExpr.DateToSerial(inner) => readsBindingAsRange(inner)
-    case TExpr.DateTimeToSerial(inner) => readsBindingAsRange(inner)
-    case _ => false
+  private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean =
+    // TODO(#733): cache per Let node (or compute at parse time) instead of walking per evaluation.
+    // Exhaustive on purpose, with no wildcard: a new TExpr case is a "match may not be exhaustive"
+    // warning here until it is classified as a wrapper to descend through or a leaf.
+    expr match
+      case call: TExpr.Call[?] =>
+        call.spec.argSpec.toValues(call.args).exists {
+          case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
+          case ArgValue.Expr(arg) => readsBindingAsRange(arg)
+          case ArgValue.Range(_) | ArgValue.Cells(_) => false
+        }
+      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
+          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
+          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
+        BinarySpine.operandList(chain).exists(readsBindingAsRange)
+      case TExpr.Let(letBindings, body) =>
+        letBindings.exists((_, value) => readsBindingAsRange(value)) || readsBindingAsRange(body)
+      case TExpr.Aggregate(_, location) =>
+        location match
+          case TExpr.RangeLocation.Binding(_) => true
+          case _ => false
+      case TExpr.Coerced(inner, _) => readsBindingAsRange(inner)
+      case TExpr.UnaryPlus(inner) => readsBindingAsRange(inner)
+      case TExpr.Percent(inner) => readsBindingAsRange(inner)
+      case TExpr.ToInt(inner) => readsBindingAsRange(inner)
+      case TExpr.DateToSerial(inner) => readsBindingAsRange(inner)
+      case TExpr.DateTimeToSerial(inner) => readsBindingAsRange(inner)
+      // leaves: no sub-expression, so no range slot below them
+      case _: TExpr.Lit[?] | _: TExpr.Ref[?] | _: TExpr.PolyRef | _: TExpr.SheetRef[?] |
+          _: TExpr.SheetPolyRef | _: TExpr.ExternalRef | _: TExpr.ExternalRange |
+          _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ErrorLit | TExpr.Missing |
+          _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] | _: TExpr.NameRef |
+          _: TExpr.SheetNameRef =>
+        false
 
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
@@ -1710,7 +1725,8 @@ private class EvaluatorImpl(
       operands = EvalContext.Operands(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),
-        selectsReference = selectsReference
+        selectsReference = selectsReference,
+        nameTrail = resolvingNames
       )
     )
     // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX)
