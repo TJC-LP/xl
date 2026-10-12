@@ -58,7 +58,10 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
     // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
     // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
-    // The blank tail is one position, the first the search meets: its end in reverse.
+    // The blank tail is one position, the first the search meets: its end in reverse. This relies
+    // on every mode keeping the FIRST of equal candidates in iteration order — `find` for the exact
+    // and wildcard modes, `approximateMatch` with `lastOnTie = false` for the approximate ones; a
+    // mode that kept the last tie would need the tail's other end.
     val reverse = searchMode == -1 || searchMode == -2
     val blankTail: Vector[Int] =
       if read < size then Vector(if reverse then size - 1 else read) else Vector.empty

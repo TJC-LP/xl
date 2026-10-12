@@ -1625,7 +1625,7 @@ object FormulaParser:
    * beats the lexical reading's `Invalid cell reference 'A1:INDEX'`.
    */
   private def insideCall(right: ParserState, err: ParseError): Boolean =
-    val name = right.remaining.takeWhile(c => c.isLetterOrDigit || c == '_' || c == '.')
+    val name = right.remaining.takeWhile(ReferenceChars.isFunctionName)
     val open = right.pos + name.length
     val errPos = err match
       case ParseError.UnexpectedChar(_, pos, _) => Some(pos)

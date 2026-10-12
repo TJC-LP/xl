@@ -17,6 +17,12 @@ private[formula] object ReferenceChars:
     c.isLetterOrDigit || c == '$' || c == '_' || c == '.' || c == '\\'
 
   /**
+   * A character of a function name as a call spells it (`LOG10`, `_xlfn.XLOOKUP`): letters, digits,
+   * `_` and `.` — never `$` or `\`, which no function name holds.
+   */
+  def isFunctionName(c: Char): Boolean = c.isLetterOrDigit || c == '_' || c == '.'
+
+  /**
    * What the sheet-qualified reader takes after a qualifier's `!`: token characters and `:`, so it
    * reads a range (`Sheet1!A1:B2`) — and runs on through any `:` that follows.
    */
