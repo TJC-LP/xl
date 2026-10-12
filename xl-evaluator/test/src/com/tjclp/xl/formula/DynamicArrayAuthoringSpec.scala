@@ -449,3 +449,17 @@ class DynamicArrayAuthoringSpec extends FunSuite:
   test("deterministic under a fixed clock") {
     assertEquals(authored(base, ref"A1", "=SORT(B1:B3)"), authored(base, ref"A1", "=SORT(B1:B3)"))
   }
+
+  test("#750: a whole-axis spill is refused as TooLarge from its shape, never built") {
+    // =B:C is 1,048,576 x 2 positions, held as its populated box until the shape is checked
+    val started = System.nanoTime()
+    author(base, ref"E1", "=B:C") match
+      case Left(Refusal.Blocked(b)) =>
+        assertEquals(b.blocker, SpillBlocker.TooLarge(1048576, 2, ArrayResult.MaxCells))
+      case other => fail(s"expected TooLarge, got $other")
+    author(base, ref"E1", "=R:KHI*1") match
+      case Left(Refusal.Blocked(b)) =>
+        assertEquals(b.blocker, SpillBlocker.TooLarge(1048576, 7636, ArrayResult.MaxCells))
+      case other => fail(s"expected TooLarge, got $other")
+    assert((System.nanoTime() - started) / 1e9 < 30.0)
+  }

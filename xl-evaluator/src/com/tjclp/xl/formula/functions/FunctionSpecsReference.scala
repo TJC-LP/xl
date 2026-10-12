@@ -538,8 +538,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
         ctx.aggregateMemo.flatMap(_.recordedSpill(anchorSheet.name, anchor)) match
           case Some(raw) => asSpill(raw)
           case None =>
-            if cached.isDefined then
-              extractRangeAsMatrixEval(ref, anchorSheet, ctx).map(ArrayResult(_))
+            if cached.isDefined then readRangeArray(ref, anchorSheet, ctx)
             else evaluated(text)
       case CellValue.Formula(text, _, _: FormulaKind.Normal) => evaluated(text)
       case _ => notAnchor

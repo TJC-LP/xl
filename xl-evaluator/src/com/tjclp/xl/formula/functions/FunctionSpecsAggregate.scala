@@ -391,9 +391,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, A] =
     evaluated match
       case ar: ArrayResult =>
-        ar.cells.foldLeft[Either[EvalError, A]](Right(acc)) {
+        // #750: one step per run, so a sparse array's fill folds in closed form
+        ar.runs.foldLeft[Either[EvalError, A]](Right(acc)) {
           case (Left(err), _) => Left(err)
-          case (Right(current), cellValue) => triageValue(agg, current, cellValue, typed = false)
+          case (Right(current), (cellValue, n)) => triageElements(agg, current, cellValue, n)
         }
       case value: BigDecimal =>
         // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
@@ -408,6 +409,34 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
         // numeric-mode error policing is unchanged
         triageValue(agg, acc, ArrayArithmetic.anyToCellValue(other), typed = true)
+
+  /**
+   * `n` equal array elements into the accumulator ([[triageValue]] `n` times, untyped): counted or
+   * combined with [[Aggregator.combineN]], so the cost does not grow with `n`.
+   */
+  private def triageElements[A](
+    agg: Aggregator[A],
+    acc: A,
+    cellValue: CellValue,
+    n: Long
+  ): Either[EvalError, A] =
+    if n == 1L then triageValue(agg, acc, cellValue, typed = false)
+    else if agg.countsNonEmpty then
+      cellValue match
+        case CellValue.Empty => Right(acc)
+        case _ => Right(agg.combineN(acc, aggregateCountUnit, n))
+    else if agg.countsEmpty then
+      cellValue match
+        case CellValue.Empty => Right(agg.combineN(acc, aggregateCountUnit, n))
+        case _ => Right(acc)
+    else
+      ArrayArithmetic.carriedError(cellValue) match
+        case Some(err) if agg.propagatesErrors => Left(propagatedElementError(agg.name, err))
+        case Some(_) => Right(acc)
+        case None =>
+          extractNumericValue(cellValue) match
+            case Some(v) => Right(agg.combineN(acc, v, n))
+            case None => Right(acc)
 
   /**
    * One evaluated value into the accumulator: COUNTA counts it unless blank, COUNTBLANK only when
@@ -1384,6 +1413,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       else Right(matrix(row)(col))
 
   /**
+   * #750: an evaluated array holding a box of cells and one fill value elsewhere (a whole-axis
+   * array): read through the array, its fill's number known once for the cells outside the box.
+   */
+  private final case class SparseArray(array: ArrayResult) extends ResolvedArray:
+    def rows: Int = array.rows
+    def cols: Int = array.cols
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      Right(coerceToNumeric(array(row, col)))
+    def fillValue: BigDecimal = coerceToNumeric(array.fill)
+
+  /**
    * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
    * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
    * would produce a wrong sum for the issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
@@ -1391,8 +1431,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
     value match
       case ar: ArrayResult =>
-        ar.cells.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+        ar.runs.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None if !ar.isDense => Right(SparseArray(ar))
           case None =>
             Right(
               MatrixArray(
@@ -1426,17 +1467,52 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     (qualifier, name) =>
       reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
 
-  /** The sum over a `rows` × `cols` shape of the arguments' element-wise products. */
+  /**
+   * The sum over a `rows` × `cols` shape of the arguments' element-wise products. #750: when every
+   * argument is a [[SparseArray]], only the union of their boxes is walked; each cell outside it
+   * adds the same product of the fills.
+   */
   private def sumOfProducts(
     arrays: List[ResolvedArray],
     rows: Int,
     cols: Int,
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    (0 until rows).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+    val sparse = arrays.collect { case s: SparseArray => s }
+    if arrays.isEmpty || sparse.size < arrays.size then sumOverBox(arrays, 0, rows, 0, cols, ctx)
+    else
+      val boxes = sparse.collect {
+        case s if s.array.boxRows > 0 && s.array.boxCols > 0 =>
+          (
+            s.array.boxTop,
+            s.array.boxTop + s.array.boxRows,
+            s.array.boxLeft,
+            s.array.boxLeft + s.array.boxCols
+          )
+      }
+      val (top, bottom, left, right) =
+        ArrayArithmetic.boundingRect(boxes).getOrElse((0, 0, 0, 0))
+      val outside = rows.toLong * cols.toLong - (bottom - top).toLong * (right - left).toLong
+      val fillProduct = sparse.foldLeft(BigDecimal(1))(_ * _.fillValue)
+      sumOverBox(arrays, top, bottom, left, right, ctx).map(boxSum =>
+        if outside > 0L then boxSum + fillProduct * BigDecimal(outside) else boxSum
+      )
+
+  /**
+   * The sum of the arguments' element-wise products over rows `[top, bottom)` × `[left, right)`.
+   */
+  private def sumOverBox(
+    arrays: List[ResolvedArray],
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    (top until bottom).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
       case (Left(err), _) => Left(err)
       case (Right(acc), row) =>
-        (0 until cols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
+        (left until right).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
           case (Left(err), _) => Left(err)
           case (Right(rowAcc), col) =>
             arrays

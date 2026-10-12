@@ -329,3 +329,40 @@ class WholeColumnBlankTailSpec extends FunSuite:
       .getOrElse(fail("rows 1-5 kept, so a tail"))
     assertEquals(SumProductTail.plan(tail, args, 5, _ => true), None)
   }
+
+  test("#750: a whole-axis array outside SUMPRODUCT keeps every blank cell, as Excel does") {
+    // A1 = 4, A2 = 5, B1 = 1: an array formula over whole columns has their declared shape, and
+    // every blank cell takes part (a blank is "" and 0)
+    assertEquals(eval("=SUM((A:B=\"\")*1)"), Right(num(2097149)))
+    assertEquals(eval("=SUM((A:XFD=\"\")*1)"), Right(num(17179869181d)))
+    assertEquals(eval("=ROWS(A:A*1)"), Right(num(1048576)))
+    assertEquals(eval("=COLUMNS(1:1*1)"), Right(num(16384)))
+    assertEquals(eval("=SUMPRODUCT((A:A>0)*1)"), Right(num(2)))
+    assertEquals(eval("=COUNT(A:A*1)"), Right(num(1048576)))
+    assertEquals(eval("=SUM(IF(A:A=\"\",1,0))"), Right(num(1048574)))
+    assertEquals(eval("=MAX(A:A-10)"), Right(num(-5)))
+    assertEquals(eval("=MIN(A:A-10)"), Right(num(-10)))
+    assertEquals(eval("=AND(A:A>=0)"), Right(CellValue.Bool(true)))
+    assertEquals(eval("=OR(A:B>4)"), Right(CellValue.Bool(true)))
+    // a positionless whole-axis array collapses to its top-left value, as `=A1:B3` does
+    assertEquals(eval("=A:XFD"), Right(num(4)))
+    assertEquals(eval("=R:KHI"), Right(num(0)))
+  }
+
+  test("#750: a whole-axis array that needs a second fill value is refused, never built") {
+    // A:A*{1,2,3} varies by column outside the populated rows: one fill cannot hold it, and its
+    // 3,145,728 cells are past the limit (an axis-varying fill is later work)
+    eval("=SUM(A:A*{1,2,3})") match
+      case Left(err) => assert(err.message.contains("1,048,576-cell limit"), err.message)
+      case Right(v) => fail(s"expected the loud limit, got $v")
+  }
+
+  test("#750: a lifted call that draws per element draws for every cell, never one fill") {
+    // IFERROR's fallback is evaluated per element: one shared draw would make every blank row's
+    // RAND() equal; a million independent draws sum to about half a million
+    eval("=SUM(IFERROR(A:A/0,RAND()))") match
+      case Right(CellValue.Number(n)) => assert(n > 1000 && n < 1048576, n.toString)
+      case other => fail(s"expected a sum, got $other")
+    // per cell past the limit is refused, never built
+    assert(eval("=SUM(IFERROR(A:B/0,RAND()))").isLeft)
+  }

@@ -134,10 +134,10 @@ private[xl] object ImplicitIntersection:
       Some(wb)
     )
     (plain, array) match
-      case (Right(p), Right(grid)) =>
-        val rows = grid.size
-        val cols = grid.map(_.size).maxOption.getOrElse(0)
-        grid.headOption.flatMap(_.headOption).flatMap { topLeft =>
+      case (Right(p), Right(array)) =>
+        val rows = array.rows
+        val cols = array.cols
+        Option.when(!array.isEmpty)(array(0, 0)).flatMap { topLeft =>
           val shape = rows != 1 || cols != 1
           Option.when(shape || !sameValue(p, topLeft))(
             Divergence(sheet.name, ref, text, p, topLeft, rows, cols)

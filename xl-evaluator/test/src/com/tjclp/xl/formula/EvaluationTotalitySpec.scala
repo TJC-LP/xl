@@ -218,3 +218,44 @@ class EvaluationTotalitySpec extends FunSuite:
       case Right(value) => fail(s"a defect must not become a cell value: $value")
       case Left(_) => ()
   }
+
+  test("#750: whole-axis ranges in any position evaluate, never materialised, every factory") {
+    // array mode holds a whole-axis value as its populated box plus one fill: every one of these
+    // finishes in milliseconds whatever its declared size (R:KHI is 8 billion positions)
+    val ranges = List("A:A", "B:C", "R:KHI", "kHi:r", "A:XFD", "2:2", "1:1048576")
+    val shapes = List(
+      "=$R",
+      "=$R*2",
+      "=-$R",
+      "=$R>0",
+      "=$R=\"\"",
+      "=$R&\"\"",
+      "=$R+$R",
+      "=SUM($R)",
+      "=SUM(($R=\"\")*1)",
+      "=COUNT($R*1)",
+      "=MEDIAN($R*1)",
+      "=ROWS($R*1)",
+      "=AND($R>0)",
+      "=NOT($R)",
+      "=IF($R>0,1,0)",
+      "=SUMPRODUCT(($R>0)*1)",
+      "=TRANSPOSE($R)",
+      "=INDEX($R,1,1)",
+      "=($R $R)",
+      "=ABS($R)",
+      "=IFERROR($R/0,0)"
+    )
+    val started = System.nanoTime()
+    for
+      (label, evaluator) <- factories
+      r <- ranges
+      shape <- shapes
+      at <- List(None, Some(ref"B2"))
+    do
+      val formula = shape.replace("$R", r)
+      // any value or Left is total; only a throw (or an OOM) would fail here
+      evaluator.eval(parse(formula), sheet, Clock.system, Some(Workbook(sheet)), at): Unit
+    val seconds = (System.nanoTime() - started) / 1e9
+    assert(seconds < 60.0, s"took $seconds s")
+  }

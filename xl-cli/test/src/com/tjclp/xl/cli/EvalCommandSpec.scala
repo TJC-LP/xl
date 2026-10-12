@@ -1097,3 +1097,50 @@ class EvalCommandSpec extends CatsEffectSuite:
       assertEquals(cli.exit, 2, cli.stdout)
       assertEquals(ujson.read(cli.stdout)("error")("code"), ujson.Str("USAGE"), cli.stdout)
   }
+
+  // ===== #750: whole-axis arrays =====
+
+  private val axisBook: Workbook =
+    Workbook(
+      Vector(
+        Sheet("Test")
+          .put(ref"A1", CellValue.Number(BigDecimal(1)))
+          .put(ref"A2", CellValue.Text("x"))
+      )
+    )
+
+  test("#750: eval of whole-axis arrays answers at once, with Excel's values") {
+    val sheet = axisBook.sheets.head
+    val started = System.nanoTime()
+    for
+      top <- ReadCommands.eval(axisBook, Some(sheet), "=R:KHI", None, Nil)
+      whole <- ReadCommands.eval(axisBook, Some(sheet), "=A:XFD", None, Nil)
+      blanks <- ReadCommands.eval(axisBook, Some(sheet), "=SUM((A:B=\"\")*1)", None, Nil)
+      rows <- ReadCommands.eval(axisBook, Some(sheet), "=ROWS(A:A*1)", None, Nil)
+    yield
+      val seconds = (System.nanoTime() - started) / 1e9
+      assert(seconds < 30.0, s"took $seconds s")
+      // a positionless whole-axis range is its top-left value, as `=A1:B3` is
+      assert(top.contains("Result: 0 (number)"), top)
+      assert(whole.contains("Result: 1 (number)"), whole)
+      // 2 x 1,048,576 cells, two of them filled
+      assert(blanks.contains("2097150"), blanks)
+      assert(rows.contains("1048576"), rows)
+  }
+
+  test("#750: evala refuses a whole-axis spill past the grid or the cell limit, as #SPILL!") {
+    val sheet = axisBook.sheets.head
+    for
+      // from the default anchor Z1000 a full column runs past row 1,048,576
+      offGrid <- ReadCommands.evalArray(axisBook, Some(sheet), "=A:A*1", None, Nil).attempt
+      // two full columns from A1 fit the grid but hold 2,097,152 cells
+      tooLarge <- ReadCommands.evalArray(axisBook, Some(sheet), "=A:B*1", Some("A1"), Nil).attempt
+    yield
+      offGrid match
+        case Left(e) =>
+          assert(e.getMessage.contains("runs past the sheet's last cell"), e.getMessage)
+        case Right(out) => fail(s"expected an off-grid refusal, got: $out")
+      tooLarge match
+        case Left(e) => assert(e.getMessage.contains("2,097,152 cells"), e.getMessage)
+        case Right(out) => fail(s"expected a too-large refusal, got: $out")
+  }
