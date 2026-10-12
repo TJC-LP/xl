@@ -899,6 +899,8 @@ object Evaluator:
     ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
       val names = wb.metadata.definedNames
       val sheets = wb.sheets.map(_.name)
+      // get-then-set, not compare-and-set: two readers that miss together both build, which
+      // costs a duplicate walk and never a wrong verdict (each builds from the workbook it holds)
       val entry = drawingNames.get() match
         case Some(known) if known.matches(names, sheets) => known
         case _ =>
@@ -995,7 +997,6 @@ object Evaluator:
     case Filled(value: Either[EvalError, BigDecimal])
     case Bypass
 
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   /** One workbook's name verdicts, as [[AggregateMemo.namesReachingDraw]] caches them. */
   private final class NameVerdicts(
     names: Vector[DefinedName],
@@ -1005,9 +1006,12 @@ object Evaluator:
     def matches(otherNames: Vector[DefinedName], otherSheets: Vector[SheetName]): Boolean =
       ((names eq otherNames) || names == otherNames) && sheets == otherSheets
 
+    // one lookup at a time holds the monitor: the walk's verdict map is not thread-safe, and a
+    // lookup is a map hit once the name has been walked
     val verdict: (SheetName, Option[SheetName], String) => NameWalk.Reach =
       (from, qualifier, name) => synchronized(walk(from, qualifier, name))
 
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private final class AggregateMemoEntry:
     private var state: AggregateMemoState = AggregateMemoState.Unchecked
 

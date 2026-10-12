@@ -1131,8 +1131,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   }
                   // the ranges share one shape and one bound, so each trimmed position is blank
                   // in every range: it counts when every criterion matches a blank. Each range's
-                  // own trimmed count is taken; should they ever disagree (a shape the dimension
-                  // check lets through some day), no trimmed cell is counted
+                  // own trimmed count is taken; should they ever disagree, no trimmed cell is
+                  // counted. That fallback is defensive and unreachable today: the dimension check
+                  // gives every range the same height and width, so they are all whole columns
+                  // (rows) or none, and the shared bound trims each by the same count (the
+                  // agreeing COUNTIFS tests in WholeColumnBlankTailSpec never reach it)
                   val trimmedCounts = resolved
                     .zip(constrainedConditions)
                     .map { case ((_, range, _), (_, constrained, _)) =>
