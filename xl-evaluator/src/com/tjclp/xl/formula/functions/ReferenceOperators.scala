@@ -427,8 +427,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         EvalError.ErrorValue(CellError.Value, Some("a range needs a reference on each side"))
       )
       _ <-
-        if all.forall(area => sheetKey(area.sheet.name) == sheetKey(first.sheet.name)) then
-          Right(())
+        if all.forall(area => sameSheetName(area.sheet.name, first.sheet.name)) then Right(())
         else
           Left(
             EvalError.ErrorValue(CellError.Value, Some("a range's references must be on one sheet"))
@@ -483,6 +482,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         (right, _) <- referenceOperand.parse(List(r), pos, RangeName)
       yield foldCells(left, right).getOrElse(TExpr.Call(range, (left, right)))
 
+  // Folding is canonicalization: `(A1):B2` re-prints as `A1:B2`, its parentheses dropped on purpose.
   private def foldCells(left: Operand, right: Operand): Option[TExpr[?]] =
     def cellText(range: CellRange): String = range.toA1Anchored.takeWhile(_ != ':')
     def spelled(a: CellRange, b: CellRange): Option[(String, CellRange)] =
@@ -497,7 +497,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       case (
             Left(TExpr.RangeLocation.CrossSheet(sa, a, RangeForm.Cell)),
             Left(TExpr.RangeLocation.CrossSheet(sb, b, RangeForm.Cell))
-          ) if sa.value.equalsIgnoreCase(sb.value) =>
+          ) if sameSheetName(sa, sb) =>
         spelled(a, b).map((text, cells) => TExpr.SheetRange(sa, cells, RangeForm.of(text, cells)))
       case _ => None
 
@@ -526,7 +526,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
               acc.flatMap(found => areas(operand, ctx).map(found ++ _))
           }
           .flatMap { found =>
-            if found.map(_.sheet.name).distinct.size <= 1 then Right(found)
+            if distinctSheets(found.map(_.sheet.name).toList).size <= 1 then Right(found)
             else
               Left(
                 EvalError.ErrorValue(CellError.Value, Some("a union's areas must be on one sheet"))
@@ -558,7 +558,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       rightAreas <- areas(right, ctx)
       pairs = for l <- leftAreas; r <- rightAreas yield (l, r)
       _ <-
-        if pairs.forall((l, r) => l.sheet.name == r.sheet.name) then Right(())
+        if pairs.forall((l, r) => sameSheetName(l.sheet.name, r.sheet.name)) then Right(())
         else
           Left(
             EvalError.ErrorValue(
@@ -611,7 +611,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             case (
                   TExpr.RangeLocation.CrossSheet(sa, a, _),
                   TExpr.RangeLocation.CrossSheet(sb, b, _)
-                ) if sa.value.equalsIgnoreCase(sb.value) =>
+                ) if sameSheetName(sa, sb) =>
               a.intersect(b).map(s => ArgValue.Range(TExpr.RangeLocation.CrossSheet(sa, s))).toList
             case _ => values
         case _ => values
@@ -628,7 +628,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         (envelope(l, shapeOf), envelope(r, shapeOf)) match
           case (el, er) if fixed(el) && fixed(er) =>
             val leaves = fixedLeaves(el) ++ fixedLeaves(er)
-            val qualified = leaves.flatMap(_._1).distinctBy(sheetKey)
+            val qualified = distinctSheets(leaves.flatMap(_._1).toList)
             leaves.headOption match
               case Some((_, first)) if qualified.size <= 1 =>
                 val box = leaves.foldLeft(first)((acc, leaf) => hull(acc, leaf._2))
@@ -658,10 +658,25 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     case NoCells
     case Unknown
 
-  private def sheetKey(sheet: SheetName): String = sheet.value.toLowerCase(java.util.Locale.ROOT)
+  /**
+   * The one sheet-identity rule here: the workbook's own (`Workbook` looks sheets up with
+   * `equalsIgnoreCase`), so `(Sheet1!A1):sheet1!B2` folds exactly when its areas count as one
+   * sheet.
+   */
+  private[formula] def sameSheetName(a: SheetName, b: SheetName): Boolean =
+    a.value.equalsIgnoreCase(b.value)
+
+  /** The sheets in order, one per [[sameSheetName]] class (the first spelling kept). */
+  private def distinctSheets(sheets: List[SheetName]): List[SheetName] =
+    sheets.foldLeft(List.empty[SheetName]) { (kept, s) =>
+      if kept.exists(sameSheetName(_, s)) then kept else kept :+ s
+    }
 
   private def sameSheet(a: Option[SheetName], b: Option[SheetName]): Boolean =
-    a.map(sheetKey) == b.map(sheetKey)
+    (a, b) match
+      case (Some(x), Some(y)) => sameSheetName(x, y)
+      case (None, None) => true
+      case _ => false
 
   private def hull(a: CellRange, b: CellRange): CellRange = a.expand(b.start).expand(b.end)
 
@@ -743,11 +758,16 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             case (Some((sa, ra, ca)), Some((sb, rb, cb))) if sameSheet(sa, sb) =>
               ra.intersect(rb).fold[Envelope](Envelope.NoCells)(Envelope.Within(sa, _, ca || cb))
             case _ => Envelope.Unknown
-    case call: TExpr.Call[?] if call.spec.name == "INDEX" =>
+    // Matched by spec identity, never by name, so a renamed or homonymous spec cannot reach the
+    // casts: `Call.args` is typed by the path `call.spec.Args`, which an `eq` test does not narrow,
+    // so the cast stays, on the identified spec only. Follow-up: an envelope hook on
+    // `FunctionSpec.Referencing` would let each reference-computing spec bound its own result and
+    // drop this match (a new one falls to `Unknown` today: sound, but always dynamic).
+    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.index =>
       call.args.asInstanceOf[IndexArgs]._1 match
         case Right(TExpr.Lit(_: ArrayResult)) => Envelope.NoCells
         case array => within(envelope(array, shapeOf), covered = true)
-    case call: TExpr.Call[?] if call.spec.name == "XLOOKUP" =>
+    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.xlookup =>
       within(envelope(Left(call.args.asInstanceOf[XLookupArgs]._3), shapeOf), covered = true)
     case call: TExpr.Call[?] if selectingFunctions.contains(call.spec.name) =>
       val branches: List[Operand] = call.spec.argSpec.toValues(call.args).collect {

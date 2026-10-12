@@ -516,13 +516,16 @@ object ArgSpec:
         // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
         // is named, never reported as a wrong argument count — accepting it here is #710's
         case (call: TExpr.Call[?]) :: _ if computedReferenceCalls.contains(call.spec.name) =>
+          // named after the call itself, so the message follows the derived set
+          val computed =
+            if call.spec.name == ReferenceOperators.RangeName then "the range operator `:`"
+            else s"${call.spec.name}(…)"
           Left(
             ParseError.InvalidArguments(
               fnName,
               pos,
               describe,
-              "a computed reference (A1:INDEX(...), OFFSET, INDIRECT, INDEX or XLOOKUP), " +
-                "which this range argument does not accept yet"
+              s"a computed reference ($computed), which this range argument does not accept yet"
             )
           )
         case _ =>

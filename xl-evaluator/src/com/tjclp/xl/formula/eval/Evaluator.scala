@@ -1061,6 +1061,7 @@ private class EvaluatorImpl(
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  // SUMPRODUCT's shared extent, ambient below it: scope documented on EvalContext.Operands
   arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */

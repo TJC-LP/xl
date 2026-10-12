@@ -215,15 +215,18 @@ class RangeOperatorSpec extends FunSuite:
     refused("=SUM(A1:INDEX(A:A,FOO(1)))") match
       case ParseError.UnknownFunction("FOO", _, _) => ()
       case other => fail(s"A1:INDEX(A:A,FOO(1)): $other")
-    // a computed reference in a typed range slot names the construct (follow-up: #710)
-    refused("=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)") match
-      case ParseError.InvalidArguments("SUMIF", _, _, actual) =>
-        assert(actual.contains("computed reference"), actual)
-      case other => fail(s"SUMIF: $other")
-    refused("=VLOOKUP(1,OFFSET(A1,0,0,3,2),2,FALSE)") match
-      case ParseError.InvalidArguments("VLOOKUP", _, _, actual) =>
-        assert(actual.contains("computed reference"), actual)
-      case other => fail(s"VLOOKUP: $other")
+    // a computed reference in a typed range slot names the call it is (follow-up: #710)
+    List(
+      ("=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)", "SUMIF", "the range operator `:`"),
+      ("=VLOOKUP(1,OFFSET(A1,0,0,3,2),2,FALSE)", "VLOOKUP", "OFFSET(…)"),
+      ("=MATCH(1,XLOOKUP(1,A1:A3,B1:C3),0)", "MATCH", "XLOOKUP(…)"),
+      ("=SUMIF(INDEX(A:A,0),\">1\")", "SUMIF", "INDEX(…)")
+    ).foreach { (formula, fn, named) =>
+      refused(formula) match
+        case ParseError.InvalidArguments(`fn`, _, _, actual) =>
+          assert(actual.contains("computed reference") && actual.contains(named), actual)
+        case other => fail(s"$formula: $other")
+    }
   }
 
   test("GH-713: lexical ranges keep their exact tree and form") {
