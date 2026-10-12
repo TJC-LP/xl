@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, CriteriaMatcher, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -12,91 +12,87 @@ import com.tjclp.xl.sheets.Sheet
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   /**
    * GH-713: the 0-based position of XLOOKUP's match along its lookup vector (one row or column —
-   * `xlookupStrip` has checked the shape), if any.
+   * `xlookupStrip` has checked the shape), if any. `matchMode` and `searchMode` are checked against
+   * their tables first ([[matchModeError]], [[searchModeError]], #692: Excel's `#VALUE!`, as XMATCH
+   * answers); `call` is by name, rendered only for a bad mode, never on a hit or for every element
+   * of a lifted array.
    *
-   * A vector that runs to the sheet's edge is read only up to the sheet's used range: every
-   * position past it is blank, so the first of them in search order stands for them all
-   * (`XLOOKUP(k,A:A,B:M)` reads the data, not a million cells). The answer is unchanged in every
-   * mode: an exact or wildcard match takes the first match in search order, and the approximate
-   * modes keep the first of equal keys, so a blank key, a reverse search (`search_mode` -1/-2) or a
-   * next-smaller/larger match that lands on the blanks lands on the same position it did when every
-   * cell was read.
+   * Keys are read through the evaluating reader (#692), so an uncached formula key is computed, and
+   * the first key that fails to evaluate ends the search with its error. match_mode 0 and 2 walk
+   * the vector lazily through [[exactLookupPosition]]: a key is computed when reached, never past
+   * the hit, and the cells past the used range of a full column or row are left out, since an exact
+   * or wildcard match never matches a blank. The approximate modes (-1, 1) read every key: a vector
+   * that runs to the sheet's edge is read only up to the sheet's used range, and every position
+   * past it is blank, so the first of them in search order stands for them all
+   * (`XLOOKUP(k,A:A,B:M)` reads the data, not a million cells). They keep the first of equal keys,
+   * so a blank key, a reverse search (`search_mode` -1/-2) or a next-smaller/larger match that
+   * lands on the blanks lands on the same position it did when every cell was read.
    */
   private def xlookupIndex(
-    lookupValue: ExprValue,
+    lookup: ExprValue,
     lookupSheet: Sheet,
     lookupArray: CellRange,
     matchMode: Int,
-    searchMode: Int
-  ): Option[Int] =
+    searchMode: Int,
+    call: => String,
+    ctx: EvalContext
+  ): Either[EvalError, Option[Int]] =
     val vertical = lookupArray.width == 1
     val size = if vertical then lookupArray.height else lookupArray.width
     def at(i: Int): ARef =
       if vertical then ARef.from0(lookupArray.colStart.index0, lookupArray.rowStart.index0 + i)
       else ARef.from0(lookupArray.colStart.index0 + i, lookupArray.rowStart.index0)
-    // positions [0, read) reach the used range; [read, size) lie past it, blank. Only a vector
-    // that runs to the sheet's edge (`A:A`, `2:2`) is clamped: `usedRange` scans every populated
-    // cell, so a bounded lookup (`$A$2:$A$50`) — the common case — never pays for it, as in
-    // SUMPRODUCT's computeBounds
-    val read =
-      if !lookupReadsUsedRange(lookupArray) then size
-      else
-        lookupSheet.usedRange.fold(0) { used =>
-          val (start, usedEnd) =
-            if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
-            else (lookupArray.colStart.index0, used.colEnd.index0)
-          math.max(0, math.min(size, usedEnd - start + 1))
+    // The approximate modes: positions [0, read) reach the used range; [read, size) lie past it,
+    // blank. Only a vector that runs to the sheet's edge (`A:A`, `2:2`) is clamped: `usedRange`
+    // scans every populated cell, so a bounded lookup (`$A$2:$A$50`) — the common case — never
+    // pays for it, as in SUMPRODUCT's computeBounds. -2 iterates reversed like -1 (descending
+    // order, GH-55). The blank tail is one position, the first the search meets: its end in
+    // reverse. This relies on `approximateMatch` with `lastOnTie = false` keeping the FIRST of
+    // equal candidates in iteration order; a rule that kept the last tie would need the tail's
+    // other end.
+    def approximate: Either[EvalError, Option[Int]] =
+      val read =
+        if !lookupReadsUsedRange(lookupArray) then size
+        else
+          lookupSheet.usedRange.fold(0) { used =>
+            val (start, usedEnd) =
+              if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
+              else (lookupArray.colStart.index0, used.colEnd.index0)
+            math.max(0, math.min(size, usedEnd - start + 1))
+          }
+      val reverse = searchMode < 0
+      val blankTail: Vector[Int] =
+        if read < size then Vector(if reverse then size - 1 else read) else Vector.empty
+      val indices: Vector[Int] =
+        if reverse then blankTail ++ (read - 1 to 0 by -1) else (0 until read).toVector ++ blankTail
+      val reader = rangeCellReader(lookupSheet, ctx)
+      def valueAt(i: Int): Either[EvalError, CellValue] =
+        if i >= read then Right(CellValue.Empty) else reader(at(i))
+      indices
+        .foldLeft[Either[EvalError, Vector[(Int, CellValue)]]](Right(Vector.empty)) {
+          case (Left(err), _) => Left(err)
+          case (Right(keys), i) => valueAt(i).map(cv => keys :+ (i -> cv))
         }
-    def valueAt(i: Int): CellValue = lookupSheet(at(i)).value
-
-    // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
-    // a ref to a cell holding "k2" must match exactly like the literal "k2".
-    val lookup = normalizeLookupValue(lookupValue)
-
-    // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
-    // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
-    // The blank tail is one position, the first the search meets: its end in reverse. This relies
-    // on every mode keeping the FIRST of equal candidates in iteration order — `find` for the exact
-    // and wildcard modes, `approximateMatch` with `lastOnTie = false` for the approximate ones; a
-    // mode that kept the last tie would need the tail's other end.
-    val reverse = searchMode == -1 || searchMode == -2
-    val blankTail: Vector[Int] =
-      if read < size then Vector(if reverse then size - 1 else read) else Vector.empty
-    val indices: Vector[Int] =
-      if reverse then blankTail ++ (read - 1 to 0 by -1) else (0 until read).toVector ++ blankTail
-
-    val wildcardCriterionOpt = lookup match
-      case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case _ => None
-
-    // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
-    // included); a linear search, so a tie keeps the first key in search order
-    def approximate(direction: Int): Option[Int] =
-      approximateMatch(
-        indices.map(idx => (idx, valueAt(idx))),
-        lookup,
-        direction,
-        lastOnTie = false
-      )
-
-    matchMode match
-      case 0 =>
-        indices.find { idx =>
-          val cellValue = valueAt(idx)
-          matchesLookupExact(cellValue, lookup)
-        }
-      case -1 => approximate(-1)
-      case 1 => approximate(1)
-      case 2 =>
-        indices.find { idx =>
-          val cellValue = valueAt(idx)
-          matchesLookupExact(cellValue, lookup) ||
-          wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
-        }
-      case _ => None
+        .map(keys => approximateMatch(keys, lookup, matchMode, lastOnTie = false))
+    for
+      _ <- matchModeError("XLOOKUP", matchMode, call)
+      _ <- searchModeError("XLOOKUP", searchMode, call)
+      index <- matchMode match
+        case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
+        case 2 =>
+          exactLookupPosition(
+            lookupArray,
+            lookupSheet,
+            ctx,
+            lookup,
+            wildcardCriterion(lookup),
+            searchMode
+          )
+        case -1 | 1 => approximate
+        // unreachable: the mode was validated above; kept total so a mode that slipped through
+        // would get the same #VALUE! rather than the approximate search
+        case other => matchModeError("XLOOKUP", other, call).map(_ => None)
+    yield index
 
   /**
    * Whether XLOOKUP's search reads the sheet's used range for `lookup` (one row or column): only
@@ -346,18 +342,28 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       searchModeRaw <- evalValue(ctx, searchModeExpr)
       matchMode <- toIntArg("XLOOKUP", matchModeRaw)
       searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-      result <- xlookupIndex(lookupValueEval, lookupSheet, lookupArray, matchMode, searchMode) match
+      // the rendered call is a diagnostic, passed by name: built only for a bad mode or a miss,
+      // never on a hit or for every element of a lifted array
+      fullCall = () =>
+        s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
+      index <- xlookupIndex(
+        normalized,
+        lookupSheet,
+        lookupArray,
+        matchMode,
+        searchMode,
+        fullCall(),
+        ctx
+      )
+      result <- index match
         case Some(i) => strip(i).map(selected => Right(RangeOperand(returnSheet, selected)))
         case None =>
           ifNotFoundOpt match
             case Some(expr) =>
               evalValue(ctx, expr).map(v => Left(toCellValue(v)))
+            // #692: one channel for every lookup's miss — the typed #N/A with its diagnostic
             case None =>
-              Left(
-                lookupNotFound(
-                  s"XLOOKUP: no match found for lookup value: XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1})"
-                )
-              )
+              Left(lookupNotFound(s"XLOOKUP: no match found for lookup value: ${fullCall()}"))
     yield result
 
   /**

@@ -69,6 +69,74 @@ object TestFixtures:
       )
     ).withCalcPr(CalcPr(iterativeCalculation = true, maxIterations = Some(100)))
 
+  /**
+   * #692: `A1:A3` = 1..3 keyed to `B1:B3`, `D1` an unguarded `VLOOKUP` miss, `D2` the guarded one,
+   * `D3` a `1/0` — the recalc summary names the two error cells with the evaluator's reasons.
+   */
+  def lookupMissBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", 1)
+          .put(ref"A2", 2)
+          .put(ref"A3", 3)
+          .put(ref"B1", "a")
+          .put(ref"B2", "b")
+          .put(ref"B3", "c")
+          .put(ref"D1", CellValue.Formula("VLOOKUP(42,A1:B3,2,FALSE)", None))
+          .put(ref"D2", CellValue.Formula("IFNA(VLOOKUP(42,A1:B3,2,FALSE),\"none\")", None))
+          .put(ref"D3", CellValue.Formula("1/0", None))
+      )
+    )
+
+  /**
+   * #692: `lookupMissBook`'s table with `A5` a 1,000-character multi-line text key and `D1` the
+   * unguarded `VLOOKUP` of it — the summary carries the reason bounded to one line, `recalc --json`
+   * the full text.
+   */
+  def lookupMissLongKeyBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", 1)
+          .put(ref"A2", 2)
+          .put(ref"A3", 3)
+          .put(ref"B1", "a")
+          .put(ref"B2", "b")
+          .put(ref"B3", "c")
+          .put(ref"A5", LongMultiLineKey)
+          .put(ref"D1", CellValue.Formula("VLOOKUP(A5,A1:B3,2,FALSE)", None))
+      )
+    )
+
+  /** The key of [[lookupMissLongKeyBook]]: 1,000 characters, CRLF, LF and tab included. */
+  val LongMultiLineKey: String = ("Line one\r\nline two\nline three\tfour  " * 40).take(1000)
+
+  /**
+   * `lookupMissLongKeyBook` with [[ControlCharacterKey]] as the missed key: the summary a mutation
+   * verb prints must not carry its escape sequences to the terminal; `recalc --json` keeps them.
+   * The key uses the C1 controls (XML 1.0-legal, so they survive the file; the writer strips the C0
+   * block, GH-237) — the 8-bit CSI, OSC and ST that terminals honour like `ESC [`, `ESC ]`,
+   * `ESC \`.
+   */
+  def lookupMissControlKeyBook(): Workbook =
+    Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"A1", 1)
+          .put(ref"A2", 2)
+          .put(ref"A3", 3)
+          .put(ref"B1", "a")
+          .put(ref"B2", "b")
+          .put(ref"B3", "c")
+          .put(ref"A5", ControlCharacterKey)
+          .put(ref"D1", CellValue.Formula("VLOOKUP(A5,A1:B3,2,FALSE)", None))
+      )
+    )
+
+  /** The key of [[lookupMissControlKeyBook]]: an 8-bit CSI colour sequence and an OSC title. */
+  val ControlCharacterKey: String = "red \u009b31mtext\u009b0m bell \u009d0;title\u009c"
+
   /** `simpleBook` plus one workbook-scoped defined name, so `names` has something to list. */
   def namedBook(): Workbook = simpleBook().withDefinedName("Total", "Data!$B$4")
 
@@ -250,6 +318,9 @@ object TestFixtures:
     "inplace.xlsx" -> (() => simpleBook()),
     "circular.xlsx" -> (() => circularBook()),
     "error-cycle.xlsx" -> (() => errorCycleBook()),
+    "lookup-miss.xlsx" -> (() => lookupMissBook()),
+    "lookup-miss-long-key.xlsx" -> (() => lookupMissLongKeyBook()),
+    "lookup-miss-control-key.xlsx" -> (() => lookupMissControlKeyBook()),
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),

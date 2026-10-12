@@ -23,6 +23,26 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **The recalc summary names its error-valued cells, with the evaluator's reason** (#692):
+  `Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found:
+  VLOOKUP(42, A1:B3, 2, FALSE))` — the first three (`RecalcResult.MaxSummaryErrorCells`) in the
+  text, the rest counted as `… and N more`, the same cap as the could-not-evaluate list; the first
+  ten (`RecalcResult.MaxNamedErrorCells`) as `RecalcResult.errorCells: Vector[ErrorValueCell]`
+  (`sheet`, `ref`, `error`, `reason`). The reason is the
+  diagnostic the evaluator raised the error with (a lookup's miss echoing its call, a division's
+  operands); an error that arrived as a plain value (`NA()`, an error literal, a precedent's error
+  read through a reference, a cycle member) has none. `xl recalc --json` publishes the same list as
+  `errorCells` (`{ref, error, reason}`) beside `errorValuedCycles`; the envelope is otherwise
+  unchanged. `ErrorValueCell.render` (and so the summary and the CLI's text) carries each reason
+  as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…`,
+  every control character (an ANSI or OSC escape in an untrusted key) replaced by a space — a
+  lookup echoes its key, which can be a 32,767-character multi-line cell — and the sheet name's
+  control characters replaced the same way (never cut or collapsed: `SheetName` rejects only
+  `:\/?*[]`), while `ErrorValueCell.reason`, `ErrorValueCell.sheet` and the JSON keep the full
+  text. `RecalcResult` gains the
+  defaulted field `errorReasons: Map[QualifiedRef, String]`: source-compatible, but the binary
+  signatures of its `apply`/`copy`/`unapply` change for code compiled against an earlier
+  `xl-evaluator`.
 - **The `:` range operator between references a function returns** (#713):
   `=SUM(A1:INDEX(A:A,COUNTA(A:A)))`, `=SUM(INDEX(B1:B3,1):INDEX(B1:B3,2))` and
   `=SUM(B1:XLOOKUP(2,A1:A3,B1:B3))` parse, print back, shift, and evaluate to the bounding range,
@@ -126,6 +146,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **The recalc summary line gains a suffix** (#692): every mutation verb's
+  `Recalculated N formulas (K error values)` is now `Recalculated N formulas (K error values:
+  Sheet!A1 #N/A — …; …)`, naming up to three cells (`… and N more` past that). A regex over that
+  line should expect the `: …` suffix inside the parentheses; `recalc --json` is additive and
+  unchanged in shape.
 - **Breaking: XLOOKUP is typed `ArrayResult` (source and binary)** (#713): `TExpr.xlookup` returns
   `TExpr[ArrayResult]` (it was `TExpr[CellValue]`), and the public spec `FunctionSpecs.xlookup`
   (exported as `com.tjclp.xl.formula.FunctionSpecs`) is a `FunctionSpec[ArrayResult] { type Args =
@@ -311,6 +336,30 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **One error channel for the lookups, `#VALUE!` for a bad XLOOKUP mode, and the evaluating
+  reader everywhere** (#692, the #670 remainder): an XLOOKUP miss now raises the typed `#N/A`
+  through `lookupNotFound` like VLOOKUP/HLOOKUP/MATCH/LOOKUP/XMATCH, so its call is the cell's
+  reason in the recalc summary (every guard still sees the same `#N/A`); a match_mode or
+  search_mode outside its table is Excel's documented `#VALUE!` for XLOOKUP as it was for XMATCH
+  (XLOOKUP answered `#N/A`, and read an unknown search_mode as forward); MATCH and XLOOKUP read
+  their lookup range through the evaluating reader, so a formula key with no cached value is
+  computed rather than silently skipped (`MATCH(20, A1:A3, 0)` over an uncached `=5*4` is 2, not
+  `#N/A`); a full-column or full-row lookup range stops at the sheet's used range, and a bounded
+  range walks its declared cells without the used-range scan (LOOKUP and XMATCH paid that scan of
+  every populated cell on every call, bounded or not; they no longer do). The exact and wildcard
+  modes of XLOOKUP, XMATCH and MATCH walk that range lazily, one cell at a time in search order,
+  so a hit near the top of a 50k-row column costs the cells up to it, never the column (200
+  `XLOOKUP` + 200 `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s
+  is reading and writing the book); the approximate modes read the used range as before. XLOOKUP's
+  `return_array` cell is read through the same evaluating reader, so an uncached formula there is
+  computed instead of returning the raw formula record — and an uncached return-cell formula that
+  fails, or a host error in that cell, now fails the XLOOKUP where it used to yield the stale or
+  empty value. A key cell whose formula cannot be
+  evaluated at all (unparseable, or an unknown function) is a host failure, not a value: MATCH and
+  XLOOKUP's exact searches now surface it when it sits before the hit in search order, as
+  LOOKUP/XMATCH already did (the old readers skipped it silently); the cells after the hit are
+  never evaluated, while the approximate modes read the whole used range and so fail on such a
+  cell anywhere in it.
 - **XLOOKUP returns a reference, and a whole matched row or column** (#713):
   `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
   folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).
