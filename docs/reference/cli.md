@@ -1041,11 +1041,14 @@ legacy formula, and xl computes it the same way:
   stand. Streaming writes and `--dry-run` do not evaluate and stay
   silent; `put`, `fill` and `copy` do not check.
 - **The `DYNAMIC_ARRAY_DOWNGRADED` warning** (GH-714). When the workbook's cell-metadata part
-  (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, xl cannot extend it
-  without risking the indices other cells use: a `putf --array` (or batch `"array": true`) still
-  writes, but the new anchor is saved without its `cm` marker, so Excel opens it as a legacy
-  `{=…}` array, and the warning says so. The part is kept as it was. A relationship that names a
-  part missing from the package is not a downgrade: xl writes the part at that target.
+  (`xl/metadata.xml`, or wherever its relationship points) cannot be read or is not readable XML,
+  xl cannot extend it without risking the indices other cells use: a `putf --array` (or batch
+  `"array": true`) still writes, but the new anchor is saved without its `cm` marker, so Excel
+  opens it as a legacy `{=…}` array, and the warning says so, naming the part and the reason. The
+  part is kept as it was. A relationship that names a part missing from the package is not a
+  downgrade: xl writes the part at that target. One that names no part of the package (external,
+  or a target resolving above its root, such as `../../evil.xml`) is ignored: xl generates the part
+  at `xl/metadata.xml` and points the relationship there.
 
 The rules, the lifted functions and the known divergences are in `docs/LIMITATIONS.md` ("Plain
 cells are legacy formulas").

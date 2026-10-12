@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Dynamic-array metadata (GH-714, late #721 review).** A `sheetMetadata` relationship whose
+  target resolves above the package root (`../../evil.xml`) or to nothing names no part: xl never
+  reads or writes such a path, and a write that generates the cell-metadata part replaces that
+  relationship with one naming the generated part. `DYNAMIC_ARRAY_DOWNGRADED` now says why the
+  part could not be extended (it could not be read, or is not XML) instead of always "not readable
+  XML". An empty dynamic-array result is `#CALC!` through one tested spill step.
+
 ## [0.24.0] - 2026-10-12
 
 Excel parity in the evaluator, from three runs: the Weaver dogfood of 0.23.1 (#683), wave 31's

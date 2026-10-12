@@ -6,9 +6,9 @@ import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.formula.eval.{ArrayResult, DynamicArrayAuthoring}
 import com.tjclp.xl.formula.eval.DynamicArrayAuthoring.{Refusal, SpillBlocked, SpillBlocker}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
@@ -55,6 +55,55 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(a.sheet(ref"A3").value, num(3))
     assertEquals(a.touched, Set(ref"A1", ref"A2", ref"A3"))
     assert(a.cached)
+  }
+
+  test("an empty array is #CALC!; an empty middle row never turns the spill into it") {
+    // spillArray is fed arrays directly: the evaluator yields an empty one only in corner cases
+    val single = FormulaKind.dynamicArray(range("F1"))
+    val placed = base.put(ref"F1", CellValue.Formula("X", None, single))
+    val expr = com.tjclp.xl.formula.parser.FormulaParser
+      .parse("=1")
+      .fold(e => fail(e.toString), identity)
+    def spill(array: ArrayResult) =
+      DynamicArrayAuthoring
+        .spillArray(placed, Workbook(Vector(placed)), ref"F1", "X", expr, array, Set.empty)
+        .fold(r => fail(r.message), identity)
+    def cached(a: DynamicArrayAuthoring.Authored) = a.sheet(ref"F1").value match
+      case CellValue.Formula("X", cache, kind) => (cache, kind)
+      case other => fail(s"F1 should hold the anchor, got $other")
+    // built from ragged rows, an array is as wide as its first row: a short row reads Empty
+    val long = spill(ArrayResult(Vector(Vector(num(1), num(2), num(3)), Vector(num(4)))))
+    assertEquals(long.extent, range("F1:H2"))
+    assertEquals(cached(long), (Some(num(1)), FormulaKind.dynamicArray(range("F1:H2"))))
+    assertEquals((long.sheet(ref"H1").value, long.sheet(ref"F2").value), (num(3), num(4)))
+    assertEquals(
+      (long.sheet(ref"G2").value, long.sheet(ref"H2").value),
+      (CellValue.Empty, CellValue.Empty)
+    )
+    // an empty middle row: its cells read Empty, the rows after it are written
+    val gap = spill(ArrayResult(Vector(Vector(num(1), num(2)), Vector.empty, Vector(num(5)))))
+    assertEquals(gap.extent, range("F1:G3"))
+    assertEquals(
+      (gap.sheet(ref"F2").value, gap.sheet(ref"G2").value),
+      (CellValue.Empty, CellValue.Empty)
+    )
+    assertEquals(gap.sheet(ref"F3").value, num(5))
+    // a sparse array (one value held for every cell) spills every cell of its shape
+    val filled = spill(ArrayResult.constant(2, 2, num(7)))
+    assertEquals(filled.extent, range("F1:G2"))
+    assertEquals(cached(filled)._1, Some(num(7)))
+    assertEquals(
+      Vector(ref"G1", ref"F2", ref"G2").map(filled.sheet(_).value),
+      Vector.fill(3)(num(7))
+    )
+    // no row, or nothing in the first row (no column): an empty array, #CALC! as Excel shows one
+    Vector(ArrayResult.empty, ArrayResult(Vector(Vector.empty, Vector(num(5))))).foreach { array =>
+      assert(array.isEmpty)
+      val empty = spill(array)
+      assertEquals(empty.extent, range("F1"))
+      assertEquals(cached(empty)._1, Some(CellValue.Error(CellError.Calc)))
+      assertEquals(empty.sheet.cells.get(ref"F2"), None)
+    }
   }
 
   test("a scalar array formula is a 1x1 dynamic record holding the array value") {
