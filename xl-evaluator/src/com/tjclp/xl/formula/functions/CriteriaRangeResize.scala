@@ -79,7 +79,20 @@ object CriteriaRangeResize:
    * false positive costs one parse.
    */
   def mayResizeThroughName(formula: String): Boolean =
-    ResizingCall.matcher(formula).find() && hasNameShapedToken(formula)
+    mayResizeThroughName(formula, formula.toUpperCase(java.util.Locale.ROOT))
+
+  /**
+   * [[mayResizeThroughName]] for a caller already holding `upperCased`, the formula's
+   * `toUpperCase(Locale.ROOT)`. A substring test on it rules out almost every formula before the
+   * Unicode-aware regex runs, and it cannot rule out a call the parser reads: the parser
+   * upper-cases a function name with `String.toUpperCase` before the registry lookup, so every
+   * spelling it accepts as SUMIF or AVERAGEIF upper-cases to that text. That includes the long s
+   * (`ſ` is `S`) and the dotless i (`ı` is `I`); a whitespace character between the name and `(`
+   * lies outside the substring.
+   */
+  def mayResizeThroughName(formula: String, upperCased: String): Boolean =
+    (upperCased.contains("SUMIF") || upperCased.contains("AVERAGEIF")) &&
+      ResizingCall.matcher(formula).find() && hasNameShapedToken(formula)
 
   private def isIdentStart(c: Char): Boolean = c.isLetter || c == '_' || c == '\\'
 
@@ -183,6 +196,9 @@ object CriteriaRangeResize:
    * workbook to resolve it) — is returned as given. The dependency extractors read a call's
    * arguments through this so the graph records the cells evaluation actually reads.
    *
+   * @param name
+   *   the call's canonical (upper-case) function name, `FunctionSpec.name`, as for
+   *   [[hasDynamicResize]]
    * @param targetOf
    *   the third argument as a location that carries its range, when one can be known (#733: a
    *   defined name bound to a range, resolved through the workbook); a location it cannot resolve
@@ -194,7 +210,7 @@ object CriteriaRangeResize:
     shapeOf: TExpr.RangeLocation => Option[CellRange] = _.staticRange,
     targetOf: TExpr.RangeLocation => TExpr.RangeLocation = identity
   ): List[ArgValue] =
-    if !resizingFunctions.contains(name.toUpperCase) then values
+    if !resizingFunctions.contains(name) then values
     else
       values match
         case (first @ ArgValue.Range(criteria)) :: criterion :: ArgValue.Range(target) :: rest =>

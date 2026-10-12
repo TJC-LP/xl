@@ -435,14 +435,12 @@ object DependencyGraph:
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
     val names = FunctionRegistry.dynamicFunctionNames
-    def mentionsAny(tokens: Iterable[String], expression: String): Boolean =
+    def candidate(expression: String): Boolean =
       val text = expression.toUpperCase(java.util.Locale.ROOT)
-      tokens.exists(text.contains)
+      names.exists(text.contains) || CriteriaRangeResize.mayResizeThroughName(expression, text)
     sheet.cells.iterator.flatMap { case (ref, cell) =>
       cell.value match
-        case CellValue.Formula(expression, _, _)
-            if mentionsAny(names, expression) ||
-              CriteriaRangeResize.mayResizeThroughName(expression) =>
+        case CellValue.Formula(expression, _, _) if candidate(expression) =>
           FormulaParser.parse(expression) match
             case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
             case _ => None
@@ -502,16 +500,6 @@ object DependencyGraph:
     val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
     // Token form for the cheap substring pre-filter over cell text (function names are upper).
     def upper(text: String): String = text.toUpperCase(java.util.Locale.ROOT)
-    // The RESOLUTION relation: two spellings are one name to every reader exactly when
-    // `DefinedNameIndex` resolves them as one, i.e. under `String.equalsIgnoreCase` — per code
-    // point `toLowerCase(toUpperCase(cp))`. `String.toUpperCase` is not that relation (it would
-    // split a Kelvin-sign `K` from `k`), so shadowing and dedup are keyed on this form.
-    def resolutionKey(name: String): String =
-      val folded = new java.lang.StringBuilder(name.length)
-      name
-        .codePoints()
-        .forEach(cp => folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp))))
-      folded.toString
     // GH-537: definitions and candidate cell formulas parse once per distinct TEXT (the memo
     // `unresolvedReaders` keeps); the per-(sheet, name) verdict is memoized separately, so a
     // workbook-scoped name read from 40 sheets is parsed once, not 40 times.
@@ -637,7 +625,7 @@ object DependencyGraph:
     def candidate(expression: String): Boolean =
       val text = upper(expression)
       candidateTokens.exists(text.contains) ||
-      CriteriaRangeResize.mayResizeThroughName(expression)
+      CriteriaRangeResize.mayResizeThroughName(expression, text)
 
     val cells =
       workbook.sheets.iterator.flatMap { sheet =>
@@ -2078,7 +2066,20 @@ object DependencyGraph:
     drain(extract(expr, currentSheet, 0))
 
   /**
-   * #733: a defined name's static (sheet, range), keyed on the name as written, its qualifier and
+   * The RESOLUTION relation: two spellings are one name to every reader exactly when
+   * `DefinedNameIndex` resolves them as one, i.e. under `String.equalsIgnoreCase` — per code point
+   * `toLowerCase(toUpperCase(cp))`. `String.toUpperCase` is not that relation (it would split a
+   * Kelvin-sign `K` from `k`), so shadowing, dedup and the name memos are keyed on this form.
+   */
+  private[graph] def resolutionKey(name: String): String =
+    val folded = new java.lang.StringBuilder(name.length)
+    name
+      .codePoints()
+      .forEach(cp => folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp))))
+    folded.toString
+
+  /**
+   * #733: a defined name's static (sheet, range), keyed on its [[resolutionKey]], its qualifier and
    * the sheet it is read from — shared across one graph build, so a book whose SUMIFs read the same
    * few names resolves each once per sheet. Holds `None` for a name that does not resolve to one.
    */
@@ -2138,7 +2139,7 @@ object DependencyGraph:
         source.flatMap(Evaluator.resolveRangeLocation(location, _, workbook).toOption)
       location match
         case TExpr.RangeLocation.Name(name, scope) =>
-          nameRanges.getOrElseUpdate((name, scope, currentSheet), resolve)
+          nameRanges.getOrElseUpdate((resolutionKey(name), scope, currentSheet), resolve)
         case _ => resolve
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
