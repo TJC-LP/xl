@@ -511,6 +511,21 @@ class RangeOperatorSpec extends FunSuite:
     assertEquals(cached(targeted), Some(N("4020")))
   }
 
+  test("GH-713: a repeated formula text is classified once, and every cell holding it is found") {
+    // the scan memoizes its verdict per text within a call: three copies of a dynamic text are
+    // all dynamic, and the workbook pass parses the text once
+    val text = "SUM(B1:INDEX(D:D,3))"
+    val placed = List(ref"I1", ref"I2", ref"I3")
+      .foldLeft(sheet1) { (s, at) =>
+        s.put(at, CellValue.Formula(text, None))
+      }
+      .put(ref"I4", CellValue.Formula("SUM(A1:A3)", None))
+    assertEquals(DependencyGraph.dynamicCells(placed), Set(ref"I1", ref"I2", ref"I3"))
+    val trace = DependencyGraph.dynamicCellsTraced(Workbook(Vector(placed)))
+    assertEquals(trace.cells.map(_.ref), Set(ref"I1", ref"I2", ref"I3"))
+    assertEquals(trace.parses, 1)
+  }
+
   test("GH-713: a defined name spelled like a column is refused after a token's `:`") {
     // `Rev` is also column REV, so `Start:Rev` keeps the lexical reading's diagnostic, as `A1:B`
     // does. Excel cannot define such a name (it collides with a column reference); only books
