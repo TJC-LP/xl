@@ -471,8 +471,12 @@ trait FunctionSpecsBase:
       case None => Right(Vector.empty)
       case Some(extent) =>
         // each key as a lookup reads it (LookupLine.key, GH-715): a failing key is its error value
-        val keys = (extent.width.toLong * extent.height).toInt
-        LookupLine(extent, keys, targetSheet, rangeCellReader(targetSheet, ctx)).storedKeys
+        LookupLine(
+          extent,
+          cellCount(extent),
+          targetSheet,
+          rangeCellReader(targetSheet, ctx)
+        ).storedKeys
           .map(_.grouped(extent.width).toVector)
 
   /**
@@ -578,11 +582,10 @@ trait FunctionSpecsBase:
     sheet: com.tjclp.xl.sheets.Sheet,
     read: ARef => Either[EvalError, CellValue]
   ):
-    val size: Int = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+    val size: Int = cellCount(range)
 
     /** The cell at position `i`. */
-    def at(i: Int): ARef =
-      ARef.from0(range.colStart.index0 + i % range.width, range.rowStart.index0 + i / range.width)
+    def at(i: Int): ARef = rowMajor(range, i)
 
     def key(i: Int): Either[EvalError, CellValue] =
       if i >= stored then Right(CellValue.Empty)
@@ -633,7 +636,7 @@ trait FunctionSpecsBase:
   ): LookupLine =
     val column = range.width == 1 && range.rowEnd.index0 == Row.MaxIndex0
     val row = range.height == 1 && range.colEnd.index0 == Column.MaxIndex0
-    val all = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+    val all = cellCount(range)
     val stored =
       if !column && !row then all
       else
@@ -649,6 +652,17 @@ trait FunctionSpecsBase:
           else math.max(0, used.colEnd.index0 - range.colStart.index0 + 1)
         }
     LookupLine(range, math.min(stored, all), targetSheet, rangeCellReader(targetSheet, ctx))
+
+  /**
+   * `range`'s cell count as an index bound: [[CellRange.cellCount]] capped at `Int.MaxValue` (a
+   * whole-sheet range holds 17 billion).
+   */
+  protected def cellCount(range: CellRange): Int =
+    math.min(range.cellCount, Int.MaxValue.toLong).toInt
+
+  /** The cell at position `i` of `range` in row-major order, `0 <= i < cellCount(range)`. */
+  protected def rowMajor(range: CellRange, i: Int): ARef =
+    ARef.from0(range.colStart.index0 + i % range.width, range.rowStart.index0 + i / range.width)
 
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match
