@@ -184,6 +184,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking: `ArrayResult` is no longer a case class** (Refs #750): its storage is private, so a
+  whole-axis array (`A:B*1`) can later be held as its populated box plus one fill value instead of
+  every cell. `values` is removed: read a cell with `arr(row, col)` (Empty out of bounds, as
+  before), walk the cells in row-major order with `runs` (`(value, length)` runs) or `cells`,
+  transform them with `map` (first error wins) or `mapPure`, take a window with `slice`, and get
+  the whole grid with `toDense(label)`, which is an `EvalError` past `ArrayResult.MaxCells` cells.
+  `rows`, `cols`, `transpose`, `isEmpty` and the factories (`ArrayResult(rows)`, `single`, `empty`,
+  `fromFlat`) are unchanged; `cellCount`, `fill` and `rowsIterator` (every row, uncapped) are
+  new. A pattern `case ArrayResult(v)` no longer compiles (match `ar: ArrayResult` and read
+  through the accessors), there is no `copy`, and `ArrayResult` is no longer a `Product`.
+  Equality stays cell by cell. Evaluation results are unchanged.
 - **Breaking: `FormulaKind.ArrayFormula` gains a fourth field, `mode: ArrayMode`** (#714): it tells
   a legacy CSE record from an Excel 365 dynamic array (`ArrayMode.Legacy` by default, so
   constructor calls still compile). A pattern match must name the new field —

@@ -113,6 +113,13 @@ object ArrayArithmetic:
     range: CellRange,
     readCell: ARef => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
+    rangeToMatrixEval(range, readCell).map(ArrayResult(_))
+
+  /** [[rangeToArrayEval]]'s rows, for the consumers that work on the whole grid. */
+  private[formula] def rangeToMatrixEval(
+    range: CellRange,
+    readCell: ARef => Either[EvalError, CellValue]
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
     (range.rowStart.index0 to range.rowEnd.index0)
       .foldLeft[Either[EvalError, Vector[Vector[CellValue]]]](Right(Vector.empty)) { (rows, row) =>
         rows.flatMap { accumulated =>
@@ -123,13 +130,12 @@ object ArrayArithmetic:
             .map(accumulated :+ _)
         }
       }
-      .map(ArrayResult(_))
 
   /**
    * Convert ArrayResult to numeric matrix.
    */
   def arrayToNumeric(arr: ArrayResult): Either[EvalError, Vector[Vector[BigDecimal]]] =
-    traverseVV(arr.values)(cellValueToNumeric)
+    traverseVV(arr.rowsIterator.toVector)(cellValueToNumeric)
 
   /**
    * Perform broadcasting binary operation.
@@ -256,8 +262,8 @@ object ArrayArithmetic:
       result <- traverseVV(
         (0 until outRows).toVector.map { row =>
           (0 until outCols).toVector.map { col =>
-            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
+            val lVal = getWithBroadcastCV(left, row, col)
+            val rVal = getWithBroadcastCV(right, row, col)
             (lVal, rVal)
           }
         }
@@ -290,7 +296,7 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(ArrayResult(left.values.map(_.map(cv => equalityElement(cv, scalarCV, negate)))))
+        Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
         for
@@ -299,8 +305,8 @@ object ArrayArithmetic:
         yield
           val result = (0 until outRows).toVector.map { row =>
             (0 until outCols).toVector.map { col =>
-              val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-              val rVal = getWithBroadcastCV(rightArr.values, row, col, rightArr.rows, rightArr.cols)
+              val lVal = getWithBroadcastCV(left, row, col)
+              val rVal = getWithBroadcastCV(rightArr, row, col)
               equalityElement(lVal, rVal, negate)
             }
           }
@@ -319,17 +325,13 @@ object ArrayArithmetic:
    * so not a broadcast axis) reads as a #N/A element — Excel pads mismatched array dimensions with
    * #N/A rather than failing the operation.
    */
-  private def getWithBroadcastCV(
-    arr: Vector[Vector[CellValue]],
-    row: Int,
-    col: Int,
-    arrRows: Int,
-    arrCols: Int
-  ): CellValue =
+  private def getWithBroadcastCV(arr: ArrayResult, row: Int, col: Int): CellValue =
+    val arrRows = arr.rows
+    val arrCols = arr.cols
     val r = if arrRows == 1 then 0 else row
     val c = if arrCols == 1 then 0 else col
     if r >= arrRows || c >= arrCols then CellValue.Error(CellError.NA)
-    else arr(r)(c)
+    else arr(r, c)
 
   /**
    * GH-337: the Excel error an element carries, if any — a `CellValue.Error` directly or cached
@@ -403,16 +405,15 @@ object ArrayArithmetic:
           (0 until outCols).toVector.map(col => (row, col))
         }
       ) { case (row, col) =>
-        val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
+        val condCV = getWithBroadcastCV(cond, row, col)
         carriedError(condCV) match
           case Some(err) => Right(CellValue.Error(err))
           case None =>
             conditionTruthy("IF condition", condCV) match
               case Right(truthy) =>
                 Right(
-                  if truthy then
-                    getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
-                  else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
+                  if truthy then getWithBroadcastCV(ifTrue, row, col)
+                  else getWithBroadcastCV(ifFalse, row, col)
                 )
               case Left(e) => toErrorElement(e)
       }
@@ -461,7 +462,7 @@ object ArrayArithmetic:
    * element's is `#VALUE!` (#709).
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
-    traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
+    traverseV(arr.cells.toVector)(cv => conditionTruthy(label, cv))
 
   /**
    * GH-338: elementwise NOT over an array condition, preserving shape (Excel broadcasts NOT rather
@@ -470,14 +471,14 @@ object ArrayArithmetic:
    * #VALUE! element. Total in Right.
    */
   def broadcastNot(label: String, arr: ArrayResult): Either[EvalError, ArrayResult] =
-    traverseVV(arr.values) { cv =>
+    arr.map { cv =>
       carriedError(cv) match
         case Some(err) => Right(CellValue.Error(err))
         case None =>
           conditionTruthy(label, cv) match
             case Right(b) => Right(CellValue.Bool(!b))
             case Left(e) => toErrorElement(e)
-    }.map(ArrayResult(_))
+    }
 
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match
@@ -526,8 +527,8 @@ object ArrayArithmetic:
       result <- traverseVV(
         (0 until outRows).toVector.map { row =>
           (0 until outCols).toVector.map { col =>
-            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
+            val lVal = getWithBroadcastCV(left, row, col)
+            val rVal = getWithBroadcastCV(right, row, col)
             (lVal, rVal)
           }
         }
@@ -548,7 +549,7 @@ object ArrayArithmetic:
     traverseVV(
       (0 until outRows).toVector.map(row => (0 until outCols).toVector.map(col => (row, col)))
     ) { case (row, col) =>
-      elem(operands.map(op => getWithBroadcastCV(op.values, row, col, op.rows, op.cols)))
+      elem(operands.map(op => getWithBroadcastCV(op, row, col)))
     }.map(ArrayResult(_))
 
   /**

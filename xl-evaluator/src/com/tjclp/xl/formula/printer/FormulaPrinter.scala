@@ -149,7 +149,9 @@ object FormulaPrinter:
       case TExpr.Lit(value: Int) => value.toString
       // GH-669: an array constant prints as Excel spells it — `,` between columns, `;` between rows
       case TExpr.Lit(array: ArrayResult) =>
-        array.values.map(_.map(arrayElementText).mkString(",")).mkString("{", ";", "}")
+        (0 until array.rows)
+          .map(r => (0 until array.cols).map(c => arrayElementText(array(r, c))).mkString(","))
+          .mkString("{", ";", "}")
       case TExpr.Lit(value) => value.toString
 
       // Cell reference
