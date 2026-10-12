@@ -272,6 +272,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     case Left(_: TExpr.RangeLocation.External) => Shape.External
     case Left(TExpr.RangeLocation.Name(_, None)) => Shape.Token
     case Left(TExpr.RangeLocation.Name(_, Some(_))) => Shape.QualifiedToken
+    // GH-710: a LET name in a range slot prints as the bare name, like a BindingRef
+    case Left(_: TExpr.RangeLocation.Binding) => Shape.Token
     case Left(_: TExpr.RangeLocation.Error) => Shape.Closed
     case Right(expr) => expressionKind(expr)
 
