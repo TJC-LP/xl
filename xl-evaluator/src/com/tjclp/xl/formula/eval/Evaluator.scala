@@ -770,8 +770,11 @@ object Evaluator:
     case TExpr.Coerced(inner, _) => denotesReference(inner)
     case _ => false
 
-  /** Functions whose expression argument must be a reference (readsBindingAsRange). */
-  private val ReferenceBaseFunctions: Set[String] = Set("OFFSET")
+  /**
+   * Functions whose expression argument must be a reference (readsBindingAsRange). Lazy, so this
+   * object's initialization never forces the function registry's.
+   */
+  private lazy val ReferenceBaseFunctions: Set[String] = Set(FunctionSpecs.offset.name)
 
   /**
    * GH-710: whether an expression reads a LET name in a range slot (`COUNTIF(r, ">2")`), or holds a
@@ -797,10 +800,10 @@ object Evaluator:
    * wrapper. `evalLet` runs it once per LET evaluation, over that LET's subtree, so nested LETs
    * walk their inner subtrees again (size × depth per evaluation). It is a pure function of the AST
    * and could be computed once per `Let` node at parse time if profiling ever shows the cost
-   * (#733).
+   * (#744).
    */
   private[formula] def readsBindingAsRange(expr: TExpr[?]): Boolean =
-    // TODO(#733): cache per Let node (or compute at parse time) instead of walking per evaluation;
+    // TODO(#744): cache per Let node (or compute at parse time) instead of walking per evaluation;
     // and memoize a computed name's reference per recalculation, rather than evaluating it again
     // at every range slot that reads it (resolveRangeSlot).
     // Exhaustive on purpose, with no wildcard: a new TExpr case is a "match may not be exhaustive"
