@@ -37,7 +37,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -113,7 +113,7 @@ sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated lit
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware
 val r = wb.recalculate()                           // RecalcResult: total, per-cell errors
 r.certified; r.errors.map(_.render); r.workbook    // certified = no host error AND every cycle converged; then write r.workbook
-r.excelErrors.isEmpty                              // 0.14.0: #DIV/0!/#REF!/… are VALUES, not errors — certified stays true (even for a cycle that converged ONTO an error: SccReport.errorValued, unreleased); gate on this too
+r.excelErrors.isEmpty                              // 0.14.0: #DIV/0!/#REF!/… are VALUES, not errors — certified stays true (even for a cycle that converged ONTO an error: SccReport.errorValued, 0.24.0); gate on this too
 Excel.writeChecked(wb, "out.xlsx")                 // 0.21.0: cache ONLY the uncached formulas + write + RecalcResult — THE write for a built model
 Excel.writeRecalculated(wb, "out.xlsx")            // 0.13.0: recompute EVERY formula + write + RecalcResult; both take a RecalcOptions (0.21.0)
 Excel.lint("out.xlsx")                             // 0.24.0: XLResult[Vector[Finding]]: the rules `xl lint` runs, formula-unparseable included (#674); gate on f.severity == LintSeverity.Repair
@@ -129,7 +129,7 @@ orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: �
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -260,7 +260,7 @@ A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary b
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -382,7 +382,7 @@ wb.recalculateUncached(opts)                            // only cache-less formu
 
 **Renaming a sheet rewrites its references** (since 0.20.0, [#559](https://github.com/TJC-LP/xl/issues/559)): `SheetRenamer.rename(wb, SheetName.unsafe("Sheet1"), SheetName.unsafe("Q1 Data"))` renames the tab AND rewrites `Sheet1!A1` → `'Q1 Data'!A1` in cell formulas on every sheet, defined names, CF and DV formulas, caches preserved; it refuses (`Left`) when a dependent that mentions the sheet cannot be parsed. `Workbook.rename` alone stays tab-only. `SheetRenamer.references(wb, sheet)` lists the cells a rename would touch; `FormulaOps.renameSheet/shift/mentionsSheet` are the string-level pieces.
 
-112 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
+124 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
 
 ### Data tables (what-if sensitivity)
 
@@ -390,7 +390,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -450,7 +450,7 @@ val sales = orExit(wb("Sales"))                      // SheetNotFound → printe
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -472,7 +472,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -499,7 +499,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-10-12
+
+Excel parity in the evaluator, from three runs: the Weaver dogfood of 0.23.1 (#683), wave 31's
+sweep of the wave-30 follow-ups (#697, then #698–#704 for #687–#696, which its reviews filed) and
+wave 32 (#705–#722, #756, #757), every evaluator change pinned against a LibreOffice
+recalculation. A plain formula cell now evaluates as Excel's legacy formula, implicit intersection
+included, while array contexts keep dynamic-array semantics and 74 scalar functions lift over
+arrays; xl authors Excel 365 dynamic arrays (`putf --array`, `cm`/metadata kept on every write,
+the `IMPLICIT_INTERSECTION` warning) and evaluates a formula as the cell it would be (`eval --at`).
+XLOOKUP returns a reference and `:` joins the references functions return; ROW and COLUMN over a
+range are arrays; whole-column blank tails count in SUMPRODUCT, COUNTIF(S) and COUNTBLANK; whole-axis
+arrays (`A:XFD`, `A:A*{1,2,3}`) evaluate exactly through a sparse `ArrayResult` instead of being
+built cell by cell (#750); dynamic named ranges and LET references work in range arguments; the
+lookups share one `#N/A` error channel whose reason the recalc summary names; and text in a typed
+scalar argument is `#VALUE!`. Number formats gain text sections, Excel's integer padding, the
+11-character General display, scaling commas and extreme-exponent safety; the renders paint
+conditional formatting, spill text and autofit rows; `diff` compares sheet structure, `deps`
+collapses ranges, and a failed `--strict` gate writes nothing. Eighteen entries carry a
+**Breaking** label: the behaviour changes callers must act on, and the source- or
+binary-incompatible API changes (`ArrayResult`, `Aggregator`, `FormulaKind.ArrayFormula`, the
+XLOOKUP type, `TExpr.cond`, `ErrorLit`, `DefinedName`, `FunctionFlags`, `RecalcResult`).
+
 The 2026-09-25 Weaver dogfood of 0.23.1 filed five findings against the CLI — `view --eval` exiting
 `INTERNAL` on one unevaluable cell, `--strict` still writing `-o` (#677), three gaps in the PNG
 render (text overflow, row height, conditional formats — #497), `diff` blind to sheet structure,
@@ -77,7 +99,7 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   lookup echoes its key, which can be a 32,767-character multi-line cell — and the sheet name's
   control characters replaced the same way (never cut or collapsed: `SheetName` rejects only
   `:\/?*[]`), while `ErrorValueCell.reason`, `ErrorValueCell.sheet` and the JSON keep the full
-  text. `RecalcResult` gains the
+  text. **Breaking (binary):** `RecalcResult` gains the
   defaulted field `errorReasons: Map[QualifiedRef, String]`: source-compatible, but the binary
   signatures of its `apply`/`copy`/`unapply` change for code compiled against an earlier
   `xl-evaluator`.
@@ -391,27 +413,29 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   precedent evaluated on demand now runs at its own cell position and in its own mode (array mode
   for an ArrayFormula record), whether a reference or an aggregate, criteria or SUMPRODUCT range
   walk reads it.
-- **`FunctionFlags` gains two fields (`lift`, `selector`)**: source-compatible, binary-incompatible for positional
-  construction and for `unapply` / positional pattern matches on `FunctionFlags(...)` (the
-  `volatile` precedent, #597).
-- **Whole-column SUMPRODUCT counts the blank rows past the used range** (#711): any whole-column
-  SUMPRODUCT argument that is non-zero, or an error, at a blank row now counts every blank row past
-  the used range, as in Excel, where it counted only the rows inside it. Recalculated books move
-  by about a million for `SUMPRODUCT(--(A:A<5))`, `SUMPRODUCT((A:A<5)*1)`,
-  `SUMPRODUCT(--(MONTH(A:A)=1))`, `SUMPRODUCT(--(A:A=0))` and `SUMPRODUCT(--(A:A<>"x"))`, and
-  become `#DIV/0!` for `SUMPRODUCT(B:B/C:C)`, `SUMPRODUCT(--(A:A="x"),B:B/C:C)` and
+- **Breaking (binary): `FunctionFlags` gains two fields (`lift`, `selector`)**: source-compatible,
+  binary-incompatible for positional construction and for `unapply` / positional pattern matches on
+  `FunctionFlags(...)` (the `volatile` precedent, #597).
+- **Breaking: whole-column SUMPRODUCT counts the blank rows past the used range** (#711): any
+  whole-column SUMPRODUCT argument that is non-zero, or an error, at a blank row now counts every
+  blank row past the used range, as in Excel, where it counted only the rows inside it. Recalculated
+  books move by about a million for `SUMPRODUCT(--(A:A<5))`, `SUMPRODUCT((A:A<5)*1)`,
+  `SUMPRODUCT(--(MONTH(A:A)=1))`, `SUMPRODUCT(--(A:A=0))` and `SUMPRODUCT(--(A:A<>"x"))`, and become
+  `#DIV/0!` for `SUMPRODUCT(B:B/C:C)`, `SUMPRODUCT(--(A:A="x"),B:B/C:C)` and
   `SUMPRODUCT(1/COUNTIF(A:A,A:A))` with no zeros in A. Bound the range when only the data rows
   should count (`SUMPRODUCT(1/COUNTIF(A1:A100,A1:A100))`), or use the blank-safe distinct count
   `SUMPRODUCT((A:A<>"")/COUNTIF(A:A,A:A&""))`.
-- **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
-  coercer, so a mistyped branch is a `Left` rather than a mistyped value.
+- **Breaking: `TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through
+  the slot's coercer, so a mistyped branch is a `Left` rather than a mistyped value. A call whose
+  `A` has no `ExprCoercer` (one exists for `BigDecimal`, `Boolean`, `String`, `Int`, `CellValue` and
+  `LocalDate`) no longer compiles, and code compiled against 0.23.x must be recompiled.
 - **A contained evaluator defect in `xl eval` / `evala` is `FORMULA_ERROR`** (still exit 3) with
   the defect wording, where it was `INTERNAL`.
-- **A refused text cell at a reference is `EvalError.ErrorValue(#VALUE!)`, not `CodecFailed`**
-  (#709): for library callers, when any single-reference decoder refuses a text cell (plain, rich,
-  or a formula's cached text), including a decoder passed to the public `TExpr.ref(at, decode)`,
-  evaluation now returns the `#VALUE!` error value instead of `EvalError.CodecFailed`. Code that
-  matched `CodecFailed` on such cells sees the error value instead.
+- **Breaking (library): a refused text cell at a reference is `EvalError.ErrorValue(#VALUE!)`, not
+  `CodecFailed`** (#709): for library callers, when any single-reference decoder refuses a text cell
+  (plain, rich, or a formula's cached text), including a decoder passed to the public `TExpr.ref(at,
+  decode)`, evaluation now returns the `#VALUE!` error value instead of `EvalError.CodecFailed`.
+  Code that matched `CodecFailed` on such cells sees the error value instead.
 
 ### Fixed
 
@@ -630,11 +654,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `RECALC_ERRORS` warning, and `putf` refused the text. A sheet, quoted or external qualifier
   followed by an error literal now parses as that error and keeps its qualifier, in expressions and
   range arguments alike: it prints back as written, evaluates to the error, has no dependency edges,
-  and follows a sheet rename as Excel's does. Structural edits carry such names verbatim. Library
-  code that pattern-matches `TExpr.ErrorLit(e)` or `RangeLocation.Error(e)` now needs the second
-  field (`ErrorLit(e, _)`); constructing them is source-compatible. Neither is binary-compatible
-  with 0.23.x: code compiled against 0.23.x that constructs, copies or matches either must be
-  recompiled.
+  and follows a sheet rename as Excel's does. Structural edits carry such names verbatim.
+  **Breaking** for library code: a pattern match on `TExpr.ErrorLit(e)` or `RangeLocation.Error(e)`
+  now needs the second field (`ErrorLit(e, _)`); constructing them is source-compatible. Neither is
+  binary-compatible with 0.23.x: code compiled against 0.23.x that constructs, copies or matches
+  either must be recompiled.
 - **Spill references read their anchor during recalculation** (#695): every evaluation fold
   (`recalc`, the targeted recalculation behind `put`, the sheet-level dependency folds and the
   `eval` precedent pass) wrote each computed value back as a plain constant before later cells
@@ -658,15 +682,15 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `SUM(IFERROR(A1,0),1)` counts a TRUE result as 1 instead of dropping it.
   A bare reference to a formula cell cached with an error (`=Y1` over `Y1 = X1+1` cached as
   `#DIV/0!`) is that error, not 0 (pre-existing; the folds now thread such records).
-- **A regenerated `<definedNames>` keeps every attribute** (#696): when xl rewrote the table (a
-  name edit, a GH-593 or #687 heal, a structural edit) it wrote back only `name`, `comment`,
-  `localSheetId` and `hidden`, so one unrelated name edit turned every macro name into a plain
-  name and dropped `description`, `shortcutKey` and the rest. `DefinedName` now carries every
-  ECMA-376 §18.2.5 attribute, plus unknown unprefixed ones in source order; both readers fill it
-  and the writer emits them in Excel's order. A print name with any such attribute stays in the
-  table instead of being lifted into `PageSetup`, which would have dropped it. `DefinedName` gains
-  12 defaulted fields: source-compatible, not binary-compatible with 0.23.x (code compiled against
-  0.23.x that calls `DefinedName.apply`/`.copy` must be recompiled).
+- **A regenerated `<definedNames>` keeps every attribute** (#696): when xl rewrote the table (a name
+  edit, a GH-593 or #687 heal, a structural edit) it wrote back only `name`, `comment`,
+  `localSheetId` and `hidden`, so one unrelated name edit turned every macro name into a plain name
+  and dropped `description`, `shortcutKey` and the rest. `DefinedName` now carries every ECMA-376
+  §18.2.5 attribute, plus unknown unprefixed ones in source order; both readers fill it and the
+  writer emits them in Excel's order. A print name with any such attribute stays in the table
+  instead of being lifted into `PageSetup`, which would have dropped it. **Breaking (binary):**
+  `DefinedName` gains 12 defaulted fields: source-compatible, not binary-compatible with 0.23.x
+  (code compiled against 0.23.x that calls `DefinedName.apply`/`.copy` must be recompiled).
 - **A raster backend's exit code no longer counts as success on its own** (#690): an rsvg-convert,
   cairosvg or ImageMagick that exited 0 without writing was reported as `Exported: out.png` with
   exit 0 and no file. Every backend now writes beside the output path, and the image replaces it
