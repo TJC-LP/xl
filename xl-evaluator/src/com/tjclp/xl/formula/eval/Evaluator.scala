@@ -163,7 +163,10 @@ object Evaluator:
     val guard = new PlacementGuard(sheet, at)
     // No depth-0 memo: one would outlive every evaluation it serves (the CLI's fold makes a new
     // Sheet per step, and the memo keys by Sheet identity). Each read starts its own memo, which
-    // inherits the guard, and the guard's one record of a read outlives them all.
+    // inherits the guard, and the guard's one record of a read outlives them all. The trade-off: an
+    // uncached precedent two top-level reads share evaluates once per read, not once per pass. The
+    // CLI fold has already evaluated and cached the precedents the static check sees, so only
+    // run-time reads (INDIRECT, OFFSET, names, other sheets) can pay it.
     val evaluator = TotalEvaluator(
       new EvaluatorWithDepth(
         0,

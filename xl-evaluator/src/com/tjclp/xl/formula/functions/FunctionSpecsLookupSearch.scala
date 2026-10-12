@@ -59,7 +59,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
     matched.flatMap {
       // the return cell as its record: XLOOKUP hands back the cell, which a reference-only
-      // consumer (ROWS) never reads, as ValueDependencies.referencePassing assumes (#720)
+      // consumer (ROWS) never reads, as ValueDependencies.referencePassing assumes (#720, #742).
+      // Position idx is the same cell of return_array: the caller refused unequal shapes.
       case Some(idx) =>
         val cell = ARef.from0(
           returnArray.colStart.index0 + idx % returnArray.width,

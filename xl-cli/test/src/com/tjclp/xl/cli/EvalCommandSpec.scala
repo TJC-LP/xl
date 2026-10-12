@@ -648,6 +648,30 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(positionless.contains("Result: 4 (number)"), positionless)
   }
 
+  test(
+    "GH-715: --with reaches a cached formula however it is read, with --at, without it, in evala"
+  ) {
+    // Data!B1 = A1*2 cached as 10 (A1 = 5); with A1 = 200 it is 400 whichever way it is read:
+    // unqualified, qualified with its own sheet, both at once, or back from another sheet
+    val data = Sheet("Data")
+      .put(ref"A1", CellValue.Number(BigDecimal(5)))
+      .put(ref"B1", CellValue.Formula("=A1*2", Some(CellValue.Number(BigDecimal(10)))))
+    val other = Sheet("Other").put(ref"A1", CellValue.Formula("=Data!B1*2"))
+    val wb = Workbook(Vector(data, other))
+    val overrides = List("A1=200")
+    val cases = List("=B1" -> 400, "=Data!B1" -> 400, "=B1+Data!B1" -> 800, "=Other!A1" -> 800)
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(wb, Some(data), formula, at, overrides).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _) >>
+      ReadCommands.evalArray(wb, Some(data), "=Data!B1+Other!A1", None, overrides).map { array =>
+        assert(array.contains("1200"), array)
+      }
+  }
+
   test("GH-715: --at far below the used range, read through a whole column, is circular") {
     // the used range ends at D10; D5000 lies far outside it, yet SUM(D:D) there reads it
     val column = (1 to 10).foldLeft(Sheet("Test")) { (s, row) =>

@@ -289,7 +289,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   read its bare record and matched it as blank. XLOOKUP's return cell is still read as stored.
   Keys are read lazily, in search order: a key whose evaluation fails is a non-match, so a broken
   cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
-  only the used range.
+  only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
+  a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
+  reference it is.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
   case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported"), and
   positionless `eval` and `evala` now see the overrides through a formula on another sheet that

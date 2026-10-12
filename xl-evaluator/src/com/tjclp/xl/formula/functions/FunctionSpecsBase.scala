@@ -382,8 +382,15 @@ trait FunctionSpecsBase:
    * position `i` the `i`-th. Each key is read lazily, in search order, the way a reference reads
    * its cell, so an uncached formula evaluates (GH-715). A key whose evaluation fails is a
    * non-matching key (its Excel error, or `#VALUE!` for any other failure), so a broken cell after
-   * the match changes nothing. A `CircularRef` propagates instead: it is a positioned evaluation's
-   * placement guard seeing a read of the placement, which no lookup may answer around.
+   * the match changes nothing. That includes a key in a cycle: evaluating it trips the recursion
+   * guard, an `EvalFailed`, and the lookup reads past it, much as Excel computes the lookup over
+   * the cycle's value. A `CircularRef` propagates instead. Reading a cell raises one only from a
+   * positioned evaluation's placement guard (`xl eval --at`), which reports the read of the
+   * placement; no lookup may answer around that. Every other `CircularRef` comes from the
+   * dependency graph, before any cell is read.
+   *
+   * A cell holding a constant or a cached formula is read directly; only an uncached formula goes
+   * through the evaluating reader.
    *
    * Positions from `stored` on lie past the sheet's used range ([[lookupLine]]): blank, never read,
    * and found only when a blank key matches.
@@ -391,6 +398,7 @@ trait FunctionSpecsBase:
   protected final class LookupLine(
     range: CellRange,
     stored: Int,
+    sheet: com.tjclp.xl.sheets.Sheet,
     read: ARef => Either[EvalError, CellValue]
   ):
     val size: Int = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
@@ -402,11 +410,16 @@ trait FunctionSpecsBase:
     def key(i: Int): Either[EvalError, CellValue] =
       if i >= stored then Right(CellValue.Empty)
       else
-        read(at(i)) match
-          case Left(cycle: EvalError.CircularRef) => Left(cycle)
-          case Left(other) =>
-            Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
-          case value => value
+        val ref = at(i)
+        sheet(ref).value match
+          case CellValue.Formula(_, None, _) =>
+            read(ref) match
+              case Left(cycle: EvalError.CircularRef) => Left(cycle)
+              case Left(other) =>
+                Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
+              case value => value
+          case CellValue.Formula(_, Some(cached), _) => Right(cached)
+          case value => Right(value)
 
     /**
      * The first position, forward or backward, whose key `matches`, reading no key past it. Past
@@ -437,7 +450,8 @@ trait FunctionSpecsBase:
    * [[LookupLine]] over `range` on `targetSheet`. A row or column that runs to the sheet's edge
    * (`A:A`, `1:1`) is clipped to the used range, asked for once, so a whole-column lookup costs the
    * data rather than a million reads. A bounded range never asks for the used range: that scan is
-   * per call (#720).
+   * per call (#720). A two-dimensional range is not clipped: MATCH and XLOOKUP take vectors, and
+   * VLOOKUP/HLOOKUP build their line from the table's key column or row.
    */
   protected def lookupLine(
     range: CellRange,
@@ -461,7 +475,7 @@ trait FunctionSpecsBase:
           then 0
           else math.max(0, used.colEnd.index0 - range.colStart.index0 + 1)
         }
-    LookupLine(range, math.min(stored, all), rangeCellReader(targetSheet, ctx))
+    LookupLine(range, math.min(stored, all), targetSheet, rangeCellReader(targetSheet, ctx))
 
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match

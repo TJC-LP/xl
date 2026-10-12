@@ -398,7 +398,7 @@ object ReadCommands:
     at: Option[ARef]
   ): IO[Evaluated] =
     for
-      tempSheet <- applyOverrides(sheet, overrides)
+      tempSheet <- overridden(sheet, overrides)
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
       bounds = tempSheet.usedRange
       closure <- at match
@@ -449,9 +449,14 @@ object ReadCommands:
         evaluatedIO.flatMap { e =>
           IO.fromEither(
             e.checked(
-              SheetEvaluator.evaluateCellUsing(e.sheet, ref, evaluator, Some(book)),
+              SheetEvaluator.evaluateCellUsing(e.sheet, ref, evaluator, Some(e.book)),
               formula
-            ).map(value => e.copy(sheet = SheetEvaluator.threadComputed(e.sheet, ref, value)))
+            ).map { value =>
+              // the book keeps step with the sheet, so a read qualified with this sheet's name, or
+              // one back from another sheet, sees what the fold computed
+              val threaded = SheetEvaluator.threadComputed(e.sheet, ref, value)
+              e.copy(sheet = threaded, book = e.book.put(threaded))
+            }
           )
         }
       }
@@ -648,6 +653,50 @@ object ReadCommands:
   // ==========================================================================
   // Private helpers
   // ==========================================================================
+
+  /**
+   * `sheet` with the `--with` overrides applied, and every formula on it that reads an overridden
+   * cell, directly or through other formulas, without its cache: the cache predates the override.
+   * However the formula is then read (in the closure, qualified with its own sheet's name, or back
+   * from another sheet's formula), it evaluates with the overrides. Value reads only
+   * ([[ValueDependencies]]): `ROW(A1)` does not go stale when A1 changes.
+   */
+  private def overridden(sheet: Sheet, overrides: List[String]): IO[Sheet] =
+    if overrides.isEmpty then IO.pure(sheet)
+    else
+      applyOverrides(sheet, overrides).map { applied =>
+        val changed = overrides.flatMap(parseOverride(_, sheet.name).toOption.map(_._1)).toSet
+        uncacheReaders(applied, changed)
+      }
+
+  /** `sheet` with every cached formula that reads `changed`, transitively, made uncached. */
+  private def uncacheReaders(sheet: Sheet, changed: Set[ARef]): Sheet =
+    val reads = ValueDependencies.Reader(sheet.usedRange, Some(sheet.name))
+    // cell → the formulas reading it, built once, locally
+    val readers = scala.collection.mutable.HashMap.empty[ARef, List[ARef]]
+    sheet.cells.foreach { (ref, cell) =>
+      cell.value match
+        // GH-430: a data table's cells are pinned value sources
+        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+        case CellValue.Formula(text, _, _) =>
+          FormulaParser.parse(text).foreach { expr =>
+            reads
+              .reads(expr)
+              .foreach(dep => readers.update(dep, ref :: readers.getOrElse(dep, Nil)))
+          }
+        case _ => ()
+    }
+    @scala.annotation.tailrec
+    def stale(frontier: List[ARef], seen: Set[ARef]): Set[ARef] = frontier match
+      case Nil => seen
+      case ref :: rest =>
+        val next = readers.getOrElse(ref, Nil).filterNot(seen.contains)
+        stale(next ::: rest, seen ++ next)
+    stale(changed.toList, Set.empty).foldLeft(sheet) { (s, ref) =>
+      s(ref).value match
+        case f @ CellValue.Formula(_, Some(_), _) => s.put(ref, f.copy(cachedValue = None))
+        case _ => s
+    }
 
   private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[Sheet] =
     IO.fromEither(

@@ -84,3 +84,35 @@ class LookupUncachedKeysSpec extends FunSuite:
     assertEquals(eval(tall, "=IFNA(MATCH(500,A:A,0),-1)"), num(-1))
     assertEquals(eval(tall, "=XLOOKUP(500,A:A,B:B)"), CellValue.Error(CellError.NA))
   }
+
+  /** A1 and A2 read each other, uncached; A3 = 7; B3 = 70. */
+  private val cyclic = Sheet("T")
+    .put(ref"A1", CellValue.Formula("=A2"))
+    .put(ref"A2", CellValue.Formula("=A1"))
+    .put(ref"A3", num(7))
+    .put(ref"B3", num(70))
+
+  test("a lookup over a key range holding a cycle reads past the cyclic keys, as Excel does") {
+    // Excel flags the cycle and computes the lookup over the cycle's value (0); here each cyclic
+    // key trips the recursion guard, a non-match, and the lookup finds A3 the same
+    assertEquals(eval(cyclic, "=MATCH(7,A1:A3,0)"), num(3))
+    assertEquals(eval(cyclic, "=VLOOKUP(7,A1:B3,2,FALSE)"), num(70))
+    assertEquals(eval(cyclic, "=XLOOKUP(7,A1:A3,B1:B3)"), num(70))
+  }
+
+  test("recalculation leaves a lookup that reads a cycle as the cycle's dependent") {
+    // Pinned: recalculation finds the A1-A2 cycle in the dependency graph first and reports every
+    // formula reading it, the lookup included, before any lookup runs
+    val book = Workbook(cyclic.put(ref"C1", CellValue.Formula("=MATCH(7,A1:A3,0)")))
+    val result = book.recalculate()
+    assert(result.errors.exists(_.ref == ref"C1"), result.errors.toString)
+    assert(result.errors.exists(_.ref == ref"A1"), result.errors.toString)
+  }
+
+  test("XLOOKUP returns an uncached formula in its return cell as stored (#742)") {
+    // Pinned until #742: VLOOKUP evaluates the result cell, XLOOKUP still reads it as stored, so
+    // an uncached `=3+4` there is not 7. The lookup itself, over evaluated keys, still matches.
+    val book = column.put(ref"B2", CellValue.Formula("=3+4"))
+    assertEquals(eval(book, "=VLOOKUP(7,A1:B3,2,FALSE)"), num(7))
+    assertNotEquals(eval(book, "=XLOOKUP(7,A1:A3,B1:B3)"), num(7))
+  }
