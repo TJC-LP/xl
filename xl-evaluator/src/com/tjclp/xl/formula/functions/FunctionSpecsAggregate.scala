@@ -239,10 +239,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     location: TExpr.RangeLocation,
     ctx: EvalContext
   ): Either[EvalError, (com.tjclp.xl.sheets.Sheet, CellRange)] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
-      case (targetSheet, range) =>
-        val bounds = computeBounds(List((range, targetSheet)))
-        (targetSheet, constrainRange(range, bounds))
+    ctx.resolveRange(location).map { case (targetSheet, range) =>
+      val bounds = computeBounds(List((range, targetSheet)))
+      (targetSheet, constrainRange(range, bounds))
     }
 
   /** Stream one already-constrained raw range into the supplied accumulator. */
@@ -444,7 +443,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     // fold above and are deliberately outside the cache's narrow safety proof.
     args match
       case List(Left(location)) =>
-        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
+        ctx.resolveRange(location) match
           // GH-630: a slot that resolves to an error VALUE — `COUNT(#REF!)`, `COUNT(name)` with
           // the name bound to `#N/A` — has no range to memoize; it is triaged like any error
           // argument (COUNT 0, COUNTA 1, the rest propagate) and finalized
@@ -511,7 +510,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ]](Right(List.empty)) {
       case (Left(err), _) => Left(err)
       case (Right(acc), (loc, criterion)) =>
-        Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { case (sheet, range) =>
+        ctx.resolveRange(loc).map { case (sheet, range) =>
           acc :+ (sheet, range, criterion)
         }
     }
@@ -564,25 +563,24 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     fnName: String
   ): Either[EvalError, Vector[BigDecimal]] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-      case (targetSheet, range) =>
-        val bounds = computeBounds(List((range, targetSheet)))
-        val constrainedRange = constrainRange(range, bounds)
-        constrainedRange.cells
-          .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
-            case (Left(err), _) => Left(err)
-            case (Right(values), cellRef) =>
-              resolveNumericPolicing(
-                targetSheet,
-                cellRef,
-                ctx,
-                fnName,
-                propagateErrors = true
-              ).map {
-                case Some(n) => values :+ n
-                case None => values
-              }
-          }
+    ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+      val bounds = computeBounds(List((range, targetSheet)))
+      val constrainedRange = constrainRange(range, bounds)
+      constrainedRange.cells
+        .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+          case (Left(err), _) => Left(err)
+          case (Right(values), cellRef) =>
+            resolveNumericPolicing(
+              targetSheet,
+              cellRef,
+              ctx,
+              fnName,
+              propagateErrors = true
+            ).map {
+              case Some(n) => values :+ n
+              case None => values
+            }
+        }
     }
 
   /** LARGE(range, k) — k-th largest value (1-based). */
@@ -719,8 +717,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // GH-394: resolution now also yields the ranges (Name locations have no static range),
         // so the dimension validation moved after it — same Excel semantics, resolved shapes.
         for
-          resolvedCriteria <- Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook)
-          resolvedSum <- Evaluator.resolveRangeLocation(effectiveLocation, ctx.sheet, ctx.workbook)
+          resolvedCriteria <- ctx.resolveRange(rangeLocation)
+          resolvedSum <- ctx.resolveRange(effectiveLocation)
           (criteriaSheet, criteriaRange0) = resolvedCriteria
           (sumSheet, sumRangeAsWritten) = resolvedSum
           // GH-631: Excel sizes sum_range to range from its upper-left cell — SUMIF(A1:A10,">0",C1)
@@ -780,21 +778,20 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
         // GH-192: Resolve target sheet for cross-sheet support
-        Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook).flatMap {
-          case (criteriaSheet, criteriaRange0) =>
-            // GH-192: Constrain full-column/row ranges to used area for performance
-            val bounds = computeBounds(List((criteriaRange0, criteriaSheet)))
-            val constrainedRange = constrainRange(criteriaRange0, bounds)
-            // GH-192: Use iterator-based folding (no .toList) for memory efficiency
-            constrainedRange.cells
-              .foldLeft[Either[EvalError, Int]](Right(0)) {
-                case (Left(err), _) => Left(err)
-                case (Right(count), ref) =>
-                  evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
-                    if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
-                  }
-              }
-              .map(BigDecimal(_))
+        ctx.resolveRange(rangeLocation).flatMap { case (criteriaSheet, criteriaRange0) =>
+          // GH-192: Constrain full-column/row ranges to used area for performance
+          val bounds = computeBounds(List((criteriaRange0, criteriaSheet)))
+          val constrainedRange = constrainRange(criteriaRange0, bounds)
+          // GH-192: Use iterator-based folding (no .toList) for memory efficiency
+          constrainedRange.cells
+            .foldLeft[Either[EvalError, Int]](Right(0)) {
+              case (Left(err), _) => Left(err)
+              case (Right(count), ref) =>
+                evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
+                  if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
+                }
+            }
+            .map(BigDecimal(_))
         }
       }
     }
@@ -814,11 +811,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static
           // range), so the dimension validation runs on the resolved shapes.
           for
-            resolvedSum <- Evaluator.resolveRangeLocation(
-              sumRangeLocation,
-              ctx.sheet,
-              ctx.workbook
-            )
+            resolvedSum <- ctx.resolveRange(sumRangeLocation)
             (sumSheet, sumRange0) = resolvedSum
             resolved <- resolveConditions(parsedConditions, ctx)
             _ <- resolved
@@ -906,7 +899,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       // GH-394: resolve first (Name locations have no static range), then validate dimensions
       // on the resolved shapes
       for
-        resolvedValue <- Evaluator.resolveRangeLocation(valueRangeLocation, ctx.sheet, ctx.workbook)
+        resolvedValue <- ctx.resolveRange(valueRangeLocation)
         (valueSheet, valueRange0) = resolvedValue
         resolved <- resolveConditions(parsedConditions, ctx)
         _ <- resolved
@@ -1088,8 +1081,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // GH-394: resolution now also yields the ranges (Name locations have no static range),
         // so the dimension validation moved after it — same Excel semantics, resolved shapes.
         for
-          resolvedCriteria <- Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook)
-          resolvedAvg <- Evaluator.resolveRangeLocation(effectiveLocation, ctx.sheet, ctx.workbook)
+          resolvedCriteria <- ctx.resolveRange(rangeLocation)
+          resolvedAvg <- ctx.resolveRange(effectiveLocation)
           (criteriaSheet, criteriaRange0) = resolvedCriteria
           (avgSheet, avgRangeAsWritten) = resolvedAvg
           // GH-631: Excel sizes average_range to range from its upper-left cell, like SUMIF
@@ -1153,11 +1146,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static
           // range), so the dimension validation runs on the resolved shapes.
           for
-            resolvedAvg <- Evaluator.resolveRangeLocation(
-              avgRangeLocation,
-              ctx.sheet,
-              ctx.workbook
-            )
+            resolvedAvg <- ctx.resolveRange(avgRangeLocation)
             (avgSheet, avgRange0) = resolvedAvg
             resolved <- resolveConditions(parsedConditions, ctx)
             _ <- resolved
@@ -1289,8 +1278,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               case (Left(err), _) => Left(err)
               case (Right(acc), Left(loc)) =>
                 // Range location argument
-                Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                  case (sheet, range) => acc :+ (range, sheet)
+                ctx.resolveRange(loc).map { case (sheet, range) =>
+                  acc :+ (range, sheet)
                 }
               case (Right(acc), Right(expr)) =>
                 // Expression argument - collect ranges from AST
@@ -1349,8 +1338,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Left(err), _) => Left(err)
                 case (Right(acc), Left(loc)) =>
                   // Range location - resolve to sheet and constrain
-                  Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                    case (sheet, range) => acc :+ RangeArray(sheet, constrainRange(range, bounds))
+                  ctx.resolveRange(loc).map { case (sheet, range) =>
+                    acc :+ RangeArray(sheet, constrainRange(range, bounds))
                   }
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support

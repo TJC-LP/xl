@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
-import com.tjclp.xl.{Anchor, CellRange}
+import com.tjclp.xl.{Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
@@ -177,17 +177,51 @@ final case class EvalContext(
   private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
     operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
 
+  /**
+   * The (sheet, range) a range-typed argument slot names — the resolver every function's range slot
+   * uses (GH-710), [[Evaluator.resolveRangeSlot]] with this call's LET environment and name trail.
+   * A written range or cell and a name bound to one resolve statically
+   * ([[Evaluator.resolveRangeLocation]]). A name whose formula computes a reference (OFFSET,
+   * INDIRECT, INDEX, IF or CHOOSE over references — a dynamic range) is evaluated for it, and a LET
+   * name is the reference it is bound to. The error such a formula evaluates to is the slot's error
+   * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
+   * Excel.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private[formula] def resolveRange(
+    location: TExpr.RangeLocation
+  ): Either[EvalError, (Sheet, CellRange)] =
+    Evaluator.resolveRangeSlot(
+      location,
+      sheet,
+      workbook,
+      operands.nameTrail,
+      bindings,
+      operands.nameReference.getOrElse { (name, scope) =>
+        // a context built outside the evaluator: the generic reference path
+        val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+        evalReference(named.asInstanceOf[TExpr[Any]])
+      }
+    )
+
 object EvalContext:
   /**
    * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
    * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
    * (the evaluator sets it for every call; None only for a context built outside the evaluator).
-   * `selectsReference`: the call feeds a reference position.
+   * `selectsReference`: the call feeds a reference position. `nameTrail`: the defined names being
+   * resolved around this call (#691's cycle guard), so a range slot's name walk shares it.
+   * `nameReference`: evaluates a defined name for the reference it computes, once the range slot's
+   * static walk has found it computed. The evaluator sets it. A hand-built context without it
+   * evaluates the name through `evalReference`, which without a `referenceArg` is the array
+   * evaluator: a name computing a reference then arrives as its values, and the slot is `#VALUE!`.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
-    selectsReference: Boolean
+    selectsReference: Boolean,
+    nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty,
+    nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None
   )
 
   private[formula] object Operands:
@@ -445,12 +479,17 @@ object ArgSpec:
           Right((TExpr.RangeLocation.External(index, name, range, form), tail))
         // GH-394: defined names are accepted in range-typed argument positions —
         // =VLOOKUP(x, named_table, 2), =SUMIF(rev_range, ">1"), =SUMIF(Model!rev_range, …).
-        // The target range resolves at evaluation (Evaluator.resolveRangeLocation); a name
-        // bound to a non-range is a clean per-cell error there, never a parse failure.
+        // The target range resolves at evaluation (EvalContext.resolveRange): a name bound to a
+        // range, or computing one (GH-710); a name bound to a value is a clean per-cell error
+        // there, never a parse failure.
         case TExpr.NameRef(name) :: tail =>
           Right((TExpr.RangeLocation.Name(name, None), tail))
         case TExpr.SheetNameRef(sheet, name) :: tail =>
           Right((TExpr.RangeLocation.Name(name, Some(sheet)), tail))
+        // GH-710: a LET name whose binding is not a literal range — LET(r, dyn, COUNTIF(r, …));
+        // the reference it is bound to resolves at evaluation
+        case TExpr.BindingRef(name) :: tail =>
+          Right((TExpr.RangeLocation.Binding(name), tail))
         // GH-612: SUM(#REF!) / COUNTIF(#REF!, x) — what Excel writes after a delete or an
         // off-grid drag; the slot carries the error and evaluation yields it
         case TExpr.ErrorLit(error, qualifier) :: tail =>
