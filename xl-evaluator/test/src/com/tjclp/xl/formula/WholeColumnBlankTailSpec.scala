@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.{CellRange, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{ArgSpec, SumProductTail}
@@ -222,4 +222,77 @@ class WholeColumnBlankTailSpec extends FunSuite:
       plan("--(A:A=\"\")", 2).map(_.map(_.fold(_ => Nil, TExpr.collectRanges(_).map(_._2.toA1)))),
       Some(List(List("A3:A3")))
     )
+  }
+
+  test("only a random draw rules the tail out: TODAY and NOW read one clock") {
+    // 2026-10-12 is serial 46307: 4, 5 and every blank (0) are before it, as with a literal
+    val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 10, 12))
+    def at(formula: String) =
+      sheet.evaluateFormula(formula, clock, Some(Workbook(Vector(sheet))), None)
+    assertEquals(at("=SUMPRODUCT(--(A:A<TODAY()))"), Right(num(1048576)))
+    assertEquals(at("=SUMPRODUCT(--(A:A<46307))"), Right(num(1048576)))
+    assertEquals(at("=SUMPRODUCT(--(A:A<NOW()))"), Right(num(1048576)))
+    // RAND draws once, so no tail (Excel: 1048574)
+    assertEquals(at("=SUMPRODUCT((A:A=\"\")*(RAND()>=0))"), Right(num(0)))
+  }
+
+  test("drift: every volatile spec is classified as a draw or a clock read") {
+    val volatile = com.tjclp.xl.formula.functions.FunctionRegistry.volatileFunctionNames.toSet
+    assert(SumProductTail.ClockReads.subsetOf(volatile), volatile)
+    // a new volatile spec lands here, a draw until it is classified
+    assertEquals(volatile -- SumProductTail.ClockReads, Set("RAND", "RANDBETWEEN"))
+  }
+
+  test("a defined name that draws rules the tail out; one that does not keeps it") {
+    val wb = Workbook(Vector(sheet))
+      .withDefinedName("draw", "RAND()")
+      .withDefinedName("drawtwice", "draw*2")
+      .withDefinedName("five", "5")
+      .withDefinedName("asof", "TODAY()")
+    val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 10, 12))
+    def e(formula: String) = sheet.evaluateFormula(formula, clock, Some(wb), None)
+    // a draw through a name, and through a name's name: the trimmed sum (Excel: 1048574)
+    assertEquals(e("=SUMPRODUCT((A:A=\"\")*(draw>=0))"), Right(num(0)))
+    assertEquals(e("=SUMPRODUCT((A:A=\"\")*(drawtwice>=0))"), Right(num(0)))
+    // a constant and a clock read through a name keep the tail
+    assertEquals(e("=SUMPRODUCT(--(A:A<five))"), Right(num(1048575)))
+    assertEquals(e("=SUMPRODUCT(--(A:A<asof))"), Right(num(1048576)))
+  }
+
+  test("whole rows: the blank line can sit before the used columns") {
+    // C1:D1 filled, row 2 empty: the bound keeps columns C:D, so the blank line is column A
+    val right = Sheet(SheetName.unsafe("R")).put(ref"C1", num(1)).put(ref"D1", num(2))
+    assertEquals(eval("=SUMPRODUCT(--(1:1=\"\"))", right), Right(num(16382)))
+    assertEquals(eval("=SUMPRODUCT(1:1)", right), Right(num(3)))
+    val row = CellRange.parse("1:1").fold(e => fail(e), identity)
+    val tail = SumProductTail
+      .of(List(row), (None, Some((Column.from0(2), Column.from0(3)))))
+      .getOrElse(fail("columns C:D kept, so a tail"))
+    assertEquals((tail.count, tail.kept, tail.alongRows), (16382L, 2L, false))
+    assertEquals(tail.line(row), CellRange(ARef.from0(0, 0), ARef.from0(0, 0)))
+    // COUNTIFS over two whole rows: one shape, one bound, so the trimmed counts agree (Excel's
+    // rule; LibreOffice 24.2's whole-row COUNTIF reads no blank cell)
+    assertEquals(eval("=COUNTIFS(1:1,\"\",2:2,\"\")", right), Right(num(16382)))
+  }
+
+  test("a selector that may pick a bounded range beside a whole column has no tail") {
+    // A1 = 0, B1:B5 = 1..5, C1:C5 = 10..50: the used rows are 1-5, the bounded branch is 5 rows,
+    // so the extent alone would let the tail through; the plan declines it on its own
+    val base = (1 to 5).foldLeft(Sheet(SheetName.unsafe("S")).put(ref"A1", num(0))) { (s, i) =>
+      s.put(ARef.from0(1, i - 1), num(i.toDouble)).put(ARef.from0(2, i - 1), num(10.0 * i))
+    }
+    assertEquals(eval("=SUMPRODUCT(IF(A1>0,B:B,C1:C5))", base), Right(num(150)))
+    assertEquals(
+      eval("=SUMPRODUCT(IF(A1>0,B:B,C1:C5))", base.put(ref"A1", num(1))),
+      Right(num(15))
+    )
+    @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+    val args = FormulaParser.parse("=SUMPRODUCT(IF(A1>0,B:B,C1:C5))") match
+      case Right(call: TExpr.Call[?]) => call.args.asInstanceOf[List[ArgSpec.SumProductArg]]
+      case other => fail(s"not a SUMPRODUCT call: $other")
+    val column = CellRange.parse("B:B").fold(e => fail(e), identity)
+    val tail = SumProductTail
+      .of(List(column), (Some((Row.from0(0), Row.from0(4))), None))
+      .getOrElse(fail("rows 1-5 kept, so a tail"))
+    assertEquals(SumProductTail.plan(tail, args, 5, _ => true), None)
   }

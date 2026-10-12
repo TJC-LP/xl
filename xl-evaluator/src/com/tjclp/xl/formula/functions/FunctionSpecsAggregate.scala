@@ -8,12 +8,14 @@ import com.tjclp.xl.formula.eval.{
   Aggregator,
   ArrayResult,
   ArrayArithmetic,
+  NameWalk,
   RangeOperand,
-  ScalarCoercion
+  ScalarCoercion,
+  WorkbookAudit
 }
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsAggregate extends FunctionSpecsBase:
@@ -278,7 +280,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   /**
    * GH-192: COUNTIF's and COUNTIFS' count of the trimmed blank cells: all of them when every
    * criterion matches a blank cell (`""`, `"="`), none otherwise (`"<>"`, `0`, `"<5"`), so
-   * `COUNTIF(B:B,"")` counts every blank cell of the column, as Excel does.
+   * `COUNTIF(B:B,"")` counts every blank cell of the column, as Excel does. Only the COUNT family
+   * needs it: SUMIF, AVERAGEIF, MAXIFS and MINIFS read a value cell, and a blank one adds nothing.
    */
   private def blankCriteriaCount(trimmed: Long, criteria: List[CriteriaMatcher.Criterion]): Long =
     if trimmed > 0L && criteria.forall(CriteriaMatcher.matches(CellValue.Empty, _)) then trimmed
@@ -1397,6 +1400,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case other =>
         Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
 
+  /**
+   * GH-711: whether a defined name, referenced from the formula's sheet, reaches a call that draws
+   * a random number ([[SumProductTail.draws]]); a chain too deep to resolve counts as one. Built on
+   * first use, so a SUMPRODUCT without a name reference never walks the name table.
+   */
+  private def drawsViaName(ctx: EvalContext): (Option[SheetName], String) => Boolean =
+    lazy val reach = ctx.workbook.map(
+      WorkbookAudit.namesReaching(_, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
+    )
+    (qualifier, name) =>
+      reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
+
   /** The sum over a `rows` × `cols` shape of the arguments' element-wise products. */
   private def sumOfProducts(
     arrays: List[ResolvedArray],
@@ -1516,48 +1531,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // argument spans the trimmed axis and reads one row there at the trimmed width; any
             // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
             def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
-              val planned = SumProductTail.of(rangesWithSheets.map(_._1), bounds).flatMap { tail =>
-                SumProductTail
-                  .plan(
-                    tail,
-                    args,
-                    if tail.alongRows then rows else cols,
-                    loc =>
-                      Evaluator
-                        .resolveRangeLocation(loc, ctx.sheet, ctx.workbook)
-                        .exists((_, range) => tail.spans(range))
-                  )
-                  .map((tail, _))
-              }
-              planned match
-                case None => Right(BigDecimal(0))
-                case Some((tail, lineArgs)) =>
-                  lineArgs
-                    .foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
-                      case (Left(err), _) => Left(err)
-                      case (Right(acc), Left(loc)) =>
-                        Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                          case (sheet, range) => acc :+ RangeArray(sheet, tail.line(range))
-                        }
-                      // the line evaluates every non-range part of the argument a second time
-                      // (a lookup, a criteria count): once per SUMPRODUCT, not per row, and never
-                      // a volatile call, which the plan rules out
-                      case (Right(acc), Right(line)) =>
-                        ctx.evalArrayExpr(line).flatMap(sumProductArray).map(acc :+ _)
-                    }
-                    .flatMap { lines =>
-                      val lineRows = lines.headOption.map(_.rows).getOrElse(0)
-                      val lineCols = lines.headOption.map(_.cols).getOrElse(0)
-                      val aligned =
-                        lines.forall(a => a.rows == lineRows && a.cols == lineCols) &&
-                          (if tail.alongRows then lineRows == 1 && (rows == 0 || lineCols == cols)
-                           else lineCols == 1 && (cols == 0 || lineRows == rows))
-                      if aligned then
-                        sumOfProducts(lines, lineRows, lineCols, ctx).map(
-                          _ * BigDecimal(tail.count)
-                        )
-                      else Right(BigDecimal(0))
-                    }
+              SumProductTail.sum[ResolvedArray](
+                rangesWithSheets.map(_._1),
+                bounds,
+                args,
+                rows,
+                cols,
+                Evaluator.resolveRangeLocation(_, ctx.sheet, ctx.workbook),
+                drawsViaName(ctx),
+                line => ctx.evalArrayExpr(line).flatMap(sumProductArray),
+                RangeArray(_, _),
+                arr => (arr.rows, arr.cols),
+                sumOfProducts(_, _, _, ctx)
+              )
 
             resolvedResult.flatMap { resolved =>
               resolved match
