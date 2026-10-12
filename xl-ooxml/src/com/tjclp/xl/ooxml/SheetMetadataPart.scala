@@ -88,6 +88,11 @@ private[xl] object SheetMetadataPart:
       case Some(root) => index(root)
       case None => CellMetadataIndex.empty
 
+  /**
+   * The child elements named `label`, matched on the LOCAL name on purpose: a part may bind
+   * SpreadsheetML to a prefix (`<x:metadata xmlns:x=…>`), and CT_Metadata's element names are
+   * unique within it, so a namespace check here would only break prefix-qualified parts.
+   */
   private def children(e: Elem, label: String): Vector[Elem] =
     e.child.collect { case c: Elem if c.label == label => c }.toVector
 

@@ -1010,7 +1010,10 @@ legacy formula, and xl computes it the same way:
   argument, an array constant, an array function (SORT, SEQUENCE, INDEX…) — so a range a function
   takes whole (`=SUM($A$1:A1)`, `COUNTIF`, `VLOOKUP`'s table, `SUMPRODUCT`) costs nothing to check;
   at most the first 1000 such cells of a command are checked, and a warning from a longer drag says
-  `(first 1000 of N cells checked)`. Streaming writes and `--dry-run` do not evaluate and stay
+  `(first 1000 of N cells checked)`; a sample that finds no divergence says so with the
+  informational `INTERSECTION_SAMPLED` note, so silence is never a sampled "all clear". A failure
+  to compute the check (an exhausted heap included) means no advisory: the write and its exit code
+  stand. Streaming writes and `--dry-run` do not evaluate and stay
   silent; `put`, `fill` and `copy` do not check.
 - **The `DYNAMIC_ARRAY_DOWNGRADED` warning** (GH-714). When the workbook's cell-metadata part
   (`xl/metadata.xml`, or wherever its relationship points) is not readable XML, xl cannot extend it

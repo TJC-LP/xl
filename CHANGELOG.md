@@ -50,7 +50,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
   row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy
   (SUMPRODUCT, `--array`, or `@`). It never gates, `--strict` included; `--stream` writes do not
-  evaluate and never warn; the check samples at most 1,000 candidate cells per command.
+  evaluate and never warn; the check samples at most 1,000 candidate cells per command, and a sample
+  that finds no divergence says so with an informational `INTERSECTION_SAMPLED` note (#739). The
+  advisories never sink a write: a failure to compute one (an exhausted heap included) means no
+  advisory, never a different exit code or a discarded output.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
