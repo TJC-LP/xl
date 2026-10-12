@@ -754,7 +754,9 @@ object ReadCommands:
       val name = sheets(target).name
       val bounds = sheets(target).usedRange
       // a reference qualified with the target spells its name, perhaps quoted, then `!`, in any
-      // case; a name may hide one, so a formula mentioning a name is read too
+      // case; a name may hide one, so a formula mentioning a name is read too. The pattern
+      // over-matches on purpose (`MyData!` contains `Data!`): it only decides what to parse, and
+      // the parsed reads decide what is stale, so a false match costs a parse, never a stale cache
       val qualified = java.util.regex.Pattern.compile(
         "'?" + java.util.regex.Pattern.quote(name.value.replace("'", "''")) + "'?!",
         java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
