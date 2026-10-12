@@ -332,7 +332,7 @@ class ArrayLiftingSpec extends FunSuite:
     // failures: each element keeps its own result, and IFERROR replaces only the failing ones
     arrayEval("=LEFT(A1:D1,-1)") match
       case Right(ar: ArrayResult) =>
-        assert(ar.values.flatten.forall(_ == CellValue.Error(CellError.Value)), ar.toString)
+        assert(ar.dense.flatten.forall(_ == CellValue.Error(CellError.Value)), ar.toString)
       case other => fail(s"expected an array of #VALUE!, got $other")
     val words = Sheet(SheetName.unsafe("Words"))
       .put(ref"A1", text("banana"))

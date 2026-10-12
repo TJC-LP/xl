@@ -55,7 +55,7 @@ class SumProductXLookupSpec extends FunSuite:
         Evaluator.eval(expr, sheet) match
           case Right(value: CellValue) => Right(value)
           // GH-713: XLOOKUP returns a reference (typed ArrayResult, like INDEX) — one cell
-          case Right(eval.ArrayResult(Vector(Vector(single)))) => Right(single)
+          case Right(ar: eval.ArrayResult) if ar.rows == 1 && ar.cols == 1 => Right(ar(0, 0))
           case Right(other) => Left(s"Expected CellValue, got: $other")
           case Left(err) =>
             EvalError.toErrorValue(err).map(CellValue.Error(_)).toRight(s"Eval error: $err")

@@ -423,7 +423,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
             }
           // GH-654: a bare cell (`=FILTER(A1:C1,D1)`) arrives as an unresolved PolyRef —
           // evalMaybeArrayArg resolves it to its 1×1 value like every other array-aware slot
-          case Right(expr) => evalMaybeArrayArg(ctx, expr).map(toCellArray(_).values)
+          case Right(expr) => evalMaybeArrayArg(ctx, expr).map(toCellArray(_).rowsIterator.toVector)
         result <-
           val rows = matrix.size
           val cols = matrix.headOption.map(_.size).getOrElse(0)

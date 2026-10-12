@@ -194,7 +194,7 @@ class ArrayTypingLawsSpec extends FunSuite:
     def texts(value: Any): Vector[String] = value match
       case s: String => Vector(s)
       case CellValue.Text(s) => Vector(s)
-      case ar: ArrayResult => ar.values.flatten.flatMap(texts)
+      case ar: ArrayResult => ar.dense.flatten.flatMap(texts)
       case _ => Vector.empty
     List("=(C2:C4+D2:D4)&\"x\"", "=TRANSPOSE(B2:B4)&\"x\"", "=\"x\"&TRANSPOSE(B2:B4)").foreach {
       f =>

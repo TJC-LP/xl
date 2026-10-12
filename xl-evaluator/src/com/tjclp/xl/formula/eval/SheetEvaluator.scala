@@ -625,7 +625,7 @@ object SheetEvaluator:
       // Handle array vs scalar result
       updated <- result match
         case ar: ArrayResult =>
-          val patch = Patch.PutArray(originRef, ar.values)
+          val patch = Patch.PutArray(originRef, ar.rowsIterator.toVector)
           val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
           scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
         case other =>
@@ -672,7 +672,7 @@ object SheetEvaluator:
   ): XLResult[Vector[Vector[CellValue]]] =
     evaluateArrayRaw(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
       .map {
-        case ar: ArrayResult => ar.values.map(_.map(spillValue))
+        case ar: ArrayResult => ar.rowsIterator.map(_.map(spillValue)).toVector
         case other => Vector(Vector(spillValue(EvalResult.toCellValue(other))))
       }
 

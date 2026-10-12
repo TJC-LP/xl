@@ -109,22 +109,22 @@ class RangeEvaluationIntegritySpec extends FunSuite:
 
   test("GH-499: array arithmetic resolves formulas and preserves the rectangular shape") {
     assertEquals(
-      array(arraySheet, "=A1:B2*2").values,
+      array(arraySheet, "=A1:B2*2").dense,
       Vector(Vector(num(4), num(40)), Vector(num(2), num(20)))
     )
     assertEquals(
-      array(arraySheet.remove(ref"B2"), "=S!A1:B2*2").values,
+      array(arraySheet.remove(ref"B2"), "=S!A1:B2*2").dense,
       Vector(Vector(num(4), num(40)), Vector(num(2), num(0)))
     )
   }
 
   test("GH-499: TRANSPOSE and SORT consume evaluated range values") {
     assertEquals(
-      array(arraySheet, "=TRANSPOSE(A1:B2)").values,
+      array(arraySheet, "=TRANSPOSE(A1:B2)").dense,
       Vector(Vector(num(2), num(1)), Vector(num(20), num(10)))
     )
     assertEquals(
-      array(arraySheet, "=SORT(A1:B2)").values,
+      array(arraySheet, "=SORT(A1:B2)").dense,
       Vector(Vector(num(1), num(10)), Vector(num(2), num(20)))
     )
   }
@@ -134,8 +134,8 @@ class RangeEvaluationIntegritySpec extends FunSuite:
       .put(ref"A3", CellValue.Formula("2"))
       .put(ref"C1", CellValue.Formula("FALSE"))
       .put(ref"C2", CellValue.Formula("TRUE"))
-    assertEquals(array(sheet, "=UNIQUE(A1:A3)").values, Vector(Vector(num(2)), Vector(num(1))))
-    assertEquals(array(sheet, "=FILTER(A1:B2,C1:C2)").values, Vector(Vector(num(1), num(10))))
+    assertEquals(array(sheet, "=UNIQUE(A1:A3)").dense, Vector(Vector(num(2)), Vector(num(1))))
+    assertEquals(array(sheet, "=FILTER(A1:B2,C1:C2)").dense, Vector(Vector(num(1), num(10))))
   }
 
   test("GH-499: a failed array element produces a diagnostic instead of a raw Formula value") {
@@ -148,7 +148,7 @@ class RangeEvaluationIntegritySpec extends FunSuite:
   test("GH-499: Excel error values retain their array positions") {
     val sheet = arraySheet.put(ref"A1", CellValue.Formula("1/0"))
     val result = array(sheet, "=A1:A2*2")
-    assertEquals(result.values, Vector(Vector(CellValue.Error(CellError.Div0)), Vector(num(2))))
+    assertEquals(result.dense, Vector(Vector(CellValue.Error(CellError.Div0)), Vector(num(2))))
   }
 
   test("GH-499: range-valued LET and defined names resolve uncached formulas") {
@@ -156,7 +156,7 @@ class RangeEvaluationIntegritySpec extends FunSuite:
     val wb = Workbook(sheet).withDefinedName("Values", "S!$A$1:$A$2")
     List("=LET(r,A1:A2,r*2)", "=Values*2").foreach { formula =>
       val result = evalArray(sheet, formula, Some(wb))
-      assertEquals(result.map(_.values), Right(Vector(Vector(num(4)), Vector(num(2)))))
+      assertEquals(result.map(_.dense), Right(Vector(Vector(num(4)), Vector(num(2)))))
     }
   }
 

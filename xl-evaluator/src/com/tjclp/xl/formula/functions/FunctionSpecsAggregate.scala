@@ -391,7 +391,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, A] =
     evaluated match
       case ar: ArrayResult =>
-        ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
+        ar.cells.foldLeft[Either[EvalError, A]](Right(acc)) {
           case (Left(err), _) => Left(err)
           case (Right(current), cellValue) => triageValue(agg, current, cellValue, typed = false)
         }
@@ -1391,13 +1391,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
     value match
       case ar: ArrayResult =>
-        ar.values.flatten.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+        ar.cells.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
           case None =>
             Right(
               MatrixArray(
                 (0 until ar.rows).map { row =>
-                  (0 until ar.cols).map(col => coerceToNumeric(ar.values(row)(col))).toVector
+                  (0 until ar.cols).map(col => coerceToNumeric(ar(row, col))).toVector
                 }.toVector
               )
             )

@@ -454,7 +454,7 @@ trait FunctionSpecsBase:
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
+    ArrayArithmetic.rangeToMatrixEval(range, rangeCellReader(targetSheet, ctx))
 
   /**
    * The part of a lookup range a search walks. A full column or row (`A:A`, `2:2`) is cut off where

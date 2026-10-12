@@ -85,18 +85,12 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
   ): Either[EvalError, Option[Boolean]] =
     boundary:
       var acc: Option[Boolean] = None
-      val rows = arr.values
-      var r = 0
-      while r < rows.length do
-        val row = rows(r)
-        var c = 0
-        while c < row.length do
-          rangeLogical(label, row(c)) match
-            case Left(err) => break(Left(err))
-            case Right(Some(b)) => acc = Some(acc.fold(b)(combine(_, b)))
-            case Right(None) => ()
-          c += 1
-        r += 1
+      val it = arr.cells
+      while it.hasNext do
+        rangeLogical(label, it.next()) match
+          case Left(err) => break(Left(err))
+          case Right(Some(b)) => acc = Some(acc.fold(b)(combine(_, b)))
+          case Right(None) => ()
       Right(acc)
 
   /**

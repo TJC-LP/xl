@@ -2717,7 +2717,7 @@ private class EvaluatorImpl(
             case Left(e) => CellValue.Error(EvalError.toCellError(e).getOrElse(CellError.Value))
     eval(operand.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell).flatMap {
       case ar: ArrayResult if allowArrayResults =>
-        Right(ArrayResult(ar.values.map(_.map(serialElement))))
+        Right(ar.mapPure(serialElement))
       case ar: ArrayResult => ScalarCoercion.collapseTo(label, ar, Some(BindingCoercion.Numeric))
       case value => ScalarCoercion.coerce(label, value, BindingCoercion.Numeric)
     }

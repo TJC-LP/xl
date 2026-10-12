@@ -67,7 +67,7 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     loc: munit.Location
   ): Vector[CellValue] =
     result match
-      case Right(ar) => ar.values.flatten
+      case Right(ar) => ar.dense.flatten
       case Left(err) => fail(s"expected Right(ArrayResult), got Left($err)")
 
   // ===== Commit 2: compare carriage =====
@@ -155,7 +155,7 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     result match
       case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
         assertEquals(out.rows, 3)
-        assertEquals(out.values.flatten, Vector(na, na, na))
+        assertEquals(out.dense.flatten, Vector(na, na, na))
       case other => fail(s"expected Array result, got $other")
   }
 
@@ -173,7 +173,7 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
     )
     multiplied match
       case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
-        assertEquals(out.values.flatten, Vector(num(1), div0, na))
+        assertEquals(out.dense.flatten, Vector(num(1), div0, na))
       case other => fail(s"expected Array result, got $other")
     val equality = ArrayArithmetic.broadcastEqualityCompare(left, Left(right), false)
     assertEquals(elementsOf(equality), Vector(CellValue.Bool(true), div0, na))
@@ -378,7 +378,7 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
 
   /** Broadcast indexing: a 1-sized axis repeats. */
   private def broadcastAt(a: ArrayResult, row: Int, col: Int): CellValue =
-    a.values(if a.rows == 1 then 0 else row)(if a.cols == 1 then 0 else col)
+    a.dense(if a.rows == 1 then 0 else row)(if a.cols == 1 then 0 else col)
 
   private def isErrorElement(cv: CellValue): Boolean = cv match
     case CellValue.Error(_) => true
@@ -483,7 +483,7 @@ class ArrayErrorPropagationSpec extends ScalaCheckSuite:
             op
           ) match
             case Right(ArrayArithmetic.ArrayOperand.Array(out)) =>
-              Prop(out.values == expected) :| s"out=${out.values} expected=$expected"
+              Prop(out.dense == expected) :| s"out=${out.dense} expected=$expected"
             case other => Prop.falsified :| s"expected Array result, got $other"
         // Reference itself fails (text/div-zero): covered by the local-failure properties above
         case Left(_) => Prop.passed
