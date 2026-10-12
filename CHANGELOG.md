@@ -284,7 +284,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   (`TEXT("123","0.00")` is `123.00`), and an escaped `\;` (or the operand of `_`/`*`) no longer
   splits a code into sections. `VALUE` and `TEXT` accept one `$`, leading or after the sign, and
   commas only as thousands groups of the integer part: `VALUE("1$2")` and `VALUE("1,23")` are
-  `#VALUE!` (were 12 and 123).
+  `#VALUE!` (were 12 and 123), and a numeric string past the double range (`"1e999999999"`) is
+  no number (`VALUE` is `#VALUE!`, `TEXT` keeps the text). The coercion runs before any section is
+  chosen, so a code whose only section is `@` sees the number: `TEXT("007","@")` is `7`. HTML/SVG
+  rendering, column-width measurement and row-height autofit draw rich text through the text
+  section too: its literals take the cell's base font, and a text section that hides the text
+  collapses the row to the default height.
 - **Integer placeholders pad as Excel does** (#693): `?` pads with a space and a zero integer part
   has no significant digit, so the accounting zero `_(* "-"??_)` is ` -   ` (was ` -0 `), `#.00` on
   0.5 is `.50` (was `0.50`) and `0#` on 0 is `0` (was `00`). Padding zeros group: `0,000` on 0 is

@@ -308,16 +308,19 @@ trait FunctionSpecsText extends FunctionSpecsBase:
         val (intPart, rest) = unpriced.span(c => c != '.' && c != 'e' && c != 'E')
         val grouped = !rest.contains(',') &&
           (!intPart.contains(',') || intPart.matches("[+-]?\\d+(,\\d{3})+"))
-        // The percent division can overflow the scale (`1E-2147483647%`), so it is inside the Try
-        scala.util
-          .Try {
-            val n = BigDecimal(unpriced.replace(",", ""))
-            val signed = if negFromParens then -n else n
-            if isPercent then signed / 100 else signed
-          }
-          .toOption
-          .filter(_ => grouped)
-          .toRight(unparseableValue(input))
+        // The percent division can overflow the scale (`1E-2147483647%`), so it is inside the Try;
+        // a magnitude past the double range is no number Excel can hold, so it stays text (#693)
+        if !grouped then Left(unparseableValue(input))
+        else
+          scala.util
+            .Try {
+              val n = BigDecimal(unpriced.replace(",", ""))
+              val signed = if negFromParens then -n else n
+              if isPercent then signed / 100 else signed
+            }
+            .toOption
+            .filter(_.abs <= BigDecimal(Double.MaxValue))
+            .toRight(unparseableValue(input))
 
   val text: FunctionSpec[String] { type Args = TextArgs } =
     FunctionSpec.simple[String, TextArgs](

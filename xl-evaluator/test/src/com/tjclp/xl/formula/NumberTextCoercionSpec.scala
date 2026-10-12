@@ -262,6 +262,24 @@ class NumberTextCoercionSpec extends ScalaCheckSuite:
       assertScalar(s"=TEXT(\"$s\",\"0\")", text(s))
   }
 
+  test(
+    "#693: a numeric string is a number under a text-only `@` code too (Excel 16, LibreOffice)"
+  ) {
+    // TEXT takes its value as a number whenever the text converts, so the leading zeros and the
+    // E notation go before any section is chosen; only text that does not convert reaches `@`
+    assertScalar("=TEXT(\"007\",\"@\")", text("7"))
+    assertScalar("=TEXT(\"007\",\"0;0;0;\"\"T:\"\"@\")", text("7"))
+    assertScalar("=TEXT(\"1e3\",\"@\")", text("1000"))
+    assertScalar("=TEXT(\"00123\",\"0;0;0;@\")", text("123"))
+    assertScalar("=TEXT(\"abc\",\"@\")", text("abc"))
+    assertScalar("=TEXT(\"abc\",\"0;0;0;\"\"T:\"\"@\")", text("T:abc"))
+  }
+
+  test("#693: a numeric string beyond the double range stays text") {
+    assertScalar("=TEXT(\"1e999999999\",\"0\")", text("1e999999999"))
+    assertScalar("=TEXT(\"-1e309\",\"0\")", text("-1e309"))
+  }
+
   test("#671: a cached formula cell in a text position reads its cached value, not its text") {
     cachedCase("=\"\"&B1", text("0"))
     cachedCase("=B2&\"!\"", text("xy!"))
