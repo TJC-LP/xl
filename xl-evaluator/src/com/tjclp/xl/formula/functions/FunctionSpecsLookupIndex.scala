@@ -43,6 +43,18 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     }
 
   /**
+   * The cells of `values` at the selected `rows` and `cols` ([[selection]]: each a whole axis or
+   * one line, so a window): sliced, keeping a sparse array sparse (#750). The window lies inside
+   * the array, so the slice is never refused.
+   */
+  private def sliceOf(
+    values: ArrayResult,
+    rows: Vector[Int],
+    cols: Vector[Int]
+  ): Either[EvalError, ArrayResult] =
+    values.slice(rows.headOption.getOrElse(0), rows.size, cols.headOption.getOrElse(0), cols.size)
+
+  /**
    * What INDEX selects: the values of an array constant (`Left`), or the reference into the chosen
    * area (`Right`) — one cell, or a whole row or column of it (unbounded — a reference position
    * reads it whole, ROWS counts it). A position outside the array is a descriptive `#REF!`.
@@ -74,8 +86,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       target <- constant match
         case Some(values) =>
           pickArea(1, areaNum, call).flatMap(_ =>
-            selection(rowNum, colNum, values.rows, values.cols, call).map { (rows, cols) =>
-              Left(ArrayResult(rows.map(r => cols.map(c => values(r, c)))))
+            selection(rowNum, colNum, values.rows, values.cols, call).flatMap { (rows, cols) =>
+              sliceOf(values, rows, cols).map(Left(_))
             }
           )
         case None =>

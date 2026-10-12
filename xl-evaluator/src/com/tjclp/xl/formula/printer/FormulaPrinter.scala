@@ -148,8 +148,13 @@ object FormulaPrinter:
       case TExpr.Lit(value: String) => s""""${escapeString(value)}""""
       case TExpr.Lit(value: Int) => value.toString
       // GH-669: an array constant prints as Excel spells it — `,` between columns, `;` between rows
+      // #750: an evaluated array substituted as a literal can be whole-axis sized; one too large
+      // to spell out (no parsed constant is) prints as its summary, never cell by cell
       case TExpr.Lit(array: ArrayResult) =>
-        array.values.map(_.map(arrayElementText).mkString(",")).mkString("{", ";", "}")
+        array.toDense("array constant") match
+          case Right(rows) =>
+            rows.map(_.map(arrayElementText).mkString(",")).mkString("{", ";", "}")
+          case Left(_) => array.toString
       case TExpr.Lit(value) => value.toString
 
       // Cell reference

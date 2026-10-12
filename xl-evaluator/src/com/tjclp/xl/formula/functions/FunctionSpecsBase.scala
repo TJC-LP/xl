@@ -224,7 +224,7 @@ trait FunctionSpecsBase:
   protected def evalMaybeArrayArg(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     expr match
       case TExpr.RangeRef(range, _) =>
-        extractRangeAsMatrixEval(range, ctx.sheet, ctx).map(ArrayResult(_))
+        readRangeArray(range, ctx.sheet, ctx)
       case TExpr.SheetRange(sheetName, range, _) =>
         Evaluator
           .resolveRangeLocation(
@@ -233,7 +233,7 @@ trait FunctionSpecsBase:
             ctx.workbook
           )
           .flatMap { case (targetSheet, _) =>
-            extractRangeAsMatrixEval(range, targetSheet, ctx).map(ArrayResult(_))
+            readRangeArray(range, targetSheet, ctx)
           }
       // GH-476: the house `=+Sheet!Ref` style resolves here too (asResolvedValueExpr pushes
       // through the transparent UnaryPlus), as it does for evalAny
@@ -321,7 +321,7 @@ trait FunctionSpecsBase:
         used.map(_.colEnd.index0)
       )
       val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
-      referenceMatrix(selected, targetSheet, ctx).map(ArrayResult(_))
+      readRangeArray(selected, targetSheet, ctx)
 
   /**
    * Whether [[boundedReferenceValues]] reads the sheet's used range for `reference`: only when an
@@ -333,43 +333,22 @@ trait FunctionSpecsBase:
     reference.rowEnd.index0 == Row.MaxIndex0 || reference.colEnd.index0 == Column.MaxIndex0
 
   /**
-   * A reference's values at its full shape. A range with no more positions than the sheet has cells
-   * is read position by position, as always (a bounded `$A$2:$A$50` never scans the sheet). A
-   * larger one — the generous `INDEX($A$1:$A$100000,0)` over a few hundred rows — is read from the
-   * other side: one pass over the sheet's cells finds the box of populated cells inside it, only
-   * that box is read, and every other position is the shared blank row or cell, which reads exactly
-   * as an absent cell does (`CellValue.Empty`). Either way the cost is the smaller of the range and
-   * the sheet, never more than the position-by-position read.
+   * A reference's values at its full shape, as array mode reads a range: position by position when
+   * the range has no more positions than the sheet has cells, otherwise only its box of populated
+   * cells, every other position the array's Empty fill ([[ArrayArithmetic.readRange]], #750).
+   * Either way the cost is the smaller of the range and the sheet.
    */
-  private def referenceMatrix(
+  protected def readRangeArray(
     range: CellRange,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
-  ): Either[EvalError, Vector[Vector[CellValue]]] =
-    val area = range.height.toLong * range.width.toLong
-    if area <= targetSheet.cells.size.toLong then extractRangeAsMatrixEval(range, targetSheet, ctx)
-    else
-      // (row min, row max, col min, col max) of the populated cells inside the range
-      val bounds = targetSheet.cells.keysIterator
-        .filter(at => range.contains(at))
-        .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, at) =>
-          val (r, c) = (at.row.index0, at.col.index0)
-          Some(acc.fold((r, r, c, c)) { case (r0, r1, c0, c1) =>
-            (math.min(r0, r), math.max(r1, r), math.min(c0, c), math.max(c1, c))
-          })
-        }
-      val blankRow = Vector.fill(range.width)(CellValue.Empty: CellValue)
-      bounds match
-        case None => Right(Vector.fill(range.height)(blankRow))
-        case Some((rowStart, rowEnd, colStart, colEnd)) =>
-          val box = CellRange(ARef.from0(colStart, rowStart), ARef.from0(colEnd, rowEnd))
-          extractRangeAsMatrixEval(box, targetSheet, ctx).map { boxRows =>
-            val left = Vector.fill(colStart - range.colStart.index0)(CellValue.Empty: CellValue)
-            val right = Vector.fill(range.colEnd.index0 - colEnd)(CellValue.Empty: CellValue)
-            Vector.fill(rowStart - range.rowStart.index0)(blankRow) ++
-              boxRows.map(row => left ++ row ++ right) ++
-              Vector.fill(range.rowEnd.index0 - rowEnd)(blankRow)
-          }
+  ): Either[EvalError, ArrayResult] =
+    ArrayArithmetic.readRange(
+      range,
+      targetSheet,
+      rangeCellReader(targetSheet, ctx),
+      Some(ctx.passMemo)
+    )
 
   /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
@@ -390,8 +369,7 @@ trait FunctionSpecsBase:
    */
   protected def materializeOperand(ctx: EvalContext, value: Any): Either[EvalError, Any] =
     value match
-      case RangeOperand(target, range) =>
-        extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
+      case RangeOperand(target, range) => readRangeArray(range, target, ctx)
       case other => Right(other)
 
   /**
@@ -454,7 +432,7 @@ trait FunctionSpecsBase:
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
+    ArrayArithmetic.rangeToMatrixEval(range, rangeCellReader(targetSheet, ctx))
 
   /**
    * The part of a lookup range a search walks. A full column or row (`A:A`, `2:2`) is cut off where

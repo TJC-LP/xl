@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-09-25
+**Last Updated**: 2026-10-12
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **119 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 7,290 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **124 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,394 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.23.1** (wave 30 — the 0.23.0 dogfood's seven issues as six adversarially reviewed clusters: typed `#N/A` on legacy lookups (#662), the batch `putf` parse gate and `formula-unparseable` lint (#663), rsvg-convert on stdin (#664), Excel's General text rule (#665), `General` and scaling commas in custom formats (#666), CLI polish (#667), skill drift (#668); follow-ups #669–#681)
+**Current Version**: **0.24.0** (Excel parity in the evaluator — the Weaver dogfood of 0.23.1 (#683), wave 31's sweep of the wave-30 follow-ups (#697, #698–#704) and wave 32 (#705–#722, #756, #757): plain cells as Excel legacy formulas, dynamic-array authoring (`putf --array`), `eval --at`, XLOOKUP references and the `:` operator, ROW/COLUMN arrays, whole-column blank tails, sparse whole-axis arrays (#750), one lookup error channel, number-format parity; follow-ups #726, #736, #744)
 
 ---
 
@@ -23,9 +23,9 @@ executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (ba
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
 
-### Unreleased — the Weaver wave: five findings from the 0.23.1 dogfood
+### v0.24.0 — the Weaver wave, wave 31 and wave 32: Excel parity in the evaluator (Released 2026-10-12)
 
-Weaver dogfooded 0.23.1 on 2026-09-25 and filed five CLI findings. They ran as seven
+**The Weaver wave (#683).** Weaver dogfooded 0.23.1 on 2026-09-25 and filed five CLI findings. They ran as seven
 worktree-isolated TDD clusters (a design panel per open question, an adversarial reviewer per
 cluster with up to two rework rounds; the evaluator and render halves each split into two
 serialized clusters):
@@ -45,6 +45,36 @@ case-folding a missing sheet's qualifier in the dependency index; an Excel-autho
 (column spans, DV, freeze pane, outlines, hidden sheet); per-family row-autofit metrics beyond the
 four calibrated Calibri sizes; the O(n²) cost of uncached running sums under a whole-column CF
 rule; MATCH/VLOOKUP over uncached formula precedents on the library path.
+
+**Wave 31 (#697, then #698–#704).** The wave-30 follow-ups (#460, #669–#681) ran as six worktree
+clusters, each test-first and adversarially reviewed against a LibreOffice 25.8 recalculation: the
+formula grammar Excel writes and the parser refused (union and intersection, array constants,
+`TRUE()`), flat operator chains of any length, lookup and financial error-code parity,
+`LOOKUP`/`XMATCH`, Excel's 11-character General display, raster backends that exit early, a
+data-table staleness note in `audit`, and the library `describe`/`lint` gaps. Its reviews filed
+#687–#696, landed as separate PRs before the release: the `Sheet!#REF!` writer corruption and its
+heal (#687, #694), date serials 1–59 (#688), extreme exponents in number formats (#689), verified
+raster output (#690), stack-safe defined-name walks (#691), spill anchors kept through recalculation
+(#695) and every `definedName` attribute kept (#696).
+
+**Wave 32 (#705–#722, #756, #757).** Reference semantics and whole-column parity, one PR per issue:
+
+| Issue | PR | Outcome |
+|---|---|---|
+| [#692](https://github.com/TJC-LP/xl/issues/692) | #705 | one `#N/A` error channel for every lookup; the recalc summary names its error cells with the reason |
+| [#693](https://github.com/TJC-LP/xl/issues/693) | #706 | text cells use their format's text section; integer placeholders pad as Excel does |
+| [#707](https://github.com/TJC-LP/xl/issues/707) | #708 | exact absolute value in fraction patterns at extreme scales (a spec flake) |
+| [#709](https://github.com/TJC-LP/xl/issues/709) | #716 | text in a typed scalar argument is `#VALUE!`, not a host failure |
+| [#710](https://github.com/TJC-LP/xl/issues/710) | #717 | dynamic named ranges and LET references resolve in range arguments |
+| [#712](https://github.com/TJC-LP/xl/issues/712) | #719 | ROW and COLUMN over a multi-cell reference are arrays |
+| [#711](https://github.com/TJC-LP/xl/issues/711) | #718 | array contexts keep the reference IF/CHOOSE select; whole-column blank tails count in SUMPRODUCT, COUNTIF(S), COUNTBLANK (breaking) |
+| [#713](https://github.com/TJC-LP/xl/issues/713) | #720 | XLOOKUP returns a reference (typed `ArrayResult`, breaking); the `:` operator between returned references |
+| [#715](https://github.com/TJC-LP/xl/issues/715) | #722 | `xl eval --at <ref>`; lookups read uncached formulas in their ranges |
+| [#714](https://github.com/TJC-LP/xl/issues/714) | #721 | dynamic-array authoring: `putf --array`, `cm`/metadata preservation, `IMPLICIT_INTERSECTION` |
+| [#750](https://github.com/TJC-LP/xl/issues/750) | #756, #757 | sparse `ArrayResult` (box + fill, `runs`/`map`/`toDense`) and `Aggregator.combineN`: whole-axis arrays evaluate exactly without materialising (breaking) |
+
+Follow-ups carried forward: Excel's `#NUM!` for out-of-range dates (#726), the declared-shape cost of
+`INDEX(…,0)` in array work (#736), caching a dynamic name's value across range slots (#744).
 
 ### v0.23.1 — wave 30: the 0.23.0 dogfood (Released 2026-09-15)
 

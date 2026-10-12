@@ -359,8 +359,8 @@ class XLookupReferenceSpec extends FunSuite:
     array("=XLOOKUP(2,A1:A3,B1:M3)") match
       case Right(r: ArrayResult) =>
         assertEquals((r.rows, r.cols), (1, 12))
-        assertEquals(r.values.headOption.map(_.take(2)), Some(Vector(N("20"), N("200"))))
-        assert(r.values.flatten.drop(2).forall(_ == CellValue.Empty), r.toString)
+        assertEquals(r.dense.headOption.map(_.take(2)), Some(Vector(N("20"), N("200"))))
+        assert(r.dense.flatten.drop(2).forall(_ == CellValue.Empty), r.toString)
       case other => fail(s"XLOOKUP(2,A1:A3,B1:M3): $other")
     assertEquals(plain("H1", s"SUMPRODUCT(XLOOKUP(2,A1:A3,B1:M3)*$months)"), Right(N("420")))
     assertEquals(plain("H1", s"SUMPRODUCT(INDEX(B1:M3,2,0)*$months)"), Right(N("420")))

@@ -356,6 +356,10 @@ object SheetEvaluator:
      *   3. If result is single value, puts it at origin only
      *   4. Returns the updated sheet and the range of cells affected
      *
+     * #750: a result that would spill past XFD1048576 (Excel's `#SPILL!`) or holds more than
+     * [[ArrayResult.MaxCells]] cells is refused with a FormulaError, checked from its shape before
+     * a cell is built.
+     *
      * @param formula
      *   Excel formula string (with or without leading =)
      * @param originRef
@@ -624,10 +628,31 @@ object SheetEvaluator:
 
       // Handle array vs scalar result
       updated <- result match
-        case ar: ArrayResult =>
-          val patch = Patch.PutArray(originRef, ar.values)
+        case ar: ArrayResult if ar.isEmpty =>
+          val patch = Patch.PutArray(originRef, Vector.empty)
           val endRef = originRef.shift(ar.cols - 1, ar.rows - 1)
           scala.util.Right((Patch.applyPatch(sheet, patch), CellRange(originRef, endRef)))
+        case ar: ArrayResult =>
+          // #750: Excel's #SPILL! for a result that runs past XFD1048576, and xl's write bound,
+          // both checked from the shape before a cell is built
+          def blocked(blocker: DynamicArrayAuthoring.SpillBlocker) =
+            val full = if formula.startsWith("=") then formula else s"=$formula"
+            scala.util.Left(
+              DynamicArrayAuthoring.SpillBlocked(full, originRef, None, blocker).toXLError
+            )
+          DynamicArrayAuthoring.spillExtent(originRef, ar.rows, ar.cols) match
+            case None => blocked(DynamicArrayAuthoring.SpillBlocker.OffGrid(ar.rows, ar.cols))
+            case Some(_) if ar.cellCount > ArrayResult.MaxCells =>
+              blocked(
+                DynamicArrayAuthoring.SpillBlocker.TooLarge(ar.rows, ar.cols, ArrayResult.MaxCells)
+              )
+            case Some(extent) =>
+              ar.toDense("spill") match
+                case scala.util.Left(err) =>
+                  scala.util.Left(evalErrorToXLError(err, Some(formula)))
+                case scala.util.Right(grid) =>
+                  val patch = Patch.PutArray(originRef, grid)
+                  scala.util.Right((Patch.applyPatch(sheet, patch), extent))
         case other =>
           val cv = EvalResult.toCellValue(other)
           scala.util.Right((sheet.put(originRef, cv), CellRange(originRef, originRef)))
@@ -657,10 +682,11 @@ object SheetEvaluator:
 
   /**
    * GH-714: the array value of `formula` entered at `originRef` — what Excel 365 computes for the
-   * formula typed into that cell (no implicit intersection) — as the row-major grid of values its
-   * spill would show, without patching anything. A scalar result is a 1x1 grid. Each element is the
+   * formula typed into that cell (no implicit intersection) — as the array of values its spill
+   * would show, without patching anything. A scalar result is a 1x1 array. Each element is the
    * value a spill cell stores: a cached formula record reads as its cache, and an empty element
-   * reads 0 (a formula cell is never blank, the [[cellResult]] rule).
+   * reads 0 (a formula cell is never blank, the [[cellResult]] rule). #750: the array may be sparse
+   * and of any shape; a caller checks its `cellCount` before building its cells.
    */
   private[xl] def evaluateArrayValues(
     sheet: Sheet,
@@ -669,11 +695,11 @@ object SheetEvaluator:
     evaluator: Evaluator,
     clock: Clock,
     workbook: Option[Workbook]
-  ): XLResult[Vector[Vector[CellValue]]] =
+  ): XLResult[ArrayResult] =
     evaluateArrayRaw(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
       .map {
-        case ar: ArrayResult => ar.values.map(_.map(spillValue))
-        case other => Vector(Vector(spillValue(EvalResult.toCellValue(other))))
+        case ar: ArrayResult => ar.mapPure(spillValue)
+        case other => ArrayResult.single(spillValue(EvalResult.toCellValue(other)))
       }
 
   /**

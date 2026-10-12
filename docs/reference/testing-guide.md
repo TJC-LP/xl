@@ -226,18 +226,18 @@ GitHub Actions runs:
 
 ## Test Counts by Module
 
-As of #699 (2026-10-07, on top of #700–#704), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran without rsvg-convert, so its end-to-end smoke was skipped (it counts as a test case either way).
+As of the 0.24.0 release (2026-10-12), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3309 |
-| xl-core | 1850 |
-| xl-ooxml | 1321 |
-| xl-cli | 1750 |
-| xl-cats-effect | 195 |
+| xl-evaluator | 3835 |
+| xl-core | 1872 |
+| xl-ooxml | 1362 |
+| xl-cli | 1904 |
+| xl-cats-effect | 209 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 64 |
-| **Total** | **8,636** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
+| **Total** | **9,394** |
 
 ## Test Quality Metrics
 

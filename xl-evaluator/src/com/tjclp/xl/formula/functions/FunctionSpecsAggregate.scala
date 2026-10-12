@@ -391,9 +391,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, A] =
     evaluated match
       case ar: ArrayResult =>
-        ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
+        // #750: one step per group of equal cells, so a sparse array's fill folds in closed form
+        ar.tally.foldLeft[Either[EvalError, A]](Right(acc)) {
           case (Left(err), _) => Left(err)
-          case (Right(current), cellValue) => triageValue(agg, current, cellValue, typed = false)
+          case (Right(current), (cellValue, n)) => triageElements(agg, current, cellValue, n)
         }
       case value: BigDecimal =>
         // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
@@ -408,6 +409,34 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
         // numeric-mode error policing is unchanged
         triageValue(agg, acc, ArrayArithmetic.anyToCellValue(other), typed = true)
+
+  /**
+   * `n` equal array elements into the accumulator ([[triageValue]] `n` times, untyped): counted or
+   * combined with [[Aggregator.combineN]], so the cost does not grow with `n`.
+   */
+  private def triageElements[A](
+    agg: Aggregator[A],
+    acc: A,
+    cellValue: CellValue,
+    n: Long
+  ): Either[EvalError, A] =
+    if n == 1L then triageValue(agg, acc, cellValue, typed = false)
+    else if agg.countsNonEmpty then
+      cellValue match
+        case CellValue.Empty => Right(acc)
+        case _ => Right(agg.combineN(acc, aggregateCountUnit, n))
+    else if agg.countsEmpty then
+      cellValue match
+        case CellValue.Empty => Right(agg.combineN(acc, aggregateCountUnit, n))
+        case _ => Right(acc)
+    else
+      ArrayArithmetic.carriedError(cellValue) match
+        case Some(err) if agg.propagatesErrors => Left(propagatedElementError(agg.name, err))
+        case Some(_) => Right(acc)
+        case None =>
+          extractNumericValue(cellValue) match
+            case Some(v) => Right(agg.combineN(acc, v, n))
+            case None => Right(acc)
 
   /**
    * One evaluated value into the accumulator: COUNTA counts it unless blank, COUNTBLANK only when
@@ -1384,6 +1413,16 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       else Right(matrix(row)(col))
 
   /**
+   * #750: an evaluated array holding a box of cells and a fill elsewhere (a whole-axis array): read
+   * through the array.
+   */
+  private final case class SparseArray(array: ArrayResult) extends ResolvedArray:
+    def rows: Int = array.rows
+    def cols: Int = array.cols
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      Right(coerceToNumeric(array(row, col)))
+
+  /**
    * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
    * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
    * would produce a wrong sum for the issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
@@ -1391,13 +1430,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
     value match
       case ar: ArrayResult =>
-        ar.values.flatten.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+        ar.tally.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None if !ar.isDense => Right(SparseArray(ar))
           case None =>
             Right(
               MatrixArray(
                 (0 until ar.rows).map { row =>
-                  (0 until ar.cols).map(col => coerceToNumeric(ar.values(row)(col))).toVector
+                  (0 until ar.cols).map(col => coerceToNumeric(ar(row, col))).toVector
                 }.toVector
               )
             )
@@ -1426,17 +1466,132 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     (qualifier, name) =>
       reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
 
-  /** The sum over a `rows` × `cols` shape of the arguments' element-wise products. */
+  /**
+   * The sum over a `rows` × `cols` shape of the arguments' element-wise products. #750: when an
+   * argument is a [[SparseArray]], a raw range argument is read through its populated box too
+   * ([[sparseRanges]]), so a whole-axis range beside a whole-axis expression is never walked
+   * position by position. When every argument is then sparse, only the cells inside some argument's
+   * box are walked, a cost bounded by the boxes' total area whatever their placement (two one-cell
+   * boxes in opposite corners of `A:XFD` walk two cells): the boxes' edges cut the shape into a
+   * grid of tiles, each wholly inside or wholly outside every box, and a tile outside all of them
+   * adds its cells' product of the fills in closed form ([[fillProducts]]).
+   */
   private def sumOfProducts(
     arrays: List[ResolvedArray],
     rows: Int,
     cols: Int,
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    (0 until rows).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+    sparseRanges(arrays, ctx).flatMap { resolved =>
+      val sparse = resolved.collect { case s: SparseArray => s }
+      if resolved.isEmpty || sparse.size < resolved.size then
+        sumOverBox(resolved, 0, rows, 0, cols, ctx)
+      else
+        val boxes = sparse.collect {
+          case s if s.array.boxRows > 0 && s.array.boxCols > 0 =>
+            (
+              s.array.boxTop,
+              s.array.boxTop + s.array.boxRows,
+              s.array.boxLeft,
+              s.array.boxLeft + s.array.boxCols
+            )
+        }
+        val rowCuts = (boxes.flatMap(b => List(b._1, b._2)) ++ List(0, rows)).distinct.sorted
+        val colCuts = (boxes.flatMap(b => List(b._3, b._4)) ++ List(0, cols)).distinct.sorted
+        val rowBands = rowCuts.zip(rowCuts.drop(1))
+        val colBands = colCuts.zip(colCuts.drop(1))
+        val outside = fillProducts(sparse.map(_.array.fill), rows, cols, rowBands, colBands)
+        val tiles = for
+          (rb, ri) <- rowBands.zipWithIndex
+          (cb, ci) <- colBands.zipWithIndex
+        yield (rb, cb, ri, ci)
+        tiles.foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+          case (Left(err), _) => Left(err)
+          case (Right(acc), ((top, bottom), (left, right), ri, ci)) =>
+            // the cuts include every box edge, so a tile is inside a box iff its corner is
+            val inBox = boxes.exists((t, b, l, r) => top >= t && top < b && left >= l && left < r)
+            if inBox then sumOverBox(resolved, top, bottom, left, right, ctx).map(acc + _)
+            else Right(acc + outside(ri, ci))
+        }
+    }
+
+  /**
+   * #750: beside a [[SparseArray]], each raw range argument read the way array mode reads a range
+   * ([[readRangeArray]]) when it has more positions than its sheet has cells: through its populated
+   * box, so it becomes a [[SparseArray]] too. A range no larger than its sheet is kept (the shape,
+   * shared by every argument, then bounds the walk by the sheet), and so is every argument when
+   * none is sparse: each range is already bounded to the used area, and the walk is the one it has
+   * always been.
+   */
+  private def sparseRanges(
+    arrays: List[ResolvedArray],
+    ctx: EvalContext
+  ): Either[EvalError, List[ResolvedArray]] =
+    if !arrays.exists { case _: SparseArray => true; case _ => false } then Right(arrays)
+    else
+      arrays.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(acc), RangeArray(sheet, range))
+            if range.height.toLong * range.width.toLong > sheet.cells.size.toLong =>
+          readRangeArray(range, sheet, ctx).flatMap(sumProductArray).map(acc :+ _)
+        case (Right(acc), other) => Right(acc :+ other)
+      }
+
+  /**
+   * #750: for each tile of the grid cut by `rowBands` × `colBands` that lies outside every box, the
+   * sum over its cells of the product of the arrays' fills. Each fill is one value, or one per row
+   * or per column, so a cell's product is `K · R(row) · C(col)` (the constant fills' product, the
+   * row fills' product in its row, the column fills' in its column), and a tile's sum is `K ·
+   * ΣR[band] · ΣC[band]`. Every cell of such a tile is outside every box, so each fill entry read
+   * there is a real one (an entry is Empty only where its row or column has no cell outside its
+   * box). The band sums cost one pass over each axis.
+   */
+  private def fillProducts(
+    fills: List[ArrayResult.Fill],
+    rows: Int,
+    cols: Int,
+    rowBands: List[(Int, Int)],
+    colBands: List[(Int, Int)]
+  ): (Int, Int) => BigDecimal =
+    // the product of the fills along one axis, entry by entry; None when no fill varies along it
+    def axisProducts(n: Int, of: PartialFunction[ArrayResult.Fill, Vector[CellValue]]) =
+      val varying = fills.collect(of)
+      if varying.isEmpty then None
+      else
+        Some(Vector.tabulate(n) { i =>
+          varying.foldLeft(BigDecimal(1))((acc, vs) =>
+            acc * coerceToNumeric(vs.lift(i).getOrElse(CellValue.Empty))
+          )
+        })
+    def bandSums(products: Option[Vector[BigDecimal]], bands: List[(Int, Int)]) =
+      bands.map { (from, until) =>
+        products match
+          case None => BigDecimal(math.max(until - from, 0))
+          case Some(ps) => (from until until).foldLeft(BigDecimal(0))(_ + ps(_))
+      }.toVector
+    val constant = fills.foldLeft(BigDecimal(1)) {
+      case (acc, ArrayResult.Fill.Const(v)) => acc * coerceToNumeric(v)
+      case (acc, _) => acc
+    }
+    val rowSums = bandSums(axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
+    val colSums = bandSums(axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
+    (ri, ci) => constant * rowSums(ri) * colSums(ci)
+
+  /**
+   * The sum of the arguments' element-wise products over rows `[top, bottom)` × `[left, right)`.
+   */
+  private def sumOverBox(
+    arrays: List[ResolvedArray],
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    (top until bottom).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
       case (Left(err), _) => Left(err)
       case (Right(acc), row) =>
-        (0 until cols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
+        (left until right).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
           case (Left(err), _) => Left(err)
           case (Right(rowAcc), col) =>
             arrays

@@ -113,6 +113,13 @@ object ArrayArithmetic:
     range: CellRange,
     readCell: ARef => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
+    rangeToMatrixEval(range, readCell).map(ArrayResult(_))
+
+  /** [[rangeToArrayEval]]'s rows, for the consumers that work on the whole grid. */
+  private[formula] def rangeToMatrixEval(
+    range: CellRange,
+    readCell: ARef => Either[EvalError, CellValue]
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
     (range.rowStart.index0 to range.rowEnd.index0)
       .foldLeft[Either[EvalError, Vector[Vector[CellValue]]]](Right(Vector.empty)) { (rows, row) =>
         rows.flatMap { accumulated =>
@@ -123,13 +130,117 @@ object ArrayArithmetic:
             .map(accumulated :+ _)
         }
       }
-      .map(ArrayResult(_))
 
   /**
-   * Convert ArrayResult to numeric matrix.
+   * How [[readRange]] reads a range: by its size (`Auto`, every production evaluation), or always
+   * one way. `Sparse` (every range through its populated box) and `Dense` (every range position by
+   * position) exist for the sparse-equals-dense laws, which set them on the pass memo
+   * ([[Evaluator.EvalMemo.rangeRead]]) through [[Evaluator.arrayInstanceReading]].
+   */
+  private[formula] enum RangeRead derives CanEqual:
+    case Auto, Sparse, Dense
+
+  /**
+   * #750: a range's values in array mode, at the range's full shape, read in time and memory
+   * proportional to the smaller of the range and the sheet's populated cells.
+   *
+   * A range with no more positions than the sheet has cells is read position by position, as always
+   * (a bounded `$A$2:$A$50` never scans the sheet). A larger one (`R:KHI`, `A:XFD`, the generous
+   * `INDEX($A$1:$A$100000,0)`) is read from the other side: one pass over the sheet's cell keys
+   * finds the box of populated cells inside it, only that box is read, and every other position is
+   * the array's Empty fill, which reads exactly as an absent cell does. Every formula cell the
+   * range holds is populated, so it lies in the box and is evaluated as before. The box found for a
+   * (sheet, range) is kept in the pass memo when there is one.
+   *
+   * Only cells that hold a value widen the box: a style-only record (kept in `Sheet.cells` as
+   * Empty, the rule `QualifiedGraph` and the streaming reader use) reads as Empty, exactly as the
+   * fill does, so a formatted blank in XFD1 does not stretch `A:XFD`'s box across the sheet.
+   *
+   * The box is always inside the range, so reading it is never more work than the positional read
+   * of the whole range that 0.23.1 did. Only a box past [[ArrayResult.MaxBoxCells]] (and past the
+   * sheet's own cell count, whichever is larger) is refused, as a loud `EvalFailed`: two cells at
+   * opposite corners of `A:XFD` make a 17-billion-cell box that no read could build.
+   */
+  private[formula] def readRange(
+    range: CellRange,
+    sheet: Sheet,
+    readCell: ARef => Either[EvalError, CellValue],
+    memo: Option[Evaluator.EvalMemo]
+  ): Either[EvalError, ArrayResult] =
+    val height = range.height
+    val width = range.width
+    if height <= 0 || width <= 0 then Right(ArrayResult.empty)
+    else
+      val area = height.toLong * width.toLong
+      val positional = memo.fold(RangeRead.Auto)(_.rangeRead) match
+        case RangeRead.Dense => true
+        case RangeRead.Sparse => false
+        case RangeRead.Auto => area <= sheet.cells.size.toLong
+      if positional then rangeToMatrixEval(range, readCell).map(ArrayResult(_))
+      else
+        val found =
+          memo.fold(populatedBox(range, sheet))(
+            _.populatedBox(sheet, range)(populatedBox(range, sheet))
+          )
+        found match
+          case None => Right(ArrayResult.constant(height, width, CellValue.Empty))
+          case Some(box) =>
+            val boxArea = box.height.toLong * box.width.toLong
+            val bound = math.max(ArrayResult.MaxBoxCells, sheet.cells.size.toLong)
+            if boxArea > bound then
+              Left(
+                EvalError.EvalFailed(
+                  s"${range.toA1}: its populated cells span ${box.toA1} " +
+                    s"(${box.height}×${box.width} cells), more than the " +
+                    s"${ArrayResult.count(bound)}-cell bound on a range's populated box",
+                  None
+                )
+              )
+            else
+              rangeToMatrixEval(box, readCell).map { values =>
+                ArrayResult.sparse(
+                  height,
+                  width,
+                  box.rowStart.index0 - range.rowStart.index0,
+                  box.colStart.index0 - range.colStart.index0,
+                  values,
+                  ArrayResult.Fill.Const(CellValue.Empty)
+                )
+              }
+
+  /**
+   * The smallest range holding every cell of `sheet` inside `range` that holds a value (a
+   * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
+   */
+  private def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
+    val r0 = range.rowStart.index0
+    val r1 = range.rowEnd.index0
+    val c0 = range.colStart.index0
+    val c1 = range.colEnd.index0
+    sheet.cells.iterator
+      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { case (acc, (at, cell)) =>
+        val r = at.row.index0
+        val c = at.col.index0
+        if r < r0 || r > r1 || c < c0 || c > c1 then acc
+        else if !holdsValue(cell.value) then acc
+        else
+          Some(acc.fold((r, r, c, c)) { case (top, bottom, left, right) =>
+            (math.min(top, r), math.max(bottom, r), math.min(left, c), math.max(right, c))
+          })
+      }
+      .map((top, bottom, left, right) =>
+        CellRange(ARef.from0(left, top), ARef.from0(right, bottom))
+      )
+
+  private def holdsValue(value: CellValue): Boolean = value match
+    case CellValue.Empty => false
+    case _ => true
+
+  /**
+   * Convert ArrayResult to numeric matrix (every cell: refused past [[ArrayResult.MaxCells]]).
    */
   def arrayToNumeric(arr: ArrayResult): Either[EvalError, Vector[Vector[BigDecimal]]] =
-    traverseVV(arr.values)(cellValueToNumeric)
+    arr.toDense("arrayToNumeric").flatMap(traverseVV(_)(cellValueToNumeric))
 
   /**
    * Perform broadcasting binary operation.
@@ -250,26 +361,16 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
-    for
-      outRows <- broadcastDim(left.rows, right.rows, "rows")
-      outCols <- broadcastDim(left.cols, right.cols, "columns")
-      result <- traverseVV(
-        (0 until outRows).toVector.map { row =>
-          (0 until outCols).toVector.map { col =>
-            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
-            (lVal, rVal)
-          }
-        }
-      ) { case (l, r) =>
-        carriedError(l).orElse(carriedError(r)) match
-          case Some(err) => Right(CellValue.Error(err))
-          case None =>
-            compareCellValues(l, r) match
-              case Right(sign) => Right(CellValue.Bool(op(sign)))
-              case Left(e) => toErrorElement(e)
-      }
-    yield ArrayResult(result)
+    broadcastN(Vector(left, right)) { elements =>
+      val l = elements.headOption.getOrElse(CellValue.Empty)
+      val r = elements.lift(1).getOrElse(CellValue.Empty)
+      carriedError(l).orElse(carriedError(r)) match
+        case Some(err) => Right(CellValue.Error(err))
+        case None =>
+          compareCellValues(l, r) match
+            case Right(sign) => Right(CellValue.Bool(op(sign)))
+            case Left(e) => toErrorElement(e)
+    }
 
   /**
    * GH-197: Element-wise equality/inequality comparison with broadcasting.
@@ -290,21 +391,18 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(ArrayResult(left.values.map(_.map(cv => equalityElement(cv, scalarCV, negate)))))
+        Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
-        for
-          outRows <- broadcastDim(left.rows, rightArr.rows, "rows")
-          outCols <- broadcastDim(left.cols, rightArr.cols, "columns")
-        yield
-          val result = (0 until outRows).toVector.map { row =>
-            (0 until outCols).toVector.map { col =>
-              val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-              val rVal = getWithBroadcastCV(rightArr.values, row, col, rightArr.rows, rightArr.cols)
-              equalityElement(lVal, rVal, negate)
-            }
-          }
-          ArrayResult(result)
+        broadcastN(Vector(left, rightArr)) { elements =>
+          Right(
+            equalityElement(
+              elements.headOption.getOrElse(CellValue.Empty),
+              elements.lift(1).getOrElse(CellValue.Empty),
+              negate
+            )
+          )
+        }
 
   /** GH-337: one equality output element — carried errors win (left first), then Bool equality. */
   private def equalityElement(l: CellValue, r: CellValue, negate: Boolean): CellValue =
@@ -319,17 +417,13 @@ object ArrayArithmetic:
    * so not a broadcast axis) reads as a #N/A element — Excel pads mismatched array dimensions with
    * #N/A rather than failing the operation.
    */
-  private def getWithBroadcastCV(
-    arr: Vector[Vector[CellValue]],
-    row: Int,
-    col: Int,
-    arrRows: Int,
-    arrCols: Int
-  ): CellValue =
+  private def getWithBroadcastCV(arr: ArrayResult, row: Int, col: Int): CellValue =
+    val arrRows = arr.rows
+    val arrCols = arr.cols
     val r = if arrRows == 1 then 0 else row
     val c = if arrCols == 1 then 0 else col
     if r >= arrRows || c >= arrCols then CellValue.Error(CellError.NA)
-    else arr(r)(c)
+    else arr(r, c)
 
   /**
    * GH-337: the Excel error an element carries, if any — a `CellValue.Error` directly or cached
@@ -393,30 +487,16 @@ object ArrayArithmetic:
     ifTrue: ArrayResult,
     ifFalse: ArrayResult
   ): Either[EvalError, ArrayResult] =
-    for
-      rowsCT <- broadcastDim(cond.rows, ifTrue.rows, "rows")
-      outRows <- broadcastDim(rowsCT, ifFalse.rows, "rows")
-      colsCT <- broadcastDim(cond.cols, ifTrue.cols, "columns")
-      outCols <- broadcastDim(colsCT, ifFalse.cols, "columns")
-      result <- traverseVV(
-        (0 until outRows).toVector.map { row =>
-          (0 until outCols).toVector.map(col => (row, col))
-        }
-      ) { case (row, col) =>
-        val condCV = getWithBroadcastCV(cond.values, row, col, cond.rows, cond.cols)
-        carriedError(condCV) match
-          case Some(err) => Right(CellValue.Error(err))
-          case None =>
-            conditionTruthy("IF condition", condCV) match
-              case Right(truthy) =>
-                Right(
-                  if truthy then
-                    getWithBroadcastCV(ifTrue.values, row, col, ifTrue.rows, ifTrue.cols)
-                  else getWithBroadcastCV(ifFalse.values, row, col, ifFalse.rows, ifFalse.cols)
-                )
-              case Left(e) => toErrorElement(e)
-      }
-    yield ArrayResult(result)
+    broadcastN(Vector(cond, ifTrue, ifFalse)) { elements =>
+      val condCV = elements.headOption.getOrElse(CellValue.Empty)
+      carriedError(condCV) match
+        case Some(err) => Right(CellValue.Error(err))
+        case None =>
+          conditionTruthy("IF condition", condCV) match
+            case Right(truthy) =>
+              Right(elements.lift(if truthy then 1 else 2).getOrElse(CellValue.Empty))
+            case Left(e) => toErrorElement(e)
+    }
 
   /**
    * GH-333/GH-338: Excel truthiness for a condition element, shared by broadcastIf (IF over an
@@ -461,7 +541,24 @@ object ArrayArithmetic:
    * element's is `#VALUE!` (#709).
    */
   def truthyElements(label: String, arr: ArrayResult): Either[EvalError, Vector[Boolean]] =
-    traverseV(arr.values.flatten)(cv => conditionTruthy(label, cv))
+    arr.toDense(label).flatMap(rows => traverseV(rows.flatten)(cv => conditionTruthy(label, cv)))
+
+  /**
+   * #750: [[truthyElements]] folded with `combine` from `seed` (AND = `&&`, OR = `||`), walking the
+   * array's [[ArrayResult.tally]]: an idempotent `combine` needs each group's value once, so a
+   * whole-axis array folds in the time of its populated cells. The first refusing element, in
+   * row-major order, short-circuits with its Left.
+   */
+  def truthyFold(
+    label: String,
+    arr: ArrayResult,
+    seed: Boolean,
+    combine: (Boolean, Boolean) => Boolean
+  ): Either[EvalError, Boolean] =
+    arr.tally.foldLeft[Either[EvalError, Boolean]](Right(seed)) {
+      case (Left(err), _) => Left(err)
+      case (Right(acc), (cv, _)) => conditionTruthy(label, cv).map(combine(acc, _))
+    }
 
   /**
    * GH-338: elementwise NOT over an array condition, preserving shape (Excel broadcasts NOT rather
@@ -470,14 +567,14 @@ object ArrayArithmetic:
    * #VALUE! element. Total in Right.
    */
   def broadcastNot(label: String, arr: ArrayResult): Either[EvalError, ArrayResult] =
-    traverseVV(arr.values) { cv =>
+    arr.map { cv =>
       carriedError(cv) match
         case Some(err) => Right(CellValue.Error(err))
         case None =>
           conditionTruthy(label, cv) match
             case Right(b) => Right(CellValue.Bool(!b))
             case Left(e) => toErrorElement(e)
-    }.map(ArrayResult(_))
+    }
 
   /** Convert any value to CellValue for comparison. */
   def anyToCellValue(v: Any): CellValue = v match
@@ -519,37 +616,284 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: BinaryOp
   ): Either[EvalError, ArrayResult] =
-    // Determine output dimensions
-    for
-      outRows <- broadcastDim(left.rows, right.rows, "rows")
-      outCols <- broadcastDim(left.cols, right.cols, "columns")
-      result <- traverseVV(
-        (0 until outRows).toVector.map { row =>
-          (0 until outCols).toVector.map { col =>
-            val lVal = getWithBroadcastCV(left.values, row, col, left.rows, left.cols)
-            val rVal = getWithBroadcastCV(right.values, row, col, right.rows, right.cols)
-            (lVal, rVal)
-          }
-        }
-      ) { case (l, r) => applyOpCarrying(l, r, op) }
-    yield ArrayResult(result)
+    broadcastN(Vector(left, right)) { elements =>
+      applyOpCarrying(
+        elements.headOption.getOrElse(CellValue.Empty),
+        elements.lift(1).getOrElse(CellValue.Empty),
+        op
+      )
+    }
+
+  /**
+   * #750: what one operand of a broadcast contributes outside the part of the output computed cell
+   * by cell. Its value varies over the output rows `[top, bottom)` and columns `[left, right)` (an
+   * empty rectangle when it varies nowhere), and is `outside` everywhere else: one value, or one
+   * value per output row or per output column.
+   */
+  private final case class Footprint(
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    outside: Outside
+  ):
+    def isEmpty: Boolean = top >= bottom || left >= right
+    def area: Long = if isEmpty then 0L else (bottom - top).toLong * (right - left).toLong
+
+  /**
+   * An operand's value outside its [[Footprint]]: one value, or a function of the row or column.
+   */
+  private enum Outside derives CanEqual:
+    case Const(value: CellValue)
+    case ByRow(at: Int => CellValue)
+    case ByCol(at: Int => CellValue)
+
+    def entry(i: Int): CellValue = this match
+      case Const(v) => v
+      case ByRow(at) => at(i)
+      case ByCol(at) => at(i)
+
+  /** The fill a broadcast's result takes: one value, one per row, or one per column. */
+  private enum FillAxis derives CanEqual:
+    case Const, ByRow, ByCol
+
+    def admits(outside: Outside): Boolean = (this, outside) match
+      case (_, Outside.Const(_)) => true
+      case (ByRow, Outside.ByRow(_)) => true
+      case (ByCol, Outside.ByCol(_)) => true
+      case _ => false
+
+  private def uniform(value: CellValue): Footprint = Footprint(0, 0, 0, 0, Outside.Const(value))
+
+  /**
+   * The ways an operand can be described on a `outRows` x `outCols` broadcast, each exact:
+   *   - a vector broadcast along the other axis (`{1,2,3}` down a million rows) varies only by
+   *     column (or by row): no footprint at all, one value per output column (or row);
+   *   - its populated box, stretched along a broadcast axis, and its own fill outside it (a fill
+   *     that also takes the #N/A of the positions past its extent, when it is shorter than the
+   *     output along one axis and that fill does not vary along the other);
+   *   - when it is shorter than the output, its whole extent, with the #N/A pad outside it.
+   */
+  private def footprints(op: ArrayResult, outRows: Int, outCols: Int): Vector[Footprint] =
+    val na = CellValue.Error(CellError.NA)
+    if op.isEmpty then Vector(uniform(na))
+    else if op.rows == 1 && op.cols == 1 then Vector(uniform(op(0, 0)))
+    else
+      val padRows = op.rows != 1 && op.rows < outRows
+      val padCols = op.cols != 1 && op.cols < outCols
+      val vector =
+        if op.rows == 1 then
+          Vector(Footprint(0, 0, 0, 0, Outside.ByCol(c => getWithBroadcastCV(op, 0, c))))
+        else if op.cols == 1 then
+          Vector(Footprint(0, 0, 0, 0, Outside.ByRow(r => getWithBroadcastCV(op, r, 0))))
+        else Vector.empty
+      // the output span an axis varies over: the whole axis when it broadcasts, else the box's
+      def span(extent: Int, out: Int, boxStart: Int, boxSize: Int): (Int, Int) =
+        if extent == 1 then (0, out) else (boxStart, boxStart + boxSize)
+      val hasBox = op.boxRows > 0 && op.boxCols > 0
+      val (top, bottom) = if hasBox then span(op.rows, outRows, op.boxTop, op.boxRows) else (0, 0)
+      val (left, right) = if hasBox then span(op.cols, outCols, op.boxLeft, op.boxCols) else (0, 0)
+      val ownFill: Option[Outside] = op.fill match
+        case ArrayResult.Fill.Const(v) =>
+          if padRows && padCols then None
+          else if padRows then Some(Outside.ByRow(r => if r < op.rows then v else na))
+          else if padCols then Some(Outside.ByCol(c => if c < op.cols then v else na))
+          else Some(Outside.Const(v))
+        case f @ ArrayResult.Fill.ByRow(_) =>
+          if padCols then None
+          else Some(Outside.ByRow(r => if r < op.rows then f.at(r, 0) else na))
+        case f @ ArrayResult.Fill.ByCol(_) =>
+          if padRows then None
+          else Some(Outside.ByCol(c => if c < op.cols then f.at(0, c) else na))
+      val boxed = ownFill.map(Footprint(top, bottom, left, right, _))
+      val extent =
+        if padRows || padCols then
+          val height = if op.rows == 1 then outRows else op.rows
+          val width = if op.cols == 1 then outCols else op.cols
+          Some(Footprint(0, height, 0, width, Outside.Const(na)))
+        else None
+      vector ++ boxed ++ extent
+
+  /** The output rectangle a broadcast computes cell by cell, and the fill outside it. */
+  private final case class BroadcastPlan(
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    axis: FillAxis,
+    outsides: Vector[Outside]
+  )
 
   /**
    * N-ary element-wise broadcast under the same shape rules as the binary broadcasts: an axis of
    * extent 1 repeats, unequal extents take the larger and pad the missing positions with #N/A
    * (GH-344 4b). `elem` receives one element per operand, in operand order; a Left from it fails
    * the whole broadcast (element-local failures should come back as error ELEMENTS instead).
+   *
+   * #750: over sparse operands only the union of the operands' footprints is computed cell by cell;
+   * every other cell is the element of the operands' outside values, computed once per fill entry.
+   * The result's fill is one value when every operand's outside is, and one value per column (or
+   * per row) when an operand's varies along that axis: `A:A*{1,2,3}` computes the populated rows of
+   * A and three fill entries. An outside that would vary along both axes (a whole column times a
+   * whole row, both padded) is computed cell by cell when the result is at most
+   * [[ArrayResult.MaxCells]] cells, and otherwise over the smallest rectangle that leaves a fill by
+   * one axis outside it, refused when that rectangle is past [[ArrayResult.MaxBoxCells]] (and past
+   * the operands' boxes together).
    */
-  private[formula] def broadcastN(operands: Vector[ArrayResult])(
+  private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
     val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
     val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
-    traverseVV(
-      (0 until outRows).toVector.map(row => (0 until outCols).toVector.map(col => (row, col)))
-    ) { case (row, col) =>
-      elem(operands.map(op => getWithBroadcastCV(op.values, row, col, op.rows, op.cols)))
-    }.map(ArrayResult(_))
+    val outCells = outRows.toLong * outCols.toLong
+    if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
+    else
+      val whole = BroadcastPlan(0, outRows, 0, outCols, FillAxis.Const, Vector.empty)
+      def cellByCell: Either[EvalError, BroadcastPlan] =
+        if outCells > ArrayResult.MaxCells then
+          Left(ArrayResult.tooLarge("array operation", outRows.toLong, outCols.toLong))
+        else Right(whole)
+      val plan: Either[EvalError, BroadcastPlan] =
+        if operands.forall(_.isDense) then Right(whole)
+        else if perCell then cellByCell
+        else
+          val options = operands.map(footprints(_, outRows, outCols))
+          // the computed rectangle is built cell by cell, so it takes the bound a range's box does
+          // (its operands' boxes, already built, count too)
+          val budget = math.max(ArrayResult.MaxBoxCells, operands.map(_.boxArea).sum)
+          // for each fill axis, every operand's smallest footprint whose outside it admits
+          val candidates = FillAxis.values.toVector.flatMap { axis =>
+            val picks = options.map(
+              _.filter(f => axis.admits(f.outside))
+                .sortBy(f =>
+                  (
+                    f.area,
+                    f.outside match
+                      case Outside.Const(_) => 0
+                      case _ => 1
+                  )
+                )
+                .headOption
+            )
+            if picks.exists(_.isEmpty) then None
+            else
+              val chosen = picks.flatten
+              val rect = boundingRect(
+                chosen.filterNot(_.isEmpty).map(f => (f.top, f.bottom, f.left, f.right))
+              )
+                .getOrElse((0, 0, 0, 0))
+              val area = (rect._2 - rect._1).toLong * (rect._4 - rect._3).toLong
+              val varies = chosen.exists(f =>
+                !(f.outside match
+                  case Outside.Const(_) => true
+                  case _ => false
+                )
+              )
+              val entries = (axis, varies) match
+                case (FillAxis.ByRow, true) => outRows.toLong
+                case (FillAxis.ByCol, true) => outCols.toLong
+                case _ => 0L
+              val effective = if varies then axis else FillAxis.Const
+              Some(
+                (
+                  area,
+                  area + entries,
+                  BroadcastPlan(
+                    rect._1,
+                    rect._2,
+                    rect._3,
+                    rect._4,
+                    effective,
+                    chosen.map(_.outside)
+                  )
+                )
+              )
+          }
+          candidates.filter(_._1 <= budget).sortBy(_._2).headOption match
+            case Some((_, _, plan)) => Right(plan)
+            case None if outCells <= ArrayResult.MaxCells => Right(whole)
+            case None =>
+              candidates.sortBy(_._1).headOption match
+                case Some((_, _, p)) =>
+                  Left(
+                    EvalError.EvalFailed(
+                      s"array operation: the populated cells of its ${outRows}×$outCols result " +
+                        s"span ${p.bottom - p.top}×${p.right - p.left} cells, more than the " +
+                        s"${ArrayResult.count(budget)}-cell bound on its computed box",
+                      None
+                    )
+                  )
+                case None => cellByCell
+      plan.flatMap { p =>
+        val height = math.max(p.bottom - p.top, 0)
+        val width = math.max(p.right - p.left, 0)
+        val g = ArrayResult.Geometry(outRows, outCols, p.top, p.left, height, width)
+        // every cell outside the computed box: the element of the operands' outside values, once
+        // per fill entry
+        val fillResult = ArrayResult.computeFill(
+          g,
+          p.axis match
+            case FillAxis.Const => None
+            case FillAxis.ByRow => Some(true)
+            case FillAxis.ByCol => Some(false)
+        )(i => elem(p.outsides.map(_.entry(i))))
+        computeBox(p.top, height, p.left, width, outCols)(r =>
+          c => elem(operands.map(op => getWithBroadcastCV(op, r, c)))
+        ) match
+          case Left((err, at)) =>
+            fillResult match
+              case Left((fillErr, fillAt)) if fillAt < at => Left(fillErr)
+              case _ => Left(err)
+          case Right(box) =>
+            fillResult match
+              case Left((fillErr, _)) => Left(fillErr)
+              case Right(fill) =>
+                Right(ArrayResult.sparse(outRows, outCols, p.top, p.left, box, fill))
+      }
+
+  /**
+   * The smallest `(top, bottom, left, right)` rectangle (bottom and right exclusive) holding every
+   * one of `rects`; None for none.
+   */
+  private[formula] def boundingRect(
+    rects: Iterable[(Int, Int, Int, Int)]
+  ): Option[(Int, Int, Int, Int)] =
+    rects.foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, rect) =>
+      Some(acc.fold(rect) { case (t, b, l, r) =>
+        (math.min(t, rect._1), math.max(b, rect._2), math.min(l, rect._3), math.max(r, rect._4))
+      })
+    }
+
+  /**
+   * The `height` x `width` cells at (`top`, `left`) of an output `outCols` wide, row-major,
+   * stopping at the first Left, which comes back with its row-major position in the output.
+   */
+  private def computeBox(top: Int, height: Int, left: Int, width: Int, outCols: Int)(
+    cell: Int => Int => Either[EvalError, CellValue]
+  ): Either[(EvalError, Long), Vector[Vector[CellValue]]] =
+    val rowsOut = new scala.collection.immutable.VectorBuilder[Vector[CellValue]]
+    @scala.annotation.tailrec
+    def rowLoop(i: Int): Either[(EvalError, Long), Vector[Vector[CellValue]]] =
+      if i >= height then Right(rowsOut.result())
+      else
+        val r = top + i
+        val at = cell(r)
+        val cellsOut = new scala.collection.immutable.VectorBuilder[CellValue]
+        @scala.annotation.tailrec
+        def colLoop(j: Int): Option[(EvalError, Long)] =
+          if j >= width then None
+          else
+            at(left + j) match
+              case Right(v) =>
+                cellsOut += v
+                colLoop(j + 1)
+              case Left(e) => Some((e, r.toLong * outCols.toLong + (left + j).toLong))
+        colLoop(0) match
+          case Some(failure) => Left(failure)
+          case None =>
+            rowsOut += cellsOut.result()
+            rowLoop(i + 1)
+    rowLoop(0)
 
   /**
    * One `&` output element: a carried error on either side wins (left first) — errors propagate,

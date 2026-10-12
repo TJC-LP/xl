@@ -30,8 +30,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   val transpose: FunctionSpec[ArrayResult] { type Args = UnaryRange } =
     FunctionSpec.simple[ArrayResult, UnaryRange]("TRANSPOSE", Arity.one) { (location, ctx) =>
       ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
-        extractRangeAsMatrixEval(range, targetSheet, ctx)
-          .map(values => ArrayResult(values.transpose))
+        readRangeArray(range, targetSheet, ctx).map(_.transpose)
       }
     }
 
@@ -166,7 +165,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   ): Either[EvalError, ArrayResult] =
     boundedToUsed(range, target) match
       case None => Right(ArrayResult.empty)
-      case Some(r) => extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
+      case Some(r) => readRangeArray(r, target, ctx)
 
   /**
    * INDIRECT(ref_text, [a1])
@@ -280,7 +279,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       case Some(r) =>
         if r.width.toLong * r.height.toLong > MaxIndirectCells then
           Left(EvalError.EvalFailed("INDIRECT: resolved range exceeds 1,048,576 cells", None))
-        else extractRangeAsMatrixEval(r, target, ctx).map(ArrayResult(_))
+        else readRangeArray(r, target, ctx)
 
   /**
    * SEQUENCE(rows, [cols], [start], [step])
@@ -423,7 +422,8 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
             }
           // GH-654: a bare cell (`=FILTER(A1:C1,D1)`) arrives as an unresolved PolyRef —
           // evalMaybeArrayArg resolves it to its 1×1 value like every other array-aware slot
-          case Right(expr) => evalMaybeArrayArg(ctx, expr).map(toCellArray(_).values)
+          case Right(expr) =>
+            evalMaybeArrayArg(ctx, expr).flatMap(toCellArray(_).toDense("FILTER include"))
         result <-
           val rows = matrix.size
           val cols = matrix.headOption.map(_.size).getOrElse(0)

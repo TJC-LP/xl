@@ -59,7 +59,7 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
         // still applies
         case arr: ArrayResult if isRange => rangeFold(label, arr, combine)
         case arr: ArrayResult =>
-          ArrayArithmetic.truthyElements(label, arr).map(v => Some(v.foldLeft(seed)(combine)))
+          ArrayArithmetic.truthyFold(label, arr, seed, combine).map(Some(_))
         case scalar => scalarCondition(label, scalar).map(Some(_))
       }
 
@@ -85,18 +85,13 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
   ): Either[EvalError, Option[Boolean]] =
     boundary:
       var acc: Option[Boolean] = None
-      val rows = arr.values
-      var r = 0
-      while r < rows.length do
-        val row = rows(r)
-        var c = 0
-        while c < row.length do
-          rangeLogical(label, row(c)) match
-            case Left(err) => break(Left(err))
-            case Right(Some(b)) => acc = Some(acc.fold(b)(combine(_, b)))
-            case Right(None) => ()
-          c += 1
-        r += 1
+      // #750: one value per group: AND and OR are idempotent, so a group of equal cells folds as one
+      val it = arr.tally
+      while it.hasNext do
+        rangeLogical(label, it.next()._1) match
+          case Left(err) => break(Left(err))
+          case Right(Some(b)) => acc = Some(acc.fold(b)(combine(_, b)))
+          case Right(None) => ()
       Right(acc)
 
   /**
