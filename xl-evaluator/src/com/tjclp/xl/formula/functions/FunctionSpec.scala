@@ -438,6 +438,16 @@ object ArgSpec:
       ): TExpr[A] =
         mapExpr(args).asInstanceOf[TExpr[A]]
 
+  /**
+   * GH-713: the calls a range slot names as "a computed reference" rather than reporting an
+   * argument count — every registered reference-computing function and the `:` operator, derived
+   * from [[ReferenceOperators.computingFunctions]]. It differs from `Evaluator.referenceFunctions`
+   * on purpose: a selector (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an
+   * intersection is not a computed reference. A drift law ties the two sets together.
+   */
+  private[formula] lazy val computedReferenceCalls: Set[String] =
+    ReferenceOperators.computingFunctions + ReferenceOperators.RangeName
+
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")
 
@@ -491,7 +501,7 @@ object ArgSpec:
           )
         // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
         // is named, never reported as a wrong argument count — accepting it here is #710's
-        case (call: TExpr.Call[?]) :: _ if ComputedReferenceCalls.contains(call.spec.name) =>
+        case (call: TExpr.Call[?]) :: _ if computedReferenceCalls.contains(call.spec.name) =>
           Left(
             ParseError.InvalidArguments(
               fnName,
@@ -503,9 +513,6 @@ object ArgSpec:
           )
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
-
-    private val ComputedReferenceCalls: Set[String] =
-      Set("OFFSET", "INDIRECT", "INDEX", "XLOOKUP", ReferenceOperators.RangeName)
 
     /** The 1×1 range a cell reference addresses, its anchor on both corners. */
     private def singleCell(at: ARef, anchor: Anchor): CellRange =

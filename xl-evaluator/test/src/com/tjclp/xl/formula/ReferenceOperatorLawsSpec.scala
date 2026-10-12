@@ -302,6 +302,22 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
       referencing ++ Set("IF", "IFS", "CHOOSE", "SWITCH") ++
         Set(functions.ReferenceOperators.IntersectionName, functions.ReferenceOperators.RangeName)
     )
+    assertEquals(
+      functions.ReferenceOperators.selectingFunctions,
+      Set("IF", "IFS", "CHOOSE", "SWITCH")
+    )
+    // a range slot names the calls that compute a reference: every Referencing spec and `:` —
+    // not the selectors (IF(…) there keeps the plain argument-count diagnostic) nor the
+    // intersection (a variadic slot reads it; a range slot reports it like any other call)
+    assertEquals(
+      functions.ArgSpec.computedReferenceCalls,
+      Evaluator.referenceFunctions -- functions.ReferenceOperators.selectingFunctions -
+        functions.ReferenceOperators.IntersectionName
+    )
+    assertEquals(
+      functions.ArgSpec.computedReferenceCalls,
+      referencing + functions.ReferenceOperators.RangeName
+    )
     // neither operator is registered, nor reachable by name
     List(
       functions.ReferenceOperators.UnionName,

@@ -566,21 +566,12 @@ object Evaluator:
    * they select; OFFSET, INDIRECT, INDEX and, GH-713, XLOOKUP compute one; GH-669: so does the
    * intersection operator ` `, and GH-713 the range operator `:`): in a reference position their
    * result reaches the consumer whole, in a plain cell's value position it is implicitly
-   * intersected. Every `FunctionSpec.Referencing` is here (a drift law pins it).
+   * intersected. Derived: the selectors, every registered `FunctionSpec.Referencing`, and the two
+   * operators, which are unregistered (a drift law pins the result).
    */
-  private[formula] val referenceFunctions: Set[String] =
-    Set(
-      "IF",
-      "IFS",
-      "CHOOSE",
-      "SWITCH",
-      "OFFSET",
-      "INDIRECT",
-      "INDEX",
-      "XLOOKUP",
-      ReferenceOperators.IntersectionName,
-      ReferenceOperators.RangeName
-    )
+  private[formula] lazy val referenceFunctions: Set[String] =
+    ReferenceOperators.selectingFunctions ++ ReferenceOperators.computingFunctions +
+      ReferenceOperators.IntersectionName + ReferenceOperators.RangeName
 
   /**
    * GH-669: an operator node (binary, `%` or unary `+`) whose operands are only array constants,

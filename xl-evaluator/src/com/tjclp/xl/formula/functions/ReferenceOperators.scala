@@ -37,6 +37,21 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   final val IntersectionName = "(intersection)"
   final val RangeName = "(range)"
 
+  /**
+   * The functions that return the reference they select: Excel's IF, IFS, CHOOSE and SWITCH. They
+   * evaluate their branches lazily rather than through `FunctionSpec.referencing`, so no spec marks
+   * them; this set is the one place that names them.
+   */
+  private[formula] val selectingFunctions: Set[String] = Set("IF", "IFS", "CHOOSE", "SWITCH")
+
+  /**
+   * The registered functions that compute a reference — every `FunctionSpec.Referencing` in the
+   * registry (OFFSET, INDIRECT, INDEX, XLOOKUP), derived so a new one needs no list edited. Lazy:
+   * the registry is read only once every spec exists, never while `FunctionSpecs` initializes.
+   */
+  private[formula] lazy val computingFunctions: Set[String] =
+    FunctionRegistry.all.collect { case spec: FunctionSpec.Referencing[?, ?] => spec.name }.toSet
+
   /** One operand: a location the parser recognized, or a reference-valued expression. */
   type Operand = Either[TExpr.RangeLocation, TExpr[Any]]
 
@@ -508,8 +523,6 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       asArea(e).fold[Envelope](Envelope.Unknown) { case (sheet, range, own) =>
         Envelope.Within(sheet, range, covered && own)
       }
-
-  private val selectingFunctions = Set("IF", "IFS", "CHOOSE", "SWITCH")
 
   /** The envelope of one operand of `:` (see [[Envelope]]). */
   private[formula] def envelope(op: Operand, shapeOf: ShapeOf): Envelope = op match
