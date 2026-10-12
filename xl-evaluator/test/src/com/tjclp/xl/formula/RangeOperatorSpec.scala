@@ -463,6 +463,44 @@ class RangeOperatorSpec extends FunSuite:
     )
   }
 
+  test("GH-713: a large finite reference keeps its declared shape (guards #736)") {
+    // a cheaper materialization (#736) must keep ROWS/COLUMNS and the bounding range exact
+    assertEquals(plain("H1", "ROWS(INDEX($A$2:$A$100000,0))"), Right(N("99999")))
+    assertEquals(plain("H1", "COLUMNS(INDEX($A$2:$M$100000,0,0))"), Right(N("13")))
+    assertEquals(plain("H1", "ROWS(INDEX($A$2:$C$100000,0,2))"), Right(N("99999")))
+    assertEquals(plain("H1", "COLUMNS(INDEX($A$2:$M$100000,5,0))"), Right(N("13")))
+    assertEquals(plain("H1", "ROWS(A1:INDEX($A$1:$A$100000,100000))"), Right(N("100000")))
+    assertEquals(plain("H1", "ROWS(XLOOKUP(2,A1:A3,$B$1:$M$3))"), Right(N("1")))
+    assertEquals(plain("H1", "COLUMNS(XLOOKUP(2,A1:A3,$B$1:$M$3))"), Right(N("12")))
+    assertEquals(plain("H1", "SUM(INDEX($A$1:$A$100000,0))"), Right(N("6")))
+  }
+
+  test("GH-713: names on another sheet as `:` operands, through the workbook graph") {
+    // OtherTop = Other!$A$1, OtherBottom = Other!$A$3: the range is Other!A1:A3, and its edges
+    // reach Other!A2, which neither name names (the graph resolves both through the workbook)
+    val sheet1Name = SheetName.unsafe("Sheet1")
+    val otherName = SheetName.unsafe("Other")
+    val named = book
+      .withDefinedName("OtherTop", "Other!$A$1")
+      .withDefinedName("OtherBottom", "Other!$A$3")
+    val placed =
+      named.put(sheet1.put(ref"H1", CellValue.Formula("SUM(OtherTop:OtherBottom)", None)))
+    val h1 = DependencyGraph.QualifiedRef(sheet1Name, ref"H1")
+    val (edges, _) = DependencyGraph.fromWorkbookBounded(placed)
+    assert(edges(h1).contains(DependencyGraph.QualifiedRef(otherName, ref"A2")), edges(h1))
+    def cached(wb: Workbook): Option[CellValue] =
+      wb(sheet1Name).toOption.flatMap(_.cells.get(ref"H1")).map(_.value) match
+        case Some(CellValue.Formula(_, value, _)) => value
+        case other => other
+    val settled = placed.recalculate().workbook
+    assertEquals(cached(settled), Some(N("6000")))
+    val edited = settled.put(
+      settled(otherName).fold(e => fail(e.message), identity).put(ref"A2", N("20"))
+    )
+    val targeted = edited.recalculateAfterEdit(otherName, Set(ref"A2"), RecalcOptions()).workbook
+    assertEquals(cached(targeted), Some(N("4020")))
+  }
+
   test("GH-713: a cross-sheet computed range through the workbook graph, covered and not") {
     val sheet1Name = SheetName.unsafe("Sheet1")
     val otherName = SheetName.unsafe("Other")
