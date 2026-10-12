@@ -243,7 +243,9 @@ object DependencyGraph:
     expr match
       case call: TExpr.Call[?] =>
         val values = call.spec.argSpec.toValues(call.args)
+        // GH-713: a computed range its own edges do not cover reads cells the graph cannot see
         (includeDynamicCalls && (call.spec.flags.dynamicDeps ||
+          ReferenceOperators.isComputedRangeDynamic(call, ReferenceOperators.staticShape) ||
           CriteriaRangeResize.hasDynamicResize(
             call.spec.name,
             values,
@@ -435,16 +437,26 @@ object DependencyGraph:
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
     val names = FunctionRegistry.dynamicFunctionNames
-    def candidate(expression: String): Boolean =
-      val text = expression.toUpperCase(java.util.Locale.ROOT)
-      names.exists(text.contains) || CriteriaRangeResize.mayResizeThroughName(expression, text)
-    sheet.cells.iterator.flatMap { case (ref, cell) =>
-      cell.value match
-        case CellValue.Formula(expression, _, _) if candidate(expression) =>
-          FormulaParser.parse(expression) match
-            case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
-            case _ => None
-        case _ => None
+    // The verdict depends on the text alone, and formulas repeat (fill-down of absolute
+    // references, copied blocks), so each distinct text is scanned, and parsed, once per call.
+    val verdicts = scala.collection.mutable.HashMap.empty[String, Boolean]
+    def dynamic(expression: String): Boolean =
+      verdicts.getOrElseUpdate(
+        expression, {
+          val text = expression.toUpperCase(java.util.Locale.ROOT)
+          // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
+          (names.exists(text.contains) ||
+            CriteriaRangeResize.mayResizeThroughName(expression, text) ||
+            ReferenceOperators.mayContainComputedRange(expression)) &&
+          FormulaParser.parse(expression).exists(containsDynamicReference)
+        }
+      )
+    sheet.cells.iterator.collect {
+      case (ref, cell) if (cell.value match
+            case CellValue.Formula(expression, _, _) => dynamic(expression)
+            case _ => false
+          ) =>
+        ref
     }.toSet
 
   /**
@@ -624,12 +636,19 @@ object DependencyGraph:
     val candidateTokens = dynamicFunctions ++ nameTokens
     // A SUMIF/AVERAGEIF resized through a LET name or a computed defined name is dynamic too
     // (hasDynamicResize; #733: a name bound to a range resizes statically). Its own text pre-filter
-    // keeps SUMIFS and SUMIF over written ranges unparsed
+    // keeps SUMIFS and SUMIF over written ranges unparsed. GH-713: a computed range its edges do
+    // not cover is dynamic (see dynamicCells(sheet)). The pre-filter's verdict depends on the text
+    // alone: each distinct text is scanned once
+    val candidates = scala.collection.mutable.HashMap.empty[String, Boolean]
     def candidate(expression: String): Boolean =
-      val text = upper(expression)
-      candidateTokens.exists(text.contains) ||
-      CriteriaRangeResize.mayResizeThroughName(expression, text)
-
+      candidates.getOrElseUpdate(
+        expression, {
+          val text = upper(expression)
+          candidateTokens.exists(text.contains) ||
+          CriteriaRangeResize.mayResizeThroughName(expression, text) ||
+          ReferenceOperators.mayContainComputedRange(expression)
+        }
+      )
     val cells =
       workbook.sheets.iterator.flatMap { sheet =>
         sheet.cells.iterator.flatMap { case (ref, cell) =>
@@ -809,7 +828,8 @@ object DependencyGraph:
         depsFromArgValues(
           ReferenceOperators.dependencyValues(
             call.spec.name,
-            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+            ReferenceOperators.staticShape
           ),
           expr => extractDependencies(expr),
           _.localCells,
@@ -932,7 +952,8 @@ object DependencyGraph:
         depsFromArgValues(
           ReferenceOperators.dependencyValues(
             call.spec.name,
-            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args))
+            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+            ReferenceOperators.staticShape
           ),
           recurse,
           localCells,
@@ -2283,7 +2304,12 @@ object DependencyGraph:
                   }
                 case other => other
               }
-            )
+            ),
+            // GH-713: a range of names resolved through the workbook gets its bounding edges
+            location =>
+              ReferenceOperators
+                .staticShape(location)
+                .orElse(resolved(location).map((sheet, range) => (Some(sheet.name), range)))
           )
           // A name the resize replaced resolved statically to a range or a cell, through any chain
           // of names: its resized CrossSheet is everything the call reads, so the name's full

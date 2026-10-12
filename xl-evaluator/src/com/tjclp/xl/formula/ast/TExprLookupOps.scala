@@ -53,13 +53,17 @@ trait TExprLookupOps:
    * @param lookupArray
    *   The range to search in
    * @param returnArray
-   *   The range to return values from (same dimensions as lookupArray)
+   *   The range to return values from: as tall as a one-column lookupArray (the matched row is
+   *   returned) or as wide as a one-row lookupArray (the matched column)
    * @param ifNotFound
    *   Optional value to return if no match (default: #N/A error)
    * @param matchMode
    *   0=exact (default), -1=next smaller, 1=next larger, 2=wildcard
    * @param searchMode
    *   1=first-to-last (default), -1=last-to-first, 2=binary asc, -2=binary desc
+   *
+   * GH-713: XLOOKUP returns a reference, so the call is typed `ArrayResult` like INDEX — one cell
+   * for a one-column return array, collapsing in scalar positions.
    *
    * Example: TExpr.xlookup(TExpr.Lit("Apple"), lookupRange, returnRange)
    */
@@ -70,7 +74,7 @@ trait TExprLookupOps:
     ifNotFound: Option[TExpr[?]] = None,
     matchMode: TExpr[Int] = Lit(0),
     searchMode: TExpr[Int] = Lit(1)
-  ): TExpr[CellValue] =
+  ): TExpr[ArrayResult] =
     val matchModeOpt = ifNotFound.map(_ => matchMode)
     val searchModeOpt = ifNotFound.map(_ => searchMode)
     Call(

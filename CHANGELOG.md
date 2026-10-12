@@ -23,6 +23,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Added
 
+- **The `:` range operator between references a function returns** (#713):
+  `=SUM(A1:INDEX(A:A,COUNTA(A:A)))`, `=SUM(INDEX(B1:B3,1):INDEX(B1:B3,2))` and
+  `=SUM(B1:XLOOKUP(2,A1:A3,B1:B3))` parse, print back, shift, and evaluate to the bounding range,
+  as in Excel; a cell holding one is a dynamic dependency, like OFFSET.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
@@ -122,6 +126,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking: XLOOKUP is typed `ArrayResult` (source and binary)** (#713): `TExpr.xlookup` returns
+  `TExpr[ArrayResult]` (it was `TExpr[CellValue]`), and the public spec `FunctionSpecs.xlookup`
+  (exported as `com.tjclp.xl.formula.FunctionSpecs`) is a `FunctionSpec[ArrayResult] { type Args =
+  XLookupArgs }` (it was `FunctionSpec[CellValue]`). XLOOKUP now returns a reference, typed like
+  INDEX. Code that ascribed the old types no longer compiles; drop the ascription or take the
+  `ArrayResult` form. Code compiled against an earlier release must be recompiled too: both types
+  erase as before, so it still links, but where it reads the result as a `CellValue` it can fail
+  at run time (a `ClassCastException`).
+- **Computed references keep their declared shape** (#713): `INDEX($A$1:$A$100000,0)` is 100k rows, not
+  the used rows, for correct ROWS/COLUMNS and alignment; it reads only the populated cells, but array work
+  over it (`SUMPRODUCT(INDEX(…)*…)`) now costs the declared size — a slowdown on upgrade #736 tracks.
 - **`TExpr.RangeLocation` gains a `Binding(name)` case** (#710): a LET name in a range slot.
   Constructing and matching the existing cases is unchanged; a downstream exhaustive match on
   `RangeLocation` needs the new arm (the compiler warns until it has one).
@@ -296,6 +311,13 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **XLOOKUP returns a reference, and a whole matched row or column** (#713):
+  `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
+  folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).
+  `INDEX(r,i,0)` and XLOOKUP's returned row or column keep the reference's shape. A 2-D
+  `lookup_array` is now `#VALUE!`, as in Excel: a same-shaped 2-D pair (`XLOOKUP(k,A1:B2,C1:D2)`)
+  used to be searched cell by cell and return a value, so a workbook relying on that now shows
+  `#VALUE!`.
 - **Array contexts keep the reference IF and CHOOSE select** (#711): in an array formula,
   SUMPRODUCT, a conditional-format rule or a positionless `xl eval`, a whole column that IF, IFS,
   CHOOSE or SWITCH selected was materialized row by row and folded as an array, so
