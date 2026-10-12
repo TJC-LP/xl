@@ -220,7 +220,7 @@ class EvaluationTotalitySpec extends FunSuite:
   }
 
   test("#750: whole-axis ranges in any position evaluate, never materialised, every factory") {
-    // array mode holds a whole-axis value as its populated box plus one fill: every one of these
+    // array mode holds a whole-axis value as its populated box plus a fill: every one of these
     // finishes in milliseconds whatever its declared size (R:KHI is 8 billion positions)
     val ranges = List("A:A", "B:C", "R:KHI", "kHi:r", "A:XFD", "2:2", "1:1048576")
     val shapes = List(
@@ -244,7 +244,11 @@ class EvaluationTotalitySpec extends FunSuite:
       "=INDEX($R,1,1)",
       "=($R $R)",
       "=ABS($R)",
-      "=IFERROR($R/0,0)"
+      "=IFERROR($R/0,0)",
+      "=SUM($R*{1,2,3})",
+      "=SUM(($R=\"\")*{1;2;3})",
+      "=SUM((1:1=\"\")*($R=\"\"))",
+      "=MAX($R*{1,2,3})"
     )
     val started = System.nanoTime()
     for

@@ -85,8 +85,8 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
   ): Either[EvalError, Option[Boolean]] =
     boundary:
       var acc: Option[Boolean] = None
-      // #750: one value per run: AND and OR are idempotent, so a run of equal cells folds as one
-      val it = arr.runs
+      // #750: one value per group: AND and OR are idempotent, so a group of equal cells folds as one
+      val it = arr.tally
       while it.hasNext do
         rangeLogical(label, it.next()._1) match
           case Left(err) => break(Left(err))

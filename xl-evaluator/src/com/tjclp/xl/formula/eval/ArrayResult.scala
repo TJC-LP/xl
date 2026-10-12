@@ -9,12 +9,15 @@ import com.tjclp.xl.cells.CellValue
  * Represents a 2D grid of cell values that can be "spilled" into adjacent cells when evaluated as
  * an array formula.
  *
- * Storage is sparse (#750): a dense, populated '''box''' of cells at (`boxTop`, `boxLeft`) and one
- * [[fill]] value for every cell outside it. A range read in array mode keeps only its populated
- * cells (`R:KHI` is 1,048,576 × 7,636 cells, almost all of them blank), and an elementwise
- * operation computes its result over the box and once for the fill (`A:B=""` is TRUE everywhere
- * outside the populated rows). So a whole-axis array evaluates exactly, in time and memory
- * proportional to its populated cells. A dense array is one whose box is the whole array.
+ * Storage is sparse (#750): a dense, populated '''box''' of cells at (`boxTop`, `boxLeft`) and a
+ * [[fill]] describing every cell outside it: one value ([[ArrayResult.Fill.Const]]), or one value
+ * per column ([[ArrayResult.Fill.ByCol]]) or per row ([[ArrayResult.Fill.ByRow]]). A range read in
+ * array mode keeps only its populated cells (`R:KHI` is 1,048,576 × 7,636 cells, almost all of them
+ * blank), and an elementwise operation computes its result over the box and once per fill entry
+ * (`A:B=""` is TRUE everywhere outside the populated rows; `A:A*{1,2,3}` is 0, 0, 0 by column
+ * there, and `{1,2,3}` itself is one value per column whatever the row). So a whole-axis array
+ * evaluates exactly, in time and memory proportional to its populated cells and its axis lengths. A
+ * dense array is one whose box is the whole array.
  *
  * Design principles:
  *   - Immutable value type, read through its accessors ([[apply]], [[runs]], [[map]], [[slice]],
@@ -46,8 +49,10 @@ final class ArrayResult private (
   private val top: Int,
   private val left: Int,
   private val box: Vector[Vector[CellValue]],
-  private val outsideValue: CellValue
+  private val outside: ArrayResult.Fill
 ):
+  import ArrayResult.Fill
+
   private val boxHeight: Int = box.size
   private val boxWidth: Int = box.headOption.map(_.size).getOrElse(0)
 
@@ -59,7 +64,7 @@ final class ArrayResult private (
   /** Number of cells the populated box holds (every cell of a dense array). */
   private[formula] def boxArea: Long = boxHeight.toLong * boxWidth.toLong
 
-  /** Number of cells outside the box: each holds [[fill]]. */
+  /** Number of cells outside the box: each holds its [[fill]] entry. */
   private[formula] def outsideCount: Long = cellCount - boxArea
 
   /** Whether every cell is stored (the box is the whole array). */
@@ -75,17 +80,18 @@ final class ArrayResult private (
   private[formula] def boxCell(row: Int, col: Int): CellValue = box(row)(col)
 
   /**
-   * The value of every cell outside the populated box. A dense array has no such cell, and its fill
-   * is `CellValue.Empty`.
+   * The cells outside the populated box: one value, or one value per row or per column. A dense
+   * array has no such cell, and its fill is `Fill.Const(CellValue.Empty)`; an entry for a row or
+   * column that has no cell outside the box is `CellValue.Empty` too.
    */
-  def fill: CellValue = outsideValue
+  def fill: ArrayResult.Fill = outside
 
   /** Get value at (row, col), both 0-indexed. Returns Empty if out of bounds. */
   def apply(row: Int, col: Int): CellValue =
     if row >= 0 && row < rows && col >= 0 && col < cols then
       val r = row - top
       val c = col - left
-      if r >= 0 && r < boxHeight && c >= 0 && c < boxWidth then box(r)(c) else outsideValue
+      if r >= 0 && r < boxHeight && c >= 0 && c < boxWidth then box(r)(c) else outside.at(row, col)
     else CellValue.Empty
 
   /** Check if array is empty (0x0). */
@@ -93,28 +99,78 @@ final class ArrayResult private (
 
   /**
    * The cells in row-major order as runs of `(value, length)`. Box cells come as runs of 1 (equal
-   * neighbours are not coalesced); the fill cells between and around them as one run each, so a
-   * sparse array has a few more runs than box cells whatever its size. Walking runs in order visits
-   * values in the same order as a row-major cell walk, so the first error found is the same.
+   * neighbours are not coalesced). A constant fill's cells between and around the box come as one
+   * run each, so such an array has a few more runs than box cells whatever its size; a fill by row
+   * gives a run per row segment, and a fill by column a run per cell outside the box (`rows × cols`
+   * runs at worst: fold with [[tally]] when order matters only for the first error). Walking runs
+   * in order visits values in the same order as a row-major cell walk, so the first error found is
+   * the same.
    */
-  def runs: Iterator[(CellValue, Long)] =
+  def runs: Iterator[(CellValue, Long)] = ArrayResult.merge(pieces(compact = false))
+
+  /**
+   * The cells as `(value, count)` groups for an order-insensitive fold (a sum, a count, AND/OR):
+   * the counts are the cells', and every value is met for the first time in row-major order, so a
+   * fold that stops at its first error stops at the error a row-major walk finds first. Equal to
+   * [[runs]] except for a fill by column, whose rows past the first of each block of rows outside
+   * the box come as one group per column: `A:A*{1,2,3}` is its box, three runs and three groups.
+   */
+  private[formula] def tally: Iterator[(CellValue, Long)] =
+    ArrayResult.merge(pieces(compact = true))
+
+  /**
+   * Row-major pieces `(value, count, key)`: box cells with key -1, fill cells with the key of their
+   * fill entry (0 for a constant fill), so [[ArrayResult.merge]] joins neighbouring cells of one
+   * entry. `compact` groups a fill by column's repeated rows (see [[tally]]).
+   */
+  private def pieces(compact: Boolean): Iterator[(CellValue, Long, Int)] =
     if isEmpty then Iterator.empty
-    else if boxHeight == 0 || boxWidth == 0 then Iterator.single((outsideValue, cellCount))
     else
+      val hasBox = boxHeight > 0 && boxWidth > 0
+      val boxEnd = if hasBox then top + boxHeight else 0
       val colsL = cols.toLong
-      val before = top.toLong * colsL
-      val after = (rows - top - boxHeight).toLong * colsL
-      val rightGap = (cols - left - boxWidth).toLong
-      // the fill run that precedes box row `i`: what is left of the row above plus this row's
-      // cells left of the box (and, for the first box row, every row above the box)
-      def leading(i: Int): Long = (if i == 0 then before else rightGap) + left.toLong
-      val inner = box.iterator.zipWithIndex.flatMap { (row, i) =>
-        val gap = leading(i)
-        (if gap > 0 then Iterator.single((outsideValue, gap)) else Iterator.empty) ++
-          row.iterator.map(cv => (cv, 1L))
-      }
-      val trailing = rightGap + after
-      inner ++ (if trailing > 0 then Iterator.single((outsideValue, trailing)) else Iterator.empty)
+      def columnPieces(from: Int, until: Int, vs: Vector[CellValue], n: Long) =
+        (from until until).iterator.map(c => (Fill.entry(vs, c), n, c))
+      // rows [from, until), every cell outside the box
+      def outsideRows(from: Int, until: Int): Iterator[(CellValue, Long, Int)] =
+        if from >= until then Iterator.empty
+        else
+          outside match
+            case Fill.Const(v) => Iterator.single((v, (until - from).toLong * colsL, 0))
+            case Fill.ByRow(vs) =>
+              (from until until).iterator.map(r => (Fill.entry(vs, r), colsL, r))
+            case Fill.ByCol(vs) =>
+              val first = columnPieces(0, cols, vs, 1L)
+              val more = until - from - 1
+              if more == 0 then first
+              else if compact then first ++ columnPieces(0, cols, vs, more.toLong)
+              else first ++ (1 to more).iterator.flatMap(_ => columnPieces(0, cols, vs, 1L))
+      // the cells of row `r` in columns [from, until), outside the box
+      def gap(r: Int, from: Int, until: Int): Iterator[(CellValue, Long, Int)] =
+        if from >= until then Iterator.empty
+        else
+          outside match
+            case Fill.Const(v) => Iterator.single((v, (until - from).toLong, 0))
+            case Fill.ByRow(vs) => Iterator.single((Fill.entry(vs, r), (until - from).toLong, r))
+            case Fill.ByCol(vs) => columnPieces(from, until, vs, 1L)
+      val right = left + boxWidth
+      val groupGaps = compact && (outside match
+        case Fill.ByCol(_) => true
+        case _ => false)
+      val boxRowsIt =
+        if !hasBox then Iterator.empty
+        else
+          box.iterator.zipWithIndex.flatMap { (row, i) =>
+            val cells = row.iterator.map(cv => (cv, 1L, -1))
+            if groupGaps && i > 0 then cells
+            else gap(top + i, 0, left) ++ cells ++ gap(top + i, right, cols)
+          } ++ (outside match
+            case Fill.ByCol(vs) if groupGaps && boxHeight > 1 =>
+              val more = (boxHeight - 1).toLong
+              columnPieces(0, left, vs, more) ++ columnPieces(right, cols, vs, more)
+            case _ => Iterator.empty)
+      if hasBox then outsideRows(0, top) ++ boxRowsIt ++ outsideRows(boxEnd, rows)
+      else outsideRows(0, rows)
 
   /**
    * Every cell in row-major order: [[runs]] expanded, one value per cell. This visits all
@@ -123,44 +179,37 @@ final class ArrayResult private (
   def cells: Iterator[CellValue] =
     runs.flatMap((cv, n) => Iterator.iterate(n)(_ - 1L).takeWhile(_ > 0L).map(_ => cv))
 
-  /**
-   * The row-major position (`row * cols + col`) of the first cell outside the box, or
-   * `Long.MaxValue` when every cell is in it. Ranks a failure on the fill against one in the box.
-   */
-  private[formula] def firstOutside: Long =
-    if outsideCount == 0L then Long.MaxValue
-    else if boxHeight == 0 || boxWidth == 0 || top > 0 || left > 0 then 0L
-    else if boxWidth < cols then boxWidth.toLong
-    else boxHeight.toLong * cols.toLong
+  private def geometry: ArrayResult.Geometry =
+    ArrayResult.Geometry(rows, cols, top, left, boxHeight, boxWidth)
 
   /**
    * Apply `f` to every cell in row-major order; the first `Left` (in that order) is returned. `f`
-   * is applied to the fill once, standing for every cell outside the box, so it must be pure.
+   * is applied once per fill entry, standing for every cell outside the box that entry covers, so
+   * it must be pure.
    */
   def map(f: CellValue => Either[EvalError, CellValue]): Either[EvalError, ArrayResult] =
-    val fillResult = if outsideCount > 0L then Some(f(outsideValue)) else None
+    val g = geometry
+    val mappedFill = ArrayResult.mapFill(g, outside)(f)
     ArrayResult.mapBox(box, top, left, cols)(f) match
       case Left((err, at)) =>
-        fillResult match
-          case Some(Left(fillErr)) if firstOutside < at => Left(fillErr)
+        mappedFill match
+          case Left((fillErr, fillAt)) if fillAt < at => Left(fillErr)
           case _ => Left(err)
       case Right(mapped) =>
-        fillResult match
-          case Some(Left(fillErr)) => Left(fillErr)
-          case Some(Right(newFill)) =>
-            Right(new ArrayResult(rows, cols, top, left, mapped, newFill))
-          case None => Right(new ArrayResult(rows, cols, top, left, mapped, CellValue.Empty))
+        mappedFill match
+          case Left((fillErr, _)) => Left(fillErr)
+          case Right(newFill) => Right(ArrayResult.sparse(rows, cols, top, left, mapped, newFill))
 
-  /** Apply a total `f` to every cell (to the fill once). */
+  /** Apply a total `f` to every cell (to each fill entry once). */
   def mapPure(f: CellValue => CellValue): ArrayResult =
-    new ArrayResult(
-      rows,
-      cols,
-      top,
-      left,
-      box.map(_.map(f)),
-      if outsideCount > 0L then f(outsideValue) else CellValue.Empty
-    )
+    val g = geometry
+    val newFill = outside match
+      case Fill.Const(v) => Fill.Const(if outsideCount > 0L then f(v) else CellValue.Empty)
+      case Fill.ByRow(vs) =>
+        Fill.ByRow(vs.zipWithIndex.map((v, r) => if g.rowHasOutside(r) then f(v) else v))
+      case Fill.ByCol(vs) =>
+        Fill.ByCol(vs.zipWithIndex.map((v, c) => if g.colHasOutside(c) then f(v) else v))
+    ArrayResult.sparse(rows, cols, top, left, box.map(_.map(f)), newFill)
 
   /**
    * The `rowCount` x `colCount` window whose top-left cell is (`rowFrom`, `colFrom`), read through
@@ -174,14 +223,18 @@ final class ArrayResult private (
     else
       val inside = rowFrom >= 0 && colFrom >= 0 &&
         rowFrom.toLong + nr <= rows && colFrom.toLong + nc <= cols
-      if inside || outsideValue == CellValue.Empty then
+      if inside || outside == Fill.Const(CellValue.Empty) then
         // the box's part of the window, in window coordinates; outside it the window reads the
         // fill (or Empty past the array's edge, the same value when the fill is Empty)
+        val windowFill = outside match
+          case Fill.Const(v) => Fill.Const(v)
+          case Fill.ByRow(vs) => Fill.ByRow(vs.slice(rowFrom, rowFrom + nr))
+          case Fill.ByCol(vs) => Fill.ByCol(vs.slice(colFrom, colFrom + nc))
         val r0 = math.max(top, rowFrom)
         val r1 = math.min(top + boxHeight, math.min(rows, rowFrom + nr))
         val c0 = math.max(left, colFrom)
         val c1 = math.min(left + boxWidth, math.min(cols, colFrom + nc))
-        if r0 >= r1 || c0 >= c1 then ArrayResult.constant(nr, nc, outsideValue)
+        if r0 >= r1 || c0 >= c1 then ArrayResult.sparse(nr, nc, 0, 0, Vector.empty, windowFill)
         else
           ArrayResult.sparse(
             nr,
@@ -189,7 +242,7 @@ final class ArrayResult private (
             r0 - rowFrom,
             c0 - colFrom,
             box.slice(r0 - top, r1 - top).map(_.slice(c0 - left, c1 - left)),
-            outsideValue
+            windowFill
           )
       else
         new ArrayResult(
@@ -198,13 +251,18 @@ final class ArrayResult private (
           0,
           0,
           Vector.tabulate(nr)(r => Vector.tabulate(nc)(c => apply(rowFrom + r, colFrom + c))),
-          CellValue.Empty
+          Fill.Const(CellValue.Empty)
         )
 
   /** Transpose the array (swap rows and columns). */
   def transpose: ArrayResult =
     if isEmpty then ArrayResult.empty
-    else new ArrayResult(cols, rows, left, top, box.transpose, outsideValue)
+    else
+      val swapped = outside match
+        case Fill.Const(v) => Fill.Const(v)
+        case Fill.ByRow(vs) => Fill.ByCol(vs)
+        case Fill.ByCol(vs) => Fill.ByRow(vs)
+      new ArrayResult(cols, rows, left, top, box.transpose, swapped)
 
   /**
    * The whole array as rows of cells, for consumers that need every cell (sorting, spilling,
@@ -231,9 +289,88 @@ final class ArrayResult private (
         .mkString(s"ArrayResult(${rows}x$cols: [", "; ", "])")
     else if isDense then s"ArrayResult(${rows}x$cols, ${apply(0, 0)}, …)"
     else
-      s"ArrayResult(${rows}x$cols, box ${boxHeight}x$boxWidth at ($top, $left), fill $outsideValue)"
+      val described = outside match
+        case Fill.Const(v) => s"fill $v"
+        case Fill.ByRow(vs) => s"fill by row ${vs.take(3).mkString(", ")}…"
+        case Fill.ByCol(vs) => s"fill by column ${vs.take(3).mkString(", ")}…"
+      s"ArrayResult(${rows}x$cols, box ${boxHeight}x$boxWidth at ($top, $left), $described)"
 
 object ArrayResult:
+
+  /**
+   * The cells of an [[ArrayResult]] outside its populated box (#750). An array holds one of these
+   * three, so a whole-axis array whose outside cells differ along one axis (`A:A*{1,2,3}`, a whole
+   * column times a row of constants) is still held by its box and one value per column, never cell
+   * by cell. An outside that varies along both axes is not representable: the operation that would
+   * produce one builds its result cell by cell up to [[MaxCells]] cells and is refused past that.
+   */
+  enum Fill:
+    /** One value for every cell outside the box. */
+    case Const(value: CellValue)
+
+    /** The value of row `r`'s cells outside the box is `values(r)`: one entry per row. */
+    case ByRow(values: Vector[CellValue])
+
+    /** The value of column `c`'s cells outside the box is `values(c)`: one entry per column. */
+    case ByCol(values: Vector[CellValue])
+
+    /** The fill's value at (`row`, `col`), a cell outside the box. */
+    def at(row: Int, col: Int): CellValue = this match
+      case Const(v) => v
+      case ByRow(vs) => Fill.entry(vs, row)
+      case ByCol(vs) => Fill.entry(vs, col)
+
+  object Fill:
+    /** `values(i)`, Empty past the end. */
+    private[eval] def entry(values: Vector[CellValue], i: Int): CellValue =
+      if i >= 0 && i < values.size then values(i) else CellValue.Empty
+
+  /**
+   * An array's shape and box: `rows` x `cols`, the box `height` x `width` at (`top`, `left`). Finds
+   * which fill entries have cells outside the box and where, in row-major order, the first of them
+   * is.
+   */
+  private[formula] final case class Geometry(
+    rows: Int,
+    cols: Int,
+    top: Int,
+    left: Int,
+    height: Int,
+    width: Int
+  ):
+    private val hasBox = height > 0 && width > 0
+    private val bottom = top + height
+    private val right = left + width
+
+    def cellCount: Long = rows.toLong * cols.toLong
+    def outsideCount: Long = cellCount - (if hasBox then height.toLong * width.toLong else 0L)
+
+    /** Whether row `r` has a cell outside the box. */
+    def rowHasOutside(r: Int): Boolean = !hasBox || r < top || r >= bottom || width < cols
+
+    /** Whether column `c` has a cell outside the box. */
+    def colHasOutside(c: Int): Boolean = !hasBox || c < left || c >= right || height < rows
+
+    /** The row-major position of the first cell outside the box, Long.MaxValue for none. */
+    def firstOutside: Long =
+      if outsideCount == 0L then Long.MaxValue
+      else if !hasBox || top > 0 || left > 0 then 0L
+      else if width < cols then width.toLong
+      else height.toLong * cols.toLong
+
+    /** The row-major position of row `r`'s first cell outside the box, Long.MaxValue for none. */
+    def firstOutsideInRow(r: Int): Long =
+      if !rowHasOutside(r) then Long.MaxValue
+      else if !hasBox || r < top || r >= bottom || left > 0 then r.toLong * cols.toLong
+      else r.toLong * cols.toLong + right.toLong
+
+    /**
+     * The row-major position of column `c`'s first cell outside the box, Long.MaxValue for none.
+     */
+    def firstOutsideInCol(c: Int): Long =
+      if !colHasOutside(c) then Long.MaxValue
+      else if !hasBox || c < left || c >= right || top > 0 then c.toLong
+      else bottom.toLong * cols.toLong + c.toLong
 
   /**
    * The most cells one array may hold: one full column (1,048,576 rows). SEQUENCE and INDIRECT
@@ -284,6 +421,67 @@ object ArrayResult:
             rowLoop(i + 1)
     rowLoop(0)
 
+  /**
+   * Compute a fill entry by entry: `entry(i)` for every entry that has a cell outside the box of
+   * `g` (Empty for one that has none, never computed). The `Left` whose first outside cell comes
+   * first in row-major order wins, and comes back with that cell's position. A constant fill is one
+   * entry.
+   */
+  private[formula] def computeFill(g: Geometry, axis: Option[Boolean])(
+    entry: Int => Either[EvalError, CellValue]
+  ): Either[(EvalError, Long), Fill] =
+    axis match
+      case None =>
+        if g.outsideCount == 0L then Right(Fill.Const(CellValue.Empty))
+        else entry(0).map(Fill.Const(_)).left.map(e => (e, g.firstOutside))
+      case Some(byRow) =>
+        val n = if byRow then g.rows else g.cols
+        val out = new scala.collection.immutable.VectorBuilder[CellValue]
+        val failure = (0 until n).foldLeft(Option.empty[(EvalError, Long)]) { (worst, i) =>
+          val at = if byRow then g.firstOutsideInRow(i) else g.firstOutsideInCol(i)
+          if at == Long.MaxValue then
+            out += CellValue.Empty
+            worst
+          else
+            entry(i) match
+              case Right(v) =>
+                out += v
+                worst
+              case Left(e) =>
+                out += CellValue.Empty
+                worst match
+                  case Some((_, earlier)) if earlier <= at => worst
+                  case _ => Some((e, at))
+        }
+        failure match
+          case Some(f) => Left(f)
+          case None =>
+            val values = out.result()
+            Right(if byRow then Fill.ByRow(values) else Fill.ByCol(values))
+
+  /** `f` over a fill's entries ([[computeFill]]: the first failure in row-major order wins). */
+  private def mapFill(g: Geometry, fill: Fill)(
+    f: CellValue => Either[EvalError, CellValue]
+  ): Either[(EvalError, Long), Fill] =
+    fill match
+      case Fill.Const(v) => computeFill(g, None)(_ => f(v))
+      case Fill.ByRow(vs) => computeFill(g, Some(true))(r => f(Fill.entry(vs, r)))
+      case Fill.ByCol(vs) => computeFill(g, Some(false))(c => f(Fill.entry(vs, c)))
+
+  /**
+   * Join neighbouring pieces of one fill entry (the same key, never -1: a box cell) into one run.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def merge(pieces: Iterator[(CellValue, Long, Int)]): Iterator[(CellValue, Long)] =
+    new Iterator[(CellValue, Long)]:
+      private val in = pieces.filter(_._2 > 0L).buffered
+      def hasNext: Boolean = in.hasNext
+      def next(): (CellValue, Long) =
+        val (v, n, key) = in.next()
+        var total = n
+        if key != -1 then while in.hasNext && in.head._3 == key do total += in.next()._2
+        (v, total)
+
   /** Whether two run walks describe the same cells (their run boundaries may differ). */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def sameRuns(a: Iterator[(CellValue, Long)], b: Iterator[(CellValue, Long)]): Boolean =
@@ -318,11 +516,14 @@ object ArrayResult:
     val rect =
       if values.forall(_.size == width) then values
       else values.map(row => row.take(width) ++ Vector.fill(width - row.size)(CellValue.Empty))
-    new ArrayResult(values.size, width, 0, 0, rect, CellValue.Empty)
+    new ArrayResult(values.size, width, 0, 0, rect, Fill.Const(CellValue.Empty))
 
   /**
    * A `rows` x `cols` array whose cells are `box` (rectangular) at (`top`, `left`) and `fill`
-   * everywhere else. The box must lie inside the array.
+   * everywhere else. The box must lie inside the array; a fill by row has `rows` entries and one by
+   * column `cols` (a shorter one reads Empty past its end). The fill is kept in its canonical form:
+   * an entry with no cell outside the box is Empty, and a fill whose entries that do have such
+   * cells are all equal is that one value.
    */
   private[formula] def sparse(
     rows: Int,
@@ -330,21 +531,39 @@ object ArrayResult:
     top: Int,
     left: Int,
     box: Vector[Vector[CellValue]],
-    fill: CellValue
+    fill: Fill
   ): ArrayResult =
     if rows <= 0 || cols <= 0 then empty
     else
-      val height = box.size
-      val width = box.headOption.map(_.size).getOrElse(0)
-      if height == 0 || width == 0 then constant(rows, cols, fill)
-      else
-        val covers = top == 0 && left == 0 && height == rows && width == cols
-        new ArrayResult(rows, cols, top, left, box, if covers then CellValue.Empty else fill)
+      val height0 = box.size
+      val width0 = box.headOption.map(_.size).getOrElse(0)
+      val (height, width, at, from, kept) =
+        if height0 == 0 || width0 == 0 then (0, 0, 0, 0, Vector.empty[Vector[CellValue]])
+        else (height0, width0, top, left, box)
+      val g = Geometry(rows, cols, at, from, height, width)
+      new ArrayResult(rows, cols, at, from, kept, canonical(g, fill))
 
   /** A `rows` x `cols` array holding `value` in every cell, stored as that one value. */
   private[formula] def constant(rows: Int, cols: Int, value: CellValue): ArrayResult =
-    if rows <= 0 || cols <= 0 then empty
-    else new ArrayResult(rows, cols, 0, 0, Vector.empty, value)
+    sparse(rows, cols, 0, 0, Vector.empty, Fill.Const(value))
+
+  /** See [[sparse]]: irrelevant entries Empty, a uniform fill one value. */
+  private def canonical(g: Geometry, fill: Fill): Fill =
+    if g.outsideCount == 0L then Fill.Const(CellValue.Empty)
+    else
+      def axis(n: Int, vs: Vector[CellValue], has: Int => Boolean)(
+        make: Vector[CellValue] => Fill
+      ): Fill =
+        val entries = Vector.tabulate(n)(i => if has(i) then Fill.entry(vs, i) else CellValue.Empty)
+        val used = (0 until n).iterator.filter(has).map(entries(_))
+        if !used.hasNext then Fill.Const(CellValue.Empty)
+        else
+          val first = used.next()
+          if used.forall(_ == first) then Fill.Const(first) else make(entries)
+      fill match
+        case c: Fill.Const => c
+        case Fill.ByRow(vs) => axis(g.rows, vs, g.rowHasOutside)(Fill.ByRow(_))
+        case Fill.ByCol(vs) => axis(g.cols, vs, g.colHasOutside)(Fill.ByCol(_))
 
   /** Empty array result. */
   val empty: ArrayResult = ArrayResult(Vector.empty)

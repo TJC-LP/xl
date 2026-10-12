@@ -11,10 +11,11 @@ import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 
 /**
- * #750: the laws that let a sparse [[ArrayResult]] (a populated box plus one fill value) stand in
- * for the dense array it describes. Its run walk is its cells; every operation agrees with the same
- * operation on the dense array; a range read through its populated box evaluates every formula as
- * the position-by-position read does; and an aggregate's closed-form `combineN` is `n` combines.
+ * #750: the laws that let a sparse [[ArrayResult]] (a populated box plus a fill: one value, or one
+ * per row or per column) stand in for the dense array it describes. Its run walk is its cells, its
+ * tally their counts with each value first met in row-major order; every operation agrees with the
+ * same operation on the dense array; a range read through its populated box evaluates every formula
+ * as the position-by-position read does; and an aggregate's closed-form `combineN` is `n` combines.
  */
 class SparseArrayLawsSpec extends ScalaCheckSuite:
 
@@ -30,7 +31,18 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
     1 -> Gen.oneOf(CellError.NA, CellError.Div0).map(CellValue.Error(_))
   )
 
-  /** A sparse array: a box anywhere inside a 1..7 x 1..7 shape (possibly empty), and a fill. */
+  /** A fill for a `rows` x `cols` array: one value, one per row or one per column. */
+  private def genFill(rows: Int, cols: Int): Gen[ArrayResult.Fill] =
+    Gen.frequency(
+      3 -> genCell.map(ArrayResult.Fill.Const(_)),
+      1 -> Gen.listOfN(rows, genCell).map(vs => ArrayResult.Fill.ByRow(vs.toVector)),
+      1 -> Gen.listOfN(cols, genCell).map(vs => ArrayResult.Fill.ByCol(vs.toVector))
+    )
+
+  /**
+   * A sparse array: a box anywhere inside a 1..7 x 1..7 shape (possibly empty), and a fill that is
+   * one value, or one value per row or per column.
+   */
   private val genSparse: Gen[ArrayResult] =
     for
       rows <- Gen.choose(1, 7)
@@ -40,7 +52,7 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
       height <- Gen.choose(0, rows - top)
       width <- Gen.choose(1, cols - left)
       box <- Gen.listOfN(height, Gen.listOfN(width, genCell).map(_.toVector)).map(_.toVector)
-      fill <- genCell
+      fill <- genFill(rows, cols)
     yield ArrayResult.sparse(rows, cols, top, left, box, fill)
 
   private def dense(ar: ArrayResult): ArrayResult = ArrayResult(ar.dense)
@@ -53,6 +65,43 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
       assertEquals(ar.cells.toVector, ar.dense.flatten)
     }
   }
+
+  property("tally holds the cells' counts and meets each value first in row-major order") {
+    def firsts(values: Iterator[CellValue]): Vector[CellValue] =
+      values.foldLeft(Vector.empty[CellValue])((seen, v) =>
+        if seen.contains(v) then seen else seen :+ v
+      )
+    def counts(groups: Iterator[(CellValue, Long)]): Map[CellValue, Long] =
+      groups.foldLeft(Map.empty[CellValue, Long]) { case (m, (v, n)) =>
+        m.updated(v, m.getOrElse(v, 0L) + n)
+      }
+    forAll(genSparse) { ar =>
+      assertEquals(counts(ar.tally), counts(ar.dense.flatten.iterator.map(_ -> 1L)))
+      assertEquals(firsts(ar.tally.map(_._1)), firsts(ar.dense.flatten.iterator))
+      assert(ar.tally.size <= ar.runs.size)
+    }
+  }
+
+  test("a fill by column folds in a handful of groups, whatever the height") {
+    val n = (i: Int) => CellValue.Number(BigDecimal(i))
+    val tall = ArrayResult.sparse(
+      1048576,
+      3,
+      2,
+      0,
+      Vector(Vector(n(4), n(8), n(12)), Vector(n(5), n(10), n(15))),
+      ArrayResult.Fill.ByCol(Vector(n(0), n(1), n(2)))
+    )
+    // two rows above the box (a row of three, then three groups), its six cells, and the rows
+    // below it (a row of three, then three groups)
+    assertEquals(tally(tall).size, 18)
+    assertEquals(tally(tall).map(_._2).sum, 3L * 1048576)
+    assertEquals(tall(1048575, 2), n(2))
+    assertEquals(tall.transpose(2, 1048575), n(2))
+    assertEquals(tall.transpose.fill, ArrayResult.Fill.ByRow(Vector(n(0), n(1), n(2))))
+  }
+
+  private def tally(ar: ArrayResult): Vector[(CellValue, Long)] = ar.tally.toVector
 
   property("a sparse array equals its dense form, cell by cell, with the same hash") {
     forAll(genSparse) { ar =>
@@ -90,9 +139,18 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
       elements.collectFirst { case CellValue.Error(CellError.Div0) => () } match
         case Some(_) => Left(EvalError.EvalFailed("div0 element", None))
         case None => Right(CellValue.Text(elements.map(_.toString.take(6)).mkString("|")))
+    // vector constants ({1,2,3}, {1;2;3}) broadcast along the other axis as a fill by column or row
+    val genVector = for
+      across <- Gen.oneOf(true, false)
+      n <- Gen.choose(1, 7)
+      cells <- Gen.listOfN(n, genCell)
+    yield
+      if across then ArrayResult(Vector(cells.toVector))
+      else ArrayResult(cells.toVector.map(Vector(_)))
     val genOperand = Gen.frequency(
       4 -> genSparse,
       1 -> genCell.map(ArrayResult.single),
+      2 -> genVector,
       1 -> genSparse.map(_.slice(0, 1, 0, 7)),
       1 -> genSparse.map(_.slice(0, 7, 0, 1))
     )
@@ -199,6 +257,17 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
         "=INDEX($R*1,0,1)",
         "=ROWS($R*1)",
         "=$R*{1,2}",
+        "=$R*{1;2;3}",
+        "=SUM($R*{1,2,3})",
+        "=SUM(($R=\"\")*{1;2})",
+        "=SUMPRODUCT(($R=\"\")*{1,2,3})",
+        "=COUNT($R*{1,2,3})",
+        // a fill by row times a fill by column: SUMPRODUCT's outside sum by inclusion-exclusion
+        "=SUMPRODUCT((A1:D6=\"\")*{1;2;3;4;5;6},(A1:D6>0)*{1,2,3,4})",
+        "=SUMPRODUCT((B2:E7=\"\")*{1;2;3;4;5;6},(B2:E7=\"\")*{2,3,4,5}+1)",
+        "=AND($R*{1,2}>=0)",
+        "=MAX(($R=\"\")*{1;2;3})",
+        "=INDEX($R*{1,2,3},0,2)",
         "=ABS($R)",
         "=ISBLANK($R)",
         "=IFERROR($R/$S,\"e\")",
@@ -222,13 +291,33 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
     }
   }
 
+  test("vector operands give fills by row and by column (the vector laws are not vacuous)") {
+    val sheet = Sheet(SheetName.unsafe("S")).put(ARef.from0(1, 1), CellValue.Number(BigDecimal(3)))
+    def fillOf(formula: String) = evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, formula) match
+      case Right(ar: ArrayResult) => ar.fill
+      case other => fail(s"expected an array, got $other")
+    val n = (i: Int) => CellValue.Number(BigDecimal(i))
+    assertEquals(
+      fillOf("=(A1:D6=\"\")*{1;2;3;4;5;6}"),
+      ArrayResult.Fill.ByRow(Vector(n(1), n(2), n(3), n(4), n(5), n(6)))
+    )
+    assertEquals(
+      fillOf("=(A1:D6=\"\")*{1,2,3,4}"),
+      ArrayResult.Fill.ByCol(Vector(n(1), n(2), n(3), n(4)))
+    )
+    // every blank cell's (row + 1) * (col + 1): 21 * 10 less B2's 2 * 2
+    val mixed = "=SUMPRODUCT((A1:D6=\"\")*{1;2;3;4;5;6},(A1:D6=\"\")*{1,2,3,4})"
+    assertEquals(evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, mixed), Right(BigDecimal(206)))
+    assertEquals(evalWith(ArrayArithmetic.RangeRead.Dense, sheet, mixed), Right(BigDecimal(206)))
+  }
+
   test("the sparse read is genuinely sparse (the law above is not vacuous)") {
     val sheet = Sheet(SheetName.unsafe("S")).put(ARef.from0(1, 1), CellValue.Number(BigDecimal(3)))
     evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, "=A1:C5*2") match
       case Right(ar: ArrayResult) =>
         assert(!ar.isDense, ar.toString)
         assertEquals((ar.boxTop, ar.boxLeft, ar.boxRows, ar.boxCols), (1, 1, 1, 1))
-        assertEquals(ar.fill, CellValue.Number(BigDecimal(0)))
+        assertEquals(ar.fill, ArrayResult.Fill.Const(CellValue.Number(BigDecimal(0))))
         assertEquals(Right(ar), evalWith(ArrayArithmetic.RangeRead.Dense, sheet, "=A1:C5*2"))
       case other => fail(s"expected an array, got $other")
   }

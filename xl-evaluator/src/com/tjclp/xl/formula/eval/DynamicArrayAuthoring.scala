@@ -173,9 +173,9 @@ private[xl] object DynamicArrayAuthoring:
    * checked before a cell of the spill is built or written, so a result over the cap
    * ([[SpillBlocker.TooLarge]]) is refused without materialising its cells, constants or styles.
    * Evaluation memory is bounded by the evaluator itself (#750): a whole-axis result (`=B:C`,
-   * `=A:A*2`) is held as its populated box plus one fill value, never cell by cell, and an array
-   * that must be built in full (SEQUENCE, INDIRECT, a box past the limit) is refused past
-   * [[ArrayResult.MaxCells]] cells.
+   * `=A:A*2`, `=A:A*{1,2,3}`) is held as its populated box plus a fill (one value, or one per row
+   * or column), never cell by cell, and an array that must be built in full (SEQUENCE, INDIRECT, a
+   * box past the limit) is refused past [[ArrayResult.MaxCells]] cells.
    *
    * A formula that reads its own spill range — its anchor (`=A1:A3` at A1), or a cell the spill
    * fills — is a circular reference in Excel, which then shows 0 rather than spilling: it is

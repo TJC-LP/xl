@@ -780,7 +780,11 @@ class CfEvaluatorSpec extends ScalaCheckSuite:
       "A:XFD" -> Set("A1", "A2", "A3"), // A1 = 1, read at every row
       "1:1048576" -> Set("A1", "B1"),
       "A:A=1" -> Set("A1", "A2", "A3"),
-      "A:B=\"\"" -> Set("B1", "B2", "B3")
+      "A:B=\"\"" -> Set("B1", "B2", "B3"),
+      // a whole column times a row of constants: a fill by column, never 3,145,728 cells
+      "A:A*{1,2,3}>0" -> Set("A1", "A2", "A3"),
+      "(A:A=\"\")*{1,2,3}>0" -> Set("B1", "B2", "B3"),
+      "SUM((A:A=\"\")*{1,2,3})=6291444" -> Set("A1", "A2", "A3")
     ).foreach { (f, expected) =>
       val started = System.nanoTime()
       val ev = ruleOver(f)

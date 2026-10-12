@@ -198,7 +198,7 @@ object ArrayArithmetic:
                   box.rowStart.index0 - range.rowStart.index0,
                   box.colStart.index0 - range.colStart.index0,
                   values,
-                  CellValue.Empty
+                  ArrayResult.Fill.Const(CellValue.Empty)
                 )
               }
 
@@ -531,7 +531,7 @@ object ArrayArithmetic:
 
   /**
    * #750: [[truthyElements]] folded with `combine` from `seed` (AND = `&&`, OR = `||`), walking the
-   * array's [[ArrayResult.runs]]: an idempotent `combine` needs each run's value once, so a
+   * array's [[ArrayResult.tally]]: an idempotent `combine` needs each group's value once, so a
    * whole-axis array folds in the time of its populated cells. The first refusing element, in
    * row-major order, short-circuits with its Left.
    */
@@ -541,7 +541,7 @@ object ArrayArithmetic:
     seed: Boolean,
     combine: (Boolean, Boolean) => Boolean
   ): Either[EvalError, Boolean] =
-    arr.runs.foldLeft[Either[EvalError, Boolean]](Right(seed)) {
+    arr.tally.foldLeft[Either[EvalError, Boolean]](Right(seed)) {
       case (Left(err), _) => Left(err)
       case (Right(acc), (cv, _)) => conditionTruthy(label, cv).map(combine(acc, _))
     }
@@ -611,53 +611,118 @@ object ArrayArithmetic:
     }
 
   /**
-   * Where one operand of a broadcast varies over the output, and its one value everywhere else: the
-   * output rows `[top, bottom)` and columns `[left, right)` (an empty rectangle when the operand is
-   * the same everywhere), and `outside`.
+   * #750: what one operand of a broadcast contributes outside the part of the output computed cell
+   * by cell. Its value varies over the output rows `[top, bottom)` and columns `[left, right)` (an
+   * empty rectangle when it varies nowhere), and is `outside` everywhere else: one value, or one
+   * value per output row or per output column.
    */
   private final case class Footprint(
     top: Int,
     bottom: Int,
     left: Int,
     right: Int,
-    outside: CellValue
+    outside: Outside
   ):
     def isEmpty: Boolean = top >= bottom || left >= right
-
-  private def uniform(value: CellValue): Footprint = Footprint(0, 0, 0, 0, value)
+    def area: Long = if isEmpty then 0L else (bottom - top).toLong * (right - left).toLong
 
   /**
-   * An operand's [[Footprint]] on a `outRows` x `outCols` broadcast, or None when one outside value
-   * cannot describe it: a sparse operand padded with #N/A past its extent holds its fill and #N/A
-   * outside its box.
+   * An operand's value outside its [[Footprint]]: one value, or a function of the row or column.
    */
-  private def footprint(op: ArrayResult, outRows: Int, outCols: Int): Option[Footprint] =
-    if op.isEmpty then Some(uniform(CellValue.Error(CellError.NA)))
-    else if op.rows == 1 && op.cols == 1 then Some(uniform(op(0, 0)))
+  private enum Outside:
+    case Const(value: CellValue)
+    case ByRow(at: Int => CellValue)
+    case ByCol(at: Int => CellValue)
+
+    def entry(i: Int): CellValue = this match
+      case Const(v) => v
+      case ByRow(at) => at(i)
+      case ByCol(at) => at(i)
+
+  /** The fill a broadcast's result takes: one value, one per row, or one per column. */
+  private enum FillAxis:
+    case Const, ByRow, ByCol
+
+    def admits(outside: Outside): Boolean = (this, outside) match
+      case (_, Outside.Const(_)) => true
+      case (ByRow, Outside.ByRow(_)) => true
+      case (ByCol, Outside.ByCol(_)) => true
+      case _ => false
+
+  private def uniform(value: CellValue): Footprint = Footprint(0, 0, 0, 0, Outside.Const(value))
+
+  /**
+   * The ways an operand can be described on a `outRows` x `outCols` broadcast, each exact:
+   *   - a vector broadcast along the other axis (`{1,2,3}` down a million rows) varies only by
+   *     column (or by row): no footprint at all, one value per output column (or row);
+   *   - its populated box, stretched along a broadcast axis, and its own fill outside it (a fill
+   *     that also takes the #N/A of the positions past its extent, when it is shorter than the
+   *     output along one axis and that fill does not vary along the other);
+   *   - when it is shorter than the output, its whole extent, with the #N/A pad outside it.
+   */
+  private def footprints(op: ArrayResult, outRows: Int, outCols: Int): Vector[Footprint] =
+    val na = CellValue.Error(CellError.NA)
+    if op.isEmpty then Vector(uniform(na))
+    else if op.rows == 1 && op.cols == 1 then Vector(uniform(op(0, 0)))
     else
       val padRows = op.rows != 1 && op.rows < outRows
       val padCols = op.cols != 1 && op.cols < outCols
+      val vector =
+        if op.rows == 1 then
+          Vector(Footprint(0, 0, 0, 0, Outside.ByCol(c => getWithBroadcastCV(op, 0, c))))
+        else if op.cols == 1 then
+          Vector(Footprint(0, 0, 0, 0, Outside.ByRow(r => getWithBroadcastCV(op, r, 0))))
+        else Vector.empty
       // the output span an axis varies over: the whole axis when it broadcasts, else the box's
       def span(extent: Int, out: Int, boxStart: Int, boxSize: Int): (Int, Int) =
         if extent == 1 then (0, out) else (boxStart, boxStart + boxSize)
-      if op.boxRows == 0 || op.boxCols == 0 then
-        if padRows || padCols then None else Some(uniform(op.fill))
-      else if !padRows && !padCols then
-        val (top, bottom) = span(op.rows, outRows, op.boxTop, op.boxRows)
-        val (left, right) = span(op.cols, outCols, op.boxLeft, op.boxCols)
-        Some(Footprint(top, bottom, left, right, op.fill))
-      else if op.isDense then
-        // the whole operand varies; past its extent every position is the #N/A pad
-        val (top, bottom) = span(op.rows, outRows, 0, op.rows)
-        val (left, right) = span(op.cols, outCols, 0, op.cols)
-        Some(Footprint(top, bottom, left, right, CellValue.Error(CellError.NA)))
-      else None
+      val hasBox = op.boxRows > 0 && op.boxCols > 0
+      val (top, bottom) = if hasBox then span(op.rows, outRows, op.boxTop, op.boxRows) else (0, 0)
+      val (left, right) = if hasBox then span(op.cols, outCols, op.boxLeft, op.boxCols) else (0, 0)
+      val ownFill: Option[Outside] = op.fill match
+        case ArrayResult.Fill.Const(v) =>
+          if padRows && padCols then None
+          else if padRows then Some(Outside.ByRow(r => if r < op.rows then v else na))
+          else if padCols then Some(Outside.ByCol(c => if c < op.cols then v else na))
+          else Some(Outside.Const(v))
+        case f @ ArrayResult.Fill.ByRow(_) =>
+          if padCols then None
+          else Some(Outside.ByRow(r => if r < op.rows then f.at(r, 0) else na))
+        case f @ ArrayResult.Fill.ByCol(_) =>
+          if padRows then None
+          else Some(Outside.ByCol(c => if c < op.cols then f.at(0, c) else na))
+      val boxed = ownFill.map(Footprint(top, bottom, left, right, _))
+      val extent =
+        if padRows || padCols then
+          val height = if op.rows == 1 then outRows else op.rows
+          val width = if op.cols == 1 then outCols else op.cols
+          Some(Footprint(0, height, 0, width, Outside.Const(na)))
+        else None
+      vector ++ boxed ++ extent
+
+  /** The output rectangle a broadcast computes cell by cell, and the fill outside it. */
+  private final case class BroadcastPlan(
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int,
+    axis: FillAxis,
+    outsides: Vector[Outside]
+  )
 
   /**
    * N-ary element-wise broadcast under the same shape rules as the binary broadcasts: an axis of
    * extent 1 repeats, unequal extents take the larger and pad the missing positions with #N/A
    * (GH-344 4b). `elem` receives one element per operand, in operand order; a Left from it fails
    * the whole broadcast (element-local failures should come back as error ELEMENTS instead).
+   *
+   * #750: over sparse operands only the union of the operands' footprints is computed cell by cell;
+   * every other cell is the element of the operands' outside values, computed once per fill entry.
+   * The result's fill is one value when every operand's outside is, and one value per column (or
+   * per row) when an operand's varies along that axis: `A:A*{1,2,3}` computes the populated rows of
+   * A and three fill entries. An outside that would vary along both axes (a whole column times a
+   * whole row, both padded) is computed cell by cell when the result is at most
+   * [[ArrayResult.MaxCells]] cells, and refused past that.
    */
   private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
@@ -667,61 +732,105 @@ object ArrayArithmetic:
     val outCells = outRows.toLong * outCols.toLong
     if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
     else
-      val footprints = operands.map(footprint(_, outRows, outCols))
-      // (top, bottom, left, right) of the output computed cell by cell
-      val whole = (0, outRows, 0, outCols)
-      val region: Either[EvalError, (Int, Int, Int, Int)] =
+      val whole = BroadcastPlan(0, outRows, 0, outCols, FillAxis.Const, Vector.empty)
+      def cellByCell: Either[EvalError, BroadcastPlan] =
+        if outCells > ArrayResult.MaxCells then
+          Left(ArrayResult.tooLarge("array operation", outRows.toLong, outCols.toLong))
+        else Right(whole)
+      val plan: Either[EvalError, BroadcastPlan] =
         if operands.forall(_.isDense) then Right(whole)
-        else if perCell || footprints.exists(_.isEmpty) then
-          if outCells > ArrayResult.MaxCells then
-            Left(ArrayResult.tooLarge("array operation", outRows.toLong, outCols.toLong))
-          else Right(whole)
+        else if perCell then cellByCell
         else
-          val varying = footprints.flatten.filterNot(_.isEmpty)
-          boundingRect(varying.map(f => (f.top, f.bottom, f.left, f.right))) match
-            case None => Right((0, 0, 0, 0))
-            case Some(union) =>
-              val height = union._2 - union._1
-              val width = union._4 - union._3
-              val area = height.toLong * width.toLong
-              val budget = math.max(ArrayResult.MaxCells, operands.map(_.boxArea).sum)
-              if area > budget then
-                Left(
-                  EvalError.EvalFailed(
-                    s"array operation: the populated cells of its ${outRows}×$outCols result span " +
-                      s"${height}×$width cells, more than the 1,048,576-cell limit",
-                    None
+          val options = operands.map(footprints(_, outRows, outCols))
+          val budget = math.max(ArrayResult.MaxCells, operands.map(_.boxArea).sum)
+          // for each fill axis, every operand's smallest footprint whose outside it admits
+          val candidates = FillAxis.values.toVector.flatMap { axis =>
+            val picks = options.map(
+              _.filter(f => axis.admits(f.outside))
+                .sortBy(f =>
+                  (
+                    f.area,
+                    f.outside match
+                      case Outside.Const(_) => 0
+                      case _ => 1
                   )
                 )
-              else Right(union)
-      region.flatMap { case (top, bottom, left, right) =>
-        val height = math.max(bottom - top, 0)
-        val width = math.max(right - left, 0)
-        val boxArea = height.toLong * width.toLong
-        // every cell outside the computed box shares one value: the element of the operands'
-        // outside values, computed once
-        val fillResult =
-          if outCells > boxArea then
-            Some(elem(footprints.map(_.fold(CellValue.Empty: CellValue)(_.outside))))
-          else None
-        val firstOutside =
-          if outCells == boxArea then Long.MaxValue
-          else if boxArea == 0L || top > 0 || left > 0 then 0L
-          else if width < outCols then width.toLong
-          else height.toLong * outCols.toLong
-        computeBox(top, height, left, width, outCols)(r =>
+                .headOption
+            )
+            if picks.exists(_.isEmpty) then None
+            else
+              val chosen = picks.flatten
+              val rect = boundingRect(
+                chosen.filterNot(_.isEmpty).map(f => (f.top, f.bottom, f.left, f.right))
+              )
+                .getOrElse((0, 0, 0, 0))
+              val area = (rect._2 - rect._1).toLong * (rect._4 - rect._3).toLong
+              val varies = chosen.exists(f =>
+                !(f.outside match
+                  case Outside.Const(_) => true
+                  case _ => false
+                )
+              )
+              val entries = (axis, varies) match
+                case (FillAxis.ByRow, true) => outRows.toLong
+                case (FillAxis.ByCol, true) => outCols.toLong
+                case _ => 0L
+              val effective = if varies then axis else FillAxis.Const
+              Some(
+                (
+                  area,
+                  area + entries,
+                  BroadcastPlan(
+                    rect._1,
+                    rect._2,
+                    rect._3,
+                    rect._4,
+                    effective,
+                    chosen.map(_.outside)
+                  )
+                )
+              )
+          }
+          candidates.filter(_._1 <= budget).sortBy(_._2).headOption match
+            case Some((_, _, plan)) => Right(plan)
+            case None if outCells <= ArrayResult.MaxCells => Right(whole)
+            case None =>
+              candidates.sortBy(_._1).headOption match
+                case Some((_, _, p)) =>
+                  Left(
+                    EvalError.EvalFailed(
+                      s"array operation: the populated cells of its ${outRows}×$outCols result " +
+                        s"span ${p.bottom - p.top}×${p.right - p.left} cells, more than the " +
+                        "1,048,576-cell limit",
+                      None
+                    )
+                  )
+                case None => cellByCell
+      plan.flatMap { p =>
+        val height = math.max(p.bottom - p.top, 0)
+        val width = math.max(p.right - p.left, 0)
+        val g = ArrayResult.Geometry(outRows, outCols, p.top, p.left, height, width)
+        // every cell outside the computed box: the element of the operands' outside values, once
+        // per fill entry
+        val fillResult = ArrayResult.computeFill(
+          g,
+          p.axis match
+            case FillAxis.Const => None
+            case FillAxis.ByRow => Some(true)
+            case FillAxis.ByCol => Some(false)
+        )(i => elem(p.outsides.map(_.entry(i))))
+        computeBox(p.top, height, p.left, width, outCols)(r =>
           c => elem(operands.map(op => getWithBroadcastCV(op, r, c)))
         ) match
           case Left((err, at)) =>
             fillResult match
-              case Some(Left(fillErr)) if firstOutside < at => Left(fillErr)
+              case Left((fillErr, fillAt)) if fillAt < at => Left(fillErr)
               case _ => Left(err)
           case Right(box) =>
             fillResult match
-              case Some(Left(fillErr)) => Left(fillErr)
-              case other =>
-                val fill = other.fold(CellValue.Empty: CellValue)(_.getOrElse(CellValue.Empty))
-                Right(ArrayResult.sparse(outRows, outCols, top, left, box, fill))
+              case Left((fillErr, _)) => Left(fillErr)
+              case Right(fill) =>
+                Right(ArrayResult.sparse(outRows, outCols, p.top, p.left, box, fill))
       }
 
   /**

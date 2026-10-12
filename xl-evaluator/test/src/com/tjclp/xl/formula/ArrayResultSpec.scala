@@ -17,7 +17,7 @@ class ArrayResultSpec extends FunSuite:
     assertEquals(grid(1, 2), n(6))
     assertEquals(grid(2, 0), CellValue.Empty)
     assertEquals(grid(-1, 0), CellValue.Empty)
-    assertEquals(grid.fill, CellValue.Empty)
+    assertEquals(grid.fill, ArrayResult.Fill.Const(CellValue.Empty))
     assertEquals((ArrayResult.empty.rows, ArrayResult.empty.cols), (0, 0))
     assert(ArrayResult.empty.isEmpty)
   }

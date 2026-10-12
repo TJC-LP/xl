@@ -391,8 +391,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, A] =
     evaluated match
       case ar: ArrayResult =>
-        // #750: one step per run, so a sparse array's fill folds in closed form
-        ar.runs.foldLeft[Either[EvalError, A]](Right(acc)) {
+        // #750: one step per group of equal cells, so a sparse array's fill folds in closed form
+        ar.tally.foldLeft[Either[EvalError, A]](Right(acc)) {
           case (Left(err), _) => Left(err)
           case (Right(current), (cellValue, n)) => triageElements(agg, current, cellValue, n)
         }
@@ -1413,15 +1413,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       else Right(matrix(row)(col))
 
   /**
-   * #750: an evaluated array holding a box of cells and one fill value elsewhere (a whole-axis
-   * array): read through the array, its fill's number known once for the cells outside the box.
+   * #750: an evaluated array holding a box of cells and a fill elsewhere (a whole-axis array): read
+   * through the array.
    */
   private final case class SparseArray(array: ArrayResult) extends ResolvedArray:
     def rows: Int = array.rows
     def cols: Int = array.cols
     def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
       Right(coerceToNumeric(array(row, col)))
-    def fillValue: BigDecimal = coerceToNumeric(array.fill)
 
   /**
    * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
@@ -1431,7 +1430,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
     value match
       case ar: ArrayResult =>
-        ar.runs.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+        ar.tally.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
           case None if !ar.isDense => Right(SparseArray(ar))
           case None =>
@@ -1493,10 +1492,53 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       val (top, bottom, left, right) =
         ArrayArithmetic.boundingRect(boxes).getOrElse((0, 0, 0, 0))
       val outside = rows.toLong * cols.toLong - (bottom - top).toLong * (right - left).toLong
-      val fillProduct = sparse.foldLeft(BigDecimal(1))(_ * _.fillValue)
       sumOverBox(arrays, top, bottom, left, right, ctx).map(boxSum =>
-        if outside > 0L then boxSum + fillProduct * BigDecimal(outside) else boxSum
+        if outside > 0L then
+          boxSum + outsideProducts(sparse.map(_.array.fill), rows, cols, top, bottom, left, right)
+        else boxSum
       )
+
+  /**
+   * #750: the sum, over every cell outside the rectangle rows `[top, bottom)` × columns `[left,
+   * right)`, of the product of the arrays' fills there. Each fill is one value, or one per row or
+   * per column, so a cell's product is `K · R(row) · C(col)` (the constant fills' product, the row
+   * fills' product in its row, the column fills' in its column), and the sum is the sum over the
+   * whole shape less the rectangle's: `K · (ΣR · ΣC − ΣR[top, bottom) · ΣC[left, right))`.
+   */
+  private def outsideProducts(
+    fills: List[ArrayResult.Fill],
+    rows: Int,
+    cols: Int,
+    top: Int,
+    bottom: Int,
+    left: Int,
+    right: Int
+  ): BigDecimal =
+    // the product of the fills along one axis, entry by entry; None when no fill varies along it
+    def axisProducts(n: Int, of: PartialFunction[ArrayResult.Fill, Vector[CellValue]]) =
+      val varying = fills.collect(of)
+      if varying.isEmpty then None
+      else
+        Some(Vector.tabulate(n) { i =>
+          varying.foldLeft(BigDecimal(1))((acc, vs) =>
+            acc * coerceToNumeric(vs.lift(i).getOrElse(CellValue.Empty))
+          )
+        })
+    val constant = fills.foldLeft(BigDecimal(1)) {
+      case (acc, ArrayResult.Fill.Const(v)) => acc * coerceToNumeric(v)
+      case (acc, _) => acc
+    }
+    val byRow = axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs })
+    val byCol = axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs })
+    def total(products: Option[Vector[BigDecimal]], from: Int, until: Int): BigDecimal =
+      products match
+        case None => BigDecimal(math.max(until - from, 0))
+        case Some(ps) => (from until until).foldLeft(BigDecimal(0))(_ + ps(_))
+    val all = total(byRow, 0, rows) * total(byCol, 0, cols)
+    val inside =
+      if bottom <= top || right <= left then BigDecimal(0)
+      else total(byRow, top, bottom) * total(byCol, left, right)
+    constant * (all - inside)
 
   /**
    * The sum of the arguments' element-wise products over rows `[top, bottom)` × `[left, right)`.

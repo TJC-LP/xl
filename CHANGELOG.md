@@ -185,15 +185,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 ### Changed
 
 - **Breaking: `ArrayResult` is no longer a case class** (#750): its storage is private, and a
-  whole-axis array (`A:B*1`) is held as its populated box plus one fill value instead of every
-  cell. `values` is removed: read a cell with `arr(row, col)` (Empty out of bounds, as before),
-  walk the cells in row-major order with `runs` (`(value, length)` runs: a sparse array's fill
-  comes as a few long runs) or `cells` (one value per cell, for arrays known to be small),
-  transform them with `map` (first error wins; the fill is mapped once) or `mapPure`, take a
-  window with `slice`, and get the whole grid with `toDense(label)`, which is an `EvalError` past
-  `ArrayResult.MaxCells` cells. `rows`, `cols`, `transpose`, `isEmpty` and the factories
-  (`ArrayResult(rows)`, `single`, `empty`, `fromFlat`) are unchanged; `cellCount` and `fill` are
-  new. A pattern `case ArrayResult(v)` no longer compiles (match `ar: ArrayResult` and read
+  whole-axis array (`A:B*1`, `A:A*{1,2,3}`) is held as its populated box plus a fill instead of
+  every cell. `values` is removed: read a cell with `arr(row, col)` (Empty out of bounds, as
+  before), walk the cells in row-major order with `runs` (`(value, length)` runs: a sparse array's
+  constant fill comes as a few long runs) or `cells` (one value per cell, for arrays known to be
+  small), transform them with `map` (first error wins; each fill entry is mapped once) or
+  `mapPure`, take a window with `slice`, and get the whole grid with `toDense(label)`, which is an
+  `EvalError` past `ArrayResult.MaxCells` cells. `rows`, `cols`, `transpose`, `isEmpty` and the
+  factories (`ArrayResult(rows)`, `single`, `empty`, `fromFlat`) are unchanged; `cellCount` and
+  `fill` are new. `fill` describes the cells outside the box as an `ArrayResult.Fill`: `Const(v)`
+  (one value; `Const(Empty)` for a dense array), `ByCol(values)` (one value per column) or
+  `ByRow(values)` (one per row), each read with `fill.at(row, col)`. A pattern `case ArrayResult(v)` no longer compiles (match `ar: ArrayResult` and read
   through the accessors), there is no `copy`, and `ArrayResult` is no longer a `Product`.
   Equality stays cell by cell, whatever the storage. A ragged grid passed to `ArrayResult(rows)`
   is read at its first row's width.
@@ -414,16 +416,23 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   once #683 read ranges as arrays in positionless and conditional-format evaluation (unreleased),
   `xl eval "=R:KHI"`, a conditional-format rule `R:KHI>0` or `A:XFD`, and any array formula over a
   whole axis built a grid of up to 2^34 cells and ran out of memory (the CF totality property ran
-  for 36 minutes on the text `kHi:r`; 0.23.1 refused a bare range there). An array now holds a range's populated box plus one fill value
-  for every other cell; elementwise operators, comparisons, `&`, IF, NOT, lifted calls and date
-  serials compute the box and the fill once, aggregates fold the fill in closed form
-  (`Aggregator.combineN`), SUMPRODUCT multiplies the fills once, AND/OR walk runs, and
-  INDEX/TRANSPOSE slice and transpose the box. So `SUM((A:B="")*1)` is 2,097,152 minus the
-  filled cells, `ROWS(A:A*1)` is 1,048,576 and `SUM((A:XFD="")*1)` counts all 17,179,869,184
-  cells, each in milliseconds, as Excel computes them. A positionless `=R:KHI` is its top-left
+  for 36 minutes on the text `kHi:r`; 0.23.1 refused a bare range there). An array now holds a
+  range's populated box plus a fill for every other cell: one value, or one value per column (or
+  per row) when the cells outside the box differ along that axis, as a whole column times a row
+  of constants does (`A:A*{1,2,3}`, `(A:A="")*{10,20}`, `{1;2;3}*(1:1)`). Elementwise operators,
+  comparisons, `&`, IF, NOT, lifted calls and date serials compute the box and each fill entry
+  once, aggregates fold the fill in closed form (`Aggregator.combineN`), SUMPRODUCT multiplies
+  the fills once per entry, AND/OR fold each distinct value once, and INDEX/TRANSPOSE slice and
+  transpose the box. So `SUM((A:B="")*1)` is 2,097,152 minus the filled cells, `ROWS(A:A*1)` is
+  1,048,576, `SUM((A:XFD="")*1)` counts all 17,179,869,184 cells and `SUM((A:A="")*{1,2,3})` is 6
+  for every blank row, each in milliseconds, as Excel computes them (0.23.1 computed the
+  whole-column-times-vector shapes cell by cell; they stay exact). A positionless `=R:KHI` is its top-left
   value (as `=A1:B3` is), a plain cell's `=R:KHI` in B2 stays `#VALUE!`, and the box of a range
   is found once per pass. Nothing allocates more than 1,048,576 cells (or the sheet's own cell
-  count): a result that needs a second fill value (`A:A*{1,2,3}`), a box whose populated cells
+  count): a whole row times a whole column whose populated band is past that bound along both
+  axes (`(1:1="")*(A:A="")` is exact while A's populated rows span at most 64 rows, or row 1's
+  populated columns one column; past both it is refused, as LibreOffice refuses the
+  17-billion-cell matrix and Excel runs out of resources), a box whose populated cells
   sit at opposite corners of the sheet, or a spill past that size is a loud error, never an
   out-of-memory (docs/LIMITATIONS.md). `putf --array A1 "=B:C"` is refused as too large from the
   result's shape before a cell is built, and the implicit-intersection warning still sees a

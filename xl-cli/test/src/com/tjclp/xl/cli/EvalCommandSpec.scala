@@ -1117,6 +1117,7 @@ class EvalCommandSpec extends CatsEffectSuite:
       whole <- ReadCommands.eval(axisBook, Some(sheet), "=A:XFD", None, Nil)
       blanks <- ReadCommands.eval(axisBook, Some(sheet), "=SUM((A:B=\"\")*1)", None, Nil)
       rows <- ReadCommands.eval(axisBook, Some(sheet), "=ROWS(A:A*1)", None, Nil)
+      byColumn <- ReadCommands.eval(axisBook, Some(sheet), "=SUM((A:A=\"\")*{1,2,3})", None, Nil)
     yield
       val seconds = (System.nanoTime() - started) / 1e9
       assert(seconds < 30.0, s"took $seconds s")
@@ -1126,6 +1127,8 @@ class EvalCommandSpec extends CatsEffectSuite:
       // 2 x 1,048,576 cells, two of them filled
       assert(blanks.contains("2097150"), blanks)
       assert(rows.contains("1048576"), rows)
+      // a whole column times a row of constants: 1,048,574 blank rows × (1 + 2 + 3)
+      assert(byColumn.contains("6291444"), byColumn)
   }
 
   test("#750: evala refuses a whole-axis spill past the grid or the cell limit, as #SPILL!") {
