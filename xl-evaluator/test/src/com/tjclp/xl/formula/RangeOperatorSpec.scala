@@ -215,7 +215,7 @@ class RangeOperatorSpec extends FunSuite:
     refused("=SUM(A1:INDEX(A:A,FOO(1)))") match
       case ParseError.UnknownFunction("FOO", _, _) => ()
       case other => fail(s"A1:INDEX(A:A,FOO(1)): $other")
-    // a computed reference in a typed range slot names the call it is (follow-up: #710)
+    // a computed reference in a typed range slot names the call it is (follow-up: #723)
     List(
       ("=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)", "SUMIF", "the range operator `:`"),
       ("=VLOOKUP(1,OFFSET(A1,0,0,3,2),2,FALSE)", "VLOOKUP", "OFFSET(…)"),

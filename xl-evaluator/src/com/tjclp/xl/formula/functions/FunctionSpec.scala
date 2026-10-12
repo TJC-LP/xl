@@ -514,7 +514,7 @@ object ArgSpec:
             )
           )
         // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
-        // is named, never reported as a wrong argument count — accepting it here is #710's
+        // is named, never reported as a wrong argument count — accepting it here is #723's
         case (call: TExpr.Call[?]) :: _ if computedReferenceCalls.contains(call.spec.name) =>
           // named after the call itself, so the message follows the derived set
           val computed =
