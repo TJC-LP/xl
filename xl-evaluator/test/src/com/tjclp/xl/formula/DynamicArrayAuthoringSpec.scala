@@ -7,7 +7,9 @@ import munit.FunSuite
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.formula.eval.DynamicArrayAuthoring.{Refusal, SpillBlocked, SpillBlocker}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -136,7 +138,123 @@ class DynamicArrayAuthoringSpec extends FunSuite:
   }
 
   test("an unparseable formula is refused") {
-    assert(author(base, ref"A1", "=SORT(B1:").isLeft)
+    author(base, ref"A1", "=SORT(B1:") match
+      case Left(Refusal.Invalid(err)) => assertEquals(err.code, "FORMULA_ERROR")
+      case other => fail(s"expected an invalid-formula refusal, got $other")
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // The typed refusal: one blocker kind each, message and hint derived from it
+
+  private def blockedBy(sheet: Sheet, at: ARef, formula: String): SpillBlocked =
+    author(sheet, at, formula) match
+      case Left(Refusal.Blocked(spill)) => spill
+      case other => fail(s"expected a blocked spill, got $other")
+
+  test("each blocker kind is typed, and its hint names the remedy for that kind") {
+    val occupied = blockedBy(base.put(ref"A3", num(9)), ref"A1", "=SORT(B1:B3)")
+    assertEquals(occupied.blocker, SpillBlocker.Occupied(Vector(ref"A3")))
+    assertEquals(occupied.extent, Some(range("A1:A3")))
+    assertEquals(occupied.hint, "clear A3 or choose another anchor")
+
+    val merged = blockedBy(base.merge(range("A2:B4")), ref"A1", "=SORT(B1:B3)")
+    assertEquals(merged.blocker, SpillBlocker.Merged(Vector(range("A2:B4"))))
+    assertEquals(merged.hint, "unmerge A2:B4 or choose another anchor")
+    assert(!merged.hint.contains("clear"), merged.hint)
+    assert(merged.message.contains("unmerge them or choose another anchor"), merged.message)
+
+    val cse = base.put(
+      ref"E3",
+      CellValue.Formula("B1:B3*2", None, FormulaKind.ArrayFormula(range("E3:F3")))
+    )
+    val array = blockedBy(cse, ref"F1", "=SORT(B1:B3)")
+    assertEquals(array.blocker, SpillBlocker.ArrayRecord(Vector(ref"E3" -> range("E3:F3"))))
+    assertEquals(array.hint, "clear or move the array formula at E3, or choose another anchor")
+
+    val spec = TableSpec(
+      name = "T1",
+      displayName = "T1",
+      range = range("H2:I4"),
+      columns = Vector(TableColumn(1, "a"), TableColumn(2, "b"))
+    )
+    val table = blockedBy(base.copy(tables = Map("T1" -> spec)), ref"H1", "=SORT(B1:B3)")
+    assertEquals(table.blocker, SpillBlocker.Table(Vector("T1" -> range("H2:I4"))))
+    assertEquals(
+      table.hint,
+      "choose an anchor whose spill misses table T1, or convert the table to a range"
+    )
+
+    val offGrid = blockedBy(base, ARef.from0(0, 1048575), "=SORT(B1:B3)")
+    assertEquals(offGrid.blocker, SpillBlocker.OffGrid(3, 1))
+    assertEquals(offGrid.extent, None)
+    assertEquals(
+      offGrid.hint,
+      "choose an anchor with 3 row(s) and 1 column(s) of room before XFD1048576"
+    )
+    assert(offGrid.message.contains("XFD1048576"), offGrid.message)
+
+    // every message keeps Excel's word for it; the domain error carries the formula and message
+    Vector(occupied, merged, array, table, offGrid).foreach { b =>
+      assert(b.message.contains("(Excel shows #SPILL!)"), b.message)
+      assertEquals(b.toXLError, XLError.FormulaError("=SORT(B1:B3)", b.message))
+    }
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // releaseForWrite: a plain write over a dynamic array, as Excel applies it
+
+  private def sorted: Sheet = authored(base, ref"A1", "=SORT(B1:B3)").sheet
+
+  private def release(sheet: Sheet, targets: ARef*) =
+    DynamicArrayAuthoring.releaseForWrite(sheet, targets.toSet)
+
+  test("a plain write over the anchor releases its spill: the children are cleared") {
+    val (released, cleared) = release(sorted, ref"A1").fold(b => fail(b.message), identity)
+    assertEquals(cleared, Set(ref"A2", ref"A3"))
+    assertEquals(released.cells.get(ref"A2"), None)
+    assertEquals(released.cells.get(ref"A3"), None)
+    // the anchor itself is the caller's to overwrite
+    assertEquals(released(ref"A1").value, sorted(ref"A1").value)
+  }
+
+  test("a write covering the anchor and its spill releases it too") {
+    assertEquals(release(sorted, ref"A1", ref"A2", ref"A3").map(_._2), Right(Set(ref"A2", ref"A3")))
+  }
+
+  test("a write into a spill cell that leaves the anchor is refused as Overwritten") {
+    release(sorted, ref"A2", ref"D9") match
+      case Left(b) =>
+        assertEquals(b.blocker, SpillBlocker.Overwritten(Vector(ref"A2")))
+        assertEquals(b.anchor, ref"A1")
+        assertEquals(b.extent, Some(range("A1:A3")))
+        assertEquals(b.formula, "=SORT(B1:B3)")
+        assert(b.message.contains("A2: it is in the spill range A1:A3"), b.message)
+        assert(b.message.contains("(Excel shows #SPILL!)"), b.message)
+        assertEquals(
+          b.hint,
+          "overwrite or clear A1 first (its spill goes with it), or write outside A1:A3"
+        )
+      case Right(_) => fail("a write into a live spill must be refused")
+  }
+
+  test("a sheet without dynamic arrays, a 1x1 record and a CSE extent are left alone") {
+    assertEquals(release(base, ref"B2"), Right((base, Set.empty[ARef])))
+    val single = authored(base, ref"D2", "=SUM(B1:B3*C1:C3)").sheet
+    assertEquals(release(single, ref"D2"), Right((single, Set.empty[ARef])))
+    val cse = base
+      .put(ref"E1", CellValue.Formula("B1:B3*2", None, FormulaKind.ArrayFormula(range("E1:E3"))))
+      .put(ref"E2", num(2))
+    assertEquals(release(cse, ref"E1", ref"E2"), Right((cse, Set.empty[ARef])))
+  }
+
+  test("withNumFmt formats the whole extent and keeps each cell's other style") {
+    val bold = CellStyle.default.withFont(CellStyle.default.font.withBold(true))
+    val a = authored(base.withCellStyle(ref"A3", bold), ref"A1", "=SORT(B1:B3)")
+      .withNumFmt(NumFmt.Percent)
+    Vector(ref"A1", ref"A2", ref"A3").foreach { r =>
+      assertEquals(a.sheet.getCellStyle(r).map(_.numFmt), Some(NumFmt.Percent), r.toA1)
+    }
+    assertEquals(a.sheet.getCellStyle(ref"A3").map(_.font.bold), Some(true))
   }
 
   test("deterministic under a fixed clock") {

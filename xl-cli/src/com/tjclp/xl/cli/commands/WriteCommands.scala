@@ -210,6 +210,26 @@ object WriteCommands:
     if policy.noRecalc then s"\n$noRecalcNote" else ""
 
   /**
+   * GH-714: what a plain (non-array) write of `targets` does to the dynamic arrays on `sheet`, as
+   * Excel 365 does it ([[DynamicArrayAuthoring.releaseForWrite]]): writing over an anchor clears
+   * the rest of its spill first, and writing into a spill whose anchor stays is refused as the
+   * `#SPILL!` it would cause (`FORMULA_ERROR`, nothing written). Returns the released book and
+   * sheet and the cells cleared, which join the write's dependent-refresh seeds.
+   */
+  private def releaseSpills(
+    wb: Workbook,
+    sheet: Sheet,
+    targets: Set[ARef]
+  ): IO[(Workbook, Sheet, Set[ARef])] =
+    IO.fromEither(
+      DynamicArrayAuthoring
+        .releaseForWrite(sheet, targets)
+        .map((released, cleared) => (wb.put(released), released, cleared))
+        .left
+        .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+    )
+
+  /**
    * Validate that the count of values/formulas matches the cell count in a range.
    *
    * Returns None if valid, else a `VALUE_COUNT_MISMATCH` with an actionable message.
@@ -368,18 +388,19 @@ object WriteCommands:
     warn: Warning => IO[Unit]
   ): IO[String] =
     val formatted = ValueParser.parsePutValue(valueStr, detect)
-    val updatedSheet = putFormatted(sheet, ref, formatted)
-    writeAfterRefresh(
-      wb.put(updatedSheet),
-      sheet.name,
-      Set(ref),
-      Format.putSuccess(ref, formatted.value),
-      outputPath,
-      config,
-      stream,
-      policy,
-      warn
-    )
+    releaseSpills(wb, sheet, Set(ref)).flatMap { (wb, sheet, cleared) =>
+      writeAfterRefresh(
+        wb.put(putFormatted(sheet, ref, formatted)),
+        sheet.name,
+        cleared + ref,
+        Format.putSuccess(ref, formatted.value),
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /** Apply a detected number format without creating a redundant General style. */
   private def putFormatted(sheet: Sheet, ref: ARef, formatted: Formatted): Sheet =
@@ -429,18 +450,20 @@ object WriteCommands:
     val formatted = ValueParser.parsePutValue(valueStr, detect)
     val cellCount = range.cellCount
     val modifiedRefs = range.cells.toSet
-    val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
-    writeAfterRefresh(
-      wb.put(updatedSheet),
-      sheet.name,
-      modifiedRefs,
-      s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}",
-      outputPath,
-      config,
-      stream,
-      policy,
-      warn
-    )
+    releaseSpills(wb, sheet, modifiedRefs).flatMap { (wb, sheet, cleared) =>
+      val updatedSheet = range.cells.foldLeft(sheet)((s, ref) => putFormatted(s, ref, formatted))
+      writeAfterRefresh(
+        wb.put(updatedSheet),
+        sheet.name,
+        modifiedRefs ++ cleared,
+        s"Filled $cellCount cells in ${range.toA1} with value ${formatted.value}",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    }
 
   /** Mode 3: Put different values to each cell (row-major order) */
   private def putBatchValues(
@@ -466,18 +489,19 @@ object WriteCommands:
           }
           .toVector
         val modifiedRefs = updates.map(_._1).toSet
-        val updatedSheet = sheet.put(updates*)
-        writeAfterRefresh(
-          wb.put(updatedSheet),
-          sheet.name,
-          modifiedRefs,
-          s"Put ${values.length} values to ${range.toA1} (row-major)",
-          outputPath,
-          config,
-          stream,
-          policy,
-          warn
-        )
+        releaseSpills(wb, sheet, modifiedRefs).flatMap { (wb, sheet, cleared) =>
+          writeAfterRefresh(
+            wb.put(sheet.put(updates*)),
+            sheet.name,
+            modifiedRefs ++ cleared,
+            s"Put ${values.length} values to ${range.toA1} (row-major)",
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+        }
 
   /**
    * Write formula to cell(s).
@@ -606,14 +630,20 @@ object WriteCommands:
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
+      released <- releaseSpills(wb, sheet, Set(ref))
+      (releasedWb, releasedSheet, cleared) = released
       cachedValue =
         if policy.noRecalc then
           // evaluated as the plain cell it becomes: at its position (a legacy formula)
           SheetEvaluator
-            .evaluateFormula(sheet)(fullFormula, workbook = Some(wb), currentCell = Some(ref))
+            .evaluateFormula(releasedSheet)(
+              fullFormula,
+              workbook = Some(releasedWb),
+              currentCell = Some(ref)
+            )
             .toOption
         else None
-      sheetWithFormula = sheet.put(ref, CellValue.Formula(formula, cachedValue))
+      sheetWithFormula = releasedSheet.put(ref, CellValue.Formula(formula, cachedValue))
       // Auto-apply date format if formula involves date functions
       finalSheet =
         if TExpr.containsDateFunction(parsedExpr) then
@@ -628,9 +658,9 @@ object WriteCommands:
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
       result <- writeAfterRefresh(
-        wb.put(finalSheet),
+        releasedWb.put(finalSheet),
         sheet.name,
-        Set(ref),
+        cleared + ref,
         Format.putSuccess(ref, CellValue.Formula(formula)),
         outputPath,
         config,
@@ -669,27 +699,24 @@ object WriteCommands:
         DynamicArrayAuthoring
           .author(wb, sheet, ref, formula, Clock.system)
           .left
-          .map(spillRefusal)
+          .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
       )
       // Auto-apply a date format over the spill when the formula involves date functions
       finalSheet =
         if TExpr.containsDateFunction(parsedExpr) then
           val numFmt =
             if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
-          authored.extent.cells.foldLeft(authored.sheet) { (s, r) =>
-            val existing = s.cells
-              .get(r)
-              .flatMap(_.styleId)
-              .flatMap(s.styleRegistry.get)
-              .getOrElse(CellStyle.default)
-            styleSyntax.withRangeStyle(s)(CellRange(r, r), existing.withNumFmt(numFmt))
-          }
+          authored.withNumFmt(numFmt).sheet
         else authored.sheet
+      // an uncached record has no extent yet: its spill is sized when it first evaluates
+      spills =
+        if authored.cached then s"spills ${authored.extent.toA1}"
+        else "uncached: it could not be evaluated, so its spill is not sized yet"
       result <- writeAfterRefresh(
         wb.put(finalSheet),
         sheet.name,
         authored.touched,
-        s"Put dynamic array $fullFormula at ${ref.toA1} (spills ${authored.extent.toA1})",
+        s"Put dynamic array $fullFormula at ${ref.toA1} ($spills)",
         outputPath,
         config,
         stream,
@@ -697,27 +724,6 @@ object WriteCommands:
         warn
       )
     yield result
-
-  /**
-   * A dynamic-array authoring failure as the CLI reports it: `FORMULA_ERROR`, and for a blocked
-   * spill a hint that names what to do about the blockers (the message names them).
-   */
-  private[cli] def spillRefusal(err: XLError): CliException =
-    val base = CliError.fromXLError(err, None)
-    err match
-      case XLError.FormulaError(_, reason) if reason.contains("#SPILL!") =>
-        val blockers = reason match
-          case s"$_ blocked by $who (Excel shows #SPILL!)$_" => Some(who)
-          case _ => None
-        CliException(
-          base.copy(
-            message = reason,
-            hint = Some(
-              blockers.fold("choose another anchor")(who => s"clear $who or choose another anchor")
-            )
-          )
-        )
-      case _ => CliException(base)
 
   /**
    * GH-714: the `IMPLICIT_INTERSECTION` advisory for the plain formulas a putf wrote, evaluated on
@@ -750,15 +756,17 @@ object WriteCommands:
       parsedExpr <- IO.fromEither(
         FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
       )
+      modifiedRefs = range.cells.toSet
+      released <- releaseSpills(wb, sheet, modifiedRefs)
+      (releasedWb, releasedSheet, cleared) = released
       // Apply formula with Excel-style dragging (existing logic)
       (updatedSheet, offGrid) =
-        putfDraggingLogic(sheet, wb, range, formula, parsedExpr, policy.noRecalc)
-      modifiedRefs = range.cells.toSet
+        putfDraggingLogic(releasedSheet, releasedWb, range, formula, parsedExpr, policy.noRecalc)
       cellCount = range.cellCount
       result <- writeAfterRefresh(
-        wb.put(updatedSheet),
+        releasedWb.put(updatedSheet),
         sheet.name,
-        modifiedRefs,
+        modifiedRefs ++ cleared,
         s"Applied formula to $cellCount cells in ${range.toA1} (with anchor-aware dragging)",
         outputPath,
         config,
@@ -787,6 +795,8 @@ object WriteCommands:
       case Some(error) => IO.raiseError(error)
       case None =>
         for
+          released <- releaseSpills(wb, sheet, range.cells.toSet)
+          (releasedWb, releasedSheet, cleared) = released
           // Parse and apply each formula (using iterator to avoid toList)
           updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
             (ref, formulaStr) =>
@@ -801,9 +811,9 @@ object WriteCommands:
                 val cachedValue =
                   if policy.noRecalc then
                     SheetEvaluator
-                      .evaluateFormula(sheet)(
+                      .evaluateFormula(releasedSheet)(
                         fullFormula,
-                        workbook = Some(wb),
+                        workbook = Some(releasedWb),
                         currentCell = Some(ref)
                       )
                       .toOption
@@ -812,11 +822,11 @@ object WriteCommands:
               }
           }
           modifiedRefs = updates.map(_._1).toSet
-          updatedSheet = sheet.put(updates*)
+          updatedSheet = releasedSheet.put(updates*)
           result <- writeAfterRefresh(
-            wb.put(updatedSheet),
+            releasedWb.put(updatedSheet),
             sheet.name,
-            modifiedRefs,
+            modifiedRefs ++ cleared,
             s"Put ${formulas.length} formulas to ${range.toA1} (explicit, no dragging)",
             outputPath,
             config,

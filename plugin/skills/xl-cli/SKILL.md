@@ -299,7 +299,8 @@ interiors).
   is `A5*B5`. `putf --array <cell> <formula>` stores what Excel stores when the formula is typed:
   a dynamic array anchored at the cell, spilling its computed values (one cell, one formula; in
   memory only). A spill into occupied cells, a merge, another array or a table is refused
-  (`FORMULA_ERROR`, nothing written) — clear the cells or choose another anchor. An in-memory
+  (`FORMULA_ERROR`, nothing written; the hint names the remedy). Writing over the anchor clears its
+  spill; writing into a spill cell is refused — overwrite or clear the anchor first. An in-memory
   `putf` whose plain value differs from its array value says so with an `IMPLICIT_INTERSECTION`
   warning (both values and the remedy; it never fails the run, `--strict` included).
 - **`format` replaces, detection defers.** An explicit `format` on `put`/`putf` overwrites the

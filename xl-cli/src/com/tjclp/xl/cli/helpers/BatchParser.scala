@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
+import com.tjclp.xl.cli.commands.SheetCommands
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -28,7 +28,6 @@ import com.tjclp.xl.formula.{
 }
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
-import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -1220,16 +1219,81 @@ object BatchParser:
     scoped: Vector[ScopedOp],
     recalcDependents: Boolean = true
   ): IO[(Workbook, Vector[OffGridHit])] =
+    // GH-714: only a batch that can meet a dynamic spill pays the per-op scan for one
+    val spills = mayMeetSpills(wb, scoped)
     scoped
       .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit]))) {
         (stateIO, op) =>
           stateIO.flatMap { (currentWb, default, offGrid) =>
-            applyOne(currentWb, default, op, recalcDependents)
+            applyOne(currentWb, default, op, recalcDependents, spills)
               .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
               .map((next, hits) => (next, retarget(default, op.op), offGrid ++ hits))
           }
       }
       .map((book, _, offGrid) => (book, offGrid))
+
+  /**
+   * GH-714: whether a dynamic-array spill can exist at any point of the batch — the book holds a
+   * dynamic anchor, or an op authors one (`"array": true`). No other op creates one (`copy` and
+   * `add-sheet` only carry existing ones), so a batch that answers no skips the spill guard.
+   */
+  private def mayMeetSpills(wb: Workbook, scoped: Vector[ScopedOp]): Boolean =
+    scoped.exists(_.op match
+      case BatchOp.PutFormula(_, _, _, array) => array
+      case _ => false) ||
+      wb.sheets.exists(_.cells.valuesIterator.exists(_.value match
+        case CellValue.Formula(_, _, kind) => kind.isDynamicArray
+        case _ => false))
+
+  /**
+   * GH-714: a plain value or formula write applied to the dynamic arrays it touches, before the
+   * op's applier runs ([[DynamicArrayAuthoring.releaseForWrite]], the putf/put verbs' rule): a
+   * write over an anchor clears the rest of its spill, and a write into a spill whose anchor stays
+   * — one an earlier op of this batch authored included — fails the op with the `#SPILL!` refusal
+   * (`BATCH_OP_FAILED`, the blockers in the message, the remedy as the hint). `"array": true`
+   * re-authors its own anchor, and a ref that does not resolve is left for the applier to report.
+   */
+  private def releaseSpills(
+    wb: Workbook,
+    sheetName: Option[SheetName],
+    scoped: ScopedOp
+  ): IO[Workbook] =
+    scoped.op match
+      case BatchOp.PutFormula(_, _, _, true) => IO.pure(wb)
+      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
+          _: BatchOp.PutFormulas | _: BatchOp.PutValues =>
+        val bySheet = targetCells(sheetName, OpRegistry.targetRefs(scoped.op)).groupMap(_._1)(_._2)
+        bySheet.toVector.foldLeft(IO.pure(wb)) { case (acc, (name, refs)) =>
+          acc.flatMap { current =>
+            current.sheets.find(_.name == name).fold(IO.pure(current)) { sheet =>
+              IO.fromEither(
+                DynamicArrayAuthoring
+                  .releaseForWrite(sheet, refs.toSet)
+                  .map((released, _) => current.put(released))
+                  .left
+                  .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+              )
+            }
+          }
+        }
+      case _ => IO.pure(wb)
+
+  /**
+   * The cells named by an op's target ref strings: a qualified ref on its own sheet, an unqualified
+   * one on `sheet` (THE sheet rule's answer for the op). A ref that does not parse names none.
+   */
+  private def targetCells(
+    sheet: Option[SheetName],
+    refs: Vector[String]
+  ): Vector[(SheetName, ARef)] =
+    refs.flatMap { r =>
+      RefType.parse(r).toOption.toList.toVector.flatMap {
+        case RefType.Cell(ref) => sheet.map(_ -> ref).toList.toVector
+        case RefType.QualifiedCell(name, ref) => Vector(name -> ref)
+        case RefType.Range(range) => sheet.toList.toVector.flatMap(n => range.cells.map(n -> _))
+        case RefType.QualifiedRange(name, range) => range.cells.map(name -> _).toVector
+      }
+    }
 
   /** A `rename-sheet` of the batch's default sheet moves the default with it. */
   private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
@@ -1267,22 +1331,26 @@ object BatchParser:
 
   /**
    * One op against the current workbook: THE sheet rule first ([[opSheet]]), then its applier —
-   * with the off-grid report of the two ops that shift formulas (GH-628).
+   * with the off-grid report of the two ops that shift formulas (GH-628). When the batch can meet a
+   * dynamic spill (`spills`), a plain write first goes through [[releaseSpills]] (GH-714).
    */
   private def applyOne(
-    currentWb: Workbook,
+    wb: Workbook,
     default: Option[SheetName],
     scoped: ScopedOp,
-    recalcDependents: Boolean
+    recalcDependents: Boolean,
+    spills: Boolean
   ): IO[(Workbook, Vector[OffGridHit])] =
-    IO.fromEither(opSheet(currentWb, default, scoped).left.map(CliException(_))).flatMap {
-      sheetName =>
+    IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
+      val released = if spills then releaseSpills(wb, sheetName, scoped) else IO.pure(wb)
+      released.flatMap { currentWb =>
         scoped.op match
           case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
             applyPutFormulaDragging(currentWb, sheetName, rangeStr, formula, fromRef, format)
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
             applyCopyRange(currentWb, sheetName, sourceStr, targetStr, valuesOnly, recalcDependents)
           case _ => dispatch(currentWb, sheetName, scoped, recalcDependents).map((_, Vector.empty))
+      }
     }
 
   /**
@@ -1658,16 +1726,8 @@ object BatchParser:
         case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
         case BatchOp.PutFormulas(range, _, _) => Vector(range)
         case _ => Vector.empty
-      lazy val sheet = opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten
-      refs.flatMap { r =>
-        RefType.parse(r).toOption.toList.toVector.flatMap {
-          case RefType.Cell(ref) => sheet.map(_ -> ref).toList.toVector
-          case RefType.QualifiedCell(name, ref) => Vector(name -> ref)
-          case RefType.Range(range) => sheet.toList.toVector.flatMap(n => range.cells.map(n -> _))
-          case RefType.QualifiedRange(name, range) => range.cells.map(name -> _).toVector
-          case _ => Vector.empty
-        }
-      }
+      if refs.isEmpty then Vector.empty
+      else targetCells(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
     }
 
   /**
@@ -1689,14 +1749,8 @@ object BatchParser:
             DynamicArrayAuthoring
               .author(wb, sheet, ref, formula, Clock.system)
               .left
-              .map(WriteCommands.spillRefusal)
-          ).map { authored =>
-            val formatted = format.fold(authored.sheet) { numFmt =>
-              authored.extent.cells
-                .foldLeft(authored.sheet)((s, r) => applyNumFmt(s, r, Some(numFmt)))
-            }
-            wb.put(formatted)
-          }
+              .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
+          ).map(authored => wb.put(format.fold(authored)(authored.withNumFmt).sheet))
       }
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>

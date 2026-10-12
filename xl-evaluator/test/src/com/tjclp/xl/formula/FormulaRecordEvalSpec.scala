@@ -411,6 +411,23 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(kindAt(shifted, ref"C9"), FormulaKind.dynamicArray(range("C9:C12")))
   }
 
+  test("GH-714: an insert inside a spill widens it by an empty band; nothing re-spills (pinned)") {
+    // C8:C11 holds SORT's {1;2;3;4}: the anchor caches 1, the other cells are constants
+    val spilled = sortSheet
+      .put(ref"C9", num(2))
+      .put(ref"C10", num(3))
+      .put(ref"C11", num(4))
+    // insert one row at row 10 (index0 9), inside the spill
+    val out = StructuralEditor.insertRows(Workbook(Vector(spilled)), S, at = 9, count = 1)
+    val sheet = sheetNamed(out, "S")
+    assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C12")))
+    assertEquals(sheet(ref"C9").value, num(2))
+    // the inserted band is empty until Excel recalculates the book and re-spills the anchor
+    assertEquals(sheet.cells.get(ref"C10").map(_.value), None)
+    assertEquals(sheet(ref"C11").value, num(3))
+    assertEquals(sheet(ref"C12").value, num(4))
+  }
+
   test("GH-714: a legacy (CSE) record torn by the same delete still degrades") {
     val cse = Sheet(S).put(
       ref"C8",

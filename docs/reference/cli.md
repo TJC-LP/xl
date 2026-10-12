@@ -1156,13 +1156,16 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   (an empty string counts; a style-only cell does not), a merge, another array formula's range, a
   table, or the grid edge.
 - **Re-authoring** a dynamic anchor clears its previous spill first, so a shrinking spill leaves no
-  stale cells. Other writes do not: a later `put` into a spill cell or over the anchor leaves the
-  rest of the spill as constants, and a later recalculation re-evaluates the anchor without
-  re-spilling (Excel recalculates on open).
+  stale cells. A plain `put`/`putf` over the anchor (batch included) clears its spill too, as Excel
+  does. A `put`/`putf` into a spill cell whose anchor stays is refused as `FORMULA_ERROR`, nothing
+  written: Excel would keep the value and show `#SPILL!` at the anchor. The hint says to overwrite
+  or clear the anchor first; in a batch, an earlier op's spill counts. A later recalculation
+  re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
+  values until Excel recalculates on open.
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with
   `"array": true` is refused by index before anything is written (`x-streamRefusedFields` in
   `xl batch --schema`). A streamed `put`/`putf` over an existing anchor writes a plain cell and
-  drops its `cm`.
+  drops its `cm`, but leaves its spill cells as constants.
 - Dynamic-array anchors read from Excel files keep their `cm` through every in-memory write; the
   metadata part is reused, extended (never renumbered, so images-in-cells metadata stays valid) or
   generated.
