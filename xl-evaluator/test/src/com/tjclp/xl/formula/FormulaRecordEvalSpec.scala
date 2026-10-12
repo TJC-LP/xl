@@ -428,6 +428,26 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheet(ref"C12").value, num(4))
   }
 
+  test("GH-714: an insert inside a spill at the grid edge clamps its end to the last row") {
+    // C1048574:C1048576 already reaches the last row; one more row inside cannot grow it past it
+    val anchor = ARef.from0(2, Row.MaxIndex0 - 2)
+    val edge = Sheet(S).put(
+      anchor,
+      CellValue.Formula(
+        "=SEQUENCE(3)",
+        Some(num(1)),
+        FormulaKind.dynamicArray(CellRange(anchor, ARef.from0(2, Row.MaxIndex0)))
+      )
+    )
+    val out = StructuralEditor.insertRows(Workbook(Vector(edge)), S, at = Row.MaxIndex0 - 1, 1)
+    // Pinned behaviour: the extent is clamped at row 1048576, not refused and not grown off the
+    // grid. The true size is the anchor's to recompute; re-spilling on recalculation is #737.
+    assertEquals(
+      kindAt(out, anchor),
+      FormulaKind.dynamicArray(CellRange(anchor, ARef.from0(2, Row.MaxIndex0)))
+    )
+  }
+
   test("GH-714: a legacy (CSE) record torn by the same delete still degrades") {
     val cse = Sheet(S).put(
       ref"C8",

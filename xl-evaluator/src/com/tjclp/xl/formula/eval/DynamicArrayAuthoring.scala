@@ -185,8 +185,13 @@ private[xl] object DynamicArrayAuthoring:
   ): Either[Refusal, Authored] =
     val text = CellValue.canonicalFormulaText(formula)
     val full = s"=$text"
-    SheetEvaluator.parseFormula(full).left.map(Refusal.Invalid(_)).flatMap { expr =>
-      val (cleared, clearedRefs) = clearOwnSpill(sheet, anchor)
+    // the anchor is a write like any other ([[releaseForWrite]]): over its own anchor it releases
+    // the old spill; inside another live spill it is refused as Overwritten, the refusal and hint
+    // a plain putf of the same cell gets
+    (for
+      expr <- SheetEvaluator.parseFormula(full).left.map(Refusal.Invalid(_))
+      released <- releaseForWrite(sheet, Set(anchor)).left.map(Refusal.Blocked(_))
+    yield (expr, released)).flatMap { case (expr, (cleared, clearedRefs)) =>
       val single = CellRange(anchor, anchor)
       val placed =
         cleared.put(anchor, CellValue.Formula(text, None, FormulaKind.dynamicArray(single)))

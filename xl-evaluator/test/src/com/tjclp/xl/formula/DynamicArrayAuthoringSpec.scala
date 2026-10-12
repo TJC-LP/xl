@@ -237,6 +237,22 @@ class DynamicArrayAuthoringSpec extends FunSuite:
       case Right(_) => fail("a write into a live spill must be refused")
   }
 
+  test("authoring an anchor inside another spill is refused as Overwritten, as a plain write is") {
+    author(sorted, ref"A2", "=SORT(C1:C3)") match
+      case Left(Refusal.Blocked(b)) =>
+        assertEquals(b.blocker, SpillBlocker.Overwritten(Vector(ref"A2")))
+        assertEquals(b.anchor, ref"A1")
+        assertEquals(b.extent, Some(range("A1:A3")))
+        assertEquals(b.formula, "=SORT(B1:B3)")
+        assertEquals(
+          b.hint,
+          "overwrite or clear A1 first (its spill goes with it), or write outside A1:A3"
+        )
+        // the same refusal a plain write at A2 gets
+        assertEquals(Left(b), release(sorted, ref"A2").map(_ => ()))
+      case other => fail(s"expected an Overwritten refusal, got $other")
+  }
+
   test("a sheet without dynamic arrays, a 1x1 record and a CSE extent are left alone") {
     assertEquals(release(base, ref"B2"), Right((base, Set.empty[ARef])))
     val single = authored(base, ref"D2", "=SUM(B1:B3*C1:C3)").sheet
