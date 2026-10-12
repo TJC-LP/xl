@@ -26,8 +26,8 @@ import com.tjclp.xl.cells.CellValue
  *   - Empty arrays have size 0x0
  *   - Equality is cell by cell: two arrays are equal when they have the same shape and the same
  *     value in every cell, whatever their storage
- *   - Only [[toDense]] builds every cell, and it refuses an array of more than
- *     [[ArrayResult.MaxCells]] cells
+ *   - Only [[toDense]] (and [[slice]] of a window past the edge of an array with a non-Empty fill)
+ *     builds every cell, and each refuses more than [[ArrayResult.MaxCells]] cells
  *
  * Example:
  * {{{
@@ -162,6 +162,10 @@ final class ArrayResult private (
         else
           box.iterator.zipWithIndex.flatMap { (row, i) =>
             val cells = row.iterator.map(cv => (cv, 1L, -1))
+            // grouping a fill by column (tally only): the box's first row emits its gaps as usual,
+            // which meets every gap column's entry in row-major order; the gaps of the box's other
+            // rows add nothing new, so they are skipped here and counted once the box is done, as
+            // one piece per gap column of weight boxHeight - 1
             if groupGaps && i > 0 then cells
             else gap(top + i, 0, left) ++ cells ++ gap(top + i, right, cols)
           } ++ (outside match
@@ -214,12 +218,20 @@ final class ArrayResult private (
   /**
    * The `rowCount` x `colCount` window whose top-left cell is (`rowFrom`, `colFrom`), read through
    * [[apply]] (cells outside this array are Empty). Negative counts are treated as 0. A window
-   * inside the array keeps its storage sparse; one that runs past its edge is built cell by cell.
+   * inside the array, or any window of an array whose fill is Empty, keeps its storage sparse and
+   * is always `Right`. A window that runs past the edge of an array with a non-Empty fill holds two
+   * outside values varying along both axes (the fill inside the array, Empty past its edge), so it
+   * is built cell by cell, and refused past [[ArrayResult.MaxCells]] cells as [[toDense]] is.
    */
-  def slice(rowFrom: Int, rowCount: Int, colFrom: Int, colCount: Int): ArrayResult =
+  def slice(
+    rowFrom: Int,
+    rowCount: Int,
+    colFrom: Int,
+    colCount: Int
+  ): Either[EvalError, ArrayResult] =
     val nr = math.max(rowCount, 0)
     val nc = math.max(colCount, 0)
-    if nr == 0 || nc == 0 then ArrayResult.empty
+    if nr == 0 || nc == 0 then Right(ArrayResult.empty)
     else
       val inside = rowFrom >= 0 && colFrom >= 0 &&
         rowFrom.toLong + nr <= rows && colFrom.toLong + nc <= cols
@@ -234,24 +246,31 @@ final class ArrayResult private (
         val r1 = math.min(top + boxHeight, math.min(rows, rowFrom + nr))
         val c0 = math.max(left, colFrom)
         val c1 = math.min(left + boxWidth, math.min(cols, colFrom + nc))
-        if r0 >= r1 || c0 >= c1 then ArrayResult.sparse(nr, nc, 0, 0, Vector.empty, windowFill)
+        if r0 >= r1 || c0 >= c1 then
+          Right(ArrayResult.sparse(nr, nc, 0, 0, Vector.empty, windowFill))
         else
-          ArrayResult.sparse(
+          Right(
+            ArrayResult.sparse(
+              nr,
+              nc,
+              r0 - rowFrom,
+              c0 - colFrom,
+              box.slice(r0 - top, r1 - top).map(_.slice(c0 - left, c1 - left)),
+              windowFill
+            )
+          )
+      else if nr.toLong * nc.toLong > ArrayResult.MaxCells then
+        Left(ArrayResult.tooLarge("slice", nr.toLong, nc.toLong))
+      else
+        Right(
+          new ArrayResult(
             nr,
             nc,
-            r0 - rowFrom,
-            c0 - colFrom,
-            box.slice(r0 - top, r1 - top).map(_.slice(c0 - left, c1 - left)),
-            windowFill
+            0,
+            0,
+            Vector.tabulate(nr)(r => Vector.tabulate(nc)(c => apply(rowFrom + r, colFrom + c))),
+            Fill.Const(CellValue.Empty)
           )
-      else
-        new ArrayResult(
-          nr,
-          nc,
-          0,
-          0,
-          Vector.tabulate(nr)(r => Vector.tabulate(nc)(c => apply(rowFrom + r, colFrom + c))),
-          Fill.Const(CellValue.Empty)
         )
 
   /** Transpose the array (swap rows and columns). */

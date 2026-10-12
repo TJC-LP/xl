@@ -45,14 +45,34 @@ class ArrayResultSpec extends FunSuite:
   }
 
   test("slice reads a window, Empty past the edge") {
-    assertEquals(grid.slice(0, 2, 1, 1), ArrayResult(Vector(Vector(n(2)), Vector(n(5)))))
+    assertEquals(grid.slice(0, 2, 1, 1), Right(ArrayResult(Vector(Vector(n(2)), Vector(n(5))))))
     assertEquals(
       grid.slice(1, 2, 2, 2),
-      ArrayResult(
-        Vector(Vector(n(6), CellValue.Empty), Vector(CellValue.Empty, CellValue.Empty))
+      Right(
+        ArrayResult(
+          Vector(Vector(n(6), CellValue.Empty), Vector(CellValue.Empty, CellValue.Empty))
+        )
       )
     )
-    assertEquals(grid.slice(0, 0, 0, 3), ArrayResult.empty)
+    assertEquals(grid.slice(0, 0, 0, 3), Right(ArrayResult.empty))
+  }
+
+  test(
+    "#750: a window past the edge of a non-Empty fill is capped; inside the array it stays sparse"
+  ) {
+    val whole = ArrayResult.constant(1048576, 16384, n(7))
+    // inside: sparse, whatever its size
+    whole.slice(0, 1048576, 0, 16384) match
+      case Right(ar) => assertEquals((ar.rows, ar.cols, ar(5, 5)), (1048576, 16384, n(7)))
+      case Left(err) => fail(s"an inside window is never refused: $err")
+    // past the edge: two outside values varying along both axes, built cell by cell up to the cap
+    assertEquals(
+      whole.slice(1048575, 2, 16383, 2),
+      Right(ArrayResult(Vector(Vector(n(7), CellValue.Empty), Vector.fill(2)(CellValue.Empty))))
+    )
+    whole.slice(1, 1048576, 0, 16384) match
+      case Left(EvalError.EvalFailed(msg, _)) => assert(msg.contains("1,048,576-cell limit"), msg)
+      case other => fail(s"expected the cell-limit refusal, got $other")
   }
 
   test("transpose and toDense") {

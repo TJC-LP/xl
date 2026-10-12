@@ -1467,9 +1467,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
 
   /**
-   * The sum over a `rows` × `cols` shape of the arguments' element-wise products. #750: when every
-   * argument is a [[SparseArray]], only the union of their boxes is walked; each cell outside it
-   * adds the same product of the fills.
+   * The sum over a `rows` × `cols` shape of the arguments' element-wise products. #750: when an
+   * argument is a [[SparseArray]], a raw range argument is read through its populated box too
+   * ([[sparseRanges]]), so a whole-axis range beside a whole-axis expression is never walked
+   * position by position. When every argument is then sparse, only the cells inside some argument's
+   * box are walked, a cost bounded by the boxes' total area whatever their placement (two one-cell
+   * boxes in opposite corners of `A:XFD` walk two cells): the boxes' edges cut the shape into a
+   * grid of tiles, each wholly inside or wholly outside every box, and a tile outside all of them
+   * adds its cells' product of the fills in closed form ([[fillProducts]]).
    */
   private def sumOfProducts(
     arrays: List[ResolvedArray],
@@ -1477,43 +1482,77 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     cols: Int,
     ctx: EvalContext
   ): Either[EvalError, BigDecimal] =
-    val sparse = arrays.collect { case s: SparseArray => s }
-    if arrays.isEmpty || sparse.size < arrays.size then sumOverBox(arrays, 0, rows, 0, cols, ctx)
-    else
-      val boxes = sparse.collect {
-        case s if s.array.boxRows > 0 && s.array.boxCols > 0 =>
-          (
-            s.array.boxTop,
-            s.array.boxTop + s.array.boxRows,
-            s.array.boxLeft,
-            s.array.boxLeft + s.array.boxCols
-          )
-      }
-      val (top, bottom, left, right) =
-        ArrayArithmetic.boundingRect(boxes).getOrElse((0, 0, 0, 0))
-      val outside = rows.toLong * cols.toLong - (bottom - top).toLong * (right - left).toLong
-      sumOverBox(arrays, top, bottom, left, right, ctx).map(boxSum =>
-        if outside > 0L then
-          boxSum + outsideProducts(sparse.map(_.array.fill), rows, cols, top, bottom, left, right)
-        else boxSum
-      )
+    sparseRanges(arrays, ctx).flatMap { resolved =>
+      val sparse = resolved.collect { case s: SparseArray => s }
+      if resolved.isEmpty || sparse.size < resolved.size then
+        sumOverBox(resolved, 0, rows, 0, cols, ctx)
+      else
+        val boxes = sparse.collect {
+          case s if s.array.boxRows > 0 && s.array.boxCols > 0 =>
+            (
+              s.array.boxTop,
+              s.array.boxTop + s.array.boxRows,
+              s.array.boxLeft,
+              s.array.boxLeft + s.array.boxCols
+            )
+        }
+        val rowCuts = (boxes.flatMap(b => List(b._1, b._2)) ++ List(0, rows)).distinct.sorted
+        val colCuts = (boxes.flatMap(b => List(b._3, b._4)) ++ List(0, cols)).distinct.sorted
+        val rowBands = rowCuts.zip(rowCuts.drop(1))
+        val colBands = colCuts.zip(colCuts.drop(1))
+        val outside = fillProducts(sparse.map(_.array.fill), rows, cols, rowBands, colBands)
+        val tiles = for
+          (rb, ri) <- rowBands.zipWithIndex
+          (cb, ci) <- colBands.zipWithIndex
+        yield (rb, cb, ri, ci)
+        tiles.foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+          case (Left(err), _) => Left(err)
+          case (Right(acc), ((top, bottom), (left, right), ri, ci)) =>
+            // the cuts include every box edge, so a tile is inside a box iff its corner is
+            val inBox = boxes.exists((t, b, l, r) => top >= t && top < b && left >= l && left < r)
+            if inBox then sumOverBox(resolved, top, bottom, left, right, ctx).map(acc + _)
+            else Right(acc + outside(ri, ci))
+        }
+    }
 
   /**
-   * #750: the sum, over every cell outside the rectangle rows `[top, bottom)` × columns `[left,
-   * right)`, of the product of the arrays' fills there. Each fill is one value, or one per row or
-   * per column, so a cell's product is `K · R(row) · C(col)` (the constant fills' product, the row
-   * fills' product in its row, the column fills' in its column), and the sum is the sum over the
-   * whole shape less the rectangle's: `K · (ΣR · ΣC − ΣR[top, bottom) · ΣC[left, right))`.
+   * #750: beside a [[SparseArray]], each raw range argument read the way array mode reads a range
+   * ([[readRangeArray]]) when it has more positions than its sheet has cells: through its populated
+   * box, so it becomes a [[SparseArray]] too. A range no larger than its sheet is kept (the shape,
+   * shared by every argument, then bounds the walk by the sheet), and so is every argument when
+   * none is sparse: each range is already bounded to the used area, and the walk is the one it has
+   * always been.
    */
-  private def outsideProducts(
+  private def sparseRanges(
+    arrays: List[ResolvedArray],
+    ctx: EvalContext
+  ): Either[EvalError, List[ResolvedArray]] =
+    if !arrays.exists { case _: SparseArray => true; case _ => false } then Right(arrays)
+    else
+      arrays.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+        case (Left(err), _) => Left(err)
+        case (Right(acc), RangeArray(sheet, range))
+            if range.height.toLong * range.width.toLong > sheet.cells.size.toLong =>
+          readRangeArray(range, sheet, ctx).flatMap(sumProductArray).map(acc :+ _)
+        case (Right(acc), other) => Right(acc :+ other)
+      }
+
+  /**
+   * #750: for each tile of the grid cut by `rowBands` × `colBands` that lies outside every box, the
+   * sum over its cells of the product of the arrays' fills. Each fill is one value, or one per row
+   * or per column, so a cell's product is `K · R(row) · C(col)` (the constant fills' product, the
+   * row fills' product in its row, the column fills' in its column), and a tile's sum is `K ·
+   * ΣR[band] · ΣC[band]`. Every cell of such a tile is outside every box, so each fill entry read
+   * there is a real one (an entry is Empty only where its row or column has no cell outside its
+   * box). The band sums cost one pass over each axis.
+   */
+  private def fillProducts(
     fills: List[ArrayResult.Fill],
     rows: Int,
     cols: Int,
-    top: Int,
-    bottom: Int,
-    left: Int,
-    right: Int
-  ): BigDecimal =
+    rowBands: List[(Int, Int)],
+    colBands: List[(Int, Int)]
+  ): (Int, Int) => BigDecimal =
     // the product of the fills along one axis, entry by entry; None when no fill varies along it
     def axisProducts(n: Int, of: PartialFunction[ArrayResult.Fill, Vector[CellValue]]) =
       val varying = fills.collect(of)
@@ -1524,21 +1563,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             acc * coerceToNumeric(vs.lift(i).getOrElse(CellValue.Empty))
           )
         })
+    def bandSums(products: Option[Vector[BigDecimal]], bands: List[(Int, Int)]) =
+      bands.map { (from, until) =>
+        products match
+          case None => BigDecimal(math.max(until - from, 0))
+          case Some(ps) => (from until until).foldLeft(BigDecimal(0))(_ + ps(_))
+      }.toVector
     val constant = fills.foldLeft(BigDecimal(1)) {
       case (acc, ArrayResult.Fill.Const(v)) => acc * coerceToNumeric(v)
       case (acc, _) => acc
     }
-    val byRow = axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs })
-    val byCol = axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs })
-    def total(products: Option[Vector[BigDecimal]], from: Int, until: Int): BigDecimal =
-      products match
-        case None => BigDecimal(math.max(until - from, 0))
-        case Some(ps) => (from until until).foldLeft(BigDecimal(0))(_ + ps(_))
-    val all = total(byRow, 0, rows) * total(byCol, 0, cols)
-    val inside =
-      if bottom <= top || right <= left then BigDecimal(0)
-      else total(byRow, top, bottom) * total(byCol, left, right)
-    constant * (all - inside)
+    val rowSums = bandSums(axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
+    val colSums = bandSums(axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
+    (ri, ci) => constant * rowSums(ri) * colSums(ci)
 
   /**
    * The sum of the arguments' element-wise products over rows `[top, bottom)` × `[left, right)`.

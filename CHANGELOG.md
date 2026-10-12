@@ -190,7 +190,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   before), walk the cells in row-major order with `runs` (`(value, length)` runs: a sparse array's
   constant fill comes as a few long runs) or `cells` (one value per cell, for arrays known to be
   small), transform them with `map` (first error wins; each fill entry is mapped once) or
-  `mapPure`, take a window with `slice`, and get the whole grid with `toDense(label)`, which is an
+  `mapPure`, take a window with `slice` (an `Either`: a window past the edge of an array whose
+  fill is not Empty is built cell by cell and refused past `ArrayResult.MaxCells` cells; any other
+  window stays sparse and is `Right`), and get the whole grid with `toDense(label)`, which is an
   `EvalError` past `ArrayResult.MaxCells` cells. `rows`, `cols`, `transpose`, `isEmpty` and the
   factories (`ArrayResult(rows)`, `single`, `empty`, `fromFlat`) are unchanged; `cellCount` and
   `fill` are new. `fill` describes the cells outside the box as an `ArrayResult.Fill`: `Const(v)`
@@ -422,7 +424,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   of constants does (`A:A*{1,2,3}`, `(A:A="")*{10,20}`, `{1;2;3}*(1:1)`). Elementwise operators,
   comparisons, `&`, IF, NOT, lifted calls and date serials compute the box and each fill entry
   once, aggregates fold the fill in closed form (`Aggregator.combineN`), SUMPRODUCT multiplies
-  the fills once per entry, AND/OR fold each distinct value once, and INDEX/TRANSPOSE slice and
+  the fills once per entry and walks only the cells inside some argument's box (two one-cell boxes
+  in opposite corners of a 524,288 × 16,384 shape walk two cells; a raw range larger than its sheet
+  beside a whole-axis argument is read through its populated box too), AND/OR fold each distinct value once, and INDEX/TRANSPOSE slice and
   transpose the box. So `SUM((A:B="")*1)` is 2,097,152 minus the filled cells, `ROWS(A:A*1)` is
   1,048,576, `SUM((A:XFD="")*1)` counts all 17,179,869,184 cells and `SUM((A:A="")*{1,2,3})` is 6
   for every blank row, each in milliseconds, as Excel computes them (0.23.1 computed the

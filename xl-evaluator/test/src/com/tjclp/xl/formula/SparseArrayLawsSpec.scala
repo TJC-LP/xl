@@ -151,8 +151,8 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
       4 -> genSparse,
       1 -> genCell.map(ArrayResult.single),
       2 -> genVector,
-      1 -> genSparse.map(_.slice(0, 1, 0, 7)),
-      1 -> genSparse.map(_.slice(0, 7, 0, 1))
+      1 -> genSparse.map(_.slice(0, 1, 0, 7).fold(_ => ArrayResult.empty, identity)),
+      1 -> genSparse.map(_.slice(0, 7, 0, 1).fold(_ => ArrayResult.empty, identity))
     )
     forAll(Gen.listOfN(3, genOperand)) { ops =>
       val sparse = ArrayArithmetic.broadcastN(ops.toVector)(elem)
@@ -285,6 +285,32 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
 
   property("a range read through its populated box evaluates as the positional read does") {
     forAll(genSheet, genFormula) { (sheet, formula) =>
+      val sparse = evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, formula)
+      val dense = evalWith(ArrayArithmetic.RangeRead.Dense, sheet, formula)
+      assertEquals(sparse, dense, formula)
+    }
+  }
+
+  property("SUMPRODUCT over boxes in disjoint corners evaluates as the positional read does") {
+    // each argument reads one half of A1:F8, so its box holds only that half's populated cells:
+    // the boxes sit apart, and every tile of the grid their edges cut is summed exactly once
+    val halves = List(
+      ("A1:F4", "A5:F8"),
+      ("A1:C8", "D1:F8"),
+      ("A1:C4", "D5:F8"),
+      ("D1:F4", "A5:C8")
+    )
+    val templates = List(
+      "=SUMPRODUCT(($R>0)*1,($S>0)*1)",
+      "=SUMPRODUCT(($R=\"\")*1,($S=\"\")*1)",
+      "=SUMPRODUCT(($R>0)*1+1,($S=\"\")*2+1)",
+      "=SUMPRODUCT(($R=\"\")*{1,2,3},($S>0)*{4;5;6;7}+1)",
+      "=SUMPRODUCT(($R=\"\")*{1;2;3;4},($S=\"\")*{1,2,3})",
+      "=SUMPRODUCT(($R=\"\")*1,($S=\"\")*1,($R>0)+($S>0)+1)"
+    )
+    forAll(genSheet, Gen.oneOf(halves), Gen.oneOf(templates)) { (sheet, half, template) =>
+      val (r, s) = half
+      val formula = template.replace("$R", r).replace("$S", s)
       val sparse = evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, formula)
       val dense = evalWith(ArrayArithmetic.RangeRead.Dense, sheet, formula)
       assertEquals(sparse, dense, formula)
