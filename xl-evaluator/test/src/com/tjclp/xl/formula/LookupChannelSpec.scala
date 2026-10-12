@@ -327,6 +327,42 @@ class LookupChannelSpec extends FunSuite:
     across("=XMATCH(\"b2\",Keys!B1:B3)", num(2))
   }
 
+  test(
+    "#692: a bounded lookup costs its range, not the sheet, however many cells the sheet holds"
+  ) {
+    // Sheet.usedRange scans every populated cell. A full-column lookup pays that once to clip its
+    // walk; a bounded range must not pay it at all — on this sheet (200k unrelated cells in Z) the
+    // 20,000 lifted lookups below would otherwise visit 4×10⁹ cells where their keys number ten.
+    // The budget is generous for the ten-cell walks (a few seconds at most) and far below what a
+    // per-call sheet scan takes (over four minutes when measured).
+    val Noise = 200000
+    val Lookups = 20000
+    val BudgetMs = 30000L
+    val keys = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+      s.put(ref"A1".shift(0, i), num(i + 1))
+    }
+    val lookups = (0 until Lookups).foldLeft(keys) { (s, i) =>
+      s.put(ref"B1".shift(0, i), num(i % 10 + 1))
+    }
+    val sheet = (0 until Noise).foldLeft(lookups) { (s, i) => s.put(ref"Z1".shift(0, i), num(i)) }
+    val t0 = System.nanoTime()
+    val matched = sheet.evaluateArrayFormula(s"=MATCH(B1:B$Lookups,A1:A10,0)", ref"C1")
+    val looked = sheet.evaluateArrayFormula(s"=XLOOKUP(B1:B$Lookups,A1:A10,A1:A10)", ref"D1")
+    val elapsedMs = (System.nanoTime() - t0) / 1000000L
+    assert(elapsedMs < BudgetMs, s"20k bounded lookups took ${elapsedMs}ms (budget ${BudgetMs}ms)")
+    val (matchedSheet, matchedRange) = matched.fold(e => fail(e.toString), identity)
+    val (lookedSheet, lookedRange) = looked.fold(e => fail(e.toString), identity)
+    assertEquals(matchedRange.height, Lookups)
+    assertEquals(lookedRange.height, Lookups)
+    assertEquals(matchedSheet(ref"C1").value, num(1))
+    assertEquals(matchedSheet(ref"C7").value, num(7))
+    assertEquals(lookedSheet(ref"D7").value, num(7))
+    // the full-column forms still clip to the used range, and keep the range's own positions
+    check(sheet, "=MATCH(7,A:A,0)", num(7))
+    check(sheet, "=XLOOKUP(7,A:A,B:B)", num(7))
+    check(sheet, "=XMATCH(7,A:A)", num(7))
+  }
+
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {
     // A1:B2 is the used range; C1 is blank, so 3 (A2) sits at row-major position 4 of A1:C2
     val grid = Sheet(SheetName.unsafe("S"))

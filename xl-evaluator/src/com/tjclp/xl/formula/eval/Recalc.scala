@@ -268,12 +268,16 @@ final case class ErrorValueCell(
 ) derives CanEqual:
   /**
    * `Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A3, 2, FALSE)` — one line, the
-   * reason bounded by [[ErrorValueCell.boundReason]]: [[reason]] keeps the full text (a lookup key
-   * echoes the cell it came from, up to 32,767 characters, newlines included), the rendering is
-   * what the one-line summary and the CLI's text output can carry.
+   * reason bounded by [[ErrorValueCell.boundReason]] and the sheet name's control characters
+   * replaced the same way (`SheetName` rejects only `:\/?*[]`, so an untrusted workbook's name can
+   * carry an escape sequence as a key can; the name is never cut or collapsed, so it still tells
+   * two sheets apart). [[reason]] and [[sheet]] keep the full text (a lookup key echoes the cell it
+   * came from, up to 32,767 characters, newlines included); the rendering is what the one-line
+   * summary and the CLI's text output can carry.
    */
   def render: String =
-    val at = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1} ${error.toExcel}"
+    val name = SheetName.quoteForFormula(ErrorValueCell.withoutControls(sheet.value))
+    val at = s"$name!${ref.toA1} ${error.toExcel}"
     reason.fold(at)(why => s"$at — ${ErrorValueCell.boundReason(why)}")
 
 object ErrorValueCell:
@@ -282,10 +286,22 @@ object ErrorValueCell:
   val MaxReasonLength: Int = 120
 
   /**
-   * Every run of whitespace, control characters (the C0 and C1 blocks, `\p{Cc}`: CR, LF, tab, NEL,
-   * ESC, BEL, DEL, …) and the Unicode line and paragraph separators `\s` leaves out.
+   * The control characters (the C0 and C1 blocks, `\p{Cc}`: CR, LF, tab, NEL, ESC, BEL, DEL, …) and
+   * the Unicode line and paragraph separators `\s` leaves out, as a regex character class body.
    */
-  private val ControlsAndWhitespace: Pattern = Pattern.compile("[\\s\\p{Cc}\\u2028\\u2029]+")
+  private val Controls: String = "\\p{Cc}\\u2028\\u2029"
+
+  /** Every run of whitespace and [[Controls]]. */
+  private val ControlsAndWhitespace: Pattern = Pattern.compile(s"[\\s$Controls]+")
+
+  /** One of [[Controls]]. */
+  private val Control: Pattern = Pattern.compile(s"[$Controls]")
+
+  /**
+   * `text` with each control character and line separator a single space and nothing else touched:
+   * how [[ErrorValueCell.render]] carries the sheet name, whose spaces are its own.
+   */
+  private def withoutControls(text: String): String = Control.matcher(text).replaceAll(" ")
 
   /**
    * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line

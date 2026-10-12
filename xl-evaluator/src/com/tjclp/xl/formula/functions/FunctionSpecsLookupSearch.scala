@@ -11,11 +11,12 @@ import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   /**
-   * XLOOKUP's search once its arguments are validated. The caller has checked `matchMode` and
-   * `searchMode` against their tables ([[matchModeError]], [[searchModeError]]); `call` is by name,
-   * rendered only for a miss. match_mode 0 and 2 walk the lookup range lazily through
-   * [[exactLookupPosition]] (#692: an uncached formula key is computed when reached, never past the
-   * hit); -1 and 1 share the lookups' approximate plane over the materialised range.
+   * XLOOKUP's search. `matchMode` and `searchMode` are checked against their tables first
+   * ([[matchModeError]], [[searchModeError]]); `call` is by name, rendered only for a bad mode or a
+   * miss, never on a hit or for every element of a lifted array. match_mode 0 and 2 walk the lookup
+   * range lazily through [[exactLookupPosition]] (#692: an uncached formula key is computed when
+   * reached, never past the hit); -1 and 1 share the lookups' approximate plane over the
+   * materialised range.
    */
   private def performXLookup(
     lookup: ExprValue,
@@ -30,6 +31,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
     for
+      // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
+      _ <- matchModeError("XLOOKUP", matchMode, call)
+      _ <- searchModeError("XLOOKUP", searchMode, call)
       matchedIndexOpt <- matchMode match
         case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
         case 2 =>
@@ -53,8 +57,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val ordered = if searchMode < 0 then keys.reverse else keys
             approximateMatch(ordered, lookup, matchMode, lastOnTie = false)
           }
-        // unreachable: the caller validated the mode; a second call site that does not gets the
-        // same #VALUE! rather than the approximate search
+        // unreachable: the mode was validated above; kept total so a mode that slipped through
+        // would get the same #VALUE! rather than the approximate search
         case other => matchModeError("XLOOKUP", other, call).map(_ => None)
       result <- matchedIndexOpt match
         case Some(idx) =>
@@ -263,13 +267,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         searchModeRaw <- evalValue(ctx, searchModeExpr)
         matchMode <- toIntArg("XLOOKUP", matchModeRaw)
         searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-        // the rendered call is a diagnostic — built by name, only for a bad mode or a miss, never
-        // on a hit or for every element of a lifted array
-        call = () =>
-          s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
-        // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
-        _ <- matchModeError("XLOOKUP", matchMode, call())
-        _ <- searchModeError("XLOOKUP", searchMode, call())
+        // the rendered call is a diagnostic, passed by name: built only for a bad mode or a miss,
+        // never on a hit or for every element of a lifted array
         result <- performXLookup(
           normalized,
           lookupSheet,
@@ -279,7 +278,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
           ifNotFoundOpt,
           matchMode,
           searchMode,
-          call(),
+          s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)",
           ctx
         )
       yield result

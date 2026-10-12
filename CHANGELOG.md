@@ -36,8 +36,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   unchanged. `ErrorValueCell.render` (and so the summary and the CLI's text) carries each reason
   as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…`,
   every control character (an ANSI or OSC escape in an untrusted key) replaced by a space — a
-  lookup echoes its key, which can be a 32,767-character multi-line cell — while
-  `ErrorValueCell.reason` and the JSON `reason` keep the full text. `RecalcResult` gains the
+  lookup echoes its key, which can be a 32,767-character multi-line cell — and the sheet name's
+  control characters replaced the same way (never cut or collapsed: `SheetName` rejects only
+  `:\/?*[]`), while `ErrorValueCell.reason`, `ErrorValueCell.sheet` and the JSON keep the full
+  text. `RecalcResult` gains the
   defaulted field `errorReasons: Map[QualifiedRef, String]`: source-compatible, but the binary
   signatures of its `apply`/`copy`/`unapply` change for code compiled against an earlier
   `xl-evaluator`.
@@ -140,6 +142,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **The recalc summary line gains a suffix** (#692): every mutation verb's
+  `Recalculated N formulas (K error values)` is now `Recalculated N formulas (K error values:
+  Sheet!A1 #N/A — …; …)`, naming up to three cells (`… and N more` past that). A regex over that
+  line should expect the `: …` suffix inside the parentheses; `recalc --json` is additive and
+  unchanged in shape.
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
@@ -304,13 +311,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   (XLOOKUP answered `#N/A`, and read an unknown search_mode as forward); MATCH and XLOOKUP read
   their lookup range through the evaluating reader, so a formula key with no cached value is
   computed rather than silently skipped (`MATCH(20, A1:A3, 0)` over an uncached `=5*4` is 2, not
-  `#N/A`), and like LOOKUP/XMATCH stop at the sheet's used range. The exact and wildcard modes of
-  XLOOKUP, XMATCH and MATCH walk that range lazily, one cell at a time in search order, so a hit
-  near the top of a 50k-row column costs the cells up to it, never the column (200 `XLOOKUP` + 200
-  `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s is reading and
-  writing the book); the approximate modes read the used range as before. XLOOKUP's
+  `#N/A`); a full-column or full-row lookup range stops at the sheet's used range, and a bounded
+  range walks its declared cells without the used-range scan (LOOKUP and XMATCH paid that scan of
+  every populated cell on every call, bounded or not; they no longer do). The exact and wildcard
+  modes of XLOOKUP, XMATCH and MATCH walk that range lazily, one cell at a time in search order,
+  so a hit near the top of a 50k-row column costs the cells up to it, never the column (200
+  `XLOOKUP` + 200 `MATCH` keyed near the top of 50k rows: `xl recalc` 63 s → 34 s, of which 19 s
+  is reading and writing the book); the approximate modes read the used range as before. XLOOKUP's
   `return_array` cell is read through the same evaluating reader, so an uncached formula there is
-  computed instead of returning the raw formula record. A key cell whose formula cannot be
+  computed instead of returning the raw formula record — and an uncached return-cell formula that
+  fails, or a host error in that cell, now fails the XLOOKUP where it used to yield the stale or
+  empty value. A key cell whose formula cannot be
   evaluated at all (unparseable, or an unknown function) is a host failure, not a value: MATCH and
   XLOOKUP's exact searches now surface it when it sits before the hit in search order, as
   LOOKUP/XMATCH already did (the old readers skipped it silently); the cells after the hit are

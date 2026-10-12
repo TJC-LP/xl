@@ -505,6 +505,28 @@ class RecalcSpec extends FunSuite:
     assertEquals(ErrorValueCell.boundReason("a\u0080\u009fb\u0085c"), "a b c")
     assertEquals(ErrorValueCell.boundReason("\u0000x\u0000"), "x")
 
+  test("#692: the summary strips control characters from the sheet name too; the field keeps it"):
+    // SheetName rejects only :\/?*[] — a C1 control (CSI, the 8-bit ESC [) passes its validation
+    // and the writer's C0 strip (GH-237) alike, so it is the one an untrusted book can carry
+    val name = "Da\u009b31mta"
+    val sheet = Sheet(SheetName.unsafe(name))
+      .put(ref"A1", num(1))
+      .put(ref"B1", formula("=1/0"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val cell = result.errorCells match
+      case Vector(only) => only
+      case other => fail(s"expected one error cell, got $other")
+    assertEquals(cell.sheet.value, name)
+    assert(!cell.render.exists(_.isControl), cell.render)
+    assert(!result.summary.exists(_.isControl), result.summary)
+    assertEquals(cell.render, "'Da 31mta'!B1 #DIV/0! — Division by zero: 1 / 0")
+    // the name is never collapsed or cut: its own spaces tell two sheets apart
+    val spaced = ErrorValueCell(SheetName.unsafe("My  Sheet"), ref"A1", CellError.NA, None)
+    assertEquals(spaced.render, "'My  Sheet'!A1 #N/A")
+    val tabbed = ErrorValueCell(SheetName.unsafe("a\tb\u0085c"), ref"A1", CellError.NA, None)
+    assertEquals(tabbed.render, "'a b c'!A1 #N/A")
+
   test("#692: bounding a summary reason never splits a Unicode surrogate pair"):
     val emoji = "\uD83D\uDE00"
     val exactly120 = "x" * 119 + emoji

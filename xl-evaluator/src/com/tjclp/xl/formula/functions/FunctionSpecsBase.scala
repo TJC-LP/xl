@@ -355,28 +355,40 @@ trait FunctionSpecsBase:
     ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
 
   /**
-   * A lookup range's values (rows of cells), cut off where the sheet's used range ends: the cells
-   * past it are blank, which no lookup mode matches, so `LOOKUP(x,A:A,B:B)` costs the data rather
-   * than a million blanks. The range's start is kept, so positions within the result are the
-   * range's own.
+   * The part of a lookup range a search walks. A full column or row (`A:A`, `2:2`) is cut off where
+   * the sheet's used range ends: the cells past it are blank, which no lookup mode matches, so
+   * `LOOKUP(x,A:A,B:B)` costs the data rather than a million blanks (`None` when the two do not
+   * meet). A bounded range is itself: `Sheet.usedRange` scans every populated cell, so clipping a
+   * bounded range would cost the whole sheet on every call — and on every element of a lifted
+   * lookup value — where walking its declared cells costs the range; the rule
+   * `FunctionSpecsAggregate.computeBounds` and `FunctionSpecsArray.boundedToUsed` follow. The
+   * range's start is kept, so positions within the result are the range's own.
+   */
+  protected def lookupRangeExtent(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet
+  ): Option[CellRange] =
+    if range.isFullColumn || range.isFullRow then
+      targetSheet.usedRange.flatMap { used =>
+        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
+        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
+        if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then None
+        else Some(CellRange(range.start, ARef.from0(colEnd, rowEnd)))
+      }
+    else Some(range)
+
+  /**
+   * A lookup range's values (rows of cells) over its [[lookupRangeExtent]]: a full column or row
+   * materialised up to the sheet's used range, a bounded range in full.
    */
   protected def lookupRangeValues(
     range: CellRange,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    targetSheet.usedRange match
+    lookupRangeExtent(range, targetSheet) match
       case None => Right(Vector.empty)
-      case Some(used) =>
-        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
-        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
-        if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then Right(Vector.empty)
-        else
-          extractRangeAsMatrixEval(
-            CellRange(range.start, ARef.from0(colEnd, rowEnd)),
-            targetSheet,
-            ctx
-          )
+      case Some(extent) => extractRangeAsMatrixEval(extent, targetSheet, ctx)
 
   /**
    * #692: the first position of a lookup range whose value satisfies `matches`, reading the range
@@ -384,9 +396,10 @@ trait FunctionSpecsBase:
    * search reaches it and never past the hit, so an exact XLOOKUP/XMATCH/MATCH over a 50k-row
    * column whose key sits near the top costs the cells up to the hit, not the column (the
    * materialised [[lookupRangeValues]] built and evaluated every cell first). Positions are the
-   * range's own row-major 0-based positions (blanks included, never compacted); the walk is cut off
-   * at the sheet's used range like [[lookupRangeValues]], forward or — `descending` — from the last
-   * used cell back. The first cell that fails to evaluate ends the search with its error.
+   * range's own row-major 0-based positions (blanks included, never compacted); the walk covers the
+   * range's [[lookupRangeExtent]] (a full column or row cut off at the sheet's used range, a
+   * bounded range in full), forward or — `descending` — from its last cell back. The first cell
+   * that fails to evaluate ends the search with its error.
    */
   protected def findLookupPosition(
     range: CellRange,
@@ -394,30 +407,31 @@ trait FunctionSpecsBase:
     ctx: EvalContext,
     descending: Boolean
   )(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
-    targetSheet.usedRange match
+    // The full-column clip relies on `matches` — `matchesLookupExact` and the wildcard criterion —
+    // never matching `Empty`: the cells past the used range are blank, so leaving them out cannot
+    // lose a hit. If blank matching is ever added (an XLOOKUP of ""), the clip must go with it.
+    lookupRangeExtent(range, targetSheet) match
       case None => Right(None)
-      case Some(used) =>
+      case Some(extent) =>
         val rowStart = range.rowStart.index0
         val colStart = range.colStart.index0
-        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
-        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
-        if rowEnd < rowStart || colEnd < colStart then Right(None)
-        else
-          val rows = if descending then rowEnd to rowStart by -1 else rowStart to rowEnd
-          val cols = if descending then colEnd to colStart by -1 else colStart to colEnd
-          val cells = rows.iterator.flatMap(row => cols.iterator.map(col => (row, col)))
-          val read = rangeCellReader(targetSheet, ctx)
-          @annotation.tailrec
-          def search(): Either[EvalError, Option[Int]] =
-            if !cells.hasNext then Right(None)
-            else
-              val (row, col) = cells.next()
-              read(ARef.from0(col, row)) match
-                case Left(error) => Left(error)
-                case Right(cv) =>
-                  if matches(cv) then Right(Some((row - rowStart) * range.width + (col - colStart)))
-                  else search()
-          search()
+        val rowEnd = extent.rowEnd.index0
+        val colEnd = extent.colEnd.index0
+        val rows = if descending then rowEnd to rowStart by -1 else rowStart to rowEnd
+        val cols = if descending then colEnd to colStart by -1 else colStart to colEnd
+        val cells = rows.iterator.flatMap(row => cols.iterator.map(col => (row, col)))
+        val read = rangeCellReader(targetSheet, ctx)
+        @annotation.tailrec
+        def search(): Either[EvalError, Option[Int]] =
+          if !cells.hasNext then Right(None)
+          else
+            val (row, col) = cells.next()
+            read(ARef.from0(col, row)) match
+              case Left(error) => Left(error)
+              case Right(cv) =>
+                if matches(cv) then Right(Some((row - rowStart) * range.width + (col - colStart)))
+                else search()
+        search()
 
   /**
    * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's

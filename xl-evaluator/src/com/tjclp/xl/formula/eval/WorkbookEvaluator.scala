@@ -934,12 +934,14 @@ object WorkbookEvaluator:
       )
 
     /**
-     * A host failure: the cell's cache stripped (Excel recalculates it on open), the error kept.
+     * A host failure: the cell's cache stripped (Excel recalculates it on open), the error kept,
+     * and no reason — a failed cell has no error value to explain.
      */
     def failed(idx: Int, q: QualifiedRef, error: XLError): PassState =
       copy(
         sheets = sheets.updated(idx, SheetEvaluator.stripFormulaCaches(sheets(idx), Set(q.ref))),
-        errors = errors :+ CellEvalError(q.sheet, q.ref, error)
+        errors = errors :+ CellEvalError(q.sheet, q.ref, error),
+        reasons = reasons - q
       )
 
   /**
