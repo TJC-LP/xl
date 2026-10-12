@@ -60,6 +60,10 @@ private[xl] object ValueDependencies:
    * [[ReferenceOperators.dependencyValues]] compares them. Any other qualified reference belongs to
    * another sheet and reads nothing here.
    *
+   * With `localReads = false` the formula sits on another sheet: only its references qualified with
+   * `home` read `home`, and its unqualified ones read its own sheet, so nothing here (`--with`'s
+   * search for another sheet's formulas that read back into the overridden one).
+   *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
    * not thread-safe, so never share one across fibers or threads (`recalc --parallel`). Its cache
@@ -67,7 +71,11 @@ private[xl] object ValueDependencies:
    * never reuse a reader where other bounds apply; build another, as the cycle check does for the
    * one-cell bound around the placement.
    */
-  private[xl] final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
+  private[xl] final class Reader(
+    bounds: Option[CellRange],
+    home: Option[SheetName],
+    localReads: Boolean = true
+  ):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
     def reads(expr: TExpr[?]): Set[ARef] =
@@ -97,6 +105,9 @@ private[xl] object ValueDependencies:
       def cell(at: ARef): Set[CellRange] =
         if referenceOnly then Set.empty else Set(CellRange(at, at))
       def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
+      // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
+      def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
+      def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
       def arg(a: ArgValue, addressOnly: Boolean): Set[CellRange] = a match
         case ArgValue.Expr(child) => loop(child, addressOnly, env)
         case ArgValue.Range(location) =>
@@ -109,10 +120,10 @@ private[xl] object ValueDependencies:
             case None if addressOnly => Set.empty
             case None =>
               location match
-                case TExpr.RangeLocation.Local(r, _) => cells(r)
+                case TExpr.RangeLocation.Local(r, _) => if localReads then cells(r) else Set.empty
                 case TExpr.RangeLocation.CrossSheet(sheet, r, _) if local(sheet) => cells(r)
                 case _ => Set.empty
-        case ArgValue.Cells(r) => if addressOnly then Set.empty else cells(r)
+        case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 
       // Exhaustive, no wildcard: a new TExpr case is a compiler warning here, never a silent
       // structural fallback that would lose referenceOnly and own-sheet qualified reads.
@@ -122,11 +133,11 @@ private[xl] object ValueDependencies:
             _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
             _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
           BinarySpine.operandList(chain).foldLeft(Set.empty[CellRange])(_ ++ value(_))
-        case TExpr.Ref(at, _, _) => cell(at)
-        case TExpr.PolyRef(at, _) => cell(at)
+        case TExpr.Ref(at, _, _) => localCell(at)
+        case TExpr.PolyRef(at, _) => localCell(at)
         case TExpr.SheetRef(sheet, at, _, _) => if local(sheet) then cell(at) else Set.empty
         case TExpr.SheetPolyRef(sheet, at, _) => if local(sheet) then cell(at) else Set.empty
-        case TExpr.RangeRef(r, _) => range(r)
+        case TExpr.RangeRef(r, _) => localRange(r)
         case TExpr.SheetRange(sheet, r, _) => if local(sheet) then range(r) else Set.empty
         case TExpr.Coerced(inner, _) => loop(inner, referenceOnly, env)
         case TExpr.ToInt(inner) => value(inner)

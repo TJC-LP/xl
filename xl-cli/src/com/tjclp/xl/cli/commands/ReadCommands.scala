@@ -402,7 +402,8 @@ object ReadCommands:
     at: Option[ARef]
   ): IO[Evaluated] =
     for
-      tempSheet <- overridden(sheet, overrides)
+      withOverrides <- overridden(wb, sheet, overrides)
+      (tempSheet, tempBook) = withOverrides
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
       bounds = tempSheet.usedRange
       // Positioned or not, only the formula's value-read closure is analysed: never the whole
@@ -435,7 +436,7 @@ object ReadCommands:
       placedSheet = at.fold(tempSheet)(SheetEvaluator.placed(tempSheet, _, formula))
       // The book holds this sheet as evaluated, so a formula on another sheet that reads back
       // into it sees the `--with` overrides, with `--at`, without it and in evala alike
-      book = wb.put(placedSheet)
+      book = tempBook.put(placedSheet)
       placement = at.map(cell =>
         (cell, SheetEvaluator.placement(formula, wb, tempSheet.name, cell))
       )
@@ -653,88 +654,135 @@ object ReadCommands:
   // ==========================================================================
 
   /**
-   * `sheet` with the `--with` overrides applied, and every formula on it that reads an overridden
-   * cell, directly or through other formulas, without its cache: the cache predates the override.
-   * However the formula is then read, it evaluates with the overrides.
+   * `sheet` with the `--with` overrides applied, and `wb` holding it, with every cached formula in
+   * the book that reads an overridden cell, directly or through other formulas on any sheet, made
+   * uncached: the cache predates the override. However the formula is then read (from the closure,
+   * at run time through `INDIRECT("B1")`, or back from another sheet as `Other!A1` holding
+   * `=Data!B1*2`), it evaluates with the overrides.
    *
    * This is the one step of `eval` (and of `--at`) that is not O(k) in the formula's closure: with
    * overrides, every formula on the sheet is parsed once to find its value reads
-   * ([[ValueDependencies]], so `ROW(A1)` does not go stale when A1 changes). The closure alone
-   * would not do. The fold re-evaluates the closure's formulas anyway; the stale formulas it cannot
-   * see are the ones read only at run time (`INDIRECT("B1")`) or back from another sheet's formula
-   * (`Other!A1` holding `=Data!B1*2`), and finding those statically would mean parsing every sheet
-   * a read could reach. EvalCommandSpec pins both shapes. Without overrides nothing is parsed.
+   * ([[ValueDependencies]], so `ROW(A1)` does not go stale when A1 changes), and every formula on
+   * another sheet that names a sheet a stale cell sits on. The closure alone would not do: the
+   * stale formulas it cannot see are the ones read only at run time or back from another sheet.
+   * EvalCommandSpec pins both shapes, cached. Without overrides nothing is parsed.
    */
-  private def overridden(sheet: Sheet, overrides: List[String]): IO[Sheet] =
-    if overrides.isEmpty then IO.pure(sheet)
+  private def overridden(
+    wb: Workbook,
+    sheet: Sheet,
+    overrides: List[String]
+  ): IO[(Sheet, Workbook)] =
+    if overrides.isEmpty then IO.pure((sheet, wb))
     else
-      applyOverrides(sheet, overrides).map((applied, changed) => uncacheReaders(applied, changed))
+      applyOverrides(sheet, overrides).map { (applied, changed) =>
+        val book = uncacheReaders(wb.put(applied), applied.name, changed)
+        (book.sheets.find(_.name == applied.name).getOrElse(applied), book)
+      }
 
   /**
-   * `sheet` with every cached formula that reads `changed`, transitively, made uncached.
+   * `book` with every cached formula, on any sheet, that reads `changed` (cells of the sheet named
+   * `home`), transitively across sheets, made uncached.
    *
    * Formulas are indexed by the ranges they read, never by those ranges' cells: a running total
    * (`B{n} = SUM($A$1:A{n})`) has a distinct range per row, and expanding them would cost the
-   * square of the row count. Each range registers in the grid blocks it overlaps (one column by
-   * [[StaleBlockRows]] rows); a range spanning more than [[StaleBlockLimit]] blocks is checked
-   * against every changed cell instead. The walk asks each changed cell's block for candidate
-   * formulas and keeps those with a range containing the cell.
+   * square of the row count. One index per sheet a stale cell lands on, built when the first one
+   * does: it holds that sheet's formulas with their unqualified and own-name reads, and another
+   * sheet's formulas with their reads qualified with its name; a formula whose text never names the
+   * sheet cannot read it that way and is not parsed for it. Each range registers in the grid blocks
+   * it overlaps (one column by [[StaleBlockRows]] rows); a range spanning more than
+   * [[StaleBlockLimit]] blocks is checked against every stale cell of its sheet instead. The walk
+   * asks each stale cell's block for candidate formulas and keeps those with a range containing the
+   * cell. Each formula is parsed at most once, whatever indexes it joins.
    *
    * A formula leaves every candidate set it is found in once it is stale, so later cells never
    * check it again. Without that, a running total of running totals (`C{n} = SUM($B$1:B{n})` over
    * stale B cells) re-checked each C reader for every stale B in its blocks, about n²/2 checks. Now
    * a formula is checked only while still cached, at most once per cell of a block it registered
-   * in: [[StaleBlockRows]] checks per registration at worst, bounded by the index's own size, not
+   * in: [[StaleBlockRows]] checks per registration at worst, bounded by the indexes' own size, not
    * by the square of the sheet. A wide reader is checked against each stale cell, as before.
    */
-  private def uncacheReaders(sheet: Sheet, changed: Set[ARef]): Sheet =
-    val reads = ValueDependencies.Reader(sheet.usedRange, Some(sheet.name))
-    val formulas: Vector[(ARef, Vector[CellRange])] = sheet.cells.iterator.flatMap { (ref, cell) =>
-      cell.value match
-        // GH-430: a data table's cells are pinned value sources
-        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
-        case CellValue.Formula(text, _, _) =>
-          FormulaParser.parse(text).toOption.map(expr => ref -> reads.readRanges(expr).toVector)
-        case _ => None
-    }.toVector
-    // (column, row block) → the cached formulas with a range overlapping it, each set shrinking as
-    // its formulas go stale; built and consumed locally, one walk
-    val blocks =
-      scala.collection.mutable.HashMap.empty[(Int, Int), scala.collection.mutable.Set[Int]]
-    val wide = scala.collection.mutable.Set.empty[Int]
-    formulas.iterator.zipWithIndex.foreach { case ((_, ranges), i) =>
-      ranges.foreach { r =>
-        val firstBlock = r.rowStart.index0 / StaleBlockRows
-        val lastBlock = r.rowEnd.index0 / StaleBlockRows
-        if r.width.toLong * (lastBlock - firstBlock + 1) > StaleBlockLimit then wide += i
-        else
-          for
-            col <- r.colStart.index0 to r.colEnd.index0
-            block <- firstBlock to lastBlock
-          do blocks.getOrElseUpdate((col, block), scala.collection.mutable.Set.empty[Int]) += i
+  private[cli] def uncacheReaders(book: Workbook, home: SheetName, changed: Set[ARef]): Workbook =
+    import scala.collection.mutable
+    val sheets = book.sheets
+    // every formula the walk meets, numbered on first sight: (sheet index, cell)
+    val nodes = mutable.ArrayBuffer.empty[(Int, ARef)]
+    val ids = mutable.HashMap.empty[(Int, ARef), Int]
+    def idOf(node: (Int, ARef)): Int = ids.getOrElseUpdate(node, { nodes += node; nodes.size - 1 })
+    val parsed = mutable.HashMap.empty[(Int, ARef), Option[TExpr[?]]]
+    def parse(node: (Int, ARef), text: String): Option[TExpr[?]] =
+      parsed.getOrElseUpdate(node, FormulaParser.parse(text).toOption)
+
+    // the formulas reading one sheet: by (column, row block) the ones still cached with a range
+    // overlapping it, each set shrinking as its formulas go stale
+    final class Readers:
+      val ranges = mutable.HashMap.empty[Int, Vector[CellRange]]
+      val blocks = mutable.HashMap.empty[(Int, Int), mutable.Set[Int]]
+      val wide = mutable.Set.empty[Int]
+      def register(id: Int, read: Vector[CellRange]): Unit =
+        ranges.update(id, read)
+        read.foreach { r =>
+          val firstBlock = r.rowStart.index0 / StaleBlockRows
+          val lastBlock = r.rowEnd.index0 / StaleBlockRows
+          if r.width.toLong * (lastBlock - firstBlock + 1) > StaleBlockLimit then wide += id
+          else
+            for
+              col <- r.colStart.index0 to r.colEnd.index0
+              block <- firstBlock to lastBlock
+            do blocks.getOrElseUpdate((col, block), mutable.Set.empty[Int]) += id
+        }
+
+    def readersOf(target: Int): Readers =
+      val readers = Readers()
+      val name = sheets(target).name
+      val bounds = sheets(target).usedRange
+      val own = ValueDependencies.Reader(bounds, Some(name))
+      val elsewhere = ValueDependencies.Reader(bounds, Some(name), localReads = false)
+      // a qualified reference spells the name, its quotes doubled, in any case
+      val spelled = name.value.toLowerCase(java.util.Locale.ROOT).replace("'", "''")
+      sheets.indices.foreach { at =>
+        val reader = if at == target then own else elsewhere
+        sheets(at).cells.foreach { (ref, cell) =>
+          cell.value match
+            // GH-430: a data table's cells are pinned value sources
+            case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+            case CellValue.Formula(text, _, _)
+                if at == target || text.toLowerCase(java.util.Locale.ROOT).contains(spelled) =>
+              parse((at, ref), text).foreach { expr =>
+                val read = reader.readRanges(expr).toVector
+                if read.nonEmpty then readers.register(idOf((at, ref)), read)
+              }
+            case _ => ()
+        }
       }
-    }
-    val stale = scala.collection.mutable.BitSet.empty
-    // the candidates in `readers` whose range contains `cell`; a formula already stale leaves it
-    def readersOf(readers: scala.collection.mutable.Set[Int], cell: ARef): List[Int] =
-      readers.filterInPlace(i => !stale.contains(i))
-      readers.iterator.filter(i => formulas(i)._2.exists(_.contains(cell))).toList
+      readers
+
+    val indexes = mutable.HashMap.empty[Int, Readers]
+    val stale = mutable.BitSet.empty
+    // the candidates in `among` whose range contains `cell`; a formula already stale leaves it
+    def hitsIn(readers: Readers, among: mutable.Set[Int], cell: ARef): List[Int] =
+      among.filterInPlace(i => !stale.contains(i))
+      among.iterator.filter(i => readers.ranges.get(i).exists(_.exists(_.contains(cell)))).toList
     @scala.annotation.tailrec
-    def walk(frontier: List[ARef]): Unit = frontier match
+    def walk(frontier: List[(Int, ARef)]): Unit = frontier match
       case Nil => ()
-      case cell :: rest =>
-        val block = blocks.get((cell.col.index0, cell.row.index0 / StaleBlockRows))
-        val hits =
-          (block.fold(List.empty[Int])(readersOf(_, cell)) ++ readersOf(wide, cell)).distinct
+      case (target, cell) :: rest =>
+        val readers = indexes.getOrElseUpdate(target, readersOf(target))
+        val block = readers.blocks.get((cell.col.index0, cell.row.index0 / StaleBlockRows))
+        val hits = (block.fold(List.empty[Int])(hitsIn(readers, _, cell)) ++
+          hitsIn(readers, readers.wide, cell)).distinct
         stale ++= hits
-        walk(hits.map(formulas(_)._1) ::: rest)
-    walk(changed.toList)
-    stale.foldLeft(sheet) { (s, i) =>
-      val ref = formulas(i)._1
-      s(ref).value match
-        case f @ CellValue.Formula(_, Some(_), _) => s.put(ref, f.copy(cachedValue = None))
-        case _ => s
-    }
+        walk(hits.map(nodes(_)) ::: rest)
+    sheets.indexWhere(_.name == home) match
+      case -1 => book
+      case homeIndex =>
+        walk(changed.toList.map(homeIndex -> _))
+        stale.toList.map(nodes(_)).groupMap(_._1)(_._2).foldLeft(book) { case (b, (at, refs)) =>
+          b.put(refs.foldLeft(sheets(at)) { (s, ref) =>
+            s(ref).value match
+              case f @ CellValue.Formula(_, Some(_), _) => s.put(ref, f.copy(cachedValue = None))
+              case _ => s
+          })
+        }
 
   /** The rows in one block of [[uncacheReaders]]'s index. */
   private val StaleBlockRows = 1024

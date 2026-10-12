@@ -294,15 +294,19 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
   a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
   reference it is. A VLOOKUP/HLOOKUP result cell that computes an Excel error shows it (`#DIV/0!`)
-  as the cell would, and one in a cycle is `#VALUE!`; any other failure there (an unknown
-  function) fails the lookup as a reference to the cell would, never a `#VALUE!`.
+  as the cell would, and one in a cycle is `#VALUE!`.
+  **Behaviour change:** a VLOOKUP/HLOOKUP result cell holding an unknown function now fails the
+  lookup, as a reference to that cell does, instead of giving `#VALUE!`.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
   case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported").
   Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the
   evaluated sheet threaded in, so a formula on another sheet that reads back into it sees the
-  overrides and the computed closure. A cached formula that reads an overridden cell drops its
-  stale cache, so `Data!B1`, `INDIRECT("B1")` and other sheets' read-backs see the override too.
-  This costs one parse of the sheet's formulas when `--with` is given.
+  overrides and the computed closure. Every cached formula in the book that reads an overridden
+  cell, directly or through other formulas on any sheet, drops its stale cache, so `Data!B1`,
+  `INDIRECT("B1")` and another sheet's read-back (`Other!A1` holding `=Data!B1*2`, cached as
+  Excel saves it) see the override too. This costs one parse of the sheet's formulas, and of each
+  other sheet's formulas that name a sheet holding an overridden or stale cell, when `--with` is
+  given.
 - **`eval` and `evala` analyse only the formula's own precedents** (#715): the closure they
   evaluate first is walked from the formula's value reads, as `eval --at` does, instead of from a
   dependency graph of the whole sheet. A cycle elsewhere on the sheet no longer fails them, a

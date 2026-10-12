@@ -676,6 +676,8 @@ object Evaluator:
    * Matched by message prefix, the three raise sites sharing the constants above: a dedicated
    * marker would be a new case or field on the published `EvalError`, a binary break.
    * LookupUncachedKeysSpec pins each raise site, so a rewording that loses the match fails there.
+   * TODO(#751): a structured cycle marker on `EvalError` replaces the prefixes at the next
+   * binary-breaking release.
    */
   private[formula] def isCycleFailure(error: EvalError): Boolean = error match
     case EvalError.EvalFailed(message, _) =>

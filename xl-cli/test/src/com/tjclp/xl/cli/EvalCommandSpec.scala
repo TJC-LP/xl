@@ -291,6 +291,22 @@ class EvalCommandSpec extends CatsEffectSuite:
       circularAt(sheet, "=C1", "D20", "D20 → C1 → D20")
   }
 
+  test("GH-715: a transitive precedent's range over a placement outside the used range is caught") {
+    // The used range is A1:C10; D40 and F30 lie outside it. Neither the formula nor its direct
+    // read reads them: that read's precedent does, through a bounded range or a whole row.
+    val sheet = pairedColumns(Sheet("Test"))
+      .put(ref"C1", CellValue.Formula("=C2*2"))
+      .put(ref"C2", CellValue.Formula("=SUM(D1:D50)"))
+      .put(ref"C3", CellValue.Formula("=C4+1"))
+      .put(ref"C4", CellValue.Formula("=SUM(30:30)"))
+    for
+      _ <- circularAt(sheet, "=C1+1", "D40", "D40 → C1 → C2 → D40")
+      _ <- circularAt(sheet, "=C3", "F30", "F30 → C3 → C4 → F30")
+      // just past the bounded range: no cycle, the plain cell evaluates
+      beyond <- ReadCommands.eval(Workbook(sheet), Some(sheet), "=C1+1", Some("D51"), Nil)
+    yield assert(beyond.contains("Result: 1 (number)"), beyond)
+  }
+
   test("GH-715: eval --at a cell the formula does not read evaluates") {
     val sheet = pairedColumns(Sheet("Test")).put(ref"C1", CellValue.Formula("=D5*2"))
     val wb = Workbook(Vector(sheet))
@@ -872,6 +888,78 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(scaled.contains("Result: 10 (number)"), scaled)
       assert(scaled.contains("At: Other!Z100"), scaled)
       assert(column.contains("Result: 5 (number)"), column)
+  }
+
+  /** A cached formula: `text` holding `cached`, as Excel saves every formula. */
+  private def cachedFormula(text: String, cached: Int): CellValue =
+    CellValue.Formula(text, Some(CellValue.Number(BigDecimal(cached))))
+
+  /**
+   * Data: A1 = 5, B1 = A1*2 (10), C1 = Other!A1+1 (21). Other: A1 = Data!B1*2 (20), A2 = Data!A2
+   * holding a cache of 99 no override reaches, A3 = B1 (Other's own B1, empty) cached 7. Third: A1
+   * = Other!A1+1 (21). Every formula holds its cache, as in a book Excel saved.
+   */
+  private val cachedReadBacks: Workbook = Workbook(
+    Vector(
+      Sheet("Data")
+        .put(ref"A1", CellValue.Number(BigDecimal(5)))
+        .put(ref"B1", cachedFormula("=A1*2", 10))
+        .put(ref"C1", cachedFormula("=Other!A1+1", 21)),
+      Sheet("Other")
+        .put(ref"A1", cachedFormula("=Data!B1*2", 20))
+        .put(ref"A2", cachedFormula("=Data!A2", 99))
+        .put(ref"A3", cachedFormula("=B1", 7)),
+      Sheet("Third").put(ref"A1", cachedFormula("=Other!A1+1", 21))
+    )
+  )
+
+  test("GH-715: --with reaches a CACHED read-back on another sheet, transitively across sheets") {
+    // A1 = 200: B1 = 400, Other!A1 = 800, and back on Data C1 = 801, as does Third!A1. Each read
+    // is a cache saved before the override, so each must be dropped, not read.
+    val data = cachedReadBacks.sheets.headOption
+    val overrides = List("A1=200")
+    val cases = List(
+      "=Other!A1" -> 800,
+      "=C1" -> 801,
+      "=Third!A1" -> 801,
+      "=INDIRECT(\"Other!A1\")" -> 800,
+      // untouched: Other!A2 reads a cell no override sets, and Other!A3 reads Other's own B1
+      "=Other!A2" -> 99,
+      "=Other!A3" -> 7
+    )
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(cachedReadBacks, data, formula, at, overrides).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _) >>
+      ReadCommands.evalArray(cachedReadBacks, data, "=Other!A1+Third!A1", None, overrides).map {
+        array => assert(array.contains("1601"), array)
+      }
+  }
+
+  test("GH-715 CLI: --with reaches another sheet's cached read-back in a saved file") {
+    for
+      book <- written(cachedReadBacks)
+      result <- CliHarness.run(
+        "-f",
+        book,
+        "-s",
+        "Data",
+        "--json",
+        "eval",
+        "=Other!A1",
+        "--with",
+        "A1=200"
+      )
+    yield
+      assertEquals(result.exit, 0, result.stdout)
+      assertEquals(
+        ujson.read(result.stdout)("data")("result")("value"),
+        ujson.Num(800),
+        result.stdout
+      )
   }
 
   test("GH-715: --with on the --at cell itself is USAGE: the formula is that cell") {
