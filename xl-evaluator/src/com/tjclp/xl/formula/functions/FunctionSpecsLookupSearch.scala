@@ -10,7 +10,17 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
-  /** GH-713: the 0-based position of XLOOKUP's match along its lookup vector, if any. */
+  /**
+   * GH-713: the 0-based position of XLOOKUP's match along its lookup vector (one row or column —
+   * `xlookupStrip` has checked the shape), if any.
+   *
+   * Only the positions up to the sheet's used range are read: every position past it is blank, so
+   * the first of them in search order stands for them all (`XLOOKUP(k,A:A,B:M)` reads the data, not
+   * a million cells). The answer is unchanged in every mode: an exact or wildcard match takes the
+   * first match in search order, and the approximate modes keep the first of equal keys, so a blank
+   * key, a reverse search (`search_mode` -1/-2) or a next-smaller/larger match that lands on the
+   * blanks lands on the same position it did when every cell was read.
+   */
   private def xlookupIndex(
     lookupValue: ExprValue,
     lookupSheet: Sheet,
@@ -18,7 +28,19 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     matchMode: Int,
     searchMode: Int
   ): Option[Int] =
-    val lookupCells = lookupArray.cells.toVector
+    val vertical = lookupArray.width == 1
+    val size = if vertical then lookupArray.height else lookupArray.width
+    def at(i: Int): ARef =
+      if vertical then ARef.from0(lookupArray.colStart.index0, lookupArray.rowStart.index0 + i)
+      else ARef.from0(lookupArray.colStart.index0 + i, lookupArray.rowStart.index0)
+    // positions [0, read) reach the used range; [read, size) lie past it, blank
+    val read = lookupSheet.usedRange.fold(0) { used =>
+      val (start, usedEnd) =
+        if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
+        else (lookupArray.colStart.index0, used.colEnd.index0)
+      math.max(0, math.min(size, usedEnd - start + 1))
+    }
+    def valueAt(i: Int): CellValue = lookupSheet(at(i)).value
 
     // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
     // a ref to a cell holding "k2" must match exactly like the literal "k2".
@@ -26,9 +48,12 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
     // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
     // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
-    val indices =
-      if searchMode == -1 || searchMode == -2 then lookupCells.indices.reverse
-      else lookupCells.indices
+    // The blank tail is one position, the first the search meets: its end in reverse.
+    val reverse = searchMode == -1 || searchMode == -2
+    val blankTail: Vector[Int] =
+      if read < size then Vector(if reverse then size - 1 else read) else Vector.empty
+    val indices: Vector[Int] =
+      if reverse then blankTail ++ (read - 1 to 0 by -1) else (0 until read).toVector ++ blankTail
 
     val wildcardCriterionOpt = lookup match
       case ExprValue.Text(text) =>
@@ -41,7 +66,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     // included); a linear search, so a tie keeps the first key in search order
     def approximate(direction: Int): Option[Int] =
       approximateMatch(
-        indices.map(idx => (idx, lookupSheet(lookupCells(idx)).value)),
+        indices.map(idx => (idx, valueAt(idx))),
         lookup,
         direction,
         lastOnTie = false
@@ -50,14 +75,14 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     matchMode match
       case 0 =>
         indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
+          val cellValue = valueAt(idx)
           matchesLookupExact(cellValue, lookup)
         }
       case -1 => approximate(-1)
       case 1 => approximate(1)
       case 2 =>
         indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
+          val cellValue = valueAt(idx)
           matchesLookupExact(cellValue, lookup) ||
           wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }

@@ -129,6 +129,52 @@ class XLookupReferenceSpec extends FunSuite:
     )
   }
 
+  /**
+   * A tall sheet's lookup: A1:A3 = 1,2,3 and B1:B3 = 10,20,30, nothing below row 3, so every
+   * position of `A:A` past row 3 is blank. `ROWS(B1:XLOOKUP(…))` is the matched row.
+   */
+  private def tall(formula: String): Either[String, CellValue] =
+    val data = (1 to 3).foldLeft(Sheet(SheetName.unsafe("Tall"))) { (s, i) =>
+      s.put(ARef.from1(1, i), N(i.toString)).put(ARef.from1(2, i), N((i * 10).toString))
+    }
+    val placed = data.put(ref"H1", CellValue.Formula(formula, None))
+    placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))).left.map(_.message)
+
+  test("GH-713: a whole-column lookup reads the data, and matches past it as before") {
+    // the data
+    assertEquals(tall("XLOOKUP(2,A:A,B:B)"), Right(N("20")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(3,A:A,B:B,,0,-1))"), Right(N("3")))
+    // keys that could meet the blanks past the data (a blank cell, "", 0, wildcards), forward
+    // and in both reverse modes, exact and wildcard. None matches a blank — a wildcard matches
+    // the numbers as text, so it lands on the first or the last of the data. These are the
+    // answers the search gave when it read every cell of A:A.
+    val blankLike =
+      for
+        key <- List("Z9", "\"\"", "0", "\"*\"", "\"?*\"")
+        mode <- List("", ",,0,-1", ",,0,-2", ",,2", ",,2,-1", ",,2,-2")
+      yield (key, mode)
+    def expected(key: String, mode: String): Either[String, CellValue] =
+      (key.contains('*'), mode) match
+        case (true, ",,2") => Right(N("1"))
+        case (true, ",,2,-1" | ",,2,-2") => Right(N("3"))
+        case _ => Right(E("#N/A"))
+    assertEquals(
+      blankLike.map((k, m) => (k + m, tall(s"ROWS(B1:XLOOKUP($k,A:A,B:B$m))"))),
+      blankLike.map((k, m) => (k + m, expected(k, m)))
+    )
+    // the approximate modes over data then blanks: next smaller from either end, next larger
+    assertEquals(tall("ROWS(B1:XLOOKUP(5,A:A,B:B,,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(5,A:A,B:B,,-1,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(0,A:A,B:B,,1))"), Right(N("1")))
+    assertEquals(tall("XLOOKUP(9,A:A,B:B,,1)"), Right(E("#N/A")))
+    // a finite lookup array past the data, and a horizontal one over a whole row
+    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A1:A10,B1:B10,,2,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(5,A1:A10,B1:B10,,-1,-1))"), Right(N("3")))
+    assertEquals(tall("COLUMNS(A2:XLOOKUP(\"*\",2:2,2:2,,2,-1))"), Right(N("2")))
+    assertEquals(tall("XLOOKUP(20,2:2,2:2)"), Right(N("20")))
+    assertEquals(tall("XLOOKUP(Z9,2:2,2:2,,0,-1)"), Right(E("#N/A")))
+  }
+
   test("GH-713: an array key still lifts under an aggregate (no reference collapse)") {
     assertEquals(plain("H1", "SUM(XLOOKUP({1;2},A1:A3,B1:B3))"), Right(N("30")))
     assertEquals(plain("H1", "SUMPRODUCT(XLOOKUP({1;2},A1:A3,B1:B3))"), Right(N("30")))
@@ -169,6 +215,19 @@ class XLookupReferenceSpec extends FunSuite:
       functions.FunctionSpecs.xlookupStrip(keys, grid).fold(e => fail(e.toString), identity)
     assertEquals(horizontal(2).map(_.toA1), Right("C1:C3"))
     assert(horizontal(3).isLeft)
+  }
+
+  test("GH-713: a 1×1 lookup array beside an N×1 return array returns the whole column") {
+    // Today's answer, pinned so it cannot drift silently: a one-cell lookup array is also a one-row
+    // array of the return array's width (1), so a match returns the matched column — all of
+    // B1:B3. Excel's answer is unconfirmed (LibreOffice 24.2 has no XLOOKUP to ask); reading the
+    // lookup array as a column instead would make the heights differ, `#VALUE!`.
+    assertEquals(
+      array("=XLOOKUP(1,A1,B1:B3)"),
+      Right(ArrayResult(Vector(Vector(N("10")), Vector(N("20")), Vector(N("30")))))
+    )
+    assertEquals(plain("H1", "SUM(XLOOKUP(1,A1,B1:B3))"), Right(N("60")))
+    assertEquals(plain("H1", "ROWS(XLOOKUP(1,A1,B1:B3))"), Right(N("3")))
   }
 
   test("GH-713: the result keeps round-tripping as _xlfn.XLOOKUP") {
