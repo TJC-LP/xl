@@ -44,8 +44,28 @@ final case class FunctionFlags(
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
    * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
    */
-  lift: ArrayLift = ArrayLift.Off
-)
+  lift: ArrayLift = ArrayLift.Off,
+  /**
+   * GH-712: an expression argument needs reference identity, its position or shape rather than its
+   * value (ROW, COLUMN, ROWS, COLUMNS), so a LET binding it reads keeps the reference it denotes.
+   */
+  requiresReferenceArguments: Boolean = false,
+  /**
+   * GH-712: the result has one element per row or column of the reference argument (ROW, COLUMN),
+   * so SUMPRODUCT's whole-axis trimming (GH-192) reaches that reference as it does a lifted slot,
+   * keeping `SUMPRODUCT((A:A>5)*ROW(A:A))` aligned. False for shape readers whose answer is the
+   * reference's full extent (ROWS, COLUMNS) and for every other function.
+   */
+  boundsReferenceAxis: Boolean = false
+):
+
+  /**
+   * GH-712: whether SUMPRODUCT's shared whole-axis extent (GH-192) enters this call's arguments — a
+   * lifted call (its lifted slots evaluate element-wise beside the other operands) or one flagged
+   * [[boundsReferenceAxis]]. The single rule for both the static trimming (`TExpr.transformRanges`)
+   * and the evaluator, which drops the extent at any other call.
+   */
+  def entersArrayRangeBounds: Boolean = boundsReferenceAxis || lift != ArrayLift.Off
 
 /**
  * Which scalar slots of a function lift over arrays (see [[FunctionFlags.lift]]).
@@ -149,6 +169,19 @@ final case class EvalContext(
   private[formula] def arrayMode: Boolean = operands.arrayMode
 
   /**
+   * Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. It
+   * shapes arrays only: callers apply it in array mode, never to a scalar answer.
+   */
+  private[formula] def boundArrayRange(range: CellRange): CellRange =
+    operands.arrayRangeBounds.fold(range)(_(range))
+
+  private[formula] def evalBoundedArrayExpr(
+    expr: TExpr[Any],
+    bound: CellRange => CellRange
+  ): Either[EvalError, Any] =
+    operands.boundedArrayArg.fold(evalArrayExpr(expr))(_(expr, bound))
+
+  /**
    * Whether this call's result feeds a reference position, so the value IF, IFS, CHOOSE and SWITCH
    * select is kept as a reference (Excel's IF and CHOOSE return references):
    * `SUM(IF(A1:A10>2,A1:A10,0))` in row 5 sums the whole range.
@@ -221,7 +254,9 @@ object EvalContext:
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
     selectsReference: Boolean,
     nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty,
-    nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None
+    nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None,
+    arrayRangeBounds: Option[CellRange => CellRange] = None,
+    boundedArrayArg: Option[(TExpr[Any], CellRange => CellRange) => Either[EvalError, Any]] = None
   )
 
   private[formula] object Operands:
