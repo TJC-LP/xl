@@ -12,7 +12,7 @@ import com.tjclp.xl.unsafe.* // For .unsafe extension
 
 import munit.ScalaCheckSuite
 import org.scalacheck.Gen
-import org.scalacheck.Prop.forAll
+import org.scalacheck.Prop.{forAll, forAllNoShrink}
 
 import java.time.LocalDateTime
 
@@ -418,12 +418,36 @@ class DisplaySpec extends ScalaCheckSuite:
       )
       negative <- Gen.oneOf(true, false)
     yield
-      val magnitude = BigDecimal(new java.math.BigDecimal(unscaled.bigInteger, scale))
-      if negative then -magnitude else magnitude
+      // Scala BigDecimal unary minus rounds through its MathContext before negating. At the
+      // scale boundary that can throw, and elsewhere it removes generated significant digits.
+      val signed = if negative then -unscaled else unscaled
+      BigDecimal(new java.math.BigDecimal(signed.bigInteger, scale))
+
+  test("General cell display: exact sign flip at the minimum stored scale") {
+    // CI seed j_SKsAEqk8H6simSNJLVLQtN0BOJHAS6IguZmxSoZEN= reached this on its sixth sample.
+    // Formatting succeeded; the old Scala `-n` oracle underflowed while rounding 35 to 34 digits.
+    val positive = BigDecimal(
+      new java.math.BigDecimal(
+        BigInt("83540582243743409901371300709146942").bigInteger,
+        Int.MinValue
+      )
+    )
+    val negative = BigDecimal(positive.bigDecimal.negate())
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(positive), NumFmt.General),
+      "8E+2147483682"
+    )
+    assertEquals(
+      NumFmtFormatter.formatValue(CellValue.Number(negative), NumFmt.General),
+      "-8E+2147483682"
+    )
+  }
 
   property("General cell display: grammar, the 11-character bound and the sign law (GH-672)") {
     val grammar = "-?[0-9]+(\\.[0-9]+)?(E[+-][0-9]{2,})?".r
-    forAll(genGeneralDisplay) { (n: BigDecimal) =>
+    // The generic fractional shrinker also rounds and divides BigDecimals, which can overflow
+    // their stored scale and mask the original failure. Keep the full generated argument instead.
+    forAllNoShrink(genGeneralDisplay) { (n: BigDecimal) =>
       val text = NumFmtFormatter.formatValue(CellValue.Number(n), NumFmt.General)
       assert(grammar.matches(text), s"'$text' for $n")
       val unsigned = text.stripPrefix("-")
@@ -435,7 +459,8 @@ class DisplaySpec extends ScalaCheckSuite:
       else
         assertEquals(text.startsWith("-"), n.signum < 0, s"'$text' for $n")
         assertEquals(
-          NumFmtFormatter.formatValue(CellValue.Number(-n), NumFmt.General),
+          NumFmtFormatter
+            .formatValue(CellValue.Number(BigDecimal(n.bigDecimal.negate())), NumFmt.General),
           if n.signum < 0 then unsigned else "-" + text,
           s"$n"
         )
