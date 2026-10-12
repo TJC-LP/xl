@@ -224,6 +224,17 @@ class RowColumnArraySpec extends FunSuite:
     assertEquals(at("=SUMPRODUCT((A:A>0)*nmCount)"), Right(number(3 * 1048576)))
   }
 
+  test("SUMPRODUCT stays consistent where the trimming does not enter: IF, and the COLUMN mirror") {
+    // IF does not enter the extent, so its condition and ROW(A:A) both stay whole (1,048,576
+    // rows) and line up: rows 6 and 7 hold A > 1, 6 + 7 = 13 (Excel and LibreOffice agree)
+    assertEquals(
+      rowsCell(rowsFrom5, "=SUMPRODUCT(IF(A:A>1,ROW(A:A),0))", ref"B6"),
+      Right(number(13))
+    )
+    // the COLUMN mirror of SUMPRODUCT((A:A>0)*ROW(A:A)): C1:E1 hold positives, 3 + 4 + 5
+    assertEquals(gridCell("=SUMPRODUCT((1:1>0)*COLUMN(1:1))", ref"H9"), Right(number(12)))
+  }
+
   // ===== A union is no single reference =====
 
   test("ROW and COLUMN of a union are #VALUE!, as in Excel") {
