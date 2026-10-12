@@ -125,6 +125,27 @@ private[xl] object SheetMetadataPart:
   private def cellBlocks(root: Elem): Vector[Elem] =
     children(root, "cellMetadata").take(1).flatMap(children(_, "bk"))
 
+  /**
+   * The cell blocks a writer may point a NEW anchor at, by `cm`: those whose only record is an
+   * XLDAPR one naming a dynamic block. A block that also carries another type's record (allowed by
+   * the schema, rare in practice) would hand that record to every anchor xl writes, so it is not
+   * reused; a variant found only there gets a block of its own.
+   */
+  private def reusable(root: Elem): Vector[(Int, ArrayMode.Dynamic)] =
+    val types = xldaprTypeIndices(root)
+    val blocks = xldaprBlocks(root)
+    cellBlocks(root).zipWithIndex.flatMap { case (bk, i) =>
+      children(bk, "rc") match
+        case Vector(rc) =>
+          for
+            t <- attr(rc, "t").flatMap(_.trim.toIntOption)
+            if types.contains(t)
+            v <- attr(rc, "v").flatMap(_.trim.toIntOption)
+            mode <- blocks.lift(v).flatten
+          yield (i + 1) -> mode
+        case _ => None
+    }
+
   private def index(root: Elem): CellMetadataIndex =
     val types = xldaprTypeIndices(root)
     val blocks = xldaprBlocks(root)
@@ -161,7 +182,7 @@ private[xl] object SheetMetadataPart:
             // an unreadable part cannot be extended: write the records without `cm`
             case None => CellMetadataPlan.none
             case Some(root) =>
-              val existing = index(root).byCm.toVector.sortBy(_._1)
+              val existing = reusable(root)
               def firstCm(m: ArrayMode.Dynamic): Option[Int] =
                 existing.collectFirst { case (cm, `m`) => cm }
               val missing = ordered.filter(firstCm(_).isEmpty)
@@ -313,20 +334,27 @@ private[xl] object SheetMetadataPart:
             (r, children(types, "metadataType").size + 1)
           case None =>
             (insertInOrder(root0, el("metadataTypes", scope, List("count" -> "1"))(typeElem)), 1)
-    // 2. the XLDAPR future-metadata blocks
-    val firstV = xldaprBlocks(root1).size
-    val blocks = missing.map(futureBlock(_, scope))
+    // 2. the XLDAPR future-metadata blocks: an existing block of the variant is pointed at again
+    // (it may only be reachable through a cell block shared with another record), a missing one
+    // is appended after the existing ones
+    val existingBlocks = xldaprBlocks(root1)
+    val fresh = missing.filterNot(m => existingBlocks.contains(Some(m)))
+    val vOf: Vector[Int] = missing.map { m =>
+      val at = existingBlocks.indexOf(Some(m))
+      if at >= 0 then at else existingBlocks.size + fresh.indexOf(m)
+    }
     val isXldapr: Elem => Boolean = e =>
       e.label == "futureMetadata" && attr(e, "name").contains(xldapr)
     val root2 =
-      if children(root1, "futureMetadata").exists(isXldapr) then
-        replaceChild(root1, isXldapr, appendChildren(_, "bk", blocks))
+      if fresh.isEmpty then root1
+      else if children(root1, "futureMetadata").exists(isXldapr) then
+        replaceChild(root1, isXldapr, appendChildren(_, "bk", fresh.map(futureBlock(_, scope))))
       else
         val fm = el("futureMetadata", scope, List("name" -> xldapr, "count" -> "0"))()
-        insertInOrder(root1, appendChildren(fm, "bk", blocks))
+        insertInOrder(root1, appendChildren(fm, "bk", fresh.map(futureBlock(_, scope))))
     // 3. the cell-metadata blocks pointing at them
     val firstCm = cellBlocks(root2).size + 1
-    val cells = missing.indices.map(i => cellBlock(typeIdx, firstV + i, scope))
+    val cells = vOf.map(v => cellBlock(typeIdx, v, scope))
     val root3 =
       if children(root2, "cellMetadata").nonEmpty then
         replaceChild(root2, _.label == "cellMetadata", appendChildren(_, "bk", cells))

@@ -89,15 +89,43 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
     assertEquals(resolve(richOnly), Map.empty)
   }
 
-  test("a dynamic record following another record in the same block is resolved and reused") {
+  test(
+    "a cell block shared with another record is read, but new anchors get a block of their own"
+  ) {
+    // cm 1's block holds two records: OTHER (t=1) and XLDAPR (t=2, v=0)
     val source = DynamicArrayFixtures.multiRecordMetadataXml
+    assert(source.contains("""<bk><rc t="1" v="0"/><rc t="2" v="0"/></bk>"""), source)
     assertEquals(resolve(source), Map(1 -> plain))
-    assertEquals(
-      SheetMetadataPart.plan(Some(source), Set(plain)),
-      CellMetadataPlan(Map(plain -> 1), MetadataOutput.Untouched)
+    val plan = SheetMetadataPart.plan(Some(source), Set(plain))
+    val xml = plan.output match
+      case MetadataOutput.Appended(x) => x
+      case other => fail(s"expected Appended, got $other")
+    // the existing plain XLDAPR block is pointed at again (no duplicate), through a new cell block
+    assertEquals(plan.cmOf, Map(plain -> 2))
+    assert(xml.contains("""<futureMetadata name="XLDAPR" count="1">"""), xml)
+    assert(
+      xml.contains(
+        """<cellMetadata count="2"><bk><rc t="1" v="0"/><rc t="2" v="0"/></bk><bk><rc t="2" v="0"/></bk></cellMetadata>"""
+      ),
+      xml
     )
-    val plan = SheetMetadataPart.plan(Some(source), Set(plain, collapsed))
-    assertEquals(resolve(outputXml(source, plan)), Map(1 -> plain, 2 -> collapsed))
+    assertEquals(resolve(xml), Map(1 -> plain, 2 -> plain))
+    assertEquals(
+      SheetMetadataPart.plan(Some(xml), Set(plain)),
+      CellMetadataPlan(Map(plain -> 2), MetadataOutput.Untouched)
+    )
+    val both = SheetMetadataPart.plan(Some(source), Set(plain, collapsed))
+    assertEquals(resolve(outputXml(source, both)), Map(1 -> plain, 2 -> plain, 3 -> collapsed))
+    // a source that already has a block of its own for the variant reuses that one
+    val withOwn = source.replace(
+      """<cellMetadata count="1"><bk><rc t="1" v="0"/><rc t="2" v="0"/></bk>""",
+      """<cellMetadata count="2"><bk><rc t="1" v="0"/><rc t="2" v="0"/></bk><bk><rc t="2" v="0"/></bk>"""
+    )
+    assert(withOwn != source, "fixture edit missed")
+    assertEquals(
+      SheetMetadataPart.plan(Some(withOwn), Set(plain)),
+      CellMetadataPlan(Map(plain -> 2), MetadataOutput.Untouched)
+    )
   }
 
   test("appending to a prefix-qualified part keeps new elements in SpreadsheetML") {

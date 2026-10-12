@@ -122,7 +122,13 @@ class DynamicArrayPreservationSpec extends FunSuite:
     val wb = read(xlsx(parts(metadata = Some(multiRecordMetadataXml))))
     assertEquals(kindAt(wb, ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
     val out = write(dirty(wb))
-    assertEquals(entryText(out, "xl/metadata.xml"), Some(multiRecordMetadataXml))
+    // the shared block (OTHER + XLDAPR) is kept; the anchor is written through a block of its own
+    val part = entryText(out, "xl/metadata.xml").getOrElse(fail("no metadata part"))
+    assert(
+      part.contains("""<bk><rc t="1" v="0"/><rc t="2" v="0"/></bk><bk><rc t="2" v="0"/></bk>"""),
+      part
+    )
+    assert(sheet1(out).contains("""<c r="B1" t="n" cm="2">"""), sheet1(out))
     assertEquals(kindAt(read(out), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)))
   }
 
