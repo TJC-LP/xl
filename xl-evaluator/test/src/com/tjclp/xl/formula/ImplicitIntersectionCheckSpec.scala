@@ -132,6 +132,35 @@ class ImplicitIntersectionCheckSpec extends FunSuite:
     assertEquals((report.hits, report.checked, report.candidates), (Vector.empty, 0, 0))
   }
 
+  test("known candidates skip the parse; the count stays what the parse would give") {
+    val drag = (1 to 12).map(i => ARef.from0(2, i - 1) -> "A$1:A$10*2")
+    val targets = drag.map((r, _) => S -> r).toVector
+    val parsed = ImplicitIntersection.check(book(drag*), targets, clock, budget = 5)
+    val known = ImplicitIntersection.check(book(drag*), targets, clock, 5, targets.toSet)
+    assertEquals(known, parsed)
+    assertEquals((known.checked, known.candidates), (5, 12))
+    // a known cell is taken on trust (never parsed), but must still hold a plain formula
+    val plain = book(ref"C1" -> "A1+1").sheets.headOption.getOrElse(fail("no sheet"))
+    val trusted = ImplicitIntersection.check(Workbook(Vector(plain)), Vector(S -> ref"C1"), clock)
+    assertEquals(trusted.candidates, 0)
+    val taken =
+      ImplicitIntersection.check(
+        Workbook(Vector(plain)),
+        Vector(S -> ref"C1"),
+        clock,
+        5,
+        Set(S -> ref"C1")
+      )
+    assertEquals(taken.candidates, 1)
+    val value = Workbook(Vector(plain.put(ref"C1", num(1))))
+    assertEquals(
+      ImplicitIntersection
+        .check(value, Vector(S -> ref"C1"), clock, 5, Set(S -> ref"C1"))
+        .candidates,
+      0
+    )
+  }
+
   test("the two-way evaluation stops at the budget and says it sampled") {
     val drag = (1 to 12).map(i => ARef.from0(2, i - 1) -> "A$1:A$10*2")
     val targets = drag.map((r, _) => S -> r).toVector

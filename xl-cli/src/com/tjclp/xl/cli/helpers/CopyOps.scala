@@ -8,7 +8,7 @@ import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.contract.OffGridHit
 import com.tjclp.xl.formula.SheetEvaluator
 import com.tjclp.xl.formula.eval.DependentRecalculation.*
-import com.tjclp.xl.formula.eval.EvalFormulaSupport
+import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, EvalFormulaSupport}
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.sheets.Sheet
 
@@ -73,9 +73,39 @@ object CopyOps:
     ).map(_._1)
 
   /**
+   * GH-714: the target cells a copy writes — those whose source cell exists (an empty source leaves
+   * its target unchanged).
+   */
+  def writtenCells(
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetRange: CellRange
+  ): Set[ARef] =
+    sourceRange.cellsRowMajor
+      .zip(targetRange.cellsRowMajor)
+      .collect { case (source, target) if sourceSheet.cells.contains(source) => target }
+      .toSet
+
+  /**
+   * GH-714: a copy onto the target sheet's dynamic arrays, by the put/putf rule
+   * ([[DynamicArrayAuthoring.releaseForWrite]]): writing over an anchor releases its spill, writing
+   * into a live spill is refused. Returns the cells to clear AFTER the copy — the released spill
+   * cells it does not overwrite itself; clearing first could empty cells the copy still reads.
+   */
+  def releasedBy(
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetSheet: Sheet,
+    targetRange: CellRange
+  ): Either[DynamicArrayAuthoring.SpillBlocked, Set[ARef]] =
+    val written = writtenCells(sourceSheet, sourceRange, targetRange)
+    DynamicArrayAuthoring.releaseForWrite(targetSheet, written).map(_._2 -- written)
+
+  /**
    * GH-628: [[copyRange]], also reporting every target cell whose formula gained a `#REF!` because
    * the displacement carried a reference off the grid — the `copy` verb's and batch op's
-   * `OFF_GRID_REF` warning.
+   * `OFF_GRID_REF` warning. `release` ([[releasedBy]]) is cleared from the target once the copy is
+   * written, before caching and the dependent refresh.
    */
   def copyRangeReporting(
     wb: Workbook,
@@ -85,7 +115,8 @@ object CopyOps:
     targetRange: CellRange,
     valuesOnly: Boolean,
     recalcDependents: Boolean = true,
-    cacheCopiedFormulas: Boolean = true
+    cacheCopiedFormulas: Boolean = true,
+    release: Set[ARef] = Set.empty
   ): XLResult[(Workbook, Vector[OffGridHit])] =
     val colDelta = Column.index0(targetRange.start.col) - Column.index0(sourceRange.start.col)
     val rowDelta = Row.index0(targetRange.start.row) - Row.index0(sourceRange.start.row)
@@ -107,7 +138,8 @@ object CopyOps:
         EvalFormulaSupport
       )
 
-    copied.map { (pure, offGrid) =>
+    copied.map { (pasted, offGrid) =>
+      val pure = DynamicArrayAuthoring.clearValues(pasted, release)
       val materialized =
         if valuesOnly then
           // Sheet.copyRange pastes Empty for an uncached formula; the CLI evaluates it against the
@@ -127,7 +159,7 @@ object CopyOps:
       val wbWithCopied = wb.put(cached)
       val result =
         if recalcDependents then
-          wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet)
+          wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet ++ release)
         else wbWithCopied
       (result, OffGridHit.of(targetSheet.name, offGrid))
     }

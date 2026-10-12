@@ -4,7 +4,7 @@ import java.nio.file.Path
 
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.output.Format
@@ -125,8 +125,16 @@ object CellCommands:
       clearStyles = all || styles
       clearComments = all || comments
 
+      // GH-714: clearing a dynamic anchor clears its whole spill, as in Excel; clearing cells of a
+      // live spill alone is refused (Excel keeps them). Styles and comments do not touch a spill.
+      released <-
+        if clearContents then
+          WriteCommands.releaseSpills(wb, targetSheet, range.cells.toSet, clearing = true)
+        else IO.pure((wb, targetSheet, Set.empty[ARef]))
+      (_, releasedSheet, _) = released
+
       // Apply clearing operations
-      sheet1 = if clearContents then targetSheet.removeRange(range) else targetSheet
+      sheet1 = if clearContents then releasedSheet.removeRange(range) else targetSheet
       sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
 

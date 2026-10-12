@@ -257,6 +257,30 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
     }
   }
 
+  test("batch drag copies are known candidates unless a later op writes them or a ref voids") {
+    val sheet = Sheet("S")
+    def known(ops: String): IO[Set[String]] =
+      BatchParser.parseBatchOperations(ops).map { result =>
+        BatchParser.putfKnownCandidates(Workbook(sheet), Some(sheet), result.scoped).map(_._2.toA1)
+      }
+    for
+      plain <- known(
+        """[{"op":"putf","ref":"C1:C3","value":"=SUM($A$1:A1)","from":"C1"},
+          |{"op":"putf","ref":"D1:D3","value":"=A$1:A$10*2","from":"D1"},
+          |{"op":"put","ref":"D2","value":1}]""".stripMargin
+      )
+      copied <- known(
+        """[{"op":"putf","ref":"D1:D3","value":"=A$1:A$10*2","from":"D1"},
+          |{"op":"copy","source":"Z1","target":"Z2"}]""".stripMargin
+      )
+      // dragged up from D5, A1:A10 shifts off the grid at D1
+      voided <- known("""[{"op":"putf","ref":"D1:D5","value":"=A1:A10*2","from":"D5"}]""")
+    yield
+      assertEquals(plain, Set("D1", "D3"))
+      assertEquals(copied, Set.empty[String])
+      assertEquals(voided, Set.empty[String])
+  }
+
   test("pinned: a sampled check with no hit in its sample warns nothing") {
     // 3 candidates, budget 2: only the third diverges (the IF picks the range in row 3)
     val sheet = (1 to 10)

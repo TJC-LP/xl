@@ -1156,10 +1156,13 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   (an empty string counts; a style-only cell does not), a merge, another array formula's range, a
   table, or the grid edge.
 - **Re-authoring** a dynamic anchor clears its previous spill first, so a shrinking spill leaves no
-  stale cells. A plain `put`/`putf` over the anchor (batch included) clears its spill too, as Excel
-  does. A `put`/`putf` into a spill cell whose anchor stays is refused as `FORMULA_ERROR`, nothing
-  written: Excel would keep the value and show `#SPILL!` at the anchor. The hint says to overwrite
-  or clear the anchor first; in a batch, an earlier op's spill counts. A later recalculation
+  stale cells. A plain `put`, `putf`, `copy`, `fill` or contents `clear` over the anchor (batch
+  included) clears its spill too, as Excel does. One into a spill cell whose anchor stays is
+  refused as `FORMULA_ERROR`, nothing written: Excel would keep the value and show `#SPILL!` at
+  the anchor (and a clear of a spill's cells alone would change nothing). The hint says to
+  overwrite or clear the anchor first; in a batch, an earlier op's spill counts. `sort` and
+  `--stream` writes do not apply this rule yet. A spill of a whole column (1,048,576 cells) or
+  more is refused before anything is written. A later recalculation
   re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
   values until Excel recalculates on open.
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with

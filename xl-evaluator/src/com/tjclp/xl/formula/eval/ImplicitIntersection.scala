@@ -52,13 +52,17 @@ private[xl] object ImplicitIntersection:
 
   /**
    * The cells of `cells` that still hold a plain formula in `wb` and diverge, in sheet then
-   * row-major order, checking at most `budget` candidates.
+   * row-major order, checking at most `budget` candidates. A cell of `known` is a candidate the
+   * caller already proved [[mayDiverge]] for — a drag's copy of a source that may diverge, whose
+   * shape a shift preserves — and is not parsed again, so the candidate count stays exact while a
+   * long drag costs no parse per cell.
    */
   def check(
     wb: Workbook,
     cells: Vector[(SheetName, ARef)],
     clock: Clock,
-    budget: Int = DefaultBudget
+    budget: Int = DefaultBudget,
+    known: Set[(SheetName, ARef)] = Set.empty
   ): Report =
     val sheets = wb.sheets.map(s => s.name -> s).toMap
     val sheetOrder = wb.sheets.map(_.name).zipWithIndex.toMap
@@ -69,7 +73,8 @@ private[xl] object ImplicitIntersection:
         sheets.get(name).flatMap { sheet =>
           sheet.cells.get(ref).map(_.value) match
             case Some(CellValue.Formula(text, _, _: FormulaKind.Normal))
-                if FormulaParser.parse(s"=$text").exists(mayDiverge) =>
+                if known.contains(name -> ref) ||
+                  FormulaParser.parse(s"=$text").exists(mayDiverge) =>
               Some((sheet, ref, text))
             case _ => None
         }

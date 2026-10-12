@@ -47,6 +47,14 @@ final case class ArrayResult(values: Vector[Vector[CellValue]]):
   def isEmpty: Boolean = rows == 0 || cols == 0
 
 object ArrayResult:
+
+  /**
+   * The most cells one array may hold: one full column (1,048,576 rows). SEQUENCE and INDIRECT
+   * refuse a larger result, and dynamic-array authoring refuses a spill of this size or more
+   * (GH-714) rather than materialise a column of constants.
+   */
+  val MaxCells: Long = 1048576L
+
   /** Empty array result. */
   val empty: ArrayResult = ArrayResult(Vector.empty)
 

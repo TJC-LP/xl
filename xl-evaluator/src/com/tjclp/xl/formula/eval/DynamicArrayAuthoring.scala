@@ -62,10 +62,23 @@ private[xl] object DynamicArrayAuthoring:
     case OffGrid(rows: Int, cols: Int)
 
     /**
+     * A `rows`x`cols` spill of `limit` cells or more ([[ArrayResult.MaxCells]], one full column):
+     * xl's own guard, not Excel's — Excel would spill it — refused rather than materialise that
+     * many constants (and their styles) in memory.
+     */
+    case TooLarge(rows: Int, cols: Int, limit: Long)
+
+    /**
      * A plain write into cells of an existing anchor's spill, leaving the anchor in place: Excel
      * keeps the written values and shows `#SPILL!` at the anchor.
      */
     case Overwritten(cells: Vector[ARef])
+
+    /**
+     * A clear of cells of an existing anchor's spill, leaving the anchor in place: Excel keeps a
+     * live spill's cells, so the clear would change nothing there.
+     */
+    case Cleared(cells: Vector[ARef])
 
   /**
    * A spill Excel would block: the dynamic array `formula` (with its `=`) at `anchor`, the extent
@@ -99,11 +112,20 @@ private[xl] object DynamicArrayAuthoring:
       case SpillBlocker.OffGrid(rows, cols) =>
         s"a ${rows}x$cols spill from ${anchor.toA1} runs past the sheet's last cell " +
           "XFD1048576 (Excel shows #SPILL!); choose another anchor"
+      case SpillBlocker.TooLarge(rows, cols, limit) =>
+        s"a ${rows}x$cols spill from ${anchor.toA1} is ${count(rows.toLong * cols)} cells; xl " +
+          s"authors a dynamic array of fewer than ${count(limit)} cells (one full column, the " +
+          "SEQUENCE and INDIRECT guard), so nothing was written"
       case SpillBlocker.Overwritten(cells) =>
         val they = if cells.size == 1 then "it is" else "they are"
         s"${listed(cells.map(_.toA1))}: $they in the spill range $span of the dynamic array " +
           s"$formula at ${anchor.toA1}; writing there would block that spill " +
           "(Excel shows #SPILL!)"
+      case SpillBlocker.Cleared(cells) =>
+        val they = if cells.size == 1 then "it is" else "they are"
+        s"${listed(cells.map(_.toA1))}: $they in the spill range $span of the dynamic array " +
+          s"$formula at ${anchor.toA1}; Excel keeps a spill's cells while its anchor stays, " +
+          "so clearing them alone would change nothing"
 
     /** The next step for this blocker, naming what to act on. */
     def hint: String = blocker match
@@ -119,9 +141,13 @@ private[xl] object DynamicArrayAuthoring:
           "or convert the table to a range"
       case SpillBlocker.OffGrid(rows, cols) =>
         s"choose an anchor with $rows row(s) and $cols column(s) of room before XFD1048576"
+      case SpillBlocker.TooLarge(_, _, _) =>
+        "bound the formula's ranges to the data (A1:A1000, not A:A), or write a plain formula"
       case SpillBlocker.Overwritten(_) =>
         s"overwrite or clear ${anchor.toA1} first (its spill goes with it), " +
           s"or write outside $span"
+      case SpillBlocker.Cleared(_) =>
+        s"clear ${anchor.toA1} to remove the whole spill, or clear outside $span"
 
     /** The domain error, for callers without a typed channel. */
     def toXLError: XLError = XLError.FormulaError(formula, message)
@@ -139,12 +165,15 @@ private[xl] object DynamicArrayAuthoring:
 
   private val maxListed = 10
 
+  private def count(n: Long): String = String.format(java.util.Locale.ROOT, "%,d", n)
+
   def author(
     wb: Workbook,
     sheet: Sheet,
     anchor: ARef,
     formula: String,
-    clock: Clock
+    clock: Clock,
+    maxCells: Long = ArrayResult.MaxCells
   ): Either[Refusal, Authored] =
     val text = CellValue.canonicalFormulaText(formula)
     val full = s"=$text"
@@ -172,21 +201,27 @@ private[xl] object DynamicArrayAuthoring:
           val cols = grid.map(_.size).maxOption.getOrElse(1)
           def refuse(extent: Option[CellRange], blocker: SpillBlocker) =
             Left(Refusal.Blocked(SpillBlocked(full, anchor, extent, blocker)))
-          spillExtent(anchor, rows, cols) match
-            case None => refuse(None, SpillBlocker.OffGrid(rows, cols))
-            case Some(extent) =>
-              blocked(placed, anchor, extent) match
-                case Some(blocker) => refuse(Some(extent), blocker)
-                case None =>
-                  val kind = FormulaKind.dynamicArray(extent)
-                  val written = grid.iterator.zipWithIndex.foldLeft(placed) { case (s, (row, r)) =>
-                    row.iterator.zipWithIndex.foldLeft(s) { case (acc, (v, c)) =>
-                      if r == 0 && c == 0 then
-                        acc.put(anchor, CellValue.Formula(text, Some(v), kind))
-                      else acc.put(anchor.shift(c, r), v)
+          // checked from the result's dimensions, before a cell of the spill is written
+          if rows.toLong * cols.toLong >= maxCells then
+            refuse(None, SpillBlocker.TooLarge(rows, cols, maxCells))
+          else
+            spillExtent(anchor, rows, cols) match
+              case None => refuse(None, SpillBlocker.OffGrid(rows, cols))
+              case Some(extent) =>
+                blocked(placed, anchor, extent) match
+                  case Some(blocker) => refuse(Some(extent), blocker)
+                  case None =>
+                    val kind = FormulaKind.dynamicArray(extent)
+                    val written = grid.iterator.zipWithIndex.foldLeft(placed) {
+                      case (s, (row, r)) =>
+                        row.iterator.zipWithIndex.foldLeft(s) { case (acc, (v, c)) =>
+                          if r == 0 && c == 0 then
+                            acc.put(anchor, CellValue.Formula(text, Some(v), kind))
+                          else acc.put(anchor.shift(c, r), v)
+                        }
                     }
-                  }
-                  Right(Authored(written, extent, clearedRefs ++ extent.cells.toSet, cached = true))
+                    val touched = clearedRefs ++ extent.cells.toSet
+                    Right(Authored(written, extent, touched, cached = true))
     }
 
   /**
@@ -197,12 +232,15 @@ private[xl] object DynamicArrayAuthoring:
    * spill — Excel keeps the value and shows `#SPILL!` at the anchor, which xl cannot write (a
    * recalculation would overwrite it) — so it is refused, the first such anchor in reading order
    * named. Returns the released sheet and the cells it cleared (seeds of the dependent refresh).
+   * `clearing` (a contents clear, not a write) only changes the refusal's wording: Excel keeps a
+   * live spill's cells, so clearing them alone would do nothing ([[SpillBlocker.Cleared]]).
    *
    * Costs one pass over the sheet's cells; a sheet without dynamic arrays is returned unchanged.
    */
   def releaseForWrite(
     sheet: Sheet,
-    targets: Set[ARef]
+    targets: Set[ARef],
+    clearing: Boolean = false
   ): Either[SpillBlocked, (Sheet, Set[ARef])] =
     if targets.isEmpty then Right((sheet, Set.empty))
     else
@@ -220,10 +258,14 @@ private[xl] object DynamicArrayAuthoring:
         .sortBy((anchor, _, _) => (anchor.row.index0, anchor.col.index0))
         .iterator
         .flatMap { (anchor, text, extent) =>
-          val hit = extent.cellsRowMajor.filter(r => r != anchor && targets.contains(r)).toVector
-          Option.when(hit.nonEmpty)(
-            SpillBlocked(s"=$text", anchor, Some(extent), SpillBlocker.Overwritten(hit))
-          )
+          // the targets, not the extent, are walked: a spill can be a whole column
+          val hit = targets.iterator
+            .filter(r => r != anchor && extent.contains(r))
+            .toVector
+            .sortBy(r => (r.row.index0, r.col.index0))
+          val blocker =
+            if clearing then SpillBlocker.Cleared(hit) else SpillBlocker.Overwritten(hit)
+          Option.when(hit.nonEmpty)(SpillBlocked(s"=$text", anchor, Some(extent), blocker))
         }
         .nextOption()
       intrusion.toLeft {
@@ -250,15 +292,23 @@ private[xl] object DynamicArrayAuthoring:
             sheet.cells.get(r).exists(_.value != CellValue.Empty)
           }
           .toSet
-        val cells = children.foldLeft(sheet.cells) { (acc, r) =>
-          acc.get(r) match
-            case Some(cell) if cell.styleId.isDefined || cell.hyperlink.isDefined =>
-              acc.updated(r, cell.withValue(CellValue.Empty))
-            case Some(_) => acc.removed(r)
-            case None => acc
-        }
-        (sheet.copy(cells = cells), children)
+        (clearValues(sheet, children), children)
       case _ => (sheet, Set.empty)
+
+  /**
+   * `refs` emptied of their values; a cell that keeps a style or hyperlink stays as an empty cell,
+   * any other is removed. What releasing a spill does to its cells, for a caller that releases
+   * after its own write (copy and fill read the cells a release would clear).
+   */
+  def clearValues(sheet: Sheet, refs: Set[ARef]): Sheet =
+    val cells = refs.foldLeft(sheet.cells) { (acc, r) =>
+      acc.get(r) match
+        case Some(cell) if cell.styleId.isDefined || cell.hyperlink.isDefined =>
+          acc.updated(r, cell.withValue(CellValue.Empty))
+        case Some(_) => acc.removed(r)
+        case None => acc
+    }
+    sheet.copy(cells = cells)
 
   /** The extent of a `rows`x`cols` spill from `anchor`; None when it runs past XFD1048576. */
   private def spillExtent(anchor: ARef, rows: Int, cols: Int): Option[CellRange] =

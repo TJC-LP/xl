@@ -247,6 +247,47 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(release(cse, ref"E1", ref"E2"), Right((cse, Set.empty[ARef])))
   }
 
+  test("a spill of the array-cell guard or more is refused before any cell is written") {
+    // the guard is ArrayResult.MaxCells (one full column); a small limit shows the rule cheaply
+    DynamicArrayAuthoring.author(
+      Workbook(Vector(base)),
+      base,
+      ref"A1",
+      "=SORT(B1:B3)",
+      clock,
+      3
+    ) match
+      case Left(Refusal.Blocked(b)) =>
+        assertEquals(b.blocker, SpillBlocker.TooLarge(3, 1, 3L))
+        assertEquals(b.extent, None)
+        assert(b.message.contains("a 3x1 spill from A1 is 3 cells"), b.message)
+        assert(b.message.contains("fewer than 3 cells"), b.message)
+        assert(b.hint.contains("A1:A1000, not A:A"), b.hint)
+      case other => fail(s"expected TooLarge, got $other")
+    assert(
+      DynamicArrayAuthoring
+        .author(Workbook(Vector(base)), base, ref"A1", "=SORT(B1:B3)", clock, 4)
+        .isRight
+    )
+    assertEquals(com.tjclp.xl.formula.eval.ArrayResult.MaxCells, 1048576L)
+  }
+
+  test("a contents clear into a live spill is refused as Cleared, over the anchor it releases") {
+    release(sorted, ref"A2") match
+      case Left(_) => ()
+      case Right(_) => fail("a write into a live spill must be refused")
+    DynamicArrayAuthoring.releaseForWrite(sorted, Set(ref"A3"), clearing = true) match
+      case Left(b) =>
+        assertEquals(b.blocker, SpillBlocker.Cleared(Vector(ref"A3")))
+        assert(b.message.contains("clearing them alone would change nothing"), b.message)
+        assertEquals(b.hint, "clear A1 to remove the whole spill, or clear outside A1:A3")
+      case Right(_) => fail("a clear of a live spill's cells must be refused")
+    assertEquals(
+      DynamicArrayAuthoring.releaseForWrite(sorted, Set(ref"A1"), clearing = true).map(_._2),
+      Right(Set(ref"A2", ref"A3"))
+    )
+  }
+
   test("withNumFmt formats the whole extent and keeps each cell's other style") {
     val bold = CellStyle.default.withFont(CellStyle.default.font.withBold(true))
     val a = authored(base.withCellStyle(ref"A3", bold), ref"A1", "=SORT(B1:B3)")

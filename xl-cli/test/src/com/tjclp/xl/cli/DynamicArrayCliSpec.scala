@@ -606,3 +606,161 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       assertEquals(seqKind, Some(FormulaKind.dynamicArray(CellRange(ref"J1", ref"J1"))))
       assertEquals(j2, CellValue.Empty)
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // copy, fill and clear follow the put/putf rule (third #721 review)
+
+  private def run(src: Path, out: Path, args: String*): IO[CliRun] =
+    CliHarness.run((List("-f", src.toString, "-o", out.toString) ++ args)*)
+
+  private def assertRefused(run: CliRun, code: String, mention: String): Unit =
+    assertEquals(run.exit, 3, run.toString)
+    val error = errorOf(run)
+    assertEquals(error("code").str, code)
+    assert(error("message").str.contains(mention), run.stdout)
+
+  test("copy or fill into a live spill is refused; nothing is written") {
+    for
+      src <- withSpill()
+      out <- outPath()
+      copy <- run(src, out, "copy", "D2", "F2", "--json")
+      // fill right from D2:D3 writes E2:F3, and F2:F3 belong to F1's spill
+      fill <- run(src, out, "fill", "D2:D3", "D2:F3", "--right", "--json")
+      exists <- IO.blocking(Files.exists(out))
+    yield
+      assertRefused(copy, "FORMULA_ERROR", "F2: it is in the spill range F1:F3")
+      assertEquals(
+        errorOf(copy)("hint").str,
+        "overwrite or clear F1 first (its spill goes with it), or write outside F1:F3"
+      )
+      assertRefused(fill, "FORMULA_ERROR", "F2, F3: they are in the spill range F1:F3")
+      assert(!exists, "a refused write must not write the output")
+  }
+
+  test("copy or fill over a dynamic anchor releases its spill; dependents refresh") {
+    for
+      src <- withSpill()
+      copied <- outPath()
+      copy <- run(src, copied, "copy", "D1", "F1")
+      c1 <- valueAt(copied, ref"F1")
+      c2 <- valueAt(copied, ref"F2")
+      c3 <- valueAt(copied, ref"F3")
+      h1 <- cachedNumber(copied, ref"H1")
+      filled <- outPath()
+      // fill right from D1 writes E1 and F1: the anchor goes, and so do F2:F3
+      fill <- run(src, filled, "fill", "D1", "D1:F1", "--right")
+      f1 <- valueAt(filled, ref"F1")
+      f2 <- valueAt(filled, ref"F2")
+      f3 <- valueAt(filled, ref"F3")
+    yield
+      ok(copy)
+      ok(fill)
+      assertEquals(c1, CellValue.Number(3))
+      assertEquals((c2, c3), (CellValue.Empty, CellValue.Empty))
+      assertEquals(h1, BigDecimal(0))
+      assertEquals(f1, CellValue.Number(3))
+      assertEquals((f2, f3), (CellValue.Empty, CellValue.Empty))
+  }
+
+  test("a whole spill copied elsewhere and copied onto itself keeps working") {
+    for
+      src <- withSpill()
+      out <- outPath()
+      // the source spill F1:F3 lands at K1:K3 as a complete spill (665f2b9)
+      away <- run(src, out, "copy", "F1:F3", "K1")
+      kind <- kindAt(out, ref"K1")
+      onto <- outPath()
+      // copying the spill over itself rewrites the anchor and its own cells: no refusal
+      self <- run(src, onto, "copy", "F1:F3", "F1")
+      selfKind <- kindAt(onto, ref"F1")
+    yield
+      ok(away)
+      ok(self)
+      assertEquals(kind, Some(FormulaKind.dynamicArray(CellRange(ref"K1", ref"K3"))))
+      assertEquals(selfKind, Some(FormulaKind.dynamicArray(CellRange(ref"F1", ref"F3"))))
+  }
+
+  test("clear: the anchor takes its spill, a spill cell alone is refused, styles are free") {
+    for
+      src <- withSpill()
+      anchor <- outPath()
+      whole <- run(src, anchor, "clear", "F1")
+      f3 <- valueAt(anchor, ref"F3")
+      out <- outPath()
+      cell <- run(src, out, "clear", "F2", "--json")
+      styled <- outPath()
+      styles <- run(src, styled, "clear", "F2", "--styles")
+      kept <- valueAt(styled, ref"F2")
+    yield
+      ok(whole)
+      assertEquals(f3, CellValue.Empty)
+      assertRefused(cell, "FORMULA_ERROR", "clearing them alone would change nothing")
+      assertEquals(
+        errorOf(cell)("hint").str,
+        "clear F1 to remove the whole spill, or clear outside F1:F3"
+      )
+      ok(styles)
+      assertEquals(kept, CellValue.Number(2))
+  }
+
+  test("batch copy and clear follow the same rule") {
+    val copyInto = """[{"op":"copy","source":"D2","target":"F3"}]"""
+    val clearInto = """[{"op":"clear","range":"F2:F3"}]"""
+    val clearAnchor =
+      """[{"op":"clear","range":"F1"},{"op":"copy","source":"D1:D2","target":"F2"}]"""
+    for
+      src <- withSpill()
+      out <- outPath()
+      copy <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "batch", "-", "--json"),
+        copyInto
+      )
+      clear <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "batch", "-", "--json"),
+        clearInto
+      )
+      released <- outPath()
+      both <- CliHarness.run(
+        List("-f", src.toString, "-o", released.toString, "batch", "-"),
+        clearAnchor
+      )
+      f2 <- valueAt(released, ref"F2")
+      f3 <- valueAt(released, ref"F3")
+    yield
+      assertRefused(copy, "BATCH_OP_FAILED", "F3: it is in the spill range F1:F3")
+      assertRefused(clear, "BATCH_OP_FAILED", "clearing them alone would change nothing")
+      ok(both)
+      // the clear took the spill, so the later copy writes plain constants where it was
+      assertEquals((f2, f3), (CellValue.Number(3), CellValue.Number(1)))
+  }
+
+  test("a spill of a whole column or more is refused before it is written") {
+    for
+      src <- numbers()
+      out <- outPath()
+      run <- putfArray(src, out, "D1", "=A:A*2", "--json")
+      exists <- IO.blocking(Files.exists(out))
+    yield
+      assertRefused(run, "FORMULA_ERROR", "a 1048576x1 spill from D1 is 1,048,576 cells")
+      assert(errorOf(run)("message").str.contains("fewer than 1,048,576 cells"), run.stdout)
+      assert(errorOf(run)("hint").str.contains("A1:A1000, not A:A"), run.stdout)
+      assert(!exists, "nothing may be written")
+  }
+
+  test("--stream put elsewhere keeps an untouched cell's vm and cm") {
+    // E1 is an image in a cell as Excel stores it: an error value whose vm names rich-value data
+    val withImage = DynamicArrayFixtures.sortSheetXml.replace(
+      """<v>15</v></c></row>""",
+      """<v>15</v></c><c r="E1" t="e" vm="1"><v>#VALUE!</v></c></row>"""
+    )
+    assert(withImage.contains("vm=\"1\""), "fixture edit missed")
+    for
+      src <- source(DynamicArrayFixtures.parts(sheetXml = withImage))
+      out <- outPath()
+      run <- CliHarness.run("-f", src.toString, "-o", out.toString, "--stream", "put", "D2", "5")
+      xml <- sheetXml(out)
+    yield
+      ok(run)
+      assert(xml.contains("""<c r="E1" t="e" vm="1">"""), xml)
+      assert(xml.contains("""<c r="B1" cm="1">"""), xml)
+  }

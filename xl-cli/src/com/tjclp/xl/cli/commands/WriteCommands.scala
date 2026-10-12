@@ -216,14 +216,15 @@ object WriteCommands:
    * `#SPILL!` it would cause (`FORMULA_ERROR`, nothing written). Returns the released book and
    * sheet and the cells cleared, which join the write's dependent-refresh seeds.
    */
-  private def releaseSpills(
+  private[cli] def releaseSpills(
     wb: Workbook,
     sheet: Sheet,
-    targets: Set[ARef]
+    targets: Set[ARef],
+    clearing: Boolean = false
   ): IO[(Workbook, Sheet, Set[ARef])] =
     IO.fromEither(
       DynamicArrayAuthoring
-        .releaseForWrite(sheet, targets)
+        .releaseForWrite(sheet, targets, clearing)
         .map((released, cleared) => (wb.put(released), released, cleared))
         .left
         .map(spill => CliException(CliError.fromSpillBlocked(spill)))
@@ -729,14 +730,21 @@ object WriteCommands:
    * GH-714: the `IMPLICIT_INTERSECTION` advisory for the plain formulas a putf wrote, evaluated on
    * the final workbook (both evaluations share one clock reading). Only formulas with an array
    * source in a value position are evaluated, at most [[ImplicitIntersection.DefaultBudget]] of
-   * them, so a long drag costs a parse per cell. Informational: never gates.
+   * them; `known` cells (a drag's copies of a source that may diverge) are candidates without a
+   * parse. `clock` defaults to one reading of the system clock, taken when the check runs; a test
+   * passes a fixed one. Informational: never gates.
    */
   private[cli] def intersectionAdvisory(
-    targets: Vector[(SheetName, ARef)]
+    targets: Vector[(SheetName, ARef)],
+    known: Set[(SheetName, ARef)] = Set.empty,
+    clock: Option[Clock] = None
   ): Workbook => Vector[Warning] = finalWb =>
-    val now = java.time.LocalDateTime.now()
-    val clock = Clock.fixed(now.toLocalDate, now)
-    IntersectionHit.warning(ImplicitIntersection.check(finalWb, targets, clock)).toList.toVector
+    val fixed = clock.getOrElse {
+      val now = java.time.LocalDateTime.now()
+      Clock.fixed(now.toLocalDate, now)
+    }
+    val report = ImplicitIntersection.check(finalWb, targets, fixed, known = known)
+    IntersectionHit.warning(report).toList.toVector
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -763,6 +771,9 @@ object WriteCommands:
       (updatedSheet, offGrid) =
         putfDraggingLogic(releasedSheet, releasedWb, range, formula, parsedExpr, policy.noRecalc)
       cellCount = range.cellCount
+      targets = dragTargets(sheet.name, range, parsedExpr)
+      // a copy whose shift voided a reference may have lost its array source: parsed again
+      known = targets.toSet -- offGrid.map(hit => sheet.name -> hit.cell)
       result <- writeAfterRefresh(
         releasedWb.put(updatedSheet),
         sheet.name,
@@ -774,7 +785,7 @@ object WriteCommands:
         policy,
         warn,
         OffGridHit.of(sheet.name, offGrid),
-        intersectionAdvisory(dragTargets(sheet.name, range, parsedExpr))
+        intersectionAdvisory(targets, known)
       )
     yield result
 
@@ -1698,7 +1709,8 @@ object WriteCommands:
                       s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
                     // GH-714: the batch's plain putf cells, checked once on the final workbook
                     val targets = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
-                    IO.blocking(intersectionAdvisory(targets)(finalWb)).flatMap { extra =>
+                    val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
+                    IO.blocking(intersectionAdvisory(targets, known)(finalWb)).flatMap { extra =>
                       strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
                     }
                   }
@@ -1864,7 +1876,7 @@ object WriteCommands:
       // The fill semantics live in Sheet.fill (ADR-017 §2.12, W2.1); the direction rule's refusal
       // keeps its INVALID_REFERENCE code and text
       // GH-628: the fill reports every target cell a displacement wrote #REF! into
-      (filledSheet, offGrid) <- IO.fromEither(
+      (filled, offGrid) <- IO.fromEither(
         targetSheet
           .fillReporting(sourceRange, targetRange, fillDir(direction))(using EvalFormulaSupport)
           .left
@@ -1873,10 +1885,16 @@ object WriteCommands:
             case other => domain(other)
           }
       )
+      // GH-714: the fill onto the target's dynamic arrays, by the put/putf rule — checked on the
+      // sheet before the fill, released after it (the fill reads what a release would clear)
+      written = fillWritten(targetSheet, sourceRange, targetRange, direction)
+      released <- releaseSpills(wb, targetSheet, written)
+      release = released._3 -- written
+      filledSheet = DynamicArrayAuthoring.clearValues(filled, release)
       // A --no-recalc write leaves every other cache alone but still caches what it wrote
       updatedSheet =
         if policy.noRecalc then cacheFilledFormulas(filledSheet, wb, targetRange) else filledSheet
-      modifiedRefs = targetRange.cells.toSet
+      modifiedRefs = targetRange.cells.toSet ++ release
       dirLabel = if direction == FillDirection.Right then "right" else "down"
       result <- writeAfterRefresh(
         wb.put(updatedSheet),
@@ -1891,6 +1909,29 @@ object WriteCommands:
         OffGridHit.of(targetSheet.name, offGrid)
       )
     yield result
+
+  /**
+   * GH-714: the cells a fill writes, as `Sheet.fill` walks them: each target cell outside the
+   * source rows (down) or columns (right) whose cyclically repeated source cell exists.
+   */
+  private def fillWritten(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: FillDirection
+  ): Set[ARef] =
+    target.cells.filter { t =>
+      val sourceRef =
+        if direction == FillDirection.Right then
+          val count = source.colEnd.index0 - source.colStart.index0 + 1
+          val col = source.colStart.index0 + (t.col.index0 - target.colStart.index0) % count
+          ARef.from0(col, t.row.index0)
+        else
+          val count = source.rowEnd.index0 - source.rowStart.index0 + 1
+          val row = source.rowStart.index0 + (t.row.index0 - target.rowStart.index0) % count
+          ARef.from0(t.col.index0, row)
+      sourceRef != t && sheet.cells.contains(sourceRef)
+    }.toSet
 
   /** The CLI's fill direction as the algebra's. */
   private def fillDir(direction: FillDirection): Edit.FillDir = direction match
@@ -2564,6 +2605,15 @@ object WriteCommands:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(invalidRef)
       )
 
+      // GH-714: the copy onto the target's dynamic arrays — release an overwritten anchor's spill,
+      // refuse a write into a live one
+      release <- IO.fromEither(
+        CopyOps
+          .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange)
+          .left
+          .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+      )
+
       // Delegate to shared helper (Sheet.copyRange plus the CLI's cache/recalc phases); GH-628:
       // it reports every target cell the displacement wrote #REF! into
       (copiedWb, offGrid) <- IO.fromEither(
@@ -2576,15 +2626,13 @@ object WriteCommands:
             targetRange,
             valuesOnly,
             recalcDependents = false,
-            cacheCopiedFormulas = policy.noRecalc
+            cacheCopiedFormulas = policy.noRecalc,
+            release = release
           )
           .left
           .map(domain)
       )
-      modifiedRefs = sourceRange.cellsRowMajor
-        .zip(targetRange.cellsRowMajor)
-        .collect { case (source, target) if sourceSheet.cells.contains(source) => target }
-        .toSet
+      modifiedRefs = CopyOps.writtenCells(sourceSheet, sourceRange, targetRange) ++ release
 
       crossSheetLabel =
         if sourceSheet.name != targetSheet.name then

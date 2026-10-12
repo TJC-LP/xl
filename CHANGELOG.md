@@ -29,9 +29,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   spill Excel would block is refused without writing), so Excel opens it spilling instead of as a legacy
   `@` formula. A file's existing `cm` and metadata part now survive every in-memory and `--stream`
   write, where they were dropped (Excel then read the formula as a legacy `{=…}` array). As in
-  Excel, an in-memory `put`/`putf` over a dynamic anchor clears its spill, and one into a spill
-  cell, whose anchor stays, is refused (`FORMULA_ERROR`) rather than leaving a `#SPILL!`; a blocked
-  spill's hint names its own remedy (unmerge a merge, clear an occupied cell).
+  Excel, an in-memory `put`, `putf`, `copy`, `fill` or `clear` over a dynamic anchor (batch
+  included) clears its spill, and one into a spill cell, whose anchor stays, is refused
+  (`FORMULA_ERROR`) rather than leaving a `#SPILL!` or values Excel would overwrite; a blocked
+  spill's hint names its own remedy (unmerge a merge, clear an occupied cell). A spill of a whole
+  column (1,048,576 cells) or more is refused before anything is written.
 - **`IMPLICIT_INTERSECTION` warning** (#714): an in-memory `putf` or batch `putf` whose plain-cell
   value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
   row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy
