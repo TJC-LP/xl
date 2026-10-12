@@ -70,24 +70,34 @@ private[xl] object ValueDependencies:
   private[xl] final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
-    def reads(expr: TExpr[?]): Set[ARef] = loop(expr, false, Map.empty)
+    def reads(expr: TExpr[?]): Set[ARef] =
+      readRanges(expr).foldLeft(Set.empty[ARef])((acc, r) => acc ++ expand(r))
 
-    private def cells(range: CellRange): Set[ARef] =
-      expanded.getOrElseUpdate(
-        (range.start, range.end),
-        bounds.fold(range.cells.toSet)(b => range.intersect(b).fold(Set.empty[ARef])(_.cells.toSet))
-      )
+    /**
+     * [[reads]] as the ranges read, never expanded: each range bounded by `bounds`, a single cell
+     * as its one-cell range (unbounded, as [[reads]] has it). For an index that must not pay for
+     * every cell of every range (`--with`'s stale-reader search over running totals).
+     */
+    def readRanges(expr: TExpr[?]): Set[CellRange] = loop(expr, false, Map.empty)
+
+    private def expand(range: CellRange): Set[ARef] =
+      if range.start == range.end then Set(range.start)
+      else expanded.getOrElseUpdate((range.start, range.end), range.cells.toSet)
+
+    private def cells(range: CellRange): Set[CellRange] =
+      bounds.fold(Option(range))(range.intersect).fold(Set.empty[CellRange])(Set(_))
 
     private def local(sheet: SheetName): Boolean =
       home.exists(_.value.equalsIgnoreCase(sheet.value))
 
-    private def loop(e: TExpr[?], referenceOnly: Boolean, env: Map[String, Bound]): Set[ARef] =
-      def value(child: TExpr[?]): Set[ARef] = loop(child, false, env)
-      def binding(name: String): Set[ARef] =
-        env.get(name).fold(Set.empty[ARef])(b => loop(b.expr, referenceOnly, b.env))
-      def cell(at: ARef): Set[ARef] = if referenceOnly then Set.empty else Set(at)
-      def range(r: CellRange): Set[ARef] = if referenceOnly then Set.empty else cells(r)
-      def arg(a: ArgValue, addressOnly: Boolean): Set[ARef] = a match
+    private def loop(e: TExpr[?], referenceOnly: Boolean, env: Map[String, Bound]): Set[CellRange] =
+      def value(child: TExpr[?]): Set[CellRange] = loop(child, false, env)
+      def binding(name: String): Set[CellRange] =
+        env.get(name).fold(Set.empty[CellRange])(b => loop(b.expr, referenceOnly, b.env))
+      def cell(at: ARef): Set[CellRange] =
+        if referenceOnly then Set.empty else Set(CellRange(at, at))
+      def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
+      def arg(a: ArgValue, addressOnly: Boolean): Set[CellRange] = a match
         case ArgValue.Expr(child) => loop(child, addressOnly, env)
         case ArgValue.Range(location) =>
           // Non-static lexical locations print as their declared identifier. This also covers
@@ -111,7 +121,7 @@ private[xl] object ValueDependencies:
         case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
             _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
             _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
-          BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ value(_))
+          BinarySpine.operandList(chain).foldLeft(Set.empty[CellRange])(_ ++ value(_))
         case TExpr.Ref(at, _, _) => cell(at)
         case TExpr.PolyRef(at, _) => cell(at)
         case TExpr.SheetRef(sheet, at, _, _) => if local(sheet) then cell(at) else Set.empty
@@ -127,7 +137,7 @@ private[xl] object ValueDependencies:
         case TExpr.BindingRef(name) => binding(name)
         case TExpr.CoercedBindingRef(name, _) => binding(name)
         case TExpr.Let(bindings, body) =>
-          val (scoped, bindingReads) = bindings.foldLeft((env, Set.empty[ARef])) {
+          val (scoped, bindingReads) = bindings.foldLeft((env, Set.empty[CellRange])) {
             case ((scope, reads), (name, definition)) =>
               (
                 scope.updated(name, Bound(definition, scope)),
@@ -145,7 +155,7 @@ private[xl] object ValueDependencies:
             CriteriaRangeResize.resizedArgs(name, call.spec.argSpec.toValues(call.args))
           )
           val passes = if referenceOnly then referencePassing.get(name) else None
-          args.zipWithIndex.foldLeft(Set.empty[ARef]) { case (acc, (a, index)) =>
+          args.zipWithIndex.foldLeft(Set.empty[CellRange]) { case (acc, (a, index)) =>
             // CELL's reference is address-only because every info type `cellFn` supports
             // (FunctionSpecsReference: filename, address, row, col) reads the address, never the
             // value; info_type itself is a value read. An arm that reads the value ("contents",

@@ -85,6 +85,32 @@ class LookupUncachedKeysSpec extends FunSuite:
     assertEquals(eval(tall, "=XLOOKUP(500,A:A,B:B)"), CellValue.Error(CellError.NA))
   }
 
+  test("a result cell that fails to evaluate shows its error, as the cell would") {
+    // Excel: a lookup returning a cell that holds #DIV/0! shows #DIV/0!; a failure with no Excel
+    // error of its own (an unknown function) is #VALUE!, never a failure of the lookup
+    List("=1/0" -> CellError.Div0, "=NOSUCHFN(1)" -> CellError.Value).foreach { (broken, error) =>
+      assertEquals(
+        eval(column.put(ref"B2", CellValue.Formula(broken)), "=VLOOKUP(7,A1:B3,2,FALSE)"),
+        CellValue.Error(error),
+        broken
+      )
+      assertEquals(
+        eval(row.put(ref"B2", CellValue.Formula(broken)), "=HLOOKUP(7,A1:C2,2,FALSE)"),
+        CellValue.Error(error),
+        broken
+      )
+    }
+  }
+
+  test("XLOOKUP searching backward over a whole column for an empty text key") {
+    // A50 holds the empty string; the blanks past the used range never match a lookup value, so
+    // the backward search starts at the used range's end and finds A50
+    val withEmpty = tall.put(ref"A50", CellValue.Text("")).put(ref"A70", CellValue.Text(""))
+    assertEquals(eval(withEmpty, "=XLOOKUP(\"\",A:A,B:B,,0,-1)"), num(140))
+    assertEquals(eval(withEmpty, "=XLOOKUP(\"\",A:A,B:B,,0,1)"), num(100))
+    assertEquals(eval(tall, "=XLOOKUP(\"\",A:A,B:B,-1,0,-1)"), num(-1))
+  }
+
   /** A1 and A2 read each other, uncached; A3 = 7; B3 = 70. */
   private val cyclic = Sheet("T")
     .put(ref"A1", CellValue.Formula("=A2"))

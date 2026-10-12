@@ -446,7 +446,8 @@ class EvalCommandSpec extends CatsEffectSuite:
   private def readsPlacement(wb: Workbook, formula: String, at: String, cell: String): IO[Unit] =
     ReadCommands.eval(wb, wb.sheets.headOption, formula, Some(at), Nil).attempt.map {
       case Left(e: XLException) =>
-        val expected = s"Circular reference detected: the formula reads its own placement $cell"
+        val expected =
+          s"Circular reference detected: the formula reads its own placement $cell at run time"
         assert(e.getMessage.contains(expected), e.getMessage)
       case other => fail(s"$formula --at $at: expected a circular reference, got $other")
     }
@@ -613,6 +614,21 @@ class EvalCommandSpec extends CatsEffectSuite:
     ).foldLeft(IO.unit)((acc, formula) => acc >> readsPlacement(named, formula, "D5", "D5"))
   }
 
+  test(
+    "GH-715: a lookup whose result cell is the placement reports the cycle, not an error value"
+  ) {
+    // C5 = 7 keys the table C1:D9 (a defined name, out of the static check's sight); the matched
+    // result cell is D5 itself. A failing result cell shows its error, but the guard's read stays
+    // the circular reference.
+    val keyed = staleTest.put(ref"C5", CellValue.Number(BigDecimal(7)))
+    val book = stale.put(keyed)
+    val tabled = book.copy(metadata =
+      book.metadata.copy(definedNames = Vector(DefinedName("tbl", "Test!$C$1:$D$9")))
+    )
+    readsPlacement(tabled, "=VLOOKUP(7,tbl,2,FALSE)", "D5", "D5") >>
+      readsPlacement(tabled, "=IFERROR(VLOOKUP(7,tbl,2,FALSE),0)", "D5", "D5")
+  }
+
   test("GH-715: run-time references elsewhere evaluate; INDEX over the placement is static") {
     val selector = staleTest.put(ref"C1", CellValue.Number(BigDecimal(5)))
     for
@@ -678,6 +694,30 @@ class EvalCommandSpec extends CatsEffectSuite:
       ReadCommands.evalArray(wb, Some(data), "=Data!B1+Other!A1", None, overrides).map { array =>
         assert(array.contains("1200"), array)
       }
+  }
+
+  test("GH-715: --with over a running total finds stale readers without expanding their ranges") {
+    // B{n} = SUM($A$1:A{n}) for 5,000 rows, each cached: every range is distinct, so indexing the
+    // readers by cell would cost about 12.5 million entries. They are indexed by range.
+    val rows = 5000
+    val sheet = (1 to rows).foldLeft(Sheet("Test")) { (s, n) =>
+      val cached = CellValue.Number(BigDecimal(n.toLong * (n + 1) / 2))
+      s.put(ARef.from0(0, n - 1), CellValue.Number(BigDecimal(n)))
+        .put(ARef.from0(1, n - 1), CellValue.Formula(s"=SUM($$A$$1:A$n)", Some(cached)))
+    }
+    val wb = Workbook(Vector(sheet))
+    // A1 goes from 1 to 5: every running total rises by 4
+    val expected = rows.toLong * (rows + 1) / 2 + 4
+    for
+      start <- IO.monotonic
+      positionless <- ReadCommands.eval(wb, Some(sheet), s"=B$rows", None, List("A1=5"))
+      at <- ReadCommands.eval(wb, Some(sheet), s"=INDIRECT(\"B$rows\")", Some("D1"), List("A1=5"))
+      end <- IO.monotonic
+    yield
+      assert(positionless.contains(s"Result: $expected (number)"), positionless)
+      assert(at.contains(s"Result: $expected (number)"), at)
+      // generous: a cell-by-cell index took tens of seconds here; the range index takes well under
+      assert((end - start).toSeconds < 20, s"took ${(end - start).toMillis} ms")
   }
 
   test("GH-715: --at far below the used range, read through a whole column, is circular") {

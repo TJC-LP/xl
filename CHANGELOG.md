@@ -27,7 +27,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `<ref>`, implicit intersection included (`=SUM(A1:A10*B1:B10) --at D5` is A5*B5 where a
   positionless `eval` gives the array sum), read-only, with `--with`, under the one-sheet rule. A
   placement that would read itself is a `FORMULA_ERROR` naming the cycle, whose path, like any
-  long cycle path from positionless `eval` and `evala`, now elides its middle.
+  long cycle path from positionless `eval` and `evala`, now elides its middle. Contract:
+  `eval --json` gains an `at` field, the cell as evaluated (`"Data!D5"`), `null` without `--at`;
+  the change is additive.
 - **Union and intersection reference operators, array constants, `TRUE()`/`FALSE()`** (#669): the
   parser now reads `=SUM((A1,A2))`, `=INDEX((A1:B2,A1:C2),1,1,2)`, `=AREAS((A1,B1))` (LibreOffice's
   `~` union too) and `=SUM((A1:B2 B1:C2))`; the aggregates fold every area, `INDEX` gains
@@ -291,7 +293,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
   only the used range. A key in a cycle is read past the same way, as Excel computes a lookup over
   a cycle's value; only `eval --at` reading its own placement fails the lookup, as the circular
-  reference it is.
+  reference it is. A VLOOKUP/HLOOKUP result cell that fails to evaluate shows its error (`#DIV/0!`,
+  or `#VALUE!`) as the cell would, rather than failing the formula.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
   case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported").
   Positionless `eval` and `evala`, like `eval --at`, now evaluate against the workbook with the
@@ -299,6 +302,12 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   overrides and the computed closure. A cached formula that reads an overridden cell drops its
   stale cache, so `Data!B1`, `INDIRECT("B1")` and other sheets' read-backs see the override too.
   This costs one parse of the sheet's formulas when `--with` is given.
+- **`eval` and `evala` analyse only the formula's own precedents** (#715): the closure they
+  evaluate first is walked from the formula's value reads, as `eval --at` does, instead of from a
+  dependency graph of the whole sheet. A cycle elsewhere on the sheet no longer fails them, a
+  formula that inspects its own address (`ROW(A1)` in A1) is no longer taken for a cycle, a read
+  qualified with the sheet's own name is followed, and a sheet of running totals
+  (`SUM($A$1:A{n})`) is no longer quadratic to analyse.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

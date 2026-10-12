@@ -378,6 +378,19 @@ trait FunctionSpecsBase:
           )
 
   /**
+   * A lookup's read of a key or result cell, as the cell shows: a failure to evaluate it is the
+   * Excel error it carries, or `#VALUE!` for any other failure, as a formula returning a cell that
+   * holds `#DIV/0!` shows `#DIV/0!`. A `CircularRef` stays a failure: it is a positioned
+   * evaluation's guard reporting a read of its placement (see [[LookupLine]]).
+   */
+  protected def lookupCellValue(read: Either[EvalError, CellValue]): Either[EvalError, CellValue] =
+    read match
+      case Left(cycle: EvalError.CircularRef) => Left(cycle)
+      case Left(other) =>
+        Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
+      case value => value
+
+  /**
    * The keys MATCH, VLOOKUP/HLOOKUP and XLOOKUP search: the cells of a range in row-major order,
    * position `i` the `i`-th. Each key is read lazily, in search order, the way a reference reads
    * its cell, so an uncached formula evaluates (GH-715). A key whose evaluation fails is a
@@ -413,11 +426,7 @@ trait FunctionSpecsBase:
         val ref = at(i)
         sheet(ref).value match
           case CellValue.Formula(_, None, _) =>
-            read(ref) match
-              case Left(cycle: EvalError.CircularRef) => Left(cycle)
-              case Left(other) =>
-                Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
-              case value => value
+            lookupCellValue(read(ref))
           case CellValue.Formula(_, Some(cached), _) => Right(cached)
           case value => Right(value)
 

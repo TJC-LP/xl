@@ -373,7 +373,8 @@ object ReadCommands:
               EvalError.CircularRef(List(cell)),
               formula,
               s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
-                "(through INDIRECT, OFFSET, a defined name or another sheet's formula)"
+                "at run time (e.g. through INDIRECT, OFFSET, a defined name or another sheet's " +
+                "formula)"
             )
           )
         case None => result.left.map(XLException(_))
@@ -404,22 +405,16 @@ object ReadCommands:
       tempSheet <- overridden(sheet, overrides)
       expr <- IO.fromEither(FormulaParser.parse(formula).left.map(unparseable(_, formula)))
       bounds = tempSheet.usedRange
-      closure <- at match
-        case None =>
-          val targetDeps =
-            bounds.fold(Set.empty[ARef])(b =>
-              DependencyGraph.extractDependenciesBounded(expr, Some(b))
-            )
-          val graph = DependencyGraph.fromSheet(tempSheet)
-          IO.pure((graph, DependencyGraph.transitiveDependencies(graph, targetDeps)))
-        case Some(cell) =>
-          val reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
-          val targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
-          val closure = valueReadClosure(tempSheet, reads, targetDeps)
-          cycleThrough(tempSheet.name, closure, expr, targetDeps, cell) match
-            case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
-            case None => IO.pure((closure.graph, closure.reached))
-      (graph, allDeps) = closure
+      // Positioned or not, only the formula's value-read closure is analysed: never the whole
+      // sheet, which a running total (B{n} = SUM($A$1:A{n})) makes quadratic to expand
+      reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
+      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
+      closure = valueReadClosure(tempSheet, reads, targetDeps)
+      _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
+        case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
+        case None => IO.unit
+      graph = closure.graph
+      allDeps = closure.reached
       formulaDeps = allDeps.filter(ref =>
         tempSheet(ref).value match
           case _: CellValue.Formula => true
@@ -478,8 +473,8 @@ object ReadCommands:
   )
 
   /**
-   * The dependency graph positioned evaluation orders by, built from `roots` (the formula's own
-   * reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
+   * The dependency graph `eval` (positioned or not) and `evala` order by, built from `roots` (the
+   * formula's own reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
    *   - its edges are structural. ROW(D5), ROWS(A:A), or a LET name that ROW inspects, make an edge
    *     to cells whose values are never read. A formula that inspects its own address, or a
    *     precedent that inspects the placement, would look circular, and the closure would be
@@ -675,34 +670,64 @@ object ReadCommands:
     else
       applyOverrides(sheet, overrides).map((applied, changed) => uncacheReaders(applied, changed))
 
-  /** `sheet` with every cached formula that reads `changed`, transitively, made uncached. */
+  /**
+   * `sheet` with every cached formula that reads `changed`, transitively, made uncached.
+   *
+   * Formulas are indexed by the ranges they read, never by those ranges' cells: a running total
+   * (`B{n} = SUM($A$1:A{n})`) has a distinct range per row, and expanding them would cost the
+   * square of the row count. Each range registers in the grid blocks it overlaps (one column by
+   * [[StaleBlockRows]] rows); a range spanning more than [[StaleBlockLimit]] blocks is checked
+   * against every changed cell instead. The walk asks each changed cell's block for candidate
+   * formulas and keeps those with a range containing the cell.
+   */
   private def uncacheReaders(sheet: Sheet, changed: Set[ARef]): Sheet =
     val reads = ValueDependencies.Reader(sheet.usedRange, Some(sheet.name))
-    // cell → the formulas reading it, built once, locally
-    val readers = scala.collection.mutable.HashMap.empty[ARef, List[ARef]]
-    sheet.cells.foreach { (ref, cell) =>
+    val formulas: Vector[(ARef, Vector[CellRange])] = sheet.cells.iterator.flatMap { (ref, cell) =>
       cell.value match
         // GH-430: a data table's cells are pinned value sources
-        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
         case CellValue.Formula(text, _, _) =>
-          FormulaParser.parse(text).foreach { expr =>
-            reads
-              .reads(expr)
-              .foreach(dep => readers.update(dep, ref :: readers.getOrElse(dep, Nil)))
-          }
-        case _ => ()
+          FormulaParser.parse(text).toOption.map(expr => ref -> reads.readRanges(expr).toVector)
+        case _ => None
+    }.toVector
+    // (column, row block) → the formulas with a range overlapping it; built once, locally
+    val blocks = scala.collection.mutable.HashMap.empty[(Int, Int), List[Int]]
+    val wide = scala.collection.mutable.ListBuffer.empty[Int]
+    formulas.iterator.zipWithIndex.foreach { case ((_, ranges), i) =>
+      ranges.foreach { r =>
+        val firstBlock = r.rowStart.index0 / StaleBlockRows
+        val lastBlock = r.rowEnd.index0 / StaleBlockRows
+        if r.width.toLong * (lastBlock - firstBlock + 1) > StaleBlockLimit then wide += i
+        else
+          for
+            col <- r.colStart.index0 to r.colEnd.index0
+            block <- firstBlock to lastBlock
+          do blocks.update((col, block), i :: blocks.getOrElse((col, block), Nil))
+      }
     }
+    val wideReaders = wide.distinct.toList
     @scala.annotation.tailrec
-    def stale(frontier: List[ARef], seen: Set[ARef]): Set[ARef] = frontier match
-      case Nil => seen
-      case ref :: rest =>
-        val next = readers.getOrElse(ref, Nil).filterNot(seen.contains)
-        stale(next ::: rest, seen ++ next)
-    stale(changed.toList, Set.empty).foldLeft(sheet) { (s, ref) =>
+    def walk(frontier: List[ARef], stale: Set[Int]): Set[Int] = frontier match
+      case Nil => stale
+      case cell :: rest =>
+        val candidates =
+          blocks.getOrElse((cell.col.index0, cell.row.index0 / StaleBlockRows), Nil) ++ wideReaders
+        val hits = candidates.distinct.filter(i =>
+          !stale.contains(i) && formulas(i)._2.exists(_.contains(cell))
+        )
+        walk(hits.map(formulas(_)._1) ::: rest, stale ++ hits)
+    walk(changed.toList, Set.empty).foldLeft(sheet) { (s, i) =>
+      val ref = formulas(i)._1
       s(ref).value match
         case f @ CellValue.Formula(_, Some(_), _) => s.put(ref, f.copy(cachedValue = None))
         case _ => s
     }
+
+  /** The rows in one block of [[uncacheReaders]]'s index. */
+  private val StaleBlockRows = 1024
+
+  /** The most blocks one range registers in; a wider range is checked against every cell. */
+  private val StaleBlockLimit = 4096L
 
   /** `sheet` with the `--with` overrides applied, and the cells they set. */
   private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[(Sheet, Set[ARef])] =
