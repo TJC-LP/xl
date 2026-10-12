@@ -65,6 +65,17 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       case call: TExpr.Call[?] if call.spec.name == RangeName => Some(call)
       case _ => None
 
+    /** A range call's two operands. */
+    def operands(call: TExpr.Call[?]): (Operand, Operand) = binaryOperands(call)
+
+  /**
+   * The two operands of a binary reference operator (`:` or ` `) — the one place their `Args` is
+   * cast: `Call.args` is typed by the path `call.spec.Args`, which the name match does not narrow,
+   * and both operators' specs take `(Operand, Operand)`.
+   */
+  private[formula] def binaryOperands(call: TExpr.Call[?]): (Operand, Operand) =
+    call.args.asInstanceOf[(Operand, Operand)]
+
   /**
    * Can `e` be an operand of `,` or ` `? Every reference the parser can see: a cell, range, name,
    * LET name or error literal (`A1:B2 #REF!` is what a deletion leaves), a union or intersection,
@@ -319,7 +330,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   @annotation.tailrec
   private def lastOperand(op: Operand): Shape = op match
     case Right(RangeOperatorCall(call)) =>
-      lastOperand(call.args.asInstanceOf[(Operand, Operand)]._2)
+      lastOperand(binaryOperands(call)._2)
     case other => kind(other)
 
   /**
@@ -331,7 +342,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   private def readsAsPrimary(op: Operand, text: String): Boolean =
     !text.startsWith("(") && (op match
       case Right(RangeOperatorCall(call)) =>
-        kind(call.args.asInstanceOf[(Operand, Operand)]._1) match
+        kind(binaryOperands(call)._1) match
           case Shape.Token | Shape.QualifiedToken => true
           case _ => false
       case _ => false)
@@ -726,7 +737,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     case TExpr.Coerced(inner, _) => expressionEnvelope(inner, shapeOf)
     case TExpr.ErrorLit(_, _) => Envelope.NoCells
     case RangeOperatorCall(call) =>
-      val (l, r) = call.args.asInstanceOf[(Operand, Operand)]
+      val (l, r) = binaryOperands(call)
       // an all-fixed range carries its bounding edges (dependencyValues); otherwise only a
       // covering operand's edges cover it
       val (el, er) = (envelope(l, shapeOf), envelope(r, shapeOf))
@@ -737,7 +748,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         .map(envelope(_, shapeOf))
         .foldLeft[Envelope](Envelope.NoCells)((acc, e) => join(acc, e, covered = false))
     case OperatorCall(call) =>
-      val (l, r) = call.args.asInstanceOf[(Operand, Operand)]
+      val (l, r) = binaryOperands(call)
       (envelope(l, shapeOf), envelope(r, shapeOf)) match
         case (Envelope.Unknown, _) | (_, Envelope.Unknown) => Envelope.Unknown
         case (Envelope.NoCells, _) | (_, Envelope.NoCells) => Envelope.NoCells
@@ -798,7 +809,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   // memoize per call if that bound ever grows.
   def isComputedRangeDynamic(call: TExpr.Call[?], shapeOf: ShapeOf): Boolean =
     call.spec.name == RangeName && {
-      val (l, r) = call.args.asInstanceOf[(Operand, Operand)]
+      val (l, r) = binaryOperands(call)
       val (el, er) = (envelope(l, shapeOf), envelope(r, shapeOf))
       el == Envelope.Unknown || er == Envelope.Unknown ||
       !((fixed(el) && fixed(er)) || coveredBy(el, er))

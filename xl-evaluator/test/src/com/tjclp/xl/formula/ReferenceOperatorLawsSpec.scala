@@ -395,9 +395,7 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
    * as one.
    */
   private def oracleRange(call: TExpr.Call[?], inLet: Boolean): String =
-    val (l, r) =
-      call.args
-        .asInstanceOf[(functions.ReferenceOperators.Operand, functions.ReferenceOperators.Operand)]
+    val (l, r) = functions.ReferenceOperators.RangeOperatorCall.operands(call)
     def text(op: functions.ReferenceOperators.Operand): String =
       op.fold(FormulaPrinter.formatLocation, e => FormulaPrinter.printFileForm(e))
     val (left, right) = (text(l), text(r))

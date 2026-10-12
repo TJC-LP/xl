@@ -1342,6 +1342,7 @@ object FormulaParser:
                 ParseError.InvalidCellRef(s"$sheetStr!", startPos, "missing cell reference after !")
               )
             else if refPart.contains(':') && s2.pos == s1.pos then
+              // (the `:` printer restates this reading: see rangeFallback's note)
               // GH-713: read exactly as the unqualified `A1:B2` — the first two tokens are a
               // lexical range unless a call follows (`Sheet1!A1:INDEX(…)`); otherwise the first
               // token is the left operand of the range operator, and any further `:` belongs to
@@ -1581,6 +1582,11 @@ object FormulaParser:
    * Otherwise the lexical answer — its diagnostic unchanged — stands. Only the nesting guards and
    * an error inside a right-hand call's arguments ([[insideCall]]) escape the probe, so a deep
    * chain is `NestingTooDeep`, never a stack overflow.
+   *
+   * The `:` printer (`ReferenceOperators.renderRange` and its `leftReadsBack` rules) restates this
+   * reading — and the qualified reader's, and `parseRange`'s — over printed text to choose its
+   * parentheses. Change them together: `ReferenceOperatorLawsSpec` checks the printer against this
+   * parser over generated `:` trees.
    */
   private def rangeFallback(
     colon: ParserState,

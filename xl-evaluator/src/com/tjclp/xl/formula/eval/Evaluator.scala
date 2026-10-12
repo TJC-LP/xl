@@ -1089,7 +1089,7 @@ private class EvaluatorImpl(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1518,7 +1518,7 @@ private class EvaluatorImpl(
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
         aggregateMemoOpt,
-        bounds
+        arrayRangeBounds = bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -1830,7 +1830,7 @@ private class EvaluatorImpl(
         resolvingNames,
         workbookPath,
         aggregateMemoOpt,
-        arrayRangeBounds
+        arrayRangeBounds = arrayRangeBounds
       )
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
@@ -2031,7 +2031,7 @@ private class EvaluatorImpl(
               trail,
               workbookPath,
               aggregateMemoOpt,
-              arrayRangeBounds
+              arrayRangeBounds = arrayRangeBounds
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -2620,7 +2620,7 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -2634,5 +2634,5 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     )
