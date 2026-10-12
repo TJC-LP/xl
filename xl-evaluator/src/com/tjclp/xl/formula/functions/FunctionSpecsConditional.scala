@@ -30,12 +30,15 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
           .toRight(e)
       case right => right
 
+  /** GH-711: IF, IFS, SWITCH and CHOOSE return what they select ([[FunctionFlags.selector]]). */
+  private val Selects = FunctionFlags(selector = true)
+
   /** GH-339: evaluate an IF/IFS branch expression, carrying a failure as a 1x1 error element. */
   private def evalBranchCarrying(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     carryLeft(evalMaybeArrayArg(ctx, expr))
 
   val ifFn: FunctionSpec[Any] { type Args = IfArgs } =
-    FunctionSpec.simple[Any, IfArgs]("IF", Arity.three) { (args, ctx) =>
+    FunctionSpec.simple[Any, IfArgs]("IF", Arity.three, Selects) { (args, ctx) =>
       val (condExpr, ifTrueExpr, ifFalseExpr) = args
       // GH-333: evaluate the condition array-aware. A range-shaped condition (the classic
       // MIN(IF(A1:A10>0,…)) CSE idiom) yields an ArrayResult that must broadcast elementwise —
@@ -72,7 +75,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
 
   /** IFS(cond1, val1, cond2, val2, ...) — first TRUE condition's value, else #N/A. */
   val ifs: FunctionSpec[Any] { type Args = List[TExpr[Any]] } =
-    FunctionSpec.simple[Any, List[TExpr[Any]]]("IFS", Arity.AtLeast(2)) { (args, ctx) =>
+    FunctionSpec.simple[Any, List[TExpr[Any]]]("IFS", Arity.AtLeast(2), Selects) { (args, ctx) =>
       // GH-338: condition slots evaluate array-aware like IF (GH-333). A scalar condition keeps
       // the lazy pair walk; an array condition switches to CSE semantics — its value and the
       // remaining pairs all evaluate, chaining elementwise through broadcastIf with the no-match
@@ -111,7 +114,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
    * default/#N/A.
    */
   val switchFn: FunctionSpec[Any] { type Args = List[TExpr[Any]] } =
-    FunctionSpec.simple[Any, List[TExpr[Any]]]("SWITCH", Arity.AtLeast(3)) { (args, ctx) =>
+    FunctionSpec.simple[Any, List[TExpr[Any]]]("SWITCH", Arity.AtLeast(3), Selects) { (args, ctx) =>
       // GH-344: an error VALUE in the target or an evaluated case propagates with its code
       // (`=SWITCH(#N/A-cell, …)` is #N/A, not a silent never-match) — errors are never "equal",
       // so without the pre-check the walk would fall through to the wrong #N/A.
@@ -147,7 +150,7 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
 
   /** CHOOSE(index, val1, val2, ...) — 1-based selection; out-of-range → #VALUE!. */
   val choose: FunctionSpec[Any] { type Args = List[TExpr[Any]] } =
-    FunctionSpec.simple[Any, List[TExpr[Any]]]("CHOOSE", Arity.AtLeast(2)) { (args, ctx) =>
+    FunctionSpec.simple[Any, List[TExpr[Any]]]("CHOOSE", Arity.AtLeast(2), Selects) { (args, ctx) =>
       args match
         case idxExpr :: values =>
           ctx.evalExpr(TExpr.asNumericExpr(idxExpr)).flatMap { n =>

@@ -131,40 +131,62 @@ trait TExprAnalysis:
    * Returns local ranges as (None, range) and cross-sheet ranges as (Some(sheetName), range). Used
    * by SUMPRODUCT to compute shared bounds across all ranges in array expressions.
    */
-  def collectRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] = expr match
-    case RangeRef(range, _) => List((None, range))
-    case SheetRange(sheet, range, _) => List((Some(sheet), range))
-    case call: Call[?] =>
-      call.spec.argSpec
-        .toValues(call.args)
-        .flatMap {
-          case ArgValue.Expr(e) => collectRanges(e)
-          case ArgValue.Range(RangeLocation.Local(range, _)) => List((None, range))
-          case ArgValue.Range(RangeLocation.CrossSheet(sheet, range, _)) =>
-            List((Some(sheet), range))
-          // GH-353: external-workbook ranges are not in this workbook — nothing to bound.
-          // GH-394: a Name's target range is behind the workbook name table — statically unknown
-          case ArgValue.Range(_) => Nil
-          case _ => Nil
-        }
-    // Binary operators - collect from operands (GH-680: a chain's left spine in one loop)
-    case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
-        _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
-      BinarySpine.operandList(chain).flatMap(collectRanges)
-    // Type conversion
-    case ToInt(e) => collectRanges(e)
-    case DateToSerial(e) => collectRanges(e)
-    case DateTimeToSerial(e) => collectRanges(e)
-    // GH-374/GH-355: unary plus and percent are transparent — nested ranges still get bounded
-    case UnaryPlus(e) => collectRanges(e)
-    case Percent(e) => collectRanges(e)
-    // GH-193: LET — ranges from binding values and the body
-    case Let(bindings, body) =>
-      bindings.flatMap((_, value) => collectRanges(value)) ++ collectRanges(body)
-    // GH-306: runtime coercion wrapper — transparent for analysis
-    case Coerced(inner, _) => collectRanges(inner)
-    // Default: no ranges (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, BindingRef, etc.)
-    case _ => Nil
+  def collectRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] =
+    collectRangesIn(expr, rangeSlots = true)
+
+  /**
+   * GH-711: the ranges an expression reads as values — [[collectRanges]] without the range slots (a
+   * function's argument taken as a reference: SUM's, COUNTIF's range, a lookup's table). A range
+   * slot hands its function one fixed reference; a range in an expression position can spread over
+   * the formula's rows (`ROW(A:A)`, an operand), which SUMPRODUCT's blank tail must rule out.
+   */
+  private[formula] def collectValueRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] =
+    collectRangesIn(expr, rangeSlots = false)
+
+  private def collectRangesIn(
+    expr: TExpr[?],
+    rangeSlots: Boolean
+  ): List[(Option[SheetName], CellRange)] =
+    def go(e: TExpr[?]): List[(Option[SheetName], CellRange)] = collectRangesIn(e, rangeSlots)
+    expr match
+      case RangeRef(range, _) => List((None, range))
+      case SheetRange(sheet, range, _) => List((Some(sheet), range))
+      // Every argument of every call contributes, including the shape-sensitive ones
+      // transformRanges leaves untrimmed (ROWS(Other!A:A)). Such a range can only widen the shared
+      // extent with its sheet's used range, adding blank rows inside the bound; a blank-counting
+      // element (`--(A:A="")`) counts them there, and the rows past the bound through
+      // SumProductTail, so they count either way
+      case call: Call[?] =>
+        call.spec.argSpec
+          .toValues(call.args)
+          .flatMap {
+            case ArgValue.Expr(e) => go(e)
+            case ArgValue.Range(RangeLocation.Local(range, _)) if rangeSlots => List((None, range))
+            case ArgValue.Range(RangeLocation.CrossSheet(sheet, range, _)) if rangeSlots =>
+              List((Some(sheet), range))
+            // GH-353: external-workbook ranges are not in this workbook — nothing to bound.
+            // GH-394: a Name's target range is behind the workbook name table — statically unknown
+            case ArgValue.Range(_) => Nil
+            case _ => Nil
+          }
+      // Binary operators - collect from operands (GH-680: a chain's left spine in one loop)
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.operandList(chain).flatMap(go)
+      // Type conversion
+      case ToInt(e) => go(e)
+      case DateToSerial(e) => go(e)
+      case DateTimeToSerial(e) => go(e)
+      // GH-374/GH-355: unary plus and percent are transparent — nested ranges still get bounded
+      case UnaryPlus(e) => go(e)
+      case Percent(e) => go(e)
+      // GH-193: LET — ranges from binding values and the body
+      case Let(bindings, body) =>
+        bindings.flatMap((_, value) => go(value)) ++ go(body)
+      // GH-306: runtime coercion wrapper — transparent for analysis
+      case Coerced(inner, _) => go(inner)
+      // Default: no ranges (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, BindingRef, etc.)
+      case _ => Nil
 
   /**
    * Transform all range references in an expression using a mapping function.
@@ -219,6 +241,14 @@ trait TExprAnalysis:
       // must not mismatch its dimensions), and so does the range of a call flagged
       // `boundsReferenceAxis` (ROW, COLUMN), whose array has one number per row or column of it
       // (GH-712: SUMPRODUCT((A:A>5)*ROW(A:A))). Other calls are shape-sensitive (ROWS(A:A), INDEX).
+      // GH-711: a selector (FunctionFlags.selector: IF, IFS, CHOOSE, SWITCH) has every argument
+      // rewritten. The reference it selects is an element source (SUMPRODUCT(IF(TRUE,B:B,A:A))
+      // reads B's used extent, as SUMPRODUCT(B:B) does), and so are the condition, index and
+      // expression arguments: under SUMPRODUCT an array condition broadcasts against its
+      // branches, so SUMPRODUCT(IF(A:A>4,B:B,A:A)) needs its condition and both branches at one
+      // size
+      case call: Call[?] if call.spec.flags.selector =>
+        Call(call.spec, call.spec.argSpec.map(call.args)(transformRanges(_, f), identity, identity))
       case call: Call[?] => transformLiftedSlots(call, f)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other

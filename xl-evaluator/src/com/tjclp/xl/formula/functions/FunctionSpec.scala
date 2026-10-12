@@ -56,7 +56,16 @@ final case class FunctionFlags(
    * keeping `SUMPRODUCT((A:A>5)*ROW(A:A))` aligned. False for shape readers whose answer is the
    * reference's full extent (ROWS, COLUMNS) and for every other function.
    */
-  boundsReferenceAxis: Boolean = false
+  boundsReferenceAxis: Boolean = false,
+  /**
+   * GH-711: True for the selectors IF, IFS, CHOOSE and SWITCH, which return the argument they
+   * select as it is — the reference itself when the call feeds a reference position
+   * (`FunctionSpecsBase.evalSelected`). The flag is the single source of truth for the analyses
+   * that see through a selector: SUMPRODUCT's whole-column trimming bounds every range under one
+   * (`TExprAnalysis.transformRanges`). `Evaluator.referenceFunctions`, which routes a reference
+   * position to the selected reference, lists every flagged spec (a drift law pins it).
+   */
+  selector: Boolean = false
 ):
 
   /**
@@ -189,23 +198,23 @@ final case class EvalContext(
   private[formula] def selectsReference: Boolean = operands.selectsReference
 
   /**
-   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
-   * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
-   * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
-   * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
-   * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
-   * formula. In array mode, [[evalArrayExpr]].
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'): exactly
+   * [[evalReference]], in either mode (GH-711: `AND(IF(TRUE,B:B,A:A))` in an array formula ignores
+   * B's blanks as `AND(B:B)` does). The name says which position asks.
    */
   private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
-    if arrayMode then evalArrayExpr(expr) else evalReference(expr)
+    evalReference(expr)
 
   /**
    * The reference an expression denotes, in either mode, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]] — for the positions that need the reference itself
-   * whatever the formula's mode: the `@` operand, OFFSET's base, the reference IF, IFS, CHOOSE or
-   * SWITCH select for a reference position. An expression that denotes no reference evaluates in
-   * the formula's mode, its result not collapsed.
+   * [[com.tjclp.xl.formula.eval.RangeOperand]] — a cell or range, a name or LET name bound to one,
+   * the reference IF, IFS, CHOOSE or SWITCH select, the one OFFSET, INDIRECT or INDEX return — for
+   * the positions that need the reference itself whatever the formula's mode: a reference-class
+   * argument ([[evalReferenceArg]]), the `@` operand, OFFSET's base, the reference a selector
+   * returns to a reference position. An expression that denotes no reference evaluates in the
+   * formula's mode, its result not collapsed (an array-returning call folds whole): in a plain cell
+   * its references are intersected, so `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a
+   * legacy formula, and in array mode it is the array.
    */
   private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
     operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
