@@ -41,12 +41,18 @@ object ReadCommands:
    * counts the cells between. A 20,000-cell chain would otherwise make a 169 KB message.
    */
   private def cyclic(error: EvalError, formula: String): XLException =
+    error match
+      case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
+        withReason(error, formula, s"Circular reference detected: ${elided(cycle)}")
+      case _ => XLException(EvalError.toXLError(error, Some(formula)))
+
+  /**
+   * `error` as the evaluator reports it, with only the formula error's reason replaced, so any
+   * structured field `toXLError` carries survives.
+   */
+  private def withReason(error: EvalError, formula: String, reason: String): XLException =
     XLException(EvalError.toXLError(error, Some(formula)) match
-      case reported @ XLError.FormulaError(_, _) =>
-        error match
-          case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
-            reported.copy(reason = s"Circular reference detected: ${elided(cycle)}")
-          case _ => reported
+      case reported @ XLError.FormulaError(_, _) => reported.copy(reason = reason)
       case other => other)
 
   /** A cycle path longer than [[MaxCyclePath]], its middle counted. */
@@ -239,17 +245,43 @@ object ReadCommands:
       }
 
   /**
-   * Whether the `--with` override `override_` sets `cell` on the sheet named `sheet`: its ref,
-   * unqualified or qualified with that sheet (as [[applyOverrides]] reads it), is `cell`. A
-   * malformed override is not a match; [[applyOverrides]] reports it.
+   * Whether the `--with` override `override_` sets `cell` on the sheet named `sheet`, as
+   * [[parseOverride]] reads it. A malformed override is not a match; [[applyOverrides]] reports it.
    */
   private def overridesCell(override_ : String, sheet: SheetName, cell: ARef): Boolean =
-    override_.split("=", 2).headOption.exists { refStr =>
-      Resolve.ref(refStr.trim) match
-        case Right((qualifier, Resolve.Target.Cell(ref))) =>
-          ref == cell && qualifier.forall(_.value.equalsIgnoreCase(sheet.value))
-        case _ => false
-    }
+    parseOverride(override_, sheet).exists((ref, _) => ref == cell)
+
+  /**
+   * One `--with` override, `ref=value`, as the cell it sets on the sheet named `sheet` and its
+   * value. The ref is a single cell, unqualified or qualified with that sheet's name in any case,
+   * as Excel compares sheet names. A range or another sheet's cell is `INVALID_REFERENCE`; a
+   * missing `=` or an empty value is `USAGE`.
+   */
+  private def parseOverride(
+    override_ : String,
+    sheet: SheetName
+  ): Either[CliException, (ARef, CellValue)] =
+    override_.split("=", 2) match
+      case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
+        // INVALID_REFERENCE: the parser's own text, a range, or another sheet's cell
+        Resolve.ref(refStr.trim).left.map(CliException(_)).flatMap {
+          case (qualifier, Resolve.Target.Cell(ref))
+              if qualifier.forall(_.value.equalsIgnoreCase(sheet.value)) =>
+            Right((ref, ValueParser.parseValue(valueStr.trim)))
+          case (Some(other), Resolve.Target.Cell(_)) =>
+            Left(
+              invalidRef(
+                s"Cross-sheet override not supported: ${refStr.trim}. " +
+                  s"Eval operates on ${sheet.value}, not ${other.value}"
+              )
+            )
+          case (_, Resolve.Target.Range(_)) =>
+            Left(invalidRef(s"Override requires single cell, not range: ${refStr.trim}"))
+        }
+      case Array(refStr, _) =>
+        Left(usage(s"Empty value for override: ${refStr.trim}. Use ref=value (e.g., B5=1000)"))
+      case _ =>
+        Left(usage(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)"))
 
   /**
    * `--with` on the `--at` cell: the formula IS that cell, so an override of it could never be
@@ -333,14 +365,14 @@ object ReadCommands:
     def checked[A](result: XLResult[A], formula: String): Either[XLException, A] =
       placement.filter(_._2.wasRead) match
         case Some((cell, _)) =>
-          val readsItself = EvalError.toXLError(EvalError.CircularRef(List(cell)), Some(formula))
-          Left(XLException(readsItself match
-            case reported @ XLError.FormulaError(_, _) =>
-              reported.copy(reason =
-                s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
-                  "(through INDIRECT, OFFSET, a defined name or another sheet's formula)"
-              )
-            case other => other))
+          Left(
+            withReason(
+              EvalError.CircularRef(List(cell)),
+              formula,
+              s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
+                "(through INDIRECT, OFFSET, a defined name or another sheet's formula)"
+            )
+          )
         case None => result.left.map(XLException(_))
 
   /**
@@ -509,6 +541,8 @@ object ReadCommands:
     val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
     def reads(e: TExpr[?]): Boolean = only.reads(e).contains(at)
     def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads)
+    // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
+    // from any reached cell ends at `at`
     @scala.annotation.tailrec
     def trace(ref: ARef, parent: Map[ARef, ARef], path: List[ARef]): List[ARef] =
       parent.get(ref) match
@@ -616,39 +650,10 @@ object ReadCommands:
   // ==========================================================================
 
   private def applyOverrides(sheet: Sheet, overrides: List[String]): IO[Sheet] =
-    overrides.foldLeft(IO.pure(sheet)) { (sheetIO, override_) =>
-      sheetIO.flatMap { s =>
-        override_.split("=", 2) match
-          case Array(refStr, valueStr) if valueStr.trim.nonEmpty =>
-            // INVALID_REFERENCE: the parser's own text, a range, or another sheet's cell
-            IO.fromEither(Resolve.ref(refStr.trim).left.map(CliException(_))).flatMap {
-              case (None, Resolve.Target.Cell(ref)) =>
-                val value = ValueParser.parseValue(valueStr.trim)
-                IO.pure(s.put(ref, value))
-              case (Some(sheetName), Resolve.Target.Cell(ref)) =>
-                // a sheet's own name in any case, as Excel compares sheet names
-                if sheetName.value.equalsIgnoreCase(sheet.name.value) then
-                  val value = ValueParser.parseValue(valueStr.trim)
-                  IO.pure(s.put(ref, value))
-                else
-                  IO.raiseError(
-                    invalidRef(
-                      s"Cross-sheet override not supported: ${refStr.trim}. " +
-                        s"Eval operates on ${sheet.name.value}, not ${sheetName.value}"
-                    )
-                  )
-              case (_, Resolve.Target.Range(_)) =>
-                IO.raiseError(
-                  invalidRef(s"Override requires single cell, not range: ${refStr.trim}")
-                )
-            }
-          case Array(refStr, _) =>
-            IO.raiseError(
-              usage(s"Empty value for override: ${refStr.trim}. Use ref=value (e.g., B5=1000)")
-            )
-          case _ =>
-            IO.raiseError(
-              usage(s"Invalid override format: $override_. Use ref=value (e.g., B5=1000)")
-            )
+    IO.fromEither(
+      overrides.foldLeft[Either[CliException, Sheet]](Right(sheet)) { (acc, override_) =>
+        acc.flatMap(s =>
+          parseOverride(override_, sheet.name).map((ref, value) => s.put(ref, value))
+        )
       }
-    }
+    )

@@ -134,12 +134,21 @@ final case class EvalContext(
    * evaluation leaves this absent, preserving its one-shot semantics and allocation profile.
    */
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  /** GH-715: the placement a positioned evaluation guards, which a fresh memo inherits. */
+  private[formula] placementGuard: Option[Evaluator.PlacementGuard] = None,
   /**
    * Excel's operand classes for this call (internal to the evaluator): see
    * [[EvalContext.Operands]].
    */
   private[formula] operands: EvalContext.Operands = EvalContext.Operands.array
 ):
+
+  /**
+   * The pass's memo, or a fresh one for a context built outside the evaluator. GH-715: a fresh memo
+   * inherits the placement guard, so the guard never depends on a memo having been threaded.
+   */
+  private[formula] def passMemo: Evaluator.EvalMemo =
+    memo.getOrElse(new Evaluator.EvalMemo(placementGuard))
 
   /**
    * Whether the formula evaluates as an array (an array formula, `evala`, SUMPRODUCT's arguments)

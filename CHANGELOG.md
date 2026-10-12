@@ -287,6 +287,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   MATCH's lookup_array, the VLOOKUP/HLOOKUP key line and result cell, and XLOOKUP's lookup_array
   read each cell the way a reference to it does, so an uncached formula evaluates. Before, they
   read its bare record and matched it as blank. XLOOKUP's return cell is still read as stored.
+  Keys are read lazily, in search order: a key whose evaluation fails is a non-match, so a broken
+  cell after the match changes nothing, and a whole-column lookup (`XLOOKUP(x,A:A,B:B)`) reads
+  only the used range.
 - **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
   case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported"), and
   positionless `eval` and `evala` now see the overrides through a formula on another sheet that

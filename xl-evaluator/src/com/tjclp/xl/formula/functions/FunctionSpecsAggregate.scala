@@ -160,7 +160,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.workbook,
             ctx.depth + 1,
             ctx.rng,
-            ctx.memo.getOrElse(new Evaluator.EvalMemo),
+            ctx.passMemo,
             ctx.workbookPath,
             ctx.aggregateMemo,
             currentCell = Some(at),
@@ -210,11 +210,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, A] =
     // GH-715: COUNTA and COUNTBLANK read the cell's record without evaluating it; a positioned
     // evaluation's placement is still read, so its guard decides
-    ctx.memo
-      .flatMap(_.guard(targetSheet, at))
-      .fold(triageRecord(agg, targetSheet, at, ctx, acc))(
-        Left(_)
-      )
+    ctx.placementGuard
+      .flatMap(_.check(targetSheet, at))
+      .fold(triageRecord(agg, targetSheet, at, ctx, acc))(Left(_))
 
   private def triageRecord[A](
     agg: Aggregator[A],

@@ -147,11 +147,12 @@ object Evaluator:
     memo
 
   /**
-   * GH-715: [[spillTrackingInstance]] for a formula placed at `at` on the sheet named `sheet`: one
-   * [[EvalMemo]] guarding that cell serves every read from depth 0 on, so a read of the placement
-   * by any path is a `CircularRef`, and the returned guard records the read even when IFERROR
-   * swallows that error (IFERROR takes any failure). The caller puts an uncached formula at `at`,
-   * in the sheet it evaluates on and in the workbook it passes, so reads reach the memo.
+   * GH-715: [[spillTrackingInstance]] for a formula placed at `at` on the sheet named `sheet`: the
+   * evaluator carries a [[PlacementGuard]] for that cell, which every memo of the evaluation
+   * inherits, so a read of the placement by any path is a `CircularRef`, and the returned guard
+   * records the read even when IFERROR swallows that error (IFERROR takes any failure). The caller
+   * puts an uncached formula at `at`, in the sheet it evaluates on and in the workbook it passes,
+   * so reads reach a memo.
    */
   private[formula] def placedInstance(
     rng: Rng,
@@ -160,11 +161,14 @@ object Evaluator:
     at: ARef
   ): (Evaluator, PlacementGuard) =
     val guard = new PlacementGuard(sheet, at)
+    // No depth-0 memo: one would outlive every evaluation it serves (the CLI's fold makes a new
+    // Sheet per step, and the memo keys by Sheet identity). Each read starts its own memo, which
+    // inherits the guard, and the guard's one record of a read outlives them all.
     val evaluator = TotalEvaluator(
       new EvaluatorWithDepth(
         0,
         rng = rng,
-        memo = Some(new EvalMemo(Some(guard))),
+        memo = None,
         aggregateMemo = Some(spillTracking(trackSpills)),
         guard = Some(guard)
       )
@@ -841,7 +845,8 @@ object Evaluator:
 
     /** The read's error when `ref` on `onSheet` is the placement, recording the read. */
     def check(onSheet: Sheet, ref: ARef): Option[EvalError] =
-      val guarded = ref == at && onSheet.name == sheet
+      // case-insensitive, as Excel compares sheet names and as the rest of GH-715 does
+      val guarded = ref == at && onSheet.name.value.equalsIgnoreCase(sheet.value)
       if guarded then wasRead = true
       Option.when(guarded)(EvalError.CircularRef(List(ref)))
 
@@ -1621,6 +1626,7 @@ private class EvaluatorImpl(
       Some(callMemo),
       workbookPath,
       aggregateMemoOpt,
+      placementGuard = placementGuard,
       operands = EvalContext.Operands(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),

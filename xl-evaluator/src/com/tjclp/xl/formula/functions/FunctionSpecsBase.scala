@@ -12,7 +12,7 @@ import com.tjclp.xl.formula.eval.{
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 
@@ -341,7 +341,7 @@ trait FunctionSpecsBase:
       ctx.workbook,
       ctx.depth,
       ctx.rng,
-      ctx.memo.getOrElse(new Evaluator.EvalMemo),
+      ctx.passMemo,
       ctx.workbookPath,
       ctx.aggregateMemo
     )
@@ -376,6 +376,92 @@ trait FunctionSpecsBase:
             targetSheet,
             ctx
           )
+
+  /**
+   * The keys MATCH, VLOOKUP/HLOOKUP and XLOOKUP search: the cells of a range in row-major order,
+   * position `i` the `i`-th. Each key is read lazily, in search order, the way a reference reads
+   * its cell, so an uncached formula evaluates (GH-715). A key whose evaluation fails is a
+   * non-matching key (its Excel error, or `#VALUE!` for any other failure), so a broken cell after
+   * the match changes nothing. A `CircularRef` propagates instead: it is a positioned evaluation's
+   * placement guard seeing a read of the placement, which no lookup may answer around.
+   *
+   * Positions from `stored` on lie past the sheet's used range ([[lookupLine]]): blank, never read,
+   * and found only when a blank key matches.
+   */
+  protected final class LookupLine(
+    range: CellRange,
+    stored: Int,
+    read: ARef => Either[EvalError, CellValue]
+  ):
+    val size: Int = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+
+    /** The cell at position `i`. */
+    def at(i: Int): ARef =
+      ARef.from0(range.colStart.index0 + i % range.width, range.rowStart.index0 + i / range.width)
+
+    def key(i: Int): Either[EvalError, CellValue] =
+      if i >= stored then Right(CellValue.Empty)
+      else
+        read(at(i)) match
+          case Left(cycle: EvalError.CircularRef) => Left(cycle)
+          case Left(other) =>
+            Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
+          case value => value
+
+    /**
+     * The first position, forward or backward, whose key `matches`, reading no key past it. Past
+     * `stored` the keys are blank, so one question settles them all.
+     */
+    def find(forward: Boolean)(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
+      val readable = math.min(stored, size)
+      lazy val blankMatches = size > readable && matches(CellValue.Empty)
+      @scala.annotation.tailrec
+      def scan(i: Int): Either[EvalError, Option[Int]] =
+        if i < 0 || i >= readable then Right(None)
+        else
+          key(i) match
+            case Left(error) => Left(error)
+            case Right(value) if matches(value) => Right(Some(i))
+            case Right(_) => scan(if forward then i + 1 else i - 1)
+      if forward then scan(0).map(_.orElse(Option.when(blankMatches)(readable)))
+      else if blankMatches then Right(Some(size - 1))
+      else scan(readable - 1)
+
+    /** The keys before `stored`, for the approximate modes: no lookup plane compares a blank. */
+    def storedKeys: Either[EvalError, Vector[CellValue]] =
+      (0 until math.min(stored, size)).foldLeft[Either[EvalError, Vector[CellValue]]](
+        Right(Vector.empty)
+      )((acc, i) => acc.flatMap(keys => key(i).map(keys :+ _)))
+
+  /**
+   * [[LookupLine]] over `range` on `targetSheet`. A row or column that runs to the sheet's edge
+   * (`A:A`, `1:1`) is clipped to the used range, asked for once, so a whole-column lookup costs the
+   * data rather than a million reads. A bounded range never asks for the used range: that scan is
+   * per call (#720).
+   */
+  protected def lookupLine(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): LookupLine =
+    val column = range.width == 1 && range.rowEnd.index0 == Row.MaxIndex0
+    val row = range.height == 1 && range.colEnd.index0 == Column.MaxIndex0
+    val all = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+    val stored =
+      if !column && !row then all
+      else
+        targetSheet.usedRange.fold(0) { used =>
+          if column then
+            if range.colStart.index0 < used.colStart.index0 ||
+              range.colStart.index0 > used.colEnd.index0
+            then 0
+            else math.max(0, used.rowEnd.index0 - range.rowStart.index0 + 1)
+          else if range.rowStart.index0 < used.rowStart.index0 ||
+            range.rowStart.index0 > used.rowEnd.index0
+          then 0
+          else math.max(0, used.colEnd.index0 - range.colStart.index0 + 1)
+        }
+    LookupLine(range, math.min(stored, all), rangeCellReader(targetSheet, ctx))
 
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match

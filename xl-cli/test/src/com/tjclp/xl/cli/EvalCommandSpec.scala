@@ -648,6 +648,26 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(positionless.contains("Result: 4 (number)"), positionless)
   }
 
+  test("GH-715: --at far below the used range, read through a whole column, is circular") {
+    // the used range ends at D10; D5000 lies far outside it, yet SUM(D:D) there reads it
+    val column = (1 to 10).foldLeft(Sheet("Test")) { (s, row) =>
+      s.put(ARef.from0(3, row - 1), CellValue.Number(BigDecimal(row)))
+    }
+    circularAt(column, "=SUM(D:D)", "D5000", "D5000 → D5000")
+  }
+
+  test("GH-715: --at evaluates a deep precedent chain, each step through the placement guard") {
+    // C1 = C2+1, …, C2999 = C3000+1, C3000 = 1: a 3,000-formula closure the fold evaluates in
+    // order, every read under the guard, with no memo held across the fold's steps
+    val depth = 3000
+    val chain = (1 to depth).foldLeft(Sheet("Test")) { (s, row) =>
+      val formula = if row == depth then "=1" else s"=C${row + 1}+1"
+      s.put(ARef.from0(2, row - 1), CellValue.Formula(formula))
+    }
+    for result <- ReadCommands.eval(Workbook(chain), Some(chain), "=C1", Some("D5"), Nil)
+    yield assert(result.contains(s"Result: $depth (number)"), result)
+  }
+
   test("GH-715: --at a cell on a sheet with no cells, read by the formula, is circular") {
     val empty = Sheet("Empty")
     circularIn(Workbook(Vector(empty)), Some(empty), "=D5", "D5", "D5 → D5") >>
