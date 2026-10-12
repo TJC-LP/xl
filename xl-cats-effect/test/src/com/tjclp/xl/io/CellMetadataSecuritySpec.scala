@@ -147,3 +147,28 @@ class CellMetadataSecuritySpec extends CatsEffectSuite:
         assertEquals(both.spillDir, Some(dir))
     }
   }
+
+  test("pinned: a metadata part over the ratio limit fails a streamed read of sound worksheets") {
+    // Today's behaviour (PR #721 review): the whole read fails, though only the dynamic-array
+    // index is at stake; withStreamLimits (above) is the caller's way through.
+    val parts = DynamicArrayFixtures.relocatedMetadataParts(metadataPath).map { (name, xml) =>
+      if name == metadataPath then name -> (xml + (" " * 200000)) else name -> xml
+    }
+    fixture(parts).use { path =>
+      for
+        ratios <- IO.blocking {
+          val zip = new ZipFile(path.toFile)
+          try
+            Vector("xl/worksheets/sheet1.xml", metadataPath).map { name =>
+              val entry = zip.getEntry(name)
+              name -> entry.getSize.toDouble / entry.getCompressedSize.max(1L)
+            }.toMap
+          finally zip.close()
+        }
+        rows <- excel.readStream(path).compile.toVector.attempt
+      yield
+        assert(ratios("xl/worksheets/sheet1.xml") < 100, ratios.toString)
+        assert(ratios(metadataPath) > 100, ratios.toString)
+        security(rows, metadataPath, "Compression ratio")
+    }
+  }

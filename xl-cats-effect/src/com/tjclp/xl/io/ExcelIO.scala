@@ -172,6 +172,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Shared formulas are expanded when their master appears first. A dependent with no active master
    * is emitted as a `#REF!` formula with its cached value preserved. Use `read` when shared formula
    * cells may appear in arbitrary physical order.
+   *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
    */
   def readStream(path: Path): Stream[F, RowData] =
     Stream
@@ -201,6 +206,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    *
    * Uses SAX parser (javax.xml.parsers.SAXParser) for 3-4x speedup vs fs2-data-xml. The
    * shared-formula ordering constraint documented on `readStream` also applies.
+   *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
    */
   def readSheetStream(path: Path, sheetName: String): Stream[F, RowData] =
     Stream
@@ -342,6 +352,11 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    *
    * Time: O(position of cell in file). Memory: the table plus the styles, whatever the worksheet's
    * size.
+   *
+   * GH-714: besides the worksheet it reads `xl/_rels/workbook.xml.rels` and the cell-metadata part
+   * whole, under [[streamLimits]] (the default ZIP size and 100:1 ratio limits): a part over them
+   * fails the whole read with a `SecurityError`, even when only the dynamic-array index is at
+   * stake. [[withStreamLimits]] sets other limits.
    *
    * @param path
    *   Path to XLSX file

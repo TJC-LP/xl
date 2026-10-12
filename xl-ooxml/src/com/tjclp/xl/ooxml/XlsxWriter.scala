@@ -2260,6 +2260,8 @@ object XlsxWriter:
       case SheetMetadataPart.MetadataOutput.Generated(_) =>
         val claimed = sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)
         danglingMetadataPath.orElse(
+          // total: `Iterator.from(2)` never ends and the package names finitely many parts, so
+          // `next()` always finds a free name
           Some(
             (Iterator.single(SheetMetadataPart.defaultPath) ++
               Iterator.from(2).map(n => s"xl/metadata$n.xml")).filterNot(claimed.contains).next()
