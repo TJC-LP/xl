@@ -20,13 +20,19 @@ trait TExprConstructors:
   /**
    * Smart constructor for cell references.
    *
+   * #709: when `decode` refuses a TEXT cell (plain, rich, or a formula's cached text), the
+   * evaluator answers Excel's `#VALUE!` (`EvalError.ErrorValue`), whatever the decoder's reason;
+   * `EvalError.CodecFailed` is reserved for refusals over non-text values. A cell holding an Excel
+   * error value propagates that error.
+   *
    * Example: TExpr.ref(ARef("A1"), Anchor.Relative, codec)
    */
   def ref[A](at: ARef, anchor: Anchor, decode: Cell => Either[CodecError, A]): TExpr[A] =
     Ref(at, anchor, decode)
 
   /**
-   * Smart constructor for cell references with default Relative anchor.
+   * Smart constructor for cell references with default Relative anchor. A refusal over a text cell
+   * is `#VALUE!` whatever the decoder (#709; see the anchored overload).
    *
    * Example: TExpr.ref(ARef("A1"), codec)
    */
