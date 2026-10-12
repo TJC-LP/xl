@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
@@ -210,7 +210,9 @@ private[xl] object DynamicArrayAuthoring:
           s"${range.toA1}, so it is not spilled (Excel shows 0 and warns of the circular reference)"
       )
       // the anchor's own cell first, without evaluating: a self-read never reaches the evaluator
-      if readsWithin(expr, single) then uncached(circular(single))
+      // the book the formula reads: its own sheet's qualifiers and defined names resolve through it
+      val book = wb.put(placed)
+      if readsWithin(expr, placed.name, book, single) then uncached(circular(single))
       else
         SheetEvaluator.evaluateArrayValues(
           placed,
@@ -218,7 +220,7 @@ private[xl] object DynamicArrayAuthoring:
           anchor,
           Evaluator.instance,
           clock,
-          Some(wb.put(placed))
+          Some(book)
         ) match
           // a host failure (not an error value): an uncached 1x1 record, reported by the refresh
           case Left(error) => uncached(error)
@@ -228,6 +230,8 @@ private[xl] object DynamicArrayAuthoring:
                 Vector(Vector(CellValue.Error(CellError.Calc)))
               else grid0
             val rows = grid.size
+            // a ragged result is sized by its longest row: `blocked` checks the whole extent, and a
+            // short row's trailing extent cells are left unwritten (empty)
             val cols = grid.map(_.size).maxOption.getOrElse(1)
             def refuse(extent: Option[CellRange], blocker: SpillBlocker) =
               Left(Refusal.Blocked(SpillBlocked(full, anchor, extent, blocker)))
@@ -238,7 +242,8 @@ private[xl] object DynamicArrayAuthoring:
               spillExtent(anchor, rows, cols) match
                 case None => refuse(None, SpillBlocker.OffGrid(rows, cols))
                 // a spill over cells its own formula reads is circular: Excel does not spill it
-                case Some(extent) if readsWithin(expr, extent) => uncached(circular(extent))
+                case Some(extent) if readsWithin(expr, placed.name, book, extent) =>
+                  uncached(circular(extent))
                 case Some(extent) =>
                   blocked(placed, extent, _ == anchor) match
                     case Some(blocker) => refuse(Some(extent), blocker)
@@ -414,11 +419,20 @@ private[xl] object DynamicArrayAuthoring:
       }
 
   /**
-   * Whether `expr` reads a cell of `range` on its own sheet (a reference, or a range meeting it).
-   * Bounded by `range`, so a whole-column operand costs no more than the range itself.
+   * Whether `expr`, a formula on `sheet`, reads a cell of `range` there: a reference or a range
+   * meeting it, unqualified or qualified with its own sheet's name (`Sheet1!A1:A3`, `'My
+   * Sheet'!A1:A3`, matched case-insensitively as Excel resolves it), or a defined name whose target
+   * does ([[DependencyGraph.localReads]], the graph's own walk). Ranges are compared, never
+   * expanded, so a whole-column operand costs nothing extra.
    */
-  private def readsWithin(expr: TExpr[?], range: CellRange): Boolean =
-    DependencyGraph.extractDependenciesBounded(expr, Some(range)).exists(range.contains)
+  private def readsWithin(
+    expr: TExpr[?],
+    sheet: SheetName,
+    book: Workbook,
+    range: CellRange
+  ): Boolean =
+    val (cells, ranges) = DependencyGraph.localReads(expr, sheet, Some(book))
+    cells.exists(range.contains) || ranges.exists(_.intersects(range))
 
   /**
    * Releasing a dynamic anchor's spill clears the cells its spill filled (values only; styles

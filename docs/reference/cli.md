@@ -1182,7 +1182,8 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   re-evaluates the anchor without re-spilling: the spill cells and the extent keep their authored
   values until Excel recalculates on open.
 - **A circular spill is not spilled**: a formula that reads its own anchor or a cell its spill
-  would fill (`putf --array A1 "=A1:A3"`) is a circular reference in Excel, which shows 0 rather
+  would fill (`putf --array A1 "=A1:A3"`, or `=Sheet1!A1:A3` on Sheet1, in any case) is a
+  circular reference in Excel, which shows 0 rather
   than spilling. xl writes it as an uncached 1×1 record and says why (`uncached: it could not be
   evaluated (… circular reference …)`).
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with

@@ -352,6 +352,34 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(self.sheet(ref"A2").value, num(7))
   }
 
+  test("a self-reference qualified with its own sheet's name is circular too, in any case") {
+    def circular(sheet: Sheet, wb: Workbook, formula: String): Unit =
+      DynamicArrayAuthoring.author(wb, sheet, ref"A1", formula, clock) match
+        case Right(a) =>
+          assert(!a.cached, s"$formula should not spill: ${a.extent}")
+          assertEquals(a.extent, range("A1"), formula)
+          assert(a.failure.exists(_.message.contains("circular reference")), a.failure.toString)
+        case Left(r) => fail(s"$formula: expected an uncached record, got ${r.message}")
+    val s = base.put(ref"A2", num(7))
+    val book = Workbook(Vector(s))
+    circular(s, book, "=S!A1:A3")
+    circular(s, book, "=s!A1:A3") // Excel resolves sheet names case-insensitively
+    circular(s, book, "=SUM(S!A1)")
+    val spaced = Sheet(SheetName.unsafe("My Sheet")).put(ref"B1", num(1))
+    val spacedBook = Workbook(Vector(spaced))
+    circular(spaced, spacedBook, "='My Sheet'!A1:A3")
+    circular(spaced, spacedBook, "='my sheet'!A1:A3")
+    circular(spaced, spacedBook, "='My Sheet'!A2:A4+0") // the spill A1:A3 covers A2:A3
+    // the same cells on another sheet are not circular: they spill
+    val other = Sheet(SheetName.unsafe("Other")).put(ref"A1", num(1)).put(ref"A2", num(2))
+    val two = Workbook(Vector(base, other))
+    val spilled = DynamicArrayAuthoring
+      .author(two, base, ref"A1", "=Other!A1:A2", clock)
+      .fold(r => fail(r.message), identity)
+    assert(spilled.cached)
+    assertEquals(spilled.extent, range("A1:A2"))
+  }
+
   test("a formula whose spill would cover cells it reads is circular too") {
     // =B1:B3 at A2 is fine; =A2:A4+0 at A1 spills A1:A3 over A2 and A3, which it reads
     assert(authored(base, ref"A2", "=B1:B3").cached)
