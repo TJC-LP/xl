@@ -91,3 +91,28 @@ class ArrayResultSpec extends FunSuite:
     assertNotEquals(grid, ArrayResult.single(CellValue.Error(CellError.NA)))
     assertNotEquals(ArrayResult.empty, ArrayResult(Vector(Vector.empty)))
   }
+
+  test("#750: == on whole-sheet arrays filled by column compares boxes and fills, not cells") {
+    // 1,048,576 × 16,384 with a fill per column: a run walk is a piece per cell (1.7e10)
+    def wide(entry: Int => Int, corner: Int) = ArrayResult.sparse(
+      1048576,
+      16384,
+      2,
+      3,
+      Vector(Vector(n(corner), n(0)), Vector(n(1), n(2))),
+      ArrayResult.Fill.ByCol(Vector.tabulate(16384)(c => n(entry(c))))
+    )
+    val start = System.nanoTime()
+    assertEquals(wide(_ % 7, 9), wide(_ % 7, 9))
+    assertNotEquals(wide(_ % 7, 9), wide(c => if c == 16000 then 99 else c % 7, 9))
+    assertNotEquals(wide(_ % 7, 9), wide(_ % 7, 8))
+    val elapsedMs = (System.nanoTime() - start) / 1000000L
+    assert(elapsedMs < 5000L, s"== took $elapsedMs ms")
+    // other geometry, same cells: the run walk decides (a box cell equal to the fill it replaces)
+    val boxed = ArrayResult.sparse(3, 2, 0, 0, Vector(Vector(n(5))), ArrayResult.Fill.Const(n(5)))
+    assertEquals(boxed, ArrayResult.constant(3, 2, n(5)))
+    assertEquals(
+      ArrayResult.constant(3, 2, n(5)),
+      ArrayResult(Vector.fill(3)(Vector.fill(2)(n(5))))
+    )
+  }

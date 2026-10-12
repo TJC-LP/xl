@@ -235,7 +235,10 @@ final class ArrayResult private (
     else
       val inside = rowFrom >= 0 && colFrom >= 0 &&
         rowFrom.toLong + nr <= rows && colFrom.toLong + nc <= cols
-      if inside || outside == Fill.Const(CellValue.Empty) then
+      val emptyFill = outside match
+        case Fill.Const(CellValue.Empty) => true
+        case _ => false
+      if inside || emptyFill then
         // the box's part of the window, in window coordinates; outside it the window reads the
         // fill (or Empty past the array's edge, the same value when the fill is Empty)
         val windowFill = outside match
@@ -293,11 +296,24 @@ final class ArrayResult private (
     else if isDense && top == 0 && left == 0 && boxHeight == rows then Right(box)
     else Right(Vector.tabulate(rows)(r => Vector.tabulate(cols)(c => apply(r, c))))
 
+  /**
+   * Cell by cell, whatever the storage. Two arrays with the same box geometry and canonical fills
+   * (every constructor keeps its fill canonical: see [[ArrayResult.sparse]]) are equal exactly when
+   * their boxes and fills are, since a canonical fill is the one way to describe its outside cells;
+   * that is compared directly, in time proportional to the box and the axis lengths. Any other pair
+   * walks [[runs]], which for a fill by column is a piece per cell outside the box.
+   */
   override def equals(that: Any): Boolean = that match
     case other: ArrayResult =>
-      (this eq other) || (rows == other.rows && cols == other.cols && ArrayResult
-        .sameRuns(runs, other.runs))
+      (this eq other) || (rows == other.rows && cols == other.cols && sameCells(other))
     case _ => false
+
+  private def sameCells(other: ArrayResult): Boolean =
+    val g = geometry
+    if g == other.geometry && ArrayResult.isCanonical(g, outside) &&
+      ArrayResult.isCanonical(g, other.outside)
+    then box == other.box && outside == other.outside
+    else ArrayResult.sameRuns(runs, other.runs)
 
   override def hashCode: Int = (rows, cols, apply(0, 0)).hashCode
 
@@ -323,7 +339,7 @@ object ArrayResult:
    * by cell. An outside that varies along both axes is not representable: the operation that would
    * produce one builds its result cell by cell up to [[MaxCells]] cells and is refused past that.
    */
-  enum Fill:
+  enum Fill derives CanEqual:
     /** One value for every cell outside the box. */
     case Const(value: CellValue)
 
@@ -356,7 +372,7 @@ object ArrayResult:
     left: Int,
     height: Int,
     width: Int
-  ):
+  ) derives CanEqual:
     private val hasBox = height > 0 && width > 0
     private val bottom = top + height
     private val right = left + width
@@ -395,12 +411,27 @@ object ArrayResult:
    * The most cells one array may hold: one full column (1,048,576 rows). SEQUENCE and INDIRECT
    * refuse a larger result, and so does dynamic-array authoring (GH-714): a spill of at most this
    * many cells — a full column — is authored, a larger one refused before it is written. A sparse
-   * array may declare any shape; only [[ArrayResult.toDense]] and a box larger than this are
-   * refused.
+   * array may declare any shape; only [[ArrayResult.toDense]] past this, and a box past
+   * [[MaxBoxCells]], are refused.
    */
   val MaxCells: Long = 1048576L
 
-  private def count(n: Long): String = String.format(java.util.Locale.ROOT, "%,d", n)
+  /**
+   * The most cells a sparse array's populated box may hold (2^24^ = 16,777,216, sixteen full
+   * columns), when the sheet it reads holds fewer cells than that. A range read in array mode
+   * builds its box position by position, and an elementwise operation computes the box again, so
+   * this bounds what one whole-axis read can allocate: a box slot is a reference (4–8 bytes; an
+   * Empty slot is the shared `CellValue.Empty`, a populated slot the sheet's own value), about
+   * 64–134 MB a box, and a computed box of new values (16–48 bytes each) at most about 0.8 GB. It
+   * admits every ordinary table: a header row over 1,048,576 rows of one column is a box 16 columns
+   * wide at most before it is refused, and a box with no more cells than its sheet is never
+   * refused. The positional read of 0.23.1 built the whole range, never smaller than its box; what
+   * stays refused are boxes no read could build, such as two cells at opposite corners of `A:XFD`
+   * (17,179,869,184 cells).
+   */
+  val MaxBoxCells: Long = 16L * MaxCells
+
+  private[formula] def count(n: Long): String = String.format(java.util.Locale.ROOT, "%,d", n)
 
   /** The refusal of an array too large to build cell by cell. */
   private[formula] def tooLarge(label: String, rows: Long, cols: Long): EvalError =
@@ -565,6 +596,9 @@ object ArrayResult:
   /** A `rows` x `cols` array holding `value` in every cell, stored as that one value. */
   private[formula] def constant(rows: Int, cols: Int, value: CellValue): ArrayResult =
     sparse(rows, cols, 0, 0, Vector.empty, Fill.Const(value))
+
+  /** Whether `fill` is already in [[canonical]] form for `g`. */
+  private def isCanonical(g: Geometry, fill: Fill): Boolean = canonical(g, fill) == fill
 
   /** See [[sparse]]: irrelevant entries Empty, a uniform fill one value. */
   private def canonical(g: Geometry, fill: Fill): Fill =

@@ -384,12 +384,19 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // and those two rows (32,768 cells) cell by cell. 16,382 blank columns × 1,048,574 blank rows;
     // LibreOffice 24.2 refuses the 17-billion-cell matrix (Err:538), Excel runs out of resources
     assertEquals(eval("=SUM((1:1=\"\")*(A:A=\"\"))"), Right(num(17177739268d)))
-    // with a populated band past the limit along both axes it is refused, never built
+    // a band of 100 rows × 100 columns: A's 100 rows across every column (1,638,400 cells) are
+    // computed, one value per column below them; 16,284 blank columns × 1,048,476 blank rows
     val wide = (0 until 100).foldLeft(sheet)((s, r) => s.put(ARef.from0(0, r), num(1)))
-    val wider = (0 until 100).foldLeft(wide)((s, c) => s.put(ARef.from0(c, 0), num(1)))
+    val square = (0 until 100).foldLeft(wide)((s, c) => s.put(ARef.from0(c, 0), num(1)))
+    assertEquals(eval("=SUM((1:1=\"\")*(A:A=\"\"))", square), Right(num(17073383184d)))
+    // past the box bound along both axes (1,100 rows × 16,384 columns, 20 columns × 1,048,576
+    // rows, both over 16,777,216 cells) it is refused, never built
+    val tall = (0 until 1100).foldLeft(sheet)((s, r) => s.put(ARef.from0(0, r), num(1)))
+    val wider = (0 until 20).foldLeft(tall)((s, c) => s.put(ARef.from0(c, 0), num(1)))
     eval("=SUM((1:1=\"\")*(A:A=\"\"))", wider) match
-      case Left(err) => assert(err.message.contains("1,048,576-cell limit"), err.message)
-      case Right(v) => fail(s"expected the loud limit, got $v")
+      case Left(err) =>
+        assert(err.message.contains("16,777,216-cell bound on its computed box"), err.message)
+      case Right(v) => fail(s"expected the loud bound, got $v")
   }
 
   test("#750: a lifted call that draws per element draws for every cell, never one fill") {

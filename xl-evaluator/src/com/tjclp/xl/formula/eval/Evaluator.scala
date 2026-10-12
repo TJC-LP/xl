@@ -211,6 +211,24 @@ object Evaluator:
     TotalEvaluator(new EvaluatorImpl(allowArrayResults = true, rng = rng))
 
   /**
+   * #750, for the sparse-equals-dense laws: [[arrayInstance]] whose ranges are all read one way
+   * ([[ArrayArithmetic.RangeRead]]: through their populated box, or position by position). The
+   * choice rides on the pass memo, which every derived evaluator of the evaluation shares, so it is
+   * an explicit value rather than ambient state. The memo is the evaluator's own: use the instance
+   * for one evaluation of one sheet.
+   */
+  private[formula] def arrayInstanceReading(rng: Rng, read: ArrayArithmetic.RangeRead): Evaluator =
+    TotalEvaluator(
+      new EvaluatorWithDepth(
+        0,
+        allowArrayResults = true,
+        rng = rng,
+        memo = Some(new EvalMemo(rangeRead = read)),
+        guard = None
+      )
+    )
+
+  /**
    * Convenience method for direct evaluation (forwards to instance.eval).
    */
   def eval[A](
@@ -1144,7 +1162,12 @@ object Evaluator:
    * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
    * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo(val placement: Option[PlacementGuard] = None):
+  private[formula] final class EvalMemo(
+    val placement: Option[PlacementGuard] = None,
+    // #750: how ArrayArithmetic.readRange reads a range in this pass; Auto (by its size) except in
+    // the sparse-equals-dense laws, through arrayInstanceReading
+    val rangeRead: ArrayArithmetic.RangeRead = ArrayArithmetic.RangeRead.Auto
+  ):
     private val bySheet =
       new java.util.IdentityHashMap[
         Sheet,

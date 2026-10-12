@@ -5,10 +5,11 @@ import org.scalacheck.{Gen, Prop}
 import org.scalacheck.Prop.forAll
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import com.tjclp.xl.formula.eval.{Aggregator, ArrayArithmetic, ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.units.StyleId
 
 /**
  * #750: the laws that let a sparse [[ArrayResult]] (a populated box plus a fill: one value, or one
@@ -279,9 +280,9 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
     FormulaParser.parse(formula) match
       case Left(err) => s"parse: $err"
       case Right(expr) =>
-        ArrayArithmetic.rangeRead.withValue(mode) {
-          Evaluator.arrayInstance(Rng.seeded(0)).eval(expr, sheet, Clock.system, None, None)
-        }
+        Evaluator
+          .arrayInstanceReading(Rng.seeded(0), mode)
+          .eval(expr, sheet, Clock.system, None, None)
 
   property("a range read through its populated box evaluates as the positional read does") {
     forAll(genSheet, genFormula) { (sheet, formula) =>
@@ -346,4 +347,87 @@ class SparseArrayLawsSpec extends ScalaCheckSuite:
         assertEquals(ar.fill, ArrayResult.Fill.Const(CellValue.Number(BigDecimal(0))))
         assertEquals(Right(ar), evalWith(ArrayArithmetic.RangeRead.Dense, sheet, "=A1:C5*2"))
       case other => fail(s"expected an array, got $other")
+  }
+
+  // ===== The box bound never refuses an ordinary table (#750 review) =====
+
+  private def evalAuto(sheet: Sheet, formula: String): Any =
+    FormulaParser.parse(formula) match
+      case Left(err) => s"parse: $err"
+      case Right(expr) =>
+        Evaluator.arrayInstance(Rng.seeded(0)).eval(expr, sheet, Clock.system, None, None)
+
+  private def num(n: Long): CellValue = CellValue.Number(BigDecimal(n))
+
+  private def timed[A](body: => A): (A, Long) =
+    val start = System.nanoTime()
+    val result = body
+    (result, (System.nanoTime() - start) / 1000000L)
+
+  test("a header row over a tall column evaluates, as the positional read does") {
+    // A1:J1 numbered headers over A2:A200000: `A:J` is read through its box (200,000 × 10), which
+    // the first bound (the larger of 1,048,576 cells and the sheet's 200,009) refused
+    val header = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S")))((s, c) =>
+      s.put(ARef.from0(c, 0), num(c + 1L))
+    )
+    val sheet = (1 until 200000).foldLeft(header)((s, r) => s.put(ARef.from0(0, r), num(1L)))
+    val cases = List(
+      "=SUM((A:J=\"\")*1)" -> BigDecimal(10285751L),
+      "=SUM(A:J*1)" -> BigDecimal(55L + 199999L),
+      "=ROWS(A:J*1)" -> BigDecimal(1048576L),
+      "=SUMPRODUCT((A:J<>\"\")*1)" -> BigDecimal(200009L)
+    )
+    cases.foreach { (formula, expected) =>
+      val (auto, ms) = timed(evalAuto(sheet, formula))
+      assertEquals(auto, Right(expected), s"$formula (${ms} ms)")
+      assertEquals(evalWith(ArrayArithmetic.RangeRead.Dense, sheet, formula), auto, formula)
+    }
+  }
+
+  test("a full column beside one cell evaluates, as the positional read does") {
+    // A1:A600000 and B1: `A:B`'s box is 600,000 × 2 (1,200,000 cells), past the first bound
+    val column = (0 until 600000).foldLeft(Sheet(SheetName.unsafe("S")))((s, r) =>
+      s.put(ARef.from0(0, r), num(1L))
+    )
+    val sheet = column.put(ARef.from0(1, 0), num(1L))
+    List("=SUM((A:B=\"\")*1)" -> BigDecimal(1497151L), "=SUM(A:B*2)" -> BigDecimal(1200002L))
+      .foreach { (formula, expected) =>
+        val (auto, ms) = timed(evalAuto(sheet, formula))
+        assertEquals(auto, Right(expected), s"$formula (${ms} ms)")
+        assertEquals(evalWith(ArrayArithmetic.RangeRead.Dense, sheet, formula), auto, formula)
+      }
+  }
+
+  test("a style-only record does not widen the box: it reads as the Empty fill does") {
+    val styled = (at: ARef) => Cell(at, CellValue.Empty, Some(StyleId(1)))
+    val data =
+      Sheet(SheetName.unsafe("S")).put(ARef.from0(0, 0), num(1L)).put(ARef.from0(0, 4), num(2L))
+    // formatted blanks in XFD1 and XFD1048576: counted as cells, the box would be the whole sheet
+    val sheet = data.put(styled(ARef.from0(16383, 0))).put(styled(ARef.from0(16383, 1048575)))
+    assertEquals(evalAuto(sheet, "=SUM((A:XFD=\"\")*1)"), Right(BigDecimal(17179869182L)))
+    assertEquals(evalAuto(sheet, "=SUM(A:XFD*1)"), Right(BigDecimal(3L)))
+    evalWith(ArrayArithmetic.RangeRead.Sparse, sheet, "=A:XFD*1") match
+      case Right(ar: ArrayResult) =>
+        assertEquals((ar.boxTop, ar.boxLeft, ar.boxRows, ar.boxCols), (0, 0, 5, 1))
+      case other => fail(s"expected an array, got $other")
+    // on a small range the dense read agrees (the generated sheets above hold Empty records too)
+    val small = data.put(styled(ARef.from0(4, 4))).put(styled(ARef.from0(3, 0)))
+    List("=SUM((A1:E5=\"\")*1)", "=A1:E5*1", "=ISBLANK(A1:E5)").foreach { formula =>
+      assertEquals(
+        evalWith(ArrayArithmetic.RangeRead.Sparse, small, formula),
+        evalWith(ArrayArithmetic.RangeRead.Dense, small, formula),
+        formula
+      )
+    }
+  }
+
+  test("a box no read could build is refused, naming the bound") {
+    // A1 and Q1048576: a box of 1,048,576 × 17 cells, past 16,777,216, on a two-cell sheet
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), num(1L))
+      .put(ARef.from0(16, 1048575), num(1L))
+    evalAuto(sheet, "=SUM(A:Q*1)") match
+      case Left(EvalError.EvalFailed(msg, _)) =>
+        assert(msg.contains("16,777,216-cell bound on a range's populated box"), msg)
+      case other => fail(s"expected the box bound, got $other")
   }

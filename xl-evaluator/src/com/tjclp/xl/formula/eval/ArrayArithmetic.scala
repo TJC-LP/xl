@@ -131,16 +131,14 @@ object ArrayArithmetic:
         }
       }
 
-  /** How [[readRange]] reads a range: by its size (the default), or always one way (laws). */
+  /**
+   * How [[readRange]] reads a range: by its size (`Auto`, every production evaluation), or always
+   * one way. `Sparse` (every range through its populated box) and `Dense` (every range position by
+   * position) exist for the sparse-equals-dense laws, which set them on the pass memo
+   * ([[Evaluator.EvalMemo.rangeRead]]) through [[Evaluator.arrayInstanceReading]].
+   */
   private[formula] enum RangeRead derives CanEqual:
     case Auto, Sparse, Dense
-
-  /**
-   * Test hook for the sparse-equals-dense laws: `rangeRead.withValue(RangeRead.Sparse) { … }` reads
-   * every range through its populated box, `Dense` reads every range position by position.
-   */
-  private[formula] val rangeRead: scala.util.DynamicVariable[RangeRead] =
-    new scala.util.DynamicVariable(RangeRead.Auto)
 
   /**
    * #750: a range's values in array mode, at the range's full shape, read in time and memory
@@ -154,8 +152,14 @@ object ArrayArithmetic:
    * range holds is populated, so it lies in the box and is evaluated as before. The box found for a
    * (sheet, range) is kept in the pass memo when there is one.
    *
-   * A box larger than both [[ArrayResult.MaxCells]] and the sheet's populated cell count (two cells
-   * at opposite corners of `A:XFD`) is a loud `EvalFailed`, never an allocation that size.
+   * Only cells that hold a value widen the box: a style-only record (kept in `Sheet.cells` as
+   * Empty, the rule `QualifiedGraph` and the streaming reader use) reads as Empty, exactly as the
+   * fill does, so a formatted blank in XFD1 does not stretch `A:XFD`'s box across the sheet.
+   *
+   * The box is always inside the range, so reading it is never more work than the positional read
+   * of the whole range that 0.23.1 did. Only a box past [[ArrayResult.MaxBoxCells]] (and past the
+   * sheet's own cell count, whichever is larger) is refused, as a loud `EvalFailed`: two cells at
+   * opposite corners of `A:XFD` make a 17-billion-cell box that no read could build.
    */
   private[formula] def readRange(
     range: CellRange,
@@ -168,7 +172,7 @@ object ArrayArithmetic:
     if height <= 0 || width <= 0 then Right(ArrayResult.empty)
     else
       val area = height.toLong * width.toLong
-      val positional = rangeRead.value match
+      val positional = memo.fold(RangeRead.Auto)(_.rangeRead) match
         case RangeRead.Dense => true
         case RangeRead.Sparse => false
         case RangeRead.Auto => area <= sheet.cells.size.toLong
@@ -182,11 +186,13 @@ object ArrayArithmetic:
           case None => Right(ArrayResult.constant(height, width, CellValue.Empty))
           case Some(box) =>
             val boxArea = box.height.toLong * box.width.toLong
-            if boxArea > math.max(ArrayResult.MaxCells, sheet.cells.size.toLong) then
+            val bound = math.max(ArrayResult.MaxBoxCells, sheet.cells.size.toLong)
+            if boxArea > bound then
               Left(
                 EvalError.EvalFailed(
                   s"${range.toA1}: its populated cells span ${box.toA1} " +
-                    s"(${box.height}×${box.width} cells), more than the 1,048,576-cell limit",
+                    s"(${box.height}×${box.width} cells), more than the " +
+                    s"${ArrayResult.count(bound)}-cell bound on a range's populated box",
                   None
                 )
               )
@@ -202,17 +208,21 @@ object ArrayArithmetic:
                 )
               }
 
-  /** The smallest range holding every populated cell of `sheet` inside `range`: one key scan. */
+  /**
+   * The smallest range holding every cell of `sheet` inside `range` that holds a value (a
+   * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
+   */
   private def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
     val r0 = range.rowStart.index0
     val r1 = range.rowEnd.index0
     val c0 = range.colStart.index0
     val c1 = range.colEnd.index0
-    sheet.cells.keysIterator
-      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, at) =>
+    sheet.cells.iterator
+      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { case (acc, (at, cell)) =>
         val r = at.row.index0
         val c = at.col.index0
         if r < r0 || r > r1 || c < c0 || c > c1 then acc
+        else if !holdsValue(cell.value) then acc
         else
           Some(acc.fold((r, r, c, c)) { case (top, bottom, left, right) =>
             (math.min(top, r), math.max(bottom, r), math.min(left, c), math.max(right, c))
@@ -221,6 +231,10 @@ object ArrayArithmetic:
       .map((top, bottom, left, right) =>
         CellRange(ARef.from0(left, top), ARef.from0(right, bottom))
       )
+
+  private def holdsValue(value: CellValue): Boolean = value match
+    case CellValue.Empty => false
+    case _ => true
 
   /**
    * Convert ArrayResult to numeric matrix (every cell: refused past [[ArrayResult.MaxCells]]).
@@ -629,7 +643,7 @@ object ArrayArithmetic:
   /**
    * An operand's value outside its [[Footprint]]: one value, or a function of the row or column.
    */
-  private enum Outside:
+  private enum Outside derives CanEqual:
     case Const(value: CellValue)
     case ByRow(at: Int => CellValue)
     case ByCol(at: Int => CellValue)
@@ -640,7 +654,7 @@ object ArrayArithmetic:
       case ByCol(at) => at(i)
 
   /** The fill a broadcast's result takes: one value, one per row, or one per column. */
-  private enum FillAxis:
+  private enum FillAxis derives CanEqual:
     case Const, ByRow, ByCol
 
     def admits(outside: Outside): Boolean = (this, outside) match
@@ -722,7 +736,9 @@ object ArrayArithmetic:
    * per row) when an operand's varies along that axis: `A:A*{1,2,3}` computes the populated rows of
    * A and three fill entries. An outside that would vary along both axes (a whole column times a
    * whole row, both padded) is computed cell by cell when the result is at most
-   * [[ArrayResult.MaxCells]] cells, and refused past that.
+   * [[ArrayResult.MaxCells]] cells, and otherwise over the smallest rectangle that leaves a fill by
+   * one axis outside it, refused when that rectangle is past [[ArrayResult.MaxBoxCells]] (and past
+   * the operands' boxes together).
    */
   private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
@@ -742,7 +758,9 @@ object ArrayArithmetic:
         else if perCell then cellByCell
         else
           val options = operands.map(footprints(_, outRows, outCols))
-          val budget = math.max(ArrayResult.MaxCells, operands.map(_.boxArea).sum)
+          // the computed rectangle is built cell by cell, so it takes the bound a range's box does
+          // (its operands' boxes, already built, count too)
+          val budget = math.max(ArrayResult.MaxBoxCells, operands.map(_.boxArea).sum)
           // for each fill axis, every operand's smallest footprint whose outside it admits
           val candidates = FillAxis.values.toVector.flatMap { axis =>
             val picks = options.map(
@@ -801,7 +819,7 @@ object ArrayArithmetic:
                     EvalError.EvalFailed(
                       s"array operation: the populated cells of its ${outRows}×$outCols result " +
                         s"span ${p.bottom - p.top}×${p.right - p.left} cells, more than the " +
-                        "1,048,576-cell limit",
+                        s"${ArrayResult.count(budget)}-cell bound on its computed box",
                       None
                     )
                   )

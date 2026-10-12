@@ -229,7 +229,9 @@ object Aggregator:
         if total % 2 == 0 then (at(mid - 1) + at(mid)) / 2
         else at(mid)
     override def finalizeWithError(acc: Vector[(BigDecimal, Long)]) =
-      if acc.isEmpty then Left(EvalError.EvalFailed("MEDIAN requires at least 1 value", None))
+      // the multiplicities' total, not the entries: an entry combined zero times is no value
+      val total = acc.iterator.map(_._2).sum
+      if total == 0L then Left(EvalError.EvalFailed("MEDIAN requires at least 1 value", None))
       else Right(finalize(acc))
 
   /**

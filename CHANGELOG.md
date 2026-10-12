@@ -197,10 +197,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   factories (`ArrayResult(rows)`, `single`, `empty`, `fromFlat`) are unchanged; `cellCount` and
   `fill` are new. `fill` describes the cells outside the box as an `ArrayResult.Fill`: `Const(v)`
   (one value; `Const(Empty)` for a dense array), `ByCol(values)` (one value per column) or
-  `ByRow(values)` (one per row), each read with `fill.at(row, col)`. A pattern `case ArrayResult(v)` no longer compiles (match `ar: ArrayResult` and read
-  through the accessors), there is no `copy`, and `ArrayResult` is no longer a `Product`.
-  Equality stays cell by cell, whatever the storage. A ragged grid passed to `ArrayResult(rows)`
-  is read at its first row's width.
+  `ByRow(values)` (one per row), each read with `fill.at(row, col)`. A pattern
+  `case ArrayResult(v)` no longer compiles (match `ar: ArrayResult` and read through the
+  accessors), there is no `copy`, and `ArrayResult` is no longer a `Product`. Equality stays cell
+  by cell, whatever the storage (two arrays with the same box and fill compare them directly). A
+  ragged grid passed to `ArrayResult(rows)` is read at its first row's width.
 - **Breaking: `Aggregator` counts in `Long`, and folds equal values in one step** (#750): COUNT,
   COUNTA and COUNTBLANK are `Aggregator[Long]`, AVERAGE's accumulator is `(BigDecimal, Long)`,
   the STDEV/VAR family's count is a `Long`, and MEDIAN's accumulator keeps each value with its
@@ -421,26 +422,31 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   for 36 minutes on the text `kHi:r`; 0.23.1 refused a bare range there). An array now holds a
   range's populated box plus a fill for every other cell: one value, or one value per column (or
   per row) when the cells outside the box differ along that axis, as a whole column times a row
-  of constants does (`A:A*{1,2,3}`, `(A:A="")*{10,20}`, `{1;2;3}*(1:1)`). Elementwise operators,
-  comparisons, `&`, IF, NOT, lifted calls and date serials compute the box and each fill entry
-  once, aggregates fold the fill in closed form (`Aggregator.combineN`), SUMPRODUCT multiplies
-  the fills once per entry and walks only the cells inside some argument's box (two one-cell boxes
-  in opposite corners of a 524,288 × 16,384 shape walk two cells; a raw range larger than its sheet
-  beside a whole-axis argument is read through its populated box too), AND/OR fold each distinct value once, and INDEX/TRANSPOSE slice and
-  transpose the box. So `SUM((A:B="")*1)` is 2,097,152 minus the filled cells, `ROWS(A:A*1)` is
-  1,048,576, `SUM((A:XFD="")*1)` counts all 17,179,869,184 cells and `SUM((A:A="")*{1,2,3})` is 6
-  for every blank row, each in milliseconds, as Excel computes them (0.23.1 computed the
-  whole-column-times-vector shapes cell by cell; they stay exact). A positionless `=R:KHI` is its top-left
-  value (as `=A1:B3` is), a plain cell's `=R:KHI` in B2 stays `#VALUE!`, and the box of a range
-  is found once per pass. Nothing allocates more than 1,048,576 cells (or the sheet's own cell
-  count): a whole row times a whole column whose populated band is past that bound along both
-  axes (`(1:1="")*(A:A="")` is exact while A's populated rows span at most 64 rows, or row 1's
-  populated columns one column; past both it is refused, as LibreOffice refuses the
-  17-billion-cell matrix and Excel runs out of resources), a box whose populated cells
-  sit at opposite corners of the sheet, or a spill past that size is a loud error, never an
-  out-of-memory (docs/LIMITATIONS.md). `putf --array A1 "=B:C"` is refused as too large from the
-  result's shape before a cell is built, and the implicit-intersection warning still sees a
-  whole-axis divergence.
+  of constants does (`A:A*{1,2,3}`, `(A:A="")*{10,20}`, `{1;2;3}*(1:1)`). Only cells holding a
+  value make the box: a style-only record (a formatted blank in XFD1) reads as the Empty fill
+  does and widens nothing. Elementwise operators, comparisons, `&`, IF, NOT, lifted calls and
+  date serials compute the box and each fill entry once, aggregates fold the fill in closed form
+  (`Aggregator.combineN`), SUMPRODUCT multiplies the fills once per entry and walks only the
+  cells inside some argument's box (two one-cell boxes in opposite corners of a 524,288 × 16,384
+  shape walk two cells; a raw range larger than its sheet beside a whole-axis argument is read
+  through its populated box too), AND/OR fold each distinct value once, and INDEX/TRANSPOSE
+  slice and transpose the box. So `SUM((A:B="")*1)` is 2,097,152 minus the filled cells,
+  `ROWS(A:A*1)` is 1,048,576, `SUM((A:XFD="")*1)` counts all 17,179,869,184 cells and
+  `SUM((A:A="")*{1,2,3})` is 6 for every blank row, each in milliseconds, as Excel computes them
+  (0.23.1 computed the whole-column-times-vector shapes cell by cell; they stay exact). A
+  positionless `=R:KHI` is its top-left value (as `=A1:B3` is), a plain cell's `=R:KHI` in B2
+  stays `#VALUE!`, and the box of a range is found once per pass. A box is read position by
+  position, never more than 0.23.1's positional read of the whole range, so ordinary tables
+  evaluate (a header row in A1:J1 over 200,000 rows of column A is a 2,000,000-cell box); only a
+  box past 16,777,216 cells (`ArrayResult.MaxBoxCells`, sixteen full columns, or the sheet's own
+  cell count when larger) is refused, as a loud error rather than an out-of-memory: populated
+  cells at opposite corners of `A:XFD`, or a whole row times a whole column whose populated band
+  is past that bound along both axes (`(1:1="")*(A:A="")` is exact while A's populated rows span
+  at most 1,024 rows, or row 1's populated cells 16 columns; past both it is refused, as
+  LibreOffice refuses the 17-billion-cell matrix and Excel runs out of resources). A spill of
+  more than 1,048,576 cells is refused too (docs/LIMITATIONS.md): `putf --array A1 "=B:C"` is
+  refused as too large from the result's shape before a cell is built, and the
+  implicit-intersection warning still sees a whole-axis divergence.
 - **Text cells render through their format's text section** (#693): `@,` showed `abc` for `abc,` and
   `0;-0;0;"T:"@` ignored its prefix, in cell display and `TEXT` alike (rich text included; `_`
   spacers pad, so `_(@_)` is ` abc `). `TEXT` reads a numeric string as its number first
