@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -38,15 +38,14 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
     locationOpt match
       case None => Right(Set.empty)
       case Some(location) =>
-        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
-          case (targetSheet, range) =>
-            range.cells
-              .map(ref => targetSheet(ref))
-              // Blank cells stay SKIPS in range folds — a blank holiday cell must not become a
-              // phantom 1900-01-01 holiday via decodeAsDate's scalar Empty arm
-              .filterNot(_.value == CellValue.Empty)
-              .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
-              .toSet
+        ctx.resolveRange(location).map { case (targetSheet, range) =>
+          range.cells
+            .map(ref => targetSheet(ref))
+            // Blank cells stay SKIPS in range folds — a blank holiday cell must not become a
+            // phantom 1900-01-01 holiday via decodeAsDate's scalar Empty arm
+            .filterNot(_.value == CellValue.Empty)
+            .flatMap(cell => TExpr.decodeAsDate(cell).toOption)
+            .toSet
         }
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

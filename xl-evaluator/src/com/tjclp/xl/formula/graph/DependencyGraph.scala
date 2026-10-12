@@ -223,52 +223,72 @@ object DependencyGraph:
    * A dynamic reference is a `TExpr.Call` whose spec is flagged `FunctionFlags.dynamicDeps` (e.g.
    * INDIRECT): its data dependencies are decided by evaluated text, so the static graph cannot see
    * them. The walk recurses into Call arguments; `ArgValue.Range`/`Cells` arguments cannot contain
-   * calls, and reference/literal leaves are never dynamic.
+   * calls. A resized SUMIF/AVERAGEIF whose shape or origin only evaluation knows — a LET name, or a
+   * defined name computing its reference (`nameIsComputed`) — also has dynamic dependencies: the
+   * graph cannot record the resized target (#733: one bound to a plain range resizes statically).
+   *
+   * @param nameIsComputed
+   *   whether a defined name in a range slot computes its reference; the default, false, is the
+   *   answer without a workbook, where a name resolves to nothing and so reads nothing
    */
   @nowarn("msg=Unreachable case")
   private[graph] def referencesMatching[A](
     expr: TExpr[A],
     resolveName: (String, Option[SheetName]) => Boolean,
-    includeDynamicCalls: Boolean
+    includeDynamicCalls: Boolean,
+    nameIsComputed: (String, Option[SheetName]) => Boolean = (_, _) => false
   ): Boolean =
+    def recurse(e: TExpr[?]): Boolean =
+      referencesMatching(e, resolveName, includeDynamicCalls, nameIsComputed)
     expr match
       case call: TExpr.Call[?] =>
-        (includeDynamicCalls && call.spec.flags.dynamicDeps) || call.spec.argSpec
-          .toValues(call.args)
-          .exists {
-            case ArgValue.Expr(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-            case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
-              resolveName(name, scope)
-            case ArgValue.Range(_) => false
-            case ArgValue.Cells(_) => false
-          }
+        val values = call.spec.argSpec.toValues(call.args)
+        (includeDynamicCalls && (call.spec.flags.dynamicDeps ||
+          CriteriaRangeResize.hasDynamicResize(
+            call.spec.name,
+            values,
+            named => nameIsComputed(named.name, named.scope)
+          ))) || values.exists {
+          case ArgValue.Expr(e) => recurse(e)
+          case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
+            resolveName(name, scope)
+          case ArgValue.Range(_) => false
+          case ArgValue.Cells(_) => false
+        }
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
           _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
           _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
-        BinarySpine.existsOperand(chain)(referencesMatching(_, resolveName, includeDynamicCalls))
-      case TExpr.ToInt(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-      case TExpr.UnaryPlus(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-      case TExpr.Percent(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-      case TExpr.DateToSerial(e) => referencesMatching(e, resolveName, includeDynamicCalls)
-      case TExpr.DateTimeToSerial(e) => referencesMatching(e, resolveName, includeDynamicCalls)
+        BinarySpine.existsOperand(chain)(recurse)
+      case TExpr.ToInt(e) => recurse(e)
+      case TExpr.UnaryPlus(e) => recurse(e)
+      case TExpr.Percent(e) => recurse(e)
+      case TExpr.DateToSerial(e) => recurse(e)
+      case TExpr.DateTimeToSerial(e) => recurse(e)
       // GH-306: runtime coercion wrapper — a coerced INDIRECT/OFFSET is still dynamic
-      case TExpr.Coerced(inner, _) => referencesMatching(inner, resolveName, includeDynamicCalls)
+      case TExpr.Coerced(inner, _) => recurse(inner)
       // GH-193: LET — binding values and the body may carry dynamic calls
       case TExpr.Let(bindings, body) =>
-        bindings.exists((_, value) =>
-          referencesMatching(value, resolveName, includeDynamicCalls)
-        ) ||
-        referencesMatching(body, resolveName, includeDynamicCalls)
+        bindings.exists((_, value) => recurse(value)) || recurse(body)
       case TExpr.NameRef(name) => resolveName(name, None)
       case TExpr.SheetNameRef(sheet, name) => resolveName(name, Some(sheet))
-      case TExpr.Aggregate(_, TExpr.RangeLocation.Name(name, scope)) => resolveName(name, scope)
-      case _ => false
+      case TExpr.Aggregate(_, location) =>
+        location match
+          case TExpr.RangeLocation.Name(name, scope) => resolveName(name, scope)
+          case _ => false
+      // Leaves, listed rather than a wildcard: a new TExpr case is a "match may not be exhaustive"
+      // warning here until it is classified as a wrapper to descend through or a leaf
+      case _: TExpr.Lit[?] | _: TExpr.Ref[?] | _: TExpr.PolyRef | _: TExpr.SheetRef[?] |
+          _: TExpr.SheetPolyRef | _: TExpr.ExternalRef | _: TExpr.ExternalRange |
+          _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ErrorLit | TExpr.Missing |
+          _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] =>
+        false
 
   private def containsDynamicReferenceResolved[A](
     expr: TExpr[A],
-    resolveName: (String, Option[SheetName]) => Boolean
-  ): Boolean = referencesMatching(expr, resolveName, includeDynamicCalls = true)
+    resolveName: (String, Option[SheetName]) => Boolean,
+    nameIsComputed: (String, Option[SheetName]) => Boolean = (_, _) => false
+  ): Boolean = referencesMatching(expr, resolveName, includeDynamicCalls = true, nameIsComputed)
 
   /**
    * GH-507: readers whose dependencies cannot be proved by the static graph. Name resolution is
@@ -405,23 +425,27 @@ object DependencyGraph:
   /**
    * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
    *
-   * A case-insensitive substring pre-filter over the registry's dynamicDeps-flagged names runs
-   * before any parsing, so sheets without dynamic functions pay no parse cost. Formulas that fail
-   * to parse are not dynamic (matching `fromSheet`, where they contribute no edges).
+   * A case-insensitive substring pre-filter over dynamicDeps-flagged names, and
+   * [[CriteriaRangeResize.mayResizeThroughName]] for a SUMIF or AVERAGEIF that may resize through a
+   * named or LET range, run before parsing. Only resize geometry known at evaluation alone needs
+   * dynamic scheduling: here, with no workbook, that is a LET name (a defined name resolves to
+   * nothing and reads nothing); literal ranges remain static, and SUMIFS/AVERAGEIFS never resize.
+   * Formulas that fail to parse are not dynamic (matching `fromSheet`, where they contribute no
+   * edges).
    */
   def dynamicCells(sheet: Sheet): Set[ARef] =
     val names = FunctionRegistry.dynamicFunctionNames
-    if names.isEmpty then Set.empty
-    else
-      sheet.cells.iterator.flatMap { case (ref, cell) =>
-        cell.value match
-          case CellValue.Formula(expression, _, _)
-              if names.exists(n => expression.toUpperCase(java.util.Locale.ROOT).contains(n)) =>
-            FormulaParser.parse(expression) match
-              case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
-              case _ => None
-          case _ => None
-      }.toSet
+    def candidate(expression: String): Boolean =
+      val text = expression.toUpperCase(java.util.Locale.ROOT)
+      names.exists(text.contains) || CriteriaRangeResize.mayResizeThroughName(expression, text)
+    sheet.cells.iterator.flatMap { case (ref, cell) =>
+      cell.value match
+        case CellValue.Formula(expression, _, _) if candidate(expression) =>
+          FormulaParser.parse(expression) match
+            case scala.util.Right(expr) if containsDynamicReference(expr) => Some(ref)
+            case _ => None
+        case _ => None
+    }.toSet
 
   /**
    * GH-520: workbook-aware dynamic classification, including parseable defined-name chains.
@@ -476,16 +500,6 @@ object DependencyGraph:
     val dynamicFunctions = FunctionRegistry.dynamicFunctionNames
     // Token form for the cheap substring pre-filter over cell text (function names are upper).
     def upper(text: String): String = text.toUpperCase(java.util.Locale.ROOT)
-    // The RESOLUTION relation: two spellings are one name to every reader exactly when
-    // `DefinedNameIndex` resolves them as one, i.e. under `String.equalsIgnoreCase` — per code
-    // point `toLowerCase(toUpperCase(cp))`. `String.toUpperCase` is not that relation (it would
-    // split a Kelvin-sign `K` from `k`), so shadowing and dedup are keyed on this form.
-    def resolutionKey(name: String): String =
-      val folded = new java.lang.StringBuilder(name.length)
-      name
-        .codePoints()
-        .forEach(cp => folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp))))
-      folded.toString
     // GH-537: definitions and candidate cell formulas parse once per distinct TEXT (the memo
     // `unresolvedReaders` keeps); the per-(sheet, name) verdict is memoized separately, so a
     // workbook-scoped name read from 40 sheets is parsed once, not 40 times.
@@ -532,6 +546,20 @@ object DependencyGraph:
     val globalVerdict = scala.collection.mutable.HashMap.empty[String, Boolean]
     val keys = scala.collection.mutable.HashMap.empty[String, String]
 
+    // #733: whether a name in a resizing call's range slot computes its reference, as seen from
+    // `current` — memoized per (name, qualifier, sheet): a book's SUMIFs share a few names. NOT
+    // thread-safe: a mutable memo for this single-threaded pass; never share it with a parallel
+    // per-sheet loop
+    val canonical = sheetCanonicaliser(workbook)
+    val computedVerdicts =
+      scala.collection.mutable.HashMap.empty[(String, Option[SheetName], SheetName), Boolean]
+    def nameIsComputed(current: SheetName)(name: String, qualifier: Option[SheetName]): Boolean =
+      computedVerdicts.getOrElseUpdate(
+        (resolutionKey(name), qualifier.map(canonical), current),
+        workbook(current).toOption
+          .exists(Evaluator.nameComputesRange(name, qualifier, _, workbook))
+      )
+
     // A classification: one node's own verdict and references, stepped once by the walk.
     def step(node: NameWalk.Node): NameWalk.Step[NameWalk.Node] =
       classifications += 1
@@ -541,7 +569,11 @@ object DependencyGraph:
           node.sheet,
           resolve,
           (expr, viaName) =>
-            containsDynamicReferenceResolved(expr, (name, scope) => viaName(scope, name))
+            containsDynamicReferenceResolved(
+              expr,
+              (name, scope) => viaName(scope, name),
+              nameIsComputed(node.sheet)
+            )
         )
       )
 
@@ -552,7 +584,8 @@ object DependencyGraph:
     def expressionIsDynamic(expr: TExpr[?], currentSheet: SheetName): Boolean =
       containsDynamicReferenceResolved(
         expr,
-        (name, scope) => nameIsDynamic(name, scope, currentSheet)
+        (name, scope) => nameIsDynamic(name, scope, currentSheet),
+        nameIsComputed(currentSheet)
       )
 
     def nameIsDynamic(name: String, qualifier: Option[SheetName], current: SheetName): Boolean =
@@ -589,22 +622,26 @@ object DependencyGraph:
         .map(dn => upper(dn.name))
         .toSet
     val candidateTokens = dynamicFunctions ++ nameTokens
+    // A SUMIF/AVERAGEIF resized through a LET name or a computed defined name is dynamic too
+    // (hasDynamicResize; #733: a name bound to a range resizes statically). Its own text pre-filter
+    // keeps SUMIFS and SUMIF over written ranges unparsed
+    def candidate(expression: String): Boolean =
+      val text = upper(expression)
+      candidateTokens.exists(text.contains) ||
+      CriteriaRangeResize.mayResizeThroughName(expression, text)
 
     val cells =
-      if candidateTokens.isEmpty then Set.empty[QualifiedRef]
-      else
-        workbook.sheets.iterator.flatMap { sheet =>
-          sheet.cells.iterator.flatMap { case (ref, cell) =>
-            cell.value match
-              case CellValue.Formula(expression, _, _)
-                  if candidateTokens.exists(upper(expression).contains) =>
-                parse(expression) match
-                  case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
-                    Some(QualifiedRef(sheet.name, ref))
-                  case _ => None
-              case _ => None
-          }
-        }.toSet
+      workbook.sheets.iterator.flatMap { sheet =>
+        sheet.cells.iterator.flatMap { case (ref, cell) =>
+          cell.value match
+            case CellValue.Formula(expression, _, _) if candidate(expression) =>
+              parse(expression) match
+                case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
+                  Some(QualifiedRef(sheet.name, ref))
+                case _ => None
+            case _ => None
+        }
+      }.toSet
     DynamicCellsTrace(cells, parses, classifications)
 
   /**
@@ -665,6 +702,8 @@ object DependencyGraph:
       // shadow workbook-scoped ones); a sheet-qualified name carries its own context
       case TExpr.Aggregate(_, TExpr.RangeLocation.Name(_, scope)) => scope.isEmpty
       case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_, _)) => false
+      // GH-710: a LET name's binding value carries its own references (the Let case)
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Binding(_)) => false
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -680,6 +719,7 @@ object DependencyGraph:
                 case TExpr.RangeLocation.External(_, _, _, _) => false
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
+                case TExpr.RangeLocation.Binding(_) => false
                 case TExpr.RangeLocation.Error(_, _) => false
             case ArgValue.Cells(_) => true
           }
@@ -1408,6 +1448,7 @@ object DependencyGraph:
   ): Map[QualifiedRef, Set[QualifiedRef]] =
     // GH-522: expand any (sheet, range) once per build — see memoizedCells
     val cellsFor = memoizedCells(unboundedQualifiedCells)
+    val nameRanges = NameRanges.empty
     workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
@@ -1416,7 +1457,13 @@ object DependencyGraph:
           case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
+                extractQualifiedDependencies(
+                  expr,
+                  sheet.name,
+                  cellsFor,
+                  Some(workbook),
+                  nameRanges = nameRanges
+                )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1448,6 +1495,7 @@ object DependencyGraph:
         case _ => Set.empty // empty or missing sheet: nothing to depend on
     }
 
+    val nameRanges = NameRanges.empty
     val dependencies = workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
         cell.value match
@@ -1456,7 +1504,13 @@ object DependencyGraph:
           case CellValue.Formula(expression, _, _) =>
             val deps = FormulaParser.parse(expression) match
               case scala.util.Right(expr) =>
-                extractQualifiedDependencies(expr, sheet.name, cellsFor, Some(workbook))
+                extractQualifiedDependencies(
+                  expr,
+                  sheet.name,
+                  cellsFor,
+                  Some(workbook),
+                  nameRanges = nameRanges
+                )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
           case _ => None
@@ -1509,6 +1563,7 @@ object DependencyGraph:
     }
 
     val canonicalSheet = sheetCanonicaliser(workbook)
+    val nameRanges = NameRanges.empty
     val dependencies = formulas.iterator.map { case (ref, expression) =>
       val deps = FormulaParser.parse(expression) match
         case scala.util.Right(expr) =>
@@ -1518,7 +1573,8 @@ object DependencyGraph:
             cellsFor,
             Some(workbook),
             preciseLookups = true,
-            canonicalSheet = canonicalSheet
+            canonicalSheet = canonicalSheet,
+            nameRanges = nameRanges
           )
             .filter(formulaNodes.contains)
         case scala.util.Left(_) => Set.empty[QualifiedRef]
@@ -1593,6 +1649,7 @@ object DependencyGraph:
     ]
 
     val canonicalSheet = sheetCanonicaliser(workbook)
+    val nameRanges = NameRanges.empty
     workbook.sheets.foreach { sheet =>
       sheet.cells.foreach { case (cellRef, cell) =>
         cell.value match
@@ -1612,7 +1669,8 @@ object DependencyGraph:
                   sheet.name,
                   recordRange,
                   Some(workbook),
-                  canonicalSheet = canonicalSheet
+                  canonicalSheet = canonicalSheet,
+                  nameRanges = nameRanges
                 )
                 points.foreach { point =>
                   pointBuilders.getOrElseUpdate(
@@ -1979,7 +2037,8 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
-    canonicalSheet: SheetName => SheetName = identity
+    canonicalSheet: SheetName => SheetName = identity,
+    nameRanges: NameRanges = NameRanges.empty
   ): Set[QualifiedRef] =
     // #691: defined names expand from a queue, breadth-first, never by recursion: the formula is
     // scanned, then each resolved name it reaches — keyed on the node (the definition and the sheet
@@ -1989,7 +2048,17 @@ object DependencyGraph:
     // NameWalk.MaxDepth contributes no edges, like an unresolvable name (evaluation fails it too).
     val names = new NameQueue
     def extract(e: TExpr[?], sheet: SheetName, depth: Int): Set[QualifiedRef] =
-      extractAt(e, sheet, depth, names, cellsFor, workbook, preciseLookups, canonicalSheet)
+      extractAt(
+        e,
+        sheet,
+        depth,
+        names,
+        cellsFor,
+        workbook,
+        preciseLookups,
+        canonicalSheet,
+        nameRanges
+      )
     @tailrec
     def drain(acc: Set[QualifiedRef]): Set[QualifiedRef] =
       names.next() match
@@ -1998,6 +2067,34 @@ object DependencyGraph:
           val body = FormulaParser.parse(node.definition.formula).toOption
           drain(body.fold(acc)(target => union(acc, extract(target, node.sheet, depth))))
     drain(extract(expr, currentSheet, 0))
+
+  /**
+   * The RESOLUTION relation: two spellings are one name to every reader exactly when
+   * `DefinedNameIndex` resolves them as one, i.e. under `String.equalsIgnoreCase` — per code point
+   * `toLowerCase(toUpperCase(cp))`. `String.toUpperCase` is not that relation (it would split a
+   * Kelvin-sign `K` from `k`), so shadowing, dedup and the name memos are keyed on this form.
+   */
+  private[graph] def resolutionKey(name: String): String =
+    val folded = new java.lang.StringBuilder(name.length)
+    name
+      .codePoints()
+      .forEach(cp => folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp))))
+    folded.toString
+
+  /**
+   * #733: a defined name's static (sheet, range), keyed on its [[resolutionKey]], its qualifier and
+   * the sheet it is read from — shared across one graph build, so a book whose SUMIFs read the same
+   * few names resolves each once per sheet. Holds `None` for a name that does not resolve to one.
+   * NOT thread-safe: a mutable map for one single-threaded build; never share it across a parallel
+   * per-sheet loop.
+   */
+  private[graph] type NameRanges =
+    scala.collection.mutable.HashMap[(String, Option[SheetName], SheetName), Option[
+      (Sheet, CellRange)
+    ]]
+
+  private[graph] object NameRanges:
+    def empty: NameRanges = scala.collection.mutable.HashMap.empty
 
   /**
    * #691: the defined names one [[extractQualifiedDependencies]] has reached and not yet expanded,
@@ -2035,8 +2132,23 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
     workbook: Option[Workbook],
     preciseLookups: Boolean,
-    canonicalSheet: SheetName => SheetName
+    canonicalSheet: SheetName => SheetName,
+    nameRanges: NameRanges
   ): Set[QualifiedRef] =
+    // the formula's own sheet, looked up once per expression (SUMIF/AVERAGEIF name resolution)
+    lazy val source: Option[Sheet] = workbook.flatMap(_(currentSheet).toOption)
+    // #733: a range slot's location as a (sheet, range), when the workbook can say statically —
+    // a defined name's answer memoized per build, since a book's SUMIFs share a few names
+    def resolved(location: TExpr.RangeLocation): Option[(Sheet, CellRange)] =
+      def resolve: Option[(Sheet, CellRange)] =
+        source.flatMap(Evaluator.resolveRangeLocation(location, _, workbook).toOption)
+      location match
+        case TExpr.RangeLocation.Name(name, scope) =>
+          nameRanges.getOrElseUpdate(
+            (resolutionKey(name), scope.map(canonicalSheet), currentSheet),
+            resolve
+          )
+        case _ => resolve
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match
         case TExpr.RangeLocation.Local(range, _) => cellsFor(currentSheet, range)
@@ -2054,6 +2166,8 @@ object DependencyGraph:
             case Some(qualifier) => go(TExpr.SheetNameRef(canonicalSheet(qualifier), name))
         // GH-612: an error in a range slot has no cells
         case TExpr.RangeLocation.Error(_, _) => Set.empty
+        // GH-710: a LET name — its binding's value expression contributes the edges
+        case TExpr.RangeLocation.Binding(_) => Set.empty
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match
@@ -2153,21 +2267,29 @@ object DependencyGraph:
           // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first — a static
           // shape, or a defined name's resolved through the workbook when one is at hand
           // GH-669: an intersection of static locations depends only on the cells they share
+          // #733: a defined name bound to a range resizes like the range itself — its target's
+          // resized cells are static edges
+          val raw = call.spec.argSpec.toValues(call.args)
           val values = ReferenceOperators.dependencyValues(
             call.spec.name,
             CriteriaRangeResize.resizedArgs(
               call.spec.name,
-              call.spec.argSpec.toValues(call.args),
-              shapeOf = location =>
-                location.staticRange.orElse(
-                  for
-                    wb <- workbook
-                    source <- wb(currentSheet).toOption
-                    resolved <- Evaluator.resolveRangeLocation(location, source, workbook).toOption
-                  yield resolved._2
-                )
+              raw,
+              shapeOf = location => location.staticRange.orElse(resolved(location).map(_._2)),
+              targetOf = {
+                case named: TExpr.RangeLocation.Name =>
+                  resolved(named).fold[TExpr.RangeLocation](named) { (target, range) =>
+                    TExpr.RangeLocation.CrossSheet(target.name, range)
+                  }
+                case other => other
+              }
             )
           )
+          // A name the resize replaced resolved statically to a range or a cell, through any chain
+          // of names: its resized CrossSheet is everything the call reads, so the name's full
+          // range adds no edge — it would make `C5 = SUMIF(A1:A3,">0",amt)` with amt = C1:C10 a
+          // false cycle, where the written `C1:C10` is not. A name that did not resolve is still in
+          // `values`, and the fold visits it as before.
           val selected = lookupCells(call.spec.name, values)
           values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>
             value match

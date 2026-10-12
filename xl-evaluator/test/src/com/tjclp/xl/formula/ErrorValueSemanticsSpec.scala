@@ -384,10 +384,12 @@ class ErrorValueSemanticsSpec extends FunSuite:
   }
 
   test("GH-344: recognition is exact — no trim, other text still refuses") {
+    // #709: the refusal is Excel's #VALUE!
     val sheet = Sheet("Test")
-    assert(sheet.evaluateFormula("=IF(\" TRUE\",1,2)").isLeft, "\" TRUE\" must refuse (no trim)")
-    assert(sheet.evaluateFormula("=IF(\"TRUEX\",1,2)").isLeft)
-    assert(sheet.evaluateFormula("=IF(\"abc\",1,2)").isLeft)
+    val refused = Right(CellValue.Error(CellError.Value))
+    assertEquals(sheet.evaluateFormula("=IF(\" TRUE\",1,2)"), refused, "\" TRUE\" must refuse")
+    assertEquals(sheet.evaluateFormula("=IF(\"TRUEX\",1,2)"), refused)
+    assertEquals(sheet.evaluateFormula("=IF(\"abc\",1,2)"), refused)
   }
 
   test("GH-344: cell-sourced boolean text coerces too (documented micro-divergence)") {
