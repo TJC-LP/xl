@@ -283,6 +283,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Fixed
 
+- **MATCH, VLOOKUP, HLOOKUP and XLOOKUP read uncached formulas in their lookup ranges** (#715):
+  MATCH's lookup_array, the VLOOKUP/HLOOKUP key line and result cell, and XLOOKUP's lookup_array
+  read each cell the way a reference to it does, so an uncached formula evaluates. Before, they
+  read its bare record and matched it as blank. XLOOKUP's return cell is still read as stored.
+- **`eval --with` overrides** (#715): a sheet qualifier matches the evaluated sheet's name in any
+  case (`--with data!B1=5` overrides Data!B1; it was "Cross-sheet override not supported"), and
+  positionless `eval` and `evala` now see the overrides through a formula on another sheet that
+  reads back into the evaluated one, as `eval --at` does.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
