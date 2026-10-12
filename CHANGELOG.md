@@ -272,10 +272,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 - **`FunctionFlags` gains two fields (`lift`, `selector`)**: source-compatible, binary-incompatible for positional
   construction and for `unapply` / positional pattern matches on `FunctionFlags(...)` (the
   `volatile` precedent, #597).
-- **`SUMPRODUCT(1/COUNTIF(A:A,A:A))` over a whole column is `#DIV/0!` when the column holds no
-  zeros** (#711): SUMPRODUCT now reads the blank rows past the used range, as Excel does, and each
-  divides by `COUNTIF(A:A,<blank>)`, which counts zeros. The distinct count it used to return
-  needs a bounded range (`SUMPRODUCT(1/COUNTIF(A1:A100,A1:A100))`) or the blank-safe idiom
+- **Whole-column SUMPRODUCT counts the blank rows past the used range** (#711): any whole-column
+  SUMPRODUCT argument that is non-zero, or an error, at a blank row now counts every blank row past
+  the used range, as in Excel, where it counted only the rows inside it. Recalculated books move
+  by about a million for `SUMPRODUCT(--(A:A<5))`, `SUMPRODUCT((A:A<5)*1)`,
+  `SUMPRODUCT(--(MONTH(A:A)=1))`, `SUMPRODUCT(--(A:A=0))` and `SUMPRODUCT(--(A:A<>"x"))`, and
+  become `#DIV/0!` for `SUMPRODUCT(B:B/C:C)`, `SUMPRODUCT(--(A:A="x"),B:B/C:C)` and
+  `SUMPRODUCT(1/COUNTIF(A:A,A:A))` with no zeros in A. Bound the range when only the data rows
+  should count (`SUMPRODUCT(1/COUNTIF(A1:A100,A1:A100))`), or use the blank-safe distinct count
   `SUMPRODUCT((A:A<>"")/COUNTIF(A:A,A:A&""))`.
 - **`TExpr.cond` takes a `using ExprCoercer[A]`**: the IF call is brought to `A` through the slot's
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.

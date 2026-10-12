@@ -1127,12 +1127,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     (sheet, constrainRange(range, bounds), criterion)
                   }
                   // the ranges share one shape and one bound, so each trimmed position is blank
-                  // in every range: it counts when every criterion matches a blank
-                  val trimmed = resolved.headOption
-                    .zip(constrainedConditions.headOption)
-                    .fold(0L) { case ((_, range, _), (_, constrained, _)) =>
-                      blankCriteriaCount(cellsTrimmed(range, constrained), resolved.map(_._3))
+                  // in every range: it counts when every criterion matches a blank. Each range's
+                  // own trimmed count is taken; should they ever disagree (a shape the dimension
+                  // check lets through some day), no trimmed cell is counted
+                  val trimmedCounts = resolved
+                    .zip(constrainedConditions)
+                    .map { case ((_, range, _), (_, constrained, _)) =>
+                      cellsTrimmed(range, constrained)
                     }
+                    .distinct
+                  val trimmed = trimmedCounts match
+                    case List(count) => blankCriteriaCount(count, resolved.map(_._3))
+                    case _ => 0L
 
                   // GH-192: Use iterator-based folding with index tracking
                   val criteriaCells =
@@ -1533,6 +1539,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
                           case (sheet, range) => acc :+ RangeArray(sheet, tail.line(range))
                         }
+                      // the line evaluates every non-range part of the argument a second time
+                      // (a lookup, a criteria count): once per SUMPRODUCT, not per row, and never
+                      // a volatile call, which the plan rules out
                       case (Right(acc), Right(line)) =>
                         ctx.evalArrayExpr(line).flatMap(sumProductArray).map(acc :+ _)
                     }

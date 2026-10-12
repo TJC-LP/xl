@@ -70,14 +70,21 @@ private[formula] object SumProductTail:
   /**
    * The arguments to read over the blank line, decided before anything is evaluated: each
    * expression with its trimmed whole columns on the line, a range location as is (its caller maps
-   * it). None — no tail — unless both hold:
-   *   - the trimmed arguments' extent along the axis (`trimmedExtent`) is the kept one. A
-   *     shape-sensitive call keeps its whole column whole (`ROW(A:A)`), so its argument already
-   *     read every row at the full height (or mismatched the others, an error before any tail):
-   *     reading it again would rebuild the million rows only to discard them.
-   *   - every argument reads a trimmed whole column as an element source: a range location that
-   *     runs the axis (`spansLocation`), or an expression whose transform moved at least one such
-   *     range onto the line. `SUMPRODUCT(SUM(A:A))` moves none: its one value is no row's.
+   * it). None — no tail, the trimmed sum stands — unless all hold:
+   *   - the trimmed arguments' extent along the axis (`trimmedExtent`) is the kept one, so no
+   *     argument came back at another height.
+   *   - every argument reads the axis only through the line: a range location that runs it
+   *     (`spansLocation`), or an expression that reads at least one whole column (row) as a value
+   *     and has every one it reads as a value moved onto the line by its transform
+   *     ([[TExpr.collectValueRanges]]). A whole column left whole in an expression position
+   *     (`ROW(A:A)`, which an array context may spread over every row) could vary from row to row,
+   *     so it rules the tail out on its own. A whole column in a range slot (SUM's, COUNTIF's
+   *     range, a lookup's table) is one fixed reference the function consumes, the same for every
+   *     row, so it may stay: `1/COUNTIF(A:A,A:A)` moves its criterion and keeps its range.
+   *     `SUMPRODUCT(SUM(A:A))` reads no whole column as a value, so it has no tail.
+   *   - no argument calls a volatile function (`FunctionFlags.volatile`): reading the line
+   *     evaluates every non-range part of the argument a second time, and `RAND()` must draw once.
+   *     A defined name is not looked through.
    */
   def plan(
     tail: Tail,
@@ -85,11 +92,14 @@ private[formula] object SumProductTail:
     trimmedExtent: Int,
     spansLocation: TExpr.RangeLocation => Boolean
   ): Option[List[ArgSpec.SumProductArg]] =
-    def spanning(expr: TExpr[?]): Int = TExpr.collectRanges(expr).count((_, r) => tail.spans(r))
+    def spanning(expr: TExpr[?]): Int =
+      TExpr.collectValueRanges(expr).count((_, r) => tail.spans(r))
+    def volatile(expr: TExpr[?]): Boolean =
+      com.tjclp.xl.formula.eval.WorkbookAudit.callsVolatile(expr, (_, _) => false)
     val lines = args.map {
       case Left(location) => (spansLocation(location), Left(location))
       case Right(expr) =>
         val line = TExpr.transformRanges(expr, (_, r) => tail.line(r))
-        (spanning(line) < spanning(expr), Right(line))
+        (spanning(expr) > 0 && spanning(line) == 0 && !volatile(expr), Right(line))
     }
     Option.when(trimmedExtent.toLong == tail.kept && lines.forall(_._1))(lines.map(_._2))

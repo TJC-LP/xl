@@ -156,8 +156,8 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // a whole column only under an aggregate is no element source: SUM(A:A) once, not per row
     // (LibreOffice: 9)
     assertEquals(eval("=SUMPRODUCT(SUM(A:A))"), Right(num(9)))
-    // ...while beside one that is, it repeats on every blank row: 1048574 * SUM(B:B)
-    // (LibreOffice: 1048574)
+    // ...while beside one that is, SUM's range slot is one fixed reference and the line repeats
+    // it on every blank row: 1048574 * SUM(B:B) (LibreOffice: 1048574)
     assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(B:B))"), Right(num(1048574)))
     // ROW of a range is its first row in xl (documented in LIMITATIONS; Excel and LibreOffice
     // fold every row: 1048571), so ROW(A:A) is no element source and nothing is read twice
@@ -165,6 +165,24 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // whole columns mixed with whole rows: no tail, the used-range blanks only (B2), where
     // Excel counts every blank cell of the sheet (documented in LIMITATIONS)
     assertEquals(eval("=SUMPRODUCT(--(A:XFD=\"\"))"), Right(num(1)))
+    // the same column under ROW stays whole, so no tail: the trimmed sum, A1 and A2 not blank.
+    // Excel and LibreOffice sum the blank rows' numbers (549756338173); xl's ROW of a range is its
+    // first row, and the plan rejects the shape on its own whatever ROW returns
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(A:A))"), Right(num(0)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(B:B))"), Right(num(0)))
+  }
+
+  test("a volatile argument is read once: no tail, so RAND draws once") {
+    // RAND()>=0 is TRUE for every row, so Excel counts the 1048574 blank rows; the tail would read
+    // the argument a second time, so it is not read and the trimmed sum stands
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(RAND()>=0))"), Right(num(0)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(RAND()>=0),--(B:B=\"\"))"), Right(num(0)))
+  }
+
+  test("COUNTIFS counts the trimmed cells only when every range trimmed the same count") {
+    // every range is one shape under one bound, so the counts agree and the blanks count
+    assertEquals(eval("=COUNTIFS(A:A,\"\",B:B,\"\",C:C,\"\")"), Right(num(1048574)))
+    assertEquals(eval("=COUNTIFS(A:B,\"\",B:C,\"\")"), Right(num(2097149)))
   }
 
   test("the tail's plan rebuilds no argument that already read every row (structural)") {
@@ -180,19 +198,25 @@ class WholeColumnBlankTailSpec extends FunSuite:
     assertEquals((tail.count, tail.kept), (1048574L, 2L))
     def plan(inner: String, extent: Int) = SumProductTail.plan(tail, args(inner), extent, _ => true)
     // an argument whose whole column no transform moved is never read over the blank row: ROW
-    // keeps A:A (its value, the first row, is a scalar), and at any extent the plan is empty
+    // keeps A:A, and at any extent the plan is empty
     assertEquals(plan("--(ROW(A:A)>5)", 1), None)
     assertEquals(plan("--(ROW(A:A)>5)", 2), None)
     // an argument that came back at another extent than the kept rows (a whole column a
     // shape-sensitive call read whole) is never read again either
     assertEquals(plan("--(A:A=\"\")", 1048576), None)
-    // (A:A="")*ROW(B:B) reads A:A as an element source and ROW(B:B) as its scalar 1, so the line
-    // is one row: 1048574 blank rows times 1 (Excel sums the blank rows' numbers; ROW above)
-    assert(plan("(A:A=\"\")*ROW(B:B)", 2).isDefined)
-    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(B:B))"), Right(num(1048574)))
-    assertEquals(plan("SUM(A:A)", 1), None)
-    assert(plan("--(A:A=\"\")", 2).isDefined)
+    // every whole column read as a value must move onto the line: one left whole rules the tail
+    // out on its own, whatever its call returns (ROW(A:A) spreads over every row once ROW
+    // returns an array). A range slot (SUM's, COUNTIF's range) is one reference and may stay
+    assertEquals(plan("(A:A=\"\")*ROW(A:A)", 2), None)
+    assertEquals(plan("(A:A=\"\")*ROW(B:B)", 2), None)
     assert(plan("(A:A=\"\")*SUM(B:B)", 2).isDefined)
+    assert(plan("1/COUNTIF(A:A,A:A)", 2).isDefined)
+    assertEquals(plan("SUM(A:A)", 1), None)
+    // a volatile call anywhere in an argument rules it out: the line would draw again
+    assertEquals(plan("(A:A=\"\")*(RAND()>=0)", 2), None)
+    assertEquals(plan("--(A:A=\"\"),(B:B=\"\")*RANDBETWEEN(1,1)", 2), None)
+    assert(plan("--(A:A=\"\")", 2).isDefined)
+    assert(plan("(A:A=\"\")*(B:B<5),C:C", 2).isDefined)
     // the planned line reads row 3, the first one past the kept rows
     assertEquals(
       plan("--(A:A=\"\")", 2).map(_.map(_.fold(_ => Nil, TExpr.collectRanges(_).map(_._2.toA1)))),
