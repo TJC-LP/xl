@@ -140,9 +140,17 @@ private[formula] object SumProductTail:
    * planned arguments read over the blank line, multiplied element-wise, summed and counted once
    * per dropped row. 0 when there is no tail, the plan declines, or the line does not come back as
    * one row (column) at the trimmed width. Each range location resolves once (`resolve`); `line`
-   * reads a planned expression as SUMPRODUCT reads an argument, `rangeArray` a range location on
-   * the line, `shape` an array's rows × columns, and `sumOfProducts` sums the products over a
-   * shape.
+   * reads a planned expression as SUMPRODUCT reads an argument, with the bound it gives a computed
+   * reference (the trimmed read's shared extent) replaced by [[Tail.line]]; `rangeArray` reads a
+   * range location on the line, `shape` an array's rows × columns, and `sumOfProducts` sums the
+   * products over a shape.
+   *
+   * The plan moves only written whole columns onto the line. A reference-returning call over one
+   * (`INDEX(B:C,0,1)`) keeps its range slot whole and computes its whole column at evaluation, so
+   * the line bounds that column to the blank row, as the trimmed read bounds it to the kept rows.
+   * Otherwise it would read the column's used rows: several rows fail the aligned check (the
+   * trimmed sum stood), and one row passed it, so every blank row read that populated cell
+   * (`SUMPRODUCT((A:A="")*(INDEX(B:C,0,1)>0))` over A1 = 4, B1 = 1 was 1048575, not 0).
    */
   def sum[A](
     ranges: List[CellRange],
@@ -152,7 +160,7 @@ private[formula] object SumProductTail:
     trimmedCols: Int,
     resolve: TExpr.RangeLocation => Either[EvalError, (Sheet, CellRange)],
     drawsViaName: (Option[SheetName], String) => Boolean,
-    line: TExpr[Any] => Either[EvalError, A],
+    line: (TExpr[Any], CellRange => CellRange) => Either[EvalError, A],
     rangeArray: (Sheet, CellRange) => A,
     shape: A => (Int, Int),
     sumOfProducts: (List[A], Int, Int) => Either[EvalError, BigDecimal]
@@ -186,7 +194,7 @@ private[formula] object SumProductTail:
             // the line evaluates every non-range part of the argument a second time (a lookup, a
             // criteria count): once per SUMPRODUCT, not per row, and never a draw, which the plan
             // rules out
-            case (Right(acc), Right(expr)) => line(expr).map(acc :+ _)
+            case (Right(acc), Right(expr)) => line(expr, tail.line).map(acc :+ _)
           }
           .flatMap { lines =>
             val (lineRows, lineCols) = lines.headOption.map(shape).getOrElse((0, 0))

@@ -15,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   relationship with one naming the generated part. `DYNAMIC_ARRAY_DOWNGRADED` now says why the
   part could not be extended (it could not be read, or is not XML) instead of always "not readable
   XML". An empty dynamic-array result is `#CALC!` through one tested spill step.
+- **SUMPRODUCT's blank tail reads a computed whole column at the blank row** (Refs #755): over a
+  whole column, SUMPRODUCT reads its arguments once at a blank row to count the rows past the used
+  range. A whole column a function computes (`INDEX(B:C,0,1)`) was read at its used rows there:
+  with one used row, every blank row took that row's value
+  (`SUMPRODUCT((A:A="")*(INDEX(B:C,0,1)>0))` over A1 = 4, B1 = 1 gave 1048575; it is 0), and with
+  several the blank rows were dropped (`(A:A="")*(INDEX(B:C,0,1)="")` gave 0, not 1048574). The
+  blank read now bounds the computed column to the blank row, as the trimmed read bounds it to the
+  used rows; a computed single cell (`INDEX(B:B,1)`) is read as before.
 
 ## [0.24.0] - 2026-10-12
 

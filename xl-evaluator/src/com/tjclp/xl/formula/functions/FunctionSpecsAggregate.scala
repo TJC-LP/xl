@@ -1711,7 +1711,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // Excel sums every one (SUMPRODUCT(--(A:A="")) counts each blank row, an IF condition
             // over A:A tests each), so the trimmed sum gains count × that product. Only when every
             // argument spans the trimmed axis and reads one row there at the trimmed width; any
-            // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
+            // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum. A
+            // computed whole column on the line takes the blank row as its bound (SumProductTail.sum)
             def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
               SumProductTail.sum[ResolvedArray](
                 rangesWithSheets.map(_._1),
@@ -1721,7 +1722,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 cols,
                 ctx.resolveRange(_),
                 drawsViaName(ctx),
-                line => ctx.evalArrayExpr(line).flatMap(sumProductArray),
+                (line, onLine) => ctx.evalBoundedArrayExpr(line, onLine).flatMap(sumProductArray),
                 RangeArray(_, _),
                 arr => (arr.rows, arr.cols),
                 sumOfProducts(_, _, _, ctx)

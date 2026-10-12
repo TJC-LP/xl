@@ -408,3 +408,37 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // per cell past the limit is refused, never built
     assert(eval("=SUM(IFERROR(A:B/0,RAND()))").isLeft)
   }
+
+  test("a computed whole column on the blank line reads the blank row, not its used rows") {
+    // INDEX(B:C,0,1) keeps its range slot whole, so the plan leaves it to the evaluation: the line
+    // bounds the column it computes to the blank row, as the trimmed read bounds it to the kept
+    // rows. Before, the line read its used rows, and one used row passed the aligned check, so
+    // every blank row read B1. Every value is LibreOffice 24.2's
+    val one = Sheet(SheetName.unsafe("O")).put(ref"A1", num(4)).put(ref"B1", num(1))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(INDEX(B:C,0,1)>0))", one), Right(num(0)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*INDEX(B:C,0,1))", one), Right(num(0)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(INDEX(B:C,0,1)=\"\"))", one), Right(num(1048575)))
+    // several used rows: the line now counts the blank rows the trimmed sum left out (#755)
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(INDEX(B:C,0,1)=\"\"))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"x\")*(INDEX(B:C,0,1)>0))"), Right(num(0)))
+    // a computed column on another sheet: the blank row lies past every operand's used rows
+    val data = (1 to 3).foldLeft(Sheet(SheetName.unsafe("D"))) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), num(i.toDouble))
+    }
+    val other = Sheet(SheetName.unsafe("X")).put(ref"B1", num(1))
+    val book = Workbook(Vector(data, other))
+    assertEquals(
+      evalIn(book, data)("=SUMPRODUCT((A:A=\"\")*(INDEX(X!B:C,0,1)>0))"),
+      Right(num(0))
+    )
+    assertEquals(
+      evalIn(book, data)("=SUMPRODUCT((A:A=\"\")*(INDEX(X!B:C,0,1)=\"\"))"),
+      Right(num(1048573))
+    )
+    // a computed single cell, and a computed column an aggregate consumes, are the same for every
+    // row: the line reads them as they are, so each blank row counts B1 = 1
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*(INDEX(B:B,1)>0))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*INDEX(B:C,1,1))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*XLOOKUP(4,A:A,B:B))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(INDEX(B:C,0,1)))"), Right(num(1048574)))
+  }
