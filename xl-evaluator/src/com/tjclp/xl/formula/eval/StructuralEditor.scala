@@ -496,9 +496,10 @@ object StructuralEditor:
         if s.name == target then
           (isRow, delta >= 0) match
             case (true, true) => s.insertRows(at, delta)
-            case (true, false) => s.deleteRows(at, -delta)
+            case (true, false) => releaseDeletedAnchors(s, isRow, at, delta).deleteRows(at, -delta)
             case (false, true) => s.insertColumns(at, delta)
-            case (false, false) => s.deleteColumns(at, -delta)
+            case (false, false) =>
+              releaseDeletedAnchors(s, isRow, at, delta).deleteColumns(at, -delta)
         else
           // GH-222: typed charts on OTHER sheets track the edited sheet's geometry (no
           // double-shift: the edited sheet's charts were already shifted above).
@@ -756,6 +757,25 @@ object StructuralEditor:
     if delta == 0 then false
     else if delta < 0 then at <= e && (at - delta - 1) >= s
     else at > s && at <= e
+
+  /**
+   * GH-714: a delete band that removes a dynamic array's anchor removes its spill too, as in Excel:
+   * the spill cells outside the band, which would otherwise survive the shift as plain constants
+   * that look like the user's data, are emptied first (values only — a style or hyperlink stays, as
+   * when an anchor is overwritten). Every one of them sits at or past the band on the edited axis
+   * (an extent starts at its anchor), so the edit's dirty cone already covers their readers.
+   */
+  private def releaseDeletedAnchors(sheet: Sheet, isRow: Boolean, at: Int, delta: Int): Sheet =
+    val last = at - delta - 1
+    def deleted(ref: ARef): Boolean =
+      val i = if isRow then ref.row.index0 else ref.col.index0
+      i >= at && i <= last
+    val children = DynamicArrayAuthoring
+      .spillsOf(sheet)
+      .filter(s => deleted(s.anchor))
+      .flatMap(s => s.extent.cellsRowMajor.filterNot(r => r == s.anchor || deleted(r)))
+      .toSet
+    if children.isEmpty then sheet else DynamicArrayAuthoring.clearValues(sheet, children)
 
   /** The range's inclusive 0-based bounds on the edited axis. */
   private def axisBounds(range: CellRange, isRow: Boolean): (Int, Int) =

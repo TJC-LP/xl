@@ -428,6 +428,38 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheet(ref"C12").value, num(4))
   }
 
+  test("GH-714: deleting a dynamic array's anchor clears the rest of its spill, as Excel does") {
+    // C8:C11 holds SORT's {1;2;3;4}; C12 is the user's own value below it
+    val spilled = sortSheet
+      .put(ref"C9", num(2))
+      .put(ref"C10", num(3))
+      .put(ref"C11", num(4))
+      .put(ref"C12", num(99))
+    // delete row 8 (index0 7), the anchor's: C9:C11 would survive as constants at C8:C10
+    val row = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 7, 1), "S")
+    Vector(ref"C8", ref"C9", ref"C10").foreach(r => assertEquals(row.cells.get(r), None, r.toA1))
+    assertEquals(row(ref"C11").value, num(99))
+    // a band through the anchor and part of the spill: the tail outside it goes too
+    val band = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 6, 3), "S")
+    Vector(ref"C7", ref"C8").foreach(r => assertEquals(band.cells.get(r), None, r.toA1))
+    assertEquals(band(ref"C9").value, num(99))
+    // the column axis: B2 spills B2:D2; deleting column B empties what moves to B2:C2
+    val across = Sheet(S)
+      .put(
+        ref"B2",
+        CellValue.Formula("=SEQUENCE(1,3)", Some(num(1)), FormulaKind.dynamicArray(range("B2:D2")))
+      )
+      .put(ref"C2", num(2))
+      .put(ref"D2", num(3))
+      .put(ref"E2", num(42))
+    val col = sheetNamed(StructuralEditor.deleteColumns(Workbook(Vector(across)), S, 1, 1), "S")
+    Vector(ref"B2", ref"C2").foreach(r => assertEquals(col.cells.get(r), None, r.toA1))
+    assertEquals(col(ref"D2").value, num(42))
+    // a delete that keeps the anchor still only shrinks the spill (above)
+    val kept = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 9, 1), "S")
+    assertEquals(kept(ref"C9").value, num(2))
+  }
+
   test("GH-714: an insert inside a spill at the grid edge clamps its end to the last row") {
     // C1048574:C1048576 already reaches the last row; one more row inside cannot grow it past it
     val anchor = ARef.from0(2, Row.MaxIndex0 - 2)
