@@ -134,6 +134,8 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   `ArrayResult` form. Code compiled against an earlier release must be recompiled too: both types
   erase as before, so it still links, but where it reads the result as a `CellValue` it can fail
   at run time (a `ClassCastException`).
+- **Computed references keep their declared shape** (#713): `INDEX($A$1:$A$100000,0)` reads 100k cells,
+  not the used rows, for correct ROWS/COLUMNS and alignment (leading blanks too); #736 tracks the cost.
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
