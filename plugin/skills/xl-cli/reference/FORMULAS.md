@@ -246,8 +246,7 @@ without writing: `xl eval "=SUM(A1:A10*B1:B10)" --at D5` is `A5*B5`, as `putf D5
 - A qualified `--at Data!D5` names the sheet; `--with` still applies.
 - A formula that reads `<ref>` back is a circular reference (`FORMULA_ERROR`), whether directly,
   through precedents, as `Data!D5`, or through INDIRECT, OFFSET or a defined name.
-- Known gaps: another sheet's cached formula that reads `<ref>`, and an XLOOKUP return cell that
-  reaches it at run time, go unseen.
+- Known gap: another sheet's cached formula that reads `<ref>` goes unseen.
 
 In an array context (`evala`, SUMPRODUCT, an array formula)
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
