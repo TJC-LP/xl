@@ -383,6 +383,90 @@ class RangeOperatorSpec extends FunSuite:
     assert(!functions.ReferenceOperators.mayContainComputedRange("SUM(Sheet1!A1:B2,$A$1:$C3)"))
   }
 
+  /**
+   * Texts with a `:` that is never the operator: 3-D references, a repeated qualifier, structured
+   * references, quoted sheet names, string literals, whole axes.
+   */
+  private val lookalikes = List(
+    "SUM(Sheet1:Sheet3!A1)",
+    "SUM(Sheet1:Sheet3!A1:B2)",
+    "SUM(Sheet1!A1:Sheet1!B2)",
+    "SUM(Table1[[#Headers],[A]:[B]])",
+    "SUM(Table1[[A]:[B]])",
+    "SUM('Q1:Q3'!A1)",
+    "\"a:b\"&\"INDEX(\"",
+    "SUM($A:$C,1:3,A1:B2)"
+  )
+
+  test("GH-713: pre-filter look-alikes are not candidates and never classify as dynamic") {
+    lookalikes.foreach { text =>
+      assert(!functions.ReferenceOperators.mayContainComputedRange(text), text)
+      // what parses is static; the 3-D and structured spellings do not parse at all
+      FormulaParser.parse(s"=$text").foreach { expr =>
+        assert(!DependencyGraph.containsDynamicReference(expr), text)
+      }
+    }
+    val placed = lookalikes.zipWithIndex.foldLeft(sheet1) { case (s, (text, i)) =>
+      s.put(ARef.from1(8, i + 1), CellValue.Formula(text, None))
+    }
+    assertEquals(DependencyGraph.dynamicCells(placed), Set.empty[ARef])
+    // the token after a range's end is the operator's again: `B2:C3:Sheet1!Start` is a range
+    assert(functions.ReferenceOperators.mayContainComputedRange("SUM(B2:C3:Sheet1!Start)"))
+    assert(DependencyGraph.containsDynamicReference(parsed("=SUM(B2:C3:Sheet1!Start)")))
+  }
+
+  test("GH-713: a book without a candidate formula parses none of them") {
+    // no defined names either: the trace counts their definitions' parses too
+    val placed = lookalikes.zipWithIndex.foldLeft(sheet1) { case (s, (text, i)) =>
+      s.put(ARef.from1(8, i + 1), CellValue.Formula(text, None))
+    }
+    val trace = DependencyGraph.dynamicCellsTraced(Workbook(Vector(placed)))
+    assertEquals(trace.cells, Set.empty[DependencyGraph.QualifiedRef])
+    assertEquals(trace.parses, 0)
+    // one candidate costs one parse
+    val one = placed.put(ref"I1", CellValue.Formula("SUM(B1:INDEX(D:D,3))", None))
+    val traced = DependencyGraph.dynamicCellsTraced(Workbook(Vector(one)))
+    assertEquals(traced.parses, 1)
+    assertEquals(
+      traced.cells,
+      Set(DependencyGraph.QualifiedRef(SheetName.unsafe("Sheet1"), ref"I1"))
+    )
+  }
+
+  test("GH-713: a cross-sheet computed range through the workbook graph, covered and not") {
+    val sheet1Name = SheetName.unsafe("Sheet1")
+    val otherName = SheetName.unsafe("Other")
+    def at(sheet: SheetName, cell: String): DependencyGraph.QualifiedRef =
+      DependencyGraph.QualifiedRef(sheet, ARef.parse(cell).fold(msg => fail(msg), identity))
+    val other = book(otherName).fold(e => fail(e.message), identity)
+    // covered: INDEX's own array, Sheet1!A:A, holds every cell of the bounding range
+    val covered = book.put(
+      other.put(ref"B10", CellValue.Formula("SUM(Sheet1!A1:INDEX(Sheet1!A:A,3))", None))
+    )
+    assert(!DependencyGraph.dynamicCells(covered).contains(at(otherName, "B10")))
+    val (edges, _) = DependencyGraph.fromWorkbookBounded(covered)
+    assert(edges(at(otherName, "B10")).contains(at(sheet1Name, "A3")), edges(at(otherName, "B10")))
+    val settled = covered.recalculate().workbook
+    def b10(wb: Workbook): Option[CellValue] =
+      wb(otherName).toOption.flatMap(_.cells.get(ref"B10")).map(_.value) match
+        case Some(CellValue.Formula(_, cached, _)) => cached
+        case other => other
+    assertEquals(b10(settled), Some(N("6")))
+    val edited = settled.put(
+      settled(sheet1Name).fold(e => fail(e.message), identity).put(ref"A2", N("20"))
+    )
+    val targeted = edited
+      .recalculateAfterEdit(sheet1Name, Set(ref"A2"), RecalcOptions())
+      .workbook
+    assertEquals(b10(targeted), Some(N("24")))
+    // uncovered: B1:INDEX(D:D,3) reads B1:D3, which INDEX's array (D:D) does not hold
+    val uncovered = book.put(
+      other.put(ref"B10", CellValue.Formula("SUM(Sheet1!B1:INDEX(Sheet1!D:D,3))", None))
+    )
+    assert(DependencyGraph.dynamicCells(uncovered).contains(at(otherName, "B10")))
+    assertEquals(b10(uncovered.recalculate().workbook), Some(N("660")))
+  }
+
   test("GH-713: shifting and renaming move both operands; a deleted operand is #REF!") {
     val shifted = FormulaShifter.shift(parsed("=SUM(A1:INDEX(A:A,COUNTA(A:A)))"), 1, 1)
     assertEquals(FormulaPrinter.printFileForm(shifted), "SUM(B2:INDEX(B:B,COUNTA(B:B)))")

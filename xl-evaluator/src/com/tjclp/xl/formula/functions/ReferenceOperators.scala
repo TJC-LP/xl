@@ -614,6 +614,11 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * are not a cell, column or row pair (`)` before it, `(` after it, a name, a qualifier, a call's
    * name followed by `(`). Law: every formula whose parse [[isComputedRangeDynamic]] flags passes,
    * since a dynamic range always has a call, a parenthesis or a name beside one of its `:`.
+   *
+   * Two spellings that only look like one are rejected outright, so the formulas they fill do not
+   * cost a parse on every recalculation: a qualified run after a token that begins a reference (3-D
+   * references, repeated qualifiers) and a structured reference's `]:[`. With no candidate token
+   * and no candidate `:`, a sheet's formulas are never parsed.
    */
   def mayContainComputedRange(text: String): Boolean =
     def tokenChar(c: Char): Boolean =
@@ -647,9 +652,18 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             val left = runBefore(i)
             val right = runFrom(i + 1)
             val next = text.lift(i + 1 + right.length)
-            val lexical = left.nonEmpty && right.nonEmpty &&
+            // only a token that starts its reference pairs lexically: after a range's end
+            // (`Jan:A:A`, `A1:B2:C3`) the `:` is the operator's
+            val startsReference = left.nonEmpty && !text.lift(i - left.length - 1).contains(':')
+            val lexical = startsReference && right.nonEmpty &&
               !next.exists(c => c == '(' || c == '!') &&
               CellRange.parse(s"$left:$right").isRight
-            !lexical || scan(i + 1)
+            // such a token before a qualified run: a 3-D reference (`Sheet1:Sheet3!A1`), a repeated
+            // qualifier (`Sheet1!A1:Sheet1!B2`) or a refused `A1:Sheet2!B2` — never the operator
+            val qualifiedEnd = startsReference && right.nonEmpty && next.contains('!')
+            // a structured reference's column span (`Table1[[#Headers],[A]:[B]]`): no reference
+            // the operator takes ends with `]`
+            val structured = text.lift(i - 1).contains(']')
+            !(lexical || qualifiedEnd || structured) || scan(i + 1)
           case _ => scan(i + 1)
     text.indexOf(':') >= 0 && scan(0)
