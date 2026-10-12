@@ -217,6 +217,16 @@ class XLookupReferenceSpec extends FunSuite:
     assert(horizontal(3).isLeft)
   }
 
+  test("GH-713: an if_not_found value is not a reference, so a `:` over it is #VALUE!") {
+    // the miss returns if_not_found, a value: the range operator refuses it as an operand; an
+    // error value there keeps its own code
+    assertEquals(plain("H1", "SUM(B1:XLOOKUP(9,A1:A3,B1:B3,\"x\"))"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "SUM(B1:XLOOKUP(9,A1:A3,B1:B3,5))"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "SUM(B1:XLOOKUP(9,A1:A3,B1:B3,#N/A))"), Right(E("#N/A")))
+    // a hit is a reference: B1:B2
+    assertEquals(plain("H1", "SUM(B1:XLOOKUP(2,A1:A3,B1:B3,\"x\"))"), Right(N("30")))
+  }
+
   test("GH-713: a 1×1 lookup array beside an N×1 return array returns the whole column") {
     // Today's answer, pinned so it cannot drift silently: a one-cell lookup array is also a one-row
     // array of the return array's width (1), so a match returns the matched column — all of

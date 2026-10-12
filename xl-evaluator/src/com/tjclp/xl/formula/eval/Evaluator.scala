@@ -569,6 +569,7 @@ object Evaluator:
    * intersected. Derived: the selectors, every registered `FunctionSpec.Referencing`, and the two
    * operators, which are unregistered (a drift law pins the result).
    */
+  // lazy: reads FunctionRegistry.all, so never touch it while FunctionSpecs initializes
   private[formula] lazy val referenceFunctions: Set[String] =
     ReferenceOperators.selectingFunctions ++ ReferenceOperators.computingFunctions +
       ReferenceOperators.IntersectionName + ReferenceOperators.RangeName

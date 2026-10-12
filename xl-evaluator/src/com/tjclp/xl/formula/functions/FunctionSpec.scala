@@ -458,6 +458,7 @@ object ArgSpec:
    * on purpose: a selector (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an
    * intersection is not a computed reference. A drift law ties the two sets together.
    */
+  // lazy: reads FunctionRegistry.all, so never touch it while FunctionSpecs initializes
   private[formula] lazy val computedReferenceCalls: Set[String] =
     ReferenceOperators.computingFunctions + ReferenceOperators.RangeName
 

@@ -427,7 +427,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         EvalError.ErrorValue(CellError.Value, Some("a range needs a reference on each side"))
       )
       _ <-
-        if all.forall(_.sheet.name == first.sheet.name) then Right(())
+        if all.forall(area => sheetKey(area.sheet.name) == sheetKey(first.sheet.name)) then
+          Right(())
         else
           Left(
             EvalError.ErrorValue(CellError.Value, Some("a range's references must be on one sheet"))
@@ -783,6 +784,10 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * unbounded (OFFSET, INDIRECT, a LET or unresolved name) or uncovered (`A1:INDEX(C:C,5)`) is
    * dynamic.
    */
+  // Cost: the envelope of an operand recurses along its whole spine, and the graph walkers ask
+  // this of every nested `:` call, so a chain of n ranges costs O(n²) envelope steps. The parser
+  // bounds n — each `:` takes a nesting level, at most 128 — so a formula costs at most ~8k steps;
+  // memoize per call if that bound ever grows.
   def isComputedRangeDynamic(call: TExpr.Call[?], shapeOf: ShapeOf): Boolean =
     call.spec.name == RangeName && {
       val (l, r) = call.args.asInstanceOf[(Operand, Operand)]
