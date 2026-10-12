@@ -163,18 +163,34 @@ class CriteriaRangeDependencySpec extends FunSuite:
     ("AVERAGE\u0131F", "AVERAGEIF with dotless i", 20, 80)
   ).foreach { (function, label, initial, expected) =>
     test(s"$label keeps resized named dependencies discoverable") {
-      val formula = s"$function(A1:A3,\">0\",staticTarget)"
-      val original = sheet.put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
-      val wb = names(Workbook(original))
       // The parser accepts these spellings as the canonical function, so its pre-filter must too.
-      assertEquals(original.evaluateCell(ref"E1", Clock.system, Some(wb)), Right(n(initial)))
+      // #733: a computed name (`target`) and a LET name are dynamic; a name bound to a plain range
+      // (`staticTarget`) resizes statically, and its resized edges keep the reader fresh as well
+      val computed = s"$function(A1:A3,\">0\",target)"
+      val bound = s"LET(t,C1,$function(A1:A3,\">0\",t))"
+      val static = s"$function(A1:A3,\">0\",staticTarget)"
+      val original = sheet
+        .put(ref"E1", CellValue.Formula(computed, Some(n(initial))))
+        .put(ref"E2", CellValue.Formula(bound, Some(n(initial))))
+        .put(ref"E3", CellValue.Formula(static, Some(n(initial))))
+      val wb = names(Workbook(original))
+      List(ref"E1", ref"E2", ref"E3").foreach { at =>
+        assertEquals(original.evaluateCell(at, Clock.system, Some(wb)), Right(n(initial)))
+      }
       val updated = wb
         .put(original.put(ref"C2", n(200)))
         .recalculateDependents(original.name, Set(ref"C2"))
-      assertEquals(cache(resultSheet(updated), ref"E1"), Some(n(expected)))
-      assert(CriteriaRangeResize.mayResizeThroughName(formula))
-      assertEquals(DependencyGraph.dynamicCells(original), Set(ref"E1"))
-      assertEquals(DependencyGraph.dynamicCells(wb), Set(QualifiedRef(sheet.name, ref"E1")))
+      List(ref"E1", ref"E2", ref"E3").foreach { at =>
+        assertEquals(cache(resultSheet(updated), at), Some(n(expected)), at.toA1)
+      }
+      List(computed, bound, static).foreach(f =>
+        assert(CriteriaRangeResize.mayResizeThroughName(f))
+      )
+      assertEquals(DependencyGraph.dynamicCells(original), Set(ref"E2"))
+      assertEquals(
+        DependencyGraph.dynamicCells(wb),
+        Set(QualifiedRef(sheet.name, ref"E1"), QualifiedRef(sheet.name, ref"E2"))
+      )
     }
   }
 
@@ -185,6 +201,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "AVERAGEIF (A1:A3, 1, amt)",
     "1+SUMIF(criteria,\">0\",C1)",
     "SUMIF(Sheet1!amt,1,C1)",
+    "SUMIF(A1:A3,\">0\",Model!amt)",
     "SUMIF('My Sheet'!amt,1,C1)",
     "SUMIF(A1:A3,1,Sales.Total)",
     "SUMIF(A1:A3,1,_amt)",
@@ -244,5 +261,146 @@ class CriteriaRangeDependencySpec extends FunSuite:
     val traced = DependencyGraph.dynamicCellsTraced(names(Workbook(withReader)))
     assertEquals(traced.cells, Set(QualifiedRef(sheet.name, ref"E1")))
     assertEquals(traced.parses, 4)
-    assertEquals(DependencyGraph.dynamicCells(withReader), Set(ref"E1"))
+    // without a workbook a defined name resolves to nothing, so the reader reads nothing through it
+    assertEquals(DependencyGraph.dynamicCells(withReader), Set.empty[ARef])
+    val withLet = literal.put(ref"E1", CellValue.Formula("LET(t,C1,SUMIF(A1:A3,\">0\",t))", None))
+    assertEquals(DependencyGraph.dynamicCells(withLet), Set(ref"E1"))
+  }
+
+  // ----- #733: names bound to plain ranges resize statically; only computed geometry is dynamic -----
+
+  private val S = sheet.name
+  private def q(at: ARef): QualifiedRef = QualifiedRef(S, at)
+
+  private def staticNames(wb: Workbook): Workbook =
+    wb.withDefinedName("Categories", "S!$A$1:$A$3")
+      .withDefinedName("Amounts", "S!$C$1:$C$3")
+      .withDefinedName("staticTarget", "S!$C$1")
+      .withDefinedName("alias", "staticTarget")
+      .withDefinedName("offsetTarget", "OFFSET(S!$C$1,0,0)")
+
+  // (formula, value before, value after C2 := 200)
+  private val staticReaders = List(
+    ref"E1" -> ("SUMIF(Categories,\">1\",Amounts)", 50, 230),
+    ref"E2" -> ("SUMIF(A1:A3,\">0\",staticTarget)", 60, 240),
+    ref"E3" -> ("AVERAGEIF(Categories,\">0\",staticTarget)", 20, 80),
+    ref"E4" -> ("SUMIF(Categories,\">0\",alias)", 60, 240),
+    ref"E5" -> ("SUMIF(S!Categories,\">0\",S!staticTarget)", 60, 240)
+  )
+
+  private def staticBook: Workbook =
+    staticNames(Workbook(staticReaders.foldLeft(sheet) { case (s, (at, (formula, before, _))) =>
+      s.put(at, CellValue.Formula(formula, Some(n(before))))
+    }))
+
+  test("#733: a SUMIF over names bound to plain ranges is static, with its resized edges") {
+    val wb = staticBook
+    assertEquals(DependencyGraph.dynamicCells(wb), Set.empty[QualifiedRef])
+    assertEquals(com.tjclp.xl.formula.eval.WorkbookAudit.of(wb).dynamic, Vector.empty)
+    val graph = DependencyGraph.fromWorkbook(wb)
+    // staticTarget names C1, but the call reads C1:C3: the graph records the resized cells
+    List(ref"E2", ref"E3", ref"E4", ref"E5").foreach { at =>
+      val deps = graph.getOrElse(q(at), Set.empty)
+      assert(Set(q(ref"C1"), q(ref"C2"), q(ref"C3")).subsetOf(deps), s"$at: $deps")
+    }
+    assert(Set(q(ref"C2"), q(ref"C3")).subsetOf(graph.getOrElse(q(ref"E1"), Set.empty)))
+  }
+
+  test("#733: an edit inside the resized target refreshes the static readers") {
+    val wb = staticBook
+    val viaDependents = wb
+      .put(resultSheet(wb).put(ref"C2", n(200)))
+      .recalculateDependents(S, Set(ref"C2"))
+    val cone = DependentRecalculation.recalculateAfterEdit(
+      wb.put(resultSheet(wb).put(ref"C2", n(200))),
+      S,
+      Set(ref"C2"),
+      Clock.system
+    )
+    assertEquals(cone.errors, Vector.empty)
+    staticReaders.foreach { case (at, (formula, _, after)) =>
+      assertEquals(cache(resultSheet(viaDependents), at), Some(n(after)), formula)
+      assertEquals(cache(resultSheet(cone.workbook), at), Some(n(after)), formula)
+    }
+  }
+
+  test("#733: full recalc orders an uncached formula in the resized target before its reader") {
+    val withFormula = resultSheet(staticBook)
+      .put(ref"C2", CellValue.Formula("Z2*10", Some(n(20))))
+      .put(ref"Z2", n(20))
+    val wb = staticBook.put(withFormula)
+    val sequential = wb.recalculate()
+    val parallel = wb.recalculateParallel(4)
+    assertEquals(sequential.errors, Vector.empty)
+    assertEquals(parallel.errors, sequential.errors)
+    assertEquals(parallel.evaluated, sequential.evaluated)
+    assertEquals(parallel.workbook, sequential.workbook)
+    staticReaders.foreach { case (at, (formula, _, after)) =>
+      assertEquals(cache(resultSheet(sequential.workbook), at), Some(n(after)), formula)
+    }
+  }
+
+  test("#733: a static self-read through a resized name is a cycle") {
+    val looped = staticNames(
+      Workbook(
+        sheet.put(ref"C2", CellValue.Formula("SUMIF(A1:A3,\">0\",staticTarget)", Some(n(60))))
+      )
+    )
+    assertEquals(DependencyGraph.dynamicCells(looped), Set.empty[QualifiedRef])
+    val result = looped.recalculate()
+    assert(result.errors.exists(_.ref == ref"C2"), result.errors.toString)
+    assertEquals(cache(resultSheet(result.workbook), ref"C2"), None)
+  }
+
+  test("#733: LET-bound and computed names keep the dynamic schedule") {
+    val wb = staticNames(
+      Workbook(
+        sheet
+          .put(ref"E1", CellValue.Formula("SUMIF(A1:A3,\">0\",offsetTarget)", Some(n(60))))
+          .put(ref"E2", CellValue.Formula("LET(t,staticTarget,SUMIF(A1:A3,\">0\",t))", Some(n(60))))
+          .put(ref"E3", CellValue.Formula("SUMIF(Categories,\">0\",staticTarget)", Some(n(60))))
+      )
+    )
+    assertEquals(DependencyGraph.dynamicCells(wb), Set(q(ref"E1"), q(ref"E2")))
+    val updated = wb
+      .put(resultSheet(wb).put(ref"C2", n(200)))
+      .recalculateDependents(S, Set(ref"C2"))
+    List(ref"E1", ref"E2", ref"E3").foreach { at =>
+      assertEquals(cache(resultSheet(updated), at), Some(n(240)), at.toA1)
+    }
+  }
+
+  test("#733: a data table over a static named SUMIF seeds again") {
+    import com.tjclp.xl.cells.FormulaKind
+    import com.tjclp.xl.formula.eval.SeedTableWarning
+    val kind: FormulaKind.DataTable =
+      FormulaKind.DataTable(ref"H10:H12", dt2D = false, dtr = false, r1 = Some(ref"A2"), r2 = None)
+    val book = staticNames(
+      Workbook(
+        sheet
+          .put(ref"H9", CellValue.Formula("SUMIF(Categories,\">1\",Amounts)"))
+          .put(ref"G10", n(0))
+          .put(ref"G11", n(5))
+          .put(ref"G12", n(9))
+          .put(ref"H10", CellValue.dataTable(kind, None))
+      )
+    )
+    val report = book.seedDataTablesReport().fold(error => fail(error.message), identity)
+    assert(
+      !report.warnings.exists {
+        case SeedTableWarning.Skipped(_, _, _, _) => true
+        case _ => false
+      },
+      report.warnings.toString
+    )
+    // A2 takes each axis value: 0 drops C2 (30), 5 and 9 keep it (50)
+    val seeded = resultSheet(report.workbook)
+    List(ref"H10" -> 30, ref"H11" -> 50, ref"H12" -> 50).foreach { (at, expected) =>
+      // the anchor keeps its dataTable formula; the other interiors are plain values
+      val seededValue = seeded(at).value match
+        case CellValue.Formula(_, cached, _) => cached
+        case CellValue.Empty => None
+        case other => Some(other)
+      assertEquals(seededValue, Some(n(expected)), at.toA1)
+    }
   }

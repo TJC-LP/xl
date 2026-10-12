@@ -189,6 +189,11 @@ final case class EvalContext(
   private[formula] def resolveRange(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange)] =
+    // An empty trail is safe here, though the typed Aggregate node passes its ambient one: the
+    // static walk guards its own name chain (each hop enters the trail, a revisit is a cycle, and
+    // the chain is bounded by NameWalk.MaxDepth), and any evaluation goes through `evalReference`,
+    // whose evaluator carries the ambient trail — so a name re-entered through its own range slot
+    // (`loop = OFFSET(…, COUNTIF(loop, …), …)`) is refused there as a cycle.
     Evaluator.resolveRangeSlot(
       location,
       sheet,

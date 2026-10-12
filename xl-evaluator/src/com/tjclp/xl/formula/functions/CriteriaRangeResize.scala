@@ -23,18 +23,28 @@ object CriteriaRangeResize:
   val resizingFunctions: Set[String] = Set("SUMIF", "AVERAGEIF")
 
   /**
-   * Whether resizing can read cells absent from the static dependency graph. A named or LET range
-   * can supply either the shape or the target's origin at evaluation time; recording the name's
-   * original cells is insufficient, since resizing may extend beyond them. Defer these readers
-   * through the dynamic-recalculation path, which invalidates them on edits and evaluates them
-   * after static precedents with dynamic caches cleared. A two-argument call does not resize.
+   * Whether resizing can read cells the static dependency graph cannot know. Resizing is static
+   * when every range it uses is: a written range, or a defined name bound to one (the graph
+   * resolves it through the workbook and records the resized target, #733). It is dynamic when the
+   * shape or the target's origin is known only at evaluation: a LET name, or a defined name whose
+   * definition computes the reference (OFFSET, INDIRECT, IF over references). Such readers take the
+   * dynamic-recalculation path, which invalidates them on edits and evaluates them after static
+   * precedents with dynamic caches cleared. A two-argument call does not resize.
    *
    * @param name
    *   the call's canonical (upper-case) function name, `FunctionSpec.name`
+   * @param nameIsComputed
+   *   whether a defined name in a range slot computes its reference; a name that does not resolve
+   *   at all reads nothing (its evaluation fails), so it is not dynamic either
    */
-  def hasDynamicResize(name: String, values: List[ArgValue]): Boolean =
+  def hasDynamicResize(
+    name: String,
+    values: List[ArgValue],
+    nameIsComputed: TExpr.RangeLocation.Name => Boolean
+  ): Boolean =
     def unresolved(location: TExpr.RangeLocation): Boolean = location match
-      case TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Binding(_) => true
+      case named: TExpr.RangeLocation.Name => nameIsComputed(named)
+      case TExpr.RangeLocation.Binding(_) => true
       case _ => false
 
     resizingFunctions.contains(name) && (values match
@@ -172,11 +182,17 @@ object CriteriaRangeResize:
    * other call — and a call whose first argument's shape is unknown (a defined name without a
    * workbook to resolve it) — is returned as given. The dependency extractors read a call's
    * arguments through this so the graph records the cells evaluation actually reads.
+   *
+   * @param targetOf
+   *   the third argument as a location that carries its range, when one can be known (#733: a
+   *   defined name bound to a range, resolved through the workbook); a location it cannot resolve
+   *   is returned as it is and keeps its own cells
    */
   def resizedArgs(
     name: String,
     values: List[ArgValue],
-    shapeOf: TExpr.RangeLocation => Option[CellRange] = _.staticRange
+    shapeOf: TExpr.RangeLocation => Option[CellRange] = _.staticRange,
+    targetOf: TExpr.RangeLocation => TExpr.RangeLocation = identity
   ): List[ArgValue] =
     if !resizingFunctions.contains(name.toUpperCase) then values
     else
@@ -184,6 +200,6 @@ object CriteriaRangeResize:
         case (first @ ArgValue.Range(criteria)) :: criterion :: ArgValue.Range(target) :: rest =>
           shapeOf(criteria) match
             case Some(shape) =>
-              first :: criterion :: ArgValue.Range(resizeLocation(target, shape)) :: rest
+              first :: criterion :: ArgValue.Range(resizeLocation(targetOf(target), shape)) :: rest
             case None => values
         case _ => values

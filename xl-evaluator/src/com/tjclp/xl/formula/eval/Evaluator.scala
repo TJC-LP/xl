@@ -322,6 +322,22 @@ object Evaluator:
     /** The definition is a formula or a constant; `notARange` is the static diagnostic. */
     case Computed(notARange: EvalError)
 
+  /**
+   * #733: whether a defined name in a range slot computes its reference — bound, directly or
+   * through a chain of names, to a formula (OFFSET, INDIRECT, IF over references) — so only
+   * evaluation knows the cells it names. A name bound to a range or a cell is not, and neither is a
+   * name that fails to resolve (it reads nothing: its evaluation fails).
+   */
+  private[formula] def nameComputesRange(
+    name: String,
+    scope: Option[SheetName],
+    currentSheet: Sheet,
+    workbook: Workbook
+  ): Boolean =
+    resolveNameRangeTarget(name, scope, currentSheet, Some(workbook), NameTrail.empty) match
+      case Right(NameRangeTarget.Computed(_)) => true
+      case _ => false
+
   private def resolveNameRangeTarget(
     name: String,
     scope: Option[SheetName],

@@ -366,6 +366,8 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     "LET(r,dyn,SUM((r,Sheet1!B1)))" -> N("124.25"),
     "LET(r,dyn,COUNT((r,Sheet1!B1)))" -> N("11"),
     "LET(r,dyn,AREAS((r,Sheet1!B1)))" -> N("2"),
+    "LET(r,OFFSET(Sheet1!A1,0,0,3,1),AREAS(r))" -> N("1"),
+    "LET(r,OFFSET(Sheet1!A1,0,0,3,1),SUM(r Sheet1!A2:B2))" -> N("-2"),
     "LET(r,dyn,SUM(r Sheet1!A3:B3))" -> N("3.5"),
     "LET(r,dyn,COUNTIF(r,\">2\")+AREAS((r,Sheet1!B1)))" -> N("7")
   ).foreach { case (formula, expected) =>
