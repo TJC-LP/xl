@@ -218,9 +218,10 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    *     `INDEX(r,1):(INDEX(r,2):B5)`) — one that does is read whole by that token's own reading of
    *     its `:` (`A1:Start:Finish` is `A1:(Start:Finish)`, [[readsAsPrimary]]);
    *   - the left operand is grouped when it is an intersection, or when the text it ends with would
-   *     take the `:` ([[leftReadsBack]]): a bare token whose reading of `:` is not this very
-   *     operator (`(A1):Jan`, `A1:(B2:C3)` or `(INDEX(r,1):B5):C6`), an external reference, a
-   *     sheet-qualified range before another qualifier.
+   *     take the `:` and grouping the right operand does not stop it ([[leftReadsBack]]): a bare
+   *     token whose reading of `:` is not this very operator (`(A1):Jan`, `(INDEX(r,1):B5):C6`;
+   *     `A1:(B2:C3)` needs only the right group), an external reference, a sheet-qualified reader
+   *     before another qualifier.
    *
    * Grouping the right operand is tried before grouping the left one, as the candidates `l:r`,
    * `l:(r)`, `(l):r`, `(l):(r)` are, in that order; every unparenthesized text the parser accepts
