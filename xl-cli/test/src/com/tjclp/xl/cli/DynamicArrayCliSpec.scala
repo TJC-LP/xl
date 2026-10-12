@@ -768,6 +768,31 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
   // ---------------------------------------------------------------------------------------------
   // Fourth #721 review
 
+  test("--stream reads the metadata part under the run's --max-size limits") {
+    // a highly compressible metadata part trips the default compression-ratio limit
+    val padded = DynamicArrayFixtures.parts().map { (name, xml) =>
+      if name == "xl/metadata.xml" then name -> (xml + (" " * 200000)) else name -> xml
+    }
+    for
+      src <- source(padded)
+      refused <- CliHarness.run("-f", src.toString, "--stream", "cell", "B1", "--json")
+      lifted <- CliHarness.run(
+        "-f",
+        src.toString,
+        "--max-size",
+        "0",
+        "--stream",
+        "cell",
+        "B1",
+        "--json"
+      )
+    yield
+      assertEquals(refused.exit, 3, refused.toString)
+      assert(refused.stdout.contains("Compression ratio"), refused.stdout)
+      ok(lifted)
+      assert(lifted.stdout.contains("SORT(A1:A5)"), lifted.stdout)
+  }
+
   test("a putf drag over an anchor and its own spill cells releases rather than refuses") {
     for
       src <- withSpill()

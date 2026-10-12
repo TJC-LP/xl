@@ -327,9 +327,14 @@ object MemoryGuard:
     parse: (Path, ReaderConfig) => XLResult[ReadResult] = XlsxReader.readWithWarnings(_, _),
     heap: Long = maxHeapBytes,
     admitLoads: Boolean = true,
-    spill: Either[CliError, Option[Path]] = Right(None)
+    spill: Either[CliError, Option[Path]] = Right(None),
+    streamLimits: ReaderConfig = ReaderConfig.default
   ): ExcelIO[IO] =
+    val limits = streamLimits
     new ExcelIO[IO](handler):
+      // GH-714: the run's --max-size limits for the parts a streaming read holds besides the SST
+      override def streamLimits: ReaderConfig = limits
+
       override def readWith(path: Path, config: ReaderConfig): IO[Workbook] =
         (if admitLoads then admit(path, config, heap, warn) else IO.unit) *>
           blocking(path, "load")(parse(path, config)).flatMap {

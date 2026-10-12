@@ -2215,12 +2215,17 @@ EXAMPLES:
    * refused up front, one that may not fit is announced as `MEMORY_PRESSURE` in the same sink, and
    * a load that exhausts the heap is `RESOURCE_LIMIT` rather than a fatal `OutOfMemoryError`.
    */
-  private def readerCollecting(warnings: Ref[IO, Vector[Warning]], heap: Long): ExcelIO[IO] =
+  private def readerCollecting(
+    warnings: Ref[IO, Vector[Warning]],
+    heap: Long,
+    streamLimits: ReaderConfig
+  ): ExcelIO[IO] =
     MemoryGuard.excel(
       handler =
         warning => warnings.update(_ :+ Warning(WarningCode.READER_WARNING, warning.toString)),
       warn = warning => warnings.update(_ :+ warning),
-      heap = heap
+      heap = heap,
+      streamLimits = streamLimits
     )
 
   /**
@@ -2601,8 +2606,11 @@ EXAMPLES:
   ): IO[ExitCode] =
     val readerConfig = buildReaderConfig(maxSizeOpt)
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      val excel =
-        readerCollecting(warnings, filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor))
+      val excel = readerCollecting(
+        warnings,
+        filePathOpt.fold(MemoryGuard.maxHeapBytes)(MemoryGuard.heapFor),
+        readerConfig
+      )
       val workbookIO: IO[Workbook] = filePathOpt match
         case Some(filePath) => readWorkbook(excel, filePath, readerConfig)
         case None => IO.pure(Workbook(Vector.empty)) // Truly empty workbook for constant formulas
@@ -2872,8 +2880,8 @@ EXAMPLES:
     warnings: Ref[IO, Vector[Warning]],
     mode: OutputMode
   ): IO[Payload] =
-    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath))
     val readerConfig = buildReaderConfig(maxSizeOpt)
+    val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath), readerConfig)
     val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
     // Handle metadata-only commands (instant for any file size)
     cmd match
