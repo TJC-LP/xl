@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.Arity
 import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
-import com.tjclp.xl.formula.parser.ParseError
+import com.tjclp.xl.formula.parser.{ParseError, ReferenceChars}
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -350,7 +350,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
   /** `T:r` with `T` an unqualified token: what `parseRange` and its fallback read. */
   private def tokenReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
-    val end = right.takeWhile(c => c.isLetterOrDigit || c == '$' || c == '!')
+    val end = right.takeWhile(ReferenceChars.isRangeEnd)
     val lexical = CellRange.parse(s"$left:$end").isRight && !right.lift(end.length).contains('(')
     !end.contains('!') && !lexical && !namesAxis(l) && !namesAxis(r) && !isQualified(r)
 
@@ -368,8 +368,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     !qualifierAhead(right) && !lexical && !namesAxis(l) && !namesAxis(r)
 
   /** The characters the sheet-qualified reader takes after `!` (`:` included). */
-  private def qualifiedRefChar(c: Char): Boolean =
-    c.isLetterOrDigit || c == '$' || c == ':' || c == '_' || c == '.' || c == '\\'
+  private def qualifiedRefChar(c: Char): Boolean = ReferenceChars.isQualifiedRef(c)
 
   /**
    * Whether, after a sheet-qualified reference and a `:`, `right` opens with a sheet qualifier the
@@ -805,8 +804,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * and no candidate `:`, a sheet's formulas are never parsed.
    */
   def mayContainComputedRange(text: String): Boolean =
-    def tokenChar(c: Char): Boolean =
-      c.isLetterOrDigit || c == '$' || c == '_' || c == '.' || c == '\\'
+    def tokenChar(c: Char): Boolean = ReferenceChars.isToken(c)
     def skipQuoted(open: Int, quote: Char): Int =
       @annotation.tailrec
       def loop(j: Int): Int =

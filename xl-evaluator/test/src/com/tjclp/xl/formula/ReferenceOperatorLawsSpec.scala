@@ -300,8 +300,8 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
    * The operands a `:` chain is built from, as written: every shape the printer tells apart — bare
    * cells and names (one spelled like a column, `Jan`), qualified cells and names, lexical and
    * qualified ranges (whole columns and rows too), external references, error literals, calls, a
-   * union and an intersection. Inside the LET context `x` is a LET name bound to a cell and `r` one
-   * bound to a range.
+   * union and an intersection, and names using every token character (`.`, `_`, `\`). Inside the
+   * LET context `x` and `n.b_1` are LET names bound to cells and `r` one bound to a range.
    */
   private val chainLeaves: List[String] = List(
     "A1",
@@ -314,6 +314,16 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     "'My Sheet'!B2",
     "Sheet1!Start",
     "Other!Jan",
+    // every token character the readers share (ReferenceChars.isToken): `.`, `_`, `\`, `$`
+    "Sales.Total",
+    "_rate",
+    "\\path",
+    "A$1",
+    "$A1",
+    "Sheet1!Sales.Total",
+    "'My Sheet'!_rate",
+    "Other!\\path",
+    "Sheet1!$A$1:B$2",
     "B2:C3",
     "A:A",
     "1:3",
@@ -337,7 +347,7 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     "(A1:C3 B2:D4)"
   )
 
-  private val letPrefix = "LET(x,A1,r,B1:B3,"
+  private val letPrefix = "LET(x,A1,r,B1:B3,n.b_1,C2,"
 
   /** A `:` tree over the leaves, each node and leaf grouped at random. */
   private def genChain(depth: Int, leaves: List[String]): Gen[String] =
@@ -359,7 +369,7 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     for
       inLet <- Gen.oneOf(false, true)
       depth <- Gen.choose(1, 5)
-      tree <- genChain(depth, if inLet then "x" :: "r" :: chainLeaves else chainLeaves)
+      tree <- genChain(depth, if inLet then "x" :: "r" :: "n.b_1" :: chainLeaves else chainLeaves)
       consumer <- Gen.oneOf("SUM", "ROWS", "COUNTA")
     yield if inLet then (s"=$letPrefix$consumer($tree))", true) else (s"=$consumer($tree)", false)
 

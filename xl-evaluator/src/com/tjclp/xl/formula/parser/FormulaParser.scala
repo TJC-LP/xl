@@ -879,8 +879,7 @@ object FormulaParser:
     @tailrec
     def readIdent(s: ParserState): ParserState =
       s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '_' || c == '$' || c == '.' || c == '\\' =>
-          readIdent(s.advance())
+        case Some(c) if ReferenceChars.isToken(c) => readIdent(s.advance())
         case Some('!') => s // Sheet reference separator
         case _ => s
 
@@ -1273,10 +1272,7 @@ object FormulaParser:
         @tailrec
         def readRef(s: ParserState): ParserState =
           s.currentChar match
-            case Some(c)
-                if c.isLetterOrDigit || c == '$' || c == ':' || c == '_' || c == '.' ||
-                  c == '\\' =>
-              readRef(s.advance())
+            case Some(c) if ReferenceChars.isQualifiedRef(c) => readRef(s.advance())
             case _ => s
 
         val s1 = readRef(state)
@@ -1552,7 +1548,7 @@ object FormulaParser:
     @tailrec
     def readRef(s: ParserState): ParserState =
       s.currentChar match
-        case Some(c) if c.isLetterOrDigit || c == '$' || c == '!' => readRef(s.advance())
+        case Some(c) if ReferenceChars.isRangeEnd(c) => readRef(s.advance())
         case _ => s
 
     val s3 = readRef(s2)
