@@ -443,19 +443,6 @@ class DisplaySpec extends ScalaCheckSuite:
     )
   }
 
-  test("GH-730: a fraction format takes a negative extreme value's magnitude without rounding") {
-    // 38 significant digits at a scale 3 above Int.MinValue: Scala's `abs` rounds to 34 digits,
-    // and that rounding underflowed (ArithmeticException) before the fraction pattern ran.
-    val negative = BigDecimal(
-      new java.math.BigDecimal(
-        BigInt("-28065098193083702104336570848532166107").bigInteger,
-        -2147483645
-      )
-    )
-    val text = NumFmtFormatter.formatValue(CellValue.Number(negative), NumFmt.Custom("# ?/?"))
-    assert(text.startsWith("-"), text)
-  }
-
   property("General cell display: grammar, the 11-character bound and the sign law (GH-672)") {
     val grammar = "-?[0-9]+(\\.[0-9]+)?(E[+-][0-9]{2,})?".r
     // The generic fractional shrinker also rounds and divides BigDecimals, which can overflow

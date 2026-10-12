@@ -176,7 +176,7 @@ class GeneralTextSpec extends ScalaCheckSuite:
       )
       negative <- Gen.oneOf(true, false)
     yield
-      // GH-730: the sign goes into the unscaled value. Scala's unary minus rounds to 34 digits,
+      // GH-707: the sign goes into the unscaled value. Scala's unary minus rounds to 34 digits,
       // which underflows a 35-40 digit value whose scale is near Int.MinValue.
       val signed = if negative then -unscaled else unscaled
       BigDecimal(new java.math.BigDecimal(signed.bigInteger, scale))
@@ -193,7 +193,7 @@ class GeneralTextSpec extends ScalaCheckSuite:
       assert(grammar.matches(text), s"'$text' for $n")
       assert(text.length <= 1 + 16 + 1 + 1 + 10, s"'$text' (${text.length} chars) for $n")
       assertEquals(
-        // exactly negated (GH-730), not through -n's 34-digit rounding
+        // exactly negated (GH-707), not through -n's 34-digit rounding
         NumFmtFormatter.generalText(BigDecimal(n.bigDecimal.negate)),
         if n.signum == 0 then "0" else if text.startsWith("-") then text.drop(1) else "-" + text,
         s"$n"
