@@ -42,8 +42,9 @@ enum EvalError derives CanEqual:
    * @param codecError
    *   The underlying codec error with details
    *
-   * Example: Formula expects number in A1, but A1 contains text → CodecFailed(A1,
-   * TypeMismatch(...))
+   * Example: a caller's decoder passed to `TExpr.ref` refuses a boolean in A1 → CodecFailed(A1,
+   * TypeMismatch(...)). A refusal over a TEXT cell is not CodecFailed: it is Excel's `#VALUE!`
+   * (`ErrorValue`, #709), whichever decoder refused.
    */
   case CodecFailed(ref: ARef, codecError: CodecError)
 
