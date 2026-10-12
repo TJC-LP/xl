@@ -183,7 +183,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         _ <- lookupValueError("VLOOKUP", normalizedLookup)
         colIndex <- ctx.evalExpr(colIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
-        resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(table)
         (targetSheet, tableRange) = resolved
         result <-
           // GH-662: Excel's codes — an index below 1 is #VALUE!, one beyond the table is #REF!
@@ -248,7 +248,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         _ <- lookupValueError("HLOOKUP", normalizedLookup)
         rowIndex <- ctx.evalExpr(rowIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
-        resolved <- Evaluator.resolveRangeLocation(table, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(table)
         (targetSheet, tableRange) = resolved
         result <-
           // GH-662: Excel's codes, as VLOOKUP above
@@ -330,8 +330,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     // GH-394: resolve locations first (Name locations have no static range), then validate
     // the shapes on the resolved ranges
     for
-      resolvedLookup <- Evaluator.resolveRangeLocation(lookupLoc, ctx.sheet, ctx.workbook)
-      resolvedReturn <- Evaluator.resolveRangeLocation(returnLoc, ctx.sheet, ctx.workbook)
+      resolvedLookup <- ctx.resolveRange(lookupLoc)
+      resolvedReturn <- ctx.resolveRange(returnLoc)
       (lookupSheet, lookupArray) = resolvedLookup
       (returnSheet, returnArray) = resolvedReturn
       strip <- xlookupStrip(lookupArray, returnArray).left.map {
@@ -388,11 +388,11 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
         lookupValue <- evalValue(ctx, lookupExpr)
         normalized = normalizeLookupValue(lookupValue)
         _ <- lookupValueError("LOOKUP", normalized)
-        resolved <- Evaluator.resolveRangeLocation(lookupLoc, ctx.sheet, ctx.workbook)
+        resolved <- ctx.resolveRange(lookupLoc)
         (lookupSheet, lookupRange) = resolved
         resultTarget <- resultLocOpt match
           case Some(loc) =>
-            Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map(Some(_))
+            ctx.resolveRange(loc).map(Some(_))
           case None => Right(None)
         values <- lookupRangeValues(lookupRange, lookupSheet, ctx)
         wide = lookupRange.width > lookupRange.height

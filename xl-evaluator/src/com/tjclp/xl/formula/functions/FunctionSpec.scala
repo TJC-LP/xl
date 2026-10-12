@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
-import com.tjclp.xl.{Anchor, CellRange}
+import com.tjclp.xl.{Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
@@ -44,8 +44,37 @@ final case class FunctionFlags(
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
    * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
    */
-  lift: ArrayLift = ArrayLift.Off
-)
+  lift: ArrayLift = ArrayLift.Off,
+  /**
+   * GH-712: an expression argument needs reference identity, its position or shape rather than its
+   * value (ROW, COLUMN, ROWS, COLUMNS), so a LET binding it reads keeps the reference it denotes.
+   */
+  requiresReferenceArguments: Boolean = false,
+  /**
+   * GH-712: the result has one element per row or column of the reference argument (ROW, COLUMN),
+   * so SUMPRODUCT's whole-axis trimming (GH-192) reaches that reference as it does a lifted slot,
+   * keeping `SUMPRODUCT((A:A>5)*ROW(A:A))` aligned. False for shape readers whose answer is the
+   * reference's full extent (ROWS, COLUMNS) and for every other function.
+   */
+  boundsReferenceAxis: Boolean = false,
+  /**
+   * GH-711: True for the selectors IF, IFS, CHOOSE and SWITCH, which return the argument they
+   * select as it is — the reference itself when the call feeds a reference position
+   * (`FunctionSpecsBase.evalSelected`). The flag is the single source of truth for the analyses
+   * that see through a selector: SUMPRODUCT's whole-column trimming bounds every range under one
+   * (`TExprAnalysis.transformRanges`). `Evaluator.referenceFunctions`, which routes a reference
+   * position to the selected reference, lists every flagged spec (a drift law pins it).
+   */
+  selector: Boolean = false
+):
+
+  /**
+   * GH-712: whether SUMPRODUCT's shared whole-axis extent (GH-192) enters this call's arguments — a
+   * lifted call (its lifted slots evaluate element-wise beside the other operands) or one flagged
+   * [[boundsReferenceAxis]]. The single rule for both the static trimming (`TExpr.transformRanges`)
+   * and the evaluator, which drops the extent at any other call.
+   */
+  def entersArrayRangeBounds: Boolean = boundsReferenceAxis || lift != ArrayLift.Off
 
 /**
  * Which scalar slots of a function lift over arrays (see [[FunctionFlags.lift]]).
@@ -148,7 +177,10 @@ final case class EvalContext(
    */
   private[formula] def arrayMode: Boolean = operands.arrayMode
 
-  /** Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. */
+  /**
+   * Shared SUMPRODUCT extent, applied after computing a reference so INDEX keeps its origin. It
+   * shapes arrays only: callers apply it in array mode, never to a scalar answer.
+   */
   private[formula] def boundArrayRange(range: CellRange): CellRange =
     operands.arrayRangeBounds.fold(range)(_(range))
 
@@ -166,51 +198,87 @@ final case class EvalContext(
   private[formula] def selectsReference: Boolean = operands.selectsReference
 
   /**
-   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'). A
-   * reference — a cell or range, a name bound to one, a LET name bound to one, IF/CHOOSE's selected
-   * reference, the reference OFFSET, INDIRECT or INDEX return — reaches the function whole, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]]; any other expression evaluates in the formula's own
-   * mode, its result not collapsed (an array-returning call folds whole), so in a plain cell its
-   * references are intersected: `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a legacy
-   * formula. In array mode, [[evalArrayExpr]].
+   * An argument in Excel's reference operand class (an aggregate's, AND's, OR's, ROWS'): exactly
+   * [[evalReference]], in either mode (GH-711: `AND(IF(TRUE,B:B,A:A))` in an array formula ignores
+   * B's blanks as `AND(B:B)` does). The name says which position asks.
    */
   private[formula] def evalReferenceArg(expr: TExpr[Any]): Either[EvalError, Any] =
-    if arrayMode then evalArrayExpr(expr) else evalReference(expr)
+    evalReference(expr)
 
   /**
    * The reference an expression denotes, in either mode, as a
-   * [[com.tjclp.xl.formula.eval.RangeOperand]] — for the positions that need the reference itself
-   * whatever the formula's mode: the `@` operand, OFFSET's base, the reference IF, IFS, CHOOSE or
-   * SWITCH select for a reference position. An expression that denotes no reference evaluates in
-   * the formula's mode, its result not collapsed.
+   * [[com.tjclp.xl.formula.eval.RangeOperand]] — a cell or range, a name or LET name bound to one,
+   * the reference IF, IFS, CHOOSE or SWITCH select, the one OFFSET, INDIRECT or INDEX return — for
+   * the positions that need the reference itself whatever the formula's mode: a reference-class
+   * argument ([[evalReferenceArg]]), the `@` operand, OFFSET's base, the reference a selector
+   * returns to a reference position. An expression that denotes no reference evaluates in the
+   * formula's mode, its result not collapsed (an array-returning call folds whole): in a plain cell
+   * its references are intersected, so `SUM(A1:A10*B1:B10)` in row 5 is A5*B5, as Excel computes a
+   * legacy formula, and in array mode it is the array.
    */
   private[formula] def evalReference(expr: TExpr[Any]): Either[EvalError, Any] =
     operands.referenceArg.fold(evalArrayExpr(expr))(_(expr))
+
+  /**
+   * The (sheet, range) a range-typed argument slot names — the resolver every function's range slot
+   * uses (GH-710), [[Evaluator.resolveRangeSlot]] with this call's LET environment and name trail.
+   * A written range or cell and a name bound to one resolve statically
+   * ([[Evaluator.resolveRangeLocation]]). A name whose formula computes a reference (OFFSET,
+   * INDIRECT, INDEX, IF or CHOOSE over references — a dynamic range) is evaluated for it, and a LET
+   * name is the reference it is bound to. The error such a formula evaluates to is the slot's error
+   * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
+   * Excel.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private[formula] def resolveRange(
+    location: TExpr.RangeLocation
+  ): Either[EvalError, (Sheet, CellRange)] =
+    Evaluator.resolveRangeSlot(
+      location,
+      sheet,
+      workbook,
+      operands.nameTrail,
+      bindings,
+      operands.nameReference.getOrElse { (name, scope) =>
+        // a context built outside the evaluator: the generic reference path
+        val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+        evalReference(named.asInstanceOf[TExpr[Any]])
+      }
+    )
 
 object EvalContext:
   /**
    * How a call's arguments evaluate. `arrayMode`: the formula evaluates as an array rather than as
    * a plain cell's legacy formula. `referenceArg`: how an argument evaluates in the reference class
    * (the evaluator sets it for every call; None only for a context built outside the evaluator).
-   * `selectsReference`: the call feeds a reference position.
+   * `selectsReference`: the call feeds a reference position. `nameTrail`: the defined names being
+   * resolved around this call (#691's cycle guard), so a range slot's name walk shares it.
+   * `nameReference`: evaluates a defined name for the reference it computes, once the range slot's
+   * static walk has found it computed. The evaluator sets it. A hand-built context without it
+   * evaluates the name through `evalReference`, which without a `referenceArg` is the array
+   * evaluator: a name computing a reference then arrives as its values, and the slot is `#VALUE!`.
    *
    * `arrayRangeBounds`, `boundedArrayArg` — SUMPRODUCT's shared extent, ambient state with a fixed
    * scope. SUMPRODUCT sets it (through `boundedArrayArg`) for each expression argument it
-   * evaluates; it then rides on every evaluator derived inside that argument — nested calls of any
-   * function, LET scopes, a defined name's formula — so a computed whole-column reference there
-   * (`INDEX(A:A,0)`, `XLOOKUP(k,ids,B:B)`, `A1:INDEX(A:A,n)`) stops where the argument's written
-   * ranges do, exactly as SUMPRODUCT's rewrite already clips every range written inside the
-   * argument, nested calls included. Three things end it: a nested SUMPRODUCT, which sets its own
-   * extent for its own arguments; another formula cell read on the way (a precedent, a spill
-   * anchor), which evaluates on a fresh evaluator with none; and the end of the top-level
-   * evaluation, since every public entry point starts without one. Only
-   * `FunctionSpecsBase.boundedReferenceValues` reads it, and only for an axis that runs to the
-   * sheet's edge, so a finite reference keeps its declared shape under it.
+   * evaluates; it then rides along the path its static trimming (`TExpr.transformRanges`) takes —
+   * operators, LET scopes and the calls whose flags answer `entersArrayRangeBounds` (lifted calls;
+   * ROW, COLUMN) — so a computed whole-column reference there (`INDEX(A:A,0)`,
+   * `XLOOKUP(k,ids,B:B)`, `A1:INDEX(A:A,n)`, `ROW(INDEX(A:A,0))`) stops where the argument's
+   * written ranges do. These end it: any other call (MAX, SUM, a nested SUMPRODUCT, which sets its
+   * own), whose arguments evaluate outside it, as Excel reads them whole (GH-712,
+   * `Evaluator.evalCall`); a defined name's own formula; another formula cell read on the way (a
+   * precedent, a spill anchor), which evaluates on a fresh evaluator with none; and the end of the
+   * top-level evaluation, since every public entry point starts without one. It is read through
+   * `boundArrayRange` — by `FunctionSpecsBase.boundedReferenceValues`, only for an axis that runs
+   * to the sheet's edge, so a finite reference keeps its declared shape under it, and by ROW and
+   * COLUMN for a computed reference.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
     selectsReference: Boolean,
+    nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty,
+    nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None,
     arrayRangeBounds: Option[CellRange => CellRange] = None,
     boundedArrayArg: Option[(TExpr[Any], CellRange => CellRange) => Either[EvalError, Any]] = None
   )
@@ -488,12 +556,17 @@ object ArgSpec:
           Right((TExpr.RangeLocation.External(index, name, range, form), tail))
         // GH-394: defined names are accepted in range-typed argument positions —
         // =VLOOKUP(x, named_table, 2), =SUMIF(rev_range, ">1"), =SUMIF(Model!rev_range, …).
-        // The target range resolves at evaluation (Evaluator.resolveRangeLocation); a name
-        // bound to a non-range is a clean per-cell error there, never a parse failure.
+        // The target range resolves at evaluation (EvalContext.resolveRange): a name bound to a
+        // range, or computing one (GH-710); a name bound to a value is a clean per-cell error
+        // there, never a parse failure.
         case TExpr.NameRef(name) :: tail =>
           Right((TExpr.RangeLocation.Name(name, None), tail))
         case TExpr.SheetNameRef(sheet, name) :: tail =>
           Right((TExpr.RangeLocation.Name(name, Some(sheet)), tail))
+        // GH-710: a LET name whose binding is not a literal range — LET(r, dyn, COUNTIF(r, …));
+        // the reference it is bound to resolves at evaluation
+        case TExpr.BindingRef(name) :: tail =>
+          Right((TExpr.RangeLocation.Binding(name), tail))
         // GH-612: SUM(#REF!) / COUNTIF(#REF!, x) — what Excel writes after a delete or an
         // off-grid drag; the slot carries the error and evaluation yields it
         case TExpr.ErrorLit(error, qualifier) :: tail =>
