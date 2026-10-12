@@ -48,6 +48,8 @@ private[xl] object ValueDependencies:
     ReferenceOperators.IntersectionName -> ((_, _) => true),
     // GH-713 introduces this operator separately; retain its reference-only operand semantics
     // before that branch lands so either merge order keeps positioned inspection correct.
+    // TODO(#713): its range operator's name constant replaces this literal once it lands;
+    // ValueDependenciesSpec turns red if the operator registers under another name.
     "(range)" -> ((_, _) => true)
   )
 
@@ -65,7 +67,7 @@ private[xl] object ValueDependencies:
    * never reuse a reader where other bounds apply; build another, as the cycle check does for the
    * one-cell bound around the placement.
    */
-  final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
+  private[xl] final class Reader(bounds: Option[CellRange], home: Option[SheetName]):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
     def reads(expr: TExpr[?]): Set[ARef] = loop(expr, false, Map.empty)

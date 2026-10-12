@@ -106,6 +106,23 @@ class ValueDependenciesSpec extends FunSuite:
     assertEquals(missing, Set.empty[String], "add them to ValueDependencies.referencePassing")
   }
 
+  test("every reference operator is in the table; (range) waits for GH-713's operator") {
+    val operators = ValueDependenciesSpec.referenceOperators.map(_.name).toSet
+    // the walk must see the operators that exist, or the checks below are vacuous
+    assert(
+      Set(ReferenceOperators.UnionName, ReferenceOperators.IntersectionName).subsetOf(operators),
+      operators.toString
+    )
+    assertEquals(
+      operators.filterNot(ValueDependencies.referencePassing.contains),
+      Set.empty[String]
+    )
+    // TODO(#713): "(range)" anticipates its operator. Registered under another name, that name is
+    // missing above; registered as "(range)", nothing is pending here.
+    val pending = ValueDependencies.referencePassing.keySet.filter(_.startsWith("(")) -- operators
+    assert(pending.subsetOf(Set("(range)")), s"operators no spec defines: $pending")
+  }
+
   // --- the address-only rules hold only while those functions never read a value ---------------
 
   /** `formula` evaluated on a sheet whose A1 holds `a1`. */
@@ -181,3 +198,16 @@ class ValueDependenciesSpec extends FunSuite:
     // Reading the range as a value must still retain those cell dependencies.
     assertEquals(reader.reads(computed), Set(ref"A1", ref"D5", ref"D6"))
   }
+
+object ValueDependenciesSpec:
+  /**
+   * Every operator spec ReferenceOperators defines, found by reflection over its accessors (the
+   * operators live outside FunctionRegistry), so a new operator needs no list here.
+   */
+  def referenceOperators: List[FunctionSpec[?]] =
+    ReferenceOperators.getClass.getMethods.toList
+      .filter(m =>
+        m.getParameterCount == 0 && classOf[FunctionSpec[?]].isAssignableFrom(m.getReturnType)
+      )
+      .map(_.invoke(ReferenceOperators))
+      .collect { case spec: FunctionSpec[?] => spec }

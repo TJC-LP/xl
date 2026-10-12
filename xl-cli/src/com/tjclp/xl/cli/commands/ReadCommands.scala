@@ -40,16 +40,21 @@ object ReadCommands:
    * longer than [[MaxCyclePath]] keeps its first [[CycleHead]] cells and its last [[CycleTail]] and
    * counts the cells between. A 20,000-cell chain would otherwise make a 169 KB message.
    */
-  private def cyclic(error: EvalError, formula: String): XLException = error match
-    case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
-      val between = cycle.size - CycleHead - CycleTail
-      val elided = "… (%,d more) …".formatLocal(java.util.Locale.ROOT, between)
-      val ends = cycle.take(CycleHead).map(_.toA1) ++
-        (elided :: cycle.takeRight(CycleTail).map(_.toA1))
-      XLException(
-        XLError.FormulaError(formula, s"Circular reference detected: ${ends.mkString(" → ")}")
-      )
-    case _ => XLException(EvalError.toXLError(error, Some(formula)))
+  private def cyclic(error: EvalError, formula: String): XLException =
+    XLException(EvalError.toXLError(error, Some(formula)) match
+      case reported @ XLError.FormulaError(_, _) =>
+        error match
+          case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
+            reported.copy(reason = s"Circular reference detected: ${elided(cycle)}")
+          case _ => reported
+      case other => other)
+
+  /** A cycle path longer than [[MaxCyclePath]], its middle counted. */
+  private def elided(cycle: List[ARef]): String =
+    val between = cycle.size - CycleHead - CycleTail
+    val middle = "… (%,d more) …".formatLocal(java.util.Locale.ROOT, between)
+    (cycle.take(CycleHead).map(_.toA1) ++ (middle :: cycle.takeRight(CycleTail).map(_.toA1)))
+      .mkString(" → ")
 
   /** The longest cycle path [[cyclic]] prints in full. */
   private val MaxCyclePath = 10
@@ -242,7 +247,7 @@ object ReadCommands:
     override_.split("=", 2).headOption.exists { refStr =>
       Resolve.ref(refStr.trim) match
         case Right((qualifier, Resolve.Target.Cell(ref))) =>
-          ref == cell && qualifier.forall(_ == sheet)
+          ref == cell && qualifier.forall(_.value.equalsIgnoreCase(sheet.value))
         case _ => false
     }
 
@@ -328,15 +333,14 @@ object ReadCommands:
     def checked[A](result: XLResult[A], formula: String): Either[XLException, A] =
       placement.filter(_._2.wasRead) match
         case Some((cell, _)) =>
-          Left(
-            XLException(
-              XLError.FormulaError(
-                formula,
+          val readsItself = EvalError.toXLError(EvalError.CircularRef(List(cell)), Some(formula))
+          Left(XLException(readsItself match
+            case reported @ XLError.FormulaError(_, _) =>
+              reported.copy(reason =
                 s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
                   "(through INDIRECT, OFFSET, a defined name or another sheet's formula)"
               )
-            )
-          )
+            case other => other))
         case None => result.left.map(XLException(_))
 
   /**
@@ -399,7 +403,9 @@ object ReadCommands:
       // the placed evaluator guards that cell, so a read the static check cannot see (INDIRECT,
       // OFFSET, a defined name, another sheet's formula) fails instead of reading its old content
       placedSheet = at.fold(tempSheet)(SheetEvaluator.placed(tempSheet, _, formula))
-      book = at.fold(wb)(_ => wb.put(placedSheet))
+      // The book holds this sheet as evaluated, so a formula on another sheet that reads back
+      // into it sees the `--with` overrides, with `--at`, without it and in evala alike
+      book = wb.put(placedSheet)
       placement = at.map(cell =>
         (cell, SheetEvaluator.placement(formula, wb, tempSheet.name, cell))
       )
@@ -592,7 +598,13 @@ object ReadCommands:
           .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
-            .evaluateArrayFormulaUsing(evalSheet, formula, originRef, evaluator, Some(wb))
+            .evaluateArrayFormulaUsing(
+              evalSheet,
+              formula,
+              originRef,
+              evaluator,
+              Some(precedents.book)
+            )
             .left
             .map(XLException(_))
         )
@@ -614,7 +626,8 @@ object ReadCommands:
                 val value = ValueParser.parseValue(valueStr.trim)
                 IO.pure(s.put(ref, value))
               case (Some(sheetName), Resolve.Target.Cell(ref)) =>
-                if sheetName == sheet.name then
+                // a sheet's own name in any case, as Excel compares sheet names
+                if sheetName.value.equalsIgnoreCase(sheet.name.value) then
                   val value = ValueParser.parseValue(valueStr.trim)
                   IO.pure(s.put(ref, value))
                 else

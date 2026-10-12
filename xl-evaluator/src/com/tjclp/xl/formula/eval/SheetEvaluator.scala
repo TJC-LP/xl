@@ -861,14 +861,14 @@ object SheetEvaluator:
    * instead of answering with the cell's old content, and [[wasRead]] records it even when the
    * failure is swallowed (IFERROR takes any failure). For the reads to reach the guard, the caller
    * puts an uncached formula at `at` ([[placed]]) in the sheet it evaluates on and in the workbook
-   * it passes. Single-use, like the memo it holds.
+   * it passes. Single-use, like the guard it holds.
    */
   private[xl] final class Placement private[SheetEvaluator] (
     val evaluator: Evaluator,
-    memo: Evaluator.EvalMemo
+    guard: Evaluator.PlacementGuard
   ):
     /** Whether the evaluation read the placement: the plain cell there would be circular. */
-    def wasRead: Boolean = memo.placementRead
+    def wasRead: Boolean = guard.read
 
   /** A [[Placement]] for `formula` at `at` on the sheet named `sheet` of `workbook`. */
   private[xl] def placement(
@@ -877,13 +877,13 @@ object SheetEvaluator:
     sheet: SheetName,
     at: ARef
   ): Placement =
-    val (evaluator, memo) = Evaluator.placedInstance(
+    val (evaluator, guard) = Evaluator.placedInstance(
       Rng.system,
       Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook),
       sheet,
       at
     )
-    new Placement(evaluator, memo)
+    new Placement(evaluator, guard)
 
   /** `sheet` with `formula` placed, uncached, at `at`: what a [[Placement]] needs there. */
   private[xl] def placed(sheet: Sheet, at: ARef, formula: String): Sheet =

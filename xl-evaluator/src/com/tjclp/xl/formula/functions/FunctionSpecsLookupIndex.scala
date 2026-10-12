@@ -207,14 +207,23 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         matchType <- ctx.evalExpr(matchTypeExpr)
         resolved <- Evaluator.resolveRangeLocation(lookupArray, ctx.sheet, ctx.workbook)
         (targetSheet, lookupRange) = resolved
+        // An uncached formula in the range evaluates, as a reference to it would, rather than
+        // reading as its bare record; GH-715: so a read of a positioned evaluation's placement
+        // reaches its guard
+        values <- {
+          val read = rangeCellReader(targetSheet, ctx)
+          lookupRange.cells.toList
+            .foldLeft[Either[EvalError, List[CellValue]]](Right(Nil)) { (acc, ref) =>
+              acc.flatMap(vs => read(ref).map(_ :: vs))
+            }
+            .map(_.reverse)
+        }
         result <- {
           // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
           // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
           val matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
           val cells: List[(Int, CellValue)] =
-            lookupRange.cells.toList.zipWithIndex.map { case (ref, idx) =>
-              (idx + 1, targetSheet(ref).value)
-            }
+            values.zipWithIndex.map { case (value, idx) => (idx + 1, value) }
 
           val positionOpt: Option[Int] = matchTypeInt match
             case 0 =>

@@ -208,6 +208,21 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
+    // GH-715: COUNTA and COUNTBLANK read the cell's record without evaluating it; a positioned
+    // evaluation's placement is still read, so its guard decides
+    ctx.memo
+      .flatMap(_.guard(targetSheet, at))
+      .fold(triageRecord(agg, targetSheet, at, ctx, acc))(
+        Left(_)
+      )
+
+  private def triageRecord[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
+    ctx: EvalContext,
+    acc: A
+  ): Either[EvalError, A] =
     val cellValue = targetSheet(at).value
     if agg.countsNonEmpty then
       // COUNTA mode: count any non-empty cell

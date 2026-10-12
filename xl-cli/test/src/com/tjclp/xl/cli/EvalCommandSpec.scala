@@ -587,6 +587,32 @@ class EvalCommandSpec extends CatsEffectSuite:
       readsPlacement(stale.put(dynamicPrecedent), "=C1+1", "D5", "D5")
   }
 
+  test("GH-715: every reader family that reaches the placement trips the guard, under IFERROR") {
+    // Match-style readers (COUNTIF, SUMIF, MATCH, the lookups) evaluate an uncached cell
+    // themselves rather than through a cell reference; each must still see the guard. A range slot
+    // takes no INDIRECT, so defined names hide the ranges from the static check: col is D1:D9 and
+    // block D1:E9, both holding the placement D5.
+    val named = stale.copy(metadata =
+      stale.metadata.copy(definedNames =
+        Vector(DefinedName("col", "Test!$D$1:$D$9"), DefinedName("block", "Test!$D$1:$E$9"))
+      )
+    )
+    List(
+      "=IFERROR(COUNTIF(col,1),0)",
+      "=IFERROR(COUNTIFS(col,1),0)",
+      "=IFERROR(SUMIF(col,\">0\"),0)",
+      "=IFERROR(AVERAGEIF(col,\">0\"),0)",
+      "=IFERROR(MATCH(7,col,0),0)",
+      "=IFERROR(VLOOKUP(7,block,2,FALSE),0)",
+      "=IFERROR(XLOOKUP(7,col,col),0)",
+      "=IFERROR(SUMPRODUCT(col),0)",
+      "=IFERROR(SUM(col),0)",
+      "=IFERROR(COUNTA(col),0)",
+      "=IFERROR(COUNTBLANK(col),0)",
+      "=IFERROR(SUM(INDIRECT(\"D1:D9\")),0)"
+    ).foldLeft(IO.unit)((acc, formula) => acc >> readsPlacement(named, formula, "D5", "D5"))
+  }
+
   test("GH-715: run-time references elsewhere evaluate; INDEX over the placement is static") {
     val selector = staleTest.put(ref"C1", CellValue.Number(BigDecimal(5)))
     for
@@ -603,6 +629,49 @@ class EvalCommandSpec extends CatsEffectSuite:
   test("GH-715: a LET body that returns its bound placement reads it") {
     circularAt(staleTest, "=LET(x,D5,x)", "D5", "D5 → D5") >>
       circularAt(staleTest, "=LET(x,Test!D5,x+0)", "D5", "D5 → D5")
+  }
+
+  test("GH-715: a --with qualifier names the evaluated sheet in any case, as Excel's names do") {
+    // Intended: `test!D5` names Test, as sheet names compare in Excel. So the override of the
+    // placement is the USAGE refusal, and a differently cased override elsewhere applies.
+    for
+      clash <- ReadCommands
+        .eval(stale, Some(staleTest), "=A5+1", Some("Test!D5"), List("test!D5=3"))
+        .attempt
+      beside <- ReadCommands.eval(stale, Some(staleTest), "=A5+1", Some("D5"), List("TEST!A5=3"))
+      positionless <- ReadCommands.eval(stale, Some(staleTest), "=A5+1", None, List("test!A5=3"))
+    yield
+      clash match
+        case Left(e: CliException) => assertEquals(e.error.code, ErrorCode.USAGE)
+        case other => fail(s"expected USAGE, got $other")
+      assert(beside.contains("Result: 4 (number)"), beside)
+      assert(positionless.contains("Result: 4 (number)"), positionless)
+  }
+
+  test("GH-715: --at a cell on a sheet with no cells, read by the formula, is circular") {
+    val empty = Sheet("Empty")
+    circularIn(Workbook(Vector(empty)), Some(empty), "=D5", "D5", "D5 → D5") >>
+      circularIn(Workbook(Vector(empty)), Some(empty), "=SUM(D:D)", "D5", "D5 → D5")
+  }
+
+  test(
+    "GH-715: --with reaches another sheet's read-back alike with --at, without it, and in evala"
+  ) {
+    // Other!A1 reads Data!B1 back; the override of B1 must reach it in every mode.
+    val data = Sheet("Data").put(ref"B1", CellValue.Number(BigDecimal(5)))
+    val other = Sheet("Other").put(ref"A1", CellValue.Formula("=Data!B1*2"))
+    val wb = Workbook(Vector(data, other))
+    val overrides = List("B1=10")
+    for
+      at <- ReadCommands.eval(wb, Some(data), "=Other!A1", Some("D5"), overrides)
+      positionless <- ReadCommands.eval(wb, Some(data), "=Other!A1+0*B1", None, overrides)
+      qualifiedOnly <- ReadCommands.eval(wb, Some(data), "=Other!A1", None, overrides)
+      array <- ReadCommands.evalArray(wb, Some(data), "=Other!A1+0*B1", None, overrides)
+    yield
+      assert(at.contains("Result: 20 (number)"), at)
+      assert(positionless.contains("Result: 20 (number)"), positionless)
+      assert(qualifiedOnly.contains("Result: 20 (number)"), qualifiedOnly)
+      assert(array.contains("20"), array)
   }
 
   test("GH-715: --with on the --at cell itself is USAGE: the formula is that cell") {

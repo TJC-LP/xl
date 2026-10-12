@@ -23,7 +23,31 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   ): Either[EvalError, CellValue] =
     val lookupCells = lookupArray.cells.toVector
     val returnCells = returnArray.cells.toVector
+    val readLookup = rangeCellReader(lookupSheet, ctx)
+    readAll(lookupCells, readLookup).flatMap(keys =>
+      xlookupIn(
+        keys,
+        returnSheet,
+        returnCells,
+        lookupValue,
+        ifNotFoundOpt,
+        matchMode,
+        searchMode,
+        ctx
+      )
+    )
 
+  /** [[performXLookup]] over the lookup array's values, read as references to them would be. */
+  private def xlookupIn(
+    keys: IndexedSeq[CellValue],
+    returnSheet: Sheet,
+    returnCells: Vector[ARef],
+    lookupValue: ExprValue,
+    ifNotFoundOpt: Option[AnyExpr],
+    matchMode: Int,
+    searchMode: Int,
+    ctx: EvalContext
+  ): Either[EvalError, CellValue] =
     // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —
     // a ref to a cell holding "k2" must match exactly like the literal "k2".
     val lookup = normalizeLookupValue(lookupValue)
@@ -31,8 +55,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     // GH-55: accept binary-search modes 2 (ascending) and -2 (descending). Linear iteration in the
     // correct direction yields correct results; -2 iterates reversed like -1 (descending order).
     val indices =
-      if searchMode == -1 || searchMode == -2 then lookupCells.indices.reverse
-      else lookupCells.indices
+      if searchMode == -1 || searchMode == -2 then keys.indices.reverse
+      else keys.indices
 
     val wildcardCriterionOpt = lookup match
       case ExprValue.Text(text) =>
@@ -45,7 +69,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     // included); a linear search, so a tie keeps the first key in search order
     def approximate(direction: Int): Option[Int] =
       approximateMatch(
-        indices.map(idx => (idx, lookupSheet(lookupCells(idx)).value)),
+        indices.map(idx => (idx, keys(idx))),
         lookup,
         direction,
         lastOnTie = false
@@ -53,26 +77,39 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
     val matchedIndexOpt = matchMode match
       case 0 =>
-        indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
-          matchesLookupExact(cellValue, lookup)
-        }
+        indices.find(idx => matchesLookupExact(keys(idx), lookup))
       case -1 => approximate(-1)
       case 1 => approximate(1)
       case 2 =>
         indices.find { idx =>
-          val cellValue = lookupSheet(lookupCells(idx)).value
+          val cellValue = keys(idx)
           matchesLookupExact(cellValue, lookup) ||
           wildcardCriterionOpt.exists(CriteriaMatcher.matches(cellValue, _))
         }
       case _ => None
 
     matchedIndexOpt match
+      // the return cell as its record: XLOOKUP hands back the cell, which a reference-only
+      // consumer (ROWS) never reads, as ValueDependencies.referencePassing assumes (#720)
       case Some(idx) => Right(unwrapCachedValue(returnSheet(returnCells(idx)).value))
       case None =>
         ifNotFoundOpt match
           case Some(expr) => evalValue(ctx, expr).map(toCellValue)
           case None => Right(CellValue.Error(CellError.NA))
+
+  /**
+   * The cells' values through `read`: an uncached formula evaluates, as a reference to it would,
+   * rather than reading as its bare record. GH-715: so a read of a positioned evaluation's
+   * placement reaches its guard.
+   */
+  private def readAll(
+    refs: IndexedSeq[ARef],
+    read: ARef => Either[EvalError, CellValue]
+  ): Either[EvalError, IndexedSeq[CellValue]] =
+    refs
+      .foldLeft[Either[EvalError, Vector[CellValue]]](Right(Vector.empty)) { (acc, ref) =>
+        acc.flatMap(values => read(ref).map(values :+ _))
+      }
 
   /**
    * VLOOKUP/HLOOKUP's search over the key line: approximate (range_lookup TRUE) through the shared
@@ -141,23 +178,22 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val keyCol0 = tableRange.colStart.index0
             val rowStart0 = tableRange.rowStart.index0
             val resultCol0 = keyCol0 + (colIndex - 1)
-            val keys = (0 until tableRange.height).map { i =>
-              targetSheet(ARef.from0(keyCol0, rowStart0 + i)).value
-            }
-            legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
-              case Some(rowIndex) =>
-                Right(
-                  unwrapCachedValue(targetSheet(ARef.from0(resultCol0, rowStart0 + rowIndex)).value)
-                )
-              case None =>
-                // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
-                // with the diagnostic kept as the error's context for putf/eval error text
-                val mode = if rangeMatch then "approximate" else "exact"
-                Left(
-                  lookupNotFound(
-                    s"VLOOKUP $mode match not found: VLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $colIndex, ${renderBoolean(rangeMatch)})"
+            val read = rangeCellReader(targetSheet, ctx)
+            val keyRefs = (0 until tableRange.height).map(i => ARef.from0(keyCol0, rowStart0 + i))
+            readAll(keyRefs, read).flatMap { keys =>
+              legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
+                case Some(rowIndex) =>
+                  read(ARef.from0(resultCol0, rowStart0 + rowIndex)).map(unwrapCachedValue)
+                case None =>
+                  // GH-662: a miss is Excel's #N/A — IFNA/ISNA-visible, cached when unguarded —
+                  // with the diagnostic kept as the error's context for putf/eval error text
+                  val mode = if rangeMatch then "approximate" else "exact"
+                  Left(
+                    lookupNotFound(
+                      s"VLOOKUP $mode match not found: VLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $colIndex, ${renderBoolean(rangeMatch)})"
+                    )
                   )
-                )
+            }
       yield result
     }
 
@@ -206,22 +242,21 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             val keyRow0 = tableRange.rowStart.index0
             val colStart0 = tableRange.colStart.index0
             val resultRow0 = keyRow0 + (rowIndex - 1)
-            val keys = (0 until tableRange.width).map { i =>
-              targetSheet(ARef.from0(colStart0 + i, keyRow0)).value
-            }
-            legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
-              case Some(colIdx) =>
-                Right(
-                  unwrapCachedValue(targetSheet(ARef.from0(colStart0 + colIdx, resultRow0)).value)
-                )
-              case None =>
-                // GH-662: the typed #N/A, as VLOOKUP above
-                val mode = if rangeMatch then "approximate" else "exact"
-                Left(
-                  lookupNotFound(
-                    s"HLOOKUP $mode match not found: HLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $rowIndex, ${renderBoolean(rangeMatch)})"
+            val read = rangeCellReader(targetSheet, ctx)
+            val keyRefs = (0 until tableRange.width).map(i => ARef.from0(colStart0 + i, keyRow0))
+            readAll(keyRefs, read).flatMap { keys =>
+              legacyLookupIndex(keys, normalizedLookup, rangeMatch) match
+                case Some(colIdx) =>
+                  read(ARef.from0(colStart0 + colIdx, resultRow0)).map(unwrapCachedValue)
+                case None =>
+                  // GH-662: the typed #N/A, as VLOOKUP above
+                  val mode = if rangeMatch then "approximate" else "exact"
+                  Left(
+                    lookupNotFound(
+                      s"HLOOKUP $mode match not found: HLOOKUP(${renderLookupValue(normalizedLookup)}, ${table.toA1}, $rowIndex, ${renderBoolean(rangeMatch)})"
+                    )
                   )
-                )
+            }
       yield result
     }
 

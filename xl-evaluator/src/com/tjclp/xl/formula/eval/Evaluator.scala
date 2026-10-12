@@ -149,26 +149,27 @@ object Evaluator:
   /**
    * GH-715: [[spillTrackingInstance]] for a formula placed at `at` on the sheet named `sheet`: one
    * [[EvalMemo]] guarding that cell serves every read from depth 0 on, so a read of the placement
-   * by any path is a `CircularRef`, and the returned memo's `placementRead` records it. The caller
-   * puts an uncached formula at `at`, in the sheet it evaluates on and in the workbook it passes,
-   * so reads reach the memo.
+   * by any path is a `CircularRef`, and the returned guard records the read even when IFERROR
+   * swallows that error (IFERROR takes any failure). The caller puts an uncached formula at `at`,
+   * in the sheet it evaluates on and in the workbook it passes, so reads reach the memo.
    */
   private[formula] def placedInstance(
     rng: Rng,
     trackSpills: Boolean,
     sheet: SheetName,
     at: ARef
-  ): (Evaluator, EvalMemo) =
-    val memo = new EvalMemo(Some((sheet, at)))
+  ): (Evaluator, PlacementGuard) =
+    val guard = new PlacementGuard(sheet, at)
     val evaluator = TotalEvaluator(
       new EvaluatorWithDepth(
         0,
         rng = rng,
-        memo = Some(memo),
-        aggregateMemo = Some(spillTracking(trackSpills))
+        memo = Some(new EvalMemo(Some(guard))),
+        aggregateMemo = Some(spillTracking(trackSpills)),
+        guard = Some(guard)
       )
     )
-    (evaluator, memo)
+    (evaluator, guard)
 
   /**
    * GH-695: whether any formula in the book (cells or defined names) may read a spill — `x#` or its
@@ -760,7 +761,8 @@ object Evaluator:
             rng = rng,
             memo = Some(memo),
             workbookPath = workbookPath,
-            aggregateMemo = aggregateMemo
+            aggregateMemo = aggregateMemo,
+            guard = memo.placement
           )
             .eval(expr, targetSheet, clock, workbook, currentCell) match
             case Right(result) => Right(EvalResult.toCellValue(result))
@@ -818,8 +820,30 @@ object Evaluator:
             rng = rng,
             memo = Some(memo),
             workbookPath = workbookPath,
-            aggregateMemo = aggregateMemo
+            aggregateMemo = aggregateMemo,
+            guard = memo.placement
           ).eval(expr, targetSheet, clock, workbook, Some(anchor))
+
+  /**
+   * GH-715: the cell a positioned evaluation places its formula in (`at` on the sheet named
+   * `sheet`), and whether anything read it. The evaluator carries it (every derived evaluator gets
+   * it, a required constructor argument of [[EvaluatorWithDepth]]) as well as the memo, so a reader
+   * that has to start a fresh memo still guards the placement, and every memo of the evaluation
+   * shares the one record of the read. Single-threaded, like the memo.
+   */
+  private[formula] final class PlacementGuard(sheet: SheetName, at: ARef):
+    // Local mutation like EvalMemo's map: one evaluation pass, one thread
+    @SuppressWarnings(Array("org.wartremover.warts.Var"))
+    private var wasRead = false
+
+    /** Whether anything read the placement. */
+    def read: Boolean = wasRead
+
+    /** The read's error when `ref` on `onSheet` is the placement, recording the read. */
+    def check(onSheet: Sheet, ref: ARef): Option[EvalError] =
+      val guarded = ref == at && onSheet.name == sheet
+      if guarded then wasRead = true
+      Option.when(guarded)(EvalError.CircularRef(List(ref)))
 
   /**
    * GH-346: per-pass memo for recursively evaluated uncached formula cells.
@@ -856,7 +880,7 @@ object Evaluator:
    * circular reference the plain cell there would be: `CircularRef(List(at))`, a one-cell path no
    * dependency-graph cycle has, never the cell's old content.
    */
-  private[formula] final class EvalMemo(placement: Option[(SheetName, ARef)]):
+  private[formula] final class EvalMemo(val placement: Option[PlacementGuard]):
     /** The ordinary memo: no cell is guarded. */
     def this() = this(None)
 
@@ -876,19 +900,7 @@ object Evaluator:
      * formula without this memo's lookup ([[evalCrossSheetFormula]], [[evalSpillFormula]]) ask too.
      */
     def guard(sheet: Sheet, at: ARef): Option[EvalError] =
-      val guarded = placement.exists((name, cell) => cell == at && sheet.name == name)
-      if guarded then placementReads = true
-      Option.when(guarded)(EvalError.CircularRef(List(at)))
-
-    /**
-     * Whether anything read the guarded placement. The error a read returns can be swallowed
-     * (IFERROR takes any failure), but the read itself still made the plain cell circular.
-     */
-    def placementRead: Boolean = placementReads
-
-    // Local mutation like `bySheet`: the memo is single-threaded and never escapes its pass
-    @SuppressWarnings(Array("org.wartremover.warts.Var"))
-    private var placementReads = false
+      placement.flatMap(_.check(sheet, at))
 
     private def memoized(
       sheet: Sheet,
@@ -1144,6 +1156,16 @@ private class EvaluatorImpl(
    */
   protected def memoOpt: Option[Evaluator.EvalMemo] = None
 
+  /** GH-715: the placement a positioned evaluation guards; None outside one. */
+  protected def placementGuard: Option[Evaluator.PlacementGuard] = None
+
+  /**
+   * The pass's memo, or a fresh one where recursion begins here. GH-715: a fresh memo inherits the
+   * evaluator's placement guard, so the guard never depends on a memo having been threaded.
+   */
+  protected def passMemo: Evaluator.EvalMemo =
+    memoOpt.getOrElse(new Evaluator.EvalMemo(placementGuard))
+
   /** One workbook recalculation generation's raw-range aggregate memo, absent for public eval. */
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
 
@@ -1222,7 +1244,7 @@ private class EvaluatorImpl(
                     // GH-161 review: Apply decoder to Cell with evaluated result (type-safe)
                     // GH-161 review: Pass currentDepth for cycle protection
                     // GH-346: memoized per pass — a cell evaluates once, not once per path
-                    val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+                    val memo = passMemo
                     memo
                       .getOrCompute(targetSheet, at) {
                         // at its own position: an implicit intersection there reads its own row
@@ -1302,7 +1324,7 @@ private class EvaluatorImpl(
             decodeOrCarried(at, cell, decode)
           case CellValue.Formula(formulaStr, None, kind) =>
             // GH-346: memoized per pass — a cell evaluates once, not once per path
-            val memo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+            val memo = passMemo
             memo
               .getOrCompute(sheet, at) {
                 // at its own position: an implicit intersection there reads its own row
@@ -1568,7 +1590,7 @@ private class EvaluatorImpl(
     // recurse through the same memo, so a shared precedent evaluates once per pass. Created
     // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
     // top-level evaluations.
-    val callMemo = memoOpt.getOrElse(new Evaluator.EvalMemo)
+    val callMemo = passMemo
     // GH-197: Array-aware evaluator for functions like SUMPRODUCT that accept array expressions.
     // GH-193: carries the LET environment and recursion depth so array-evaluated arguments
     // (e.g. SUM over a range-valued binding) still resolve in-scope names.
@@ -1581,7 +1603,8 @@ private class EvaluatorImpl(
         Some(callMemo),
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        placementGuard
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -1802,7 +1825,7 @@ private class EvaluatorImpl(
         workbook,
         currentDepth,
         rng,
-        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        passMemo,
         workbookPath,
         aggregateMemoOpt
       )(at)
@@ -1889,7 +1912,8 @@ private class EvaluatorImpl(
         memoOpt,
         resolvingNames,
         workbookPath,
-        aggregateMemoOpt
+        aggregateMemoOpt,
+        placementGuard
       )
     val envResult = letBindings.foldLeft[Either[EvalError, Map[String, Any]]](Right(bindings)) {
       case (Left(err), _) => Left(err)
@@ -2089,7 +2113,8 @@ private class EvaluatorImpl(
               memoOpt,
               trail,
               workbookPath,
-              aggregateMemoOpt
+              aggregateMemoOpt,
+              placementGuard
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -2141,7 +2166,7 @@ private class EvaluatorImpl(
       workbook,
       currentDepth,
       rng,
-      memoOpt.getOrElse(new Evaluator.EvalMemo),
+      passMemo,
       workbookPath,
       aggregateMemoOpt
     )
@@ -2384,7 +2409,7 @@ private class EvaluatorImpl(
         workbook,
         currentDepth,
         rng,
-        memoOpt.getOrElse(new Evaluator.EvalMemo),
+        passMemo,
         workbookPath,
         aggregateMemoOpt
       )
@@ -2669,7 +2694,9 @@ private class EvaluatorWithDepth(
   memo: Option[Evaluator.EvalMemo] = None,
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
-  aggregateMemo: Option[Evaluator.AggregateMemo] = None
+  aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  // GH-715: required, so every derived evaluator decides it; see Evaluator.PlacementGuard
+  guard: Option[Evaluator.PlacementGuard]
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
@@ -2680,6 +2707,7 @@ private class EvaluatorWithDepth(
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
+  override protected def placementGuard: Option[Evaluator.PlacementGuard] = guard
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorWithDepth(
       depth,
@@ -2689,5 +2717,6 @@ private class EvaluatorWithDepth(
       memo,
       resolvingNames,
       workbookPath,
-      aggregateMemo
+      aggregateMemo,
+      guard
     )
