@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, CriteriaMat
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
@@ -14,12 +14,13 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
    * GH-713: the 0-based position of XLOOKUP's match along its lookup vector (one row or column —
    * `xlookupStrip` has checked the shape), if any.
    *
-   * Only the positions up to the sheet's used range are read: every position past it is blank, so
-   * the first of them in search order stands for them all (`XLOOKUP(k,A:A,B:M)` reads the data, not
-   * a million cells). The answer is unchanged in every mode: an exact or wildcard match takes the
-   * first match in search order, and the approximate modes keep the first of equal keys, so a blank
-   * key, a reverse search (`search_mode` -1/-2) or a next-smaller/larger match that lands on the
-   * blanks lands on the same position it did when every cell was read.
+   * A vector that runs to the sheet's edge is read only up to the sheet's used range: every
+   * position past it is blank, so the first of them in search order stands for them all
+   * (`XLOOKUP(k,A:A,B:M)` reads the data, not a million cells). The answer is unchanged in every
+   * mode: an exact or wildcard match takes the first match in search order, and the approximate
+   * modes keep the first of equal keys, so a blank key, a reverse search (`search_mode` -1/-2) or a
+   * next-smaller/larger match that lands on the blanks lands on the same position it did when every
+   * cell was read.
    */
   private def xlookupIndex(
     lookupValue: ExprValue,
@@ -33,13 +34,22 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     def at(i: Int): ARef =
       if vertical then ARef.from0(lookupArray.colStart.index0, lookupArray.rowStart.index0 + i)
       else ARef.from0(lookupArray.colStart.index0 + i, lookupArray.rowStart.index0)
-    // positions [0, read) reach the used range; [read, size) lie past it, blank
-    val read = lookupSheet.usedRange.fold(0) { used =>
-      val (start, usedEnd) =
-        if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
-        else (lookupArray.colStart.index0, used.colEnd.index0)
-      math.max(0, math.min(size, usedEnd - start + 1))
-    }
+    // positions [0, read) reach the used range; [read, size) lie past it, blank. Only a vector
+    // that runs to the sheet's edge (`A:A`, `2:2`) is clamped: `usedRange` scans every populated
+    // cell, so a bounded lookup (`$A$2:$A$50`) — the common case — never pays for it, as in
+    // SUMPRODUCT's computeBounds
+    val reachesEdge =
+      if vertical then lookupArray.rowEnd.index0 == Row.MaxIndex0
+      else lookupArray.colEnd.index0 == Column.MaxIndex0
+    val read =
+      if !reachesEdge then size
+      else
+        lookupSheet.usedRange.fold(0) { used =>
+          val (start, usedEnd) =
+            if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
+            else (lookupArray.colStart.index0, used.colEnd.index0)
+          math.max(0, math.min(size, usedEnd - start + 1))
+        }
     def valueAt(i: Int): CellValue = lookupSheet(at(i)).value
 
     // GH-467: dereference cell-ref lookup values and coerce dates to serials before comparing —

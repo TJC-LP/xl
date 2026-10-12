@@ -301,8 +301,10 @@ trait FunctionSpecsBase:
     // first, before any corner is computed from it.
     if reference.height <= 0 || reference.width <= 0 then Right(ArrayResult.empty)
     else
-      val used = targetSheet.usedRange
-      def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: Option[Int]): Int =
+      // `usedRange` scans every populated cell: read it only for an axis that reaches the sheet's
+      // edge, never for a bounded reference (as SUMPRODUCT's computeBounds keeps it off that path)
+      lazy val used = targetSheet.usedRange
+      def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: => Option[Int]): Int =
         if hi < sheetLast then hi
         else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
       val rowEnd = end(
