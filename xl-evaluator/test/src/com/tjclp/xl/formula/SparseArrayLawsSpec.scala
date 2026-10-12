@@ -20,6 +20,10 @@ import com.tjclp.xl.styles.units.StyleId
  */
 class SparseArrayLawsSpec extends ScalaCheckSuite:
 
+  // The regression sheets (a header over 200,000 rows, 600,000 rows plus B1) take ~6 s locally but
+  // over 30 s on a loaded CI runner, mostly building the sheets
+  override val munitTimeout = scala.concurrent.duration.Duration(120, "s")
+
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(300)
 
