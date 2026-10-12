@@ -101,6 +101,11 @@ private[formula] object SumProductTail:
    *   - no argument also reads a bounded range running more than one row (column) along the axis as
    *     a value: beside a whole column it is another height, which a selector may pick
    *     (`IF(A1>0,B:B,C1:C5)`) and no single blank row stands for.
+   *   - no argument reads a reference's position along the axis (a call flagged
+   *     [[FunctionFlags.boundsReferenceAxis]]: ROW, COLUMN). SUMPRODUCT's shared extent reaches
+   *     into ROW(A:A) (GH-712), so its whole column moves onto the line like any other, but the
+   *     line's one row stands for no blank row's number: `(A:A="")*ROW(A:A)` varies from row to
+   *     row, so it keeps the trimmed sum.
    *   - no argument draws a random number ([[draws]]), directly or through a defined name
    *     (`drawsViaName`): reading the line evaluates every non-range part of the argument a second
    *     time, and `RAND()` must draw once.
@@ -122,7 +127,8 @@ private[formula] object SumProductTail:
       case Right(expr) =>
         val line = TExpr.transformRanges(expr, (_, r) => tail.line(r))
         (
-          readsLineOnly(expr, line) && !WorkbookAudit.callsWhere(expr, drawsViaName, draws),
+          readsLineOnly(expr, line) && !WorkbookAudit.callsWhere(expr, drawsViaName, draws) &&
+            !WorkbookAudit.callsWhere(expr, (_, _) => false, _.flags.boundsReferenceAxis),
           Right(line)
         )
     }

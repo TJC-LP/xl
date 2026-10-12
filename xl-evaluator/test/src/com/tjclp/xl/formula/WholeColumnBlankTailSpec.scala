@@ -159,15 +159,15 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // ...while beside one that is, SUM's range slot is one fixed reference and the line repeats
     // it on every blank row: 1048574 * SUM(B:B) (LibreOffice: 1048574)
     assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(B:B))"), Right(num(1048574)))
-    // ROW of a range is its first row in xl (documented in LIMITATIONS; Excel and LibreOffice
-    // fold every row: 1048571), so ROW(A:A) is no element source and nothing is read twice
+    // ROW(A:A) is a position reader, so it has no tail: inside SUMPRODUCT its array spans the
+    // kept rows only (rows 1-2, neither above 5; Excel and LibreOffice fold every row: 1048571)
     assertEquals(eval("=SUMPRODUCT(--(ROW(A:A)>5))"), Right(num(0)))
     // whole columns mixed with whole rows: no tail, the used-range blanks only (B2), where
     // Excel counts every blank cell of the sheet (documented in LIMITATIONS)
     assertEquals(eval("=SUMPRODUCT(--(A:XFD=\"\"))"), Right(num(1)))
     // the same column under ROW stays whole, so no tail: the trimmed sum, A1 and A2 not blank.
-    // Excel and LibreOffice sum the blank rows' numbers (549756338173); xl's ROW of a range is its
-    // first row, and the plan rejects the shape on its own whatever ROW returns
+    // Excel and LibreOffice sum the blank rows' numbers (549756338173); ROW reads a position, so
+    // the plan rejects the shape whatever ROW returns, and the kept rows hold no blank in A
     assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(A:A))"), Right(num(0)))
     assertEquals(eval("=SUMPRODUCT((A:A=\"\")*ROW(B:B))"), Right(num(0)))
   }
@@ -197,8 +197,8 @@ class WholeColumnBlankTailSpec extends FunSuite:
       .getOrElse(fail("rows 1-2 kept, so a tail"))
     assertEquals((tail.count, tail.kept), (1048574L, 2L))
     def plan(inner: String, extent: Int) = SumProductTail.plan(tail, args(inner), extent, _ => true)
-    // an argument whose whole column no transform moved is never read over the blank row: ROW
-    // keeps A:A, and at any extent the plan is empty
+    // a position reader is never read over the blank row: the line's one row stands for no
+    // trimmed row's number (ROW(A:A) on the line is that row), so at any extent the plan is empty
     assertEquals(plan("--(ROW(A:A)>5)", 1), None)
     assertEquals(plan("--(ROW(A:A)>5)", 2), None)
     // an argument that came back at another extent than the kept rows (a whole column a
