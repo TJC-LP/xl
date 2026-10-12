@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -218,7 +218,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -383,7 +383,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -417,7 +417,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -463,7 +463,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -491,9 +491,14 @@ Workbook(model).recalculate().toEither match
 ```
 
 Since 0.12.1, conditional formatting is typed: `sheet.conditionalFormat(range, CfRule.cellIs(...))`
-authors cellIs/expression/colorScale/dataBar/top10 rules with `Dxf` differential formats;
-structural edits shift rule ranges, and rule families xl does not model survive round-trips
-byte-faithfully.
+authors cellIs/expression/colorScale/dataBar/top10 rules with `Dxf` differential formats; structural
+edits shift rule ranges, and rule families xl does not model survive round-trips byte-faithfully.
+Since 0.24.0 ([#497](https://github.com/TJC-LP/xl/issues/497)) they also paint in a render:
+`sheet.conditionalFormatOverlay(range)` evaluates the rules over `range` as Excel paints them (a
+`CfOverlay`), `sheet.evaluateConditionalFormats(range, Some(wb), clock)` adds `.unevaluated` (the
+rules it could not paint, as `CfUnevaluated`), and `sheet.toSvg(range, overlay)` /
+`sheet.toHtml(range, overlay)` draw it — the overlay-free `toSvg`/`toHtml` stay CF-blind.
+`Dxf.orElse` (higher precedence first) and `dxf.applyTo(style)` are the composition underneath.
 
 Since 0.12.0 the prelude also exposes the drawing layer: `sheet.addImage(bytes, format, at)`
 embeds pictures (7 formats, natural-size PNG/JPEG sniffing) and `com.tjclp.xl.charts.Chart`
@@ -522,8 +527,8 @@ For Excel-style format inheritance on formula entry, use the opt-in
 | `cycles` | (0.19.2) `Vector[SccReport]` — one verdict per cyclic strongly-connected component actually iterated (`members`, `converged`, `rounds`, `maxDelta`, `stalled`, `errorValued`, plus `render`), sorted by the component's minimum member. `stalled` (GH-537) means a member failed every round (a host failure, listed in `errors`) and the loop stopped at the first exact replay that consumed no randomness instead of burning `maxIter`. Empty on non-iterative and acyclic runs |
 | `unconverged` | (0.19.2) `cycles.filterNot(_.converged)` — the offenders to name in a report |
 | `certified` | (0.19.2) `errors.isEmpty && converged` — the single gate meaning "this workbook is at its global fixpoint". A cycle that converges ONTO an Excel error value (`A1 = 1/B1`, `B1 = 1/A1` settles on `#DIV/0!`) is still a fixpoint, so it certifies (#678) |
-| `errorCells` | (unreleased, #692) `Vector[ErrorValueCell]` — the first `RecalcResult.MaxNamedErrorCells` (10) of `excelErrors` with the reason the evaluator raised each error with, when it gave one (`sheet`, `ref`, `error`, `reason: Option[String]`, plus `render`: `S!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE)`, the reason as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…`, control characters replaced by a space; `reason` keeps the full text). The summary line names the first `RecalcResult.MaxSummaryErrorCells` (3) of them, then `… and N more`: `Recalculated 3 formulas (1 error value: S!B2 #N/A — …)`; `xl recalc --json` publishes all ten as `errorCells` |
-| `errorValuedCycles` | (unreleased, #678) the converged components whose `SccReport.errorValued` is set — some member holds an Excel error value; the summary line adds `, 1 cycle settled on error values` and the component's `verdict` reads `converged in 2 round(s) onto error values` |
+| `errorCells` | (0.24.0, #692) `Vector[ErrorValueCell]` — the first `RecalcResult.MaxNamedErrorCells` (10) of `excelErrors` with the reason the evaluator raised each error with, when it gave one (`sheet`, `ref`, `error`, `reason: Option[String]`, plus `render`: `S!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE)`, the reason as one line bounded to `ErrorValueCell.MaxReasonLength` (120) characters with a trailing `…`, control characters replaced by a space; `reason` keeps the full text). The summary line names the first `RecalcResult.MaxSummaryErrorCells` (3) of them, then `… and N more`: `Recalculated 3 formulas (1 error value: S!B2 #N/A — …)`; `xl recalc --json` publishes all ten as `errorCells` |
+| `errorValuedCycles` | (0.24.0, #678) the converged components whose `SccReport.errorValued` is set — some member holds an Excel error value; the summary line adds `, 1 cycle settled on error values` and the component's `verdict` reads `converged in 2 round(s) onto error values` |
 
 Reference cycles are **isolated**: the participants and their downstream dependents are reported
 (e.g. `Model!A7: Formula error in '=B7': Circular reference` via `CellEvalError.render`) while
@@ -646,9 +651,23 @@ explicit `recalculate().toEither` pattern above when a dirty result must abort *
 lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (108 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (124 functions supported —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
+
+Since 0.24.0 a stored plain formula evaluates as Excel's **legacy formula**, implicit intersection
+included, as Excel 365 opens one: a range in a value position reads the cell in the formula's own
+row or column, so `=SUM(A1:A10*E1:E10)` stored in row 5 is A5*E5 (write `SUMPRODUCT(...)` for
+array math in one cell). `recalculate` evaluates every cell at its own position by its kind, and
+array formulas keep dynamic-array semantics. `sheet.evaluateFormula(f)` without a cell evaluates
+as a formula typed into a new Excel 365 cell (top-left of its array); pass
+`currentCell = Some(ref"D5")` for the plain cell at D5 — what `xl eval --at D5` prints
+([#715](https://github.com/TJC-LP/xl/issues/715)).
+
+`sheet.evaluateForRangePerCell(range)` (also `(range, clock, workbook)`, since 0.24.0) is the
+total, per-cell evaluation behind `xl view --eval`: a `RangeEvalResult(values, failures, blocked)`
+where one failing formula costs only itself and its dependents, with `isClean` and a one-line
+`summary`. `evaluateForRange` and `evaluateWithDependencyCheck` keep their fail-fast semantics.
 
 ### Inspect a workbook: `wb.describe`, `wb.audit`, `QualifiedGraph` (since 0.20.0)
 
@@ -687,6 +706,13 @@ its sheet (`r.a1` is Excel's spelling, `A:A`; `node.label` the qualified one, `D
 are sorted by `QualifiedGraph.nodeOrder`. `QualifiedGraph`'s constructor gained the `rangeCells`
 field in 0.24.0; build graphs with `QualifiedGraph.of`.
 
+`Excel.lint(path)` / `Excel.lintStream(path)` (since 0.24.0,
+[#674](https://github.com/TJC-LP/xl/issues/674)) run `xl lint`'s rule set, the parser-backed
+`formula-unparseable` included, and return `XLResult[Vector[Finding]]`; each `Finding(part,
+category, locator, message, severity)` carries a `LintCategory` and a `LintSeverity` (`Repair` is
+what Excel would repair on open). `lintStream` scans sheet and table parts in O(1) memory with the
+same findings.
+
 ## Typed extraction
 
 ```scala
@@ -721,7 +747,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -861,7 +887,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -887,7 +913,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -918,14 +944,18 @@ file name, `&A` sheet name, with `&L`/`&C`/`&R` section markers.
 
 `wb.withDefinedName("Tax", "Inputs!$B$2")` defines or replaces a workbook-global name;
 `wb.withDefinedName("Tax", "Inputs!$B$3", SheetName.unsafe("Inputs"))` is the sheet-local form
-(`XLResult`, `Left(SheetNotFound)` for a missing sheet). Matching is case-insensitive like Excel,
-so `withDefinedName("tax", …)` beside `TAX` replaces it instead of appending a shadowed duplicate;
-`wb.removeDefinedName(name)` / `removeDefinedName(name, scope)` are the inverses.
-`_xlnm.Print_Area` and `_xlnm.Print_Titles` on a sheet are the same thing as its
-`PageSetup.printArea` / `repeatRows` — whichever you set last wins, on both writer backends.
-`DefinedName` (`wb.metadata.definedNames`, `DefinedName.sameName`, `DefinedName.PrintArea`) is
-part of the prelude export. A formula that reads a redefined name keeps its cached value until
-you `recalculate` — the CLI's `name add|rm` and batch `define-name`/`remove-name` do that for you.
+(`XLResult`, `Left(SheetNotFound)` for a missing sheet). Matching is case-insensitive like Excel, so
+`withDefinedName("tax", …)` beside `TAX` replaces it instead of appending a shadowed duplicate;
+`wb.removeDefinedName(name)` / `removeDefinedName(name, scope)` are the inverses. `_xlnm.Print_Area`
+and `_xlnm.Print_Titles` on a sheet are the same thing as its `PageSetup.printArea` / `repeatRows` —
+whichever you set last wins, on both writer backends. `DefinedName` (`wb.metadata.definedNames`,
+`DefinedName.sameName`, `DefinedName.PrintArea`) is part of the prelude export. A formula that reads
+a redefined name keeps its cached value until you `recalculate` — the CLI's `name add|rm` and batch
+`define-name`/`remove-name` do that for you. `wb.effectiveDefinedNames` (since 0.24.0,
+[#674](https://github.com/TJC-LP/xl/issues/674)) is the table the writer emits: the metadata names
+plus the print areas and titles a read lifts into `PageSetup`, which `wb.describe` reports. A
+regenerated table keeps every `definedName` attribute (`function`, `vbProcedure`, `description`, …)
+since 0.24.0 ([#696](https://github.com/TJC-LP/xl/issues/696)).
 
 ## The `.unsafe` boundary
 
@@ -971,7 +1001,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.23.1
+//> using dep com.tjclp::xl:0.24.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -990,6 +1020,12 @@ println(s"column C total: $total")
 
 Streaming writes: `Stream.emits(rows).through(excel.writeStream(path, "Sheet1"))` with
 `RowData(rowIndex, Map(colIdx -> CellValue))` (1-based rows, 0-based columns).
+`excel.writeStreamStyledWithAutoDetect(path, "Sheet1", styles)` (since 0.24.0,
+[#675](https://github.com/TJC-LP/xl/issues/675)) is the two-pass writer with a style table —
+`StyledRowData` rows index into `styles`, and the archive gets an accurate `<dimension>` — so
+streamed dates show as dates. The streaming reads also read the workbook rels and the cell-metadata
+part (dynamic arrays) under the default ZIP limits; `excel.withStreamLimits(config)` (since 0.24.0,
+[#714](https://github.com/TJC-LP/xl/issues/714)) sets others.
 
 ## Going further
 

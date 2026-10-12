@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-09-25 (unreleased: the Weaver wave)
+**Last Updated**: 2026-10-12 (0.24.0)
 
 ## Current State
 
@@ -8,12 +8,16 @@
 
 ### What Works (Production-Ready)
 
-**Unreleased** (2026-09-25) — the Weaver dogfood of 0.23.1 filed five CLI findings, run as seven adversarially reviewed clusters; two **Breaking:** entries:
-- ✅ **`view --eval` never crashes on one cell** — type-sound array arguments, a guarded evaluation boundary (#681), per-cell degradation (`evaluateForRangePerCell`), and Excel array lifting for 74 scalar functions: `=SUMPRODUCT(--(B2:B4>0),ABS(C2:C4+D2:D4))` is 5; CSE/dynamic-array anchors evaluate as arrays
-- ✅ **A failed `--strict` gate writes nothing** (#677) — `-o` and `-i` alike; a file is published only by a run that exits 0
-- ✅ **Renders match Excel's layout and conditional formats** (#497) — text spills into valueless neighbours whatever their style (left, right and centred), rows autofit to their fonts and wrapped text, and conditional formatting paints in SVG/HTML/PNG with `CF_NOT_RENDERED` naming what it cannot
-- ✅ **`diff` compares sheet structure** — row heights, column widths, hidden/outline, defaults, freeze panes, visibility, CF/DV blocks, sheet order and defined names; `--cells-only` for the old scope
-- ✅ **`deps`/`cell` collapse ranges** — a range precedent is one node with occupied/formula counts (`--expand` for cells); `QualifiedGraph` declared view
+**New in 0.24.0** (2026-10-12) — Excel parity in the evaluator, from three runs: the Weaver dogfood of 0.23.1 (five CLI findings, seven clusters, #683), wave 31's sweep of the wave-30 follow-ups (#697, then #698–#704), and wave 32 (#705–#722, #756, #757), every evaluator change pinned against LibreOffice; eighteen **Breaking** entries:
+- ✅ **Plain cells evaluate as Excel's legacy formula** — implicit intersection in value positions (`=SUM(A1:A10*E1:E10)` in row 5 is A5*E5), array contexts keep dynamic-array semantics, and 74 scalar functions lift over arrays (`=SUMPRODUCT(--ISNUMBER(r))`)
+- ✅ **Dynamic-array authoring** (#714) — `putf --array` / batch `"array": true` write Excel 365 anchors with cached spills, `cm`/`xl/metadata.xml` survive every write, writes into a live spill are refused, and `IMPLICIT_INTERSECTION` warns when a plain cell would differ from its array value
+- ✅ **`xl eval --at <ref>`** (#715) — evaluates a formula as the plain cell it would be at `<ref>`; `eval`/`evala` analyse only the formula's own precedents and `--with` overrides reach every reader
+- ✅ **References as values** — XLOOKUP returns a reference (a whole row or column, #713), the `:` operator joins returned references (`=SUM(A1:INDEX(A:A,COUNTA(A:A)))`), ROW/COLUMN over a range are arrays (#712), dynamic named ranges and LET names work in range arguments (#710), OFFSET sizes like its base
+- ✅ **Whole columns count as Excel counts them** (#711, #750) — blank tails past the used range in SUMPRODUCT, COUNTIF(S) and COUNTBLANK; whole-axis arrays (`A:XFD`, `A:A*{1,2,3}`) evaluate exactly through a sparse `ArrayResult` (box + fill) and `Aggregator.combineN`, in milliseconds, never built cell by cell
+- ✅ **Lookup and error parity** — one `#N/A` error channel for every lookup, its reason named in the recalc summary (#692); `LOOKUP`/`XMATCH` (#670); Excel's lookup and financial error codes; text in a typed scalar argument is `#VALUE!` (#709); union/intersection operators, array constants and `TRUE()` parse (#669); flat operator chains of any length (#680)
+- ✅ **Number formats** — text sections and integer padding (#693), the 11-character General display and scaling commas (#672), extreme stored exponents without throwing (#689, #707), date serials 1–59 (#688)
+- ✅ **Renders, diff, deps, `--strict`** — conditional formatting painted in SVG/HTML/PNG (#497), Excel's text spill and row autofit; `diff` compares sheet structure; `deps`/`cell` collapse a range to one node; a failed `--strict` gate writes nothing (#677); raster backends verified before publishing (#690)
+- ✅ **Fidelity** — `Sheet1!#REF!` parses and survives writes (#694, #687 heal + `anchorarray-qualifier-corrupt` lint), every `definedName` attribute kept (#696), spill anchors stay anchors through recalculation (#695), defined-name walks stack-safe and linear (#691)
 
 **New in 0.23.1** (2026-09-15) — wave 30: the 0.23.0 dogfood (103 probes over the CLI, the scripting library and the tjc-modeling template lane; every recorded 0.19.x quirk re-tested as fixed) filed seven issues, run as six adversarially reviewed clusters, then six automated review rounds on the PR; three **Breaking:** entries:
 - ✅ **Typed `#N/A` on legacy lookups** (#662) — a VLOOKUP, HLOOKUP or MATCH miss is the error value XLOOKUP already returned, so IFNA, ISNA, ISERR, IFERROR, ISERROR, ERROR.TYPE and an IF condition all see it; `=IF(ISNA(VLOOKUP(miss)),0,1)` caches 0; an unguarded miss caches `#N/A`; index below 1 is `#VALUE!`, past the table `#REF!`
@@ -262,17 +266,17 @@
 
 ### Test Coverage
 
-**8,636 test cases** (verified via `./mill __.test`, 2026-10-07, after #700–#704 and #699): zero failures; the existing style-performance comparison is skipped, the LibreOffice-oracle tests skip where soffice is absent, and the rsvg-convert smoke skips where rsvg-convert is absent.
+**9,394 test cases** (verified via `./mill __.test`, 2026-10-12, the 0.24.0 release branch): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3309 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1850 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1321 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1750 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 195 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-evaluator | 3835 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1362 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1904 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 209 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 64 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.

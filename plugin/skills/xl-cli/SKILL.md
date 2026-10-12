@@ -5,9 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.23.1.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.24.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.23.1 or later.
+statement in this skill assumes 0.24.0 or later.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +15,7 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Environment
 
-- `xl --version` must print `0.23.1` or later. Not installed, or older: follow
+- `xl --version` must print `0.24.0` or later. Not installed, or older: follow
   [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
   JAR fallback, the rasterizer for image export).
 - A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where
@@ -279,7 +279,10 @@ without a `<v>` (the summary counts both), and mark the workbook `fullCalcOnLoad
 the whole book on open; LibreOffice (which ignores the marker by default) computes the uncached
 cells; cache-only readers (openpyxl `data_only`, `xl view` without `--eval`) see a blank there,
 never a stale number. `recalc` refreshes every cached value (`--tables` also seeds data-table
-interiors).
+interiors). The summary names the first error-valued cells with the evaluator's reason
+(`Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found: …)`);
+`recalc --json` lists up to ten as `errorCells` (`{ref, error, reason}`) beside
+`errorValuedCycles`.
 
 ---
 
