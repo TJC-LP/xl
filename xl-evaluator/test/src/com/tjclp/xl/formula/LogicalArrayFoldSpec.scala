@@ -148,13 +148,14 @@ class LogicalArrayFoldSpec extends FunSuite:
     assertScalar(mixedFT, "=NOT(A1:A2>0)", CellValue.Bool(true))
   }
 
-  // ===== Text in a condition position refuses cleanly (total, no throw) =====
+  // ===== Text in a condition position is #VALUE! (total, no throw) =====
 
-  test("GH-338: text condition elements refuse the AND/OR folds with a clean Left") {
-    assert(mixedTF.evaluateFormula("=AND(IF(A1:A2>0,\"x\",\"y\"))").isLeft)
-    assert(mixedTF.evaluateFormula("=OR(IF(A1:A2>0,\"x\",\"y\"))").isLeft)
-    assert(mixedTF.evaluateArrayFormula("=AND(IF(A1:A2>0,\"x\",\"y\"))", ref"D1").isLeft)
-    assert(mixedTF.evaluateFormula("=OR(\"abc\")").isLeft)
+  test("GH-338/#709: text condition elements make the AND/OR folds #VALUE!") {
+    val refused = CellValue.Error(CellError.Value)
+    assertEquals(mixedTF.evaluateFormula("=AND(IF(A1:A2>0,\"x\",\"y\"))"), Right(refused))
+    assertEquals(mixedTF.evaluateFormula("=OR(IF(A1:A2>0,\"x\",\"y\"))"), Right(refused))
+    assertArrayEntry(mixedTF, "=AND(IF(A1:A2>0,\"x\",\"y\"))", refused)
+    assertEquals(mixedTF.evaluateFormula("=OR(\"abc\")"), Right(refused))
   }
 
   test("GH-344: NOT demotes text elements to #VALUE! elements (Excel broadcast semantics)") {

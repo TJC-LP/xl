@@ -65,11 +65,29 @@ trait TExprDecoders:
    * over a sparse range ignore blanks, and a blank cashflow must not become a period-shifting 0.
    * Error values still refuse via the delegate's catch-all (Empty and Error are distinct
    * constructors, so blank-as-zero can never mask a carried error).
+   *
+   * #709: numeric text is its number here, as Excel reads it (`=ABS(A1)` over `'5` is 5, like
+   * ScalarCoercion.coerceNumeric and the lifted element) — the folds keep skipping it. Other text
+   * refuses; the evaluator turns that refusal into `#VALUE!`.
+   *
+   * For a SINGLE-REFERENCE scalar slot only. Never use it for a range or aggregate fold: Excel's
+   * folds skip text that arrives through a reference, so `=SUM(A1)` over the text `'5` is 0, where
+   * this decoder reads 5 (the aggregates keep [[decodeNumeric]]; TextScalarSlotSpec pins it).
    */
   def decodeNumericScalar(cell: Cell): Either[CodecError, BigDecimal] =
     cell.value match
+      // the common case first: a number skips the text lookup below (cellText + parse). Not
+      // redundant with decodeNumeric's Number arm — it keeps the hot path off numericText.
+      case CellValue.Number(n) => scala.util.Right(n)
       case CellValue.Empty => scala.util.Right(BigDecimal(0))
-      case _ => decodeNumeric(cell)
+      case other =>
+        numericText(other) match
+          case Some(n) => scala.util.Right(n)
+          case None => decodeNumeric(cell)
+
+  /** #709: the number a text cell (or a formula cached as text) spells, if it spells one. */
+  private def numericText(value: CellValue): Option[BigDecimal] =
+    ScalarCoercion.cellText(value).flatMap(ScalarCoercion.parseNumericText)
 
   /**
    * Decode cell as LocalDate value (extracts date from DateTime).
@@ -102,7 +120,8 @@ trait TExprDecoders:
    * GH-344 item 5: exactly the text "TRUE"/"FALSE" (case-insensitive, NO trim) coerces via the
    * shared [[ScalarCoercion.boolTextValue]] table — aligned with ScalarCoercion.coerceBool and
    * ArrayArithmetic.conditionTruthy (the L6 parity law). All other text still refuses (clean
-   * per-cell error).
+   * per-cell error). #709: rich text, and a formula's cached text, read through
+   * ScalarCoercion.cellText like plain text.
    */
   def decodeBool(cell: Cell): Either[CodecError, Boolean] =
     cell.value match
@@ -112,27 +131,22 @@ trait TExprDecoders:
       case CellValue.DateTime(dt) =>
         scala.util.Right(CellValue.dateTimeToExcelSerial(dt) != 0.0)
       case CellValue.Empty => scala.util.Right(false)
-      case CellValue.Text(s) =>
-        ScalarCoercion.boolTextValue(s) match
-          case Some(b) => scala.util.Right(b)
-          case None => scala.util.Left(CodecError.TypeMismatch("Boolean", cell.value))
       case CellValue.Formula(_, Some(CellValue.Bool(cached)), _) =>
         scala.util.Right(cached)
       case CellValue.Formula(_, Some(CellValue.Number(cached)), _) =>
         scala.util.Right(cached.signum != 0)
       case CellValue.Formula(_, Some(CellValue.DateTime(cached)), _) =>
         scala.util.Right(CellValue.dateTimeToExcelSerial(cached) != 0.0)
-      case CellValue.Formula(_, Some(CellValue.Text(cached)), _) =>
-        ScalarCoercion.boolTextValue(cached) match
-          case Some(b) => scala.util.Right(b)
-          case None => scala.util.Left(CodecError.TypeMismatch("Boolean", cell.value))
       case other =>
-        scala.util.Left(
-          CodecError.TypeMismatch(
-            expected = "Boolean",
-            actual = other
-          )
-        )
+        ScalarCoercion.cellText(other).flatMap(ScalarCoercion.boolTextValue) match
+          case Some(b) => scala.util.Right(b)
+          case None =>
+            scala.util.Left(
+              CodecError.TypeMismatch(
+                expected = "Boolean",
+                actual = other
+              )
+            )
 
   /**
    * Decode cell as CellValue (always succeeds).
@@ -240,14 +254,10 @@ trait TExprDecoders:
    *   - Empty -> 1900-01-01 (GH-396: Excel's blank-as-serial-0 rendering, see
    *     ScalarCoercion.BlankDate for the day-0 caveat)
    *   - Formula -> cached DateTime, serial Number, or Bool, same conversions
-   *   - Text -> error (Excel does not coerce arbitrary text in date positions)
+   *   - Text -> error (a range fold — NETWORKDAYS/WORKDAY holidays, XIRR/XNPV dates — never reads
+   *     text as a date; the single-reference slot uses [[decodeAsDateScalar]])
    */
   def decodeAsDate(cell: Cell): Either[CodecError, java.time.LocalDate] =
-    def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
-      if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
-        Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
-      else None
-
     def boolToDate(b: Boolean): Either[CodecError, java.time.LocalDate] =
       serialToDate(if b then BigDecimal(1) else BigDecimal(0))
         .toRight(CodecError.TypeMismatch("Date", cell.value))
@@ -274,30 +284,58 @@ trait TExprDecoders:
         )
 
   /**
+   * #709: [[decodeAsDate]] for a single reference in a date slot (YEAR(A1), EDATE(A1, 1)), where
+   * numeric text is its serial as ScalarCoercion.coerceDate reads it. Other text refuses, which the
+   * evaluator turns into `#VALUE!`. A serial outside the date range — a number, a formula's cached
+   * number or numeric text — refuses with ScalarCoercion.DateSerialOutOfRange, which the evaluator
+   * turns into the error value ScalarCoercion.dateSerialOutOfRange gives the literal path. The
+   * holiday and XIRR/XNPV folds keep the strict decoder.
+   *
+   * For a SINGLE-REFERENCE scalar slot only: a range fold that takes dates must use
+   * [[decodeAsDate]], which never reads text as a date (Excel's NETWORKDAYS holidays and XIRR/XNPV
+   * dates do not).
+   */
+  def decodeAsDateScalar(cell: Cell): Either[CodecError, java.time.LocalDate] =
+    val serial = cell.value match
+      case CellValue.Number(n) => Some(n)
+      case CellValue.Formula(_, Some(CellValue.Number(n)), _) => Some(n)
+      case other => numericText(other)
+    serial match
+      case Some(n) => serialToDate(n).toRight(ScalarCoercion.DateSerialOutOfRange)
+      case None => decodeAsDate(cell)
+
+  private def serialToDate(serial: BigDecimal): Option[java.time.LocalDate] =
+    if serial >= 0 && serial <= ScalarCoercion.MaxExcelDateSerial then
+      Some(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
+    else None
+
+  /**
    * Decode cell as Int with automatic type coercion.
    *
    * GH-396: mirrors ScalarCoercion.coerceInteger exactly — the direct-cell and Coerced integer
    * boundaries previously diverged (a blank/numeric-text/fractional cell errored where the same
    * value as a literal or call result coerced):
    *   - Number -> truncates toward zero like Excel (LEFT("hello", 2.7) -> "he"); values outside the
-   *     Int range are a clean error
+   *     Int range refuse with ScalarCoercion.IntOutOfRange (#709: `#VALUE!` at the reference
+   *     boundary, sized before truncating, so `1e2147483647` never builds its BigInteger)
    *   - Boolean -> 1 for TRUE, 0 for FALSE
-   *   - Text -> numeric text parses ("3" -> 3; "abc" is a clean error — Excel #VALUE!)
+   *   - Text -> numeric text parses ("3" -> 3; "abc" is a clean error — Excel #VALUE!); rich text
+   *     reads through its plain text (#709)
    *   - Empty -> 0 (=LEFT("hello", <blank>) is "")
    *   - Formula -> cached value unwraps first, same conversions (it was the only decoder missing
    *     the cached arms)
    */
   def decodeAsInt(cell: Cell): Either[CodecError, Int] =
+    // #709: magnitude-guarded (ScalarCoercion.truncatedInt); out of the Int range is the
+    // IntOutOfRange refusal, which the evaluator reads as the literal path's error value
     def truncateToInt(n: BigDecimal): Either[CodecError, Int] =
-      val truncated = n.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
-      if truncated.isValidInt then scala.util.Right(truncated.toInt)
-      else scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
+      ScalarCoercion.truncatedInt(n).toRight(ScalarCoercion.IntOutOfRange)
 
     def convert(value: CellValue): Either[CodecError, Int] = value match
       case CellValue.Number(n) => truncateToInt(n)
       case CellValue.Bool(b) => scala.util.Right(ArrayArithmetic.boolToNumeric(b).toInt)
-      case CellValue.Text(s) =>
-        ScalarCoercion.parseNumericText(s) match
+      case text @ (CellValue.Text(_) | CellValue.RichText(_)) =>
+        ScalarCoercion.cellText(text).flatMap(ScalarCoercion.parseNumericText) match
           case Some(n) => truncateToInt(n)
           case None => scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
       case CellValue.Empty => scala.util.Right(0)

@@ -68,22 +68,14 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "ROW",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        boundsReferenceAxis = true
+      )
     ) { (exprOpt, ctx) =>
       exprOpt match
-        case Some(expr) =>
-          // GH-612: ROW(#REF!) is #REF!, the error value the argument names
-          errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
-            extractARef(expr) match
-              case Some(aref) => Right(BigDecimal(aref.row.index0 + 1))
-              case None =>
-                Left(
-                  EvalError.EvalFailed(
-                    "ROW requires a cell reference",
-                    Some(s"ROW(${FormulaPrinter.print(expr, includeEquals = false)})")
-                  )
-                )
-          }
+        case Some(expr) => positions("ROW", expr, ctx, alongRows = true)
         case None =>
           // Zero-argument form: ROW() returns row of current cell
           ctx.currentCell match
@@ -101,21 +93,14 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, Option[AnyExpr]](
       "COLUMN",
       Arity.Range(0, 1),
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        boundsReferenceAxis = true
+      )
     ) { (exprOpt, ctx) =>
       exprOpt match
-        case Some(expr) =>
-          errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
-            extractARef(expr) match
-              case Some(aref) => Right(BigDecimal(aref.col.index0 + 1))
-              case None =>
-                Left(
-                  EvalError.EvalFailed(
-                    "COLUMN requires a cell reference",
-                    Some(s"COLUMN(${FormulaPrinter.print(expr, includeEquals = false)})")
-                  )
-                )
-          }
+        case Some(expr) => positions("COLUMN", expr, ctx, alongRows = false)
         case None =>
           // Zero-argument form: COLUMN() returns column of current cell
           ctx.currentCell match
@@ -129,11 +114,73 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
               )
     }
 
+  /**
+   * GH-712: ROW's and COLUMN's numbers for a reference — a cell or range, or the reference a name,
+   * OFFSET, INDIRECT, INDEX, IF or CHOOSE denotes. A reference spanning several rows (ROW) or
+   * columns (COLUMN) is an array in array mode, ROW's a column (`ROW(A1:B3)` is {1;2;3}) and
+   * COLUMN's a row, as Excel's; a plain cell keeps its first number, the top-left legacy Excel
+   * keeps of an array value (`SUM(ROW(A1:A10))` is 1, never the intersected row). The array leaves
+   * through the BigDecimal-typed call as any array-mode result does (the array-mode typing
+   * invariant); only the Either container is cast.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private def positions(
+    fnName: String,
+    expr: AnyExpr,
+    ctx: EvalContext,
+    alongRows: Boolean
+  ): Either[EvalError, BigDecimal] =
+    def axis(range: CellRange): (Int, Int) =
+      if alongRows then (range.rowStart.index0, range.rowEnd.index0)
+      else (range.colStart.index0, range.colEnd.index0)
+    def numbers(reference: CellRange): Either[EvalError, Any] =
+      // a plain cell's number is the reference's own first row or column: SUMPRODUCT's shared
+      // extent only aligns arrays, so it never reaches the scalar answer
+      if !ctx.arrayMode then Right(BigDecimal(axis(reference)._1 + 1))
+      else
+        val range = ctx.boundArrayRange(reference)
+        // CellRange.empty (start past end, so no rows or columns): a whole axis SUMPRODUCT
+        // constrained to an empty sheet's used area has no numbers
+        if range.height <= 0 || range.width <= 0 then Right(ArrayResult.empty)
+        else
+          val (first, last) = axis(range)
+          if first == last then Right(BigDecimal(first + 1))
+          else
+            val values = (first to last).map(i => CellValue.Number(BigDecimal(i + 1))).toVector
+            if alongRows then Right(ArrayResult(values.map(Vector(_))))
+            else Right(ArrayResult(Vector(values)))
+    def notAReference: EvalError =
+      EvalError.EvalFailed(
+        s"$fnName requires a cell reference",
+        Some(s"$fnName(${FormulaPrinter.print(expr, includeEquals = false)})")
+      )
+    // GH-612: ROW(#REF!) is #REF!, the error value the argument names
+    val result: Either[EvalError, Any] = errorLiteral(expr) match
+      case Some(error) => Left(EvalError.ErrorValue(error))
+      case None =>
+        extractCellRange(expr).orElse(extractARef(expr).map(at => CellRange(at, at))) match
+          case Some(range) => numbers(range)
+          case None =>
+            ctx.evalReference(expr).flatMap {
+              case RangeOperand(_, range) => numbers(range)
+              // a value is no reference, but the error value an unresolvable INDIRECT or OFFSET
+              // computes instead of one is ROW's result (`ROW(INDIRECT("nowhere!!"))` is #REF!)
+              case other =>
+                val value = other match
+                  case array: ArrayResult if !array.isEmpty => array(0, 0)
+                  case scalar => scalar
+                val error = value match
+                  case cell: CellValue => ArrayArithmetic.carriedError(cell)
+                  case _ => None
+                Left(error.fold(notAReference)(EvalError.ErrorValue(_)))
+            }
+    result.asInstanceOf[Either[EvalError, BigDecimal]]
+
   val rows: FunctionSpec[BigDecimal] { type Args = AnyExpr } =
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "ROWS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (expr, ctx) =>
       // GH-612: ROWS(#REF!) is #REF!, the error value the argument names
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
@@ -152,7 +199,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "COLUMNS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
     ) { (expr, ctx) =>
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
         extractCellRange(expr) match

@@ -122,6 +122,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **`TExpr.RangeLocation` gains a `Binding(name)` case** (#710): a LET name in a range slot.
+  Constructing and matching the existing cases is unchanged; a downstream exhaustive match on
+  `RangeLocation` needs the new arm (the compiler warns until it has one).
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
@@ -285,6 +288,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   coercer, so a mistyped branch is a `Left` rather than a mistyped value.
 - **A contained evaluator defect in `xl eval` / `evala` is `FORMULA_ERROR`** (still exit 3) with
   the defect wording, where it was `INTERNAL`.
+- **A refused text cell at a reference is `EvalError.ErrorValue(#VALUE!)`, not `CodecFailed`**
+  (#709): for library callers, when any single-reference decoder refuses a text cell (plain, rich,
+  or a formula's cached text), including a decoder passed to the public `TExpr.ref(at, decode)`,
+  evaluation now returns the `#VALUE!` error value instead of `EvalError.CodecFailed`. Code that
+  matched `CodecFailed` on such cells sees the error value instead.
 
 ### Fixed
 
@@ -309,6 +317,34 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   matches a blank. Values move to Excel's: `SUMPRODUCT(1/COUNTIF(A:A,A:A))` over a whole column with
   no zeros is now `#DIV/0!`, as in Excel. Bound the range for the distinct count, or use
   `SUMPRODUCT((A:A<>"")/COUNTIF(A:A,A:A&""))`.
+- **ROW and COLUMN over a multi-cell reference are arrays** (#712): `=SUMPRODUCT(ROW(A1:A10))` is
+  55, `=SUMPRODUCT(COLUMN(A1:E1))` 15 and `=SUMPRODUCT(--(ROW(A1:A10)>5))` 5, as in Excel, where
+  they read the first number only. A plain cell still keeps the top-left (`=SUM(ROW(A1:A10))` is 1,
+  legacy Excel's value). Inside SUMPRODUCT a whole-column `ROW(A:A)` is trimmed to the used rows, the
+  GH-192 trimming that keeps `SUMPRODUCT((A:A="x")*ROW(A:A))` sized.
+- **Dynamic named ranges and LET references work in range arguments** (#710): a name computing a
+  reference (`dyn = OFFSET(Sheet1!$A$1,0,0,10,1)`, or INDEX/INDIRECT/IF/CHOOSE over references) was
+  `#VALUE!` in every slot that takes a range — `COUNTIF(dyn,">2")`, `INDEX(dyn,3)`, `MATCH(7,dyn,0)`,
+  `VLOOKUP(7,dyn,1,FALSE)` — and so was a LET name bound to one (`LET(r,dyn,COUNTIF(r,">2"))`). Every
+  range slot now resolves them through one evaluator-aware resolver, matching LibreOffice. Each range
+  slot evaluates the name's formula when it reads it, so a book with many readers of one dynamic
+  name recalculates more slowly than the instant `#VALUE!` it used to get (caching: #744).
+- **SUMIF and AVERAGEIF resized through a named range recalculate correctly** (#710, #733):
+  `SUMIF(A1:A3,">0",amt)` with `amt = S!C1` reads C1:C3, and an edit to C2 used to leave it stale.
+  A name bound to a range now records its resized cells, so these readers, like
+  `SUMIF(Categories,"Rent",Amounts)`, stay static. A resize through a LET name or a name computing
+  its reference (OFFSET, INDIRECT) is dynamic: `xl audit` lists it under `dynamic`,
+  `recalc --tables` skips a data table whose cone holds it, and `recalculateDependents` treats it
+  as always dirty.
+- **Text in a typed scalar argument is `#VALUE!`, not an evaluation failure** (#709): `=ABS(C5)`,
+  `=ROUND(C5,0)`, `=IF(C5,1,0)`, `=NOT(C5)` over a text cell left the cell uncached
+  (`RECALC_ERRORS`, `--strict` exit 1); they now cache Excel's `#VALUE!`, which IFERROR and ISERROR
+  see. Numeric text still reads as its number in a numeric or date slot (`'45000` in `YEAR` is
+  2023); date range folds (NETWORKDAYS holidays, XIRR/XNPV dates) still refuse text, as Excel does.
+  On every path (literal, reference, computed), a date serial outside 0..2958465 and an integer
+  argument outside the integer range (`=LEFT("abc",1E10)`) are now `#VALUE!` too, not a
+  recalculation failure; Excel's `#NUM!` for dates is tracked in #726. A huge exponent in an
+  integer argument (`'1e2147483647`) no longer raises an internal defect or stalls.
 - **Fraction patterns take an exact absolute value at the bottom of the scale range** (#707): a
   negative value with more than 34 significant digits and a scale near `Int.MinValue` (within the
   number of digits past 34) threw `ArithmeticException: Underflow` under a `?/?`-style code: the
