@@ -37,7 +37,7 @@ object CriteriaRangeResize:
    *   whether a defined name in a range slot computes its reference; a name that does not resolve
    *   at all reads nothing (its evaluation fails), so it is not dynamic either
    */
-  def hasDynamicResize(
+  private[formula] def hasDynamicResize(
     name: String,
     values: List[ArgValue],
     nameIsComputed: TExpr.RangeLocation.Name => Boolean
@@ -78,7 +78,7 @@ object CriteriaRangeResize:
    * sheet names, `[…]` and error literals hold no names. Anything else counts as a possible name: a
    * false positive costs one parse.
    */
-  def mayResizeThroughName(formula: String): Boolean =
+  private[formula] def mayResizeThroughName(formula: String): Boolean =
     mayResizeThroughName(formula, formula.toUpperCase(java.util.Locale.ROOT))
 
   /**
@@ -90,7 +90,7 @@ object CriteriaRangeResize:
    * (`ſ` is `S`) and the dotless i (`ı` is `I`); a whitespace character between the name and `(`
    * lies outside the substring.
    */
-  def mayResizeThroughName(formula: String, upperCased: String): Boolean =
+  private[formula] def mayResizeThroughName(formula: String, upperCased: String): Boolean =
     (upperCased.contains("SUMIF") || upperCased.contains("AVERAGEIF")) &&
       ResizingCall.matcher(formula).find() && hasNameShapedToken(formula)
 
@@ -141,6 +141,8 @@ object CriteriaRangeResize:
             skipWhile(text, from + 1, c => c.isLetterOrDigit || "/_!?".contains(c))
           )
         // a range's second corner (A1:B2, A:C, 1:3) is never a name, as the parser reads it
+        // today. GH-713's range operator (`A1:myName`, `myName:B3`) will make both corners
+        // possible names: this arm, and the `:` look-ahead in isName, must accept them then
         case ':' =>
           hasNameShapedToken(text, skipWhile(text, from + 1, c => c.isLetterOrDigit || c == '$'))
         // a number (1, 2.5, 1E5): never a name
@@ -197,8 +199,8 @@ object CriteriaRangeResize:
    * arguments through this so the graph records the cells evaluation actually reads.
    *
    * @param name
-   *   the call's canonical (upper-case) function name, `FunctionSpec.name`, as for
-   *   [[hasDynamicResize]]
+   *   the function's name, in any case (the published signature since 0.22.0; the evaluator passes
+   *   the canonical `FunctionSpec.name`)
    * @param targetOf
    *   the third argument as a location that carries its range, when one can be known (#733: a
    *   defined name bound to a range, resolved through the workbook); a location it cannot resolve
@@ -210,7 +212,7 @@ object CriteriaRangeResize:
     shapeOf: TExpr.RangeLocation => Option[CellRange] = _.staticRange,
     targetOf: TExpr.RangeLocation => TExpr.RangeLocation = identity
   ): List[ArgValue] =
-    if !resizingFunctions.contains(name) then values
+    if !resizingFunctions.contains(name.toUpperCase(java.util.Locale.ROOT)) then values
     else
       values match
         case (first @ ArgValue.Range(criteria)) :: criterion :: ArgValue.Range(target) :: rest =>

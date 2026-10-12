@@ -352,6 +352,41 @@ class CriteriaRangeDependencySpec extends FunSuite:
     assertEquals(cache(resultSheet(result.workbook), ref"C2"), None)
   }
 
+  test("#733: a resize through a constant name is static: audit, seeding and dependents agree") {
+    import com.tjclp.xl.cells.FormulaKind
+    import com.tjclp.xl.formula.eval.SeedTableWarning
+    val kind: FormulaKind.DataTable =
+      FormulaKind.DataTable(ref"H10:H12", dt2D = false, dtr = false, r1 = Some(ref"A2"), r2 = None)
+    val book = staticNames(
+      Workbook(
+        sheet
+          .put(ref"E1", CellValue.Formula("SUMIF(A1:A3,\">0\",rate)", None))
+          .put(ref"H9", CellValue.Formula("SUMIF(A1:A3,\">0\",rate)+SUM(C1:C3)"))
+          .put(ref"G10", n(0))
+          .put(ref"G11", n(5))
+          .put(ref"G12", n(9))
+          .put(ref"H10", CellValue.dataTable(kind, None))
+      )
+    ).withDefinedName("rate", "0.05")
+    assertEquals(DependencyGraph.dynamicCells(book), Set.empty[QualifiedRef])
+    assertEquals(com.tjclp.xl.formula.eval.WorkbookAudit.of(book).dynamic, Vector.empty)
+    // a constant in a range slot is #VALUE!, as in Excel
+    assertEquals(
+      sheet
+        .put(ref"E1", CellValue.Formula("SUMIF(A1:A3,\">0\",rate)", None))
+        .evaluateCell(ref"E1", Clock.system, Some(book)),
+      Right(CellValue.Error(CellError.Value))
+    )
+    val report = book.seedDataTablesReport().fold(error => fail(error.message), identity)
+    assert(
+      !report.warnings.exists {
+        case SeedTableWarning.Skipped(_, _, _, _) => true
+        case _ => false
+      },
+      report.warnings.toString
+    )
+  }
+
   test("#733: LET-bound and computed names keep the dynamic schedule") {
     val wb = staticNames(
       Workbook(

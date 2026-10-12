@@ -319,14 +319,31 @@ object Evaluator:
   private[formula] enum NameRangeTarget:
     case Range(target: Sheet, range: CellRange)
 
-    /** The definition is a formula or a constant; `notARange` is the static diagnostic. */
+    /**
+     * The definition is a formula, which may compute a reference; `notARange` is the static
+     * diagnostic. A constant is a static `Left` instead: no reference can come out of it.
+     */
     case Computed(notARange: EvalError)
+
+  /**
+   * #733: a definition that is a constant — a scalar literal, signed or with `%` (`0.05`, `-0.05`,
+   * `"x"`, `TRUE`, `5%`). Its value can never be a reference, and in a range slot it is `#VALUE!`
+   * whatever it holds. An array constant is not one: a 1×1 `{#N/A}` evaluates to its error.
+   */
+  private def isConstant(expr: TExpr[?]): Boolean = expr match
+    case TExpr.Lit(_: ArrayResult) => false
+    case TExpr.Lit(_) => true
+    case TExpr.UnaryPlus(inner) => isConstant(inner)
+    case TExpr.Percent(inner) => isConstant(inner)
+    // unary minus parses as `0 - x`
+    case TExpr.Sub(left, right) => isConstant(left) && isConstant(right)
+    case _ => false
 
   /**
    * #733: whether a defined name in a range slot computes its reference — bound, directly or
    * through a chain of names, to a formula (OFFSET, INDIRECT, IF over references) — so only
-   * evaluation knows the cells it names. A name bound to a range or a cell is not, and neither is a
-   * name that fails to resolve (it reads nothing: its evaluation fails).
+   * evaluation knows the cells it names. A name bound to a range, a cell or a constant is not, and
+   * neither is a name that fails to resolve (it reads nothing: its evaluation fails).
    */
   private[formula] def nameComputesRange(
     name: String,
@@ -419,19 +436,16 @@ object Evaluator:
                       Left(
                         EvalError.ErrorValue(err, Some(s"Defined name '$name' is ${err.toExcel}"))
                       )
-                    case _ =>
+                    case other =>
                       // Excel: a non-reference name in a range position is #VALUE! — unless the
-                      // formula computes a reference (GH-710, resolveRangeSlot)
-                      Right(
-                        NameRangeTarget.Computed(
-                          EvalError.ErrorValue(
-                            CellError.Value,
-                            Some(
-                              s"name '$name' does not refer to a range (refersTo: ${dn.formula})"
-                            )
-                          )
-                        )
+                      // formula computes a reference (GH-710, resolveRangeSlot). A constant
+                      // (`rate = 0.05`, `-0.05`) never does: it is #VALUE! here, never evaluated
+                      val notARange = EvalError.ErrorValue(
+                        CellError.Value,
+                        Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
                       )
+                      if isConstant(other) then Left(notARange)
+                      else Right(NameRangeTarget.Computed(notARange))
             }
 
   /**

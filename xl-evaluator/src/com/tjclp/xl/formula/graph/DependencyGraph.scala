@@ -2277,7 +2277,9 @@ object DependencyGraph:
               }
             )
           )
-          // the name's own edges stay (its definition's cells and the names it reaches)
+          // the name's own edges stay (its definition's cells and the names it reaches). Only
+          // when the resize replaced it: an unresolved name is still in `values` and the fold
+          // below visits it — adding it here too would double the walk, dropping it the edges
           val namedTarget = raw match
             case _ :: _ :: ArgValue.Range(named: TExpr.RangeLocation.Name) :: _
                 if !values.lift(2).contains(ArgValue.Range(named)) =>

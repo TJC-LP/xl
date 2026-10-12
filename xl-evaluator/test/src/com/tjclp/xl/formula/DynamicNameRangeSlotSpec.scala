@@ -283,23 +283,43 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     )
   }
 
+  test("a name bound to a constant is #VALUE! statically, never evaluated") {
+    val wb = book
+      .withDefinedName("negative", "-0.05")
+      .withDefinedName("pct", "5%")
+      .withDefinedName("label", "\"x\"")
+    List("konst" -> "5", "negative" -> "-0.05", "pct" -> "5%", "label" -> "\"x\"").foreach {
+      (name, refersTo) =>
+        assertEquals(
+          slot(wb, name),
+          Left(
+            EvalError.ErrorValue(
+              CellError.Value,
+              Some(s"name '$name' does not refer to a range (refersTo: $refersTo)")
+            )
+          )
+        )
+    }
+  }
+
   test("a name bound to a formula is evaluated; a value it computes keeps the static diagnostic") {
+    val wb = book.withDefinedName("calc", "SUM(Sheet1!$A$1:$A$3)")
     val notARange =
       EvalError.ErrorValue(
         CellError.Value,
-        Some("name 'konst' does not refer to a range (refersTo: 5)")
+        Some("name 'calc' does not refer to a range (refersTo: SUM(Sheet1!$A$1:$A$3))")
       )
-    assertEquals(slot(book, "konst", _ => Right(BigDecimal(5))), Left(notARange))
+    assertEquals(slot(wb, "calc", _ => Right(BigDecimal(5))), Left(notARange))
     // a bare #VALUE! from the evaluation says less than the static diagnostic
     assertEquals(
-      slot(book, "konst", _ => Left(EvalError.ErrorValue(CellError.Value, None))),
+      slot(wb, "calc", _ => Left(EvalError.ErrorValue(CellError.Value, None))),
       Left(notARange)
     )
     // a more specific failure of the evaluation is the slot's
     val failed = EvalError.EvalFailed("boom", None)
-    assertEquals(slot(book, "konst", _ => Left(failed)), Left(failed))
+    assertEquals(slot(wb, "calc", _ => Left(failed)), Left(failed))
     assertEquals(
-      slot(book, "konst", _ => Right(CellValue.Error(CellError.Ref))),
+      slot(wb, "calc", _ => Right(CellValue.Error(CellError.Ref))),
       Left(EvalError.ErrorValue(CellError.Ref))
     )
     // the evaluation sees the name itself, unqualified as written
@@ -373,6 +393,19 @@ class DynamicNameRangeSlotSpec extends FunSuite:
       agree(unplaced(formula), expected)
       agree(plain("Empty", "A1", formula), expected)
     }
+  }
+
+  test("a range-slot read of one LET name leaves the other bindings' array values unchanged") {
+    // r is read by COUNTIF's range slot, so the array-mode LET binds references; s, an OFFSET read
+    // by FILTER as an array, must give the same values as when nothing makes the LET bind them
+    val withSlot =
+      "LET(r,IF(TRUE,A1:A3,B1:B3),s,OFFSET(A1,0,0,3,1),COUNTIF(r,\">0\")+SUM(FILTER(s,s>1)))"
+    val withoutSlot = "LET(r,IF(TRUE,A1:A3,B1:B3),s,OFFSET(A1,0,0,3,1),SUM(FILTER(s,s>1)))"
+    // A1:A3 is 1, -2, 3.5: two are positive, and 3.5 is the only one above 1
+    agree(unplaced(withoutSlot), N("3.5"))
+    agree(unplaced("COUNTIF(A1:A3,\">0\")"), N("2"))
+    agree(unplaced(withSlot), N("5.5"))
+    agree(plain("Sheet1", "H1", withSlot), N("5.5"))
   }
 
   // ----- a LET name as an operand of the reference operators -----
