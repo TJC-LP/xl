@@ -82,10 +82,6 @@ private[xl] object SheetMetadataPart:
       .find(rel => rel.`type` == relType && !rel.targetMode.exists(_.equalsIgnoreCase("External")))
       .map(rel => Relationships.resolveWorkbookTarget(rel.target))
 
-  /** Whether `xml` parses as a part the plan can extend (not whether it holds dynamic arrays). */
-  def readable(xml: String, path: String = defaultPath): Boolean =
-    XmlSecurity.parseSafe(xml, path).isRight
-
   /** Resolve every dynamic-array `cm` index of a part; malformed XML reads as none. */
   def parse(xml: String, path: String = defaultPath): CellMetadataIndex =
     XmlSecurity.parseSafe(xml, path).toOption match

@@ -81,7 +81,7 @@ object XlsxWriter:
     outputPath: Path,
     config: WriterConfig = WriterConfig()
   ): XLResult[Unit] =
-    writeToTarget(workbook, OutputPath(outputPath), config)
+    writeToTarget(workbook, OutputPath(outputPath), config).map(_ => ())
 
   /**
    * Internal dispatch: Choose write strategy based on SourceContext.
@@ -104,7 +104,7 @@ object XlsxWriter:
     workbook: Workbook,
     target: OutputTarget,
     config: WriterConfig
-  ): XLResult[Unit] =
+  ): XLResult[WriteReport] =
     try
       val escapeFormulas = formulaEscapingRequested(config)
       // GH-243: serialize DateTime cells with the workbook's date system before any write path.
@@ -117,10 +117,11 @@ object XlsxWriter:
         case Some(ctx) => dated.copy(sourceContext = Some(ctx.reconciledWith(dated)))
         case None => dated
 
-      normalized.sourceContext match
+      val report = normalized.sourceContext match
         case Some(ctx) if ctx.isClean && !escapeFormulas =>
           // Clean workbook → verbatim copy (ultra-fast), to a file or a stream alike (GH-516)
           copyVerbatim(ctx, target)
+          WriteReport.empty
 
         case Some(ctx) =>
           // Surgical mode with source: use atomic temp file to prevent corruption
@@ -134,7 +135,7 @@ object XlsxWriter:
           // No source context: safe to write directly (no surgical preservation)
           unifiedWrite(normalized, None, target, config)
 
-      Right(())
+      Right(report)
 
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
 
@@ -188,22 +189,25 @@ object XlsxWriter:
     sourceContext: Option[SourceContext],
     destPath: Path,
     config: WriterConfig
-  ): Unit =
+  ): WriteReport =
     val parent = Option(destPath.getParent).getOrElse(Path.of("."))
     val tempPath = Files.createTempFile(parent, ".xl-", ".tmp")
 
     try
-      unifiedWrite(workbook, sourceContext, OutputPath(tempPath), config)
-      Files.move(
-        tempPath,
-        destPath,
-        StandardCopyOption.REPLACE_EXISTING,
-        StandardCopyOption.ATOMIC_MOVE
-      )
+      val report = unifiedWrite(workbook, sourceContext, OutputPath(tempPath), config)
+      try
+        Files.move(
+          tempPath,
+          destPath,
+          StandardCopyOption.REPLACE_EXISTING,
+          StandardCopyOption.ATOMIC_MOVE
+        )
+      catch
+        case e: java.nio.file.AtomicMoveNotSupportedException =>
+          // Fallback for filesystems that don't support atomic move
+          Files.move(tempPath, destPath, StandardCopyOption.REPLACE_EXISTING)
+      report
     catch
-      case e: java.nio.file.AtomicMoveNotSupportedException =>
-        // Fallback for filesystems that don't support atomic move
-        Files.move(tempPath, destPath, StandardCopyOption.REPLACE_EXISTING)
       case e: Exception =>
         Files.deleteIfExists(tempPath)
         throw e
@@ -241,30 +245,38 @@ object XlsxWriter:
       .toSet
 
   /**
-   * GH-714: the source cell-metadata part a write of `workbook` cannot extend — present but not
-   * readable XML — when the sheets it regenerates hold dynamic arrays. Those records are then
-   * written without their `cm` marker, and Excel opens them as legacy CSE arrays (`{=...}`); the
-   * part itself is kept as it is (another one would orphan whatever else it holds, such as
-   * images-in-cells data). None when nothing is lost: no source, no dynamic array on a regenerated
-   * sheet, a readable part, or none at all (one is generated — at the relationship's own target
-   * when that names a missing part). The writer's own decision, computed without writing, for
-   * callers that report it.
+   * What a write decided that its caller may need to report — taken from the plan the write
+   * actually used, so a report can never disagree with the bytes written.
+   *
+   * `cellMetadataDowngrade` (GH-714): the cell-metadata part the write could not extend, when the
+   * sheets it regenerated hold dynamic arrays the plan allocated no `cm` for. That happens when the
+   * source part is present but not readable XML: it is kept as it is (a second part would orphan
+   * whatever else it holds, such as images-in-cells data), and those records are written without
+   * `cm`, so Excel opens them as legacy CSE arrays (`{=...}`). None when nothing was lost —
+   * including a relationship naming a missing part, whose part is generated at that target.
    */
-  def cellMetadataDowngrade(
+  private[xl] final case class WriteReport(cellMetadataDowngrade: Option[String]) derives CanEqual
+
+  private[xl] object WriteReport:
+    val empty: WriteReport = WriteReport(None)
+
+  /**
+   * [[writeWith]], also returning the write's [[WriteReport]] (the CLI's warnings come from it).
+   */
+  private[xl] def writeWithReport(
     workbook: Workbook,
-    config: WriterConfig = WriterConfig()
-  ): Option[String] =
-    workbook.sourceContext.flatMap { ctx =>
-      val sheets = regeneratedSheets(workbook, ctx.modificationTracker, config)
-      if dynamicVariants(workbook, sheets).isEmpty then None
-      else
-        val (_, _, wbRels, _) = parsePreservedStructure(ctx.content)
-        wbRels.flatMap(SheetMetadataPart.locate).filter { path =>
-          ctx.partManifest.contains(path) &&
-          withSourceZip(ctx.content)(readZipEntry(_, path))
-            .forall(xml => !SheetMetadataPart.readable(xml, path))
-        }
-    }
+    outputPath: Path,
+    config: WriterConfig
+  ): XLResult[WriteReport] =
+    writeToTarget(workbook, OutputPath(outputPath), config)
+
+  /** [[writeToBytes]], also returning the write's [[WriteReport]]. */
+  private[xl] def writeToBytesWithReport(
+    workbook: Workbook,
+    config: WriterConfig
+  ): XLResult[(Array[Byte], WriteReport)] =
+    val out = new SizedByteSink(archiveSizeEstimate(workbook))
+    writeToTarget(workbook, OutputStreamTarget(out), config).map(report => (out.result(), report))
 
   /**
    * Copy the source archive verbatim to the target (for clean workbooks).
@@ -1847,7 +1859,7 @@ object XlsxWriter:
     sourceContext: Option[SourceContext],
     target: OutputTarget,
     config: WriterConfig
-  ): Unit =
+  ): WriteReport =
     val escapeFormulas = formulaEscapingRequested(config)
 
     // Determine modification tracking (all sheets modified if no source)
@@ -2251,7 +2263,7 @@ object XlsxWriter:
     val metadataPlan: SheetMetadataPart.CellMetadataPlan =
       (sourceMetadataPath, sourceMetadataXml) match
         // a present part that cannot be read: nothing to extend, and a second part would orphan
-        // whatever else it holds — the records are written without `cm` (cellMetadataDowngrade)
+        // whatever else it holds — the records are written without `cm` (the report says so)
         case (Some(_), None) if sourceMetadataPresent => SheetMetadataPart.CellMetadataPlan.none
         case (Some(path), Some(xml)) =>
           SheetMetadataPart.plan(Some(xml), neededDynamic, path)
@@ -2268,6 +2280,11 @@ object XlsxWriter:
           )
         )
       case _ => None
+    // GH-714: the report's downgrade is read off this plan — a needed variant it allocated no `cm`
+    val metadataDowngrade: Option[String] =
+      Option.when(neededDynamic.exists(v => !metadataPlan.cmOf.contains(v)))(
+        sourceMetadataPath.getOrElse(SheetMetadataPart.defaultPath)
+      )
     // the source path whose bytes this write replaces (skipped by the verbatim copy loop)
     val appendedMetadataPath: Option[String] = metadataPlan.output match
       case SheetMetadataPart.MetadataOutput.Appended(_) => sourceMetadataPath
@@ -2338,18 +2355,19 @@ object XlsxWriter:
           if needsGeneratedTheme then
             Relationships(
               base.relationships :+ Relationship(
-                s"rId${base.relationships.size + 1}",
+                s"rId${Relationships.maxNumericId(base.relationships) + 1}",
                 XmlUtil.relTypeTheme,
                 "theme/theme1.xml"
               )
             )
           else base
-        // GH-714: the generated cell-metadata part, appended like the theme
+        // GH-714: the generated cell-metadata part, appended like the theme (each with the next
+        // free numeric rId, not the count + 1, so a non-sequential base cannot collide)
         val withMetadata = generatedMetadataPath match
           case Some(path) =>
             Relationships(
               withTheme.relationships :+ Relationship(
-                s"rId${withTheme.relationships.size + 1}",
+                s"rId${Relationships.maxNumericId(withTheme.relationships) + 1}",
                 XmlUtil.relTypeSheetMetadata,
                 path.stripPrefix("xl/")
               )
@@ -2758,6 +2776,7 @@ object XlsxWriter:
       }
 
     finally zip.close()
+    WriteReport(metadataDowngrade)
 
   /**
    * Serialise the workbook to XLSX bytes with the default configuration.

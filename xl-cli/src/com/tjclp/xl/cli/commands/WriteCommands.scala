@@ -146,11 +146,10 @@ object WriteCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean
-  ): IO[Unit] =
-    // GH-636: the one guarded instance, so serialisation exhausting the heap is RESOURCE_LIMIT
-    val excel = MemoryGuard.writer
-    if stream then excel.writeWorkbookStream(wb, outputPath, config)
-    else excel.writeWith(wb, outputPath, config)
+  ): IO[XlsxWriter.WriteReport] =
+    // GH-636: the one guarded write, so serialisation exhausting the heap is RESOURCE_LIMIT;
+    // GH-714: it hands back the writer's report, which the callers that warn read
+    MemoryGuard.writeReporting(wb, outputPath, config, stream)
 
   /**
    * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
@@ -192,13 +191,13 @@ object WriteCommands:
         }
     calculation.flatMap { result =>
       val finalWb = result.fold(wb)(_.workbook)
-      writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+      writeWorkbook(finalWb, outputPath, config, stream).flatMap { report =>
         val note = result match
           case None => noRecalcSuffix(policy)
           case Some(r) if r.errors.isEmpty && r.converged && r.evaluated.values.forall(_.isEmpty) =>
             ""
           case Some(r) => "\n" + formatRecalcSummary(r)
-        IO.blocking(advisories(finalWb) ++ downgradeWarning(finalWb, config)).flatMap { extra =>
+        IO.blocking(advisories(finalWb) ++ downgradeWarning(report)).flatMap { extra =>
           strictGate(
             policy,
             s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
@@ -766,11 +765,10 @@ object WriteCommands:
 
   /**
    * GH-714: `DYNAMIC_ARRAY_DOWNGRADED` when the write just made could not keep its dynamic arrays'
-   * `cm` marker (`XlsxWriter.cellMetadataDowngrade`: the source metadata part does not parse).
+   * `cm` marker — read off the writer's own report (the source metadata part does not parse).
    */
-  private[cli] def downgradeWarning(wb: Workbook, config: WriterConfig): Vector[Warning] =
-    XlsxWriter
-      .cellMetadataDowngrade(wb, config)
+  private[cli] def downgradeWarning(report: XlsxWriter.WriteReport): Vector[Warning] =
+    report.cellMetadataDowngrade
       .map { path =>
         Warning(
           WarningCode.DYNAMIC_ARRAY_DOWNGRADED,
@@ -1785,7 +1783,7 @@ object WriteCommands:
               val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
               refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
                 (finalWb, recalcOpt, refreshLine) =>
-                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+                  writeWorkbook(finalWb, outputPath, config, stream).flatMap { written =>
                     val ops = result.ops
                     val summary = BatchParser.formatScopedSummary(result.scoped)
                     val recalcLine = refreshLine.fold("")(line => s"$line\n")
@@ -1799,7 +1797,7 @@ object WriteCommands:
                     IO.blocking(
                       intersectionAdvisory(targets, known, clock)(finalWb) ++
                         spillsKeptWarning(kept).toList.toVector ++
-                        downgradeWarning(finalWb, config)
+                        downgradeWarning(written)
                     ).flatMap { extra =>
                       strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
                     }

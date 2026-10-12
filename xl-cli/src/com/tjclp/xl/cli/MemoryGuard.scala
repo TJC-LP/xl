@@ -15,7 +15,7 @@ import fs2.{Pipe, Stream}
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.error.{XLError, XLException, XLResult}
 import com.tjclp.xl.io.{ExcelIO, RowData, StyledRowData}
-import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter}
+import com.tjclp.xl.ooxml.{WriterConfig, XlsxReader, XlsxWriter, XmlBackend}
 import com.tjclp.xl.ooxml.XlsxReader.{ReadResult, ReaderConfig}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.workbooks.Workbook
@@ -487,6 +487,27 @@ object MemoryGuard:
    * spill goes where `XL_SPILL_DIR` points.
    */
   val writer: ExcelIO[IO] = excel(_ => IO.unit, spill = spill)
+
+  /**
+   * GH-714: the in-memory write a command makes — [[writer]]'s `writeWith`, or with `stream` its
+   * SAX/StAX `writeWorkbookStream`, under the same guard and failure text — returning the writer's
+   * report, so a warning about what the write did (`DYNAMIC_ARRAY_DOWNGRADED`) is read off the plan
+   * it actually used rather than recomputed.
+   */
+  def writeReporting(
+    wb: Workbook,
+    path: Path,
+    config: WriterConfig,
+    stream: Boolean
+  ): IO[XlsxWriter.WriteReport] =
+    if stream && wb.sheets.isEmpty then
+      IO.raiseError(new IllegalArgumentException("Workbook must have at least one sheet"))
+    else
+      val effective = if stream then config.copy(backend = XmlBackend.SaxStax) else config
+      blocking(path, "write")(XlsxWriter.writeWithReport(wb, path, effective)).flatMap {
+        case Right(report) => IO.pure(report)
+        case Left(err) => IO.raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
+      }
 
   /** Binary units with one decimal (`8.0 GB`, `512.0 MB`), the way `-Xmx` counts. */
   def human(bytes: Long): String =

@@ -33,6 +33,15 @@ class DynamicArrayPreservationSpec extends FunSuite:
   private def write(wb: Workbook, config: WriterConfig = WriterConfig()): Array[Byte] =
     XlsxWriter.writeToBytes(wb, config).fold(err => fail(err.message), identity)
 
+  /** The write's bytes and the report it made from the plan it used. */
+  private def reported(
+    wb: Workbook,
+    config: WriterConfig = WriterConfig()
+  ): (Array[Byte], XlsxWriter.WriteReport) =
+    XlsxWriter.writeToBytesWithReport(wb, config).fold(err => fail(err.message), identity)
+
+  private def downgradeOf(wb: Workbook): Option[String] = reported(wb)._2.cellMetadataDowngrade
+
   private def sheet1(bytes: Array[Byte]): String =
     entryText(bytes, "xl/worksheets/sheet1.xml").getOrElse(fail("no sheet1"))
 
@@ -273,12 +282,13 @@ class DynamicArrayPreservationSpec extends FunSuite:
     val broken = "<metadata"
     val wb = read(xlsx(parts(metadata = Some(broken))))
     // nothing regenerated yet, or no dynamic array on a regenerated sheet: nothing is lost
-    assertEquals(XlsxWriter.cellMetadataDowngrade(wb), None)
-    assertEquals(XlsxWriter.cellMetadataDowngrade(dirty(wb)), None)
+    assertEquals(downgradeOf(wb), None)
+    assertEquals(downgradeOf(dirty(wb)), None)
     val edited = withAnchorAt(wb, ref"E1")
-    assertEquals(XlsxWriter.cellMetadataDowngrade(edited), Some("xl/metadata.xml"))
-    backends.foreach { case (_, config) =>
-      val out = write(edited, config)
+    backends.foreach { case (name, config) =>
+      val (out, report) = reported(edited, config)
+      // the report is read off the plan this very write used
+      assertEquals(report.cellMetadataDowngrade, Some("xl/metadata.xml"), name)
       // the part rides through untouched (a second one would orphan whatever else it holds) ...
       assertEquals(entryText(out, "xl/metadata.xml"), Some(broken))
       // ... and the anchor is written in its legacy shape, as the signal warned
@@ -302,9 +312,9 @@ class DynamicArrayPreservationSpec extends FunSuite:
       val dangling = source.filterNot(_._1 == path)
       val wb = read(xlsx(dangling))
       val edited = withAnchorAt(wb, ref"E1")
-      assertEquals(XlsxWriter.cellMetadataDowngrade(edited), None, path)
       backends.foreach { case (name, config) =>
-        val out = write(edited, config)
+        val (out, report) = reported(edited, config)
+        assertEquals(report.cellMetadataDowngrade, None, s"$path ($name)")
         assertEquals(entryText(out, path), Some(metadataXml), s"$path ($name)")
         assertEquals(entries(out).count(_._1 == path), 1, s"$path ($name)")
         if path != "xl/metadata.xml" then
@@ -320,6 +330,39 @@ class DynamicArrayPreservationSpec extends FunSuite:
           Some(FormulaKind.dynamicArray(CellRange(ref"E1", ref"E1")))
         )
       }
+  }
+
+  test("recalc on open, pinned: xl adds no calcId; a source's calcPr rides through as it was") {
+    def workbookXml(out: Array[Byte]) = entryText(out, "xl/workbook.xml").getOrElse(fail("no wb"))
+    // a book xl creates: no <calcPr> at all, so Excel recalculates it (and re-spills) on open
+    val kind = FormulaKind.dynamicArray(CellRange(ref"A1", ref"A3"))
+    val scratch = Workbook(
+      Sheet("S").put(ref"A1", CellValue.Formula("SEQUENCE(3)", Some(CellValue.Number(1)), kind))
+    )
+    backends.foreach { case (name, config) =>
+      val xml = workbookXml(write(scratch, config))
+      assert(!xml.contains("calcId"), s"$name: $xml")
+      assert(!xml.contains("<calcPr"), s"$name: $xml")
+    }
+    // a book Excel saved keeps its calcId (and no fullCalcOnLoad is added) when a sheet holding a
+    // dynamic extent is regenerated: Excel then trusts the written caches on open, so a spill xl
+    // did not re-spill stays as written until Excel recalculates (#737)
+    val withCalc = parts().map { (name, xml) =>
+      if name == "xl/workbook.xml" then
+        name -> xml.replace(
+          "</sheets></workbook>",
+          """</sheets><calcPr calcId="191029"/></workbook>"""
+        )
+      else name -> xml
+    }
+    val edited = dirty(read(xlsx(withCalc)))
+    backends.foreach { case (name, config) =>
+      val out = write(edited, config)
+      assertEquals(kindAt(read(out), ref"B1"), Some(FormulaKind.dynamicArray(sortRange)), name)
+      val xml = workbookXml(out)
+      assert(xml.contains("""<calcPr calcId="191029""""), s"$name: $xml")
+      assert(!xml.contains("fullCalcOnLoad"), s"$name: $xml")
+    }
   }
 
   test("a newly authored variant extends the relationship's renamed metadata part") {
