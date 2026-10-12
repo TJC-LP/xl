@@ -152,7 +152,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   a legacy CSE record from an Excel 365 dynamic array (`ArrayMode.Legacy` by default, so
   constructor calls still compile). A pattern match must name the new field —
   `ArrayFormula(r, a, c)` → `ArrayFormula(r, a, c, _)` — and code compiled against an earlier
-  release must be recompiled (`apply`, `copy` and `unapply` changed).
+  release must be recompiled (`apply`, `copy` and `unapply` changed). To build or test a dynamic
+  array, use `FormulaKind.dynamicArray(extent)` and `kind.isDynamicArray` rather than matching on
+  `mode`.
 - **Writes into a spilled cell of an Excel-authored book are refused** (#714): xl now reads Excel
   365's dynamic arrays as such, so an in-memory `put`, `putf`, `copy` or `fill` into a cell of a
   live spill whose anchor stays is `FORMULA_ERROR` (`BATCH_OP_FAILED` in a batch) and writes

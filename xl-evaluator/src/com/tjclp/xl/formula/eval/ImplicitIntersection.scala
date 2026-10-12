@@ -24,7 +24,10 @@ import com.tjclp.xl.workbooks.Workbook
  * differs by shape. A host failure on either side is no finding. Pure and total.
  *
  * Cost: only a cell whose parsed formula [[mayDiverge]] is evaluated, and at most `budget` of those
- * (the first in reading order), so a long drag of `=SUM($A$1:A1)` costs a parse per cell.
+ * (the first in reading order). The budget bounds evaluations, not parses: walking costs one parse
+ * per non-candidate cell it passes (a cell `known` to be a candidate skips it), and the walk keeps
+ * every cell it visited to skip repeats, so a long drag of `=SUM($A$1:A1)`, none of whose cells is
+ * a candidate, costs a parse per cell and memory for each.
  */
 private[xl] object ImplicitIntersection:
 

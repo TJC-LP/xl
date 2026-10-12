@@ -84,6 +84,10 @@ object FormulaKind:
  * attribute, resolved through `xl/metadata.xml` to XLDAPR dynamic-array properties with `fDynamic`
  * set. `collapsed` carries XLDAPR's `fCollapsed` losslessly. The model never holds the raw `cm`
  * index; the writer allocates it from the metadata part it ships.
+ *
+ * Library code rarely needs to name a mode: build a dynamic-array record with
+ * `FormulaKind.dynamicArray(extent)` and test one with `isDynamicArray`, rather than matching on
+ * `mode` itself (`Dynamic` also carries the collapsed flag).
  */
 enum ArrayMode derives CanEqual:
   case Legacy
