@@ -679,6 +679,13 @@ object ReadCommands:
    * [[StaleBlockRows]] rows); a range spanning more than [[StaleBlockLimit]] blocks is checked
    * against every changed cell instead. The walk asks each changed cell's block for candidate
    * formulas and keeps those with a range containing the cell.
+   *
+   * A formula leaves every candidate set it is found in once it is stale, so later cells never
+   * check it again. Without that, a running total of running totals (`C{n} = SUM($B$1:B{n})` over
+   * stale B cells) re-checked each C reader for every stale B in its blocks, about n²/2 checks. Now
+   * a formula is checked only while still cached, at most once per cell of a block it registered
+   * in: [[StaleBlockRows]] checks per registration at worst, bounded by the index's own size, not
+   * by the square of the sheet. A wide reader is checked against each stale cell, as before.
    */
   private def uncacheReaders(sheet: Sheet, changed: Set[ARef]): Sheet =
     val reads = ValueDependencies.Reader(sheet.usedRange, Some(sheet.name))
@@ -690,9 +697,11 @@ object ReadCommands:
           FormulaParser.parse(text).toOption.map(expr => ref -> reads.readRanges(expr).toVector)
         case _ => None
     }.toVector
-    // (column, row block) → the formulas with a range overlapping it; built once, locally
-    val blocks = scala.collection.mutable.HashMap.empty[(Int, Int), List[Int]]
-    val wide = scala.collection.mutable.ListBuffer.empty[Int]
+    // (column, row block) → the cached formulas with a range overlapping it, each set shrinking as
+    // its formulas go stale; built and consumed locally, one walk
+    val blocks =
+      scala.collection.mutable.HashMap.empty[(Int, Int), scala.collection.mutable.Set[Int]]
+    val wide = scala.collection.mutable.Set.empty[Int]
     formulas.iterator.zipWithIndex.foreach { case ((_, ranges), i) =>
       ranges.foreach { r =>
         val firstBlock = r.rowStart.index0 / StaleBlockRows
@@ -702,21 +711,25 @@ object ReadCommands:
           for
             col <- r.colStart.index0 to r.colEnd.index0
             block <- firstBlock to lastBlock
-          do blocks.update((col, block), i :: blocks.getOrElse((col, block), Nil))
+          do blocks.getOrElseUpdate((col, block), scala.collection.mutable.Set.empty[Int]) += i
       }
     }
-    val wideReaders = wide.distinct.toList
+    val stale = scala.collection.mutable.BitSet.empty
+    // the candidates in `readers` whose range contains `cell`; a formula already stale leaves it
+    def readersOf(readers: scala.collection.mutable.Set[Int], cell: ARef): List[Int] =
+      readers.filterInPlace(i => !stale.contains(i))
+      readers.iterator.filter(i => formulas(i)._2.exists(_.contains(cell))).toList
     @scala.annotation.tailrec
-    def walk(frontier: List[ARef], stale: Set[Int]): Set[Int] = frontier match
-      case Nil => stale
+    def walk(frontier: List[ARef]): Unit = frontier match
+      case Nil => ()
       case cell :: rest =>
-        val candidates =
-          blocks.getOrElse((cell.col.index0, cell.row.index0 / StaleBlockRows), Nil) ++ wideReaders
-        val hits = candidates.distinct.filter(i =>
-          !stale.contains(i) && formulas(i)._2.exists(_.contains(cell))
-        )
-        walk(hits.map(formulas(_)._1) ::: rest, stale ++ hits)
-    walk(changed.toList, Set.empty).foldLeft(sheet) { (s, i) =>
+        val block = blocks.get((cell.col.index0, cell.row.index0 / StaleBlockRows))
+        val hits =
+          (block.fold(List.empty[Int])(readersOf(_, cell)) ++ readersOf(wide, cell)).distinct
+        stale ++= hits
+        walk(hits.map(formulas(_)._1) ::: rest)
+    walk(changed.toList)
+    stale.foldLeft(sheet) { (s, i) =>
       val ref = formulas(i)._1
       s(ref).value match
         case f @ CellValue.Formula(_, Some(_), _) => s.put(ref, f.copy(cachedValue = None))

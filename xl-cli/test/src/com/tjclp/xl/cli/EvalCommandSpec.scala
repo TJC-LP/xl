@@ -720,6 +720,55 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert((end - start).toSeconds < 20, s"took ${(end - start).toMillis} ms")
   }
 
+  /** B{n} = SUM($A$1:A{n}) and C{n} = SUM($B$1:B{n}) over A{n} = n, every formula cached. */
+  private def runningTotals(rows: Int): Sheet =
+    (1 to rows).foldLeft(Sheet("Test")) { (s, n) =>
+      val b = CellValue.Number(BigDecimal(n.toLong * (n + 1) / 2))
+      val c = CellValue.Number(BigDecimal(n.toLong * (n + 1) * (n + 2) / 6))
+      s.put(ARef.from0(0, n - 1), CellValue.Number(BigDecimal(n)))
+        .put(ARef.from0(1, n - 1), CellValue.Formula(s"=SUM($$A$$1:A$n)", Some(b)))
+        .put(ARef.from0(2, n - 1), CellValue.Formula(s"=SUM($$B$$1:B$n)", Some(c)))
+    }
+
+  test("GH-715: --with reaches a running total of running totals") {
+    // A1 goes from 1 to 5: every B rises by 4, so C{n} rises by 4n
+    val rows = 60
+    val sheet = runningTotals(rows)
+    val expected = rows.toLong * (rows + 1) * (rows + 2) / 6 + 4L * rows
+    for result <- ReadCommands.eval(
+        Workbook(sheet),
+        Some(sheet),
+        s"=INDIRECT(\"C$rows\")",
+        Some("E1"),
+        List("A1=5")
+      )
+    yield assert(result.contains(s"Result: $expected (number)"), result)
+  }
+
+  test("GH-715: --with over a running total of running totals stays near-linear to find") {
+    // Every B goes stale, and each C range overlaps every B block up to its row, so asking each
+    // stale B for its candidate readers afresh cost about rows²/2 checks (26 s here). A reader
+    // leaves the index once stale, so each is checked a bounded number of times. The formula
+    // reads one B and one C at run time, so the evaluation itself stays cheap.
+    val rows = 20000
+    val sheet = runningTotals(rows)
+    // B{rows} rises by 4; C2 = B1 + B2 rises by 8, from 4
+    val expected = rows.toLong * (rows + 1) / 2 + 4 + 12
+    for
+      start <- IO.monotonic
+      result <- ReadCommands.eval(
+        Workbook(sheet),
+        Some(sheet),
+        s"=INDIRECT(\"B$rows\")+INDIRECT(\"C2\")",
+        Some("E1"),
+        List("A1=5")
+      )
+      end <- IO.monotonic
+    yield
+      assert(result.contains(s"Result: $expected (number)"), result)
+      assert((end - start).toSeconds < 20, s"took ${(end - start).toMillis} ms")
+  }
+
   test("GH-715: --at far below the used range, read through a whole column, is circular") {
     // the used range ends at D10; D5000 lies far outside it, yet SUM(D:D) there reads it
     val column = (1 to 10).foldLeft(Sheet("Test")) { (s, row) =>

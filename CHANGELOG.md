@@ -308,7 +308,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   dependency graph of the whole sheet. A cycle elsewhere on the sheet no longer fails them, a
   formula that inspects its own address (`ROW(A1)` in A1) is no longer taken for a cycle, a read
   qualified with the sheet's own name is followed, and a sheet of running totals
-  (`SUM($A$1:A{n})`) is no longer quadratic to analyse.
+  (`SUM($A$1:A{n})`) is no longer quadratic to analyse. A precedent the formula reads only as a
+  reference (`B1:B3` in `ROWS(B1:B3)`) is no longer evaluated first, so which errors surface can
+  change: only a formula whose value the evaluation reads can fail it.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

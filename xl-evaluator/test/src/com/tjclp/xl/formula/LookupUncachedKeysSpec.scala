@@ -3,6 +3,8 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.parser.FormulaParser
 import munit.FunSuite
 
 /**
@@ -34,6 +36,19 @@ class LookupUncachedKeysSpec extends FunSuite:
 
   private def eval(sheet: Sheet, formula: String): CellValue =
     sheet.evaluateFormula(formula).fold(e => fail(s"$formula: $e"), identity)
+
+  /** `formula` as the plain cell Z50 evaluates it, its failure the evaluator's own EvalError. */
+  private def evalRaw(
+    sheet: Sheet,
+    formula: String,
+    workbook: Option[Workbook] = None
+  ): Either[EvalError, Any] =
+    FormulaParser
+      .parse(formula)
+      .fold(
+        error => fail(s"$formula: $error"),
+        expr => Evaluator.instance.eval(expr, sheet, Clock.system, workbook, Some(ref"Z50"))
+      )
 
   test("an uncached formula key evaluates and matches, with no placement involved") {
     assertEquals(eval(column, "=VLOOKUP(7,A1:B3,2,FALSE)"), num(20))
@@ -178,6 +193,58 @@ class LookupUncachedKeysSpec extends FunSuite:
     val result = book.recalculate()
     assert(result.errors.exists(_.ref == ref"C1"), result.errors.toString)
     assert(result.errors.exists(_.ref == ref"A1"), result.errors.toString)
+  }
+
+  test("keys in a cell cycle, with no placement, are non-matches: never a CircularRef") {
+    // Pins the invariant LookupLine relies on for cells, as the defined-name test does for names:
+    // outside `eval --at` reading a key raises no CircularRef, so a cyclic key cannot fail the
+    // lookup. A1 and A2 read each other; every lookup below misses or reads past them.
+    val formulas = List(
+      "=MATCH(7,A1:A3,0)" -> num(3),
+      "=MATCH(99,A1:A2,0)" -> CellValue.Error(CellError.NA),
+      "=VLOOKUP(7,A1:B3,2,FALSE)" -> num(70),
+      "=VLOOKUP(99,A1:B2,2,FALSE)" -> CellValue.Error(CellError.NA),
+      "=XLOOKUP(99,A1:A2,B1:B2)" -> CellValue.Error(CellError.NA)
+    )
+    formulas.foreach { (formula, expected) =>
+      val raw = evalRaw(cyclic, formula)
+      assert(
+        !raw.left.exists {
+          case _: EvalError.CircularRef => true
+          case _ => false
+        },
+        s"$formula: $raw"
+      )
+      assertEquals(eval(cyclic, formula), expected, formula)
+    }
+  }
+
+  test("each way a cycle fails without a placement is recognised as a cycle failure") {
+    // Evaluator.isCycleFailure matches the messages of three raise sites; a rewording that loses
+    // the match would turn a cyclic result cell's #VALUE! into a hard failure, so pin each site
+    def failure(result: Either[EvalError, Any], site: String): EvalError =
+      result.fold(identity, value => fail(s"$site: expected a failure, got $value"))
+    // cells reading each other: the cross-sheet recursion depth guard
+    val cells = failure(evalRaw(cyclic, "=A1"), "cells")
+    // spill anchors reading each other's spill: the spill recursion depth guard
+    val spills = Sheet("T")
+      .put(ref"A1", CellValue.Formula("=B1#"))
+      .put(ref"B1", CellValue.Formula("=A1#"))
+    val spill = failure(evalRaw(spills, "=A1#"), "spill")
+    // defined names referring to each other
+    val names = Vector(
+      com.tjclp.xl.workbooks.DefinedName("ping", "=pong"),
+      com.tjclp.xl.workbooks.DefinedName("pong", "=ping")
+    )
+    val book = Workbook(column)
+    val named = book.copy(metadata = book.metadata.copy(definedNames = names))
+    val name = failure(evalRaw(column, "=ping", Some(named)), "names")
+    List("cells" -> cells, "spill" -> spill, "names" -> name).foreach { (site, error) =>
+      assert(Evaluator.isCycleFailure(error), s"$site: $error")
+    } // a cell holding an unknown function fails too, but not as a cycle
+    val broken = column.put(ref"A9", CellValue.Formula("=NOSUCHFN(1)"))
+    val unknown = failure(evalRaw(broken, "=A9"), "unknown function")
+    assert(!Evaluator.isCycleFailure(unknown), unknown.toString)
   }
 
   test("XLOOKUP returns an uncached formula in its return cell as stored (#742)") {

@@ -672,6 +672,10 @@ object Evaluator:
    * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: a recursion
    * depth guard (cells, or a spill reference, reading each other) or a defined-name cycle. Each is
    * an `EvalFailed` the cycle's readers see; it is not an internal failure.
+   *
+   * Matched by message prefix, the three raise sites sharing the constants above: a dedicated
+   * marker would be a new case or field on the published `EvalError`, a binary break.
+   * LookupUncachedKeysSpec pins each raise site, so a rewording that loses the match fails there.
    */
   private[formula] def isCycleFailure(error: EvalError): Boolean = error match
     case EvalError.EvalFailed(message, _) =>
@@ -732,6 +736,9 @@ object Evaluator:
    *   Workbook context for nested cross-sheet references
    * @param depth
    *   Current recursion depth (for cycle protection)
+   * @param memo
+   *   the evaluation's memo, which carries its placement guard (GH-715). No default: a fresh memo
+   *   here would carry no guard, and the placement could evaluate as a precedent of itself
    * @param arrayRecord
    *   the cell is an ArrayFormula record: it evaluates in array mode and reads as element (0,0)
    * @return
@@ -744,7 +751,7 @@ object Evaluator:
     workbook: Option[Workbook],
     depth: Int = 0,
     rng: Rng = Rng.system,
-    memo: EvalMemo = new EvalMemo,
+    memo: EvalMemo,
     workbookPath: Option[String] = None,
     aggregateMemo: Option[AggregateMemo] = None,
     currentCell: Option[ARef] = None,
