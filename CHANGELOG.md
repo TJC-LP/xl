@@ -288,8 +288,17 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   counted only the blanks inside the sheet's used range, in plain cells too, so a recalculated
   `=COUNTBLANK(B:B)` over a sheet holding only B1:B3 was 0 where Excel shows 1048573. It now
   counts the blank cells above, below and beside the used range, whether the column is written,
-  selected by IF or CHOOSE, or computed by INDEX or OFFSET. `COUNTIF(B:B,"")` still counts only
-  the used range.
+  selected by IF or CHOOSE, or computed by INDEX or OFFSET.
+- **SUMPRODUCT, COUNTIF and COUNTIFS count the blank rows past the used range** (#711, GH-192):
+  SUMPRODUCT read a whole column only within the used range, so a blank-testing element never saw
+  the blank rows below it: `SUMPRODUCT(--(A:A=""))` and `SUMPRODUCT(--ISBLANK(A:A))` were 0 with A
+  filled to its last row, where Excel counts every blank row. SUMPRODUCT now adds the dropped rows,
+  each blank in every argument, as one product times their count. This keeps
+  `SUMPRODUCT(IF(A:A="",1,0))` exact now that a selector's whole columns are trimmed too.
+  `COUNTIF(B:B,"")` and COUNTIFS count the blank cells past the used range when every criterion
+  matches a blank. Values move to Excel's: `SUMPRODUCT(1/COUNTIF(A:A,A:A))` over a whole column with
+  no zeros is now `#DIV/0!`, as in Excel. Bound the range for the distinct count, or use
+  `SUMPRODUCT((A:A<>"")/COUNTIF(A:A,A:A&""))`.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the

@@ -263,8 +263,24 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     range: CellRange,
     constrained: CellRange
   ): Long =
-    if agg.countsEmpty && (range.isFullColumn || range.isFullRow) then
-      range.cellCount - constrained.cellCount
+    if agg.countsEmpty then cellsTrimmed(range, constrained) else 0L
+
+  /**
+   * GH-711/GH-192: how many cells of a whole-column or whole-row `range` a used-area bound dropped
+   * (`constrained` is `range` after [[usedArea]] or [[constrainRange]]); 0 for any other range.
+   * Each lies outside every involved sheet's used range, so each is blank.
+   */
+  private def cellsTrimmed(range: CellRange, constrained: CellRange): Long =
+    if range.isFullColumn || range.isFullRow then range.cellCount - constrained.cellCount
+    else 0L
+
+  /**
+   * GH-192: COUNTIF's and COUNTIFS' count of the trimmed blank cells: all of them when every
+   * criterion matches a blank cell (`""`, `"="`), none otherwise (`"<>"`, `0`, `"<5"`), so
+   * `COUNTIF(B:B,"")` counts every blank cell of the column, as Excel does.
+   */
+  private def blankCriteriaCount(trimmed: Long, criteria: List[CriteriaMatcher.Criterion]): Long =
+    if trimmed > 0L && criteria.forall(CriteriaMatcher.matches(CellValue.Empty, _)) then trimmed
     else 0L
 
   /**
@@ -470,11 +486,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   )
                 else
                   areas.foldLeft[Either[EvalError, (A, Long)]](Right((acc, 0L))) {
-                      case (Left(err), _) => Left(err)
-                      case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
-                        foldReference(agg, targetSheet, range, ctx, current)
-                          .map((next, more) => (next, trimmed + more))
-                    }
+                    case (Left(err), _) => Left(err)
+                    case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
+                      foldReference(agg, targetSheet, range, ctx, current)
+                        .map((next, more) => (next, trimmed + more))
+                  }
             )
         case Right(expr) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
@@ -853,6 +869,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             val bounds = computeBounds(List((criteriaRange0, criteriaSheet)))
             val constrainedRange = constrainRange(criteriaRange0, bounds)
             // GH-192: Use iterator-based folding (no .toList) for memory efficiency
+            val trimmed =
+              blankCriteriaCount(cellsTrimmed(criteriaRange0, constrainedRange), List(criterion))
             constrainedRange.cells
               .foldLeft[Either[EvalError, Int]](Right(0)) {
                 case (Left(err), _) => Left(err)
@@ -861,7 +879,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
                   }
               }
-              .map(BigDecimal(_))
+              .map(count => BigDecimal(count.toLong + trimmed))
         }
       }
     }
@@ -1107,6 +1125,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
                     (sheet, constrainRange(range, bounds), criterion)
                   }
+                  // the ranges share one shape and one bound, so each trimmed position is blank
+                  // in every range: it counts when every criterion matches a blank
+                  val trimmed = resolved.headOption
+                    .zip(constrainedConditions.headOption)
+                    .fold(0L) { case ((_, range, _), (_, constrained, _)) =>
+                      blankCriteriaCount(cellsTrimmed(range, constrained), resolved.map(_._3))
+                    }
 
                   // GH-192: Use iterator-based folding with index tracking
                   val criteriaCells =
@@ -1135,7 +1160,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                           if allMatch then count + 1 else count
                         }
                     }
-                    .map(BigDecimal(_))
+                    .map(count => BigDecimal(count.toLong + trimmed))
                 }
         }
     }
@@ -1337,6 +1362,108 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         )
       else Right(matrix(row)(col))
 
+  /**
+   * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
+   * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
+   * would produce a wrong sum for the issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
+   */
+  private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
+    value match
+      case ar: ArrayResult =>
+        ar.values.flatten.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+          case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None =>
+            Right(
+              MatrixArray(
+                (0 until ar.rows).map { row =>
+                  (0 until ar.cols).map(col => coerceToNumeric(ar.values(row)(col))).toVector
+                }.toVector
+              )
+            )
+      case bd: BigDecimal => Right(MatrixArray(Vector(Vector(bd))))
+      case b: Boolean =>
+        Right(MatrixArray(Vector(Vector(if b then BigDecimal(1) else BigDecimal(0)))))
+      case cv: CellValue =>
+        ArrayArithmetic.carriedError(cv) match
+          case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None => Right(MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
+      case other =>
+        Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
+
+  /** The sum over a `rows` × `cols` shape of the arguments' element-wise products. */
+  private def sumOfProducts(
+    arrays: List[ResolvedArray],
+    rows: Int,
+    cols: Int,
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    (0 until rows).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+      case (Left(err), _) => Left(err)
+      case (Right(acc), row) =>
+        (0 until cols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
+          case (Left(err), _) => Left(err)
+          case (Right(rowAcc), col) =>
+            arrays
+              .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(1))) {
+                case (Left(err), _) => Left(err)
+                case (Right(product), arr) => arr.valueAt(row, col, ctx).map(v => product * v)
+              }
+              .map(product => rowAcc + product)
+        }
+    }
+
+  /**
+   * GH-711/GH-192: what SUMPRODUCT's shared bound trimmed off its whole columns (or whole rows):
+   * how many rows (columns) it dropped, and how to read any one of them, a one-row (one-column)
+   * range in place of each whole column (row). Every dropped row lies outside every involved
+   * sheet's used range, so it is blank in every argument, and every one contributes the same
+   * product.
+   */
+  private final case class BlankTail(count: Long, alongRows: Boolean, line: CellRange => CellRange)
+
+  /**
+   * The [[BlankTail]] of SUMPRODUCT's `ranges` under `bounds`: None when nothing was dropped, or
+   * when whole columns and whole rows mix (the dropped cells then form no whole rows).
+   */
+  private def blankTail(
+    ranges: List[CellRange],
+    bounds: (Option[RowBounds], Option[ColBounds])
+  ): Option[BlankTail] =
+    val columns = ranges.exists(_.isFullColumn)
+    val rows = ranges.exists(_.isFullRow)
+    // the first index outside the kept [lo, hi], and how many of `total` lie outside it
+    def outside(kept: Option[(Int, Int)], total: Int): Option[(Int, Long)] =
+      kept match
+        case None => Some((0, total.toLong))
+        case Some((lo, hi)) =>
+          val dropped = total.toLong - (hi - lo + 1)
+          Option.when(dropped > 0L)((if lo > 0 then 0 else hi + 1, dropped))
+    if columns == rows then None
+    else if columns then
+      outside(bounds._1.map((lo, hi) => (lo.index0, hi.index0)), Row.MaxIndex0 + 1).map {
+        (blank, dropped) =>
+          BlankTail(
+            dropped,
+            alongRows = true,
+            r =>
+              if r.isFullColumn then
+                CellRange(ARef.from0(r.colStart.index0, blank), ARef.from0(r.colEnd.index0, blank))
+              else r
+          )
+      }
+    else
+      outside(bounds._2.map((lo, hi) => (lo.index0, hi.index0)), Column.MaxIndex0 + 1).map {
+        (blank, dropped) =>
+          BlankTail(
+            dropped,
+            alongRows = false,
+            r =>
+              if r.isFullRow then
+                CellRange(ARef.from0(blank, r.rowStart.index0), ARef.from0(blank, r.rowEnd.index0))
+              else r
+          )
+      }
+
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -1422,40 +1549,57 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support
                   val boundedExpr = constrainExprRanges(expr)
-                  ctx.evalArrayExpr(boundedExpr).flatMap {
-                    case ar: ArrayResult =>
-                      // Convert ArrayResult to numeric matrix with boolean coercion.
-                      // GH-337: a carried error element fails loudly naming the code — the
-                      // pre-carriage coerceToNumeric would silently turn it into 0 and produce
-                      // a wrong sum for the exact issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
-                      val matrix = ar.values.flatten
-                        .collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
-                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
-                        case None =>
-                          Right(
-                            (0 until ar.rows).map { row =>
-                              (0 until ar.cols).map { col =>
-                                coerceToNumeric(ar.values(row)(col))
-                              }.toVector
-                            }.toVector
-                          )
-                      matrix.map(m => acc :+ MatrixArray(m))
-                    case bd: BigDecimal =>
-                      // Scalar treated as 1x1 matrix
-                      Right(acc :+ MatrixArray(Vector(Vector(bd))))
-                    case b: Boolean =>
-                      // Boolean coerced to 1/0
-                      val n = if b then BigDecimal(1) else BigDecimal(0)
-                      Right(acc :+ MatrixArray(Vector(Vector(n))))
-                    case cv: CellValue =>
-                      // CellValue coerced to numeric; GH-337: carried errors fail loudly
-                      ArrayArithmetic.carriedError(cv) match
-                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
-                        case None => Right(acc :+ MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
-                    case other =>
-                      Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
+                  ctx.evalArrayExpr(boundedExpr).flatMap { value =>
+                    sumProductArray(value).map(acc :+ _)
                   }
               }
+
+            // GH-711/GH-192: the rows (or columns) the shared bound trimmed off are blank in every
+            // argument, so each adds one same product: the arguments read over one blank row.
+            // Excel sums every one (SUMPRODUCT(--(A:A="")) counts each blank row, an IF condition
+            // over A:A tests each), so the trimmed sum gains count × that product. Only when every
+            // argument spans the trimmed axis and reads one row there at the trimmed width; any
+            // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
+            def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
+              blankTail(rangesWithSheets.map(_._1), bounds) match
+                case None => Right(BigDecimal(0))
+                case Some(tail) =>
+                  def spans(range: CellRange): Boolean =
+                    if tail.alongRows then range.isFullColumn else range.isFullRow
+                  val everyArgSpans = args.forall {
+                    case Left(loc) =>
+                      Evaluator
+                        .resolveRangeLocation(loc, ctx.sheet, ctx.workbook)
+                        .exists((_, range) => spans(range))
+                    case Right(expr) => TExpr.collectRanges(expr).exists((_, range) => spans(range))
+                  }
+                  if !everyArgSpans then Right(BigDecimal(0))
+                  else
+                    args
+                      .foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+                        case (Left(err), _) => Left(err)
+                        case (Right(acc), Left(loc)) =>
+                          Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
+                            case (sheet, range) => acc :+ RangeArray(sheet, tail.line(range))
+                          }
+                        case (Right(acc), Right(expr)) =>
+                          ctx
+                            .evalArrayExpr(TExpr.transformRanges(expr, (_, r) => tail.line(r)))
+                            .flatMap(sumProductArray)
+                            .map(acc :+ _)
+                      }
+                      .flatMap { lines =>
+                        val lineRows = lines.headOption.map(_.rows).getOrElse(0)
+                        val lineCols = lines.headOption.map(_.cols).getOrElse(0)
+                        val aligned =
+                          lines.forall(a => a.rows == lineRows && a.cols == lineCols) &&
+                            (if tail.alongRows then lineRows == 1 && (rows == 0 || lineCols == cols)
+                             else lineCols == 1 && (cols == 0 || lineRows == rows))
+                        if aligned then
+                          sumOfProducts(lines, lineRows, lineCols, ctx)
+                            .map(_ * BigDecimal(tail.count))
+                        else Right(BigDecimal(0))
+                      }
 
             resolvedResult.flatMap { resolved =>
               resolved match
@@ -1480,25 +1624,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       // Compute final dimensions
                       val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
                       val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
-
-                      // Element-wise multiplication and sum
-                      (0 until finalRows).foldLeft[Either[EvalError, BigDecimal]](
-                        Right(BigDecimal(0))
-                      ) {
-                        case (Left(err), _) => Left(err)
-                        case (Right(acc), row) =>
-                          (0 until finalCols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
-                            case (Left(err), _) => Left(err)
-                            case (Right(rowAcc), col) =>
-                              // Get values from all arrays at this position
-                              resolved
-                                .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(1))) {
-                                  case (Left(err), _) => Left(err)
-                                  case (Right(product), arr) =>
-                                    arr.valueAt(row, col, ctx).map(v => product * v)
-                                }
-                                .map(product => rowAcc + product)
-                          }
+                      sumOfProducts(resolved, finalRows, finalCols, ctx).flatMap { sum =>
+                        blankTailSum(finalRows, finalCols).map(tail => sum + tail)
                       }
             }
           }
