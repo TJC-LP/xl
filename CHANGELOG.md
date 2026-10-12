@@ -138,6 +138,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking: `FormulaKind.ArrayFormula` gains a fourth field, `mode: ArrayMode`** (#714): it tells
+  a legacy CSE record from an Excel 365 dynamic array (`ArrayMode.Legacy` by default, so
+  constructor calls still compile). A pattern match must name the new field —
+  `ArrayFormula(r, a, c)` → `ArrayFormula(r, a, c, _)` — and code compiled against an earlier
+  release must be recompiled (`apply`, `copy` and `unapply` changed).
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
