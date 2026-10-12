@@ -126,10 +126,14 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
-- **Breaking (source): `TExpr.xlookup` returns `TExpr[ArrayResult]`** (#713): it was
-  `TExpr[CellValue]`. XLOOKUP now returns a reference, typed like INDEX, so code that ascribed the
-  old type (`val e: TExpr[CellValue] = TExpr.xlookup(…)`) no longer compiles; drop the ascription
-  or take `TExpr[ArrayResult]`.
+- **Breaking (source and binary): XLOOKUP is typed `ArrayResult`** (#713): `TExpr.xlookup` returns
+  `TExpr[ArrayResult]` (it was `TExpr[CellValue]`), and the public spec `FunctionSpecs.xlookup`
+  (exported as `com.tjclp.xl.formula.FunctionSpecs`) is a `FunctionSpec[ArrayResult] { type Args =
+  XLookupArgs }` (it was `FunctionSpec[CellValue]`). XLOOKUP now returns a reference, typed like
+  INDEX. Code that ascribed the old types no longer compiles; drop the ascription or take the
+  `ArrayResult` form. Code compiled against an earlier release must be recompiled too: both types
+  erase as before, so it still links, but where it reads the result as a `CellValue` it can fail
+  at run time (a `ClassCastException`).
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
