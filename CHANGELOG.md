@@ -126,6 +126,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 
 ### Changed
 
+- **Breaking (source): `TExpr.xlookup` returns `TExpr[ArrayResult]`** (#713): it was
+  `TExpr[CellValue]`. XLOOKUP now returns a reference, typed like INDEX, so code that ascribed the
+  old type (`val e: TExpr[CellValue] = TExpr.xlookup(…)`) no longer compiles; drop the ascription
+  or take `TExpr[ArrayResult]`.
 - **Breaking: `--raster-output` must name a regular file** (#690): raster exports now write beside
   the output path and publish only a verified image, so a device or pipe (`--raster-output
   /dev/stdout`, a FIFO), a directory or `/` is `IO_WRITE` before any backend runs, where a backend
@@ -285,7 +289,10 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
 - **XLOOKUP returns a reference, and a whole matched row or column** (#713):
   `=XLOOKUP(2,A1:A3,B1:C3)` is `{20,200}` where it was `#VALUE!`, `ROWS` of it is 1, `SUM` of it
   folds the row, and a plain cell intersects it like any returned reference (`@XLOOKUP`).
-  `INDEX(r,i,0)` and XLOOKUP's returned row or column keep the reference's shape.
+  `INDEX(r,i,0)` and XLOOKUP's returned row or column keep the reference's shape. A 2-D
+  `lookup_array` is now `#VALUE!`, as in Excel: a same-shaped 2-D pair (`XLOOKUP(k,A1:B2,C1:D2)`)
+  used to be searched cell by cell and return a value, so a workbook relying on that now shows
+  `#VALUE!`.
 - **Number formats render extreme stored exponents without throwing** (#689): a digit pattern on
   a value whose scale sits near either end of the Int range threw `ArithmeticException` (`0.00` on
   `1E-2147483647`, `General;-General` and `General%` on `1E±2147483647`), so cell display broke the
