@@ -1116,6 +1116,33 @@ object Evaluator:
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /**
+     * GH-711: SUMPRODUCT's blank tail asks whether a defined name reaches a random draw. Building
+     * that verdict walks the name table (a resolver, a sheet canonicaliser, a parse of every body
+     * reached), so the generation builds it once and every formula reuses it. A generation never
+     * changes the name table or the sheet list, only cells; the entry is still keyed on both, so a
+     * memo that meets another workbook rebuilds instead of answering for the wrong one. The walk
+     * memoizes verdicts in a mutable map, so a parallel wave queries it under the entry's monitor.
+     */
+    private val drawingNames =
+      new java.util.concurrent.atomic.AtomicReference[Option[NameVerdicts]](None)
+
+    def namesReachingDraw(
+      wb: Workbook,
+      build: Workbook => (SheetName, Option[SheetName], String) => NameWalk.Reach
+    ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
+      val names = wb.metadata.definedNames
+      val sheets = wb.sheets.map(_.name)
+      // get-then-set, not compare-and-set: two readers that miss together both build, which
+      // costs a duplicate walk and never a wrong verdict (each builds from the workbook it holds)
+      val entry = drawingNames.get() match
+        case Some(known) if known.matches(names, sheets) => known
+        case _ =>
+          val built = NameVerdicts(names, sheets, build(wb))
+          drawingNames.set(Some(built))
+          built
+      entry.verdict
+
+    /**
      * GH-695: each spill anchor's raw evaluation as this generation's fold computed it — an array
      * is its spill, a scalar is not a spill anchor, an error is that error, exactly as `x#` reads
      * an anchor it evaluates itself. The threaded sheet caches only the anchor's top-left element,
@@ -1202,6 +1229,20 @@ object Evaluator:
     case Hit(value: Either[EvalError, BigDecimal])
     case Filled(value: Either[EvalError, BigDecimal])
     case Bypass
+
+  /** One workbook's name verdicts, as [[AggregateMemo.namesReachingDraw]] caches them. */
+  private final class NameVerdicts(
+    names: Vector[DefinedName],
+    sheets: Vector[SheetName],
+    walk: (SheetName, Option[SheetName], String) => NameWalk.Reach
+  ):
+    def matches(otherNames: Vector[DefinedName], otherSheets: Vector[SheetName]): Boolean =
+      ((names eq otherNames) || names == otherNames) && sheets == otherSheets
+
+    // one lookup at a time holds the monitor: the walk's verdict map is not thread-safe, and a
+    // lookup is a map hit once the name has been walked
+    val verdict: (SheetName, Option[SheetName], String) => NameWalk.Reach =
+      (from, qualifier, name) => synchronized(walk(from, qualifier, name))
 
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private final class AggregateMemoEntry:
@@ -1829,17 +1870,19 @@ private class EvaluatorImpl(
         boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
       )
     )
-    // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX)
-    // for the reference itself, unread
-    val reference = if selectsReference then call.spec.reference(call.args, ctx) else None
-    reference.getOrElse {
-      call.spec.flags.lift match
-        case ArrayLift.Off => call.spec.eval(call.args, ctx)
-        // in array mode the result may be an ArrayResult: its consumers handle one (the
-        // array-mode typing invariant)
-        case lift @ ArrayLift.On(_, _) =>
-          evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)
-    }
+    // a reference position asks a function that returns a reference (`FunctionSpec.reference`)
+    // for the reference itself, unread — only once its lifted slots are planned, so an array in
+    // one (`SUM(INDEX(r,{1;2}))`) still lifts, per element, as values, and a scalar one is
+    // evaluated once
+    def unlifted(args: call.spec.Args): Either[EvalError, Any] =
+      if selectsReference then call.spec.reference(args, ctx).getOrElse(call.spec.eval(args, ctx))
+      else call.spec.eval(args, ctx)
+    call.spec.flags.lift match
+      case ArrayLift.Off => unlifted(call.args)
+      // in array mode the result may be an ArrayResult: its consumers handle one (the
+      // array-mode typing invariant)
+      case lift @ ArrayLift.On(_, _) =>
+        evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)(unlifted)
 
   /**
    * An argument in Excel's reference operand class ([[EvalContext.evalReferenceArg]]), and the
@@ -1934,7 +1977,7 @@ private class EvaluatorImpl(
     clock: Clock,
     workbook: Option[Workbook],
     currentCell: Option[ARef]
-  ): Either[EvalError, Any] =
+  )(unlifted: call.spec.Args => Either[EvalError, Any]): Either[EvalError, Any] =
     import ArrayLifting.SlotValue
     val slots = call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map {
       case ((expr, kind), position) => (expr, kind, lift.slots.forall(_.contains(position)))
@@ -1947,8 +1990,7 @@ private class EvaluatorImpl(
       else
         val peeled = ArrayLifting.peel(expr, kind)._1
         ArrayLifting.referenceLocation(peeled).isDefined || Evaluator.isArrayConstant(peeled)
-    if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then
-      call.spec.eval(call.args, ctx)
+    if !slots.exists((expr, kind, lifted) => lifted && mayLift(expr, kind)) then unlifted(call.args)
     else
       val planned = slots.foldLeft[Either[EvalError, Vector[(TExpr[?], LiftSlot, SlotValue)]]](
         Right(Vector.empty)
@@ -1987,7 +2029,7 @@ private class EvaluatorImpl(
             }
           call.spec.argSpec.replaceScalarSlots(call.args, replacements.toList)._1
         val arrays = plan.collect { case (_, _, SlotValue.Elements(array, _)) => array }
-        if arrays.isEmpty then call.spec.eval(argsFor(Vector.empty), ctx)
+        if arrays.isEmpty then unlifted(argsFor(Vector.empty))
         else
           ArrayArithmetic.broadcastN(arrays) { elements =>
             ArrayLifting.elementResult(call.spec.eval(argsFor(elements), ctx))

@@ -304,6 +304,19 @@ trait FunctionSpecsBase:
         extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
       case other => Right(other)
 
+  /**
+   * A whole column or row bounded to the sheet's used range (None when the two do not meet); any
+   * other range as is. Cells outside the used range are blank either way. The one used-area bound
+   * for a reference read on its own: AND and OR, the aggregates (`FunctionSpecsAggregate.usedArea`,
+   * where COUNTBLANK counts the dropped cells back) and a materialized reference all read it.
+   */
+  protected def boundedToUsed(
+    range: CellRange,
+    target: com.tjclp.xl.sheets.Sheet
+  ): Option[CellRange] =
+    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+    else Some(range)
+
   /** A range reference, seen through the coercion a typed slot wraps it in. */
   protected def bareRange(expr: TExpr[?]): Option[TExpr[?]] = expr match
     case r @ (_: TExpr.RangeRef | _: TExpr.SheetRange) => Some(r)
