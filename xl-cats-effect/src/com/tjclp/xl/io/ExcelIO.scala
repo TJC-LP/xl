@@ -71,14 +71,37 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * Instances are cheap, so this doubles as the per-call form: build one at the call site that
    * needs a different directory and leave the rest of the program on the default.
    *
-   * Carries the warning handler over, but nothing else: the result is a plain `ExcelIO`, so a
-   * subclass calling this would silently lose its own overrides. Subclasses should override
-   * [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by overriding
-   * this method too.
+   * Carries the warning handler and [[streamLimits]] over, but nothing else: the result is a plain
+   * `ExcelIO`, so a subclass calling this would silently lose its own overrides. Subclasses should
+   * override [[spillDir]] directly instead — hence `final`, so that trap cannot be widened by
+   * overriding this method too.
    */
   final def withSpillDir(dir: Path): ExcelIO[F] =
+    val limits = streamLimits
     new ExcelIO[F](warningHandler):
       override def spillDir: Option[Path] = Some(dir)
+      override def streamLimits: XlsxReader.ReaderConfig = limits
+
+  /**
+   * GH-714: the ZIP inflation-size and compression-ratio limits the streaming reads (`readStream`,
+   * `readSheetStream`, `streamCellDetails` and their variants) apply to the two small parts they
+   * read whole besides the shared-string table: `xl/_rels/workbook.xml.rels` and the cell-metadata
+   * part it names. The default limits (a metadata part is a few KB); the shared-string table keeps
+   * its own policy, set by [[loadSharedStrings]]'s config. A member, like [[spillDir]], so the
+   * constructor's signature is unchanged.
+   */
+  def streamLimits: XlsxReader.ReaderConfig = XlsxReader.ReaderConfig.default
+
+  /**
+   * An interpreter identical to this one but reading those parts under `config`'s limits — the same
+   * config a caller hands [[loadSharedStrings]], so a lifted limit (`--max-size 0`) reaches every
+   * part a streaming read holds. Carries the warning handler and [[spillDir]] over.
+   */
+  final def withStreamLimits(config: XlsxReader.ReaderConfig): ExcelIO[F] =
+    val dir = spillDir
+    new ExcelIO[F](warningHandler):
+      override def spillDir: Option[Path] = dir
+      override def streamLimits: XlsxReader.ReaderConfig = config
 
   /**
    * Create a scratch file for a two-pass write, honoring [[spillDir]].
@@ -373,7 +396,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
   ): Either[Throwable, StreamingCellDetails] =
     for
       // Validate the relationship part and its metadata before any worksheet lookup reads them.
-      cellMetadata <- loadCellMetadataIndexSync(zipFile)
+      cellMetadata <- loadCellMetadataIndexSync(zipFile, streamLimits)
       // 1. Resolve worksheet path from workbook metadata
       worksheetPath <- resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
 
@@ -561,25 +584,27 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetIndex: Int,
     range: Option[CellRange]
   ): Stream[F, RowData] =
-    Stream.eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile)).rethrow).flatMap { metadata =>
-      Stream
-        .eval(
-          Sync[F]
-            .blocking(
-              resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
-            )
-            .rethrow
-        )
-        .flatMap { worksheetPath =>
-          readWorksheetStream(
-            zipFile,
-            worksheetPath,
-            range,
-            loadSharedStringsForStream(zipFile),
-            metadata
+    Stream
+      .eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile, streamLimits)).rethrow)
+      .flatMap { metadata =>
+        Stream
+          .eval(
+            Sync[F]
+              .blocking(
+                resolveWorksheetPathByOrderSync(zipFile, sheetIndex).leftMap(new Exception(_))
+              )
+              .rethrow
           )
-        }
-    }
+          .flatMap { worksheetPath =>
+            readWorksheetStream(
+              zipFile,
+              worksheetPath,
+              range,
+              loadSharedStringsForStream(zipFile),
+              metadata
+            )
+          }
+      }
 
   private def readStreamByName(
     zipFile: ZipFile,
@@ -595,19 +620,21 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     range: Option[CellRange],
     sst: F[Option[SharedStrings]]
   ): Stream[F, RowData] =
-    Stream.eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile)).rethrow).flatMap { metadata =>
-      Stream
-        .eval(
-          Sync[F]
-            .blocking(
-              resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
-            )
-            .rethrow
-        )
-        .flatMap { worksheetPath =>
-          readWorksheetStream(zipFile, worksheetPath, range, sst, metadata)
-        }
-    }
+    Stream
+      .eval(Sync[F].blocking(loadCellMetadataIndexSync(zipFile, streamLimits)).rethrow)
+      .flatMap { metadata =>
+        Stream
+          .eval(
+            Sync[F]
+              .blocking(
+                resolveWorksheetPathByNameSync(zipFile, sheetName).leftMap(new Exception(_))
+              )
+              .rethrow
+          )
+          .flatMap { worksheetPath =>
+            readWorksheetStream(zipFile, worksheetPath, range, sst, metadata)
+          }
+      }
 
   private def readWorksheetStream(
     zipFile: ZipFile,

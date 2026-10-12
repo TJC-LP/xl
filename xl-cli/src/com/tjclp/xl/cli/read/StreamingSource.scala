@@ -165,14 +165,17 @@ object StreamingSource:
    * The source over `path`, its three shared parts memoised: `workbook.xml` (the input read of
    * every streaming verb, so a missing or unreadable file is `IO_READ` here as on every other
    * verb), the shared-string table under `config`'s limits, and `styles.xml`. Each is read on first
-   * use, at most once per source.
+   * use, at most once per source. GH-714: the row and cell streams read the workbook relationships
+   * and the cell-metadata part under the same `config` (`ExcelIO.withStreamLimits`), so a lifted
+   * `--max-size` reaches them too. That rebuilds a plain interpreter, which is safe here: a
+   * streaming source only reads, and the overrides a CLI interpreter adds guard loads and writes.
    */
   def apply(path: Path, excel: ExcelIO[IO], config: ReaderConfig): IO[StreamingSource] =
     (
       memoizedRead(metadata(path, excel)),
       memoizedRead(sharedStrings(path, excel, config)),
       memoizedRead(excel.loadStyles(path))
-    ).mapN(new StreamingSource(path, excel, _, _, _))
+    ).mapN(new StreamingSource(path, excel.withStreamLimits(config), _, _, _))
 
   /**
    * Cache failures as values in the memo's worker, then raise them in the consuming fiber. A fast

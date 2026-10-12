@@ -124,3 +124,26 @@ class CellMetadataSecuritySpec extends CatsEffectSuite:
           security(preloaded, part, "Compression ratio")
       }
     }
+
+  test("withStreamLimits carries a caller's lifted limits to the rels and metadata parts") {
+    val parts = DynamicArrayFixtures.relocatedMetadataParts(metadataPath).map { (name, xml) =>
+      if name == metadataPath then name -> (xml + (" " * 200000)) else name -> xml
+    }
+    val lifted = excel.withStreamLimits(XlsxReader.ReaderConfig.permissive)
+    fixture(parts).use { path =>
+      for
+        refused <- excel.readSheetStream(path, "Sheet1", None).compile.toVector.attempt
+        rows <- lifted.readSheetStream(path, "Sheet1", None).compile.toVector
+        cell <- lifted.streamCellDetails(path, "Sheet1", ref"B1")
+        dir <- IO.blocking(Files.createTempDirectory("xl-spill-"))
+      yield
+        security(refused, metadataPath, "Compression ratio")
+        assert(rows.nonEmpty)
+        // B1 resolves through the metadata part the default limits refused
+        assert(cell.value.toString.contains("Dynamic"), cell.value.toString)
+        // the limits survive withSpillDir, and withStreamLimits keeps the spill directory
+        assertEquals(lifted.withSpillDir(dir).streamLimits, XlsxReader.ReaderConfig.permissive)
+        val both = excel.withSpillDir(dir).withStreamLimits(XlsxReader.ReaderConfig.permissive)
+        assertEquals(both.spillDir, Some(dir))
+    }
+  }

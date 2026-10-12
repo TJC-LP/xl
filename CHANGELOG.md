@@ -33,7 +33,11 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   included) clears its spill, and one into a spill cell, whose anchor stays, is refused
   (`FORMULA_ERROR`) rather than leaving a `#SPILL!` or values Excel would overwrite; a blocked
   spill's hint names its own remedy (unmerge a merge, clear an occupied cell). A spill of a whole
-  column (1,048,576 cells) or more is refused before anything is written.
+  column (1,048,576 cells) or more is refused before anything is written. The streaming reads
+  (`readStream`, `readSheetStream`, `streamCellDetails`) now also read `xl/_rels/workbook.xml.rels`
+  and the metadata part, under the default ZIP size and ratio limits; `ExcelIO.withStreamLimits`
+  sets others (the CLI passes its `--max-size` limits), and the shared-string table keeps its own
+  policy.
 - **`IMPLICIT_INTERSECTION` warning** (#714): an in-memory `putf` or batch `putf` whose plain-cell
   value differs from the value the formula has as an array at that cell (`=SUM(A1:A10*B1:B10)` in
   row 5, `=A1:A10*2`) gets one informational warning naming the cell, both values and the remedy
