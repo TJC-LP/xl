@@ -98,8 +98,28 @@ object CopyOps:
     targetSheet: Sheet,
     targetRange: CellRange
   ): Either[DynamicArrayAuthoring.SpillBlocked, Set[ARef]] =
-    val written = writtenCells(sourceSheet, sourceRange, targetRange)
-    DynamicArrayAuthoring.releaseForWrite(targetSheet, written).map(_._2 -- written)
+    releasedBy(
+      sourceSheet,
+      sourceRange,
+      targetSheet,
+      targetRange,
+      DynamicArrayAuthoring.spillsOf(targetSheet)
+    )
+
+  /** [[releasedBy]] against the target sheet's spills already known (a batch's index). */
+  def releasedBy(
+    sourceSheet: Sheet,
+    sourceRange: CellRange,
+    targetSheet: Sheet,
+    targetRange: CellRange,
+    spills: Vector[DynamicArrayAuthoring.Spill]
+  ): Either[DynamicArrayAuthoring.SpillBlocked, Set[ARef]] =
+    if spills.isEmpty then Right(Set.empty)
+    else
+      val written = writtenCells(sourceSheet, sourceRange, targetRange)
+      DynamicArrayAuthoring
+        .releaseCells(targetSheet, spills, written, clearing = false)
+        .map(_._2 -- written)
 
   /**
    * GH-628: [[copyRange]], also reporting every target cell whose formula gained a `#REF!` because

@@ -764,3 +764,86 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       assert(xml.contains("""<c r="E1" t="e" vm="1">"""), xml)
       assert(xml.contains("""<c r="B1" cm="1">"""), xml)
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Fourth #721 review
+
+  test("a putf drag over an anchor and its own spill cells releases rather than refuses") {
+    for
+      src <- withSpill()
+      out <- outPath()
+      drag <- run(src, out, "putf", "F1:F3", "=D1*2")
+      kind <- kindAt(out, ref"F1")
+      f2 <- valueAt(out, ref"F2")
+      h1 <- cachedNumber(out, ref"H1")
+    yield
+      ok(drag)
+      assertEquals(kind, Some(FormulaKind.Normal()))
+      f2 match
+        case CellValue.Formula("D2*2", _, FormulaKind.Normal(_, _)) => ()
+        case other => fail(s"F2 should hold the dragged plain formula, got $other")
+      // H1 = F2*10 reads the dragged D2*2 = 2
+      assertEquals(h1, BigDecimal(20))
+  }
+
+  test("putf with formulas: a malformed formula reports before a spill refusal") {
+    for
+      src <- withSpill()
+      out <- outPath()
+      res <- run(src, out, "putf", "F2:F3", "=1", "=SUM(", "--json")
+    yield
+      assertEquals(res.exit, 3, res.toString)
+      val error = errorOf(res)
+      assertEquals(error("code").str, "FORMULA_ERROR")
+      assert(error("message").str.contains("does not parse"), res.stdout)
+      assert(!error("message").str.contains("spill"), res.stdout)
+  }
+
+  test("a batch rescans a sheet for spills only when an op could have changed them") {
+    import java.util.concurrent.atomic.AtomicInteger
+    import com.tjclp.xl.cli.helpers.BatchParser
+    // a 20,000-cell sheet whose F1 spills F1:F3
+    val big = (0 until 4000).foldLeft(Sheet("Sheet1")) { (s, row) =>
+      (0 until 5).foldLeft(s)((acc, col) =>
+        acc.put(ARef.from0(col + 10, row), CellValue.Number(BigDecimal(row)))
+      )
+    }
+    val seeded = big
+      .put(ref"D1", CellValue.Number(3))
+      .put(ref"D2", CellValue.Number(1))
+      .put(ref"D3", CellValue.Number(2))
+    val wb0 = Workbook(seeded)
+    val authored = DynamicArrayAuthoring
+      .author(wb0, seeded, ref"F1", "=SORT(D1:D3)", com.tjclp.xl.formula.Clock.system)
+      .fold(r => fail(r.message), identity)
+    val wb = wb0.put(authored.sheet)
+    val puts = (1 to 500).map(i => s"""{"op":"put","ref":"H$i","value":$i}""")
+    val styles = (1 to 50).map(i => s"""{"op":"style","range":"H$i","bold":true}""")
+    val array = """{"op":"putf","ref":"Z1","value":"=SEQUENCE(2)","array":true}"""
+    val ops = (puts.take(250) ++ styles ++ Vector(array) ++ puts.drop(250)).mkString("[", ",", "]")
+    val scans = new AtomicInteger(0)
+    val counting: Sheet => Vector[DynamicArrayAuthoring.Spill] = s =>
+      scans.incrementAndGet()
+      DynamicArrayAuthoring.spillsOf(s)
+    for
+      parsed <- BatchParser.parseBatchOperations(ops)
+      result <- BatchParser.applyScopedReporting(
+        wb,
+        wb.sheets.headOption,
+        parsed.scoped,
+        recalcDependents = false,
+        scanSpills = counting
+      )
+    yield
+      // one scan for the first put, one after the array op dropped the index: not one per op
+      assertEquals(scans.get(), 2)
+      val sheet = result._1.sheets.headOption.getOrElse(fail("no sheet"))
+      assertEquals(
+        sheet(ref"F1").value match
+          case CellValue.Formula(_, _, k) => Some(k)
+          case _ => None
+        ,
+        Some(FormulaKind.dynamicArray(CellRange(ref"F1", ref"F3")))
+      )
+      assertEquals(sheet(ref"H500").value, CellValue.Number(500))
+  }

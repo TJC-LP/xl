@@ -288,6 +288,42 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     )
   }
 
+  test("spillsOf lists multi-cell anchors; releaseRanges agrees with releaseForWrite") {
+    import DynamicArrayAuthoring.Spill
+    val spills = DynamicArrayAuthoring.spillsOf(sorted)
+    assertEquals(spills, Vector(Spill(ref"A1", "SORT(B1:B3)", range("A1:A3"))))
+    // a range over the anchor and its spill releases, without expanding the range
+    assertEquals(
+      DynamicArrayAuthoring
+        .releaseRanges(sorted, spills, Vector(range("A1:A1048576")), false)
+        .map(_._2),
+      release(sorted, ref"A1").map(_._2)
+    )
+    // a range into the spill alone is refused, naming exactly the overlap
+    DynamicArrayAuthoring.releaseRanges(
+      sorted,
+      spills,
+      Vector(range("A2:D2"), range("A3")),
+      false
+    ) match
+      case Left(b) => assertEquals(b.blocker, SpillBlocker.Overwritten(Vector(ref"A2", ref"A3")))
+      case Right(_) => fail("a write into a live spill must be refused")
+    // no known spill: nothing to scan or release
+    assertEquals(
+      DynamicArrayAuthoring.releaseRanges(sorted, Vector.empty, Vector(range("A2")), false),
+      Right((sorted, Set.empty[ARef]))
+    )
+  }
+
+  test("author returns the expression it parsed") {
+    assertEquals(
+      authored(base, ref"A1", "=SORT(B1:B3)").expr,
+      com.tjclp.xl.formula.parser.FormulaParser
+        .parse("=SORT(B1:B3)")
+        .fold(e => fail(e.toString), identity)
+    )
+  }
+
   test("withNumFmt formats the whole extent and keeps each cell's other style") {
     val bold = CellStyle.default.withFont(CellStyle.default.font.withBold(true))
     val a = authored(base.withCellStyle(ref"A3", bold), ref"A1", "=SORT(B1:B3)")

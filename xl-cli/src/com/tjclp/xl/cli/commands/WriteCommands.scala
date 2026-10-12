@@ -166,7 +166,8 @@ object WriteCommands:
     policy: WritePolicy,
     warn: Warning => IO[Unit],
     offGrid: Vector[OffGridHit] = Vector.empty,
-    advisories: Workbook => Vector[Warning] = _ => Vector.empty
+    advisories: Workbook => Vector[Warning] = _ => Vector.empty,
+    clock: Option[Clock] = None
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -180,7 +181,12 @@ object WriteCommands:
               val written = applyConeCaches(wb, full.workbook, cone)
               scopeToCone(full, cone, written).copy(workbook = written)
             else
-              DependentRecalculation.recalculateAfterEdit(wb, sheetName, modifiedRefs, Clock.system)
+              DependentRecalculation.recalculateAfterEdit(
+                wb,
+                sheetName,
+                modifiedRefs,
+                clock.getOrElse(Clock.system)
+              )
           Some(result)
         }
     calculation.flatMap { result =>
@@ -658,6 +664,7 @@ object WriteCommands:
           val mergedStyle = existingStyle.withNumFmt(numFmt)
           styleSyntax.withRangeStyle(sheetWithFormula)(CellRange(ref, ref), mergedStyle)
         else sheetWithFormula
+      clock <- commandClock
       result <- writeAfterRefresh(
         releasedWb.put(finalSheet),
         sheet.name,
@@ -668,7 +675,8 @@ object WriteCommands:
         stream,
         policy,
         warn,
-        advisories = intersectionAdvisory(Vector(sheet.name -> ref))
+        advisories = intersectionAdvisory(Vector(sheet.name -> ref), clock = clock),
+        clock = Some(clock)
       )
     yield result
 
@@ -693,20 +701,30 @@ object WriteCommands:
     val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
-      parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
-      )
+      // one reading: the spill and the dependent refresh see the same NOW()
+      clock <- commandClock
       authored <- IO.fromEither(
         DynamicArrayAuthoring
-          .author(wb, sheet, ref, formula, Clock.system)
+          .author(wb, sheet, ref, formula, clock)
           .left
-          .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
+          .map {
+            // the parse failure keeps the putf caret diagnostic (parsed again only to report it)
+            case refusal @ DynamicArrayAuthoring.Refusal.Invalid(_) =>
+              FormulaParser
+                .parse(fullFormula)
+                .fold(
+                  formulaError(_, fullFormula),
+                  _ => CliException(CliError.fromSpillRefusal(refusal))
+                )
+            case refusal => CliException(CliError.fromSpillRefusal(refusal))
+          }
       )
-      // Auto-apply a date format over the spill when the formula involves date functions
+      // Auto-apply a date format over the spill when the formula involves date functions; the
+      // expression is the one authoring parsed
       finalSheet =
-        if TExpr.containsDateFunction(parsedExpr) then
+        if TExpr.containsDateFunction(authored.expr) then
           val numFmt =
-            if TExpr.containsTimeFunction(parsedExpr) then NumFmt.DateTime else NumFmt.Date
+            if TExpr.containsTimeFunction(authored.expr) then NumFmt.DateTime else NumFmt.Date
           authored.withNumFmt(numFmt).sheet
         else authored.sheet
       // an uncached record has no extent yet: its spill is sized when it first evaluates
@@ -722,7 +740,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        clock = Some(clock)
       )
     yield result
 
@@ -731,20 +750,20 @@ object WriteCommands:
    * the final workbook (both evaluations share one clock reading). Only formulas with an array
    * source in a value position are evaluated, at most [[ImplicitIntersection.DefaultBudget]] of
    * them; `known` cells (a drag's copies of a source that may diverge) are candidates without a
-   * parse. `clock` defaults to one reading of the system clock, taken when the check runs; a test
-   * passes a fixed one. Informational: never gates.
+   * parse. `clock` is the command's one reading ([[commandClock]]), so both evaluations, and the
+   * write's own refresh, see the same `NOW()`. Informational: never gates.
    */
   private[cli] def intersectionAdvisory(
     targets: Vector[(SheetName, ARef)],
     known: Set[(SheetName, ARef)] = Set.empty,
-    clock: Option[Clock] = None
+    clock: Clock
   ): Workbook => Vector[Warning] = finalWb =>
-    val fixed = clock.getOrElse {
-      val now = java.time.LocalDateTime.now()
-      Clock.fixed(now.toLocalDate, now)
-    }
-    val report = ImplicitIntersection.check(finalWb, targets, fixed, known = known)
+    val report = ImplicitIntersection.check(finalWb, targets, clock, known = known)
     IntersectionHit.warning(report).toList.toVector
+
+  /** One reading of the system clock, taken in IO: a command's single notion of now. */
+  private[cli] val commandClock: IO[Clock] =
+    IO(java.time.LocalDateTime.now()).map(now => Clock.fixed(now.toLocalDate, now))
 
   /** Mode 2: Formula dragging with anchor-aware shifting (existing behavior) */
   private def putfFormulaDragging(
@@ -774,6 +793,7 @@ object WriteCommands:
       targets = dragTargets(sheet.name, range, parsedExpr)
       // a copy whose shift voided a reference may have lost its array source: parsed again
       known = targets.toSet -- offGrid.map(hit => sheet.name -> hit.cell)
+      clock <- commandClock
       result <- writeAfterRefresh(
         releasedWb.put(updatedSheet),
         sheet.name,
@@ -785,7 +805,8 @@ object WriteCommands:
         policy,
         warn,
         OffGridHit.of(sheet.name, offGrid),
-        intersectionAdvisory(targets, known)
+        intersectionAdvisory(targets, known, clock),
+        clock = Some(clock)
       )
     yield result
 
@@ -820,10 +841,9 @@ object WriteCommands:
       case Some(error) => IO.raiseError(error)
       case None =>
         for
-          released <- releaseSpills(wb, sheet, range.cells.toSet)
-          (releasedWb, releasedSheet, cleared) = released
-          // Parse and apply each formula (using iterator to avoid toList)
-          updates <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
+          // Parse every formula first (using iterator to avoid toList): a malformed one reports
+          // before a spill refusal, as in the other putf modes
+          parsed <- range.cellsRowMajor.zip(formulas.iterator).toList.traverse {
             (ref, formulaStr) =>
               val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
@@ -832,20 +852,24 @@ object WriteCommands:
                   .parse(fullFormula)
                   .left
                   .map(formulaError(_, fullFormula, s"Formula for ${ref.toA1}: "))
-              ).map { _ =>
-                val cachedValue =
-                  if policy.noRecalc then
-                    SheetEvaluator
-                      .evaluateFormula(releasedSheet)(
-                        fullFormula,
-                        workbook = Some(releasedWb),
-                        currentCell = Some(ref)
-                      )
-                      .toOption
-                  else None
-                (ref, CellValue.Formula(formula, cachedValue))
-              }
+              ).as((ref, formula))
           }
+          released <- releaseSpills(wb, sheet, range.cells.toSet)
+          (releasedWb, releasedSheet, cleared) = released
+          updates = parsed.map { (ref, formula) =>
+            val cachedValue =
+              if policy.noRecalc then
+                SheetEvaluator
+                  .evaluateFormula(releasedSheet)(
+                    s"=$formula",
+                    workbook = Some(releasedWb),
+                    currentCell = Some(ref)
+                  )
+                  .toOption
+              else None
+            (ref, CellValue.Formula(formula, cachedValue))
+          }
+          clock <- commandClock
           modifiedRefs = updates.map(_._1).toSet
           updatedSheet = releasedSheet.put(updates*)
           result <- writeAfterRefresh(
@@ -858,7 +882,9 @@ object WriteCommands:
             stream,
             policy,
             warn,
-            advisories = intersectionAdvisory(updates.map((r, _) => sheet.name -> r).toVector)
+            advisories =
+              intersectionAdvisory(updates.map((r, _) => sheet.name -> r).toVector, clock = clock),
+            clock = Some(clock)
           )
         yield result
 
@@ -1710,9 +1736,13 @@ object WriteCommands:
                     // GH-714: the batch's plain putf cells, checked once on the final workbook
                     val targets = BatchParser.putfTargets(finalWb, sheetOpt, result.scoped)
                     val known = BatchParser.putfKnownCandidates(finalWb, sheetOpt, result.scoped)
-                    IO.blocking(intersectionAdvisory(targets, known)(finalWb)).flatMap { extra =>
-                      strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
-                    }
+                    commandClock
+                      .flatMap { clock =>
+                        IO.blocking(intersectionAdvisory(targets, known, clock)(finalWb))
+                      }
+                      .flatMap { extra =>
+                        strictGate(policy, rendered, recalcOpt, Vector.empty, warn, offGrid, extra)
+                      }
                   }
               }
             }

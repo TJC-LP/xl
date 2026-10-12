@@ -1217,33 +1217,77 @@ object BatchParser:
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp],
-    recalcDependents: Boolean = true
+    recalcDependents: Boolean = true,
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill] = DynamicArrayAuthoring.spillsOf
   ): IO[(Workbook, Vector[OffGridHit])] =
-    // GH-714: only a batch that can meet a dynamic spill pays the per-op scan for one
-    val spills = mayMeetSpills(wb, scoped)
+    val start = (wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit], SpillIndex.empty)
     scoped
-      .foldLeft(IO.pure((wb, defaultSheetOpt.map(_.name), Vector.empty[OffGridHit]))) {
-        (stateIO, op) =>
-          stateIO.flatMap { (currentWb, default, offGrid) =>
-            applyOne(currentWb, default, op, recalcDependents, spills)
-              .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
-              .map((next, hits) => (next, retarget(default, op.op), offGrid ++ hits))
-          }
+      .foldLeft(IO.pure(start)) { (stateIO, op) =>
+        stateIO.flatMap { (currentWb, default, offGrid, spills) =>
+          applyOne(currentWb, default, op, recalcDependents, spills, scanSpills)
+            .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
+            .map((next, hits, index) => (next, retarget(default, op.op), offGrid ++ hits, index))
+        }
       }
-      .map((book, _, offGrid) => (book, offGrid))
+      .map((book, _, offGrid, _) => (book, offGrid))
 
   /**
-   * GH-714: whether a dynamic-array spill can exist at any point of the batch — the book holds a
-   * dynamic anchor, or an op authors one (`"array": true`). No other op creates one (`copy` and
-   * `add-sheet` only carry existing ones), so a batch that answers no skips the spill guard.
+   * GH-714: a batch's dynamic spills by sheet ([[DynamicArrayAuthoring.spillsOf]]), so the spill
+   * guard does not rescan a sheet for every op. A sheet is scanned the first time an op needs it,
+   * then kept current: a plain write or contents clear removes the anchors it overwrites (it can
+   * create none), an op that touches no cell value keeps the index, and any other op (an `"array":
+   * true` putf, a `copy`, a sheet added or renamed, a merge) drops it, to be rescanned on next
+   * need.
    */
-  private def mayMeetSpills(wb: Workbook, scoped: Vector[ScopedOp]): Boolean =
-    scoped.exists(_.op match
-      case BatchOp.PutFormula(_, _, _, array) => array
-      case _ => false) ||
-      wb.sheets.exists(_.cells.valuesIterator.exists(_.value match
-        case CellValue.Formula(_, _, kind) => kind.isDynamicArray
-        case _ => false))
+  private type SpillIndex = Map[SheetName, Vector[DynamicArrayAuthoring.Spill]]
+
+  private object SpillIndex:
+    val empty: SpillIndex = Map.empty
+
+  /**
+   * The areas a plain write or a contents clear targets, each on its sheet (never expanded into
+   * cells), and whether it is a clear; None for every other op.
+   */
+  private def releaseAreas(
+    sheetName: Option[SheetName],
+    op: BatchOp
+  ): Option[(Vector[(SheetName, CellRange)], Boolean)] =
+    def areas = targetAreas(sheetName, OpRegistry.targetRefs(op))
+    op match
+      case BatchOp.PutFormula(_, _, _, true) => None
+      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
+          _: BatchOp.PutFormulas | _: BatchOp.PutValues =>
+        Some((areas, false))
+      case BatchOp.Clear(_, all, styles, comments) if all || (!styles && !comments) =>
+        Some((areas, true))
+      case _ => None
+
+  /** The index after `op` (see [[SpillIndex]]). */
+  private def nextSpills(
+    spills: SpillIndex,
+    op: BatchOp,
+    released: Option[(Vector[(SheetName, CellRange)], Boolean)]
+  ): SpillIndex =
+    released match
+      case Some((areas, _)) =>
+        areas.groupMap(_._1)(_._2).foldLeft(spills) { case (ix, (name, ranges)) =>
+          ix.get(name).fold(ix) { known =>
+            ix.updated(name, known.filterNot(s => ranges.exists(_.contains(s.anchor))))
+          }
+        }
+      case None =>
+        op match
+          case _: BatchOp.Style | _: BatchOp.ColWidth | _: BatchOp.RowHeight |
+              _: BatchOp.AddComment | _: BatchOp.RemoveComment | _: BatchOp.Hyperlink |
+              _: BatchOp.ColHide | _: BatchOp.ColShow | _: BatchOp.RowHide | _: BatchOp.RowShow |
+              _: BatchOp.GroupRows | _: BatchOp.GroupCols | _: BatchOp.UngroupRows |
+              _: BatchOp.UngroupCols | _: BatchOp.AutoFit | _: BatchOp.DefineName |
+              _: BatchOp.RemoveName | _: BatchOp.Freeze | BatchOp.Unfreeze | _: BatchOp.AddChart |
+              _: BatchOp.SetSheetView | _: BatchOp.SetTabColor | _: BatchOp.SetAutoFilter |
+              _: BatchOp.SetPageSetup | _: BatchOp.SetHeaderFooter |
+              _: BatchOp.AddConditionalFormat | _: BatchOp.Clear =>
+            spills
+          case _ => SpillIndex.empty
 
   /**
    * GH-714: a plain value or formula write applied to the dynamic arrays it touches, before the
@@ -1253,36 +1297,48 @@ object BatchParser:
    * (`BATCH_OP_FAILED`, the blockers in the message, the remedy as the hint). `"array": true`
    * re-authors its own anchor, and a ref that does not resolve is left for the applier to report. A
    * contents `clear` follows the clear verb: an anchor's whole spill goes, a live spill's cells
-   * alone are refused. `copy` applies the rule itself ([[CopyOps.releasedBy]]).
+   * alone are refused. `copy` applies the rule itself ([[CopyOps.releasedBy]]). The spills come
+   * from the batch's [[SpillIndex]], so a sheet with none costs nothing, and the target ranges are
+   * matched against them as ranges ([[DynamicArrayAuthoring.releaseRanges]]).
    */
   private def releaseSpills(
     wb: Workbook,
-    sheetName: Option[SheetName],
-    scoped: ScopedOp
+    areas: Vector[(SheetName, CellRange)],
+    clearing: Boolean,
+    spills: SpillIndex
   ): IO[Workbook] =
-    def release(clearing: Boolean): IO[Workbook] =
-      val bySheet = targetCells(sheetName, OpRegistry.targetRefs(scoped.op)).groupMap(_._1)(_._2)
-      bySheet.toVector.foldLeft(IO.pure(wb)) { case (acc, (name, refs)) =>
-        acc.flatMap { current =>
-          current.sheets.find(_.name == name).fold(IO.pure(current)) { sheet =>
+    areas.groupMap(_._1)(_._2).toVector.foldLeft(IO.pure(wb)) { case (acc, (name, ranges)) =>
+      acc.flatMap { current =>
+        val known = spills.getOrElse(name, Vector.empty)
+        current.sheets.find(_.name == name).filter(_ => known.nonEmpty).fold(IO.pure(current)) {
+          sheet =>
             IO.fromEither(
               DynamicArrayAuthoring
-                .releaseForWrite(sheet, refs.toSet, clearing)
+                .releaseRanges(sheet, known, ranges, clearing)
                 .map((released, _) => current.put(released))
                 .left
                 .map(spill => CliException(CliError.fromSpillBlocked(spill)))
             )
-          }
         }
       }
-    scoped.op match
-      case BatchOp.PutFormula(_, _, _, true) => IO.pure(wb)
-      case _: BatchOp.Put | _: BatchOp.PutFormula | _: BatchOp.PutFormulaDragging |
-          _: BatchOp.PutFormulas | _: BatchOp.PutValues =>
-        release(clearing = false)
-      case BatchOp.Clear(_, all, styles, comments) if all || (!styles && !comments) =>
-        release(clearing = true)
-      case _ => IO.pure(wb)
+    }
+
+  /**
+   * The areas named by an op's target ref strings: a qualified ref on its own sheet, an unqualified
+   * one on `sheet`; a cell is a 1x1 range. A ref that does not parse names none.
+   */
+  private def targetAreas(
+    sheet: Option[SheetName],
+    refs: Vector[String]
+  ): Vector[(SheetName, CellRange)] =
+    refs.flatMap { r =>
+      RefType.parse(r).toOption.toList.toVector.flatMap {
+        case RefType.Cell(ref) => sheet.map(_ -> CellRange(ref, ref)).toList.toVector
+        case RefType.QualifiedCell(name, ref) => Vector(name -> CellRange(ref, ref))
+        case RefType.Range(range) => sheet.map(_ -> range).toList.toVector
+        case RefType.QualifiedRange(name, range) => Vector(name -> range)
+      }
+    }
 
   /**
    * The cells named by an op's target ref strings: a qualified ref on its own sheet, an unqualified
@@ -1345,12 +1401,22 @@ object BatchParser:
     default: Option[SheetName],
     scoped: ScopedOp,
     recalcDependents: Boolean,
-    spills: Boolean
-  ): IO[(Workbook, Vector[OffGridHit])] =
+    spills: SpillIndex,
+    scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill]
+  ): IO[(Workbook, Vector[OffGridHit], SpillIndex)] =
     IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
-      val released = if spills then releaseSpills(wb, sheetName, scoped) else IO.pure(wb)
+      val areas = releaseAreas(sheetName, scoped.op)
+      // the sheets this op releases on, scanned once if the index does not know them yet
+      val known = areas.toList.flatMap(_._1.map(_._1)).distinct.foldLeft(spills) { (ix, name) =>
+        if ix.contains(name) then ix
+        else wb.sheets.find(_.name == name).fold(ix)(s => ix.updated(name, scanSpills(s)))
+      }
+      def spillsOn(name: SheetName): Vector[DynamicArrayAuthoring.Spill] =
+        known.getOrElse(name, wb.sheets.find(_.name == name).fold(Vector.empty)(scanSpills))
+      val released =
+        areas.fold(IO.pure(wb))((as, clearing) => releaseSpills(wb, as, clearing, known))
       released.flatMap { currentWb =>
-        scoped.op match
+        val applied = scoped.op match
           case BatchOp.PutFormulaDragging(rangeStr, formula, fromRef, format) =>
             applyPutFormulaDragging(currentWb, sheetName, rangeStr, formula, fromRef, format)
           case BatchOp.CopyRange(sourceStr, targetStr, valuesOnly) =>
@@ -1361,9 +1427,10 @@ object BatchParser:
               targetStr,
               valuesOnly,
               recalcDependents,
-              spills
+              spillsOn
             )
           case _ => dispatch(currentWb, sheetName, scoped, recalcDependents).map((_, Vector.empty))
+        applied.map((next, hits) => (next, hits, nextSpills(known, scoped.op, areas)))
       }
     }
 
@@ -1579,7 +1646,9 @@ object BatchParser:
           targetStr,
           valuesOnly,
           recalcDependents,
-          spills = true // applyOne routes copy itself; here, always check
+          // applyOne routes copy itself; here, scan the target sheet
+          name =>
+            currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
         ).map(_._1)
 
       case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
@@ -1828,7 +1897,15 @@ object BatchParser:
         sheetFor(wb, defaultSheetName, "putf").flatMap(at(_, ref))
       case RefType.QualifiedCell(sheetName, ref) => at(sheetName, ref)
       case RefType.Range(_) | RefType.QualifiedRange(_, _) =>
-        IO.raiseError(new Exception(s"batch putf with 'array' requires a single cell ref: $refStr"))
+        IO.raiseError(
+          CliException(
+            CliError.fromXLError(
+              XLError
+                .InvalidReference(s"batch putf with 'array' requires a single cell ref: $refStr"),
+              None
+            )
+          )
+        )
     }
 
   /**
@@ -2375,7 +2452,7 @@ object BatchParser:
     targetStr: String,
     valuesOnly: Boolean,
     recalcDependents: Boolean,
-    spills: Boolean
+    spillsOn: SheetName => Vector[DynamicArrayAuthoring.Spill]
   ): IO[(Workbook, Vector[OffGridHit])] =
 
     def parseSide(label: String, s: String): IO[(Option[SheetName], Either[ARef, CellRange])] =
@@ -2422,15 +2499,12 @@ object BatchParser:
         CopyOps.validateDimensions(sourceRange, targetRange).left.map(new Exception(_))
       )
       // GH-714: the copy onto the target's dynamic arrays, as the copy verb applies it
-      release <-
-        if !spills then IO.pure(Set.empty[ARef])
-        else
-          IO.fromEither(
-            CopyOps
-              .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange)
-              .left
-              .map(spill => CliException(CliError.fromSpillBlocked(spill)))
-          )
+      release <- IO.fromEither(
+        CopyOps
+          .releasedBy(sourceSheet, sourceRange, targetSheet, targetRange, spillsOn(targetSheetName))
+          .left
+          .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+      )
       // GH-628: the copy reports every target cell the displacement wrote #REF! into
       copied <- IO.fromEither(
         CopyOps

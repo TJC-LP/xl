@@ -4,6 +4,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
@@ -31,9 +32,16 @@ private[xl] object DynamicArrayAuthoring:
    * The authored sheet, the record's extent, every cell whose value the authoring changed (the old
    * extent it cleared plus the new one — the seeds of the dependent refresh), and whether the
    * anchor carries a cache (false when the formula could not be evaluated: it is then written as an
-   * uncached 1x1 record, like any putf whose evaluation fails).
+   * uncached 1x1 record, like any putf whose evaluation fails), and the parsed formula (so a caller
+   * that inspects it — the CLI's date auto-format — does not parse it again).
    */
-  final case class Authored(sheet: Sheet, extent: CellRange, touched: Set[ARef], cached: Boolean):
+  final case class Authored(
+    sheet: Sheet,
+    extent: CellRange,
+    touched: Set[ARef],
+    cached: Boolean,
+    expr: TExpr[?]
+  ):
 
     /**
      * `numFmt` merged into the style of every cell of the extent (font, fill and borders kept) —
@@ -177,7 +185,7 @@ private[xl] object DynamicArrayAuthoring:
   ): Either[Refusal, Authored] =
     val text = CellValue.canonicalFormulaText(formula)
     val full = s"=$text"
-    SheetEvaluator.parseFormula(full).left.map(Refusal.Invalid(_)).flatMap { _ =>
+    SheetEvaluator.parseFormula(full).left.map(Refusal.Invalid(_)).flatMap { expr =>
       val (cleared, clearedRefs) = clearOwnSpill(sheet, anchor)
       val single = CellRange(anchor, anchor)
       val placed =
@@ -191,7 +199,7 @@ private[xl] object DynamicArrayAuthoring:
         Some(wb.put(placed))
       ) match
         // a host failure (not an error value): an uncached 1x1 record, reported by the refresh
-        case Left(_) => Right(Authored(placed, single, clearedRefs + anchor, cached = false))
+        case Left(_) => Right(Authored(placed, single, clearedRefs + anchor, cached = false, expr))
         case Right(grid0) =>
           val grid =
             if grid0.isEmpty || grid0.exists(_.isEmpty) then
@@ -221,7 +229,7 @@ private[xl] object DynamicArrayAuthoring:
                         }
                     }
                     val touched = clearedRefs ++ extent.cells.toSet
-                    Right(Authored(written, extent, touched, cached = true))
+                    Right(Authored(written, extent, touched, cached = true, expr))
     }
 
   /**
@@ -243,36 +251,100 @@ private[xl] object DynamicArrayAuthoring:
     clearing: Boolean = false
   ): Either[SpillBlocked, (Sheet, Set[ARef])] =
     if targets.isEmpty then Right((sheet, Set.empty))
+    else releaseCells(sheet, spillsOf(sheet), targets, clearing)
+
+  /**
+   * A multi-cell dynamic-array anchor of a sheet: the anchor, its formula text (without `=`) and
+   * its spill extent. A 1x1 record has no spill to release or intrude on.
+   */
+  final case class Spill(anchor: ARef, formula: String, extent: CellRange) derives CanEqual
+
+  /**
+   * Every [[Spill]] of `sheet`, in reading order — one pass over its cells. A caller applying many
+   * writes to one sheet (a batch) computes this once and keeps it current instead of rescanning.
+   */
+  def spillsOf(sheet: Sheet): Vector[Spill] =
+    sheet.cells.valuesIterator
+      .flatMap(cell =>
+        cell.value match
+          case CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula)
+              if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 =>
+            Some(Spill(cell.ref, text, arr.ref))
+          case _ => None
+      )
+      .toVector
+      .sortBy(s => (s.anchor.row.index0, s.anchor.col.index0))
+
+  /** [[releaseForWrite]] against `spills` already known for `sheet` (see [[spillsOf]]). */
+  def releaseCells(
+    sheet: Sheet,
+    spills: Vector[Spill],
+    targets: Set[ARef],
+    clearing: Boolean
+  ): Either[SpillBlocked, (Sheet, Set[ARef])] =
+    // the targets, not the extent, are walked: a spill can be a whole column
+    release(sheet, spills, targets.contains, extent => targets.iterator.filter(extent.contains))(
+      clearing
+    )
+
+  /**
+   * [[releaseForWrite]] for targets given as ranges, against `spills` already known for `sheet`: no
+   * range is expanded into its cells unless a refusal must list them, so a batch op over a large
+   * range costs a pass over the sheet's spills, not over the range.
+   */
+  def releaseRanges(
+    sheet: Sheet,
+    spills: Vector[Spill],
+    targets: Vector[CellRange],
+    clearing: Boolean
+  ): Either[SpillBlocked, (Sheet, Set[ARef])] =
+    release(
+      sheet,
+      spills,
+      r => targets.exists(_.contains(r)),
+      extent => targets.iterator.flatMap(overlap(_, extent)).flatMap(_.cellsRowMajor)
+    )(clearing)
+
+  /** The cells two ranges share, as a range; None when they do not meet. */
+  private def overlap(a: CellRange, b: CellRange): Option[CellRange] =
+    Option.when(a.intersects(b))(
+      CellRange(
+        ARef.from0(
+          a.colStart.index0.max(b.colStart.index0),
+          a.rowStart.index0.max(b.rowStart.index0)
+        ),
+        ARef.from0(a.colEnd.index0.min(b.colEnd.index0), a.rowEnd.index0.min(b.rowEnd.index0))
+      )
+    )
+
+  private def release(
+    sheet: Sheet,
+    spills: Vector[Spill],
+    targeted: ARef => Boolean,
+    targetedIn: CellRange => Iterator[ARef]
+  )(clearing: Boolean): Either[SpillBlocked, (Sheet, Set[ARef])] =
+    if spills.isEmpty then Right((sheet, Set.empty))
     else
-      val spills = sheet.cells.valuesIterator
-        .flatMap(cell =>
-          cell.value match
-            case CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula)
-                if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 =>
-              Some((cell.ref, text, arr.ref))
-            case _ => None
-        )
-        .toVector
-      val intrusion = spills
-        .filterNot((anchor, _, _) => targets.contains(anchor))
-        .sortBy((anchor, _, _) => (anchor.row.index0, anchor.col.index0))
-        .iterator
-        .flatMap { (anchor, text, extent) =>
-          // the targets, not the extent, are walked: a spill can be a whole column
-          val hit = targets.iterator
-            .filter(r => r != anchor && extent.contains(r))
+      val intrusion = spills.iterator
+        .filterNot(s => targeted(s.anchor))
+        .flatMap { s =>
+          val hit = targetedIn(s.extent)
+            .filter(_ != s.anchor)
             .toVector
+            .distinct
             .sortBy(r => (r.row.index0, r.col.index0))
           val blocker =
             if clearing then SpillBlocker.Cleared(hit) else SpillBlocker.Overwritten(hit)
-          Option.when(hit.nonEmpty)(SpillBlocked(s"=$text", anchor, Some(extent), blocker))
+          Option.when(hit.nonEmpty)(
+            SpillBlocked(s"=${s.formula}", s.anchor, Some(s.extent), blocker)
+          )
         }
         .nextOption()
       intrusion.toLeft {
         spills
-          .filter((anchor, _, _) => targets.contains(anchor))
-          .foldLeft((sheet, Set.empty[ARef])) { case ((s, acc), (anchor, _, _)) =>
-            val (next, cleared) = clearOwnSpill(s, anchor)
+          .filter(s => targeted(s.anchor))
+          .foldLeft((sheet, Set.empty[ARef])) { case ((current, acc), s) =>
+            val (next, cleared) = clearOwnSpill(current, s.anchor)
             (next, acc ++ cleared)
           }
       }
