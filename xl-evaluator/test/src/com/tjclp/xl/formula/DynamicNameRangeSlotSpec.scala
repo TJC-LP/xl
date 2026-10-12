@@ -334,15 +334,15 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     )
   }
 
-  test("a name whose OFFSET fails reports that failure, not the name's shape") {
-    // OFFSET(A1,"x",0) fails on its text row offset; the slot keeps that failure
+  test("a name whose OFFSET fails carries that error, not the name's shape") {
+    // OFFSET(A1,"x",0) is #VALUE! on its text row offset (#709); the slot keeps that error
+    // rather than failing because the name "does not refer to a range"
     val wb = book.withDefinedName("badOffset", "OFFSET(Sheet1!$A$1,\"x\",0)")
     val placed = Sheet(emptyName).put(ref"A1", CellValue.Formula("COUNTIF(badOffset,1)", None))
-    val message = placed
-      .evaluateCell(ref"A1", Clock.system, Some(wb.put(placed)))
-      .fold(_.message, value => fail(s"expected a failure, got $value"))
-    assert(message.contains("TypeMismatch(integer argument,integer,x)"), message)
-    assert(!message.contains("does not refer to a range"), message)
+    assertEquals(
+      placed.evaluateCell(ref"A1", Clock.system, Some(wb.put(placed))),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   test("a hand-built LET name outside its LET is a clean failure, never an exception") {
