@@ -42,8 +42,9 @@ enum EvalError derives CanEqual:
    * @param codecError
    *   The underlying codec error with details
    *
-   * Example: Formula expects number in A1, but A1 contains text → CodecFailed(A1,
-   * TypeMismatch(...))
+   * Example: a caller's decoder passed to `TExpr.ref` refuses a boolean in A1 → CodecFailed(A1,
+   * TypeMismatch(...)). A refusal over a TEXT cell is not CodecFailed: it is Excel's `#VALUE!`
+   * (`ErrorValue`, #709), whichever decoder refused.
    */
   case CodecFailed(ref: ARef, codecError: CodecError)
 
@@ -200,6 +201,16 @@ object EvalError:
   def toErrorValue(error: EvalError): Option[CellError] = error match
     case ErrorValue(err, _) => Some(err)
     case DivByZero(_, _) => Some(CellError.Div0)
+    case _ => None
+
+  /**
+   * #692: the diagnostic an error VALUE was raised with, when it has one — the context of an
+   * [[EvalError.ErrorValue]] (a lookup's miss echoing its call) or a division's operands. The
+   * recalc summary names an error-valued cell with it; None for the other errors.
+   */
+  def reason(error: EvalError): Option[String] = error match
+    case ErrorValue(_, context) => context
+    case DivByZero(num, denom) => Some(s"Division by zero: $num / $denom")
     case _ => None
 
   /**

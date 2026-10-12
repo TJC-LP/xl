@@ -337,6 +337,206 @@ class RecalcSpec extends FunSuite:
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     assertEquals(cached(result.workbook, "S", ref"D1"), Some(num(28)))
 
+  test("#692: errorCells carries the first ten error-valued cells; the summary names three"):
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", num(10))
+      .put(ref"B1", formula("=VLOOKUP(42,A1:A1,1,FALSE)"))
+      .put(ref"B2", formula("=1/0"))
+      .put(ref"B3", formula("=NA()"))
+      .put(ref"B4", formula("=B1+1")) // an error read through a reference: code, no reason
+      .put(ref"B5", formula("=XLOOKUP(42,A1:A1,A1:A1)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val S = SheetName.unsafe("S")
+    assertEquals(
+      result.errorCells,
+      Vector(
+        ErrorValueCell(
+          S,
+          ref"B1",
+          CellError.NA,
+          Some("VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE)")
+        ),
+        ErrorValueCell(S, ref"B2", CellError.Div0, Some("Division by zero: 1 / 0")),
+        ErrorValueCell(S, ref"B3", CellError.NA, None),
+        ErrorValueCell(S, ref"B4", CellError.NA, None),
+        ErrorValueCell(
+          S,
+          ref"B5",
+          CellError.NA,
+          Some("XLOOKUP: no match found for lookup value: XLOOKUP(42, A1:A1, A1:A1, 0, 1)")
+        )
+      )
+    )
+    // the reasons themselves are keyed by QualifiedRef, one per cell that has one
+    assertEquals(
+      result.errorReasons.keySet,
+      Set(QualifiedRef(S, ref"B1"), QualifiedRef(S, ref"B2"), QualifiedRef(S, ref"B5"))
+    )
+    // the text names MaxSummaryErrorCells (3) of them, then counts the rest
+    assertEquals(
+      result.summary,
+      "Recalculated 5 formulas (5 error values: " +
+        "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE); " +
+        "S!B2 #DIV/0! — Division by zero: 1 / 0; S!B3 #N/A; … and 2 more)"
+    )
+    // the targeted paths carry the reasons too (an edit of A1 reaches B1, B4 and B5)
+    val afterEdit = Workbook(sheet).recalculateAfterEdit(S, Set(ref"A1"), RecalcOptions())
+    assertEquals(
+      afterEdit.errorCells,
+      result.errorCells.filter(c => Set(ref"B1", ref"B4", ref"B5")(c.ref))
+    )
+    val uncached = Workbook(sheet).recalculateUncached(RecalcOptions())
+    assertEquals(uncached.errorCells, result.errorCells)
+    // more than MaxNamedErrorCells: errorCells carries the first ten, the summary names the first
+    // MaxSummaryErrorCells (3) and counts the rest against the whole
+    val many = (1 to 12).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), formula(s"=$i/0"))
+    }
+    val capped = Workbook(many).recalculate()
+    assertEquals(capped.excelErrors.size, 12)
+    assertEquals(RecalcResult.MaxNamedErrorCells, 10)
+    assertEquals(RecalcResult.MaxSummaryErrorCells, 3)
+    assertEquals(capped.errorCells.size, RecalcResult.MaxNamedErrorCells)
+    assertEquals(
+      capped.errorCells.headOption.map(_.render),
+      Some("S!A1 #DIV/0! — Division by zero: 1 / 0")
+    )
+    assertEquals(
+      capped.summary,
+      "Recalculated 12 formulas (12 error values: " +
+        capped.errorCells.take(RecalcResult.MaxSummaryErrorCells).map(_.render).mkString("; ") +
+        "; … and 9 more)"
+    )
+    // exactly the summary cap: every cell named, nothing counted
+    val three = Workbook((1 to 3).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+      s.put(ARef.from0(0, i - 1), formula(s"=$i/0"))
+    }).recalculate()
+    assertEquals(three.excelErrors.size, 3)
+    assert(three.summary.endsWith("S!A3 #DIV/0! — Division by zero: 3 / 0)"), three.summary)
+    assert(!three.summary.contains("more"), three.summary)
+
+  test("#692: an error read through a reference is named with its code and no reason"):
+    // A1 computes #DIV/0! with the evaluator's diagnostic; B1 = A1+1 carries the error as a plain
+    // value — so the summary names B1 with its code only, never A1's reason
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", formula("=1/0"))
+      .put(ref"B1", formula("=A1+1"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val S = SheetName.unsafe("S")
+    assertEquals(
+      result.errorCells,
+      Vector(
+        ErrorValueCell(S, ref"A1", CellError.Div0, Some("Division by zero: 1 / 0")),
+        ErrorValueCell(S, ref"B1", CellError.Div0, None)
+      )
+    )
+    assertEquals(result.errorReasons.keySet, Set(QualifiedRef(S, ref"A1")))
+    val b1 = result.errorCells.find(_.ref == ref"B1").map(_.render)
+    assertEquals(b1, Some("S!B1 #DIV/0!"))
+    assert(b1.exists(!_.contains("—")), b1)
+    assertEquals(
+      result.summary,
+      "Recalculated 2 formulas (2 error values: S!A1 #DIV/0! — Division by zero: 1 / 0; S!B1 #DIV/0!)"
+    )
+
+  test("#692: the summary bounds each reason to one line; errorCells keeps the full text"):
+    // a 1,000-character text key with every kind of line break and a tab: the lookup echoes it
+    val key = ("Line one\r\nline two\nline three\tfour  " * 40).take(1000)
+    assertEquals(key.length, 1000)
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Text(key))
+      .put(ref"C1", num(1))
+      .put(ref"B1", formula("=VLOOKUP(A1,C1:C1,1,FALSE)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val cell = result.errorCells match
+      case Vector(only) => only
+      case other => fail(s"expected one error cell, got $other")
+    // the field keeps the full diagnostic, line breaks included (what `recalc --json` publishes)
+    assert(cell.reason.exists(_.contains(key)), cell.reason)
+    assert(cell.reason.exists(_.length > 1000), cell.reason.map(_.length))
+    // the rendering is one bounded line
+    val rendered = cell.render
+    assert(!rendered.exists(c => c == '\n' || c == '\r' || c == '\t'), rendered)
+    assert(
+      rendered.startsWith(
+        "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(Line one line two line three four "
+      ),
+      rendered
+    )
+    assert(rendered.endsWith("…"), rendered)
+    assertEquals(rendered.length, "S!B1 #N/A — ".length + ErrorValueCell.MaxReasonLength)
+    assertEquals(result.summary.linesIterator.size, 1)
+    assertEquals(result.summary, s"Recalculated 1 formula (1 error value: $rendered)")
+    // the bound itself: whitespace runs become one space, a cut ends in `…` at the bound
+    assertEquals(ErrorValueCell.MaxReasonLength, 120)
+    assertEquals(ErrorValueCell.boundReason(" a\r\nb\tc  d\n"), "a b c d")
+    assertEquals(ErrorValueCell.boundReason("a\u2028b\u2029c\u0085d"), "a b c d")
+    assertEquals(ErrorValueCell.boundReason("x" * 120), "x" * 120)
+    assertEquals(ErrorValueCell.boundReason("x" * 121), "x" * 119 + "…")
+
+  test("#692: the summary strips control characters from a reason; the field keeps them"):
+    // an untrusted key carrying an ANSI colour escape, a BEL, a DEL and a C1 control: the lookup
+    // echoes it, and the summary is a sink the user never asked to see, so none of them may reach
+    // the terminal through it
+    val key = "red \u001b[31mtext\u001b[0m\u0007 bell\u007f del\u009c st"
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ref"A1", CellValue.Text(key))
+      .put(ref"C1", num(1))
+      .put(ref"B1", formula("=VLOOKUP(A1,C1:C1,1,FALSE)"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val cell = result.errorCells match
+      case Vector(only) => only
+      case other => fail(s"expected one error cell, got $other")
+    assert(cell.reason.exists(_.contains(key)), cell.reason)
+    val rendered = cell.render
+    assert(!rendered.exists(_.isControl), rendered)
+    assert(!result.summary.exists(_.isControl), result.summary)
+    assertEquals(
+      rendered,
+      "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(red [31mtext [0m bell del st, C1:C1, 1, FALSE)"
+    )
+    // the bound itself, C0 and C1 alike; a run of them and whitespace is one space
+    assertEquals(ErrorValueCell.boundReason("a\u001b[2Jb"), "a [2Jb")
+    assertEquals(ErrorValueCell.boundReason("a\u0007\u0008\u000b\u000c\u001f\u007f b"), "a b")
+    assertEquals(ErrorValueCell.boundReason("a\u0080\u009fb\u0085c"), "a b c")
+    assertEquals(ErrorValueCell.boundReason("\u0000x\u0000"), "x")
+
+  test("#692: the summary strips control characters from the sheet name too; the field keeps it"):
+    // SheetName rejects only :\/?*[] — a C1 control (CSI, the 8-bit ESC [) passes its validation
+    // and the writer's C0 strip (GH-237) alike, so it is the one an untrusted book can carry
+    val name = "Da\u009b31mta"
+    val sheet = Sheet(SheetName.unsafe(name))
+      .put(ref"A1", num(1))
+      .put(ref"B1", formula("=1/0"))
+    val result = Workbook(sheet).recalculate()
+    assert(result.isClean, result.errors.map(_.render).mkString("; "))
+    val cell = result.errorCells match
+      case Vector(only) => only
+      case other => fail(s"expected one error cell, got $other")
+    assertEquals(cell.sheet.value, name)
+    assert(!cell.render.exists(_.isControl), cell.render)
+    assert(!result.summary.exists(_.isControl), result.summary)
+    assertEquals(cell.render, "'Da 31mta'!B1 #DIV/0! — Division by zero: 1 / 0")
+    // the name is never collapsed or cut: its own spaces tell two sheets apart
+    val spaced = ErrorValueCell(SheetName.unsafe("My  Sheet"), ref"A1", CellError.NA, None)
+    assertEquals(spaced.render, "'My  Sheet'!A1 #N/A")
+    val tabbed = ErrorValueCell(SheetName.unsafe("a\tb\u0085c"), ref"A1", CellError.NA, None)
+    assertEquals(tabbed.render, "'a b c'!A1 #N/A")
+
+  test("#692: bounding a summary reason never splits a Unicode surrogate pair"):
+    val emoji = "\uD83D\uDE00"
+    val exactly120 = "x" * 119 + emoji
+    assertEquals(ErrorValueCell.boundReason(exactly120), exactly120)
+    val boundary = "x" * 118 + emoji + "tail"
+    val bounded = ErrorValueCell.boundReason(boundary)
+    assertEquals(bounded, "x" * 118 + emoji + "…")
+    assertEquals(bounded.codePointCount(0, bounded.length), ErrorValueCell.MaxReasonLength)
+    assertEquals(ErrorValueCell.boundReason(emoji * 130), emoji * 119 + "…")
+
   test("GH-662: a lookup miss recalculates as a cached #N/A — guarded cells cache their fallback"):
     // The dogfood book: A3:A7 years keyed to B3:B7; B18 unguarded miss, B19 the ISNA idiom, B20
     // IFNA over MATCH. Before GH-662 B18/B20 were host failures (uncached, in `errors`) and B19
@@ -356,7 +556,22 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"B18"), Some(CellValue.Error(CellError.NA)))
     assertEquals(cached(result.workbook, "S", ref"B19"), Some(num(0)))
     assertEquals(cached(result.workbook, "S", ref"B20"), Some(num(0)))
-    assertEquals(result.summary, "Recalculated 3 formulas (1 error value)")
+    assertEquals(
+      result.summary,
+      "Recalculated 3 formulas (1 error value: S!B18 #N/A — VLOOKUP exact match not found: " +
+        "VLOOKUP(2030, A3:B7, 2, FALSE))"
+    )
+    assertEquals(
+      result.errorCells,
+      Vector(
+        ErrorValueCell(
+          SheetName.unsafe("S"),
+          ref"B18",
+          CellError.NA,
+          Some("VLOOKUP exact match not found: VLOOKUP(2030, A3:B7, 2, FALSE)")
+        )
+      )
+    )
     // and the audit of the recalculated book lists the miss as an error cell, nothing uncached
     val audit = WorkbookAudit.of(result.workbook)
     assertEquals(

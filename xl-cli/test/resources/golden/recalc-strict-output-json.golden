@@ -18,7 +18,8 @@ recalc
     "text": "Recalculated 0 formulas; 1 error (Data!A1: Formula error in 'A1+1': Circular reference)\nNOT saved (--strict failure): nothing written to <DIR>/recalc-strict-output.xlsx\nSTRICT FAILURE (--strict): 1 formula evaluation error(s)",
     "saved": null,
     "written": false,
-    "errorValuedCycles": []
+    "errorValuedCycles": [],
+    "errorCells": []
   },
   "warnings": [],
   "error": {

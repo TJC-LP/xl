@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.EvalError
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -43,13 +43,12 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     location: TExpr.RangeLocation,
     ctx: EvalContext
   ): Either[EvalError, Vector[Cell]] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-      case (targetSheet, range) =>
-        val readCell = rangeCellReader(targetSheet, ctx)
-        range.cellsRowMajor.foldLeft[Either[EvalError, Vector[Cell]]](Right(Vector.empty)) {
-          (result, at) =>
-            result.flatMap(cells => readCell(at).map(value => cells :+ Cell(at, value)))
-        }
+    ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+      val readCell = rangeCellReader(targetSheet, ctx)
+      range.cellsRowMajor.foldLeft[Either[EvalError, Vector[Cell]]](Right(Vector.empty)) {
+        (result, at) =>
+          result.flatMap(cells => readCell(at).map(value => cells :+ Cell(at, value)))
+      }
     }
 
   /**

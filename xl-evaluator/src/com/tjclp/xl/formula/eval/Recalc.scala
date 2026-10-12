@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula.eval
 
+import java.util.regex.Pattern
+
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
@@ -252,6 +254,69 @@ final case class SccReport(
     else s"exhausted $rounds round(s)"
 
 /**
+ * #692: one formula cell whose computed VALUE is an Excel error, as the recalc summary and `recalc
+ * --json` name it: where, which code, and — when the evaluator raised the error with a diagnostic
+ * (a lookup's miss echoing its call, a division's operands) — why. A reason is `None` for an error
+ * that arrived as a plain value: `NA()`, an error literal, a precedent's error read through a
+ * reference, or a cycle member's last-round value.
+ */
+final case class ErrorValueCell(
+  sheet: SheetName,
+  ref: ARef,
+  error: CellError,
+  reason: Option[String]
+) derives CanEqual:
+  /**
+   * `Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A3, 2, FALSE)` — one line, the
+   * reason bounded by [[ErrorValueCell.boundReason]] and the sheet name's control characters
+   * replaced the same way (`SheetName` rejects only `:\/?*[]`, so an untrusted workbook's name can
+   * carry an escape sequence as a key can; the name is never cut or collapsed, so it still tells
+   * two sheets apart). [[reason]] and [[sheet]] keep the full text (a lookup key echoes the cell it
+   * came from, up to 32,767 characters, newlines included); the rendering is what the one-line
+   * summary and the CLI's text output can carry.
+   */
+  def render: String =
+    val name = SheetName.quoteForFormula(ErrorValueCell.withoutControls(sheet.value))
+    val at = s"$name!${ref.toA1} ${error.toExcel}"
+    reason.fold(at)(why => s"$at — ${ErrorValueCell.boundReason(why)}")
+
+object ErrorValueCell:
+
+  /** The longest rendered reason in Unicode code points, including the `…` that marks a cut. */
+  val MaxReasonLength: Int = 120
+
+  /**
+   * The control characters (the C0 and C1 blocks, `\p{Cc}`: CR, LF, tab, NEL, ESC, BEL, DEL, …) and
+   * the Unicode line and paragraph separators `\s` leaves out, as a regex character class body.
+   */
+  private val Controls: String = "\\p{Cc}\\u2028\\u2029"
+
+  /** Every run of whitespace and [[Controls]]. */
+  private val ControlsAndWhitespace: Pattern = Pattern.compile(s"[\\s$Controls]+")
+
+  /** One of [[Controls]]. */
+  private val Control: Pattern = Pattern.compile(s"[$Controls]")
+
+  /**
+   * `text` with each control character and line separator a single space and nothing else touched:
+   * how [[ErrorValueCell.render]] carries the sheet name, whose spaces are its own.
+   */
+  private def withoutControls(text: String): String = Control.matcher(text).replaceAll(" ")
+
+  /**
+   * A reason as the one-line summary carries it: every line break (CR, LF, NEL and the Unicode line
+   * and paragraph separators), tab and other control character a single space — a lookup echoes its
+   * key, so an untrusted workbook's ANSI or OSC escape sequence must not reach the terminal through
+   * a summary the user never asked to see — runs of whitespace collapsed, then cut to
+   * [[MaxReasonLength]] Unicode code points with a trailing `…`, keeping surrogate pairs whole.
+   * [[ErrorValueCell.reason]] (and so the JSON `reason`) keeps the text as the cell holds it.
+   */
+  def boundReason(reason: String): String =
+    val oneLine = ControlsAndWhitespace.matcher(reason).replaceAll(" ").trim
+    if oneLine.codePointCount(0, oneLine.length) <= MaxReasonLength then oneLine
+    else oneLine.substring(0, oneLine.offsetByCodePoints(0, MaxReasonLength - 1)) + "…"
+
+/**
  * Result of a total, whole-workbook recalculation (`wb.recalculate()`).
  *
  * Evaluation is per-cell: a failing or cyclic formula is collected into `errors` and left uncached,
@@ -311,6 +376,9 @@ final case class SccReport(
  *   GH-492: one [[SccReport]] per cyclic component actually iterated, sorted by the component's
  *   canonical key (its top-left member: sheet name, row, column). Empty on non-iterative and
  *   acyclic runs. Future diagnostics extend [[SccReport]], not this class.
+ * @param errorReasons
+ *   #692: the diagnostic the evaluator raised an error VALUE with, per cell that has one (see
+ *   [[ErrorValueCell]]); read through [[errorCells]]
  */
 final case class RecalcResult(
   workbook: Workbook,
@@ -318,7 +386,8 @@ final case class RecalcResult(
   errors: Vector[CellEvalError],
   converged: Boolean = true,
   iterationsUsed: Int = 0,
-  cycles: Vector[SccReport] = Vector.empty
+  cycles: Vector[SccReport] = Vector.empty,
+  errorReasons: Map[QualifiedRef, String] = Map.empty
 ) derives CanEqual:
 
   /** GH-492: the cyclic components that exhausted their budget — the offenders to name. */
@@ -385,6 +454,22 @@ final case class RecalcResult(
       err <- carriedCellError(value).toList
     yield (sheet, ref, err)).sortBy((sheet, ref, _) => (sheet.value, ref.toA1))
 
+  /**
+   * #692: the first [[RecalcResult.MaxNamedErrorCells]] of [[excelErrors]] with their reasons — the
+   * cells `recalc --json` names, in the same sorted order; the text [[summary]] names the first
+   * [[RecalcResult.MaxSummaryErrorCells]] of them.
+   */
+  def errorCells: Vector[ErrorValueCell] =
+    namedErrorCells(excelErrors, RecalcResult.MaxNamedErrorCells)
+
+  private def namedErrorCells(
+    all: Vector[(SheetName, ARef, CellError)],
+    count: Int
+  ): Vector[ErrorValueCell] =
+    all.take(count).map { (sheet, ref, err) =>
+      ErrorValueCell(sheet, ref, err, errorReasons.get(QualifiedRef(sheet, ref)))
+    }
+
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private def carriedCellError(value: CellValue): Option[CellError] =
     RecalcResult.carriedCellError(value)
@@ -407,7 +492,8 @@ final case class RecalcResult(
    *
    * {{{
    * Recalculated 12 formulas
-   * Recalculated 12 formulas (1 error value)
+   * Recalculated 12 formulas (1 error value: Sales!B2 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE))
+   * Recalculated 12 formulas (12 error values: Sales!B2 #DIV/0! — Division by zero: A2 / 0; …; … and 9 more)
    * Recalculated 11 formulas; 1 error (Sales!B2: Formula error in 'NOSUCHFN(A1)': ...)
    * Recalculated 40 formulas; converged in 7 iterative round(s)
    * Recalculated 2 formulas (2 error values); converged in 2 iterative round(s), 1 cycle settled on error values
@@ -419,14 +505,27 @@ final case class RecalcResult(
    * stall was detected on, not the longest run of some converged component. If any component
    * genuinely oscillated to `maxIter`, exhaustion stays the headline. The text after `iterative
    * calculation ` is [[unconvergedVerdict]], the same string the `--strict` reason carries.
+   *
+   * #692: the error-value parenthetical names its cells — the first
+   * [[RecalcResult.MaxSummaryErrorCells]] as [[ErrorValueCell.render]], `; `-separated, then `… and
+   * N more` — so a summary can say which cell missed and why; [[errorCells]] carries the first
+   * [[RecalcResult.MaxNamedErrorCells]] for `recalc --json` and the API.
    */
   def summary: String =
     val formulaCount = evaluated.valuesIterator.map(_.size).sum
     val formulasLabel = if formulaCount == 1 then "formula" else "formulas"
-    val errorValueCount = excelErrors.size
+    val allErrorValues = excelErrors
+    val errorValueCount = allErrorValues.size
     val errorValues =
       if errorValueCount == 0 then ""
-      else s" ($errorValueCount error ${if errorValueCount == 1 then "value" else "values"})"
+      else
+        val named =
+          namedErrorCells(allErrorValues, RecalcResult.MaxSummaryErrorCells).map(_.render)
+        val more =
+          if errorValueCount > named.size then Vector(s"… and ${errorValueCount - named.size} more")
+          else Vector.empty
+        val label = if errorValueCount == 1 then "value" else "values"
+        s" ($errorValueCount error $label: ${(named ++ more).mkString("; ")})"
     val settledOnErrors = errorValuedCycles.size match
       case 0 => ""
       case 1 => ", 1 cycle settled on error values"
@@ -446,6 +545,20 @@ final case class RecalcResult(
 
 object RecalcResult:
 
+  /**
+   * #692: how many error-valued cells [[RecalcResult.errorCells]] carries, for `recalc --json` and
+   * the API — a list an agent or script reads, so it affords ten.
+   */
+  val MaxNamedErrorCells: Int = 10
+
+  /**
+   * #692: how many of them the one-line text [[RecalcResult.summary]] names before `… and N more` —
+   * the same three as the could-not-evaluate list, because every mutation verb prints the line and
+   * each cell can carry a reason of [[ErrorValueCell.MaxReasonLength]] characters; `recalc --json`
+   * and [[RecalcResult.errorCells]] keep [[MaxNamedErrorCells]].
+   */
+  val MaxSummaryErrorCells: Int = 3
+
   /** The Excel error a computed value carries, if any (cached formula values included). */
   private[eval] def carriedCellError(value: CellValue): Option[CellError] = value match
     case CellValue.Error(err) => Some(err)
@@ -458,7 +571,8 @@ object RecalcResult:
     successful: Map[SheetName, Map[ARef, CellValue]],
     failures: Vector[CellEvalError],
     dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    cycleReports: Vector[SccReport] = Vector.empty
+    cycleReports: Vector[SccReport] = Vector.empty,
+    reasons: Map[QualifiedRef, String] = Map.empty
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -552,5 +666,7 @@ object RecalcResult:
       errors = failures ++ additionalErrors,
       converged = converged,
       iterationsUsed = iterationsUsed,
-      cycles = cycles
+      cycles = cycles,
+      // a reason outlives neither its cell's value nor the invalidation above
+      errorReasons = reasons.filter((q, _) => evaluated.get(q.sheet).exists(_.contains(q.ref)))
     )

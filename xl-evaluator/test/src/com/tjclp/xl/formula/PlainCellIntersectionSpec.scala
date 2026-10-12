@@ -307,6 +307,46 @@ class PlainCellIntersectionSpec extends FunSuite:
     ("Sheet1", "AG20", "ISBLANK(A:A)", B(true))
   )
 
+  /**
+   * GH-712: ROW and COLUMN over a multi-cell reference are arrays — ROW the column of its row
+   * numbers, COLUMN the row of its column numbers — so an array context folds them; a plain cell's
+   * value keeps the array's first number, never the intersected one (CH20 is 3).
+   */
+  private val libreOfficeRowColumn: List[(String, String, String, CellValue)] = List(
+    ("Sheet1", "CA5", "SUMPRODUCT(ROW(A1:A10))", N("55")),
+    ("Sheet1", "CA20", "SUMPRODUCT(ROW(A1:A10))", N("55")),
+    ("Sheet1", "CB5", "SUMPRODUCT(COLUMN(A1:E1))", N("15")),
+    ("Sheet1", "CB20", "SUMPRODUCT(COLUMN(A1:E1))", N("15")),
+    ("Sheet1", "CC5", "SUMPRODUCT(--(ROW(A1:A10)>5))", N("5")),
+    ("Sheet1", "CD5", "SUMPRODUCT((MOD(ROW(A1:A10),2)=0)*A1:A10)", N("110")),
+    ("Sheet1", "CE5", "SUMPRODUCT(ROW(A1:B3))", N("6")),
+    ("Sheet1", "CF5", "SUMPRODUCT(COLUMN(A1:C2))", N("6")),
+    ("Sheet1", "CG5", "SUMPRODUCT(ROW(A1:A10)-ROW(A1)+1)", N("55")),
+    ("Sheet1", "CH5", "ROW(A3:A10)", N("3")),
+    ("Sheet1", "CH20", "ROW(A3:A10)", N("3")),
+    ("Sheet1", "CI5", "COLUMN(B1:E5)", N("2")),
+    ("Sheet1", "CJ5", "SUMPRODUCT(ROW(Other!A1:A3))", N("6")),
+    ("Sheet1", "CK5", "ROW(A3:A10)+1", N("4")),
+    ("Sheet1", "CL5", "SUMPRODUCT(ROW(A1:A10),A1:A10)", N("937.75")),
+    ("Sheet1", "CM5", "SUMPRODUCT(COLUMN(A12:E12)*A12:E12)", N("55")),
+    ("Sheet1", "CN5", "SUMPRODUCT(ABS(ROW(A1:A3)))", N("6")),
+    ("Sheet1", "CO5", "SUMPRODUCT(--ISNUMBER(ROW(A1:A3)))", N("3")),
+    ("Sheet1", "CP5", "INDEX(A1:A10,ROW(A3:A10))", N("3.5")),
+    ("Sheet1", "CQ5", "SUMPRODUCT(IF(A1:A10>5,ROW(A1:A10),0))", N("19")),
+    ("Sheet1", "CR5", "SUMPRODUCT(ROW(A1:A3)+COLUMN(A1:C1))", N("36")),
+    ("Sheet1", "CS5", "SUMPRODUCT(ROW(nmRef))", N("55")),
+    ("Sheet1", "CT5", "SUMPRODUCT(ROW(INDIRECT(\"A1:A4\")))", N("10")),
+    ("Sheet1", "CU5", "SUMPRODUCT(ROW(OFFSET(A1,0,0,4,1)))", N("10")),
+    ("Sheet1", "CV5", "SUMPRODUCT(ROW(dyn))", N("55")),
+    ("Sheet1", "CW5", "ROW(INDIRECT(\"A3:A4\"))", N("3")),
+    ("Sheet1", "CX5", "COLUMN(nmRef)", N("1")),
+    ("Sheet1", "CY5", "SUMPRODUCT(COLUMN(A:C))", N("6")),
+    ("Sheet1", "CZ5", "SUMPRODUCT((A:A>5)*ROW(A:A))", N("19")),
+    ("Sheet1", "DA5", "SUMPRODUCT(ROW(A5))", N("5")),
+    ("Sheet1", "DE5", "SUMPRODUCT(ROW(IF(TRUE,A1:A3,B1:B4)))", N("6")),
+    ("Sheet1", "DF5", "SUMPRODUCT(ROW(INDEX(A1:B10,0,1)))", N("55"))
+  )
+
   /** LibreOffice prints 15 significant digits: numbers agree to 1e-12. */
   private def agree(obtained: Either[String, CellValue], expected: CellValue): Unit =
     (obtained, expected) match
@@ -396,7 +436,7 @@ class PlainCellIntersectionSpec extends FunSuite:
         ("Sheet1", "AC5", "SUM(OFFSET(INDEX(A1:B10,0,2),1,0))", N("18"))
       )
 
-  (libreOffice ++ libreOfficeRow4 ++ libreOfficeReferences).foreach {
+  (libreOffice ++ libreOfficeRow4 ++ libreOfficeReferences ++ libreOfficeRowColumn).foreach {
     (sheet, at, formula, expected) =>
       test(s"=$formula at $sheet!$at is $expected") {
         agree(plain(sheet, at, formula), expected)
@@ -422,8 +462,9 @@ class PlainCellIntersectionSpec extends FunSuite:
     agree(plain("Sheet1", "AD4", "COUNT(IF(TRUE,F6,0))"), N("0"))
   }
 
-  test("ROW over a range is its first row in every context (xl has no ROW array)") {
-    // legacy Excel's plain-cell value is the first row too (LibreOffice folds 55); in an array
-    // context Excel folds ROW's array, a documented xl limitation
-    agree(plain("Sheet1", "M5", "SUM(ROW(A1:A10))"), N("1"))
+  test("ROW over a range in a plain cell's aggregate is its first row, as in legacy Excel") {
+    // legacy Excel keeps the top-left of ROW's array in a plain cell, so SUM and MAX see one number
+    // (LibreOffice folds 55 and 10); SUMPRODUCT and array formulas fold the whole array (GH-712)
+    agree(plain("Sheet1", "DB5", "SUM(ROW(A1:A10))"), N("1"))
+    agree(plain("Sheet1", "DC5", "MAX(ROW(A1:A10))"), N("1"))
   }
