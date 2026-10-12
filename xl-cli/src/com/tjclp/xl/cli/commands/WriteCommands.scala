@@ -1992,6 +1992,7 @@ object WriteCommands:
         if policy.noRecalc then cacheFilledFormulas(filledSheet, wb, targetRange) else filledSheet
       modifiedRefs = targetRange.cells.toSet ++ release
       dirLabel = if direction == FillDirection.Right then "right" else "down"
+      overlap = filledSpillsWarning(sourceResolved._1, sourceRange, targetRange, direction)
       result <- writeAfterRefresh(
         wb.put(updatedSheet),
         targetSheet.name,
@@ -2002,9 +2003,49 @@ object WriteCommands:
         stream,
         policy,
         warn,
-        OffGridHit.of(targetSheet.name, offGrid)
+        OffGridHit.of(targetSheet.name, offGrid),
+        advisories = _ => overlap.toList.toVector
       )
     yield result
+
+  /**
+   * GH-714: `FILLED_SPILLS_OVERLAP` when the fill source holds a dynamic-array anchor whose last
+   * spill (its cached extent) runs more than one cell along the fill direction and the target
+   * places two or more copies along it: each copy is an anchor one cell from the next, so in Excel
+   * their spills block each other. The first such anchor is named; None when there is none.
+   */
+  private[cli] def filledSpillsWarning(
+    sheet: Sheet,
+    source: CellRange,
+    target: CellRange,
+    direction: FillDirection
+  ): Option[Warning] =
+    val down = direction == FillDirection.Down
+    def along(r: CellRange): Int = if down then r.height else r.width
+    Option
+      .when(along(target) >= 2)(
+        source.cellsRowMajor
+          .flatMap { at =>
+            sheet.cells.get(at).map(_.value) match
+              case Some(CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula))
+                  if arr.isDynamicArray && arr.ref.start == at && along(arr.ref) > 1 =>
+                Some((at, text, arr.ref))
+              case _ => None
+          }
+          .nextOption()
+      )
+      .flatten
+      .map { (at, text, extent) =>
+        val unit = if down then "rows" else "columns"
+        Warning(
+          WarningCode.FILLED_SPILLS_OVERLAP,
+          s"${sheet.name.value}!${at.toA1}: the dynamic array =$text last spilled ${extent.toA1} " +
+            s"(${along(extent)} $unit); filled ${if down then "down" else "right"} over " +
+            s"${target.toA1}, each copy is its own anchor one cell from the next, so in Excel " +
+            "their spills overlap and every copy but the last shows #SPILL! (xl writes each " +
+            "copy's top-left value and does not re-spill, #737)"
+        )
+      }
 
   /** The CLI's fill direction as the algebra's. */
   private def fillDir(direction: FillDirection): Edit.FillDir = direction match

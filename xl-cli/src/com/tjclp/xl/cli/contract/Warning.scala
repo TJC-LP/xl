@@ -95,6 +95,14 @@ object WarningCode:
    */
   val SPILL_CELLS_SKIPPED: String = "SPILL_CELLS_SKIPPED"
 
+  /**
+   * GH-714: a `fill` copied a dynamic-array anchor whose last spill runs more than one cell along
+   * the fill direction. Each filled cell is its own anchor, one cell from the next, so their spills
+   * overlap: Excel shows `#SPILL!` in every copy but the last when it recalculates. xl writes each
+   * copy with its own top-left value and does not re-spill (#737). Informational.
+   */
+  val FILLED_SPILLS_OVERLAP: String = "FILLED_SPILLS_OVERLAP"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -113,5 +121,6 @@ object WarningCode:
     CF_NOT_RENDERED,
     IMPLICIT_INTERSECTION,
     DYNAMIC_ARRAY_DOWNGRADED,
-    SPILL_CELLS_SKIPPED
+    SPILL_CELLS_SKIPPED,
+    FILLED_SPILLS_OVERLAP
   )

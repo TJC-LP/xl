@@ -87,3 +87,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `IMPLICIT_INTERSECTION` |
 | `DYNAMIC_ARRAY_DOWNGRADED` |
 | `SPILL_CELLS_SKIPPED` |
+| `FILLED_SPILLS_OVERLAP` |

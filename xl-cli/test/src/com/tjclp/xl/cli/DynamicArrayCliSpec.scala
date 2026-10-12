@@ -1123,3 +1123,44 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
         Some(CellValue.Number(3))
       )
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Ninth #721 review: a fill from a multi-cell dynamic anchor
+
+  private def overlapping(run: CliRun): Vector[String] =
+    warningsOf(run).filter(_("code").str == "FILLED_SPILLS_OVERLAP").map(_("message").str)
+
+  test("fill from a multi-cell dynamic anchor warns that the copies' spills overlap") {
+    for
+      src <- withSpill()
+      down <- outPath()
+      // F1 = SORT(D1:D3) last spilled F1:F3; filling it down F5:F8 makes four anchors a row apart
+      filled <- run(src, down, "fill", "F1", "F5:F8", "--json")
+      f6 <- kindAt(down, ref"F6")
+      // down from the anchor itself, the first copy lands in F1's own live spill: refused
+      own <- outPath()
+      intoOwn <- run(src, own, "fill", "F1", "F1:F4", "--json")
+      across <- outPath()
+      // across, the copies sit side by side: a one-column spill cannot reach the next copy
+      right <- run(src, across, "fill", "F1", "F1:G1", "--right", "--json")
+      plain <- outPath()
+      // a plain formula fills as before, silently
+      noArray <- run(src, plain, "fill", "D1", "D1:D4", "--json")
+    yield
+      ok(filled)
+      assertEquals(overlapping(filled).size, 1, filled.stdout)
+      assert(
+        overlapping(filled).forall(m =>
+          m.contains("Sheet1!F1: the dynamic array =SORT(D1:D3) last spilled F1:F3 (3 rows)") &&
+            m.contains("every copy but the last shows #SPILL!") && m.contains("#737")
+        ),
+        filled.stdout
+      )
+      // pinned (#737): each copy is written as a 1x1 dynamic record with its own top-left value
+      assertEquals(f6, Some(FormulaKind.dynamicArray(CellRange(ref"F6", ref"F6"))))
+      assertRefused(intoOwn, "FORMULA_ERROR", "F2, F3: they are in the spill range F1:F3")
+      ok(right)
+      assertEquals(overlapping(right), Vector.empty, right.stdout)
+      ok(noArray)
+      assertEquals(overlapping(noArray), Vector.empty, noArray.stdout)
+  }
