@@ -431,6 +431,16 @@ class DynamicArrayPreservationSpec extends FunSuite:
       wb.put(s.put(ref"B1", CellValue.Formula("SORT(A1:A1)", Some(CellValue.Number(5)), kind)))
     val out = write(edited)
     val part = entryText(out, "xl/metadata.xml").getOrElse(fail("no metadata part"))
+    // the rich values' blocks come back byte for byte: every vm index still names the same image
+    def between(xml: String, open: String, close: String): String =
+      val start = xml.indexOf(open)
+      assert(start >= 0, s"$open not in $xml")
+      xml.substring(start, xml.indexOf(close, start) + close.length)
+    Vector(
+      ("<valueMetadata", "</valueMetadata>"),
+      ("""<futureMetadata name="XLRICHVALUE"""", "</futureMetadata>"),
+      ("""<metadataType name="XLRICHVALUE"""", "/>")
+    ).foreach((open, close) => assertEquals(between(part, open, close), between(rich, open, close)))
     assert(
       part.contains("""<valueMetadata count="1"><bk><rc t="1" v="0"/></bk></valueMetadata>"""),
       part

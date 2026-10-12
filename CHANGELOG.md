@@ -35,7 +35,9 @@ exit early, a data-table staleness note in `audit`, and the library gaps `descri
   contents clear there leaves those cells, clears the rest of its range and warns
   `SPILL_CELLS_SKIPPED`; a blocked spill's hint names its own remedy (unmerge a merge, clear an
   occupied cell). A formula that reads its own spill range (`putf --array A1 "=A1:A3"`) is circular,
-  as in Excel: it is written uncached and not spilled. A spill of more
+  as in Excel: it is written uncached and not spilled. Deleting an anchor's row or column removes
+  its spill, and a `fill` of a dynamic anchor whose copies' spills would overlap warns
+  `FILLED_SPILLS_OVERLAP`. A spill of more
   than 1,048,576 cells (one full column) is refused before anything is written, and a `copy` of a
   whole spill onto a merge or table is refused as the `#SPILL!` it would be. The streaming reads
   (`readStream`, `readSheetStream`, `streamCellDetails`) now also read `xl/_rels/workbook.xml.rels`

@@ -424,6 +424,10 @@ private[xl] object DynamicArrayAuthoring:
    * Sheet'!A1:A3`, matched case-insensitively as Excel resolves it), or a defined name whose target
    * does ([[DependencyGraph.localReads]], the graph's own walk). Ranges are compared, never
    * expanded, so a whole-column operand costs nothing extra.
+   *
+   * Static reads only: a dynamic reference (`INDIRECT("A2:A4")`, `OFFSET(A1,1,0,3)`) that resolves
+   * into the extent is not seen, so such a formula spills where Excel reports a circular reference.
+   * Deliberately not refused wholesale: most INDIRECT/OFFSET spills read elsewhere.
    */
   private def readsWithin(
     expr: TExpr[?],

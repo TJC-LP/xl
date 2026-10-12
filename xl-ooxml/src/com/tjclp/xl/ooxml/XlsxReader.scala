@@ -630,10 +630,18 @@ object XlsxReader:
           )
         else Right(Some(new String(bytes, "UTF-8")))
 
+    // an IO failure on either source names the part, as a typed error
+    def failed(e: java.io.IOException): XLResult[Option[String]] =
+      Left(
+        XLError.IOError(
+          s"Metadata part '$path' could not be reread from the source: ${e.getMessage}"
+        )
+      )
+
     source match
       case None => Right(None)
       case Some(SourceHandle.OnDisk(file, _, _)) =>
-        // the file can change or vanish after the scan: an IO failure here names the part
+        // the file can change or vanish after the scan
         try
           val zip = new ZipFile(file.toFile)
           try
@@ -644,14 +652,9 @@ object XlsxReader:
                 try readText(in)
                 finally in.close()
           finally zip.close()
-        catch
-          case e: java.io.IOException =>
-            Left(
-              XLError.IOError(
-                s"Metadata part '$path' could not be reread from the source: ${e.getMessage}"
-              )
-            )
+        catch case e: java.io.IOException => failed(e)
       case Some(SourceHandle.InMemory(bytes)) =>
+        // the scan read these bytes already, but a damaged entry still fails as a typed IO error
         val zip = new ZipInputStream(new ByteArrayInputStream(SourceContent.rawArray(bytes)))
         @annotation.tailrec
         def find(): XLResult[Option[String]] =
@@ -659,8 +662,10 @@ object XlsxReader:
             case None => Right(None)
             case Some(entry) if entry.getName == path => readText(zip)
             case Some(_) => find()
-        try find()
-        finally zip.close()
+        try
+          try find()
+          finally zip.close()
+        catch case e: java.io.IOException => failed(e)
 
   /**
    * Parse docProps/core.xml + app.xml into the modeled metadata fields (GH-242).

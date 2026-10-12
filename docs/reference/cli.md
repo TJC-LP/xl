@@ -1183,9 +1183,14 @@ echo '[{"op":"putf","ref":"A1","value":"=SORT(B1:B3)","array":true}]' | xl -f in
   values until Excel recalculates on open.
 - **A circular spill is not spilled**: a formula that reads its own anchor or a cell its spill
   would fill (`putf --array A1 "=A1:A3"`, or `=Sheet1!A1:A3` on Sheet1, in any case) is a
-  circular reference in Excel, which shows 0 rather
-  than spilling. xl writes it as an uncached 1×1 record and says why (`uncached: it could not be
-  evaluated (… circular reference …)`).
+  circular reference in Excel, which shows 0 rather than spilling. xl writes it as an uncached 1×1
+  record and says why (`uncached: it could not be evaluated (… circular reference …)`). Only
+  static reads are checked: an `INDIRECT`/`OFFSET` that resolves into the spill is not seen.
+- **Structural edits and fills**: deleting the row or column of an anchor removes its spill, as
+  in Excel (the spill cells outside the deleted band are emptied, styles kept). A `fill` that
+  copies a dynamic anchor whose last spill runs along the fill direction warns
+  `FILLED_SPILLS_OVERLAP`: each copy is its own anchor one cell from the next, so in Excel their
+  spills overlap and all but the last show `#SPILL!`; xl writes each copy's top-left value (#737).
 - **In-memory only**: `--stream --array` is `UNSUPPORTED_IN_STREAM`, and a streamed batch op with
   `"array": true` is refused by index before anything is written (`x-streamRefusedFields` in
   `xl batch --schema`). A streamed `put`/`putf` over an existing anchor writes a plain cell and

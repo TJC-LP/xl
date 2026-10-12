@@ -300,7 +300,10 @@ interiors).
   a dynamic array anchored at the cell, spilling its computed values (one cell, one formula; in
   memory only). A spill into occupied cells, a merge, another array or a table is refused
   (`FORMULA_ERROR`, nothing written; the hint names the remedy). Writing over the anchor clears its
-  spill; writing into a spill cell is refused — overwrite or clear the anchor first. An in-memory
+  spill. Writing into a spill cell is refused — overwrite or clear the anchor first. That refusal is
+  xl's policy, not Excel's behaviour: Excel accepts the value and shows `#SPILL!` at the anchor,
+  which xl cannot keep across a recalculation. A `clear` into a spill leaves its cells, clears the
+  rest and warns `SPILL_CELLS_SKIPPED` (that one is Excel's behaviour). An in-memory
   `putf` whose plain value differs from its array value says so with an `IMPLICIT_INTERSECTION`
   warning (both values and the remedy; it never fails the run, `--strict` included).
 - **`format` replaces, detection defers.** An explicit `format` on `put`/`putf` overwrites the
