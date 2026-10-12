@@ -2306,11 +2306,11 @@ object BatchParser:
         )
     }
 
-  /** Clear contents, styles, and/or comments from a range. */
   /**
-   * A `clear`, as the clear verb does it: GH-714 — a contents clear takes a cleared anchor's whole
-   * spill and leaves the cells of a live spill whose anchor stays as they were, returned for the
-   * `SPILL_CELLS_SKIPPED` warning ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
+   * A `clear` of contents, styles and/or comments, as the clear verb does it: GH-714 — a contents
+   * clear takes a cleared anchor's whole spill and leaves the cells of a live spill whose anchor
+   * stays as they were, returned for the `SPILL_CELLS_SKIPPED` warning
+   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
    */
   private def applyClear(
     wb: Workbook,
