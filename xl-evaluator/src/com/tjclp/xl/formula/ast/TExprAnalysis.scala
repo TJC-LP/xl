@@ -228,15 +228,14 @@ trait TExprAnalysis:
     call: Call[A],
     f: (Option[SheetName], CellRange) => CellRange
   ): TExpr[A] =
-    call.spec.flags.lift match
-      case ArrayLift.Off if call.spec.flags.boundsReferenceAxis =>
-        val replacements =
-          call.spec.argSpec.scalarSlots(call.args).map((slot, _) => transformRanges(slot, f))
-        Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)
-      case ArrayLift.Off => call
-      case ArrayLift.On(lifted, _) =>
-        val replacements =
-          call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
-            if lifted.forall(_.contains(position)) then transformRanges(slot, f) else slot
-          }
-        Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)
+    if !call.spec.flags.entersArrayRangeBounds then call
+    else
+      // a lifted call's lifted slots; every scalar slot of a boundsReferenceAxis call
+      def enters(position: Int): Boolean = call.spec.flags.lift match
+        case ArrayLift.On(lifted, _) => lifted.forall(_.contains(position))
+        case ArrayLift.Off => true
+      val replacements =
+        call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
+          if enters(position) then transformRanges(slot, f) else slot
+        }
+      Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)

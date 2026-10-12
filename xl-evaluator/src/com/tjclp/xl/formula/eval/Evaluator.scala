@@ -651,14 +651,6 @@ object Evaluator:
     case TExpr.DateTimeToSerial(inner) => inspectsReference(inner)
     case _ => false
 
-  /**
-   * GH-712: whether SUMPRODUCT's shared extent survives into `call`'s arguments — the calls whose
-   * slots its static trimming (`TExpr.transformRanges`) also enters: a lifted call (element-wise,
-   * so its arrays must line up with the other operands) and ROW/COLUMN (`boundsReferenceAxis`).
-   */
-  private[formula] def keepsArrayRangeBounds(call: TExpr.Call[?]): Boolean =
-    call.spec.flags.boundsReferenceAxis || call.spec.flags.lift != ArrayLift.Off
-
   /** Maximum recursion depth for cross-sheet formula evaluation (GH-161 cycle protection). */
   private val MaxCrossSheetRecursionDepth = 100
 
@@ -1500,10 +1492,11 @@ private class EvaluatorImpl(
    * aggregate's argument), so IF, IFS, CHOOSE and SWITCH keep the reference they select whole.
    *
    * GH-712: SUMPRODUCT's shared extent reaches a call only along the path its static trimming
-   * (`TExpr.transformRanges`) takes — operators, LET, lifted calls and the calls flagged
-   * `boundsReferenceAxis` (ROW, COLUMN). Any other call (MAX, COUNT, INDEX's shape, IF, a nested
-   * SUMPRODUCT) evaluates its arguments outside it, so `SUMPRODUCT((A:A>0)*MAX(ROW(A:A)))` reads
-   * MAX over every row, as Excel does, rather than over the used ones.
+   * (`TExpr.transformRanges`) takes — operators, LET and the calls whose flags answer
+   * `entersArrayRangeBounds` (lifted calls; ROW, COLUMN). Any other call (MAX, COUNT, INDEX's
+   * shape, IF, a nested SUMPRODUCT) evaluates its arguments outside it, so
+   * `SUMPRODUCT((A:A>0)*MAX(ROW(A:A)))` reads MAX over every row, as Excel does, rather than over
+   * the used ones.
    */
   private def evalCall(
     call: TExpr.Call[?],
@@ -1513,7 +1506,7 @@ private class EvaluatorImpl(
     currentCell: Option[ARef],
     selectsReference: Boolean
   ): Either[EvalError, Any] =
-    if arrayRangeBounds.isDefined && !Evaluator.keepsArrayRangeBounds(call) then
+    if arrayRangeBounds.isDefined && !call.spec.flags.entersArrayRangeBounds then
       outsideArrayRangeBounds.evalCallNode(
         call,
         sheet,

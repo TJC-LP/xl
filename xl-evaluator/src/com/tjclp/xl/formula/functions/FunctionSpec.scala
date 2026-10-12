@@ -57,7 +57,15 @@ final case class FunctionFlags(
    * reference's full extent (ROWS, COLUMNS) and for every other function.
    */
   boundsReferenceAxis: Boolean = false
-)
+):
+
+  /**
+   * GH-712: whether SUMPRODUCT's shared whole-axis extent (GH-192) enters this call's arguments — a
+   * lifted call (its lifted slots evaluate element-wise beside the other operands) or one flagged
+   * [[boundsReferenceAxis]]. The single rule for both the static trimming (`TExpr.transformRanges`)
+   * and the evaluator, which drops the extent at any other call.
+   */
+  def entersArrayRangeBounds: Boolean = boundsReferenceAxis || lift != ArrayLift.Off
 
 /**
  * Which scalar slots of a function lift over arrays (see [[FunctionFlags.lift]]).

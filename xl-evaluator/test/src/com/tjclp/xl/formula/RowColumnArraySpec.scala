@@ -76,6 +76,19 @@ class RowColumnArraySpec extends FunSuite:
     )
   }
 
+  test("a computed reference spanning the whole axis is bounded like the literal one") {
+    // OFFSET and INDIRECT computing A1:A1048576 or A1:XFD1 are whole axes by geometry, so they take
+    // the shared extent as A:A does, and SUMPRODUCT sums 1*1 + 2*2 + 3*3, as Excel does
+    assertEquals(array("=SUMPRODUCT(A:A,ROW(OFFSET(A1,0,0,1048576,1)))"), Right(number(14)))
+    assertEquals(array("=SUMPRODUCT(A:A,ROW(INDIRECT(\"A1:A1048576\")))"), Right(number(14)))
+    assertEquals(array("=SUMPRODUCT(1:1,COLUMN(OFFSET(A1,0,0,1,16384)))"), Right(number(21)))
+    // one row short of the edge is a different shape, in Excel too (#VALUE!)
+    assertEquals(
+      array("=SUMPRODUCT(A:A,ROW(OFFSET(A1,0,0,1048575,1)))"),
+      Right(CellValue.Error(CellError.Value))
+    )
+  }
+
   test("computed positions use SUMPRODUCT's shared cross-sheet extent") {
     val other = Sheet(SheetName.unsafe("Other")).put(ref"A5", number(5))
     val wb = Workbook(sheet, other)
@@ -90,6 +103,10 @@ class RowColumnArraySpec extends FunSuite:
   ) {
     val flagged = FunctionRegistry.all.filter(_.flags.boundsReferenceAxis).map(_.name).toSet
     assertEquals(flagged, Set("ROW", "COLUMN"))
+    // one rule for the static trimming and the evaluator: lifted calls and the axis readers
+    val entering = FunctionRegistry.all.filter(_.flags.entersArrayRangeBounds).map(_.name).toSet
+    assert(Set("ROW", "COLUMN", "ABS", "MATCH").subsetOf(entering), entering)
+    assert(Set("ROWS", "COLUMNS", "MAX", "COUNT", "IF").intersect(entering).isEmpty, entering)
     val trim = (_: Option[SheetName], range: CellRange) =>
       if range.isFullColumn then CellRange(ref"A5", ref"A7") else range
     assertEquals(TExpr.transformRanges(parse("=ROW(A:A)"), trim), parse("=ROW(A5:A7)"))
@@ -248,6 +265,24 @@ class RowColumnArraySpec extends FunSuite:
     assertEquals(
       evala("=LET(r,INDEX(A1:B3,0,2),r+ROW(r))"),
       Right(column(number(11), number(22), number(33)))
+    )
+  }
+
+  test("a ROWS term beside an operand binding leaves the operand's values unchanged") {
+    // A1:A3 = 1,2,3 and B1:B3 = 10,20,30: SUM(s*2) is 120 with or without ROWS(r) (3)
+    assertEquals(evala("=LET(r,A1:A3,s,B1:B3,SUM(s*2))"), Right(BigDecimal(120)))
+    assertEquals(evala("=LET(r,A1:A3,s,B1:B3,ROWS(r)+SUM(s*2))"), Right(BigDecimal(123)))
+    assertEquals(
+      evala("=LET(r,OFFSET(A1,0,0,3),s,OFFSET(B1,0,0,3),SUM(s*2))"),
+      Right(BigDecimal(120))
+    )
+    assertEquals(
+      evala("=LET(r,OFFSET(A1,0,0,3),s,OFFSET(B1,0,0,3),ROWS(r)+SUM(s*2))"),
+      Right(BigDecimal(123))
+    )
+    assertEquals(
+      evala("=LET(r,OFFSET(A1,0,0,3),s,OFFSET(B1,0,0,3),s*2+ROWS(r))"),
+      Right(column(number(23), number(43), number(63)))
     )
   }
 
