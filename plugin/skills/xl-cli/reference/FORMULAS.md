@@ -184,11 +184,28 @@ beginning. `NPV` discounts `value1…` from period 1; `IRR`/`XIRR` accept an opt
 `XNPV`/`XIRR` pair values with dates.
 
 **Lookup and reference.** `VLOOKUP`/`HLOOKUP` take an optional exact/approximate flag (`FALSE` =
-exact); `XLOOKUP` takes lookup, lookup array and return array; `MATCH` takes `match_type` 0 for
-exact. `OFFSET` returns a range and composes with aggregates (`=SUM(OFFSET(A1, 1, 0, 5, 1))`);
+exact); `MATCH` takes `match_type` 0 for exact. `XLOOKUP` takes lookup, lookup array and return
+array and returns a reference — the matched row of a 2-D return array (the matched column for a
+one-row lookup array): `=SUM(XLOOKUP(key, ids, B:M))` sums a year's row, `xl evala
+"=XLOOKUP(2, A1:A3, B1:C3)"` shows `{20, 200}`, and a plain cell reads the row's cell in its own
+column (Excel shows `=@XLOOKUP(…)`); a 2-D lookup array is `#VALUE!`, `if_not_found` is a value.
+`OFFSET` returns a range and composes with aggregates (`=SUM(OFFSET(A1, 1, 0, 5, 1))`);
 `INDIRECT` reads the cell its text names. Both are dynamic: the dependency graph cannot see their
-targets, so cells holding them are always recalculated. `ADDRESS` `abs_num`: 1 = `$A$1`, 2 = `A$1`,
+targets, so cells holding them are always recalculated. **The range operator `:`** joins
+reference-valued operands into their bounding range: `=SUM(A1:INDEX(A:A, COUNTA(A:A)))` (the
+non-volatile dynamic range — not always recalculated), `=SUM(INDEX(r, 1):INDEX(r, 2))`,
+`=SUM(B1:XLOOKUP(k, ids, B:B))`, `=SUM(Start:Finish)` with two names. Both ends must be on one
+sheet (`#VALUE!` otherwise); no spaces around `:`. Like `OFFSET`, `INDIRECT` and `INDEX`, a
+computed range is not accepted yet as a range-typed argument (the `SUMIF`/`COUNTIF`/`VLOOKUP`/
+`MATCH`/`XLOOKUP` ranges): the parse error says so. `ADDRESS` `abs_num`: 1 = `$A$1`, 2 = `A$1`,
 3 = `$A1`, 4 = `A1`. `ROW()`/`COLUMN()` without an argument refer to the cell being evaluated.
+Over a multi-cell range they are arrays of row or column numbers in an array context (`evala`,
+SUMPRODUCT, an array formula): `=SUMPRODUCT((MOD(ROW(r),2)=0)*r)` sums every other row,
+`ROW(r)-ROW(first)+1` numbers positions. A plain cell keeps the first number (`=SUM(ROW(A1:A10))`
+is 1, as in legacy Excel), so fold ROW's array with SUMPRODUCT. Inside SUMPRODUCT a whole column
+is trimmed to the sheet's used rows, so `=SUMPRODUCT((A:A="x")*ROW(A:A))` lines up, but
+`=SUMPRODUCT(ROW(A:A))` sums only the used rows' numbers where Excel sums 1 to 1,048,576: bound
+the range (`ROW(A1:A1000)`) when every row must count.
 `CELL("filename")` reports the workbook's saved path, `CELL("address", ref)`, `CELL("row", ref)` and
 `CELL("col", ref)` the reference parts.
 
@@ -211,7 +228,7 @@ scalar arguments, criteria, the IF condition and the CHOOSE index. So in row 3, 
 `C3*2`, `=ABS(C2:C4)` is `ABS(C3)` and `COUNTIF(r,">"&r)` compares with r's row-3 cell. **Inside
 SUM/MAX/AVERAGE/COUNT an expression is still a value**: `=SUM(A1:A10*B1:B10)` in row 5 is
 `A5*B5`, and `#VALUE!` outside rows 1–10. References stay whole there — a range, a name, a LET
-name bound to one, the reference IF/CHOOSE select and the one OFFSET/INDIRECT/INDEX return:
+name bound to one, the reference IF/CHOOSE select and the one OFFSET/INDIRECT/INDEX/XLOOKUP/`:` return:
 `SUM(A1:A10)`, `SUM(OFFSET(A1,0,0,10,1))`, `LET(r,A1:A10,SUM(r))`, and `SUM(IF(c,A1:A10,0))` when `c`
 holds in the formula's row. **For array math in one cell, use SUMPRODUCT**:
 `=SUMPRODUCT(A1:A10*B1:B10)`, `=SUMPRODUCT(--(r>0))`, `=SUMPRODUCT(ABS(r))`. Inside SUMPRODUCT
@@ -223,7 +240,16 @@ at the cell, with no implicit intersection: `putf --array C5 "=SUM(A1:A10*B1:B10
 sum in any row, and `putf --array A1 "=SORT(B1:B3)"` spills A1:A3. One cell, one formula; a spill
 into occupied cells is refused.
 `eval` without a cell answers as the formula typed into a new Excel 365 cell would (its top-left
-value); `evala` shows the whole array. In an array context (`evala`, SUMPRODUCT, an array formula)
+value); `evala` shows the whole array. `eval --at <ref>` answers as the plain cell at `<ref>` would,
+without writing: `xl eval "=SUM(A1:A10*B1:B10)" --at D5` is `A5*B5`, as `putf D5` would show.
+
+- A qualified `--at Data!D5` names the sheet; `--with` still applies.
+- A formula that reads `<ref>` back is a circular reference (`FORMULA_ERROR`), whether directly,
+  through precedents, as `Data!D5`, or through INDIRECT, OFFSET or a defined name.
+- Known gaps: another sheet's cached formula that reads `<ref>`, and an XLOOKUP return cell that
+  reaches it at run time, go unseen.
+
+In an array context (`evala`, SUMPRODUCT, an array formula)
 EDATE/EOMONTH/WORKDAY/NETWORKDAYS/YEARFRAC/MROUND answer `#VALUE!` for a multi-cell range reference;
 pass `+A2:A10` to lift them. In a plain cell `+A2:A10` reads the formula's row like any operand. No
 array constants (`{1,2,3}`).

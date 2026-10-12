@@ -59,6 +59,7 @@ xl -f model.xlsx cell B5                   # Get single cell details (single-she
 xl -f model.xlsx search "Revenue"          # Find cells by content (all sheets)
 xl -f model.xlsx -s "P&L" stats B1:B100    # Numeric statistics for a range
 xl -f model.xlsx -s "P&L" eval "=SUM(B1:B10)"   # Evaluate formula (what-if)
+xl -f model.xlsx -s "P&L" eval "=B1:B10*2" --at D5  # ...as the plain cell at D5 would
 xl -f model.xlsx -s "P&L" evala "=TRANSPOSE(A1:C2)"  # Evaluate array formula (spill grid)
 
 # Mutations (require -o or -i)
@@ -934,22 +935,46 @@ sheet. No `TRUNCATED` warning accompanies a clipped `search`: the clip is in the
 
 ---
 
-### `xl eval <formula> [--with overrides]`
+### `xl eval <formula> [--at <ref>] [--with overrides]`
 
 Evaluate a formula without modifying the file (what-if analysis). `-f` is optional for constant formulas (`xl eval "=PI()*2"`).
 
-The formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+Without `--at` the formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
+
+`--at <ref>` answers the second question without writing the file: the formula evaluates as the plain cell at `<ref>` would. With A1:A10 and B1:B10 holding 1..10, `eval "=SUM(A1:A10*B1:B10)"` is 385, `--at D5` is 25 (`A5*B5`) and `--at D20` is `#VALUE!` (row 20 crosses neither range). The ref follows the one sheet rule: a qualified ref (`--at Data!D5`) names the sheet the formula evaluates on, else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` (exit 3). It must be one cell: a range or a malformed ref is `INVALID_REFERENCE` (exit 3). It needs no `-f` for a formula that reads no cell (`xl eval "=ROW()" --at D5` is 5), and, like `eval` itself, is refused under `--stream`. `evala --at` is different: it only anchors where the displayed spill starts.
+
+**Cycles.** A formula that reads `<ref>`'s value would make the plain cell a circular reference, so `eval --at` fails with `FORMULA_ERROR` (exit 3) rather than answering with the cell's current content.
+- A read the formula or its precedents on that sheet make is named with its path, as a cycle among the precedents is: `eval "=SUM(A1:A10)" --at A5` is `A5 → A5`, and `--at D5` when C1 holds `=D5*2` and the formula reads C1 is `Circular reference detected: D5 → C1 → D5`. A path longer than ten cells keeps its ends and counts the cells between (`D5 → C1 → C2 → … (37 more) … → C40 → D5`).
+- A reference qualified with the placement's own sheet is a read of that sheet: `eval "=Data!D5" --at Data!D5` is circular (sheet names compare case-insensitively).
+- Inspecting an address is not a read: `ROW(D5)`, `ROWS(D5:D6)` and `CELL("row",D5)` evaluate at D5.
+- The check that names the path follows only the formulas on the placement's sheet, and only the formula's own precedents: a cycle elsewhere on the sheet does not stop it.
+- It counts every cell of a range read as a value, even where the plain cell reads only one of them by implicit intersection: when B10 holds `=D5`, `eval "=B:B+1" --at D5` reports `D5 → B10 → D5`, though the plain cell at D5 reads only B5. That over-report is deliberate, as a dependency graph tracks the range rather than the one cell it yields: a false cycle is safer than an answer computed from a stale value.
+- A read the check cannot see is caught when the evaluation makes it: a reference computed at run time (`INDIRECT("D5")`, `OFFSET(A1,4,0)` at A5, a defined name naming `<ref>`) or another sheet's formula that reads `<ref>` fails as `Circular reference detected: the formula reads its own placement D5 at run time (…)`.
+
+**Known gaps.** Two reads still go unseen:
+- another sheet's formula that holds a cached value is read as that value, not re-evaluated, so its read of `<ref>` is missed and the answer uses `<ref>`'s current content ([#729](https://github.com/TJC-LP/xl/issues/729));
+- XLOOKUP reads its return cell as stored, so an uncached formula there that reaches `<ref>` only at run time (`=INDIRECT("D5")`) is returned as its record, not reported ([#742](https://github.com/TJC-LP/xl/issues/742)).
+
+**With `--with`.** The overrides apply with or without `--at`, in `eval` and `evala` alike, to the sheet the formula evaluates on: the `--at` sheet, else `-s`. So `-s Data eval … --at Other!D5 --with B1=5` sets Other!B1, and an override qualified with another sheet's name is `INVALID_REFERENCE`.
+- On the `--at` cell itself an override is `USAGE` (exit 2): the formula is that cell, so `--at D5 --with D5=3` would set a cell nothing could read.
+- A sheet qualifier matches the evaluated sheet's name in any case (`--with data!D5=1` overrides Data!D5).
+- Every formula in the book that reads an overridden cell, directly, through a defined name or through other formulas on any sheet, drops its cached value, so every read sees the overrides: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that qualify a reference with a sheet holding an overridden or stale cell, or mention a defined name; without `--with`, `eval --at` touches only the formula's own precedents.
+
+**Output.** The text output adds an `At:` line, and the JSON payload's `at` carries the cell as evaluated (`"Data!D5"`; `null` without `--at`).
 
 **Arguments**:
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Formula to evaluate |
-| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) |
+| `--at` | string | No | Evaluate as the plain cell at this ref (implicit intersection included; nothing is written). Without it the formula evaluates as an array, showing its top-left value |
+| `--with`, `-w` | string | No | Temporary cell overrides (e.g., "B1=100,B2=200"; repeatable) on the sheet the formula evaluates on: the `--at` sheet, else `-s` |
 
 **Examples**:
 ```bash
 xl -f model.xlsx -s Sheet1 eval "=SUM(B1:B10)"
 xl -f model.xlsx -s Sheet1 eval "=B1*1.1" --with "B1=100"
+xl -f model.xlsx -s Sheet1 eval "=SUM(A1:A10*B1:B10)" --at D5   # what putf D5 would show
+xl -f model.xlsx eval "=A1:A10*2" --at Data!E3 --with "A3=7"     # qualified ref names the sheet
 ```
 
 ---
@@ -2469,7 +2494,8 @@ otherwise:
 - Typed verbs build `data` directly: `sheets` → `{sheets: [{name, index, state, dimension}]}`
   (`--stats` adds `cells`, `formulas` to each element; the elements are `describe`'s
   `data.sheets`); `names` → `{names: [{name, refersTo, scope, hidden}]}`; `bounds` →
-  `{sheet, range, dimension}`; `eval` → `{formula, result: {type, value, formatted}, overrides}`;
+  `{sheet, range, dimension}`; `eval` → `{formula, at, result: {type, value, formatted},
+  overrides}` (`at` is the `--at` cell as evaluated, `null` without it);
   `evala` → `{formula, spillRange, result, overrides}` with `result` in the `view` JSON shape;
   `functions` → `{functions: [{name, minArgs, maxArgs, args, returnsDate, returnsTime,
   dynamicDeps, volatile, specialForm}]}`; `rasterizers` → `{backends: [{name, status, note}],

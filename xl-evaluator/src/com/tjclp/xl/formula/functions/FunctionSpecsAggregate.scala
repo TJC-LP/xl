@@ -8,12 +8,14 @@ import com.tjclp.xl.formula.eval.{
   Aggregator,
   ArrayResult,
   ArrayArithmetic,
+  NameWalk,
   RangeOperand,
-  ScalarCoercion
+  ScalarCoercion,
+  WorkbookAudit
 }
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsAggregate extends FunctionSpecsBase:
@@ -39,7 +41,16 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    *
    * We still enforce Excel's dimension rules on the original ranges, but we constrain full
    * column/row ranges to the union of used ranges across all involved sheets. This prevents
-   * mismatched lengths after constraining while preserving performance.
+   * mismatched lengths after constraining while preserving performance. GH-712: SUMPRODUCT's
+   * `constrainComputedRange` relies on that union across sheets to bound a computed reference (ROW
+   * of `INDEX(Other!A:A,0)`) without knowing its sheet.
+   *
+   * This is the bound for several ranges that must line up (SUMPRODUCT's arrays, a criteria range
+   * and its sum or average range), and for the criteria functions over one range. What it drops is
+   * blank in every range, and added back where it counts: a blank criterion (`COUNTIF(B:B,"")`)
+   * counts the dropped cells through [[blankCriteriaCount]], and SUMPRODUCT reads one dropped row
+   * for all of them (`SumProductTail`). A reference folded on its own by an aggregate, AND or OR
+   * reads [[usedArea]] instead, whose dropped cells only COUNTBLANK observes ([[blanksTrimmed]]).
    */
   private def computeBounds(
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
@@ -160,7 +171,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             ctx.workbook,
             ctx.depth + 1,
             ctx.rng,
-            ctx.memo.getOrElse(new Evaluator.EvalMemo),
+            ctx.passMemo,
             ctx.workbookPath,
             ctx.aggregateMemo,
             currentCell = Some(at),
@@ -208,6 +219,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
+    // GH-715: COUNTA and COUNTBLANK read the cell's record without evaluating it; a positioned
+    // evaluation's placement is still read, so its guard decides
+    ctx.placementGuard match
+      case Some(guard) =>
+        guard.check(targetSheet, at) match
+          case Some(error) => Left(error)
+          case None => triageRecord(agg, targetSheet, at, ctx, acc)
+      case None => triageRecord(agg, targetSheet, at, ctx, acc)
+
+  private def triageRecord[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    at: ARef,
+    ctx: EvalContext,
+    acc: A
+  ): Either[EvalError, A] =
     val cellValue = targetSheet(at).value
     if agg.countsNonEmpty then
       // COUNTA mode: count any non-empty cell
@@ -234,16 +261,71 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case None => acc
         }
 
-  /** Resolve a raw range and apply the full-row/full-column used-area constraint once. */
-  private def resolveConstrainedRange(
-    location: TExpr.RangeLocation,
-    ctx: EvalContext
-  ): Either[EvalError, (com.tjclp.xl.sheets.Sheet, CellRange)] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).map {
-      case (targetSheet, range) =>
-        val bounds = computeBounds(List((range, targetSheet)))
-        (targetSheet, constrainRange(range, bounds))
-    }
+  /**
+   * The cells an aggregate folds for one reference: a whole column or row within the sheet's used
+   * range ([[boundedToUsed]], the bound AND and OR read a reference by, so the two cannot drift),
+   * `CellRange.empty` when the two do not meet; any other range as is. Every cell it drops lies
+   * outside the used range, so it is blank: only COUNTBLANK observes them, and [[blanksTrimmed]]
+   * counts them back.
+   */
+  private def usedArea(range: CellRange, targetSheet: com.tjclp.xl.sheets.Sheet): CellRange =
+    boundedToUsed(range, targetSheet).getOrElse(CellRange.empty)
+
+  /**
+   * GH-711: the cells of a whole-column or whole-row `range` that the used-area constraint dropped
+   * (`constrained` is `range` after [[usedArea]]), above, below or beside the used range. All are
+   * blank: COUNTBLANK counts them, as Excel does (`COUNTBLANK(B:B)` is 1048573 with B1:B3 filled
+   * and with B5:B7 filled alike), and every other aggregate skips them (0). A whole sheet holds
+   * 2^34 cells, past `Int`, so the count rides beside the accumulator as a `Long` and joins the
+   * finalized result once ([[withBlanksTrimmed]]).
+   */
+  private def blanksTrimmed(
+    agg: Aggregator[?],
+    range: CellRange,
+    constrained: CellRange
+  ): Long =
+    if agg.countsEmpty then cellsTrimmed(range, constrained) else 0L
+
+  /**
+   * GH-711/GH-192: how many cells of a whole-column or whole-row `range` a used-area bound dropped
+   * (`constrained` is `range` after [[usedArea]] or [[constrainRange]]); 0 for any other range.
+   * Each lies outside every involved sheet's used range, so each is blank.
+   */
+  private def cellsTrimmed(range: CellRange, constrained: CellRange): Long =
+    if range.isFullColumn || range.isFullRow then range.cellCount - constrained.cellCount
+    else 0L
+
+  /**
+   * GH-192: COUNTIF's and COUNTIFS' count of the trimmed blank cells: all of them when every
+   * criterion matches a blank cell (`""`, `"="`), none otherwise (`"<>"`, `0`, `"<5"`), so
+   * `COUNTIF(B:B,"")` counts every blank cell of the column, as Excel does. Only the COUNT family
+   * needs it: SUMIF, AVERAGEIF, MAXIFS and MINIFS read a value cell, and a blank one adds nothing.
+   */
+  private def blankCriteriaCount(trimmed: Long, criteria: List[CriteriaMatcher.Criterion]): Long =
+    if trimmed > 0L && criteria.forall(CriteriaMatcher.matches(CellValue.Empty, _)) then trimmed
+    else 0L
+
+  /**
+   * A finalized aggregate with the [[blanksTrimmed]] count added: as is when nothing was trimmed,
+   * so a fold that counts no blanks allocates nothing for it.
+   */
+  private def withBlanksTrimmed(result: BigDecimal, trimmed: Long): BigDecimal =
+    if trimmed == 0L then result else result + BigDecimal(trimmed)
+
+  /**
+   * Fold one reference, a whole column or row within the sheet's used range ([[usedArea]]), into
+   * the accumulator; the second component is [[blanksTrimmed]].
+   */
+  private def foldReference[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    ctx: EvalContext,
+    acc: A
+  ): Either[EvalError, (A, Long)] =
+    val constrained = usedArea(range, targetSheet)
+    foldRawRange(agg, targetSheet, constrained, ctx, acc)
+      .map((_, blanksTrimmed(agg, range, constrained)))
 
   /** Stream one already-constrained raw range into the supplied accumulator. */
   private def foldRawRange[A](
@@ -298,6 +380,64 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case CellValue.RichText(rt) => directValue(agg, acc, CellValue.Text(rt.toPlainText))
       case _ => Right(acc)
 
+  /**
+   * Fold an aggregate argument that evaluated to a value, not a reference: an array's elements, or
+   * a scalar.
+   */
+  private def foldEvaluatedArg[A](
+    agg: Aggregator[A],
+    evaluated: Any,
+    acc: A
+  ): Either[EvalError, A] =
+    evaluated match
+      case ar: ArrayResult =>
+        ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
+          case (Left(err), _) => Left(err)
+          case (Right(current), cellValue) => triageValue(agg, current, cellValue, typed = false)
+        }
+      case value: BigDecimal =>
+        // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
+        // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
+        Right(
+          if agg.countsNonEmpty then agg.combine(acc, aggregateCountUnit)
+          else if agg.countsEmpty then acc
+          else agg.combine(acc, value)
+        )
+      case other =>
+        // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
+        // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
+        // numeric-mode error policing is unchanged
+        triageValue(agg, acc, ArrayArithmetic.anyToCellValue(other), typed = true)
+
+  /**
+   * One evaluated value into the accumulator: COUNTA counts it unless blank, COUNTBLANK only when
+   * blank; the numeric aggregates propagate a carried error (COUNT skips it) and combine a number.
+   * A value that is none of these is skipped as an array element, while a scalar `typed` into the
+   * argument list follows Excel's rule for one ([[directValue]]: TRUE is 1, other text #VALUE!).
+   */
+  private def triageValue[A](
+    agg: Aggregator[A],
+    acc: A,
+    cellValue: CellValue,
+    typed: Boolean
+  ): Either[EvalError, A] =
+    if agg.countsNonEmpty then
+      cellValue match
+        case CellValue.Empty => Right(acc)
+        case _ => Right(agg.combine(acc, aggregateCountUnit))
+    else if agg.countsEmpty then
+      cellValue match
+        case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
+        case _ => Right(acc)
+    else
+      ArrayArithmetic.carriedError(cellValue) match
+        case Some(err) if agg.propagatesErrors => Left(propagatedElementError(agg.name, err))
+        case Some(_) => Right(acc) // COUNT: errors are not numbers
+        case None =>
+          extractNumericValue(cellValue) match
+            case Some(n) => Right(agg.combine(acc, n))
+            case None => if typed then directValue(agg, acc, cellValue) else Right(acc)
+
   /** Helper to evaluate variadic aggregates with proper type handling. */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def evalVariadicAggregate[A](
@@ -307,18 +447,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Either[EvalError, BigDecimal] =
     // Stream values into the aggregator's own accumulator. Aggregators that need to retain their
     // inputs (for example MEDIAN) do so in A; ordinary aggregates avoid an intermediate Vector.
-    def foldAllArgs: Either[EvalError, A] =
-      args.foldLeft[Either[EvalError, A]](Right(agg.empty)) {
+    // The second component counts the blanks trimmed off whole columns and rows (GH-711)
+    def foldAllArgs: Either[EvalError, (A, Long)] =
+      args.foldLeft[Either[EvalError, (A, Long)]](Right((agg.empty, 0L))) {
         case (Left(err), _) => Left(err)
-        case (Right(acc), Left(location)) =>
+        case (Right((acc, trimmed)), arg) =>
+          foldArg(acc, arg).map((next, more) => (next, trimmed + more))
+      }
+
+    def valueOnly(result: Either[EvalError, A]): Either[EvalError, (A, Long)] =
+      result.map((_, 0L))
+
+    def foldArg(acc: A, arg: NumericArg): Either[EvalError, (A, Long)] =
+      arg match
+        case Left(location) =>
           // GH-630: an error in the RANGE slot (`COUNT(#REF!)` parses `#REF!` as a range argument,
           // like `SUM(#REF!)`) is triaged exactly like an error-valued direct argument
-          resolveConstrainedRange(location, ctx).fold(
-            triageErrorArgument(agg, acc, _),
-            { case (targetSheet, constrainedRange) =>
-              foldRawRange(agg, targetSheet, constrainedRange, ctx, acc)
-            }
-          )
+          ctx
+            .resolveRange(location)
+            .fold(
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
+              { case (targetSheet, range) => foldReference(agg, targetSheet, range, ctx, acc) }
+            )
         // GH-395: direct single-cell references triage per-cell like a 1×1 range. In NumericArg
         // position Ref/SheetRef can ONLY arise from direct refs (asNumericExpr rewrites
         // PolyRef → Ref and SheetPolyRef → SheetRef; no other NumericArg source produces these
@@ -326,26 +476,28 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // blank direct arg is ignored by COUNT/AVERAGE (not coerced to a genuine 0 by the
         // scalar decode), a text cell skips like the range fold, and COUNTBLANK still counts
         // the blank.
-        case (Right(acc), Right(TExpr.Ref(at, _, _))) =>
-          triageCellForAggregate(agg, ctx.sheet, at, ctx, acc)
-        case (Right(acc), Right(TExpr.SheetRef(sheetName, at, _, _))) =>
-          Evaluator
-            .resolveRangeLocation(
-              TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
-              ctx.sheet,
-              ctx.workbook
-            )
-            .flatMap { case (targetSheet, _) =>
-              triageCellForAggregate(agg, targetSheet, at, ctx, acc)
-            }
+        case Right(TExpr.Ref(at, _, _)) =>
+          valueOnly(triageCellForAggregate(agg, ctx.sheet, at, ctx, acc))
+        case Right(TExpr.SheetRef(sheetName, at, _, _)) =>
+          valueOnly(
+            Evaluator
+              .resolveRangeLocation(
+                TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
+                ctx.sheet,
+                ctx.workbook
+              )
+              .flatMap { case (targetSheet, _) =>
+                triageCellForAggregate(agg, targetSheet, at, ctx, acc)
+              }
+          )
         // GH-669: a union or intersection folds every area it denotes, each like a written range,
         // in either mode — resolved as one argument, so its first error is triaged once (GH-630).
         // COUNTBLANK takes one range: several areas are #VALUE!, as in Excel
-        case (Right(acc), Right(ReferenceOperators.OperatorCall(call))) =>
+        case Right(ReferenceOperators.OperatorCall(call)) =>
           ReferenceOperators
             .areas(Right(call.asInstanceOf[TExpr[Any]]), ctx)
             .fold(
-              triageErrorArgument(agg, acc, _),
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
               areas =>
                 if agg.countsEmpty && areas.size > 1 then
                   Left(
@@ -355,14 +507,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     )
                   )
                 else
-                  areas.foldLeft[Either[EvalError, A]](Right(acc)) {
+                  areas.foldLeft[Either[EvalError, (A, Long)]](Right((acc, 0L))) {
                     case (Left(err), _) => Left(err)
-                    case (Right(current), RangeOperand(targetSheet, range)) =>
-                      val bounds = computeBounds(List((range, targetSheet)))
-                      foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, current)
+                    case (Right((current, trimmed)), RangeOperand(targetSheet, range)) =>
+                      foldReference(agg, targetSheet, range, ctx, current)
+                        .map((next, more) => (next, trimmed + more))
                   }
             )
-        case (Right(acc), Right(expr)) =>
+        case Right(expr) =>
           // GH-122: evaluate array-aware so a range-returning call (e.g. OFFSET) flattens into the
           // aggregate exactly like a literal range would; scalars keep their existing behavior.
           // GH-337: carried error ELEMENTS in the evaluated array fail loudly (per the
@@ -376,67 +528,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           ctx
             .evalReferenceArg(expr.asInstanceOf[TExpr[Any]])
             .fold(
-              triageErrorArgument(agg, acc, _),
+              err => valueOnly(triageErrorArgument(agg, acc, err)),
               {
                 // a reference IF/CHOOSE selected, or a range name: folded like a written range
                 case RangeOperand(targetSheet, range) =>
-                  val bounds = computeBounds(List((range, targetSheet)))
-                  foldRawRange(agg, targetSheet, constrainRange(range, bounds), ctx, acc)
-                case ar: ArrayResult =>
-                  ar.values.iterator.flatten.foldLeft[Either[EvalError, A]](Right(acc)) {
-                    case (Left(err), _) => Left(err)
-                    case (Right(current), cellValue) =>
-                      if agg.countsNonEmpty then
-                        cellValue match
-                          case CellValue.Empty => Right(current)
-                          case _ => Right(agg.combine(current, aggregateCountUnit))
-                      else if agg.countsEmpty then
-                        cellValue match
-                          case CellValue.Empty => Right(agg.combine(current, aggregateCountUnit))
-                          case _ => Right(current)
-                      else
-                        ArrayArithmetic.carriedError(cellValue) match
-                          case Some(err) if agg.propagatesErrors =>
-                            Left(propagatedElementError(agg.name, err))
-                          case Some(_) => Right(current) // COUNT: errors are not numbers
-                          case None =>
-                            extractNumericValue(cellValue) match
-                              case Some(n) => Right(agg.combine(current, n))
-                              case None => Right(current)
-                  }
-                case value: BigDecimal =>
-                  // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
-                  // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
-                  Right(
-                    if agg.countsNonEmpty then agg.combine(acc, aggregateCountUnit)
-                    else if agg.countsEmpty then acc
-                    else agg.combine(acc, value)
-                  )
-                case other =>
-                  // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
-                  // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
-                  // numeric-mode error policing is unchanged
-                  val cellValue = ArrayArithmetic.anyToCellValue(other)
-                  if agg.countsNonEmpty then
-                    cellValue match
-                      case CellValue.Empty => Right(acc)
-                      case _ => Right(agg.combine(acc, aggregateCountUnit))
-                  else if agg.countsEmpty then
-                    cellValue match
-                      case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
-                      case _ => Right(acc)
-                  else
-                    ArrayArithmetic.carriedError(cellValue) match
-                      case Some(err) if agg.propagatesErrors =>
-                        Left(propagatedElementError(agg.name, err))
-                      case Some(_) => Right(acc)
-                      case None =>
-                        extractNumericValue(cellValue) match
-                          case Some(n) => Right(agg.combine(acc, n))
-                          case None => directValue(agg, acc, cellValue)
+                  foldReference(agg, targetSheet, range, ctx, acc)
+                case evaluated => valueOnly(foldEvaluatedArg(agg, evaluated, acc))
               }
             )
-      }
 
     // The common workbook-recalc hot shape is one literal raw range. Its finalized immutable
     // result can be shared across formulas in this calculation generation when the target range
@@ -444,7 +543,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     // fold above and are deliberately outside the cache's narrow safety proof.
     args match
       case List(Left(location)) =>
-        Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook) match
+        ctx.resolveRange(location) match
           // GH-630: a slot that resolves to an error VALUE — `COUNT(#REF!)`, `COUNT(name)` with
           // the name bound to `#N/A` — has no range to memoize; it is triaged like any error
           // argument (COUNT 0, COUNTA 1, the rest propagate) and finalized
@@ -455,16 +554,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // bounds may shrink when an earlier formula evaluates to Empty even though the formula
             // lies outside the referenced row/column, so resolve them before keying. Ordinary
             // bounded ranges skip usedRange entirely and use their declared geometry directly.
-            val effectiveRange =
-              if rawRange.isFullColumn || rawRange.isFullRow then
-                constrainRange(rawRange, computeBounds(List((rawRange, targetSheet))))
-              else rawRange
+            val effectiveRange = usedArea(rawRange, targetSheet)
 
             def compute: Either[EvalError, BigDecimal] =
               foldRawRange(agg, targetSheet, effectiveRange, ctx, agg.empty)
                 .flatMap(agg.finalizeWithError)
 
-            ctx.aggregateMemo match
+            // The memo keys the used-area fold only, and the trimmed blanks are added outside it, on
+            // purpose: COUNTBLANK(A:A) and COUNTBLANK(A1:A3) over a used range of exactly A1:A3
+            // share one cached fold (both read A1:A3) and still finalize to different counts, as
+            // the trimmed count depends on the raw range. A whole column the used range misses keys
+            // on CellRange.empty, which the target sheet still scopes.
+            val folded = ctx.aggregateMemo match
               case Some(memo) =>
                 memo.getOrCompute(
                   targetSheet,
@@ -473,7 +574,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   Evaluator.AggregateMemoMode.FunctionCall
                 )(compute)
               case None => compute
-      case _ => foldAllArgs.flatMap(agg.finalizeWithError)
+            folded.map(withBlanksTrimmed(_, blanksTrimmed(agg, rawRange, effectiveRange)))
+      case _ =>
+        foldAllArgs.flatMap((acc, trimmed) =>
+          agg.finalizeWithError(acc).map(withBlanksTrimmed(_, trimmed))
+        )
 
   private def evalCriteriaValues(
     ctx: EvalContext,
@@ -511,7 +616,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ]](Right(List.empty)) {
       case (Left(err), _) => Left(err)
       case (Right(acc), (loc, criterion)) =>
-        Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map { case (sheet, range) =>
+        ctx.resolveRange(loc).map { case (sheet, range) =>
           acc :+ (sheet, range, criterion)
         }
     }
@@ -564,25 +669,24 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     fnName: String
   ): Either[EvalError, Vector[BigDecimal]] =
-    Evaluator.resolveRangeLocation(location, ctx.sheet, ctx.workbook).flatMap {
-      case (targetSheet, range) =>
-        val bounds = computeBounds(List((range, targetSheet)))
-        val constrainedRange = constrainRange(range, bounds)
-        constrainedRange.cells
-          .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
-            case (Left(err), _) => Left(err)
-            case (Right(values), cellRef) =>
-              resolveNumericPolicing(
-                targetSheet,
-                cellRef,
-                ctx,
-                fnName,
-                propagateErrors = true
-              ).map {
-                case Some(n) => values :+ n
-                case None => values
-              }
-          }
+    ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+      val bounds = computeBounds(List((range, targetSheet)))
+      val constrainedRange = constrainRange(range, bounds)
+      constrainedRange.cells
+        .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+          case (Left(err), _) => Left(err)
+          case (Right(values), cellRef) =>
+            resolveNumericPolicing(
+              targetSheet,
+              cellRef,
+              ctx,
+              fnName,
+              propagateErrors = true
+            ).map {
+              case Some(n) => values :+ n
+              case None => values
+            }
+        }
     }
 
   /** LARGE(range, k) — k-th largest value (1-based). */
@@ -719,8 +823,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // GH-394: resolution now also yields the ranges (Name locations have no static range),
         // so the dimension validation moved after it — same Excel semantics, resolved shapes.
         for
-          resolvedCriteria <- Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook)
-          resolvedSum <- Evaluator.resolveRangeLocation(effectiveLocation, ctx.sheet, ctx.workbook)
+          resolvedCriteria <- ctx.resolveRange(rangeLocation)
+          resolvedSum <- ctx.resolveRange(effectiveLocation)
           (criteriaSheet, criteriaRange0) = resolvedCriteria
           (sumSheet, sumRangeAsWritten) = resolvedSum
           // GH-631: Excel sizes sum_range to range from its upper-left cell — SUMIF(A1:A10,">0",C1)
@@ -780,21 +884,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       evalValue(ctx, criteria).flatMap { criteriaValue =>
         val criterion = CriteriaMatcher.parse(criteriaValue)
         // GH-192: Resolve target sheet for cross-sheet support
-        Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook).flatMap {
-          case (criteriaSheet, criteriaRange0) =>
-            // GH-192: Constrain full-column/row ranges to used area for performance
-            val bounds = computeBounds(List((criteriaRange0, criteriaSheet)))
-            val constrainedRange = constrainRange(criteriaRange0, bounds)
-            // GH-192: Use iterator-based folding (no .toList) for memory efficiency
-            constrainedRange.cells
-              .foldLeft[Either[EvalError, Int]](Right(0)) {
-                case (Left(err), _) => Left(err)
-                case (Right(count), ref) =>
-                  evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
-                    if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
-                  }
-              }
-              .map(BigDecimal(_))
+        ctx.resolveRange(rangeLocation).flatMap { case (criteriaSheet, criteriaRange0) =>
+          // GH-192: Constrain full-column/row ranges to used area for performance
+          val bounds = computeBounds(List((criteriaRange0, criteriaSheet)))
+          val constrainedRange = constrainRange(criteriaRange0, bounds)
+          // GH-192: Use iterator-based folding (no .toList) for memory efficiency
+          val trimmed =
+            blankCriteriaCount(cellsTrimmed(criteriaRange0, constrainedRange), List(criterion))
+          constrainedRange.cells
+            .foldLeft[Either[EvalError, Int]](Right(0)) {
+              case (Left(err), _) => Left(err)
+              case (Right(count), ref) =>
+                evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
+                  if CriteriaMatcher.matches(testValue, criterion) then count + 1 else count
+                }
+            }
+            .map(count => BigDecimal(count.toLong + trimmed))
         }
       }
     }
@@ -814,11 +919,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static
           // range), so the dimension validation runs on the resolved shapes.
           for
-            resolvedSum <- Evaluator.resolveRangeLocation(
-              sumRangeLocation,
-              ctx.sheet,
-              ctx.workbook
-            )
+            resolvedSum <- ctx.resolveRange(sumRangeLocation)
             (sumSheet, sumRange0) = resolvedSum
             resolved <- resolveConditions(parsedConditions, ctx)
             _ <- resolved
@@ -906,7 +1007,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       // GH-394: resolve first (Name locations have no static range), then validate dimensions
       // on the resolved shapes
       for
-        resolvedValue <- Evaluator.resolveRangeLocation(valueRangeLocation, ctx.sheet, ctx.workbook)
+        resolvedValue <- ctx.resolveRange(valueRangeLocation)
         (valueSheet, valueRange0) = resolvedValue
         resolved <- resolveConditions(parsedConditions, ctx)
         _ <- resolved
@@ -1040,6 +1141,22 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
                     (sheet, constrainRange(range, bounds), criterion)
                   }
+                  // the ranges share one shape and one bound, so each trimmed position is blank
+                  // in every range: it counts when every criterion matches a blank. Each range's
+                  // own trimmed count is taken; should they ever disagree, no trimmed cell is
+                  // counted. That fallback is defensive and unreachable today: the dimension check
+                  // gives every range the same height and width, so they are all whole columns
+                  // (rows) or none, and the shared bound trims each by the same count (the
+                  // agreeing COUNTIFS tests in WholeColumnBlankTailSpec never reach it)
+                  val trimmedCounts = resolved
+                    .zip(constrainedConditions)
+                    .map { case ((_, range, _), (_, constrained, _)) =>
+                      cellsTrimmed(range, constrained)
+                    }
+                    .distinct
+                  val trimmed = trimmedCounts match
+                    case List(count) => blankCriteriaCount(count, resolved.map(_._3))
+                    case _ => 0L
 
                   // GH-192: Use iterator-based folding with index tracking
                   val criteriaCells =
@@ -1068,7 +1185,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                           if allMatch then count + 1 else count
                         }
                     }
-                    .map(BigDecimal(_))
+                    .map(count => BigDecimal(count.toLong + trimmed))
                 }
         }
     }
@@ -1088,8 +1205,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         // GH-394: resolution now also yields the ranges (Name locations have no static range),
         // so the dimension validation moved after it — same Excel semantics, resolved shapes.
         for
-          resolvedCriteria <- Evaluator.resolveRangeLocation(rangeLocation, ctx.sheet, ctx.workbook)
-          resolvedAvg <- Evaluator.resolveRangeLocation(effectiveLocation, ctx.sheet, ctx.workbook)
+          resolvedCriteria <- ctx.resolveRange(rangeLocation)
+          resolvedAvg <- ctx.resolveRange(effectiveLocation)
           (criteriaSheet, criteriaRange0) = resolvedCriteria
           (avgSheet, avgRangeAsWritten) = resolvedAvg
           // GH-631: Excel sizes average_range to range from its upper-left cell, like SUMIF
@@ -1153,11 +1270,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static
           // range), so the dimension validation runs on the resolved shapes.
           for
-            resolvedAvg <- Evaluator.resolveRangeLocation(
-              avgRangeLocation,
-              ctx.sheet,
-              ctx.workbook
-            )
+            resolvedAvg <- ctx.resolveRange(avgRangeLocation)
             (avgSheet, avgRange0) = resolvedAvg
             resolved <- resolveConditions(parsedConditions, ctx)
             _ <- resolved
@@ -1270,6 +1383,71 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         )
       else Right(matrix(row)(col))
 
+  /**
+   * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
+   * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
+   * would produce a wrong sum for the issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
+   */
+  private def sumProductArray(value: Any): Either[EvalError, ResolvedArray] =
+    value match
+      case ar: ArrayResult =>
+        ar.values.flatten.collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
+          case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None =>
+            Right(
+              MatrixArray(
+                (0 until ar.rows).map { row =>
+                  (0 until ar.cols).map(col => coerceToNumeric(ar.values(row)(col))).toVector
+                }.toVector
+              )
+            )
+      case bd: BigDecimal => Right(MatrixArray(Vector(Vector(bd))))
+      case b: Boolean =>
+        Right(MatrixArray(Vector(Vector(if b then BigDecimal(1) else BigDecimal(0)))))
+      case cv: CellValue =>
+        ArrayArithmetic.carriedError(cv) match
+          case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None => Right(MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
+      case other =>
+        Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
+
+  /**
+   * GH-711: whether a defined name, referenced from the formula's sheet, reaches a call that draws
+   * a random number ([[SumProductTail.draws]]); a chain too deep to resolve counts as one. Built on
+   * first use, so a SUMPRODUCT without a name reference never walks the name table.
+   */
+  private def drawsViaName(ctx: EvalContext): (Option[SheetName], String) => Boolean =
+    def build(wb: com.tjclp.xl.workbooks.Workbook) =
+      WorkbookAudit.namesReaching(wb, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
+    // a recalculation generation builds the verdicts once for every formula; a lone evaluation
+    // builds them for its own use
+    lazy val reach =
+      ctx.workbook.map(wb => ctx.aggregateMemo.fold(build(wb))(_.namesReachingDraw(wb, build)))
+    (qualifier, name) =>
+      reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent)
+
+  /** The sum over a `rows` × `cols` shape of the arguments' element-wise products. */
+  private def sumOfProducts(
+    arrays: List[ResolvedArray],
+    rows: Int,
+    cols: Int,
+    ctx: EvalContext
+  ): Either[EvalError, BigDecimal] =
+    (0 until rows).foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+      case (Left(err), _) => Left(err)
+      case (Right(acc), row) =>
+        (0 until cols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
+          case (Left(err), _) => Left(err)
+          case (Right(rowAcc), col) =>
+            arrays
+              .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(1))) {
+                case (Left(err), _) => Left(err)
+                case (Right(product), arr) => arr.valueAt(row, col, ctx).map(v => product * v)
+              }
+              .map(product => rowAcc + product)
+        }
+    }
+
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -1289,8 +1467,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               case (Left(err), _) => Left(err)
               case (Right(acc), Left(loc)) =>
                 // Range location argument
-                Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                  case (sheet, range) => acc :+ (range, sheet)
+                ctx.resolveRange(loc).map { case (sheet, range) =>
+                  acc :+ (range, sheet)
                 }
               case (Right(acc), Right(expr)) =>
                 // Expression argument - collect ranges from AST
@@ -1334,6 +1512,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               if rangesWithSheets.nonEmpty then computeBounds(rangesWithSheets)
               else (None, None)
 
+            // A computed reference takes the shared extent only for axes represented in the
+            // static inputs. No discovered whole axis is different from an empty used extent:
+            // INDEX(namedColumn,0) still materializes by its own reference rules. The extent is
+            // sheet-agnostic on purpose: computeBounds unions the used ranges of every sheet the
+            // operands name, and every operand takes that one extent, so a computed reference on
+            // any sheet (ROW(INDEX(Other!A:A,0))) lines up with A:A here; its sheet is not needed.
+            val boundsColumns = rangesWithSheets.exists(_._1.isFullColumn)
+            val boundsRows = rangesWithSheets.exists(_._1.isFullRow)
+            def constrainComputedRange(range: CellRange): CellRange =
+              if (range.isFullColumn && boundsColumns) || (range.isFullRow && boundsRows) then
+                constrainRange(range, bounds)
+              else range
+
             // Helper to constrain ranges in expressions
             def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
               TExpr.transformRanges(
@@ -1349,46 +1540,37 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case (Left(err), _) => Left(err)
                 case (Right(acc), Left(loc)) =>
                   // Range location - resolve to sheet and constrain
-                  Evaluator.resolveRangeLocation(loc, ctx.sheet, ctx.workbook).map {
-                    case (sheet, range) => acc :+ RangeArray(sheet, constrainRange(range, bounds))
+                  ctx.resolveRange(loc).map { case (sheet, range) =>
+                    acc :+ RangeArray(sheet, constrainRange(range, bounds))
                   }
                 case (Right(acc), Right(expr)) =>
                   // GH-197: Expression - constrain ranges, then evaluate with array support
                   val boundedExpr = constrainExprRanges(expr)
-                  ctx.evalArrayExpr(boundedExpr).flatMap {
-                    case ar: ArrayResult =>
-                      // Convert ArrayResult to numeric matrix with boolean coercion.
-                      // GH-337: a carried error element fails loudly naming the code — the
-                      // pre-carriage coerceToNumeric would silently turn it into 0 and produce
-                      // a wrong sum for the exact issue-cited =SUMPRODUCT((A1:A3<5)*1) case.
-                      val matrix = ar.values.flatten
-                        .collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
-                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
-                        case None =>
-                          Right(
-                            (0 until ar.rows).map { row =>
-                              (0 until ar.cols).map { col =>
-                                coerceToNumeric(ar.values(row)(col))
-                              }.toVector
-                            }.toVector
-                          )
-                      matrix.map(m => acc :+ MatrixArray(m))
-                    case bd: BigDecimal =>
-                      // Scalar treated as 1x1 matrix
-                      Right(acc :+ MatrixArray(Vector(Vector(bd))))
-                    case b: Boolean =>
-                      // Boolean coerced to 1/0
-                      val n = if b then BigDecimal(1) else BigDecimal(0)
-                      Right(acc :+ MatrixArray(Vector(Vector(n))))
-                    case cv: CellValue =>
-                      // CellValue coerced to numeric; GH-337: carried errors fail loudly
-                      ArrayArithmetic.carriedError(cv) match
-                        case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
-                        case None => Right(acc :+ MatrixArray(Vector(Vector(coerceToNumeric(cv)))))
-                    case other =>
-                      Left(EvalError.TypeMismatch("SUMPRODUCT", "array or number", other.toString))
+                  ctx.evalBoundedArrayExpr(boundedExpr, constrainComputedRange).flatMap { value =>
+                    sumProductArray(value).map(acc :+ _)
                   }
               }
+
+            // GH-711/GH-192: the rows (or columns) the shared bound trimmed off are blank in every
+            // argument, so each adds one same product: the arguments read over one blank row.
+            // Excel sums every one (SUMPRODUCT(--(A:A="")) counts each blank row, an IF condition
+            // over A:A tests each), so the trimmed sum gains count × that product. Only when every
+            // argument spans the trimmed axis and reads one row there at the trimmed width; any
+            // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
+            def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
+              SumProductTail.sum[ResolvedArray](
+                rangesWithSheets.map(_._1),
+                bounds,
+                args,
+                rows,
+                cols,
+                ctx.resolveRange(_),
+                drawsViaName(ctx),
+                line => ctx.evalArrayExpr(line).flatMap(sumProductArray),
+                RangeArray(_, _),
+                arr => (arr.rows, arr.cols),
+                sumOfProducts(_, _, _, ctx)
+              )
 
             resolvedResult.flatMap { resolved =>
               resolved match
@@ -1413,25 +1595,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       // Compute final dimensions
                       val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
                       val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
-
-                      // Element-wise multiplication and sum
-                      (0 until finalRows).foldLeft[Either[EvalError, BigDecimal]](
-                        Right(BigDecimal(0))
-                      ) {
-                        case (Left(err), _) => Left(err)
-                        case (Right(acc), row) =>
-                          (0 until finalCols).foldLeft[Either[EvalError, BigDecimal]](Right(acc)) {
-                            case (Left(err), _) => Left(err)
-                            case (Right(rowAcc), col) =>
-                              // Get values from all arrays at this position
-                              resolved
-                                .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(1))) {
-                                  case (Left(err), _) => Left(err)
-                                  case (Right(product), arr) =>
-                                    arr.valueAt(row, col, ctx).map(v => product * v)
-                                }
-                                .map(product => rowAcc + product)
-                          }
+                      sumOfProducts(resolved, finalRows, finalCols, ctx).flatMap { sum =>
+                        blankTailSum(finalRows, finalCols).map(tail => sum + tail)
                       }
             }
           }

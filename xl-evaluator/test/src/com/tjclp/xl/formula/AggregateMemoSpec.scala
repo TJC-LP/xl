@@ -173,9 +173,31 @@ class AggregateMemoSpec extends FunSuite:
 
     assert(result.isClean, result.errors.map(_.render).mkString("; "))
     // Z1000's IFERROR falls back to the blank Empty!A1, which a formula cell shows as 0 (it is
-    // never blank), so Data's used bounds keep row 1000 and COUNTBLANK(Data!A:A) counts A1000
+    // never blank), so Data's used bounds keep row 1000. COUNTBLANK(Data!A:A) counts every cell of
+    // column A, inside those bounds or past them, as Excel does
     assertEquals(result.evaluated(dataName)(ref"Z1000"), num(0))
-    assertEquals(result.evaluated(outputName)(ref"A1"), num(1))
+    assertEquals(result.evaluated(outputName)(ref"A1"), num(1048576))
+
+  test("GH-711: a whole column and its used range share one memo entry, not one count"):
+    // Data's used range is exactly A1:A3 (A2 blank), so COUNTBLANK(Data!A:A) and
+    // COUNTBLANK(Data!A1:A3) fold the same cells under the same key; the blanks trimmed off the
+    // whole column are added outside the memo, so the two still finalize differently
+    val data = Sheet(dataName).put(ref"A1", num(1)).put(ref"A3", num(3))
+    val output = Sheet(outputName)
+      .put(ref"A1", formula("=COUNTBLANK(Data!A:A)"))
+      .put(ref"A2", formula("=COUNTBLANK(Data!A1:A3)"))
+      .put(ref"A3", formula("=COUNTBLANK(Data!A:A)"))
+    val memo = new Evaluator.AggregateMemo
+    val evaluator = Evaluator.recalculationInstance(Rng.system, memo)
+    val wb = Workbook(data, output)
+    val values = List(ref"A1", ref"A2", ref"A3").map(at => evaluate(output, at, wb, evaluator))
+    assertEquals(values, List(Right(num(1048574)), Right(num(1)), Right(num(1048574))))
+    assertEquals(memo.stats.fills, 1L, memo.stats.toString)
+    assertEquals(memo.stats.hits, 2L, memo.stats.toString)
+    val recalculated = Workbook(data, output).recalculate()
+    assert(recalculated.isClean, recalculated.errors.map(_.render).mkString("; "))
+    assertEquals(recalculated.evaluated(outputName)(ref"A1"), num(1048574))
+    assertEquals(recalculated.evaluated(outputName)(ref"A2"), num(1))
 
   test("uncached formula ranges bypass; cached formula ranges may reuse"):
     val inputRef = ARef.from0(0, 0)

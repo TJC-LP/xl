@@ -376,7 +376,7 @@ object FormulaPrinter:
   /**
    * Format RangeLocation (local, cross-sheet, or external-workbook) to A1 notation.
    */
-  private[printer] def formatLocation(location: TExpr.RangeLocation): String =
+  private[formula] def formatLocation(location: TExpr.RangeLocation): String =
     location match
       case TExpr.RangeLocation.Local(range, form) => formatRange(range, form)
       case TExpr.RangeLocation.CrossSheet(sheet, range, form) =>
@@ -391,6 +391,8 @@ object FormulaPrinter:
         scope match
           case Some(sheet) => s"${formatSheetName(sheet)}!$name"
           case None => name
+      // GH-710: a LET name in a range slot prints as its identifier
+      case TExpr.RangeLocation.Binding(name) => name
       // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
       case TExpr.RangeLocation.Error(error, qualifier) => qualifiedError(error, qualifier)
 

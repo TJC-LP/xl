@@ -26,6 +26,11 @@ import scala.math.BigDecimal
  *   2. Ring laws: Add/Mul form commutative semiring over BigDecimal
  *   3. Short-circuit: And/Or respect left-to-right semantics
  *   4. Round-trip: parse(print(expr)) == Right(expr)
+ *
+ * The tree walks are written per node, with no generic child traversal. A new case with children
+ * must be added to each walk that falls through to a `case _` default, or it is silently skipped:
+ * `TExprAnalysis` (containsExternalRef, collectRanges, transformRanges, the date/time scans) and
+ * `Evaluator.inspectsReference`.
  */
 enum TExpr[A] derives CanEqual:
   /**

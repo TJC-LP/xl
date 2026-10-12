@@ -35,16 +35,22 @@ object Format:
     else s"Saved: $outputPath"
 
   /**
-   * Format an eval success message.
+   * Format an eval success message. `at` is the cell `eval --at` evaluated the formula as; a
+   * positionless eval prints no `At:` line.
    */
-  def evalSuccess(formula: String, result: CellValue, overrides: List[String]): String =
+  def evalSuccess(
+    formula: String,
+    at: Option[String],
+    result: CellValue,
+    overrides: List[String]
+  ): String =
     val resultStr = formatValue(result)
     val typeStr = valueType(result)
+    val atStr = at.fold("")(cell => s"\nAt: $cell")
     val overridesStr =
       if overrides.isEmpty then ""
       else s"\nWith: ${overrides.mkString(", ")}"
-    s"""Formula: $formula
-       |Result: $resultStr ($typeStr)$overridesStr""".stripMargin
+    s"Formula: $formula$atStr\nResult: $resultStr ($typeStr)$overridesStr"
 
   /**
    * Format an array formula evaluation result.

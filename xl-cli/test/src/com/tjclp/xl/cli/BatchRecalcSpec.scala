@@ -111,7 +111,12 @@ class BatchRecalcSpec extends FunSuite:
     val result = WriteCommands.recalc(wb, out, config).unsafeRunSync()
 
     // Error values are data conditions: the run is clean, the summary reports the count
-    assert(result.contains("Recalculated 1 formula (1 error value)"), s"summary was: $result")
+    assert(
+      result.contains(
+        "Recalculated 1 formula (1 error value: Data!C1 #DIV/0! — Division by zero: 1 / 0)"
+      ),
+      s"summary was: $result"
+    )
 
     // The cached #DIV/0! survives the write/read round-trip (t="e" cell)
     cachedFormulaValue(readBack(out), 2, 0) match
@@ -128,7 +133,7 @@ class BatchRecalcSpec extends FunSuite:
     )
     val out = tempXlsx()
     val result = WriteCommands.recalc(wb, out, config).unsafeRunSync()
-    assert(result.contains("(1 error value)"), s"summary was: $result")
+    assert(result.contains("(1 error value: Data!B1 #DIV/0!"), s"summary was: $result")
     assert(result.contains("1 error ("), s"summary was: $result")
     Files.deleteIfExists(out)
   }
@@ -2390,8 +2395,14 @@ class BatchRecalcSpec extends FunSuite:
       val summary = WriteCommands
         .batch(wb, wb.sheets.headOption, ops.toString, out, config, warn = w => IO(warnings += w))
         .unsafeRunSync()
-      assert(summary.contains("Recalculated 3 formulas (1 error value)"), s"summary: $summary")
-      assert(!summary.contains("not found"), s"the miss is a value, not a failure: $summary")
+      assert(
+        summary.contains(
+          "Recalculated 3 formulas (1 error value: Data!B20 #N/A — VLOOKUP exact match not found: " +
+            "VLOOKUP(2030, A3:B7, 2, FALSE))"
+        ),
+        s"summary: $summary"
+      )
+      assert(!summary.contains(" error ("), s"the miss is a value, not a failure: $summary")
       assertEquals(warnings.toList, Nil, "no RECALC_ERRORS: every formula computed a value")
 
       val written = readBack(out)

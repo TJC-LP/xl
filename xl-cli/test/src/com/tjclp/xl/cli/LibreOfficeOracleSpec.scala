@@ -158,7 +158,10 @@ class LibreOfficeOracleSpec extends FunSuite:
           .put(ref"B20", CellValue.Formula("IFNA(MATCH(2030,A3:A7,0),0)", None))
       )
       val summary = WriteCommands.recalc(wb, book, config).unsafeRunSync()
-      assert(summary.contains("(1 error value)"), s"premise: the miss is one error value: $summary")
+      assert(
+        summary.contains("(1 error value: Sheet1!B18 #N/A"),
+        s"premise: the miss is one error value: $summary"
+      )
 
       val rows = libreOfficeCsv(workDir, book)("lookup-miss").split("\n").toVector
       def cellB(row: Int): String = rows

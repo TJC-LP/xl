@@ -108,7 +108,13 @@ class ArrayTypingLawsSpec extends FunSuite:
     "=UPPER(B2:B4&\"\")",
     "=LEN(TRANSPOSE(A1:D1)&\"\")",
     "=NOT(B2:B4>0)",
-    "=EDATE(DATE(2020,1,31),B2:B4*1)"
+    "=EDATE(DATE(2020,1,31),B2:B4*1)",
+    // GH-713: computed ranges and XLOOKUP's reference in typed slots
+    "=ABS(B2:INDEX(B2:B4,3)+0)",
+    "=ROUND(INDEX(C2:C4,2):C4/3,1)",
+    "=SUM(ABS(XLOOKUP(B2:B4,B2:B4,C2:D4)+0))",
+    "=LEN(XLOOKUP(B2,B2:B4,C2:D4)&\"\")",
+    "=DATE(2020,XLOOKUP(B3,B2:B4,C2:C4):C4+0,1)"
   )
 
   test("an array-valued expression in a typed argument never reaches a function body mistyped") {
@@ -156,14 +162,14 @@ class ArrayTypingLawsSpec extends FunSuite:
   }
 
   test("the typed collapse coerces by the node's static kind, so a text element is a clean Left") {
-    // A1:A2 top-left is "Label": a numeric slot that does not lift refuses it as a type
-    // mismatch, and so does a plain cell's ABS; a lifting ABS answers #VALUE! per element
+    // A1:A2 top-left is "Label": a numeric slot that does not lift refuses it as #VALUE! (#709),
+    // and so does a plain cell's ABS; a lifting ABS answers #VALUE! per element
     arrayEval("=SEQUENCE(A1:A2&\"\")") match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     scalarEval("=ABS(A1:A2&\"\")") match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     assertEquals(
       arrayEval("=ABS(A1:A2&\"\")"),
       Right(column(CellValue.Error(CellError.Value), CellValue.Error(CellError.Value)))
@@ -261,8 +267,8 @@ class ArrayTypingLawsSpec extends FunSuite:
     assertEquals(Evaluator.instance.eval(serial, sheet), Right(BigDecimal(5)))
     val textual = TExpr.DateToSerial(TExpr.Lit("abc").asInstanceOf[TExpr[LocalDate]])
     Evaluator.instance.eval(textual, sheet) match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
   }
 
   // ===== Programmatic ASTs: literal arms and TExpr.cond =====
@@ -288,8 +294,8 @@ class ArrayTypingLawsSpec extends FunSuite:
     val mistyped = TExpr.Lit("abc").asInstanceOf[TExpr[BigDecimal]]
     val expr = TExpr.cond(TExpr.Lit(false), TExpr.Lit(BigDecimal(1)), mistyped)
     Evaluator.instance.eval(expr, sheet) match
-      case Left(EvalError.TypeMismatch(_, _, _)) => ()
-      case other => fail(s"expected a TypeMismatch, got $other")
+      case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+      case other => fail(s"expected #VALUE!, got $other")
     assertEquals(
       Evaluator.instance
         .eval(TExpr.cond(TExpr.Lit(true), TExpr.Lit(BigDecimal(1)), mistyped), sheet),

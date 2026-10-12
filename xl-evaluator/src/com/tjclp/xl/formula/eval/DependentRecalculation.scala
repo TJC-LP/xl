@@ -99,45 +99,27 @@ object DependentRecalculation:
           val memo = new Evaluator.AggregateMemo
           if Evaluator.mayReadSpills(wb) then memo.trackSpills()
           val evaluator = Evaluator.recalculationInstance(Rng.system, memo)
-          val initial: WorkbookEvaluator.PassState =
-            (initialSheets, Map.empty, cycleErrors)
-          val (_, values, errors) = ordered.foldLeft(initial) {
-            case (state @ (sheets, evaluated, failures), q) =>
+          val initial = WorkbookEvaluator.PassState(initialSheets, Map.empty, cycleErrors)
+          val WorkbookEvaluator.PassState(_, values, errors, reasons) =
+            ordered.foldLeft(initial) { (state, q) =>
               positions.get(q.sheet) match
                 case None => state
                 case Some(position) =>
                   val result =
                     EvalDefect.xlGuard(expression(q), Some(q.ref)) {
-                      SheetEvaluator.evaluateCellWithEvaluator(
-                        sheets(position),
+                      SheetEvaluator.evaluateCellOutcome(
+                        state.sheets(position),
                         q.ref,
                         evaluator,
                         calculationClock,
-                        Some(wb.copy(sheets = sheets))
+                        Some(wb.copy(sheets = state.sheets))
                       )
                     }
                   result match
-                    case Right(value) =>
-                      (
-                        sheets.updated(
-                          position,
-                          SheetEvaluator.threadComputed(sheets(position), q.ref, value)
-                        ),
-                        evaluated.updated(
-                          q.sheet,
-                          evaluated.getOrElse(q.sheet, Map.empty) + (q.ref -> value)
-                        ),
-                        failures
-                      )
-                    case Left(error) =>
-                      val stripped = SheetEvaluator.stripFormulaCaches(sheets(position), Set(q.ref))
-                      (
-                        sheets.updated(position, stripped),
-                        evaluated,
-                        failures :+ CellEvalError(q.sheet, q.ref, error)
-                      )
-          }
-          RecalcResult.cacheResults(wb, values, errors, dependents)
+                    case Right(outcome) => state.computed(position, q, outcome)
+                    case Left(error) => state.failed(position, q, error)
+            }
+          RecalcResult.cacheResults(wb, values, errors, dependents, reasons = reasons)
 
   extension (sheet: Sheet)
     /**

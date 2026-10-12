@@ -6,13 +6,14 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
 }
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import java.time.LocalDate
 
@@ -282,6 +283,95 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
+   * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
+   * reference's own shape — rows × columns equal ROWS × COLUMNS, blanks included, so array
+   * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
+   * the sheet's last row or column (`A:A`, `B5:B1048576`, `2:2`): it stops where the used range
+   * does (one cell when they do not meet), so `INDEX(A:A,0)` or `XLOOKUP(k,ids,B:B)` costs the
+   * data, not a million blanks. SUMPRODUCT supplies a shared extent for whole axes, including
+   * leading blanks and empty ranges; apply it after reference resolution to keep INDEX's origin.
+   */
+  protected def boundedReferenceValues(
+    ref: RangeOperand,
+    ctx: EvalContext
+  ): Either[EvalError, ArrayResult] =
+    val RangeOperand(targetSheet, original) = ref
+    val reference = ctx.boundArrayRange(original)
+    // SUMPRODUCT's shared extent can leave no cells: a whole axis bounded by static ranges that
+    // hold none is `CellRange.empty` (start past end, a non-positive height or width). Decided
+    // first, before any corner is computed from it.
+    if reference.height <= 0 || reference.width <= 0 then Right(ArrayResult.empty)
+    else
+      // `usedRange` scans every populated cell: read it only for an axis that reaches the sheet's
+      // edge, never for a bounded reference (as SUMPRODUCT's computeBounds keeps it off that path)
+      val used = if readsUsedRange(reference) then targetSheet.usedRange else None
+      def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: => Option[Int]): Int =
+        if hi < sheetLast then hi
+        else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
+      val rowEnd = end(
+        reference.rowStart.index0,
+        reference.rowEnd.index0,
+        Row.MaxIndex0,
+        used.map(_.rowEnd.index0)
+      )
+      val colEnd = end(
+        reference.colStart.index0,
+        reference.colEnd.index0,
+        Column.MaxIndex0,
+        used.map(_.colEnd.index0)
+      )
+      val selected = CellRange(reference.start, ARef.from0(colEnd, rowEnd))
+      referenceMatrix(selected, targetSheet, ctx).map(ArrayResult(_))
+
+  /**
+   * Whether [[boundedReferenceValues]] reads the sheet's used range for `reference`: only when an
+   * axis runs to the sheet's last row or column, the one place its result depends on it. A bounded
+   * reference never pays for the scan (b65bde0: 10k bounded XLOOKUPs on a 210k-cell sheet went from
+   * 93.5 s to 0.27 s); `ComputedReferenceSpec` pins this predicate.
+   */
+  private[formula] def readsUsedRange(reference: CellRange): Boolean =
+    reference.rowEnd.index0 == Row.MaxIndex0 || reference.colEnd.index0 == Column.MaxIndex0
+
+  /**
+   * A reference's values at its full shape. A range with no more positions than the sheet has cells
+   * is read position by position, as always (a bounded `$A$2:$A$50` never scans the sheet). A
+   * larger one — the generous `INDEX($A$1:$A$100000,0)` over a few hundred rows — is read from the
+   * other side: one pass over the sheet's cells finds the box of populated cells inside it, only
+   * that box is read, and every other position is the shared blank row or cell, which reads exactly
+   * as an absent cell does (`CellValue.Empty`). Either way the cost is the smaller of the range and
+   * the sheet, never more than the position-by-position read.
+   */
+  private def referenceMatrix(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): Either[EvalError, Vector[Vector[CellValue]]] =
+    val area = range.height.toLong * range.width.toLong
+    if area <= targetSheet.cells.size.toLong then extractRangeAsMatrixEval(range, targetSheet, ctx)
+    else
+      // (row min, row max, col min, col max) of the populated cells inside the range
+      val bounds = targetSheet.cells.keysIterator
+        .filter(at => range.contains(at))
+        .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, at) =>
+          val (r, c) = (at.row.index0, at.col.index0)
+          Some(acc.fold((r, r, c, c)) { case (r0, r1, c0, c1) =>
+            (math.min(r0, r), math.max(r1, r), math.min(c0, c), math.max(c1, c))
+          })
+        }
+      val blankRow = Vector.fill(range.width)(CellValue.Empty: CellValue)
+      bounds match
+        case None => Right(Vector.fill(range.height)(blankRow))
+        case Some((rowStart, rowEnd, colStart, colEnd)) =>
+          val box = CellRange(ARef.from0(colStart, rowStart), ARef.from0(colEnd, rowEnd))
+          extractRangeAsMatrixEval(box, targetSheet, ctx).map { boxRows =>
+            val left = Vector.fill(colStart - range.colStart.index0)(CellValue.Empty: CellValue)
+            val right = Vector.fill(range.colEnd.index0 - colEnd)(CellValue.Empty: CellValue)
+            Vector.fill(rowStart - range.rowStart.index0)(blankRow) ++
+              boxRows.map(row => left ++ row ++ right) ++
+              Vector.fill(range.rowEnd.index0 - rowEnd)(blankRow)
+          }
+
+  /**
    * A reference-returning function's value from what its [[FunctionSpec.reference]] computed: the
    * value it computed instead of a reference (a `#REF!`) as is, a reference by [[referenceResult]]
    * with `whole` materializing it.
@@ -303,6 +393,19 @@ trait FunctionSpecsBase:
       case RangeOperand(target, range) =>
         extractRangeAsMatrixEval(range, target, ctx).map(ArrayResult(_))
       case other => Right(other)
+
+  /**
+   * A whole column or row bounded to the sheet's used range (None when the two do not meet); any
+   * other range as is. Cells outside the used range are blank either way. The one used-area bound
+   * for a reference read on its own: AND and OR, the aggregates (`FunctionSpecsAggregate.usedArea`,
+   * where COUNTBLANK counts the dropped cells back) and a materialized reference all read it.
+   */
+  protected def boundedToUsed(
+    range: CellRange,
+    target: com.tjclp.xl.sheets.Sheet
+  ): Option[CellRange] =
+    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+    else Some(range)
 
   /** A range reference, seen through the coercion a typed slot wraps it in. */
   protected def bareRange(expr: TExpr[?]): Option[TExpr[?]] = expr match
@@ -341,7 +444,7 @@ trait FunctionSpecsBase:
       ctx.workbook,
       ctx.depth,
       ctx.rng,
-      ctx.memo.getOrElse(new Evaluator.EvalMemo),
+      ctx.passMemo,
       ctx.workbookPath,
       ctx.aggregateMemo
     )
@@ -354,28 +457,220 @@ trait FunctionSpecsBase:
     ArrayArithmetic.rangeToArrayEval(range, rangeCellReader(targetSheet, ctx)).map(_.values)
 
   /**
-   * A lookup range's values (rows of cells), cut off where the sheet's used range ends: the cells
-   * past it are blank, which no lookup mode matches, so `LOOKUP(x,A:A,B:B)` costs the data rather
-   * than a million blanks. The range's start is kept, so positions within the result are the
-   * range's own.
+   * The part of a lookup range a search walks. A full column or row (`A:A`, `2:2`) is cut off where
+   * the sheet's used range ends: the cells past it are blank, which no lookup mode matches, so
+   * `LOOKUP(x,A:A,B:B)` costs the data rather than a million blanks (`None` when the two do not
+   * meet). A bounded range is itself: `Sheet.usedRange` scans every populated cell, so clipping a
+   * bounded range would cost the whole sheet on every call — and on every element of a lifted
+   * lookup value — where walking its declared cells costs the range; the rule
+   * `FunctionSpecsAggregate.computeBounds` and `FunctionSpecsArray.boundedToUsed` follow. The
+   * range's start is kept, so positions within the result are the range's own.
+   */
+  protected def lookupRangeExtent(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet
+  ): Option[CellRange] =
+    if range.isFullColumn || range.isFullRow then
+      targetSheet.usedRange.flatMap { used =>
+        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
+        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
+        if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then None
+        else Some(CellRange(range.start, ARef.from0(colEnd, rowEnd)))
+      }
+    else Some(range)
+
+  /**
+   * A lookup range's values (rows of cells) over its [[lookupRangeExtent]]: a full column or row
+   * materialised up to the sheet's used range, a bounded range in full. Each key reads as
+   * [[LookupLine]] reads it: a key that fails to evaluate is its error value, a non-match.
    */
   protected def lookupRangeValues(
     range: CellRange,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    targetSheet.usedRange match
+    lookupRangeExtent(range, targetSheet) match
       case None => Right(Vector.empty)
-      case Some(used) =>
-        val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
-        val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
-        if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then Right(Vector.empty)
+      case Some(extent) =>
+        // each key as a lookup reads it (LookupLine.key, GH-715): a failing key is its error value
+        val keys = (extent.width.toLong * extent.height).toInt
+        LookupLine(extent, keys, targetSheet, rangeCellReader(targetSheet, ctx)).storedKeys
+          .map(_.grouped(extent.width).toVector)
+
+  /**
+   * #692: the first position of a lookup range whose value satisfies `matches`, reading one key at
+   * a time through [[LookupLine]] (GH-715) — an uncached formula key is computed when the search
+   * reaches it and never past the hit, so an exact XLOOKUP/XMATCH/MATCH over a 50k-row column whose
+   * key sits near the top costs the cells up to the hit, not the column. A key that fails to
+   * evaluate is a non-matching key, as Excel reads an error in the lookup array. Positions are the
+   * range's own row-major 0-based positions; a row or column that runs to the sheet's edge stops at
+   * the used range ([[lookupLine]]), forward or — `descending` — from its last cell back.
+   */
+  protected def findLookupPosition(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    descending: Boolean
+  )(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
+    lookupLine(range, targetSheet, ctx).find(forward = !descending)(matches)
+
+  /**
+   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's
+   * direction, through [[findLookupPosition]]: the first key in search order that equals the lookup
+   * value in the lookup plane, or matches the wildcard criterion. search_mode 2 / -2 (the binary
+   * searches) are answered by the same walk in their direction, which agrees on the sorted data
+   * they require (GH-55).
+   */
+  protected def exactLookupPosition(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext,
+    lookup: ExprValue,
+    wildcard: Option[CriteriaMatcher.Wildcard],
+    searchMode: Int
+  ): Either[EvalError, Option[Int]] =
+    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0) { cv =>
+      matchesLookupExact(cv, lookup) || wildcard.exists(CriteriaMatcher.matches(cv, _))
+    }
+
+  /**
+   * The wildcard criterion a text lookup value spells (`*`, `?`, `~` escapes), for match_mode 2.
+   */
+  protected def wildcardCriterion(lookup: ExprValue): Option[CriteriaMatcher.Wildcard] =
+    lookup match
+      case ExprValue.Text(text) =>
+        CriteriaMatcher.parse(ExprValue.Text(text)) match
+          case c: CriteriaMatcher.Wildcard => Some(c)
+          case _ => None
+      case _ => None
+
+  /**
+   * A lookup's read of a key cell: a failure to evaluate it is the Excel error it carries, or
+   * `#VALUE!` for any other failure, so a failing key is a non-match and never fails the lookup. A
+   * `CircularRef` stays a failure: it is a positioned evaluation's guard reporting a read of its
+   * placement (see [[LookupLine]]). The result cell is narrower ([[lookupResultValue]]).
+   */
+  protected def lookupCellValue(read: Either[EvalError, CellValue]): Either[EvalError, CellValue] =
+    read match
+      case Left(cycle: EvalError.CircularRef) => Left(cycle)
+      case Left(other) =>
+        Right(CellValue.Error(EvalError.toCellError(other).getOrElse(CellError.Value)))
+      case value => value
+
+  /**
+   * GH-715: the value VLOOKUP and HLOOKUP return from their result cell, read as a reference reads
+   * it. An Excel error the cell computes is that error (`=1/0` there is `#DIV/0!`). A result cell
+   * in a cycle (no placement guard: [[Evaluator.isCycleFailure]]) is `#VALUE!`, as a key in a cycle
+   * is a non-match. Every other failure propagates, the placement guard's `CircularRef` included: a
+   * failure with no Excel error of its own (an unknown function, an internal failure) is never
+   * laundered into a spreadsheet `#VALUE!`, exactly as a plain reference to the cell would fail.
+   */
+  protected def lookupResultValue(
+    read: Either[EvalError, CellValue]
+  ): Either[EvalError, CellValue] =
+    read match
+      case Left(error) =>
+        EvalError.toErrorValue(error) match
+          case Some(code) => Right(CellValue.Error(code))
+          case None if Evaluator.isCycleFailure(error) => Right(CellValue.Error(CellError.Value))
+          case None => Left(error)
+      case value => value
+
+  /**
+   * The keys MATCH, VLOOKUP/HLOOKUP and XLOOKUP search: the cells of a range in row-major order,
+   * position `i` the `i`-th. Each key is read lazily, in search order, the way a reference reads
+   * its cell, so an uncached formula evaluates (GH-715). A key whose evaluation fails is a
+   * non-matching key (its Excel error, or `#VALUE!` for any other failure), so a broken cell after
+   * the match changes nothing. That includes a key in a cycle: evaluating it trips the recursion
+   * guard, an `EvalFailed`, and the lookup reads past it, much as Excel computes the lookup over
+   * the cycle's value. A `CircularRef` propagates instead. Reading a cell raises one only from a
+   * positioned evaluation's placement guard (`xl eval --at`), which reports the read of the
+   * placement; no lookup may answer around that. Every other `CircularRef` comes from the
+   * dependency graph, before any cell is read.
+   *
+   * A cell holding a constant or a cached formula is read directly; only an uncached formula goes
+   * through the evaluating reader.
+   *
+   * Positions from `stored` on lie past the sheet's used range ([[lookupLine]]): blank, never read,
+   * and found only when a blank key matches.
+   */
+  protected final class LookupLine(
+    range: CellRange,
+    stored: Int,
+    sheet: com.tjclp.xl.sheets.Sheet,
+    read: ARef => Either[EvalError, CellValue]
+  ):
+    val size: Int = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+
+    /** The cell at position `i`. */
+    def at(i: Int): ARef =
+      ARef.from0(range.colStart.index0 + i % range.width, range.rowStart.index0 + i / range.width)
+
+    def key(i: Int): Either[EvalError, CellValue] =
+      if i >= stored then Right(CellValue.Empty)
+      else
+        val ref = at(i)
+        sheet(ref).value match
+          case CellValue.Formula(_, None, _) =>
+            lookupCellValue(read(ref))
+          case CellValue.Formula(_, Some(cached), _) => Right(cached)
+          case value => Right(value)
+
+    /**
+     * The first position, forward or backward, whose key `matches`, reading no key past it. Past
+     * `stored` the keys are blank, so one question settles them all.
+     */
+    def find(forward: Boolean)(matches: CellValue => Boolean): Either[EvalError, Option[Int]] =
+      val readable = math.min(stored, size)
+      lazy val blankMatches = size > readable && matches(CellValue.Empty)
+      @scala.annotation.tailrec
+      def scan(i: Int): Either[EvalError, Option[Int]] =
+        if i < 0 || i >= readable then Right(None)
         else
-          extractRangeAsMatrixEval(
-            CellRange(range.start, ARef.from0(colEnd, rowEnd)),
-            targetSheet,
-            ctx
-          )
+          key(i) match
+            case Left(error) => Left(error)
+            case Right(value) if matches(value) => Right(Some(i))
+            case Right(_) => scan(if forward then i + 1 else i - 1)
+      if forward then scan(0).map(_.orElse(Option.when(blankMatches)(readable)))
+      else if blankMatches then Right(Some(size - 1))
+      else scan(readable - 1)
+
+    /** The keys before `stored`, for the approximate modes: no lookup plane compares a blank. */
+    def storedKeys: Either[EvalError, Vector[CellValue]] =
+      (0 until math.min(stored, size)).foldLeft[Either[EvalError, Vector[CellValue]]](
+        Right(Vector.empty)
+      )((acc, i) => acc.flatMap(keys => key(i).map(keys :+ _)))
+
+  /**
+   * [[LookupLine]] over `range` on `targetSheet`. A row or column that runs to the sheet's edge
+   * (`A:A`, `1:1`) is clipped to the used range, asked for once, so a whole-column lookup costs the
+   * data rather than a million reads. A bounded range never asks for the used range: that scan is
+   * per call (#720). A two-dimensional range is not clipped: MATCH and XLOOKUP take vectors, and
+   * VLOOKUP/HLOOKUP build their line from the table's key column or row.
+   */
+  protected def lookupLine(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): LookupLine =
+    val column = range.width == 1 && range.rowEnd.index0 == Row.MaxIndex0
+    val row = range.height == 1 && range.colEnd.index0 == Column.MaxIndex0
+    val all = math.min(range.width.toLong * range.height, Int.MaxValue.toLong).toInt
+    val stored =
+      if !column && !row then all
+      else
+        targetSheet.usedRange.fold(0) { used =>
+          if column then
+            if range.colStart.index0 < used.colStart.index0 ||
+              range.colStart.index0 > used.colEnd.index0
+            then 0
+            else math.max(0, used.rowEnd.index0 - range.rowStart.index0 + 1)
+          else if range.rowStart.index0 < used.rowStart.index0 ||
+            range.rowStart.index0 > used.rowEnd.index0
+          then 0
+          else math.max(0, used.colEnd.index0 - range.colStart.index0 + 1)
+        }
+    LookupLine(range, math.min(stored, all), targetSheet, rangeCellReader(targetSheet, ctx))
 
   /** Normalize an evaluated value to an ArrayResult (scalars become 1x1). */
   protected def toCellArray(value: Any): ArrayResult = value match
@@ -467,11 +762,38 @@ trait FunctionSpecsBase:
   /**
    * GH-662: the typed `#N/A` a lookup raises when nothing matches. Left channel per the GH-344
    * charter (RANK's not-found precedent), so IFNA/ISNA/ERROR.TYPE see the code and an unguarded
-   * miss promotes to a cached `#N/A` at the CellValue boundary; the context is the human diagnostic
-   * and is dropped, by design, at that boundary. LOOKUP and XMATCH (#670) raise through this too.
+   * miss promotes to a cached `#N/A` at the CellValue boundary, where the context becomes the
+   * cell's reason in the recalc summary (#692). Every lookup's miss travels this one channel:
+   * VLOOKUP/HLOOKUP/MATCH, LOOKUP and XMATCH (#670), XLOOKUP (#692).
    */
   protected def lookupNotFound(context: String): EvalError =
     EvalError.ErrorValue(CellError.NA, Some(context))
+
+  /**
+   * #692: XLOOKUP/XMATCH's match_mode (-1, 0, 1, 2) — a mode outside its table is Excel's
+   * documented `#VALUE!`, for both functions alike.
+   */
+  protected def matchModeError(fn: String, value: Int, call: => String): Either[EvalError, Unit] =
+    lookupModeError(fn, "match_mode", Set(-1, 0, 1, 2), "-1, 0, 1 or 2", value, call)
+
+  /** #692: XLOOKUP/XMATCH's search_mode (1, -1, 2, -2), as [[matchModeError]]. */
+  protected def searchModeError(fn: String, value: Int, call: => String): Either[EvalError, Unit] =
+    lookupModeError(fn, "search_mode", Set(-2, -1, 1, 2), "1, -1, 2 or -2", value, call)
+
+  /** `call` is by name: the rendered call is built only for the diagnostic of a bad mode. */
+  private def lookupModeError(
+    fn: String,
+    label: String,
+    allowed: Set[Int],
+    spelled: String,
+    value: Int,
+    call: => String
+  ): Either[EvalError, Unit] =
+    if allowed.contains(value) then Right(())
+    else
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"$fn: $label $value is not $spelled: $call"))
+      )
 
   /**
    * One rendering of a lookup value for the lookup diagnostics (the call echoed in the context).
@@ -545,6 +867,10 @@ trait FunctionSpecsBase:
    * keys: the binary-search family (VLOOKUP/HLOOKUP/MATCH/LOOKUP over sorted data) lands on the
    * last of a run of duplicates, the linear XLOOKUP/XMATCH on the first in search order
    * (LibreOffice: `MATCH(20,{10,20,20,30},1)` is 3, `XMATCH(20,{10,20,20,30},-1)` 2).
+   *
+   * XLOOKUP's whole-column search (`xlookupIndex`) relies on `lastOnTie = false` keeping the FIRST
+   * equal key in search order: it lets one blank stand for every position past the used range.
+   * Change the tie rule and that stand-in must change with it.
    */
   protected def approximateMatch(
     keys: Seq[(Int, CellValue)],

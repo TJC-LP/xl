@@ -1,20 +1,22 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.Arity
-import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
-import com.tjclp.xl.formula.parser.ParseError
+import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.parser.{ParseError, ReferenceChars}
 
+import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 
 /**
  * GH-669: Excel's reference operators — union `,` (inside parentheses: `SUM((A1,A2))`) and
- * intersection ` ` (a single space: `A1:C3 B2:D4`).
+ * intersection ` ` (a single space: `A1:C3 B2:D4`); GH-713: the range operator `:` between
+ * reference-valued operands (`A1:INDEX(A:A,COUNTA(A:A))`, `INDEX(r,1):INDEX(r,2)`).
  *
- * Both are unregistered `TExpr.Call` specs, like `@x` (SINGLE) and `x#` (ANCHORARRAY): every walker
- * already reaches a call's operands through its ArgSpec, so dependency edges, shifting, sheet
- * renames and externality come for free, and their names are not identifiers, so `=UNION(…)` stays
- * an unknown function and `xl functions` never lists them. The object lives outside the
+ * All three are unregistered `TExpr.Call` specs, like `@x` (SINGLE) and `x#` (ANCHORARRAY): every
+ * walker already reaches a call's operands through its ArgSpec, so dependency edges, shifting,
+ * sheet renames and externality come for free, and their names are not identifiers, so `=UNION(…)`
+ * stays an unknown function and `xl functions` never lists them. The object lives outside the
  * `FunctionSpecs*` traits for that reason (FunctionRegistryMacro collects every spec those
  * declare).
  *
@@ -30,9 +32,18 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
-  /** The operators' spec names — never identifiers, so no formula can call them by name. */
+  /**
+   * The operators' spec names — never identifiers, so no formula can call them by name. Keep them
+   * `final val` string literals: `Evaluator.referenceFunctions` and
+   * `ArgSpec.computedReferenceCalls` read them as folded constants, which is what keeps those sets
+   * from initializing this object.
+   */
   final val UnionName = "(union)"
   final val IntersectionName = "(intersection)"
+  final val RangeName = "(range)"
+
+  /** IF, IFS, CHOOSE and SWITCH: the functions that return the reference they select. */
+  private[formula] def selectingFunctions: Set[String] = ReferenceFunctionNames.selecting
 
   /** One operand: a location the parser recognized, or a reference-valued expression. */
   type Operand = Either[TExpr.RangeLocation, TExpr[Any]]
@@ -49,14 +60,38 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   def isOperatorCall(e: TExpr[?]): Boolean = OperatorCall.unapply(e).isDefined
 
   /**
+   * GH-713: a call to the range operator, looking through the parser's coercion wrapper. Kept out
+   * of [[OperatorCall]]: a range is one area, so [[areas]] reaches it as any reference-returning
+   * call (its own `reference`).
+   */
+  object RangeOperatorCall:
+    def unapply(e: TExpr[?]): Option[TExpr.Call[?]] = e match
+      case TExpr.Coerced(inner, _) => unapply(inner)
+      case call: TExpr.Call[?] if call.spec.name == RangeName => Some(call)
+      case _ => None
+
+    /** A range call's two operands. */
+    def operands(call: TExpr.Call[?]): (Operand, Operand) = binaryOperands(call)
+
+  /**
+   * The two operands of a binary reference operator (`:` or ` `) — the one place their `Args` is
+   * cast: `Call.args` is typed by the path `call.spec.Args`, which the name match does not narrow,
+   * and both operators' specs take `(Operand, Operand)`.
+   */
+  private[formula] def binaryOperands(call: TExpr.Call[?]): (Operand, Operand) =
+    call.args.asInstanceOf[(Operand, Operand)]
+
+  /**
    * Can `e` be an operand of `,` or ` `? Every reference the parser can see: a cell, range, name,
    * LET name or error literal (`A1:B2 #REF!` is what a deletion leaves), a union or intersection,
    * and a call to a function that returns a reference (IF, IFS, CHOOSE, SWITCH, OFFSET, INDIRECT,
-   * INDEX). Literals, arithmetic, comparisons, `@x`, `x#`, array constants and every other call are
-   * values — Excel refuses them too.
+   * INDEX, XLOOKUP, the range operator). Literals, arithmetic, comparisons, `@x`, `x#`, array
+   * constants and every other call are values — Excel refuses them too.
    */
   def isReferenceShape(e: TExpr[?]): Boolean = e match
     case TExpr.Coerced(inner, _) => isReferenceShape(inner)
+    // BindingRef: an operand slot now parses a LET name as a location (GH-710), but union's
+    // `areas.forall(isReferenceShape)` still sees it as an expression, so the arm stays
     case _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ExternalRange | _: TExpr.PolyRef |
         _: TExpr.Ref[?] | _: TExpr.SheetPolyRef | _: TExpr.SheetRef[?] | _: TExpr.ExternalRef |
         _: TExpr.NameRef | _: TExpr.SheetNameRef | _: TExpr.ErrorLit | _: TExpr.BindingRef |
@@ -105,11 +140,11 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
   /**
    * INDEX's first slot: a location exactly as before, an operator call (area_num picks among its
-   * areas) or an array constant (INDEX indexes the constant's values). Any other expression keeps
-   * the range slot's parse error.
+   * areas), a range-operator call (GH-713: `INDEX(A1:INDEX(A:A,5),2)`) or an array constant (INDEX
+   * indexes the constant's values). Any other expression keeps the range slot's parse error.
    */
   val indexOperand: ArgSpec[Operand] = operandSpec(e =>
-    isOperatorCall(e) || (e match
+    isOperatorCall(e) || RangeOperatorCall.unapply(e).isDefined || (e match
       case TExpr.Lit(_: ArrayResult) => true
       case _ => false)
   )
@@ -162,6 +197,254 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       }
     }(using ArgSpec.tuple(using referenceOperand, ArgSpec.tuple(using referenceOperand)))
 
+  /**
+   * GH-713: `a:b` — the smallest range holding every area of both operands, on their one sheet.
+   * Like the intersection, one area is an ordinary reference: a plain cell reads it through the
+   * implicit intersection, array mode whole, a reference position takes it unread.
+   */
+  val range: FunctionSpec[ArrayResult] { type Args = (Operand, Operand) } =
+    FunctionSpec.referencing[ArrayResult, (Operand, Operand)](
+      RangeName,
+      Arity.two,
+      renderFn = Some((args, printer) => renderRange(args, printer))
+    )((args, ctx) => boundingArea(args, ctx)) { (args, ctx) =>
+      boundingArea(args, ctx).flatMap { area =>
+        referenceResult(area.range, area.sheet, ctx)(boundedReferenceValues(area, ctx))
+      }
+    }(using ArgSpec.tuple(using referenceOperand, ArgSpec.tuple(using referenceOperand)))
+
+  /**
+   * `l:r` with the fewest grouping parentheses that re-parse to this very tree, decided from the
+   * operands' shapes alone — the printer never runs the parser. The `:` is both a lexical range
+   * (`A1:B2`) and this operator, and the parser reads a reference token before a `:` together with
+   * what follows it, so:
+   *
+   *   - the right operand is grouped when it is not one primary: an intersection (looser than `:`),
+   *     or a range whose text does not open with a bare token (`:` folds left, so
+   *     `INDEX(r,1):(INDEX(r,2):B5)`) — one that does is read whole by that token's own reading of
+   *     its `:` (`A1:Start:Finish` is `A1:(Start:Finish)`, [[readsAsPrimary]]);
+   *   - the left operand is grouped when it is an intersection, or when the text it ends with would
+   *     take the `:` and grouping the right operand does not stop it ([[leftReadsBack]]): a bare
+   *     token whose reading of `:` is not this very operator (`(A1):Jan`, `(INDEX(r,1):B5):C6`;
+   *     `A1:(B2:C3)` needs only the right group), an external reference, a sheet-qualified reader
+   *     before another qualifier.
+   *
+   * Grouping the right operand is tried before grouping the left one, as the candidates `l:r`,
+   * `l:(r)`, `(l):r`, `(l):(r)` are, in that order; every unparenthesized text the parser accepts
+   * prints back byte-for-byte. `ReferenceOperatorLawsSpec` checks the rule against the parser
+   * itself: `parse(print(t)) == t`, and the choice is the first candidate that re-parses to `t`.
+   */
+  private def renderRange(args: (Operand, Operand), printer: ArgPrinter): String =
+    val (l, r) = args
+    val left = operandText(l, printer)
+    val right = operandText(r, printer)
+    val rightAlone = kind(r) match
+      case Shape.Loose => false
+      case Shape.Chain => readsAsPrimary(r, right)
+      case _ => true
+    val (groupLeft, groupRight) =
+      if rightAlone && leftReadsBack(l, left, r, right) then (false, false)
+      else if leftReadsBack(l, left, r, s"($right)") then (false, true)
+      else (true, !rightAlone)
+    val leftText = if groupLeft then s"($left)" else left
+    val rightText = if groupRight then s"($right)" else right
+    s"$leftText:$rightText"
+
+  /**
+   * How an operand's printed text meets a neighbouring `:` (see [[renderRange]]).
+   *
+   *   - `Closed`: a call, a parenthesized union, an error literal, an unqualified lexical range
+   *     (`B2:C3`, `A:A`, `1:3`): its reading stops at its own last character.
+   *   - `Token`: a bare cell, name or LET name (`A1`, `Start`, `x`), read with the `:` after it.
+   *   - `QualifiedToken`: the same behind a sheet (`Sheet1!A1`, `'Q 1'!Start`).
+   *   - `QualifiedRange`: `Sheet1!A1:B2` — closed unless another qualifier follows its `:`.
+   *   - `External`: `[1]Book!A1` — its reader takes every `:` and token after it.
+   *   - `Chain`: a range-operator call; `Loose`: an intersection, looser than `:`.
+   */
+  private enum Shape derives CanEqual:
+    case Closed, Token, QualifiedToken, QualifiedRange, External, Chain, Loose
+
+  private def kind(op: Operand): Shape = op match
+    case Left(TExpr.RangeLocation.Local(_, RangeForm.Cell)) => Shape.Token
+    case Left(TExpr.RangeLocation.Local(_, _)) => Shape.Closed
+    case Left(TExpr.RangeLocation.CrossSheet(_, _, RangeForm.Cell)) => Shape.QualifiedToken
+    case Left(TExpr.RangeLocation.CrossSheet(_, _, _)) => Shape.QualifiedRange
+    case Left(_: TExpr.RangeLocation.External) => Shape.External
+    case Left(TExpr.RangeLocation.Name(_, None)) => Shape.Token
+    case Left(TExpr.RangeLocation.Name(_, Some(_))) => Shape.QualifiedToken
+    // GH-710: a LET name in a range slot prints as the bare name, like a BindingRef
+    case Left(_: TExpr.RangeLocation.Binding) => Shape.Token
+    case Left(_: TExpr.RangeLocation.Error) => Shape.Closed
+    case Right(expr) => expressionKind(expr)
+
+  private def expressionKind(expr: TExpr[?]): Shape = expr match
+    case TExpr.Coerced(inner, _) => expressionKind(inner)
+    case _: TExpr.BindingRef | _: TExpr.CoercedBindingRef[?] | _: TExpr.NameRef | _: TExpr.PolyRef |
+        _: TExpr.Ref[?] =>
+      Shape.Token
+    case TExpr.RangeRef(_, RangeForm.Cell) => Shape.Token
+    case _: TExpr.RangeRef => Shape.Closed
+    case _: TExpr.SheetNameRef | _: TExpr.SheetPolyRef | _: TExpr.SheetRef[?] =>
+      Shape.QualifiedToken
+    case TExpr.SheetRange(_, _, RangeForm.Cell) => Shape.QualifiedToken
+    case _: TExpr.SheetRange => Shape.QualifiedRange
+    case _: TExpr.ExternalRef | _: TExpr.ExternalRange => Shape.External
+    case RangeOperatorCall(_) => Shape.Chain
+    case OperatorCall(call) if call.spec.name == IntersectionName => Shape.Loose
+    case _ => Shape.Closed
+
+  /**
+   * Whether the text `l:r` (`left` and `right` as printed, `right` possibly grouped) reads back as
+   * `l`, then this operator, then `r` — the parser's grammar at a `:`, restated over the operands'
+   * shapes:
+   *
+   *   - after a closed text the operator's own loop reads `r` (one primary);
+   *   - a sheet-qualified reader reads every reference character after its `!`, `:` included, so
+   *     one whose run reaches the end of `left` (`Sheet1!A1:B2`, `Sheet1!B2:A:A`) takes the `:` and
+   *     fails on a qualifier opening `r` (`Sheet1!A1:B2:Sheet1!C3` is one malformed range);
+   *   - a bare token is read with the `:` after it: a lexical range when the next token pairs with
+   *     it (`A1:B2`, unless a call follows), refused when that token is qualified, otherwise this
+   *     operator over the token and one primary — unless either side is a name spelled like a
+   *     column or row (`A1:B` stays a typo) or, after an unqualified token, `r` is qualified
+   *     (`A1:Sheet2!B2` stays refused, as the 3-D reference it spells);
+   *   - a token ending a chain takes the `:` that follows the chain, as does an external
+   *     reference's reader.
+   */
+  private def leftReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
+    // a sheet-qualified reader whose run reaches the end of `left` (`Sheet1!B2:A:A`) reads on
+    // through the `:` into `right`, and a qualifier there is its repeated or 3-D end
+    !(qualifiedRunReachesEnd(left) && qualifierAhead(right)) && (kind(l) match
+      case Shape.Closed | Shape.QualifiedRange => true
+      case Shape.Token => tokenReadsBack(l, left, r, right)
+      case Shape.QualifiedToken => qualifiedTokenReadsBack(l, left, r, right)
+      case Shape.External | Shape.Loose => false
+      case Shape.Chain =>
+        // a chain ending in `)` (a call, a grouped operand) is closed; otherwise it ends with its
+        // last operand, ungrouped
+        left.endsWith(")") || (lastOperand(l) match
+          case Shape.Closed | Shape.QualifiedRange => true
+          case _ => false))
+
+  /**
+   * Whether `left` ends inside a sheet-qualified reference whose reader runs to its last character:
+   * the longest suffix of reader characters is preceded by a qualifier's `!` (an error literal's
+   * `!` is followed by `:`, never by a reference).
+   */
+  private def qualifiedRunReachesEnd(left: String): Boolean =
+    val suffix = left.reverseIterator.takeWhile(qualifiedRefChar).length
+    suffix > 0 && left.charAt(left.length - suffix) != ':' &&
+    left.lift(left.length - suffix - 1).contains('!')
+
+  /** The shape of the operand a chain's text ends with: its rightmost, through nested ranges. */
+  @annotation.tailrec
+  private def lastOperand(op: Operand): Shape = op match
+    case Right(RangeOperatorCall(call)) =>
+      lastOperand(binaryOperands(call)._2)
+    case other => kind(other)
+
+  /**
+   * Whether a range-operator operand's printed text is ONE primary to the parser: it opens with a
+   * bare token, ungrouped (`Start:Finish`, `Sheet1!A1:INDEX(…)`), so the token's own reading of its
+   * `:` takes the whole range, its right operand being one primary by its own rule. A range opening
+   * with anything else (a call, a group, a lexical range) is read one operand at a time.
+   */
+  private def readsAsPrimary(op: Operand, text: String): Boolean =
+    !text.startsWith("(") && (op match
+      case Right(RangeOperatorCall(call)) =>
+        kind(binaryOperands(call)._1) match
+          case Shape.Token | Shape.QualifiedToken => true
+          case _ => false
+      case _ => false)
+
+  /** `T:r` with `T` an unqualified token: what `parseRange` and its fallback read. */
+  private def tokenReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
+    val end = right.takeWhile(ReferenceChars.isRangeEnd)
+    val lexical = CellRange.parse(s"$left:$end").isRight && !right.lift(end.length).contains('(')
+    !end.contains('!') && !lexical && !namesAxis(l) && !namesAxis(r) && !isQualified(r)
+
+  /** `Q!T:r`: what the sheet-qualified reader and its fallback read. */
+  private def qualifiedTokenReadsBack(
+    l: Operand,
+    left: String,
+    r: Operand,
+    right: String
+  ): Boolean =
+    val token = left.substring(left.lastIndexOf('!') + 1)
+    val second = right.takeWhile(c => qualifiedRefChar(c) && c != ':')
+    val lexical = CellRange.parse(s"$token:$second").isRight &&
+      !right.lift(second.length).exists(c => c == '(' || c == '!')
+    !qualifierAhead(right) && !lexical && !namesAxis(l) && !namesAxis(r)
+
+  /** The characters the sheet-qualified reader takes after `!` (`:` included). */
+  private def qualifiedRefChar(c: Char): Boolean = ReferenceChars.isQualifiedRef(c)
+
+  /**
+   * Whether, after a sheet-qualified reference and a `:`, `right` opens with a sheet qualifier the
+   * reader takes as the range's repeated (or 3-D) end: a token run then `!`, or a quoted name.
+   */
+  private def qualifierAhead(right: String): Boolean =
+    val run = right.takeWhile(qualifiedRefChar)
+    val next = right.lift(run.length)
+    val trailingColon = run.isEmpty || run.endsWith(":")
+    (next.contains('!') && !trailingColon) || (next.contains('\'') && trailingColon)
+
+  /** A name spelled like a column or row, as the operand reads (see [[spellsAxis]]). */
+  private def namesAxis(op: Operand): Boolean = op match
+    case Left(TExpr.RangeLocation.Name(name, _)) => spellsAxis(name)
+    case Right(expr) =>
+      expr match
+        case TExpr.Coerced(inner, _) => namesAxis(Right(inner.asInstanceOf[TExpr[Any]]))
+        case TExpr.NameRef(name) => spellsAxis(name)
+        case TExpr.SheetNameRef(_, name) => spellsAxis(name)
+        case _ => false
+    case _ => false
+
+  /** A sheet- or workbook-qualified location (`Sheet2!B2`, `'Q 1'!Start`, `[1]Book!A1`). */
+  private def isQualified(op: Operand): Boolean = op match
+    case Left(_: TExpr.RangeLocation.CrossSheet | _: TExpr.RangeLocation.External) => true
+    case Left(TExpr.RangeLocation.Name(_, scope)) => scope.isDefined
+    case Left(_) => false
+    case Right(expr) =>
+      expressionKind(expr) match
+        case Shape.QualifiedToken | Shape.QualifiedRange | Shape.External => true
+        case _ => false
+
+  /**
+   * A bare name spelled like a column (`B`, `Jan`) or a row: never an operand of a `:` read after a
+   * token (`A1:B` stays a typo, `A:IF(…)` a column range). The parser's fallback and the printer
+   * share it.
+   */
+  private[formula] def spellsAxis(name: String): Boolean =
+    (name.forall(_.isLetter) || name.forall(_.isDigit)) && CellRange.parse(s"$name:$name").isRight
+
+  /**
+   * GH-713: the area `a:b` denotes — the bounding range of every area of both operands, left to
+   * right, the first error winning (`#REF!`, `#N/A`, a missing sheet). An operand that evaluates to
+   * a value is `#VALUE!` (not a reference), as are areas on two sheets (Excel; LibreOffice spans
+   * them).
+   */
+  private[formula] def boundingArea(
+    args: (Operand, Operand),
+    ctx: EvalContext
+  ): Either[EvalError, RangeOperand] =
+    for
+      left <- areas(args._1, ctx)
+      right <- areas(args._2, ctx)
+      all = left ++ right
+      first <- all.headOption.toRight(
+        EvalError.ErrorValue(CellError.Value, Some("a range needs a reference on each side"))
+      )
+      _ <-
+        if all.forall(area => sameSheetName(area.sheet.name, first.sheet.name)) then Right(())
+        else
+          Left(
+            EvalError.ErrorValue(CellError.Value, Some("a range's references must be on one sheet"))
+          )
+    yield RangeOperand(
+      first.sheet,
+      all.foldLeft(first.range)((box, area) => box.expand(area.range.start).expand(area.range.end))
+    )
+
   private def singleArea(
     args: (Operand, Operand),
     ctx: EvalContext
@@ -195,6 +478,38 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       yield TExpr.Call(intersection, (left, right))
 
   /**
+   * GH-713: build `l:r`; both operands must be references. Two single cells on one sheet (`(A1):B2`
+   * — the only text that reaches here with them) fold into the lexical range they spell.
+   */
+  def mkRange(l: TExpr[?], r: TExpr[?], pos: Int): Either[ParseError, TExpr[?]] =
+    if !(isReferenceShape(l) && isReferenceShape(r)) then
+      Left(ParseError.InvalidOperator(":", pos, "range operands must be references"))
+    else
+      for
+        (left, _) <- referenceOperand.parse(List(l), pos, RangeName)
+        (right, _) <- referenceOperand.parse(List(r), pos, RangeName)
+      yield foldCells(left, right).getOrElse(TExpr.Call(range, (left, right)))
+
+  // Folding is canonicalization: `(A1):B2` re-prints as `A1:B2`, its parentheses dropped on purpose.
+  private def foldCells(left: Operand, right: Operand): Option[TExpr[?]] =
+    def cellText(range: CellRange): String = range.toA1Anchored.takeWhile(_ != ':')
+    def spelled(a: CellRange, b: CellRange): Option[(String, CellRange)] =
+      val text = s"${cellText(a)}:${cellText(b)}"
+      CellRange.parse(text).toOption.map((text, _))
+    (left, right) match
+      case (
+            Left(TExpr.RangeLocation.Local(a, RangeForm.Cell)),
+            Left(TExpr.RangeLocation.Local(b, RangeForm.Cell))
+          ) =>
+        spelled(a, b).map((text, cells) => TExpr.RangeRef(cells, RangeForm.of(text, cells)))
+      case (
+            Left(TExpr.RangeLocation.CrossSheet(sa, a, RangeForm.Cell)),
+            Left(TExpr.RangeLocation.CrossSheet(sb, b, RangeForm.Cell))
+          ) if sameSheetName(sa, sb) =>
+        spelled(a, b).map((text, cells) => TExpr.SheetRange(sa, cells, RangeForm.of(text, cells)))
+      case _ => None
+
+  /**
    * The areas an operand denotes, left to right — the ONLY multi-area resolution. A location is one
    * area (its errors propagate: `#REF!`, a missing sheet, a name bound to a non-reference). A union
    * concatenates its operands' areas, duplicates and overlaps kept (`SUM((A1,A1))` is 2×A1; nested
@@ -208,8 +523,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   ): Either[EvalError, Vector[RangeOperand]] =
     op match
       case Left(location) =>
-        Evaluator
-          .resolveRangeLocation(location, ctx.sheet, ctx.workbook)
+        ctx
+          .resolveRange(location)
           .map((sheet, range) => Vector(RangeOperand(sheet, range)))
       case Right(OperatorCall(call)) if call.spec.name == UnionName =>
         call.args
@@ -219,19 +534,30 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
               acc.flatMap(found => areas(operand, ctx).map(found ++ _))
           }
           .flatMap { found =>
-            if found.map(_.sheet.name).distinct.size <= 1 then Right(found)
+            if distinctSheets(found.map(_.sheet.name).toList).size <= 1 then Right(found)
             else
               Left(
                 EvalError.ErrorValue(CellError.Value, Some("a union's areas must be on one sheet"))
               )
           }
       case Right(OperatorCall(call)) =>
-        val (left, right) = call.args.asInstanceOf[(Operand, Operand)]
+        val (left, right) = binaryOperands(call)
         intersect(left, right, ctx)
       case Right(other) =>
         ctx.evalReference(other).flatMap {
           case operand: RangeOperand => Right(Vector(operand))
-          case _ => Left(EvalError.ErrorValue(CellError.Value, Some("not a reference")))
+          case other =>
+            // a scalar or one-cell error keeps its code (the `#REF!` a failed INDIRECT or OFFSET
+            // gives); any other array value is `#VALUE!` whatever it holds, as in Excel
+            val value: Option[Any] = other match
+              case array: ArrayResult =>
+                Option.when(array.rows == 1 && array.cols == 1)(array(0, 0))
+              case scalar => Some(scalar)
+            val code = value.flatMap {
+              case cell: CellValue => ArrayArithmetic.carriedError(cell)
+              case _ => None
+            }
+            Left(EvalError.ErrorValue(code.getOrElse(CellError.Value), Some("not a reference")))
         }
 
   private def intersect(
@@ -244,7 +570,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       rightAreas <- areas(right, ctx)
       pairs = for l <- leftAreas; r <- rightAreas yield (l, r)
       _ <-
-        if pairs.forall((l, r) => l.sheet.name == r.sheet.name) then Right(())
+        if pairs.forall((l, r) => sameSheetName(l.sheet.name, r.sheet.name)) then Right(())
         else
           Left(
             EvalError.ErrorValue(
@@ -259,13 +585,35 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     yield result
 
   /**
+   * Where a location lies, for the dependency graph: the sheet (None: the formula's own) and the
+   * range. The sheet-level graph knows the static locations only ([[staticShape]]); the workbook
+   * graph also resolves defined names.
+   */
+  type ShapeOf = TExpr.RangeLocation => Option[(Option[SheetName], CellRange)]
+
+  /** A static location's shape; None for a name, an error or an external location. */
+  val staticShape: ShapeOf = {
+    case TExpr.RangeLocation.Local(range, _) => Some((None, range))
+    case TExpr.RangeLocation.CrossSheet(sheet, range, _) => Some((Some(sheet), range))
+    case _ => None
+  }
+
+  /**
    * The static dependency edges of an operator call: an intersection of two static locations on one
    * sheet depends only on the cells they share (whole-operand edges would falsely make
-   * `C3: =SUM(A1:C3 A1:A3)` circular), nothing when they share none. Anything else — names, dynamic
-   * operands, nesting — keeps every operand's edges, a sound over-approximation.
+   * `C3: =SUM(A1:C3 A1:A3)` circular), nothing when they share none. GH-713: a range whose operands
+   * all denote fixed cells (`A1:B1:C3`, `Start:Finish`) also depends on its whole bounding range,
+   * which neither operand names (B2 here). Anything else — names, dynamic operands, nesting — keeps
+   * every operand's edges, a sound over-approximation; a computed range those edges do not cover is
+   * a dynamic reference ([[isComputedRangeDynamic]]).
    */
-  def dependencyValues(specName: String, values: List[ArgValue]): List[ArgValue] =
-    if specName != IntersectionName then values
+  def dependencyValues(
+    specName: String,
+    values: List[ArgValue],
+    shapeOf: ShapeOf = staticShape
+  ): List[ArgValue] =
+    if specName == RangeName then values ++ boundingEdges(values, shapeOf)
+    else if specName != IntersectionName then values
     else
       values match
         case List(ArgValue.Range(l), ArgValue.Range(r)) =>
@@ -275,7 +623,266 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             case (
                   TExpr.RangeLocation.CrossSheet(sa, a, _),
                   TExpr.RangeLocation.CrossSheet(sb, b, _)
-                ) if sa.value.equalsIgnoreCase(sb.value) =>
+                ) if sameSheetName(sa, sb) =>
               a.intersect(b).map(s => ArgValue.Range(TExpr.RangeLocation.CrossSheet(sa, s))).toList
             case _ => values
         case _ => values
+
+  private def operandOf(value: ArgValue): Option[Operand] = value match
+    case ArgValue.Range(location) => Some(Left(location))
+    case ArgValue.Expr(expr) => Some(Right(expr.asInstanceOf[TExpr[Any]]))
+    case ArgValue.Cells(_) => None
+
+  /** The bounding range of a range whose operands denote fixed cells, on each sheet it may be. */
+  private def boundingEdges(values: List[ArgValue], shapeOf: ShapeOf): List[ArgValue] =
+    values.flatMap(operandOf) match
+      case List(l, r) =>
+        (envelope(l, shapeOf), envelope(r, shapeOf)) match
+          case (el, er) if fixed(el) && fixed(er) =>
+            val leaves = fixedLeaves(el) ++ fixedLeaves(er)
+            val qualified = distinctSheets(leaves.flatMap(_._1).toList)
+            leaves.headOption match
+              case Some((_, first)) if qualified.size <= 1 =>
+                val box = leaves.foldLeft(first)((acc, leaf) => hull(acc, leaf._2))
+                val local =
+                  if leaves.exists(_._1.isEmpty) then List(TExpr.RangeLocation.Local(box)) else Nil
+                (local ++ qualified.map(TExpr.RangeLocation.CrossSheet(_, box)))
+                  .map(ArgValue.Range(_))
+              case _ => Nil
+          case _ => Nil
+      case _ => Nil
+
+  /**
+   * GH-713: the cells an operand of `:` may denote, for the dependency graph.
+   *
+   *   - `Exact(leaves, covered)`: the operand denotes exactly these locations (a static location, a
+   *     name the graph resolves, a union, a range of such); the range reads their bounding range.
+   *   - `Within(sheet, range, covered)`: the operand denotes some reference inside `range` (INDEX's
+   *     array, XLOOKUP's return array, the branches IF, IFS, CHOOSE and SWITCH select from).
+   *   - `NoCells`: it denotes none (an error literal, an INDEX into an array constant).
+   *   - `Unknown`: the graph cannot bound it (OFFSET, INDIRECT, a LET name, an unresolved name).
+   *
+   * `covered`: the operand's own dependency edges already include every cell of its bounding range.
+   */
+  private[formula] enum Envelope derives CanEqual:
+    case Exact(leaves: Vector[(Option[SheetName], CellRange)], covered: Boolean)
+    case Within(sheet: Option[SheetName], range: CellRange, covered: Boolean)
+    case NoCells
+    case Unknown
+
+  /**
+   * The one sheet-identity rule here: the workbook's own (`Workbook` looks sheets up with
+   * `equalsIgnoreCase`), so `(Sheet1!A1):sheet1!B2` folds exactly when its areas count as one
+   * sheet.
+   */
+  private[formula] def sameSheetName(a: SheetName, b: SheetName): Boolean =
+    a.value.equalsIgnoreCase(b.value)
+
+  /** The sheets in order, one per [[sameSheetName]] class (the first spelling kept). */
+  private def distinctSheets(sheets: List[SheetName]): List[SheetName] =
+    sheets.foldLeft(List.empty[SheetName]) { (kept, s) =>
+      if kept.exists(sameSheetName(_, s)) then kept else kept :+ s
+    }
+
+  private def sameSheet(a: Option[SheetName], b: Option[SheetName]): Boolean =
+    (a, b) match
+      case (Some(x), Some(y)) => sameSheetName(x, y)
+      case (None, None) => true
+      case _ => false
+
+  private def hull(a: CellRange, b: CellRange): CellRange = a.expand(b.start).expand(b.end)
+
+  private def holds(outer: CellRange, inner: CellRange): Boolean =
+    outer.colStart.index0 <= inner.colStart.index0 && outer.colEnd.index0 >= inner.colEnd.index0 &&
+      outer.rowStart.index0 <= inner.rowStart.index0 && outer.rowEnd.index0 >= inner.rowEnd.index0
+
+  private def fixed(e: Envelope): Boolean = e match
+    case Envelope.Exact(_, _) | Envelope.NoCells => true
+    case _ => false
+
+  private def fixedLeaves(e: Envelope): Vector[(Option[SheetName], CellRange)] = e match
+    case Envelope.Exact(leaves, _) => leaves
+    case _ => Vector.empty
+
+  /** An envelope as one area on one sheet: None when it spans sheets or is not bounded. */
+  private def asArea(e: Envelope): Option[(Option[SheetName], CellRange, Boolean)] = e match
+    case Envelope.Within(sheet, range, covered) => Some((sheet, range, covered))
+    case Envelope.Exact(leaves, covered) =>
+      leaves.headOption.flatMap { case (sheet, first) =>
+        Option.when(leaves.forall(leaf => sameSheet(leaf._1, sheet)))(
+          (sheet, leaves.foldLeft(first)((acc, leaf) => hull(acc, leaf._2)), covered)
+        )
+      }
+    case _ => None
+
+  /** The bounding envelope of two (a range's operands, a union's areas). */
+  private def join(a: Envelope, b: Envelope, covered: Boolean): Envelope = (a, b) match
+    case (Envelope.Unknown, _) | (_, Envelope.Unknown) => Envelope.Unknown
+    case (Envelope.NoCells, other) => other
+    case (other, Envelope.NoCells) => other
+    case (Envelope.Exact(la, _), Envelope.Exact(lb, _)) => Envelope.Exact(la ++ lb, covered)
+    case _ =>
+      (asArea(a), asArea(b)) match
+        case (Some((sa, ra, _)), Some((sb, rb, _))) if sameSheet(sa, sb) =>
+          Envelope.Within(sa, hull(ra, rb), covered)
+        case _ => Envelope.Unknown
+
+  /** `e` as the bound of a reference chosen inside it (INDEX's array, XLOOKUP's return array). */
+  private def within(e: Envelope, covered: Boolean): Envelope = e match
+    case Envelope.Unknown | Envelope.NoCells => e
+    case _ =>
+      asArea(e).fold[Envelope](Envelope.Unknown) { case (sheet, range, own) =>
+        Envelope.Within(sheet, range, covered && own)
+      }
+
+  /** The envelope of one operand of `:` (see [[Envelope]]). */
+  private[formula] def envelope(op: Operand, shapeOf: ShapeOf): Envelope = op match
+    case Left(TExpr.RangeLocation.Error(_, _)) => Envelope.NoCells
+    case Left(location @ (_: TExpr.RangeLocation.Local | _: TExpr.RangeLocation.CrossSheet)) =>
+      shapeOf(location).fold[Envelope](Envelope.Unknown)(leaf => Envelope.Exact(Vector(leaf), true))
+    case Left(location) =>
+      shapeOf(location).fold[Envelope](Envelope.Unknown)(leaf =>
+        Envelope.Exact(Vector(leaf), false)
+      )
+    case Right(expr) => expressionEnvelope(expr, shapeOf)
+
+  private def expressionEnvelope(expr: TExpr[?], shapeOf: ShapeOf): Envelope = expr match
+    case TExpr.Coerced(inner, _) => expressionEnvelope(inner, shapeOf)
+    case TExpr.ErrorLit(_, _) => Envelope.NoCells
+    case RangeOperatorCall(call) =>
+      val (l, r) = binaryOperands(call)
+      // an all-fixed range carries its bounding edges (dependencyValues); otherwise only a
+      // covering operand's edges cover it
+      val (el, er) = (envelope(l, shapeOf), envelope(r, shapeOf))
+      join(el, er, covered = (fixed(el) && fixed(er)) || coveredBy(el, er))
+    case OperatorCall(call) if call.spec.name == UnionName =>
+      call.args
+        .asInstanceOf[List[Operand]]
+        .map(envelope(_, shapeOf))
+        .foldLeft[Envelope](Envelope.NoCells)((acc, e) => join(acc, e, covered = false))
+    case OperatorCall(call) =>
+      val (l, r) = binaryOperands(call)
+      (envelope(l, shapeOf), envelope(r, shapeOf)) match
+        case (Envelope.Unknown, _) | (_, Envelope.Unknown) => Envelope.Unknown
+        case (Envelope.NoCells, _) | (_, Envelope.NoCells) => Envelope.NoCells
+        case (el, er) =>
+          (asArea(el), asArea(er)) match
+            case (Some((sa, ra, ca)), Some((sb, rb, cb))) if sameSheet(sa, sb) =>
+              ra.intersect(rb).fold[Envelope](Envelope.NoCells)(Envelope.Within(sa, _, ca || cb))
+            case _ => Envelope.Unknown
+    // Matched by spec identity, never by name, so a renamed or homonymous spec cannot reach the
+    // casts: `Call.args` is typed by the path `call.spec.Args`, which an `eq` test does not narrow,
+    // so the cast stays, on the identified spec only. Follow-up: an envelope hook on
+    // `FunctionSpec.Referencing` would let each reference-computing spec bound its own result and
+    // drop this match (a new one falls to `Unknown` today: sound, but always dynamic).
+    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.index =>
+      call.args.asInstanceOf[IndexArgs]._1 match
+        case Right(TExpr.Lit(_: ArrayResult)) => Envelope.NoCells
+        case array => within(envelope(array, shapeOf), covered = true)
+    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.xlookup =>
+      within(envelope(Left(call.args.asInstanceOf[XLookupArgs]._3), shapeOf), covered = true)
+    case call: TExpr.Call[?] if selectingFunctions.contains(call.spec.name) =>
+      val branches: List[Operand] = call.spec.argSpec.toValues(call.args).collect {
+        case ArgValue.Range(location) => Left(location)
+        case ArgValue.Expr(e) if isReferenceShape(e) => Right(e.asInstanceOf[TExpr[Any]])
+      }
+      within(
+        branches
+          .map(envelope(_, shapeOf))
+          .foldLeft[Envelope](Envelope.NoCells)((acc, e) => join(acc, e, covered = false)),
+        covered = false
+      )
+    case _ => Envelope.Unknown
+
+  /** Whether one operand's own covered edges hold the whole bounding range of both. */
+  private def coveredBy(el: Envelope, er: Envelope): Boolean =
+    join(el, er, covered = false) match
+      case Envelope.NoCells => true
+      case whole =>
+        asArea(whole).exists { case (sheet, box, _) =>
+          List(el, er).exists(e =>
+            asArea(e).exists((s, range, covered) =>
+              covered && sameSheet(s, sheet) && holds(range, box)
+            )
+          )
+        }
+
+  /**
+   * GH-713: whether a range-operator call reads cells its dependency edges may miss, so the graph
+   * treats it as a dynamic reference (evaluated last, always recalculated). A range of fixed
+   * operands carries its bounding edges, and one whose bounding range lies inside a single
+   * operand's covered envelope needs nothing more — `A1:INDEX(A:A,COUNTA(A:A))`,
+   * `INDEX(r,1):INDEX(r,2)`, `B1:XLOOKUP(k,A1:A3,B1:B3)` stay static and non-volatile. Anything
+   * unbounded (OFFSET, INDIRECT, a LET or unresolved name) or uncovered (`A1:INDEX(C:C,5)`) is
+   * dynamic.
+   */
+  // Cost: the envelope of an operand recurses along its whole spine, and the graph walkers ask
+  // this of every nested `:` call, so a chain of n ranges costs O(n²) envelope steps. The parser
+  // bounds n — each `:` takes a nesting level, at most 128 — so a formula costs at most ~8k steps;
+  // memoize per call if that bound ever grows.
+  def isComputedRangeDynamic(call: TExpr.Call[?], shapeOf: ShapeOf): Boolean =
+    call.spec.name == RangeName && {
+      val (l, r) = binaryOperands(call)
+      val (el, er) = (envelope(l, shapeOf), envelope(r, shapeOf))
+      el == Envelope.Unknown || er == Envelope.Unknown ||
+      !((fixed(el) && fixed(er)) || coveredBy(el, er))
+    }
+
+  /**
+   * GH-713: the dynamic-cell pre-filter for computed ranges — a linear scan, outside string
+   * literals and quoted sheet names, for a `:` that is not one lexical range: one whose neighbours
+   * are not a cell, column or row pair (`)` before it, `(` after it, a name, a qualifier, a call's
+   * name followed by `(`). Law: every formula whose parse [[isComputedRangeDynamic]] flags passes,
+   * since a dynamic range always has a call, a parenthesis or a name beside one of its `:`.
+   *
+   * Two spellings that only look like one are rejected outright, so the formulas they fill do not
+   * cost a parse on every recalculation: a qualified run after a token that begins a reference (3-D
+   * references, repeated qualifiers) and a structured reference's `]:[`. With no candidate token
+   * and no candidate `:`, a sheet's formulas are never parsed.
+   */
+  def mayContainComputedRange(text: String): Boolean =
+    def tokenChar(c: Char): Boolean = ReferenceChars.isToken(c)
+    def skipQuoted(open: Int, quote: Char): Int =
+      @annotation.tailrec
+      def loop(j: Int): Int =
+        if j >= text.length then j
+        else if text.charAt(j) == quote then
+          if text.lift(j + 1).contains(quote) then loop(j + 2) else j + 1
+        else loop(j + 1)
+      loop(open + 1)
+    // the token run ending before `end` (exclusive) and the one starting at `start`
+    def runBefore(end: Int): String =
+      @annotation.tailrec
+      def back(j: Int): Int = if j > 0 && tokenChar(text.charAt(j - 1)) then back(j - 1) else j
+      text.substring(back(end), end)
+    def runFrom(start: Int): String =
+      @annotation.tailrec
+      def ahead(j: Int): Int =
+        if j < text.length && tokenChar(text.charAt(j)) then ahead(j + 1) else j
+      text.substring(start, ahead(start))
+    @annotation.tailrec
+    def scan(i: Int): Boolean =
+      if i >= text.length then false
+      else
+        text.charAt(i) match
+          case '"' => scan(skipQuoted(i, '"'))
+          case '\'' => scan(skipQuoted(i, '\''))
+          case ':' =>
+            val left = runBefore(i)
+            val right = runFrom(i + 1)
+            val next = text.lift(i + 1 + right.length)
+            // only a token that starts its reference pairs lexically: after a range's end
+            // (`Jan:A:A`, `A1:B2:C3`) the `:` is the operator's
+            val startsReference = left.nonEmpty && !text.lift(i - left.length - 1).contains(':')
+            val lexical = startsReference && right.nonEmpty &&
+              !next.exists(c => c == '(' || c == '!') &&
+              CellRange.parse(s"$left:$right").isRight
+            // such a token before a qualified run: a 3-D reference (`Sheet1:Sheet3!A1`), a repeated
+            // qualifier (`Sheet1!A1:Sheet1!B2`) or a refused `A1:Sheet2!B2` — never the operator
+            val qualifiedEnd = startsReference && right.nonEmpty && next.contains('!')
+            // a structured reference's column span (`Table1[[#Headers],[A]:[B]]`): no reference
+            // the operator takes ends with `]`
+            val structured = text.lift(i - 1).contains(']')
+            !(lexical || qualifiedEnd || structured) || scan(i + 1)
+          case _ => scan(i + 1)
+    text.indexOf(':') >= 0 && scan(0)
