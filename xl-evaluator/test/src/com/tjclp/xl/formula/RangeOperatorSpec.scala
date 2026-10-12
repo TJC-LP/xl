@@ -343,6 +343,13 @@ class RangeOperatorSpec extends FunSuite:
     assertEquals(plain("H1", "SUM(A1:IF(FALSE,B2,C3))"), Right(N("666")))
     // an operand that evaluates to a value is not a reference
     assertEquals(plain("H1", "SUM(A1:IF(TRUE,5,B2))"), Right(E("#VALUE!")))
+    // a scalar or one-cell error value keeps its code (the `#REF!` a failed INDIRECT or OFFSET
+    // gives); an array value is `#VALUE!` whatever it holds, as Excel answers
+    assertEquals(plain("H1", "SUM(A1:IF(TRUE,#N/A,B2))"), Right(E("#N/A")))
+    assertEquals(plain("H1", "SUM(A1:CHOOSE(1,{#N/A},B2))"), Right(E("#N/A")))
+    assertEquals(plain("H1", "SUM(CHOOSE(1,{#REF!;1},B2):B2)"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "SUM(A1:IF(TRUE,{1,#N/A},B2))"), Right(E("#VALUE!")))
+    assertEquals(plain("H1", "SUM(A1:IF(TRUE,{#DIV/0!,1},B2))"), Right(E("#VALUE!")))
     // a range's two ends must be on one sheet: Excel's #VALUE! (LibreOffice spans the sheets)
     assertEquals(plain("H1", "SUM(A1:INDEX(Other!A1:A3,2))"), Right(E("#VALUE!")))
     assertEquals(plain("H1", "SUM(Start:OtherCell)"), Right(E("#VALUE!")))

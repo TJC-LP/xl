@@ -532,18 +532,22 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
               )
           }
       case Right(OperatorCall(call)) =>
-        val (left, right) = call.args.asInstanceOf[(Operand, Operand)]
+        val (left, right) = binaryOperands(call)
         intersect(left, right, ctx)
       case Right(other) =>
         ctx.evalReference(other).flatMap {
           case operand: RangeOperand => Right(Vector(operand))
           case other =>
-            val value = other match
-              case array: ArrayResult if !array.isEmpty => array(0, 0)
-              case scalar => scalar
-            val code = value match
+            // a scalar or one-cell error keeps its code (the `#REF!` a failed INDIRECT or OFFSET
+            // gives); any other array value is `#VALUE!` whatever it holds, as in Excel
+            val value: Option[Any] = other match
+              case array: ArrayResult =>
+                Option.when(array.rows == 1 && array.cols == 1)(array(0, 0))
+              case scalar => Some(scalar)
+            val code = value.flatMap {
               case cell: CellValue => ArrayArithmetic.carriedError(cell)
               case _ => None
+            }
             Left(EvalError.ErrorValue(code.getOrElse(CellError.Value), Some("not a reference")))
         }
 
