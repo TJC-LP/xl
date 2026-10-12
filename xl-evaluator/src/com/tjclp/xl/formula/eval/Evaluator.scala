@@ -452,24 +452,26 @@ object Evaluator:
    * The (sheet, range) a range-typed argument slot names — THE resolver for a function's range slot
    * (`EvalContext.resolveRange`) and the typed [[TExpr.Aggregate]] node's (GH-710). A written range
    * or cell and a name bound to one resolve statically ([[resolveRangeLocation]]). A name whose
-   * definition is a formula is evaluated (`evalReference`) for the reference it computes — OFFSET,
+   * definition is a formula is evaluated (`evalName`) for the reference it computes — OFFSET,
    * INDIRECT, INDEX, IF or CHOOSE over references, a dynamic range — and a LET name is the
    * reference it is bound to (`bindings`). The error such a formula evaluates to is the slot's
    * error (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as
-   * in Excel, with the static diagnostic. A name that fails statically (unknown, cyclic, too deep,
-   * bound to an error literal) is never evaluated.
+   * in Excel, with the static diagnostic. An error the evaluation itself produces (a bare `#VALUE!`
+   * from `OFFSET(A1,"x",0)`, a cycle) is the slot's as it is. A name that fails statically
+   * (unknown, cyclic, too deep, bound to an error literal or a constant) is never evaluated.
    *
-   * @param evalReference
-   *   evaluates an expression for the reference it denotes, a [[RangeOperand]] when it denotes one
+   * @param evalName
+   *   evaluates a defined name (as written, with its qualifier) for the reference it computes, a
+   *   [[RangeOperand]] when it computes one. The static walk has already run, so the evaluator's
+   *   `evalNameRef(…, asReference = true)` is the right callback: it does not resolve again.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[formula] def resolveRangeSlot(
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
     workbook: Option[Workbook],
     resolvingNames: NameTrail,
     bindings: Map[String, Any],
-    evalReference: TExpr[Any] => Either[EvalError, Any]
+    evalName: (String, Option[SheetName]) => Either[EvalError, Any]
   ): Either[EvalError, (Sheet, CellRange)] =
     def referenceOf(value: Any, notARange: EvalError): Either[EvalError, (Sheet, CellRange)] =
       value match
@@ -481,20 +483,12 @@ object Evaluator:
             case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
             case _ => Left(notARange)
         case _ => Left(notARange)
-    // a bare #VALUE! says less than the static diagnostic it stands for
-    def specific(notARange: EvalError)(failure: EvalError): EvalError = failure match
-      case EvalError.ErrorValue(CellError.Value, None) => notARange
-      case other => other
     location match
       case TExpr.RangeLocation.Name(name, scope) =>
         resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
           case NameRangeTarget.Range(target, range) => Right((target, range))
           case NameRangeTarget.Computed(notARange) =>
-            val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
-            evalReference(named.asInstanceOf[TExpr[Any]])
-              .flatMap(referenceOf(_, notARange))
-              .left
-              .map(specific(notARange))
+            evalName(name, scope).flatMap(referenceOf(_, notARange))
         }
       case TExpr.RangeLocation.Binding(name) =>
         val notARange = EvalError.ErrorValue(
@@ -1597,7 +1591,7 @@ private class EvaluatorImpl(
               workbook,
               resolvingNames,
               bindings,
-              referenceArgument(_, sheet, clock, workbook, currentCell)
+              evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true)
             ) match
               // GH-630: a slot that IS an error value (`COUNT(#REF!)`, a name bound to `#N/A`)
               // follows the aggregate's error-argument policy, exactly as the Call form does
@@ -1758,7 +1752,9 @@ private class EvaluatorImpl(
         arrayMode = allowArrayResults,
         referenceArg = Some(referenceArgument(_, sheet, clock, workbook, currentCell)),
         selectsReference = selectsReference,
-        nameTrail = resolvingNames
+        nameTrail = resolvingNames,
+        nameReference =
+          Some(evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true))
       )
     )
     // a reference position asks a function that returns a reference (OFFSET, INDIRECT, INDEX)

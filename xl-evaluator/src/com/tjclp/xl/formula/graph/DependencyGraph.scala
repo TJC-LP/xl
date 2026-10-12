@@ -549,11 +549,12 @@ object DependencyGraph:
     // #733: whether a name in a resizing call's range slot computes its reference, as seen from
     // `current` — memoized per (name, qualifier, sheet): a book's SUMIFs share a few names. A
     // mutable memo for this single-threaded pass; never share it with a parallel per-sheet loop
+    val canonical = sheetCanonicaliser(workbook)
     val computedVerdicts =
       scala.collection.mutable.HashMap.empty[(String, Option[SheetName], SheetName), Boolean]
     def nameIsComputed(current: SheetName)(name: String, qualifier: Option[SheetName]): Boolean =
       computedVerdicts.getOrElseUpdate(
-        (resolutionKey(name), qualifier, current),
+        (resolutionKey(name), qualifier.map(canonical), current),
         workbook(current).toOption
           .exists(Evaluator.nameComputesRange(name, qualifier, _, workbook))
       )
@@ -2141,7 +2142,10 @@ object DependencyGraph:
         source.flatMap(Evaluator.resolveRangeLocation(location, _, workbook).toOption)
       location match
         case TExpr.RangeLocation.Name(name, scope) =>
-          nameRanges.getOrElseUpdate((resolutionKey(name), scope, currentSheet), resolve)
+          nameRanges.getOrElseUpdate(
+            (resolutionKey(name), scope.map(canonicalSheet), currentSheet),
+            resolve
+          )
         case _ => resolve
     def locCells(location: TExpr.RangeLocation): Set[QualifiedRef] =
       location match

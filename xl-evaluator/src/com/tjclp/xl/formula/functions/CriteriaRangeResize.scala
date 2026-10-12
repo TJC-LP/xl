@@ -94,6 +94,9 @@ object CriteriaRangeResize:
     (upperCased.contains("SUMIF") || upperCased.contains("AVERAGEIF")) &&
       ResizingCall.matcher(formula).find() && hasNameShapedToken(formula)
 
+  // Char-based, as FormulaParser's identifier tests are: a letter outside the BMP (a surrogate
+  // pair) is no identifier character to either. Keep the two in step — if the parser ever reads
+  // code points, these must too, or such a name becomes a false negative here.
   private def isIdentStart(c: Char): Boolean = c.isLetter || c == '_' || c == '\\'
 
   private def isIdentPart(c: Char): Boolean =

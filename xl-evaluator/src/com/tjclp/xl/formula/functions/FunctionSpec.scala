@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
-import com.tjclp.xl.{Anchor, CellRange}
+import com.tjclp.xl.{Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.sheets.Sheet
@@ -187,6 +187,7 @@ final case class EvalContext(
    * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
    * Excel.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[formula] def resolveRange(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange)] =
@@ -196,7 +197,11 @@ final case class EvalContext(
       workbook,
       operands.nameTrail,
       bindings,
-      evalReference
+      operands.nameReference.getOrElse { (name, scope) =>
+        // a context built outside the evaluator: the generic reference path
+        val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+        evalReference(named.asInstanceOf[TExpr[Any]])
+      }
     )
 
 object EvalContext:
@@ -206,12 +211,15 @@ object EvalContext:
    * (the evaluator sets it for every call; None only for a context built outside the evaluator).
    * `selectsReference`: the call feeds a reference position. `nameTrail`: the defined names being
    * resolved around this call (#691's cycle guard), so a range slot's name walk shares it.
+   * `nameReference`: evaluates a defined name for the reference it computes, once the range slot's
+   * static walk has found it computed (the evaluator sets it; None falls back to `evalReference`).
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
     referenceArg: Option[TExpr[Any] => Either[EvalError, Any]],
     selectsReference: Boolean,
-    nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty
+    nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty,
+    nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None
   )
 
   private[formula] object Operands:

@@ -56,17 +56,6 @@ trait TExprRangeLocation:
     case Name(name: String, scope: Option[SheetName])
 
     /**
-     * GH-710: a LET name in a range-typed argument slot — `LET(r, dyn, COUNTIF(r, ">2"))`, where
-     * the binding is not a literal range (a literal range is substituted by the parser).
-     *
-     * The range is the reference the binding holds, known only at evaluation (the LET binds a
-     * reference-denoting value — a cell, a name, OFFSET, INDIRECT, INDEX, IF/CHOOSE over references
-     * — as that reference). Like [[Name]] it has no static range and contributes no dependency
-     * edges of its own: the binding's value expression carries them.
-     */
-    case Binding(name: String)
-
-    /**
      * GH-612: an error literal in a range-typed argument slot — `SUM(#REF!)`, `COUNTIF(#REF!, x)`.
      *
      * What Excel writes when a range argument is deleted or dragged off the grid, and what
@@ -76,6 +65,18 @@ trait TExprRangeLocation:
      * as on [[TExpr.ErrorLit]] (`SUM(Sheet1!#REF!)`).
      */
     case Error(error: CellError, qualifier: Option[ErrorQualifier] = None)
+
+    /**
+     * GH-710: a LET name in a range-typed argument slot — `LET(r, dyn, COUNTIF(r, ">2"))`, where
+     * the binding is not a literal range (a literal range is substituted by the parser).
+     *
+     * The range is the reference the binding holds, known only at evaluation (the LET binds a
+     * reference-denoting value — a cell, a name, OFFSET, INDIRECT, INDEX, IF/CHOOSE over references
+     * — as that reference). Like [[Name]] it has no static range and contributes no dependency
+     * edges of its own: the binding's value expression carries them. Declared last, after
+     * [[Error]], so the earlier cases keep their ordinals.
+     */
+    case Binding(name: String)
 
   object RangeLocation:
     extension (loc: RangeLocation)

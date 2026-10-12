@@ -237,13 +237,13 @@ class DynamicNameRangeSlotSpec extends FunSuite:
 
   // ----- the static resolution decides whether a name is evaluated (review of #717) -----
 
-  private val unread: TExpr[Any] => Either[EvalError, Any] =
-    expr => fail(s"$expr must not be evaluated: its static resolution already failed")
+  private val unread: (String, Option[SheetName]) => Either[EvalError, Any] =
+    (name, _) => fail(s"$name must not be evaluated: its static resolution already failed")
 
   private def slot(
     wb: Workbook,
     name: String,
-    evalReference: TExpr[Any] => Either[EvalError, Any] = unread
+    evalName: (String, Option[SheetName]) => Either[EvalError, Any] = unread
   ): Either[EvalError, (Sheet, CellRange)] =
     Evaluator.resolveRangeSlot(
       TExpr.RangeLocation.Name(name, None),
@@ -251,7 +251,7 @@ class DynamicNameRangeSlotSpec extends FunSuite:
       Some(wb),
       Evaluator.NameTrail.empty,
       Map.empty,
-      evalReference
+      evalName
     )
 
   test("a name that fails statically is never evaluated, and keeps its own diagnostic") {
@@ -309,24 +309,40 @@ class DynamicNameRangeSlotSpec extends FunSuite:
         CellError.Value,
         Some("name 'calc' does not refer to a range (refersTo: SUM(Sheet1!$A$1:$A$3))")
       )
-    assertEquals(slot(wb, "calc", _ => Right(BigDecimal(5))), Left(notARange))
-    // a bare #VALUE! from the evaluation says less than the static diagnostic
-    assertEquals(
-      slot(wb, "calc", _ => Left(EvalError.ErrorValue(CellError.Value, None))),
-      Left(notARange)
-    )
-    // a more specific failure of the evaluation is the slot's
+    // only a value the evaluation computes is relabelled "does not refer to a range"
+    assertEquals(slot(wb, "calc", (_, _) => Right(BigDecimal(5))), Left(notARange))
+    // an error the evaluation itself produces is the slot's as it is: a bare #VALUE! (from
+    // OFFSET(A1,"x",0), say) is not blamed on the name's shape
+    val bare = EvalError.ErrorValue(CellError.Value, None)
+    assertEquals(slot(wb, "calc", (_, _) => Left(bare)), Left(bare))
     val failed = EvalError.EvalFailed("boom", None)
-    assertEquals(slot(wb, "calc", _ => Left(failed)), Left(failed))
+    assertEquals(slot(wb, "calc", (_, _) => Left(failed)), Left(failed))
     assertEquals(
-      slot(wb, "calc", _ => Right(CellValue.Error(CellError.Ref))),
+      slot(wb, "calc", (_, _) => Right(CellValue.Error(CellError.Ref))),
       Left(EvalError.ErrorValue(CellError.Ref))
     )
-    // the evaluation sees the name itself, unqualified as written
+    // the evaluation is handed the name itself, unqualified as written
     assertEquals(
-      slot(book, "dyn", expr => Right(RangeOperand(other, CellRange(ref"A1", ref"A2")))),
+      slot(
+        book,
+        "dyn",
+        (name, scope) =>
+          assertEquals((name, scope), ("dyn", None))
+          Right(RangeOperand(other, CellRange(ref"A1", ref"A2")))
+      ),
       Right((other, CellRange(ref"A1", ref"A2")))
     )
+  }
+
+  test("a name whose OFFSET fails reports that failure, not the name's shape") {
+    // OFFSET(A1,"x",0) fails on its text row offset; the slot keeps that failure
+    val wb = book.withDefinedName("badOffset", "OFFSET(Sheet1!$A$1,\"x\",0)")
+    val placed = Sheet(emptyName).put(ref"A1", CellValue.Formula("COUNTIF(badOffset,1)", None))
+    val message = placed
+      .evaluateCell(ref"A1", Clock.system, Some(wb.put(placed)))
+      .fold(_.message, value => fail(s"expected a failure, got $value"))
+    assert(message.contains("TypeMismatch(integer argument,integer,x)"), message)
+    assert(!message.contains("does not refer to a range"), message)
   }
 
   test("a hand-built LET name outside its LET is a clean failure, never an exception") {
