@@ -39,7 +39,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    *
    * We still enforce Excel's dimension rules on the original ranges, but we constrain full
    * column/row ranges to the union of used ranges across all involved sheets. This prevents
-   * mismatched lengths after constraining while preserving performance.
+   * mismatched lengths after constraining while preserving performance. GH-712: SUMPRODUCT's
+   * `constrainComputedRange` relies on that union across sheets to bound a computed reference (ROW
+   * of `INDEX(Other!A:A,0)`) without knowing its sheet.
    */
   private def computeBounds(
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]

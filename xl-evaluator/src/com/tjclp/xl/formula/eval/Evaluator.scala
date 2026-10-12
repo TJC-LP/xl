@@ -1906,6 +1906,10 @@ private class EvaluatorImpl(
         aggregateMemoOpt,
         arrayRangeBounds
       )
+    // One flag for the whole LET, deliberately: a reference-denoting binding read as a value
+    // reads the same whether it is bound as the reference or as its array (an aggregate skips an
+    // array's text and logical elements as it skips a reference's — RowColumnArraySpec pins SUM,
+    // COUNT and COUNTA), and Excel's LET always binds the reference, so binding one is never wrong.
     lazy val bindsReferences = !allowArrayResults ||
       letBindings.exists((_, value) => Evaluator.inspectsReference(value)) ||
       Evaluator.inspectsReference(body)

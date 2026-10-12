@@ -275,3 +275,29 @@ class RowColumnArraySpec extends FunSuite:
     assertEquals(spill("=OFFSET(A1,ROW(A1:A3),0)"), Right(Vector(number(2))))
     assertEquals(spill("=CHOOSE(COLUMN(A1:C1),\"a\",\"b\",\"c\")"), Right(Vector(text("a"))))
   }
+
+  test("typed integer slots over ROW's array under evala: LEFT lifts, SEQUENCE keeps the first") {
+    // LEFT lifts its count (a ToInt slot), so each row number is its own count, as in Excel 365
+    assertEquals(evala("=LEFT(\"abc\",ROW(A1:A2))"), Right(column(text("a"), text("ab"))))
+    // SEQUENCE does not lift: its rows argument collapses to the array's first number (2)
+    assertEquals(spill("=SEQUENCE(ROW(A2:A3))"), Right(Vector(number(1), number(2))))
+  }
+
+  // ===== An array-mode LET binds references for the whole LET once any term inspects one =====
+
+  test("an unrelated ROWS term does not change what SUM, COUNT and COUNTA read from a binding") {
+    // A1:A3 holds TRUE, the text '5 and 7: a reference's SUM skips the logical and the text
+    // (7), COUNT counts the number (1), COUNTA every value (3) — the same whether the binding is
+    // bound as the reference (the ROWS term present) or as its values (absent)
+    val mixed = Sheet(SheetName.unsafe("Mixed"))
+      .put(ref"A1", CellValue.Bool(true))
+      .put(ref"A2", text("5"))
+      .put(ref"A3", number(7))
+    def evalaMixed(formula: String): Either[EvalError, Any] =
+      Evaluator.arrayInstance.eval(parse(formula), mixed, Clock.system, Some(Workbook(mixed)), None)
+    for (fn, expected) <- List("SUM" -> 7, "COUNT" -> 1, "COUNTA" -> 3) do
+      val asValues = evalaMixed(s"=LET(r,OFFSET(A1,0,0,3),$fn(r))")
+      val asReference = evalaMixed(s"=LET(r,OFFSET(A1,0,0,3),$fn(r)+0*ROWS(Z1))")
+      assertEquals(asValues, Right(BigDecimal(expected)), fn)
+      assertEquals(asReference, Right(BigDecimal(expected)), fn)
+  }
