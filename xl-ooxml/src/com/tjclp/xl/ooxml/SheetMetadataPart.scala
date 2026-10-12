@@ -82,6 +82,10 @@ private[xl] object SheetMetadataPart:
       .find(rel => rel.`type` == relType && !rel.targetMode.exists(_.equalsIgnoreCase("External")))
       .map(rel => Relationships.resolveWorkbookTarget(rel.target))
 
+  /** Whether `xml` parses as a part the plan can extend (not whether it holds dynamic arrays). */
+  def readable(xml: String, path: String = defaultPath): Boolean =
+    XmlSecurity.parseSafe(xml, path).isRight
+
   /** Resolve every dynamic-array `cm` index of a part; malformed XML reads as none. */
   def parse(xml: String, path: String = defaultPath): CellMetadataIndex =
     XmlSecurity.parseSafe(xml, path).toOption match
@@ -146,6 +150,11 @@ private[xl] object SheetMetadataPart:
         case _ => None
     }
 
+  /**
+   * Every `cm` a reader can resolve to a dynamic variant: a cell block counts when ANY of its
+   * records names an XLDAPR block — mixed blocks included, on purpose, since a cell Excel wrote
+   * that way is still a dynamic array. Only reuse for new anchors is stricter ([[reusable]]).
+   */
   private def index(root: Elem): CellMetadataIndex =
     val types = xldaprTypeIndices(root)
     val blocks = xldaprBlocks(root)

@@ -621,7 +621,7 @@ object XlsxReader:
       else
         val crc = new java.util.zip.CRC32()
         crc.update(bytes)
-        if (bytes.length.toLong, crc.getValue) != expected then
+        if expected != (bytes.length.toLong, crc.getValue) then
           Left(
             XLError.SecurityError(
               s"Metadata part '$path' differs from the entry the archive scan read " +

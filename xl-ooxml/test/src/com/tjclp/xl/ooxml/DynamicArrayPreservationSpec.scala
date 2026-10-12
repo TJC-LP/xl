@@ -264,6 +264,64 @@ class DynamicArrayPreservationSpec extends FunSuite:
     }
   }
 
+  private def withAnchorAt(wb: Workbook, at: ARef): Workbook =
+    val sheet = wb.sheets.headOption.getOrElse(fail("no sheet"))
+    val kind = FormulaKind.dynamicArray(CellRange(at, at))
+    wb.put(sheet.put(at, CellValue.Formula("SEQUENCE(1)", None, kind)))
+
+  test("an unreadable metadata part is kept, its new anchors lose cm, and the writer says so") {
+    val broken = "<metadata"
+    val wb = read(xlsx(parts(metadata = Some(broken))))
+    // nothing regenerated yet, or no dynamic array on a regenerated sheet: nothing is lost
+    assertEquals(XlsxWriter.cellMetadataDowngrade(wb), None)
+    assertEquals(XlsxWriter.cellMetadataDowngrade(dirty(wb)), None)
+    val edited = withAnchorAt(wb, ref"E1")
+    assertEquals(XlsxWriter.cellMetadataDowngrade(edited), Some("xl/metadata.xml"))
+    backends.foreach { case (_, config) =>
+      val out = write(edited, config)
+      // the part rides through untouched (a second one would orphan whatever else it holds) ...
+      assertEquals(entryText(out, "xl/metadata.xml"), Some(broken))
+      // ... and the anchor is written in its legacy shape, as the signal warned
+      val xml = sheet1(out)
+      val e1 =
+        xml.substring(xml.indexOf("<c r=\"E1\""), xml.indexOf("</c>", xml.indexOf("<c r=\"E1\"")))
+      assert(!e1.contains("cm="), e1)
+      assertEquals(
+        kindAt(read(out), ref"E1"),
+        Some(FormulaKind.ArrayFormula(CellRange(ref"E1", ref"E1")))
+      )
+    }
+  }
+
+  test("a relationship naming a missing part: a part is generated at its target, no downgrade") {
+    for (path, source) <- List(
+        "xl/metadata.xml" -> parts(),
+        "xl/custom/state.xml" -> relocatedMetadataParts("xl/custom/state.xml")
+      )
+    do
+      val dangling = source.filterNot(_._1 == path)
+      val wb = read(xlsx(dangling))
+      val edited = withAnchorAt(wb, ref"E1")
+      assertEquals(XlsxWriter.cellMetadataDowngrade(edited), None, path)
+      backends.foreach { case (name, config) =>
+        val out = write(edited, config)
+        assertEquals(entryText(out, path), Some(metadataXml), s"$path ($name)")
+        assertEquals(entries(out).count(_._1 == path), 1, s"$path ($name)")
+        if path != "xl/metadata.xml" then
+          assertEquals(entryText(out, "xl/metadata.xml"), None, s"$path ($name)")
+        assertEquals(occurrences(out, "[Content_Types].xml", s"/$path"), 1, s"$path ($name)")
+        assertEquals(
+          occurrences(out, "xl/_rels/workbook.xml.rels", "relationships/sheetMetadata"),
+          1,
+          s"$path ($name)"
+        )
+        assertEquals(
+          kindAt(read(out), ref"E1"),
+          Some(FormulaKind.dynamicArray(CellRange(ref"E1", ref"E1")))
+        )
+      }
+  }
+
   test("a newly authored variant extends the relationship's renamed metadata part") {
     val path = "xl/custom/state.xml"
     val wb = read(xlsx(relocatedMetadataParts(path)))

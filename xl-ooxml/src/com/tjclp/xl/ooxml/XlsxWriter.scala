@@ -213,6 +213,60 @@ object XlsxWriter:
     config.formulaInjectionPolicy == FormulaInjectionPolicy.Escape
 
   /**
+   * The sheets a write regenerates (the rest ride verbatim). Escaping must be applied to every
+   * text-bearing worksheet part — preserved sheets can contain dangerous inline strings or
+   * shared-string references that would bypass WriterConfig.secure — and a metadata change or a
+   * reorder regenerates them all.
+   */
+  private def regeneratedSheets(
+    workbook: Workbook,
+    tracker: ModificationTracker,
+    config: WriterConfig
+  ): Set[Int] =
+    if formulaEscapingRequested(config) || tracker.modifiedMetadata || tracker.reorderedSheets then
+      workbook.sheets.indices.toSet
+    else tracker.modifiedSheets
+
+  /** GH-714: the dynamic-array variants `sheets` hold (stops once every variant is found). */
+  private def dynamicVariants(workbook: Workbook, sheets: Set[Int]): Set[ArrayMode.Dynamic] =
+    sheets.iterator
+      .flatMap(workbook.sheets.lift)
+      .flatMap(_.cells.valuesIterator)
+      .map(_.value)
+      .collect {
+        case CellValue.Formula(_, _, FormulaKind.ArrayFormula(_, _, _, d: ArrayMode.Dynamic)) => d
+      }
+      .distinct
+      .take(SheetMetadataPart.variantCount)
+      .toSet
+
+  /**
+   * GH-714: the source cell-metadata part a write of `workbook` cannot extend — present but not
+   * readable XML — when the sheets it regenerates hold dynamic arrays. Those records are then
+   * written without their `cm` marker, and Excel opens them as legacy CSE arrays (`{=...}`); the
+   * part itself is kept as it is (another one would orphan whatever else it holds, such as
+   * images-in-cells data). None when nothing is lost: no source, no dynamic array on a regenerated
+   * sheet, a readable part, or none at all (one is generated — at the relationship's own target
+   * when that names a missing part). The writer's own decision, computed without writing, for
+   * callers that report it.
+   */
+  def cellMetadataDowngrade(
+    workbook: Workbook,
+    config: WriterConfig = WriterConfig()
+  ): Option[String] =
+    workbook.sourceContext.flatMap { ctx =>
+      val sheets = regeneratedSheets(workbook, ctx.modificationTracker, config)
+      if dynamicVariants(workbook, sheets).isEmpty then None
+      else
+        val (_, _, wbRels, _) = parsePreservedStructure(ctx.content)
+        wbRels.flatMap(SheetMetadataPart.locate).filter { path =>
+          ctx.partManifest.contains(path) &&
+          withSourceZip(ctx.content)(readZipEntry(_, path))
+            .forall(xml => !SheetMetadataPart.readable(xml, path))
+        }
+    }
+
+  /**
    * Copy the source archive verbatim to the target (for clean workbooks).
    *
    * Fast path optimization: When a workbook has no modifications, just copy the source archive
@@ -1839,12 +1893,7 @@ object XlsxWriter:
         removalOrphanedParts(ctx, workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet)
       case _ => Set.empty
 
-    // Escaping must be applied to every text-bearing worksheet part; preserved sheets can contain
-    // dangerous inline strings or shared-string references that would bypass WriterConfig.secure.
-    val sheetsToRegenerate =
-      if escapeFormulas || tracker.modifiedMetadata || tracker.reorderedSheets then
-        workbook.sheets.indices.toSet
-      else tracker.modifiedSheets
+    val sheetsToRegenerate = regeneratedSheets(workbook, tracker, config)
 
     // xl/calcChain.xml lists every formula cell by sheet id, and Excel checks it on open: an entry
     // naming a cell that holds no formula triggers the repair prompt. xl neither reads nor emits
@@ -2185,40 +2234,36 @@ object XlsxWriter:
     // against the source part: reused when it already has their XLDAPR blocks, appended when it
     // lacks one (existing indices never move — rich-value `vm`s and foreign `cm`s stay valid), or
     // generated when the package has none. No dynamic record means no plan: today's exact bytes.
-    val neededDynamic: Set[ArrayMode.Dynamic] =
-      sheetsToRegenerate.iterator
-        .flatMap(workbook.sheets.lift)
-        .flatMap(_.cells.valuesIterator)
-        .map(_.value)
-        .collect {
-          case CellValue.Formula(_, _, FormulaKind.ArrayFormula(_, _, _, d: ArrayMode.Dynamic)) => d
-        }
-        .distinct
-        .take(SheetMetadataPart.variantCount) // every variant found: no need to look further
-        .toSet
+    val neededDynamic: Set[ArrayMode.Dynamic] = dynamicVariants(workbook, sheetsToRegenerate)
     val sourceMetadataPath: Option[String] =
       if neededDynamic.isEmpty then None
       else preservedStructWbRels.flatMap(SheetMetadataPart.locate)
+    val sourceMetadataPresent: Boolean =
+      sourceMetadataPath.exists(path => sourceContext.exists(_.partManifest.contains(path)))
     val sourceMetadataXml: Option[String] = (sourceContext, sourceMetadataPath) match
-      case (Some(ctx), Some(path)) if ctx.partManifest.contains(path) =>
+      case (Some(ctx), Some(path)) if sourceMetadataPresent =>
         withSourceZip(ctx.content)(readZipEntry(_, path))
       case _ => None
+    // a relationship naming a part the package lacks (dangling): the part is generated AT that
+    // target, so the relationship (and any Override for it) points at a real part again
+    val danglingMetadataPath: Option[String] =
+      sourceMetadataPath.filterNot(_ => sourceMetadataPresent)
     val metadataPlan: SheetMetadataPart.CellMetadataPlan =
       (sourceMetadataPath, sourceMetadataXml) match
-        // a relationship naming a part the package lacks: nothing to extend or to point at
-        case (Some(_), None) => SheetMetadataPart.CellMetadataPlan.none
-        case _ =>
-          SheetMetadataPart.plan(
-            sourceMetadataXml,
-            neededDynamic,
-            sourceMetadataPath.getOrElse(SheetMetadataPart.defaultPath)
-          )
+        // a present part that cannot be read: nothing to extend, and a second part would orphan
+        // whatever else it holds — the records are written without `cm` (cellMetadataDowngrade)
+        case (Some(_), None) if sourceMetadataPresent => SheetMetadataPart.CellMetadataPlan.none
+        case (Some(path), Some(xml)) =>
+          SheetMetadataPart.plan(Some(xml), neededDynamic, path)
+        case _ => SheetMetadataPart.plan(None, neededDynamic)
     val generatedMetadataPath: Option[String] = metadataPlan.output match
       case SheetMetadataPart.MetadataOutput.Generated(_) =>
         val claimed = sourceContext.map(_.partManifest.entries.keySet).getOrElse(Set.empty)
-        Some(
-          (Iterator.single(SheetMetadataPart.defaultPath) ++
-            Iterator.from(2).map(n => s"xl/metadata$n.xml")).filterNot(claimed.contains).next()
+        danglingMetadataPath.orElse(
+          Some(
+            (Iterator.single(SheetMetadataPart.defaultPath) ++
+              Iterator.from(2).map(n => s"xl/metadata$n.xml")).filterNot(claimed.contains).next()
+          )
         )
       case _ => None
     // the source path whose bytes this write replaces (skipped by the verbatim copy loop)

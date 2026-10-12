@@ -319,3 +319,94 @@ class SheetMetadataPartSpec extends ScalaCheckSuite:
       assertEquals(again.cmOf, p.cmOf)
     }
   }
+
+  /**
+   * An arbitrary readable part: up to two non-XLDAPR types and an optional XLDAPR type at any
+   * position, up to three XLDAPR blocks with any flags, and up to three cell blocks of one or two
+   * records naming any type (so blocks shared between XLDAPR and other records occur too).
+   */
+  private val genPart: Gen[String] =
+    for
+      others <- Gen.choose(0, 2)
+      withDapr <- if others == 0 then Gen.const(true) else Gen.oneOf(true, false)
+      at <- Gen.choose(0, others)
+      flags <- Gen
+        .choose(1, 3)
+        .flatMap(n => Gen.listOfN(n, Gen.zip(Gen.oneOf("0", "1"), Gen.oneOf("0", "1"))))
+      names = {
+        val other = Vector.tabulate(others)(i => s"XLOTHER$i")
+        if withDapr then other.patch(at, Vector("XLDAPR"), 0) else other
+      }
+      rc = Gen.choose(1, names.size).flatMap { t =>
+        val blocks = if names(t - 1) == "XLDAPR" then flags.size else 1
+        Gen.choose(0, blocks - 1).map(v => s"""<rc t="$t" v="$v"/>""")
+      }
+      cells <- Gen
+        .choose(0, 3)
+        .flatMap(n => Gen.listOfN(n, Gen.choose(1, 2).flatMap(Gen.listOfN(_, rc))))
+    yield
+      val types =
+        names.map(n => if n == "XLDAPR" then xldaprType else richType.replace("XLRICHVALUE", n))
+      val future = names.map { n =>
+        if n == "XLDAPR" then
+          s"""<futureMetadata name="XLDAPR" count="${flags.size}">${flags
+              .map((d, c) => dapr(d, c))
+              .mkString}</futureMetadata>"""
+        else
+          s"""<futureMetadata name="$n" count="1"><bk><extLst><ext uri="{3e2802c4-a4d2-4d8b-9148-e3be6c30e623}"><xlrd:rvb i="0"/></ext></extLst></bk></futureMetadata>"""
+      }
+      val cellPart =
+        if cells.isEmpty then ""
+        else
+          s"""<cellMetadata count="${cells.size}">${cells
+              .map(b => s"<bk>${b.mkString}</bk>")
+              .mkString}</cellMetadata>"""
+      s"""$head<metadata $ns $xlrdNs $xdaNs><metadataTypes count="${names.size}">${types.mkString}</metadataTypes>${future.mkString}$cellPart</metadata>"""
+
+  /**
+   * What each `cm` index (1-based `cellMetadata/bk`) means, and what each `futureMetadata` block
+   * holds: every record as its type's name plus the block it names, compacted. Independent of the
+   * type and block numbering, so a renumbering that kept meanings would still pass, and any change
+   * of meaning would not.
+   */
+  private def meanings(xml: String): (Vector[Vector[String]], Map[String, Vector[String]]) =
+    val root = XmlSecurity.parseSafe(xml, "metadata.xml").fold(e => fail(e.message), identity)
+    def kids(e: Elem, label: String): Vector[Elem] =
+      e.child.collect { case c: Elem if c.label == label => c }.toVector
+    def at(e: Elem, name: String): String = e.attributes.asAttrMap.getOrElse(name, "")
+    val types = kids(root, "metadataTypes").flatMap(kids(_, "metadataType")).map(at(_, "name"))
+    val future =
+      kids(root, "futureMetadata")
+        .map(f => at(f, "name") -> kids(f, "bk").map(XmlUtil.compact))
+        .toMap
+    val cells = kids(root, "cellMetadata").flatMap(kids(_, "bk")).map { bk =>
+      kids(bk, "rc").map { rc =>
+        val name = types.lift(at(rc, "t").toInt - 1).getOrElse(fail(s"no type ${at(rc, "t")}"))
+        val block =
+          future.get(name).flatMap(_.lift(at(rc, "v").toInt)).getOrElse(fail(s"no block: $xml"))
+        s"$name:$block"
+      }
+    }
+    (cells, future)
+
+  property("plan over any part: existing cm/bk meanings never move, every planned cm resolves") {
+    val genNeeded = Gen.nonEmptyContainerOf[Set, ArrayMode.Dynamic](Gen.oneOf(plain, collapsed))
+    forAll(genPart, genNeeded) { (source, needed) =>
+      val p = SheetMetadataPart.plan(Some(source), needed)
+      val out = outputXml(source, p)
+      val (cellsBefore, futureBefore) = meanings(source)
+      val (cellsAfter, futureAfter) = meanings(out)
+      // every existing cm index means what it meant; new ones only follow
+      assertEquals(cellsAfter.take(cellsBefore.size), cellsBefore, out)
+      // every existing futureMetadata block keeps its position (rc v) and content
+      futureBefore.foreach { case (name, blocks) =>
+        assertEquals(futureAfter.getOrElse(name, Vector.empty).take(blocks.size), blocks, out)
+      }
+      val before = resolve(source)
+      val after = resolve(out)
+      before.foreach { case (cm, mode) => assertEquals(after.get(cm), Some(mode), out) }
+      // the plan covers exactly what was asked, and the written part resolves each to its variant
+      assertEquals(p.cmOf.keySet, needed)
+      p.cmOf.foreach { case (mode, cm) => assertEquals(after.get(cm), Some(mode), out) }
+    }
+  }
