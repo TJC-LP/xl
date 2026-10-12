@@ -1,40 +1,83 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
   /**
-   * XLOOKUP's search. `matchMode` and `searchMode` are checked against their tables first
-   * ([[matchModeError]], [[searchModeError]]); `call` is by name, rendered only for a bad mode or a
-   * miss, never on a hit or for every element of a lifted array. match_mode 0 and 2 walk the lookup
-   * range lazily through [[exactLookupPosition]] (#692: an uncached formula key is computed when
-   * reached, never past the hit); -1 and 1 share the lookups' approximate plane over the
-   * materialised range.
+   * GH-713: the 0-based position of XLOOKUP's match along its lookup vector (one row or column —
+   * `xlookupStrip` has checked the shape), if any. `matchMode` and `searchMode` are checked against
+   * their tables first ([[matchModeError]], [[searchModeError]], #692: Excel's `#VALUE!`, as XMATCH
+   * answers); `call` is by name, rendered only for a bad mode, never on a hit or for every element
+   * of a lifted array.
+   *
+   * Keys are read through the evaluating reader (#692), so an uncached formula key is computed, and
+   * the first key that fails to evaluate ends the search with its error. match_mode 0 and 2 walk
+   * the vector lazily through [[exactLookupPosition]]: a key is computed when reached, never past
+   * the hit, and the cells past the used range of a full column or row are left out, since an exact
+   * or wildcard match never matches a blank. The approximate modes (-1, 1) read every key: a vector
+   * that runs to the sheet's edge is read only up to the sheet's used range, and every position
+   * past it is blank, so the first of them in search order stands for them all
+   * (`XLOOKUP(k,A:A,B:M)` reads the data, not a million cells). They keep the first of equal keys,
+   * so a blank key, a reverse search (`search_mode` -1/-2) or a next-smaller/larger match that
+   * lands on the blanks lands on the same position it did when every cell was read.
    */
-  private def performXLookup(
+  private def xlookupIndex(
     lookup: ExprValue,
     lookupSheet: Sheet,
     lookupArray: CellRange,
-    returnSheet: Sheet,
-    returnArray: CellRange,
-    ifNotFoundOpt: Option[AnyExpr],
     matchMode: Int,
     searchMode: Int,
     call: => String,
     ctx: EvalContext
-  ): Either[EvalError, CellValue] =
+  ): Either[EvalError, Option[Int]] =
+    val vertical = lookupArray.width == 1
+    val size = if vertical then lookupArray.height else lookupArray.width
+    def at(i: Int): ARef =
+      if vertical then ARef.from0(lookupArray.colStart.index0, lookupArray.rowStart.index0 + i)
+      else ARef.from0(lookupArray.colStart.index0 + i, lookupArray.rowStart.index0)
+    // The approximate modes: positions [0, read) reach the used range; [read, size) lie past it,
+    // blank. Only a vector that runs to the sheet's edge (`A:A`, `2:2`) is clamped: `usedRange`
+    // scans every populated cell, so a bounded lookup (`$A$2:$A$50`) — the common case — never
+    // pays for it, as in SUMPRODUCT's computeBounds. -2 iterates reversed like -1 (descending
+    // order, GH-55). The blank tail is one position, the first the search meets: its end in
+    // reverse. This relies on `approximateMatch` with `lastOnTie = false` keeping the FIRST of
+    // equal candidates in iteration order; a rule that kept the last tie would need the tail's
+    // other end.
+    def approximate: Either[EvalError, Option[Int]] =
+      val read =
+        if !lookupReadsUsedRange(lookupArray) then size
+        else
+          lookupSheet.usedRange.fold(0) { used =>
+            val (start, usedEnd) =
+              if vertical then (lookupArray.rowStart.index0, used.rowEnd.index0)
+              else (lookupArray.colStart.index0, used.colEnd.index0)
+            math.max(0, math.min(size, usedEnd - start + 1))
+          }
+      val reverse = searchMode < 0
+      val blankTail: Vector[Int] =
+        if read < size then Vector(if reverse then size - 1 else read) else Vector.empty
+      val indices: Vector[Int] =
+        if reverse then blankTail ++ (read - 1 to 0 by -1) else (0 until read).toVector ++ blankTail
+      val reader = rangeCellReader(lookupSheet, ctx)
+      def valueAt(i: Int): Either[EvalError, CellValue] =
+        if i >= read then Right(CellValue.Empty) else reader(at(i))
+      indices
+        .foldLeft[Either[EvalError, Vector[(Int, CellValue)]]](Right(Vector.empty)) {
+          case (Left(err), _) => Left(err)
+          case (Right(keys), i) => valueAt(i).map(cv => keys :+ (i -> cv))
+        }
+        .map(keys => approximateMatch(keys, lookup, matchMode, lastOnTie = false))
     for
-      // #692: a mode outside its table is Excel's #VALUE!, as XMATCH answers
       _ <- matchModeError("XLOOKUP", matchMode, call)
       _ <- searchModeError("XLOOKUP", searchMode, call)
-      matchedIndexOpt <- matchMode match
+      index <- matchMode match
         case 0 => exactLookupPosition(lookupArray, lookupSheet, ctx, lookup, None, searchMode)
         case 2 =>
           exactLookupPosition(
@@ -45,34 +88,53 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
             wildcardCriterion(lookup),
             searchMode
           )
-        // #670(g): the next-smaller/larger modes share the lookups' approximate plane (text keys
-        // included); a linear search over the evaluating reader's rows (keys as row-major
-        // positions, cut off at the used range), so a tie keeps the first key in search order;
-        // -2 iterates reversed like -1 (descending order, GH-55)
-        case -1 | 1 =>
-          lookupRangeValues(lookupArray, lookupSheet, ctx).map { values =>
-            val keys = values.zipWithIndex.flatMap { (row, r) =>
-              row.zipWithIndex.map { (cv, c) => (r * lookupArray.width + c, cv) }
-            }
-            val ordered = if searchMode < 0 then keys.reverse else keys
-            approximateMatch(ordered, lookup, matchMode, lastOnTie = false)
-          }
+        case -1 | 1 => approximate
         // unreachable: the mode was validated above; kept total so a mode that slipped through
         // would get the same #VALUE! rather than the approximate search
         case other => matchModeError("XLOOKUP", other, call).map(_ => None)
-      result <- matchedIndexOpt match
-        case Some(idx) =>
-          val at = ARef.from0(
-            returnArray.colStart.index0 + idx % lookupArray.width,
-            returnArray.rowStart.index0 + idx / lookupArray.width
+    yield index
+
+  /**
+   * Whether XLOOKUP's search reads the sheet's used range for `lookup` (one row or column): only
+   * when the vector runs to the sheet's edge along its own axis. Pinned by `ComputedReferenceSpec`
+   * with [[readsUsedRange]].
+   */
+  private[formula] def lookupReadsUsedRange(lookup: CellRange): Boolean =
+    if lookup.width == 1 then lookup.rowEnd.index0 == Row.MaxIndex0
+    else lookup.colEnd.index0 == Column.MaxIndex0
+
+  /**
+   * GH-713: the strip of `return_array` a match at position i selects — Excel's shape rule. A
+   * one-column lookup array of the return array's height selects row i (tried first, so a 1×1
+   * lookup array beside a one-row return array returns that row); a one-row lookup array of its
+   * width selects column i. Anything else, a 2-D lookup array included, is `#VALUE!`.
+   *
+   * The strip is total: a position outside the return array — which the shape check above keeps any
+   * match from reaching — is `#REF!`, never a silently wrong-shaped reference.
+   */
+  private[formula] def xlookupStrip(
+    lookup: CellRange,
+    ret: CellRange
+  ): Either[EvalError, Int => Either[EvalError, CellRange]] =
+    def outside(i: Int, axis: String): EvalError =
+      EvalError.ErrorValue(
+        CellError.Ref,
+        Some(s"XLOOKUP: match position ${i + 1} is outside return_array's $axis (${ret.toA1})")
+      )
+    if lookup.width == 1 && ret.height == lookup.height then
+      Right(i => ret.row(i).toRight(outside(i, "rows")))
+    else if lookup.height == 1 && ret.width == lookup.width then
+      Right(i => ret.column(i).toRight(outside(i, "columns")))
+    else
+      // #670: Excel's #VALUE!, a cached error value rather than a host failure
+      Left(
+        EvalError.ErrorValue(
+          CellError.Value,
+          Some(
+            s"XLOOKUP: lookup_array must be one row or column matching return_array's dimension (${lookup.height}×${lookup.width} vs ${ret.height}×${ret.width})"
           )
-          rangeCellReader(returnSheet, ctx)(at)
-        case None =>
-          ifNotFoundOpt match
-            case Some(expr) => evalValue(ctx, expr).map(toCellValue)
-            // #692: one channel for every lookup's miss — the typed #N/A with its diagnostic
-            case None => Left(lookupNotFound(s"XLOOKUP: no match found for lookup value: $call"))
-    yield result
+        )
+      )
 
   /**
    * VLOOKUP/HLOOKUP's search over the key line: approximate (range_lookup TRUE) through the shared
@@ -225,64 +287,84 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       yield result
     }
 
-  val xlookup: FunctionSpec[CellValue] { type Args = XLookupArgs } =
-    FunctionSpec.simple[CellValue, XLookupArgs](
+  /**
+   * XLOOKUP(lookup_value, lookup_array, return_array, [if_not_found], [match_mode], [search_mode])
+   *
+   * GH-713: a reference-returning function, typed `ArrayResult` like INDEX — the match selects a
+   * row of `return_array` (a column for a one-row lookup array, see [[xlookupStrip]]), so
+   * `SUM(XLOOKUP(k,ids,B:M))` folds a year's row, `ROWS` and `:` take it as a reference, array mode
+   * returns it whole, and a plain cell reads it through the implicit intersection (Excel 365's
+   * `=@XLOOKUP(…)`). A miss is `#N/A`; `if_not_found` is a value, never a reference.
+   */
+  val xlookup: FunctionSpec[ArrayResult] { type Args = XLookupArgs } =
+    FunctionSpec.referencing[ArrayResult, XLookupArgs](
       "XLOOKUP",
       Arity.Range(3, 6),
       flags = FunctionFlags(lift = ArrayLift.slots(0))
-    ) { (args, ctx) =>
-      val (lookupValue, lookupLoc, returnLoc, ifNotFoundSlot, matchModeSlot, searchModeSlot) =
-        args
-      // GH-654: XLOOKUP reads an empty optional slot as omitted — `XLOOKUP(x,a,b,,0)` is #N/A
-      // when nothing matches, not a blank result (Excel and LibreOffice agree)
-      val ifNotFoundOpt = unlessOmitted(ifNotFoundSlot)
-      val matchModeOpt = unlessOmitted(matchModeSlot)
-      val searchModeOpt = unlessOmitted(searchModeSlot)
-      val matchModeExpr = matchModeOpt.getOrElse(TExpr.Lit(0))
-      val searchModeExpr = searchModeOpt.getOrElse(TExpr.Lit(1))
-      // GH-394: resolve locations first (Name locations have no static range), then validate
-      // dimensions on the resolved shapes
-      for
-        resolvedLookup <- ctx.resolveRange(lookupLoc)
-        resolvedReturn <- ctx.resolveRange(returnLoc)
-        (lookupSheet, lookupArray) = resolvedLookup
-        (returnSheet, returnArray) = resolvedReturn
-        _ <-
-          if lookupArray.width != returnArray.width || lookupArray.height != returnArray.height
-          then
-            // #670: Excel's #VALUE!, a cached error value rather than a host failure
-            Left(
-              EvalError.ErrorValue(
-                CellError.Value,
-                Some(
-                  s"XLOOKUP: lookup_array and return_array must have same dimensions (${lookupArray.height}×${lookupArray.width} vs ${returnArray.height}×${returnArray.width}): XLOOKUP(…, ${lookupLoc.toA1}, ${returnLoc.toA1}, …)"
-                )
-              )
-            )
-          else Right(())
-        lookupValueEval <- evalValue(ctx, lookupValue)
-        normalized = normalizeLookupValue(lookupValueEval)
-        _ <- lookupValueError("XLOOKUP", normalized)
-        matchModeRaw <- evalValue(ctx, matchModeExpr)
-        searchModeRaw <- evalValue(ctx, searchModeExpr)
-        matchMode <- toIntArg("XLOOKUP", matchModeRaw)
-        searchMode <- toIntArg("XLOOKUP", searchModeRaw)
-        // the rendered call is a diagnostic, passed by name: built only for a bad mode or a miss,
-        // never on a hit or for every element of a lifted array
-        result <- performXLookup(
-          normalized,
-          lookupSheet,
-          lookupArray,
-          returnSheet,
-          returnArray,
-          ifNotFoundOpt,
-          matchMode,
-          searchMode,
-          s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)",
-          ctx
-        )
-      yield result
+    )((args, ctx) => xlookupTarget(args, ctx).map(_.merge)) { (args, ctx) =>
+      xlookupTarget(args, ctx).flatMap { target =>
+        referencedValue(target.left.map(ArrayResult.single), ctx)(boundedReferenceValues(_, ctx))
+      }
     }
+
+  /**
+   * What XLOOKUP selects: the matched strip of `return_array` (`Right`), or the `if_not_found`
+   * value on a miss (`Left`) — a value even in a reference position, so `SUM` takes it as it took
+   * XLOOKUP's value before GH-713. A miss without one is the typed `#N/A`.
+   */
+  private def xlookupTarget(
+    args: XLookupArgs,
+    ctx: EvalContext
+  ): Either[EvalError, Either[CellValue, RangeOperand]] =
+    val (lookupValue, lookupLoc, returnLoc, ifNotFoundSlot, matchModeSlot, searchModeSlot) = args
+    // GH-654: XLOOKUP reads an empty optional slot as omitted — `XLOOKUP(x,a,b,,0)` is #N/A
+    // when nothing matches, not a blank result (Excel and LibreOffice agree)
+    val ifNotFoundOpt = unlessOmitted(ifNotFoundSlot)
+    val matchModeExpr = unlessOmitted(matchModeSlot).getOrElse(TExpr.Lit(0))
+    val searchModeExpr = unlessOmitted(searchModeSlot).getOrElse(TExpr.Lit(1))
+    val call = s"XLOOKUP(…, ${lookupLoc.toA1}, ${returnLoc.toA1}, …)"
+    // GH-394: resolve locations first (Name locations have no static range), then validate
+    // the shapes on the resolved ranges
+    for
+      resolvedLookup <- ctx.resolveRange(lookupLoc)
+      resolvedReturn <- ctx.resolveRange(returnLoc)
+      (lookupSheet, lookupArray) = resolvedLookup
+      (returnSheet, returnArray) = resolvedReturn
+      strip <- xlookupStrip(lookupArray, returnArray).left.map {
+        case EvalError.ErrorValue(code, detail) =>
+          EvalError.ErrorValue(code, detail.map(d => s"$d: $call"))
+        case other => other
+      }
+      lookupValueEval <- evalValue(ctx, lookupValue)
+      normalized = normalizeLookupValue(lookupValueEval)
+      _ <- lookupValueError("XLOOKUP", normalized)
+      matchModeRaw <- evalValue(ctx, matchModeExpr)
+      searchModeRaw <- evalValue(ctx, searchModeExpr)
+      matchMode <- toIntArg("XLOOKUP", matchModeRaw)
+      searchMode <- toIntArg("XLOOKUP", searchModeRaw)
+      // the rendered call is a diagnostic, passed by name: built only for a bad mode or a miss,
+      // never on a hit or for every element of a lifted array
+      fullCall = () =>
+        s"XLOOKUP(${renderLookupValue(normalized)}, ${lookupLoc.toA1}, ${returnLoc.toA1}, $matchMode, $searchMode)"
+      index <- xlookupIndex(
+        normalized,
+        lookupSheet,
+        lookupArray,
+        matchMode,
+        searchMode,
+        fullCall(),
+        ctx
+      )
+      result <- index match
+        case Some(i) => strip(i).map(selected => Right(RangeOperand(returnSheet, selected)))
+        case None =>
+          ifNotFoundOpt match
+            case Some(expr) =>
+              evalValue(ctx, expr).map(v => Left(toCellValue(v)))
+            // #692: one channel for every lookup's miss — the typed #N/A with its diagnostic
+            case None =>
+              Left(lookupNotFound(s"XLOOKUP: no match found for lookup value: ${fullCall()}"))
+    yield result
 
   /**
    * LOOKUP(lookup_value, lookup_vector, [result_vector]) and LOOKUP(lookup_value, array) — #670(d).

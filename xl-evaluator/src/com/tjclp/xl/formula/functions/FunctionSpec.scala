@@ -257,6 +257,21 @@ object EvalContext:
    * static walk has found it computed. The evaluator sets it. A hand-built context without it
    * evaluates the name through `evalReference`, which without a `referenceArg` is the array
    * evaluator: a name computing a reference then arrives as its values, and the slot is `#VALUE!`.
+   *
+   * `arrayRangeBounds`, `boundedArrayArg` — SUMPRODUCT's shared extent, ambient state with a fixed
+   * scope. SUMPRODUCT sets it (through `boundedArrayArg`) for each expression argument it
+   * evaluates; it then rides along the path its static trimming (`TExpr.transformRanges`) takes —
+   * operators, LET scopes and the calls whose flags answer `entersArrayRangeBounds` (lifted calls;
+   * ROW, COLUMN) — so a computed whole-column reference there (`INDEX(A:A,0)`,
+   * `XLOOKUP(k,ids,B:B)`, `A1:INDEX(A:A,n)`, `ROW(INDEX(A:A,0))`) stops where the argument's
+   * written ranges do. These end it: any other call (MAX, SUM, a nested SUMPRODUCT, which sets its
+   * own), whose arguments evaluate outside it, as Excel reads them whole (GH-712,
+   * `Evaluator.evalCall`); a defined name's own formula; another formula cell read on the way (a
+   * precedent, a spill anchor), which evaluates on a fresh evaluator with none; and the end of the
+   * top-level evaluation, since every public entry point starts without one. It is read through
+   * `boundArrayRange` — by `FunctionSpecsBase.boundedReferenceValues`, only for an axis that runs
+   * to the sheet's edge, so a finite reference keeps its declared shape under it, and by ROW and
+   * COLUMN for a computed reference.
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
@@ -504,6 +519,24 @@ object ArgSpec:
       ): TExpr[A] =
         mapExpr(args).asInstanceOf[TExpr[A]]
 
+  /**
+   * GH-713: the calls a range slot names as "a computed reference" rather than reporting an
+   * argument count — every registered reference-computing function
+   * ([[ReferenceFunctionNames.computing]], tied to the registry by the drift law) and the `:`
+   * operator. It differs from `Evaluator.referenceFunctions` on purpose: a selector
+   * (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an intersection is not a
+   * computed reference. The drift law ties the two sets together.
+   */
+  private[formula] val computedReferenceCalls: Set[String] =
+    ReferenceFunctionNames.computing + ReferenceOperators.RangeName
+
+  /** A call to one of [[computedReferenceCalls]], looking through the parser's coercion wrapper. */
+  private object ComputedReferenceCall:
+    def unapply(e: TExpr[?]): Option[TExpr.Call[?]] = e match
+      case TExpr.Coerced(inner, _) => unapply(inner)
+      case call: TExpr.Call[?] if computedReferenceCalls.contains(call.spec.name) => Some(call)
+      case _ => None
+
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")
 
@@ -558,6 +591,21 @@ object ArgSpec:
             (
               TExpr.RangeLocation.External(index, name, singleCell(at, anchor), RangeForm.Cell),
               tail
+            )
+          )
+        // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
+        // is named, never reported as a wrong argument count — accepting it here is #723's
+        case ComputedReferenceCall(call) :: _ =>
+          // named after the call itself, so the message follows the derived set
+          val computed =
+            if call.spec.name == ReferenceOperators.RangeName then "the range operator `:`"
+            else s"${call.spec.name}(…)"
+          Left(
+            ParseError.InvalidArguments(
+              fnName,
+              pos,
+              describe,
+              s"a computed reference ($computed), which this range argument does not accept yet"
             )
           )
         case _ =>

@@ -10,6 +10,7 @@ import com.tjclp.xl.formula.functions.{
   FunctionSpec,
   FunctionSpecs,
   LiftSlot,
+  ReferenceFunctionNames,
   ReferenceOperators
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
@@ -702,21 +703,17 @@ object Evaluator:
 
   /**
    * The functions that return a reference (Excel's IF, IFS, CHOOSE and SWITCH return the reference
-   * they select; OFFSET, INDIRECT and INDEX compute one; GH-669: so does the intersection operator
-   * ` `): in a reference position their result reaches the consumer whole, in a plain cell's value
-   * position it is implicitly intersected.
+   * they select; OFFSET, INDIRECT, INDEX and, GH-713, XLOOKUP compute one; GH-669: so does the
+   * intersection operator ` `, and GH-713 the range operator `:`): in a reference position their
+   * result reaches the consumer whole, in a plain cell's value position it is implicitly
+   * intersected. Built from `ReferenceFunctionNames` (the selectors, and every registered
+   * `FunctionSpec.Referencing`, which the drift law ties to the registry) and the two operators,
+   * which are unregistered. Static, so the parser's reference-shape check never initializes the
+   * registry.
    */
   private[formula] val referenceFunctions: Set[String] =
-    Set(
-      "IF",
-      "IFS",
-      "CHOOSE",
-      "SWITCH",
-      "OFFSET",
-      "INDIRECT",
-      "INDEX",
-      ReferenceOperators.IntersectionName
-    )
+    ReferenceFunctionNames.selecting ++ ReferenceFunctionNames.computing +
+      ReferenceOperators.IntersectionName + ReferenceOperators.RangeName
 
   /**
    * GH-669: an operator node (binary, `%` or unary `+`) whose operands are only array constants,
@@ -1340,6 +1337,7 @@ private class EvaluatorImpl(
   resolvingNames: Evaluator.NameTrail = Evaluator.NameTrail.empty,
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
+  // SUMPRODUCT's shared extent, ambient below it: scope documented on EvalContext.Operands
   arrayRangeBounds: Option[CellRange => CellRange] = None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
@@ -1365,7 +1363,7 @@ private class EvaluatorImpl(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1842,7 +1840,7 @@ private class EvaluatorImpl(
         resolvingNames, // GH-384: the name-cycle guard survives array-argument evaluation
         workbookPath,
         aggregateMemoOpt,
-        bounds
+        arrayRangeBounds = bounds
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -2159,7 +2157,7 @@ private class EvaluatorImpl(
         resolvingNames,
         workbookPath,
         aggregateMemoOpt,
-        arrayRangeBounds
+        arrayRangeBounds = arrayRangeBounds
       )
     // An array evaluation binds references when a range slot reads a LET name (GH-710) or when
     // something inspects a reference's position or shape (GH-712). One flag for the whole LET,
@@ -2995,7 +2993,7 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -3009,5 +3007,5 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds
     )
