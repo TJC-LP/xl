@@ -63,9 +63,10 @@ private[xl] object ValueDependencies:
    * `home` read `home`, and its unqualified ones read its own sheet, so nothing here (`--with`'s
    * search for another sheet's formulas that read back into the overridden one).
    *
-   * With `names`, a defined name read as a value reads what its definition reads ([[Names]]), as
-   * resolved from `current`, the sheet the formula sits on (`home` when it is not given). Without,
-   * a name reads nothing: the placement guard catches a read through one at run time.
+   * With `names`, a defined name read as a value or in a range slot (`SUMIF(rng, …)`, GH-761) reads
+   * what its definition reads ([[Names]]), as resolved from `current`, the sheet the formula sits
+   * on (`home` when it is not given). Without, a name reads nothing: the placement guard catches a
+   * read through one at run time.
    *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
@@ -110,14 +111,15 @@ private[xl] object ValueDependencies:
       def cell(at: ARef): Set[CellRange] =
         if referenceOnly then Set.empty else Set(CellRange(at, at))
       def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
-      // a defined name read as a value: what its definition reads on `home`
+      // a defined name's reads: what its definition reads on `home`, resolved from `current`
+      def resolved(qualifier: Option[SheetName], name: String): Set[CellRange] =
+        (names, home, current.orElse(home)) match
+          case (Some(resolver), Some(target), Some(from)) =>
+            resolver.reads(qualifier, name, from, target, bounds)
+          case _ => Set.empty
+      // a defined name read as a value
       def named(qualifier: Option[SheetName], name: String): Set[CellRange] =
-        if referenceOnly then Set.empty
-        else
-          (names, home, current.orElse(home)) match
-            case (Some(resolver), Some(target), Some(from)) =>
-              resolver.reads(qualifier, name, from, target, bounds)
-            case _ => Set.empty
+        if referenceOnly then Set.empty else resolved(qualifier, name)
       // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
       def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
       def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
@@ -135,6 +137,9 @@ private[xl] object ValueDependencies:
               location match
                 case TExpr.RangeLocation.Local(r, _) => if localReads then cells(r) else Set.empty
                 case TExpr.RangeLocation.CrossSheet(sheet, r, _) if local(sheet) => cells(r)
+                // GH-761: a defined name in a range slot (SUMIF(rng, …)) reads what it names, as
+                // a name read as a value does
+                case TExpr.RangeLocation.Name(name, scope) => resolved(scope, name)
                 case _ => Set.empty
         case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 

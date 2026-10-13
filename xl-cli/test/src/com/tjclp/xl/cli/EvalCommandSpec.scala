@@ -998,6 +998,54 @@ class EvalCommandSpec extends CatsEffectSuite:
       }
   }
 
+  /**
+   * GH-761: Data: B1 = 10, B2 = 1. Other: A2 = SUMIF(rng,">0") (11), A3 = COUNTIF(rng,">5") (1), A4 =
+   * SUM(rng) (11), each cached. Names: rng = Data!$B$1:$B$2, read in a range slot (A2, A3) and as a
+   * value (A4).
+   */
+  private val rangeSlotReadBacks: Workbook =
+    val book = Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"B1", CellValue.Number(BigDecimal(10)))
+          .put(ref"B2", CellValue.Number(BigDecimal(1))),
+        Sheet("Other")
+          .put(ref"A2", cachedFormula("=SUMIF(rng,\">0\")", 11))
+          .put(ref"A3", cachedFormula("=COUNTIF(rng,\">5\")", 1))
+          .put(ref"A4", cachedFormula("=SUM(rng)", 11))
+      )
+    )
+    book.copy(metadata =
+      book.metadata.copy(definedNames = Vector(DefinedName("rng", "Data!$B$1:$B$2")))
+    )
+
+  test("GH-761: --with reaches a cached reader through a defined name in a range slot") {
+    // B1 = 0: SUMIF over rng is 1, COUNTIF(rng,">5") is 0, SUM(rng) is 1. Before the fix the
+    // range-slot readers kept their caches (11 and 1) while the value-position SUM did not.
+    val data = rangeSlotReadBacks.sheets.headOption
+    val overrides = List("B1=0")
+    val cases = List("=Other!A2" -> 1, "=Other!A3" -> 0, "=Other!A4" -> 1)
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(rangeSlotReadBacks, data, formula, at, overrides).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _)
+  }
+
+  test("GH-761 CLI: eval --with sees past a range-slot name's cache in a saved file") {
+    for
+      book <- written(rangeSlotReadBacks)
+      sumif <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A2", "--with", "B1=0")
+      countif <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A3", "--with", "B1=0")
+    yield
+      assertEquals(sumif.exit, 0, sumif.stderr)
+      assert(sumif.stdout.contains("Result: 1 (number)"), sumif.stdout)
+      assertEquals(countif.exit, 0, countif.stderr)
+      assert(countif.stdout.contains("Result: 0 (number)"), countif.stdout)
+  }
+
   test("GH-715: evala --with sees another sheet's cached read-back without its cache") {
     // evala goes through the same stale-reader search as eval: Other!A1 is 800, not its 20
     val data = cachedReadBacks.sheets.headOption

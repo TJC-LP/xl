@@ -224,7 +224,8 @@ class ValueDependenciesSpec extends FunSuite:
           DefinedName("loc", "Data!$A$1"),
           DefinedName("loc", "Data!$B$1", localSheetId = Some(1)),
           DefinedName("ping", "pong+1"),
-          DefinedName("pong", "ping+Data!$C$1")
+          DefinedName("pong", "ping+Data!$C$1"),
+          DefinedName("block", "Data!$B$1:$C$2")
         )
       )
     )
@@ -258,6 +259,30 @@ class ValueDependenciesSpec extends FunSuite:
 
   test("GH-715: names in a cycle terminate and read what their chain reaches") {
     assertEquals(readsOnData("=ping", "Other"), Set(ref"C1"))
+  }
+
+  test("GH-761: a defined name in a range slot reads its definition's reads, through names") {
+    // SUMIF's first slot is a range slot: the name is a RangeLocation.Name, not a NameRef
+    assertEquals(readsOnData("=SUMIF(block,\">0\")", "Other"), ref"B1:C2".cells.toSet)
+    assertEquals(readsOnData("=COUNTIF(rate,\">5\")", "Other"), Set(ref"B1"))
+    assertEquals(readsOnData("=SUMIF(base,\">0\")", "Other"), Set(ref"B1"))
+    // the same resolution rules as a value-position name: an unqualified body resolves from the
+    // referencing sheet, a sheet-scoped name shadows the workbook's on its own sheet, and a
+    // qualifier names the sheet the name resolves from
+    assertEquals(readsOnData("=SUMIF(ubase,\">0\")", "Other"), Set.empty[ARef])
+    assertEquals(readsOnData("=SUMIF(ubase,\">0\")", "Data"), Set(ref"B1"))
+    assertEquals(readsOnData("=COUNTIF(loc,\">5\")", "Other"), Set(ref"B1"))
+    assertEquals(readsOnData("=COUNTIF(loc,\">5\")", "Data"), Set(ref"A1"))
+    assertEquals(readsOnData("=COUNTIF(Other!loc,\">5\")", "Data"), Set(ref"B1"))
+    // inspecting a name is not a read; an unknown name reads nothing
+    assertEquals(readsOnData("=ROWS(block)", "Other"), Set.empty[ARef])
+    assertEquals(readsOnData("=SUMIF(nosuchname,\">0\")", "Other"), Set.empty[ARef])
+  }
+
+  test("GH-761: a range-slot name reads nothing without names, as a value-position name does") {
+    val reader = ValueDependencies.Reader(Some(ref"A1:F10"), Some(SheetName.unsafe("Data")))
+    assertEquals(reader.reads(parsed("=SUMIF(block,\">0\")")), Set.empty[ARef])
+    assertEquals(reader.reads(parsed("=block*2")), Set.empty[ARef])
   }
 
 object ValueDependenciesSpec:
