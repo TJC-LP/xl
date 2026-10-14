@@ -1,12 +1,16 @@
 # XL Project Status
 
-**Last Updated**: 2026-10-12 (0.24.0)
+**Last Updated**: 2026-10-14 (0.24.1)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.24.1** (2026-10-14) — one fix, from a review of the `--with` stale-reader search:
+- ✅ **`eval --with` through range-slot names** (#761) — a cached formula that reads an overridden cell through a defined name in a function's range argument (`SUMIF(rng,">0")`, `COUNTIF(rng,">5")`, `VLOOKUP(x,tbl,2)`), or through a name that sizes `SUMIF`'s or `AVERAGEIF`'s sum range (`SUMIF(rng,">0",Data!C1)` sums C1:C2), drops its cache under `--with`, as one reading the name as a value already did
+- Follow-up filed: #763 (readers through OFFSET or INDIRECT, directly or in a defined name, keep their caches under `--with`)
 
 **New in 0.24.0** (2026-10-12) — Excel parity in the evaluator, from three runs: the Weaver dogfood of 0.23.1 (five CLI findings, seven clusters, #683), wave 31's sweep of the wave-30 follow-ups (#697, then #698–#704), and wave 32 (#705–#722, #756, #757), every evaluator change pinned against LibreOffice; eighteen **Breaking** entries:
 - ✅ **Plain cells evaluate as Excel's legacy formula** — implicit intersection in value positions (`=SUM(A1:A10*E1:E10)` in row 5 is A5*E5), array contexts keep dynamic-array semantics, and 74 scalar functions lift over arrays (`=SUMPRODUCT(--ISNUMBER(r))`)
@@ -266,14 +270,14 @@
 
 ### Test Coverage
 
-**9,394 test cases** (verified via `./mill __.test`, 2026-10-12, the 0.24.0 release branch): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,401 test cases** (verified via `./mill __.test`, 2026-10-14, the 0.24.1 release branch): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3835 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 3839 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1362 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1904 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 1907 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 209 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
