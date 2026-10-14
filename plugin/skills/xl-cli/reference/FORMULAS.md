@@ -149,8 +149,11 @@ it are hand-written semantics worth knowing.
 **Aggregates and criteria.** `SUM`, `COUNT`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `VAR` and
 their variants are variadic: `=SUM(1,2,3)`, `=SUM(A1:A5, B1:B5)`, `=SUM(A1, 5, B1:B3)`. Criteria for
 `SUMIF`/`COUNTIF`/`AVERAGEIF`/`SUMIFS`/`COUNTIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` follow Excel:
-`">100"`, `"<>0"`, `"Yes"`, and `*`/`?` wildcards (`"Widget*"`). `MAXIFS`/`MINIFS` return `0` when
-nothing matches. `SUMPRODUCT` accepts array expressions such as `(A1:A5="Yes")*B1:B5`.
+`">100"`, `"<>0"`, `"Yes"`, and `*`/`?` wildcards (`"Widget*"`). `~*`, `~?` and `~~` match a literal
+`*`, `?` and `~`, but only in a criterion that contains a `*` or `?`; without one, `~` is an ordinary
+character (`"a~~b"` matches only `a~~b`). So to match a text key exactly, use it as is when it has no
+`*` or `?`, and otherwise escape every `~`, `*` and `?` (not `SUBSTITUTE(key,"~","~~")` alone).
+`MAXIFS`/`MINIFS` return `0` when nothing matches. `SUMPRODUCT` accepts array expressions such as `(A1:A5="Yes")*B1:B5`.
 
 **Statistics.** `STDEV`/`VAR` are the sample forms (n−1); `STDEVP`/`VARP` the population forms
 (n). With too few values (sample forms under two, population forms none) the result is `#DIV/0!`,
