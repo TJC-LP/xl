@@ -99,7 +99,10 @@ xl batch --schema                                  # JSON Schema of the batch do
 > `batch --dry-run` accept `--max-size` and ignore it, so a `--max-size 0` prefix never breaks
 > them. Any other global a verb does not take exits 2 with `code: USAGE` and names the flag:
 > `xl --backend saxstax -f f.xlsx view A1` says `view does not take --backend`, and the hint says
-> why. When the line has a second mistake, the parser's error for that one is reported instead.
+> why. Without `-f`, `batch --dry-run` and `batch --schema` take only `--max-size`, `--stream` and
+> `--json` (`batch --dry-run does not take --no-recalc`); with `-f` the line is a batch on that file
+> and takes every global. When the line has a second mistake, the parser's error for that one is
+> reported instead.
 
 > **The file is always `-f <path>`, never positional.** The first non-flag token on the command
 > line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails

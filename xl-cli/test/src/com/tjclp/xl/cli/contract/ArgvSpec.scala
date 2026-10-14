@@ -786,9 +786,20 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
   private def parses(line: List[String]): Boolean =
     Cli.command(CliIO.system).parse(Argv.hoist(line), Map.empty).isRight
 
-  test("GH-766: every verb has a base command line that parses") {
+  /**
+   * Forms of a verb whose globals differ from its base line's: the standalone `batch --dry-run` and
+   * `batch --schema` (no `-f`) take only --max-size, --stream and --json; `sheets hide` writes.
+   */
+  private val formBases: Vector[(String, List[String])] = Vector(
+    "batch" -> List("batch", "--dry-run", "b.json"),
+    "batch" -> List("batch", "--schema"),
+    "sheets" -> List("-f", "f.xlsx", "-o", "o.xlsx", "sheets", "hide", "Data")
+  )
+
+  test("GH-766: every verb, and every extra form, has a base command line that parses") {
     val missing = Argv.verbs.filter(baseLine(_).isEmpty)
     assertEquals(missing, Vector.empty[String])
+    assertEquals(formBases.filterNot((_, line) => parses(line)), Vector.empty)
   }
 
   /** A value for each value-taking global, by long name. */
@@ -820,8 +831,9 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       "and Argv.verbGlobals is exactly what the parser takes"
   ) {
     val io = CliIO.system
-    val bases = Argv.verbs.flatMap(verb => baseLine(verb).map(verb -> _).toList)
-    assertEquals(bases.size, Argv.verbs.size)
+    val verbBases = Argv.verbs.flatMap(verb => baseLine(verb).map(verb -> _).toList)
+    assertEquals(verbBases.size, Argv.verbs.size)
+    val bases = verbBases ++ formBases
     val failures = for
       (verb, base) <- bases
       (name, tokens) <- globalSpellings
@@ -837,7 +849,7 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
         case (Some(refusal), "--stream") =>
           Option.unless(refusal.message.contains("--stream"))(s"${line.mkString(" ")}: $refusal")
         case _ =>
-          val accepted = ownFlag || Argv.verbGlobals.getOrElse(verb, Set.empty).contains(long)
+          val accepted = ownFlag || Argv.acceptedGlobals(argv).exists(_._2.contains(long))
           Cli.command(io).parse(argv, Map.empty) match
             case Right(_) =>
               Option.unless(accepted)(s"${line.mkString(" ")}: parses, table says refused")
@@ -877,6 +889,29 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     assertEquals(Argv.unacceptedGlobals(List("-f", "--backend", "names")), Vector())
     assertEquals(Argv.unacceptedGlobals(List("-f", "f.xlsx", "search", "--", "--strict")), Vector())
     assertEquals(Argv.unacceptedGlobals(List("--backend", "x", "viwe")), Vector())
+    // the standalone batch forms take only --max-size, --stream and --json; with -f, every global
+    assertEquals(
+      Argv.unacceptedGlobals(
+        List("--no-recalc", "-s", "Data", "--max-size", "0", "batch", "--dry-run", "b.json")
+      ),
+      Vector("--no-recalc", "--sheet")
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("-o", "o.xlsx", "batch", "--schema")),
+      Vector("--output")
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("-f", "f.xlsx", "--no-recalc", "batch", "--dry-run", "b.json")),
+      Vector()
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("--no-recalc", "batch", "b.json", "--", "--dry-run")),
+      Vector()
+    )
+    assertEquals(
+      Argv.acceptedGlobals(List("--strict", "batch", "--dry-run", "b.json")).map(_._1),
+      Some("batch --dry-run")
+    )
   }
 
   test("GH-766: Argv.sheetlessVerbs is exactly the verbs whose globals lack --sheet") {
@@ -919,6 +954,7 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       fileOnNew <- CliHarness.run("-f", simple, "new", file("never-766.xlsx"))
       two <- CliHarness.run("-f", simple, "--preserve-caches", "lint", "--backend", "saxstax")
       json <- CliHarness.run("--json", "--max-size", "0", "schema")
+      dryRun <- CliHarness.run("--no-recalc", "batch", "--dry-run", "b.json", "-s", "Data")
     yield
       def check(run: CliRun, message: String, hint: String): Unit =
         assertEquals(run.exit, 2, run.stderr)
@@ -927,15 +963,21 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
         assert(run.stderr.contains(s"  hint: $hint"), run.stderr)
         assert(!run.stderr.contains("Unexpected argument"), run.stderr)
       check(backend, "view does not take --backend", "drop --backend; --backend picks a write's")
-      check(noRecalc, "sheets does not take --no-recalc", "drop --no-recalc; --no-recalc skips")
+      check(noRecalc, "sheets does not take --no-recalc", "drop --no-recalc; --no-recalc applies")
       check(strict, "view does not take --strict", "drop --strict; view's own --strict gates")
       check(maxSize, "functions does not take --max-size", "drop --max-size; functions reads no")
       check(fileOnNew, "new does not take -f/--file", "drop -f/--file; new creates the file it")
       check(
         two,
         "lint does not take --preserve-caches, --backend",
-        "drop --preserve-caches, --backend; --preserve-caches skips"
+        "drop --preserve-caches, --backend; --preserve-caches applies"
       )
+      check(
+        dryRun,
+        "batch --dry-run does not take --no-recalc, -s/--sheet",
+        "drop --no-recalc, -s/--sheet; batch --dry-run without -f reads and writes no workbook"
+      )
+      assert(dryRun.stderr.contains("Run `xl batch --help` for the usage"), dryRun.stderr)
       assert(!Files.exists(Path.of(file("never-766.xlsx"))))
       assertEquals(json.exit, 2, json.stdout)
       val envelope = ujson.read(json.stdout)

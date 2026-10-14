@@ -16,9 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
   the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
   `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
-  `view` points at view's own `--strict` after the verb. `Argv.verbGlobals` is the table of the
-  globals each verb takes; `ArgvSpec` checks every verb with every global, before and after the
-  verb, against the parser, so the table cannot drift from the parser chains.
+  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
+  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
+  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
+  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
+  and after the verb, against the parser, so the table cannot drift from the parser chains.
 
 ## [0.24.1] - 2026-10-14
 
