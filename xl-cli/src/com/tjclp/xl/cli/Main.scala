@@ -2054,19 +2054,24 @@ EXAMPLES:
     mode: OutputMode = OutputMode.Text
   ): IO[Outcome] =
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      execute(
-        filePath,
-        sheetNameOpt,
-        outputOpt,
-        backendOpt,
-        maxSizeOpt,
-        stream,
-        cmd,
-        policy,
-        io,
-        warnings,
-        mode
-      ).attempt.flatMap { attempt =>
+      // GH-768: refused before any read; a streaming write never rewrites the shared-string table
+      val run =
+        if stream && policy.compactStrings then IO.raiseError(compactStringsInStream)
+        else
+          execute(
+            filePath,
+            sheetNameOpt,
+            outputOpt,
+            backendOpt,
+            maxSizeOpt,
+            stream,
+            cmd,
+            policy,
+            io,
+            warnings,
+            mode
+          )
+      run.attempt.flatMap { attempt =>
         warnings.get.map { collected =>
           attempt match
             case Right(payload) =>
@@ -2912,205 +2917,201 @@ EXAMPLES:
     val readerConfig = buildReaderConfig(maxSizeOpt)
     val excel = readerCollecting(warnings, MemoryGuard.heapFor(filePath), readerConfig)
     val warn: Warning => IO[Unit] = warning => warnings.update(_ :+ warning)
-    // GH-768: refused before any read; a streaming write never rewrites the shared-string table
-    if stream && policy.compactStrings then IO.raiseError(compactStringsInStream)
     // Handle metadata-only commands (instant for any file size)
-    else
-      cmd match
-        // Sheets list: quick mode (metadata only, instant) by default, --stats loads the workbook
-        case CliCommand.Sheets(SheetsAction.List(stats)) =>
-          (stats, mode) match
-            // GH-638: the counts need the loaded book — refused like describe --full, before any read
-            case (true, _) if stream =>
-              IO.raiseError(
-                unsupportedInStream(
-                  "sheets --stats is not supported with --stream (the counts need the whole workbook)",
-                  "omit --stats for the metadata-only listing, or omit --stream; use --max-size <MB> for a large file"
-                )
-              )
-            case (true, OutputMode.Text) =>
-              readWorkbook(excel, filePath, readerConfig)
-                .flatMap(WorkbookCommands.sheets)
-                .map(Payload.text)
-            case (true, OutputMode.Json) =>
-              readWorkbook(excel, filePath, readerConfig)
-                .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
-            case (false, OutputMode.Text) =>
-              classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
-            case (false, OutputMode.Json) =>
-              classifyRead(filePath)(WorkbookCommands.sheetsQuickData(filePath))
-                .map(Payload.Json(_))
-        case CliCommand.Sheets(SheetsAction.Hide(name, veryHide)) =>
-          // Hide requires loading workbook and writing output
-          requireOutputAction(outputOpt, "sheets hide") { outputPath =>
-            val config = buildWriterConfig(backendOpt, policy)
-            readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
-              SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
-            }
-          }.map(Payload.text)
-        case CliCommand.Sheets(SheetsAction.Show(name)) =>
-          // Show requires loading workbook and writing output
-          requireOutputAction(outputOpt, "sheets show") { outputPath =>
-            val config = buildWriterConfig(backendOpt, policy)
-            readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
-              SheetCommands.showSheet(wb, name, outputPath, config, stream)
-            }
-          }.map(Payload.text)
-
-        // Names: always lightweight (defined names don't require cell data)
-        case CliCommand.Names =>
-          mode match
-            case OutputMode.Text =>
-              classifyRead(filePath)(WorkbookCommands.namesLight(filePath)).map(Payload.text)
-            case OutputMode.Json =>
-              classifyRead(filePath)(WorkbookCommands.namesData(filePath)).map(Payload.Json(_))
-
-        // Bounds: dimension-first by default (--scan for full scan). The metadata read is the input
-        // read, so a missing or unreadable file is IO_READ here as on every other verb.
-        case CliCommand.Bounds(scan) =>
-          classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
-            announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn) *> {
-              mode match
-                case OutputMode.Text =>
-                  val text =
-                    if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
-                    else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
-                  text.map(Payload.text)
-                case OutputMode.Json =>
-                  StreamingReadCommands
-                    .boundsData(meta, filePath, sheetNameOpt, scan)
-                    .map(Payload.Json(_))
-            }
-          }
-
-        // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
-        case CliCommand.Batch(source, true, _) =>
-          batchDryRunPayload(source, io, mode, warn)
-
-        // --schema prints the document's JSON Schema; no workbook is read, nothing is written
-        case CliCommand.Batch(_, _, true) =>
-          IO.pure(batchSchemaPayload)
-
-        // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
-        // the loaded book's counts. A workbook verb: -s selects nothing, but an explicit -s must
-        // still name a real sheet (SHEET_NOT_FOUND with candidates otherwise). The other workbook
-        // verbs (sheets, names) are parsed without --sheet at all (Cli.scala), so only describe
-        // can see the flag.
-        case CliCommand.Describe(full) =>
-          if !full then
-            classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
-              InspectCommands
-                .checkSheetFlag(sheetNameOpt, "describe")(IO.pure(meta))
-                .as(InspectCommands.describeLight(meta, mode))
-            }
-          else if stream then
+    cmd match
+      // Sheets list: quick mode (metadata only, instant) by default, --stats loads the workbook
+      case CliCommand.Sheets(SheetsAction.List(stats)) =>
+        (stats, mode) match
+          // GH-638: the counts need the loaded book — refused like describe --full, before any read
+          case (true, _) if stream =>
             IO.raiseError(
               unsupportedInStream(
-                "describe --full is not supported with --stream (the counts need the whole workbook)",
-                "omit --full for the metadata-only card, or omit --stream; use --max-size <MB> for a large file"
+                "sheets --stats is not supported with --stream (the counts need the whole workbook)",
+                "omit --stats for the metadata-only listing, or omit --stream; use --max-size <MB> for a large file"
               )
             )
-          else
-            InspectCommands.checkSheetFlag(sheetNameOpt, "describe")(
-              classifyRead(filePath)(excel.readMetadata(filePath))
-            ) *> readWorkbook(excel, filePath, readerConfig)
-              .map(wb => InspectCommands.describe(wb, mode))
+          case (true, OutputMode.Text) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .flatMap(WorkbookCommands.sheets)
+              .map(Payload.text)
+          case (true, OutputMode.Json) =>
+            readWorkbook(excel, filePath, readerConfig)
+              .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
+          case (false, OutputMode.Text) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
+          case (false, OutputMode.Json) =>
+            classifyRead(filePath)(WorkbookCommands.sheetsQuickData(filePath)).map(Payload.Json(_))
+      case CliCommand.Sheets(SheetsAction.Hide(name, veryHide)) =>
+        // Hide requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets hide") { outputPath =>
+          val config = buildWriterConfig(backendOpt, policy)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
+          }
+        }.map(Payload.text)
+      case CliCommand.Sheets(SheetsAction.Show(name)) =>
+        // Show requires loading workbook and writing output
+        requireOutputAction(outputOpt, "sheets show") { outputPath =>
+          val config = buildWriterConfig(backendOpt, policy)
+          readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
+            SheetCommands.showSheet(wb, name, outputPath, config, stream)
+          }
+        }.map(Payload.text)
 
-        // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
-        // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
-        case CliCommand.Audit(failOnFindings) =>
-          for
-            wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-            payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
-          yield payload
+      // Names: always lightweight (defined names don't require cell data)
+      case CliCommand.Names =>
+        mode match
+          case OutputMode.Text =>
+            classifyRead(filePath)(WorkbookCommands.namesLight(filePath)).map(Payload.text)
+          case OutputMode.Json =>
+            classifyRead(filePath)(WorkbookCommands.namesData(filePath)).map(Payload.Json(_))
 
-        case CliCommand.Deps(refStr, direction, depth, expand) =>
-          for
-            wb <- readWorkbook(excel, filePath, readerConfig)
-            sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-            payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, expand, mode)
-          yield payload
+      // Bounds: dimension-first by default (--scan for full scan). The metadata read is the input
+      // read, so a missing or unreadable file is IO_READ here as on every other verb.
+      case CliCommand.Bounds(scan) =>
+        classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+          announceAutoSelect(Resolve.only(meta), sheetNameOpt, cmd, mode, warn) *> {
+            mode match
+              case OutputMode.Text =>
+                val text =
+                  if scan then StreamingReadCommands.boundsScan(filePath, sheetNameOpt)
+                  else StreamingReadCommands.boundsFromMetadata(meta, filePath, sheetNameOpt)
+                text.map(Payload.text)
+              case OutputMode.Json =>
+                StreamingReadCommands
+                  .boundsData(meta, filePath, sheetNameOpt, scan)
+                  .map(Payload.Json(_))
+          }
+        }
 
-        // Other commands: regular execution path
-        case _ =>
-          // For write commands: stream flag uses the SAX/StAX workbook writer
-          // For read commands: stream flag enables O(1) input memory (true streaming)
-          // W2.4: the record-based reads are one function of a query and a source; the source
-          // is the strategy (streaming reader or loaded workbook)
-          val readQuery = ReadQuery.of(cmd, mode)
+      // A dry run validates the batch JSON and reads no workbook, whatever else is on the line
+      case CliCommand.Batch(source, true, _) =>
+        batchDryRunPayload(source, io, mode, warn)
 
-          // Check for streaming write commands (true O(1) memory transform)
-          val isStreamingWriteCmd = cmd match
-            case _: CliCommand.Style => true
-            case _: CliCommand.Put => true
-            case _: CliCommand.PutFormula => true
-            case _: CliCommand.Batch => true
-            case _ => false
+      // --schema prints the document's JSON Schema; no workbook is read, nothing is written
+      case CliCommand.Batch(_, _, true) =>
+        IO.pure(batchSchemaPayload)
 
-          (stream, readQuery) match
-            case (true, Some(query)) =>
-              // The streaming source shares its parsed parts across the run's reads and holds the
-              // shared-string table to --max-size (GH-640)
-              streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-                missingInputGuard(filePath)(
-                  SheetSource
-                    .streaming(filePath, excel, readerConfig)
-                    .flatMap(Reads.run(query, _, sheetNameOpt, mode, warn))
-                )
-            case _ if stream && isStreamingWriteCmd =>
-              // GH-496: a streaming write never recalculates, so --strict could only ever report
-              // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
-              // needs no guard: it is what the streaming path already does.
-              if policy.strict then
-                IO.raiseError(
-                  unsupportedInStream(
-                    "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
-                    "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
-                  )
-                )
-              else
-                // GH-621: a missing input is the one IO_READ diagnostic here too (the streaming
-                // writer reads workbook.xml first and reports its own IO_READ without the hint)
-                missingInputGuard(filePath)(
-                  streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
-                    executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
-                ).map(Payload.text)
-            case _ =>
-              // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
-              // memory and only the write goes through the streaming backend — say so
-              val backendOnly = Warning(
-                WarningCode.STREAM_BACKEND_ONLY,
-                s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
-                  "(a write still goes through the streaming writer)"
+      // Describe (ADR-017 §2.10): metadata only — instant, streaming-safe — unless --full asks for
+      // the loaded book's counts. A workbook verb: -s selects nothing, but an explicit -s must
+      // still name a real sheet (SHEET_NOT_FOUND with candidates otherwise). The other workbook
+      // verbs (sheets, names) are parsed without --sheet at all (Cli.scala), so only describe
+      // can see the flag.
+      case CliCommand.Describe(full) =>
+        if !full then
+          classifyRead(filePath)(excel.readMetadata(filePath)).flatMap { meta =>
+            InspectCommands
+              .checkSheetFlag(sheetNameOpt, "describe")(IO.pure(meta))
+              .as(InspectCommands.describeLight(meta, mode))
+          }
+        else if stream then
+          IO.raiseError(
+            unsupportedInStream(
+              "describe --full is not supported with --stream (the counts need the whole workbook)",
+              "omit --full for the metadata-only card, or omit --stream; use --max-size <MB> for a large file"
+            )
+          )
+        else
+          InspectCommands.checkSheetFlag(sheetNameOpt, "describe")(
+            classifyRead(filePath)(excel.readMetadata(filePath))
+          ) *> readWorkbook(excel, filePath, readerConfig)
+            .map(wb => InspectCommands.describe(wb, mode))
+
+      // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
+      // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
+      case CliCommand.Audit(failOnFindings) =>
+        for
+          wb <- readWorkbook(excel, filePath, readerConfig)
+          sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+        yield payload
+
+      case CliCommand.Deps(refStr, direction, depth, expand) =>
+        for
+          wb <- readWorkbook(excel, filePath, readerConfig)
+          sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+          payload <- InspectCommands.deps(wb, sheet, refStr, direction, depth, expand, mode)
+        yield payload
+
+      // Other commands: regular execution path
+      case _ =>
+        // For write commands: stream flag uses the SAX/StAX workbook writer
+        // For read commands: stream flag enables O(1) input memory (true streaming)
+        // W2.4: the record-based reads are one function of a query and a source; the source
+        // is the strategy (streaming reader or loaded workbook)
+        val readQuery = ReadQuery.of(cmd, mode)
+
+        // Check for streaming write commands (true O(1) memory transform)
+        val isStreamingWriteCmd = cmd match
+          case _: CliCommand.Style => true
+          case _: CliCommand.Put => true
+          case _: CliCommand.PutFormula => true
+          case _: CliCommand.Batch => true
+          case _ => false
+
+        (stream, readQuery) match
+          case (true, Some(query)) =>
+            // The streaming source shares its parsed parts across the run's reads and holds the
+            // shared-string table to --max-size (GH-640)
+            streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+              missingInputGuard(filePath)(
+                SheetSource
+                  .streaming(filePath, excel, readerConfig)
+                  .flatMap(Reads.run(query, _, sheetNameOpt, mode, warn))
               )
-              for
-                _ <- warn(backendOnly).whenA(stream)
-                wb <- readWorkbook(excel, filePath, readerConfig)
-                sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-                payload <- readQuery match
-                  case Some(query) =>
-                    Reads.run(query, SheetSource.inMemory(wb), sheet.map(_.name.value), mode, warn)
-                  case None =>
-                    cmd match
-                      case recalc: CliCommand.Recalc =>
-                        runRecalc(wb, outputOpt, backendOpt, stream, recalc, policy, warn).map {
-                          (text, facts) => Payload.Text(text, None, false, facts)
-                        }
-                      case _ =>
-                        executeCommand(
-                          wb,
-                          sheet,
-                          outputOpt,
-                          backendOpt,
-                          stream,
-                          cmd,
-                          policy,
-                          io,
-                          warn,
-                          mode
-                        ).map(Payload.text)
-              yield payload
+          case _ if stream && isStreamingWriteCmd =>
+            // GH-496: a streaming write never recalculates, so --strict could only ever report
+            // "clean" — refuse rather than hand a CI lane a gate that cannot fail. --no-recalc
+            // needs no guard: it is what the streaming path already does.
+            if policy.strict then
+              IO.raiseError(
+                unsupportedInStream(
+                  "--strict is not supported with --stream (streaming writes never recalculate). Re-run without --stream.",
+                  "omit --stream: the in-memory write recalculates the edit's dependency cone and can gate"
+                )
+              )
+            else
+              // GH-621: a missing input is the one IO_READ diagnostic here too (the streaming
+              // writer reads workbook.xml first and reports its own IO_READ without the hint)
+              missingInputGuard(filePath)(
+                streamAutoSelect(excel, filePath, sheetNameOpt, cmd, mode, warn) *>
+                  executeStreamingWrite(filePath, sheetNameOpt, outputOpt, cmd, io, warn)
+              ).map(Payload.text)
+          case _ =>
+            // --stream accepted but with no O(1) path for this verb: the workbook is loaded in
+            // memory and only the write goes through the streaming backend — say so
+            val backendOnly = Warning(
+              WarningCode.STREAM_BACKEND_ONLY,
+              s"--stream has no O(1) path for ${cmd.verb}: the workbook was loaded in memory " +
+                "(a write still goes through the streaming writer)"
+            )
+            for
+              _ <- warn(backendOnly).whenA(stream)
+              wb <- readWorkbook(excel, filePath, readerConfig)
+              sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
+              payload <- readQuery match
+                case Some(query) =>
+                  Reads.run(query, SheetSource.inMemory(wb), sheet.map(_.name.value), mode, warn)
+                case None =>
+                  cmd match
+                    case recalc: CliCommand.Recalc =>
+                      runRecalc(wb, outputOpt, backendOpt, stream, recalc, policy, warn).map {
+                        (text, facts) => Payload.Text(text, None, false, facts)
+                      }
+                    case _ =>
+                      executeCommand(
+                        wb,
+                        sheet,
+                        outputOpt,
+                        backendOpt,
+                        stream,
+                        cmd,
+                        policy,
+                        io,
+                        warn,
+                        mode
+                      ).map(Payload.text)
+            yield payload
 
   /**
    * The verbs that run in O(1) memory under `--stream`: the record-based reads
