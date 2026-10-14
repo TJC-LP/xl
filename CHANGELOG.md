@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   so `"a~~b"` matched the text `a~b`, and a cell holding `a~~b` used as its own criterion
   (`COUNTIFS(A:A,A2)`) missed itself. An operand with no `*` and no `?`, after any `<>` or `=`, is
   now compared as written, as desktop Excel does: a key pre-escaped with
-  `SUBSTITUTE(key,"~","~~")` counted in xl and LibreOffice and not in Excel. An operand containing
-  `*` or `?` keeps the escape grammar (`~*`, `~?`, `~~`). A `~` before an ordinary character in
+  `SUBSTITUTE(key,"~","~~")` counted in xl and LibreOffice and not in Excel. A bare or `<>` operand
+  containing `*` or `?` keeps the escape grammar (`~*`, `~?`, `~~`). A `~` before an ordinary character in
   such an operand stays a literal tilde (`"a~b*"` matches `a~bc`): a Microsoft Q&A thread suggests
   Excel drops it, but no Excel observation confirms that, so it is unchanged and noted in
   `docs/LIMITATIONS.md`. XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.

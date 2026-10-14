@@ -69,6 +69,14 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     assertEquals(parse(ExprValue.Text("<>~~")), CompareText(CompareOp.Neq, "~~"))
   }
 
+  test("GH-765: = keeps its operand verbatim, ~ and wildcards included") {
+    assertEquals(parse(ExprValue.Text("=a~~b")), Exact(ExprValue.Text("a~~b")))
+    // xl reads `*` after `=` as a literal (Excel applies the wildcard; docs/LIMITATIONS.md)
+    assertEquals(parse(ExprValue.Text("=a~~b*")), Exact(ExprValue.Text("a~~b*")))
+    check("=COUNTIF(A1:A6,\"=a~~b\")", num(1))
+    check("=SUMIFS(B1:B6,A1:A6,\"=a~b\")", num(1))
+  }
+
   property("GH-765: an operand with no * or ? parses to itself") {
     forAllNoShrink(literalOperand) { s =>
       assertEquals(parse(ExprValue.Text(s)), Exact(ExprValue.Text(s)))
