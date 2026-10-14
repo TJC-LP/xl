@@ -232,12 +232,12 @@ As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports; macros
 |--------|-------|
 | xl-evaluator | 3839 |
 | xl-core | 1872 |
-| xl-ooxml | 1378 |
+| xl-ooxml | 1383 |
 | xl-cli | 1910 |
 | xl-cats-effect | 209 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,420** |
+| **Total** | **9,425** |
 
 ## Test Quality Metrics
 

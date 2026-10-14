@@ -137,6 +137,91 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
     assertOrphanLintClean(out)
   }
 
+  test("GH-768: several removed strings below an untouched sheet's positions keep every position") {
+    // Sheet1 alone held 0, 2 and 4 (4 a rich-text entry); Sheet2 references 1, 3 and 5
+    val source = book(
+      Vector("Gone0", "Kept1", "Gone2", "Kept3", "RICHGONE", "Kept5"),
+      Vector(Vector("A1" -> 0, "A2" -> 2, "A3" -> 4), Vector("A1" -> 1, "A2" -> 3, "A3" -> 5))
+    )
+    val withRich = rewriteEntry(
+      source,
+      "xl/sharedStrings.xml",
+      _.replace(
+        "<si><t>RICHGONE</t></si>",
+        "<si><r><rPr><b/></rPr><t>RICH</t></r><r><t>GONE</t></r></si>"
+      )
+    )
+    val out = editSheet(withRich, "Sheet1")(sheet =>
+      sheet.remove(ref"A1").remove(ref"A2").remove(ref"A3").put(ref"B1" -> "Kept3")
+    )
+    Vector("Gone0", "Gone2", ">RICH<", ">GONE<").foreach(assertNoText(out, _))
+    assertEquals(sstTexts(out), Vector("", "Kept1", "", "Kept3", "", "Kept5"))
+    assertEquals(
+      entry(out, "xl/worksheets/sheet2.xml").toSeq,
+      entry(withRich, "xl/worksheets/sheet2.xml").toSeq
+    )
+    assertSstCounts(out, count = 4, unique = 6)
+    assertOrphanLintClean(out)
+    assertEquals(texts(out, "Sheet1"), Map("B1" -> "Kept3"))
+    assertEquals(texts(out, "Sheet2"), Map("A1" -> "Kept1", "A2" -> "Kept3", "A3" -> "Kept5"))
+  }
+
+  test("GH-768: a duplicate entry the edit released becomes empty; its twin keeps the text") {
+    // positions 0 and 2 both spell "Dup"; Sheet1 references 0, Sheet2 references 1 and 2
+    val source = book(
+      Vector("Dup", "Other", "Dup"),
+      Vector(Vector("A1" -> 0), Vector("A1" -> 1, "A2" -> 2))
+    )
+    val out = editSheet(source, "Sheet1")(_.put(ref"B1" -> 1))
+    assertEquals(
+      entry(out, "xl/worksheets/sheet2.xml").toSeq,
+      entry(source, "xl/worksheets/sheet2.xml").toSeq
+    )
+    assertEquals(texts(out, "Sheet1"), Map("A1" -> "Dup"))
+    assertEquals(texts(out, "Sheet2"), Map("A1" -> "Other", "A2" -> "Dup"))
+    assertOrphanLintClean(out)
+  }
+
+  test("GH-768: a revision log xl does not model pins the positions it references") {
+    // Sheet1 alone held 0 and 2; the revision log references 3, Sheet2 references 1
+    val source = book(
+      Vector("Gone0", "Kept1", "Gone2", "RevisionText"),
+      Vector(Vector("A1" -> 0, "A2" -> 2), Vector("A1" -> 1)),
+      revisionLog = Some(Vector("A1" -> 3))
+    )
+    for config <- Vector(WriterConfig(), compact) do
+      val out = editSheet(source, "Sheet1", config)(_.remove(ref"A1").remove(ref"A2"))
+      assertNoText(out, "Gone0")
+      assertNoText(out, "Gone2")
+      assertEquals(
+        entry(out, "xl/revisions/revisionLog1.xml").toSeq,
+        entry(source, "xl/revisions/revisionLog1.xml").toSeq
+      )
+      // the log pins position 3, so even compacting leaves empty entries below it
+      assertEquals(sstTexts(out), Vector("", "Kept1", "", "RevisionText"), config.toString)
+      assertEquals(texts(out, "Sheet2"), Map("A1" -> "Kept1"))
+  }
+
+  test("GH-768: an untouched part that cannot be read keeps every entry (the old append plan)") {
+    // the revision log is not well-formed, so it may reference any position
+    val source = rewriteEntry(
+      book(
+        Vector("OldLabelAlpha", "KeepMe"),
+        Vector(Vector("A1" -> 0, "A2" -> 1)),
+        revisionLog = Some(Vector("A1" -> 1))
+      ),
+      "xl/revisions/revisionLog1.xml",
+      _ => "<revisions><rcc><nc"
+    )
+    val out = editSheet(source, "Sheet1")(_.put(ref"A1" -> "NewLabelBeta"))
+    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe", "NewLabelBeta"))
+    assertEquals(
+      entry(out, "xl/revisions/revisionLog1.xml").toSeq,
+      entry(source, "xl/revisions/revisionLog1.xml").toSeq
+    )
+    assertEquals(texts(out, "Sheet1"), Map("A1" -> "NewLabelBeta", "A2" -> "KeepMe"))
+  }
+
   // ========== compactSharedStrings ==========
 
   private val compact = WriterConfig(compactSharedStrings = true)
@@ -170,6 +255,21 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
       entry(out, "xl/worksheets/sheet2.xml").toSeq,
       entry(source, "xl/worksheets/sheet2.xml").toSeq
     )
+    assertOrphanLintClean(out)
+  }
+
+  test("GH-768: compactSharedStrings regenerates every untouched sheet a renumbering reaches") {
+    // Sheet1 alone held 0; Sheet2 references 1..2, Sheet3 references 3: both must be renumbered
+    val source = book(
+      Vector("Gone0", "S2a", "S2b", "S3a"),
+      Vector(Vector("A1" -> 0), Vector("A1" -> 1, "A2" -> 2), Vector("A1" -> 3))
+    )
+    val out = editSheet(source, "Sheet1", compact)(_.remove(ref"A1"))
+    assertNoText(out, "Gone0")
+    assertEquals(sstTexts(out), Vector("S2a", "S2b", "S3a"))
+    assertSstCounts(out, count = 3, unique = 3)
+    assertEquals(texts(out, "Sheet2"), Map("A1" -> "S2a", "A2" -> "S2b"))
+    assertEquals(texts(out, "Sheet3"), Map("A1" -> "S3a"))
     assertOrphanLintClean(out)
   }
 
@@ -290,6 +390,22 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
         .toVector
     finally zip.close()
 
+  /** The package with one part's text replaced, every other part as it was. */
+  private def rewriteEntry(bytes: Array[Byte], name: String, f: String => String): Array[Byte] =
+    val buffer = new ByteArrayOutputStream()
+    val out = new ZipOutputStream(buffer)
+    entries(bytes).foreach { (n, content) =>
+      out.putNextEntry(new ZipEntry(n))
+      out.write(
+        if n == name then
+          f(new String(content, StandardCharsets.UTF_8)).getBytes(StandardCharsets.UTF_8)
+        else content
+      )
+      out.closeEntry()
+    }
+    out.close()
+    buffer.toByteArray
+
   private def entry(bytes: Array[Byte], name: String): Array[Byte] =
     entries(bytes).find(_._1 == name).map(_._2).getOrElse(fail(s"missing $name"))
 
@@ -321,8 +437,16 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
     val findings = WorkbookLint.lintBytes(bytes).fold(e => fail(e.message), identity)
     assertEquals(findings.filter(_.category == LintCategory.SharedStringOrphan), Vector.empty)
 
-  /** A raw package: the table holds `strings`; each sheet lists (ref, t="s" index) cells. */
-  private def book(strings: Vector[String], sheets: Vector[Vector[(String, Int)]]): Array[Byte] =
+  /**
+   * A raw package: the table holds `strings`; each sheet lists (ref, t="s" index) cells. A
+   * `revisionLog`, when given, is a part xl does not model whose cell values (`<nc t="s">`)
+   * reference the table too.
+   */
+  private def book(
+    strings: Vector[String],
+    sheets: Vector[Vector[(String, Int)]],
+    revisionLog: Option[Vector[(String, Int)]] = None
+  ): Array[Byte] =
     val n = sheets.size
     val bytes = new ByteArrayOutputStream()
     val out = new ZipOutputStream(bytes)
@@ -343,6 +467,9 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
             s"""<Override PartName="/xl/worksheets/sheet$i.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>"""
           )
           .mkString +
+        revisionLog.fold("")(_ =>
+          """<Override PartName="/xl/revisions/revisionLog1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.revisionLog+xml"/>"""
+        ) +
         """<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>""" +
         "</Types>"
     )
@@ -375,20 +502,31 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
           .sum}" uniqueCount="${strings.size}">""" +
         strings.map(s => s"<si><t>$s</t></si>").mkString + "</sst>"
     )
+    def rowsXml(cells: Vector[(String, Int)]): String = cells
+      .groupBy((r, _) => r.dropWhile(_.isLetter).toInt)
+      .toVector
+      .sortBy(_._1)
+      .map { (row, cs) =>
+        s"""<row r="$row">""" +
+          cs.sortBy(_._1).map((r, idx) => s"""<c r="$r" t="s"><v>$idx</v></c>""").mkString +
+          "</row>"
+      }
+      .mkString
     sheets.zipWithIndex.foreach { (cells, i) =>
-      val rows = cells
-        .groupBy((r, _) => r.dropWhile(_.isLetter).toInt)
-        .toVector
-        .sortBy(_._1)
-        .map { (row, cs) =>
-          s"""<row r="$row">""" +
-            cs.sortBy(_._1).map((r, idx) => s"""<c r="$r" t="s"><v>$idx</v></c>""").mkString +
-            "</row>"
-        }
-        .mkString
       put(
         s"xl/worksheets/sheet${i + 1}.xml",
-        s"""<?xml version="1.0"?><worksheet xmlns="$ns"><sheetData>$rows</sheetData></worksheet>"""
+        s"""<?xml version="1.0"?><worksheet xmlns="$ns"><sheetData>${rowsXml(
+            cells
+          )}</sheetData></worksheet>"""
+      )
+    }
+    revisionLog.foreach { cells =>
+      val changes = cells
+        .map((r, idx) => s"""<rcc rId="1" sId="1"><nc r="$r" t="s"><v>$idx</v></nc></rcc>""")
+        .mkString
+      put(
+        "xl/revisions/revisionLog1.xml",
+        s"""<?xml version="1.0"?><revisions xmlns="$ns">$changes</revisions>"""
       )
     }
     out.close()

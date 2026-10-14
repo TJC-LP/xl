@@ -2104,7 +2104,8 @@ object XlsxWriter:
      * regenerated or deleted parts referenced before the edit), so a write that removes no string
      * scans no untouched part. With it, every entry is considered, and the untouched sheets that
      * reference a position past the first orphan are regenerated instead (extraRegenerated) so the
-     * table needs no empty entries; a part xl does not model (a macro sheet) is never regenerated.
+     * table needs no empty entries; a part xl does not model (a macro sheet, a revision log) is never
+     * regenerated, so it still pins the positions it references.
      *
      * None keeps the GH-304 append/recount plan: nothing to remove, or a copied part could not be
      * read (an unread part may reference any entry).

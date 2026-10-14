@@ -396,10 +396,11 @@ date formatting #667 already fixed.
   text, a removed sheet's strings). An untouched sheet keeps its bytes, so an entry before a
   position it references becomes an empty `<si>` rather than shifting later entries; entries the
   source already carried unreferenced stay unless every sheet is regenerated.
-  `WriterConfig.compactSharedStrings` (CLI `--compact-strings`) drops every unreferenced entry with
-  no empty entries, rewriting the untouched sheets that reference a later position. Residual: a
-  `--stream put` writes `inlineStr` and copies the table verbatim, so text it replaces stays in the
-  table (`--compact-strings` is refused with `--stream`); `xl lint` reports that as
+  `WriterConfig.compactSharedStrings` (CLI `--compact-strings`) drops every unreferenced entry,
+  rewriting the untouched sheets that reference a later position; only a part xl does not model
+  (a macro sheet, a revision log's cell values) still pins positions with empty entries.
+  Residual: a `--stream put` writes `inlineStr` and copies the table verbatim, so text it replaces
+  stays in the table (`--compact-strings` is refused with `--stream`); `xl lint` reports that as
   `shared-string-orphan` (count + first five indices, never the text) at severity `hygiene`, and
   an in-memory write of the output with `--compact-strings` removes it
   (`xl -f out.xlsx -o clean.xlsx recalc --compact-strings`)

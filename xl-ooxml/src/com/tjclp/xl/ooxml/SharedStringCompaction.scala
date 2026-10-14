@@ -19,8 +19,9 @@ import org.xml.sax.helpers.DefaultHandler
  *   - otherwise replaces it with an empty entry (`<si><t/></si>`), so the copied parts keep their
  *     positions and the removed text still leaves the package.
  *
- * Only `<c t="s">` cells reference the table: ECMA-376 Part 1, §18.3.1.4 (`c`, `t` attribute, value
- * `s`) and §18.4.9 (`sst`).
+ * Only cells with `t="s"` reference the table: a worksheet or macro sheet's `<c>` (ECMA-376 Part 1,
+ * §18.3.1.4, `t` attribute value `s`; §18.4.9 `sst`) and a revision log's `<nc>`/`<oc>` new and old
+ * cell values (§18.11, both of type CT_Cell).
  */
 private[ooxml] object SharedStringCompaction:
 
@@ -30,7 +31,7 @@ private[ooxml] object SharedStringCompaction:
    * @param indices
    *   the table positions its `t="s"` cells name
    * @param count
-   *   the number of `t="s"` cells (the table's `count` attribute counts references)
+   *   the number of `t="s"` sheet cells, `<c>` only (the table's `count` attribute counts them)
    */
   final case class RefScan(indices: BitSet, count: Int) derives CanEqual:
     /** The highest position referenced, or -1 when the part references none. */
@@ -39,9 +40,10 @@ private[ooxml] object SharedStringCompaction:
   object RefScan:
     val empty: RefScan = RefScan(BitSet.empty, 0)
 
-  /** Sheet-class parts whose cells can reference the table (worksheets and macro sheets). */
+  /** Parts whose cells can reference the table: worksheets, macro sheets and revision logs. */
   def isCellBearingPart(path: String): Boolean =
-    (path.startsWith("xl/worksheets/") || path.startsWith("xl/macrosheets/")) &&
+    (path.startsWith("xl/worksheets/") || path.startsWith("xl/macrosheets/") ||
+      path.startsWith("xl/revisions/revisionLog")) &&
       !path.contains("/_rels/") && path.endsWith(".xml")
 
   /**
@@ -94,9 +96,10 @@ private[ooxml] object SharedStringCompaction:
       atts: Attributes
     ): Unit =
       label(localName, qName) match
-        case "c" =>
+        case name @ ("c" | "nc" | "oc") =>
           inSharedCell = atts.getValue("t") == "s"
-          if inSharedCell then count += 1
+          // the table's count attribute counts sheet cells; a revision's cell value is history
+          if inSharedCell && name == "c" then count += 1
         case "v" if inSharedCell =>
           inValue = true
           value.setLength(0)
@@ -110,5 +113,5 @@ private[ooxml] object SharedStringCompaction:
         case "v" if inValue =>
           inValue = false
           value.toString.trim.toIntOption.filter(_ >= 0).foreach(indices += _)
-        case "c" => inSharedCell = false
+        case "c" | "nc" | "oc" => inSharedCell = false
         case _ => ()

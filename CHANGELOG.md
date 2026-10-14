@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`WriterConfig.compactSharedStrings` and `--compact-strings`** (#768): drop every shared
   string no cell references, including the ones the source already carried, with no empty
-  entries; the untouched sheets that reference a later position are regenerated (values
+  entries unless a part xl does not model (a macro sheet, a revision log) pins a later position;
+  the untouched sheets that reference a later position are regenerated (values
   unchanged), and a clean workbook is copied verbatim unless its table holds such an entry. The
   CLI flag is global for the write verbs and `sheets hide|show`; with `--stream` it is refused
   as `UNSUPPORTED_IN_STREAM` (a streaming write copies the table untouched). **Breaking
