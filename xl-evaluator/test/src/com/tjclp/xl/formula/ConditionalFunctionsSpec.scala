@@ -179,6 +179,13 @@ class ConditionalFunctionsSpec extends FunSuite:
     assertEval("=SUMIF(A1:A2, \"test~*value\", B1:B2)", sheet, 10)
   }
 
+  test("GH-765: COUNTIFS with a cell holding ~~ and no wildcard as criterion counts that cell") {
+    val sheet = sheetWith(ref"A1" -> "a~b", ref"A2" -> "a~~b", ref"A3" -> "ab")
+    assertEval("=COUNTIFS(A1:A3, A2)", sheet, 1)
+    assertEval("=COUNTIFS(A1:A3, A2, A1:A3, \"a~~b\")", sheet, 1)
+    assertEval("=COUNTIF(A1:A3, \"a~b\")", sheet, 1)
+  }
+
   // ===== SUMIF Numeric Comparison Tests =====
 
   test("SUMIF: greater than comparison") {
