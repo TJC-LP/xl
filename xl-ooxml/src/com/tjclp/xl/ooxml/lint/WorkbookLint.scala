@@ -2767,8 +2767,12 @@ object WorkbookLint:
 
   // ===== GH-567: shared-string entries referenced by no cell =====
 
-  /** The shared-string table as counted: its `<si>` entries and a phrase describing it. */
-  private final case class SstTableFacts(count: Int, phrase: String)
+  /**
+   * The shared-string table as counted: its `<si>` entries, a phrase describing it, and the entries
+   * that hold no text (GH-768: the empty `<si>` xl writes in place of a removed string, so that
+   * untouched sheets keep their positions).
+   */
+  private final case class SstTableFacts(count: Int, phrase: String, blank: BitSet = BitSet.empty)
 
   /**
    * xl/sharedStrings.xml as read once before the sheets: the part path, whether it is present, its
@@ -2804,29 +2808,35 @@ object WorkbookLint:
             try SharedStringCounter.count(path, stream)
             finally stream.close()
           counted.map {
-            case Right(count) =>
+            case Right((count, blank)) =>
               SstFacts(
                 path,
                 present = true,
-                Some(SstTableFacts(count, s"$path holds $count <si> ${entryWord(count)}")),
+                Some(SstTableFacts(count, s"$path holds $count <si> ${entryWord(count)}", blank)),
                 None
               )
             case Left(detail) => SstFacts(path, present = true, None, Some(detail))
           }
       }
 
-  /** SAX count of the `<si>` children of `<sst>`; O(1) memory in the table size. */
+  /**
+   * SAX count of the `<si>` children of `<sst>`, with the positions of those holding no text (one
+   * bit per position at most; the text itself is never kept).
+   */
   private object SharedStringCounter:
     import org.xml.sax.{Attributes, InputSource, SAXException}
     import org.xml.sax.helpers.DefaultHandler
 
-    /** `Right(Right(n))` counted, `Right(Left(detail))` not well-formed, `Left` an I/O failure. */
-    def count(part: String, stream: InputStream): XLResult[Either[String, Int]] =
+    /**
+     * `Right(Right((n, blank)))` counted, `Right(Left(detail))` not well-formed, `Left` an I/O
+     * failure.
+     */
+    def count(part: String, stream: InputStream): XLResult[Either[String, (Int, BitSet)]] =
       try
         val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
         val handler = new Counter
         parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(stream)), handler)
-        Right(Right(handler.total))
+        Right(Right((handler.total, handler.blankEntries)))
       catch
         case e: SAXException => Right(Left(s"Malformed XML: ${e.getMessage}"))
         case e: java.io.IOException =>
@@ -2836,18 +2846,32 @@ object WorkbookLint:
     private final class Counter extends DefaultHandler:
       private var depth = 0
       private var count = 0
+      private var inText = false
+      private var hasText = false
+      private val blank = BitSet.newBuilder
       def total: Int = count
+      def blankEntries: BitSet = blank.result()
+      private def label(localName: String, qName: String): String =
+        if localName.nonEmpty then localName else qName
       override def startElement(
         uri: String,
         localName: String,
         qName: String,
         atts: Attributes
       ): Unit =
-        val label = if localName.nonEmpty then localName else qName
-        if depth == 1 && label == "si" then count += 1
+        val name = label(localName, qName)
+        if depth == 1 && name == "si" then
+          count += 1
+          hasText = false
+        else if depth >= 2 && name == "t" then inText = true
         depth += 1
+      override def characters(ch: Array[Char], start: Int, length: Int): Unit =
+        if inText && length > 0 then hasText = true
       override def endElement(uri: String, localName: String, qName: String): Unit =
         depth -= 1
+        val name = label(localName, qName)
+        if name == "t" then inText = false
+        else if depth == 1 && name == "si" && !hasText then blank += count - 1
 
   /**
    * Per-part shared-string reference facts (GH-567), collected identically by both scanners: the
@@ -2933,8 +2957,10 @@ object WorkbookLint:
       )
     }
     val orphans = sst.table.filter(_ => sst.present).toList.toVector.flatMap { t =>
-      val referenced = perSheet.foldLeft(BitSet.empty)(_ | _.referenced)
-      // the bit set only ever holds indices below the count, so its size is the exact usage
+      // GH-768: an entry with no text carries nothing to leak, so it is never an orphan (xl writes
+      // one in place of a removed string when untouched sheets reference later positions)
+      val referenced = perSheet.foldLeft(BitSet.empty)(_ | _.referenced) | t.blank
+      // the bit sets only ever hold indices below the count, so the size is the exact usage
       val orphanCount = t.count - referenced.size
       if orphanCount <= 0 then Vector.empty
       else
@@ -2955,8 +2981,8 @@ object WorkbookLint:
             s"<si> #${sample.headOption.getOrElse(0)}",
             s"$orphanCount of ${t.count} shared string(s) are referenced by no cell ($where) — " +
               "the text still rides in the package for every recipient (a value scrubbed from " +
-              "the cells survives here); xl never prunes a preserved table on write, see " +
-              "docs/LIMITATIONS.md for the rebuild",
+              "the cells survives here); an xl write drops the strings its own edit removes, " +
+              "and --compact-strings (WriterConfig.compactSharedStrings) drops the rest",
             LintSeverity.Hygiene
           )
         )

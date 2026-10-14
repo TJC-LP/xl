@@ -2301,10 +2301,9 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(WorkbookLint.lintStreamBytes(bytes), Right(Vector.empty[Finding]))
   }
 
-  test("GH-567 carve-out: replacing text in a foreign SST book leaves an orphan the lint reports") {
-    // The documented outcome of the lint-only decision: xl appends the new string and re-points
-    // the cell, but never prunes a preserved table — the replaced text stays in the package and
-    // `shared-string-orphan` is the ONE finding on xl's own output. (No SST compaction this wave.)
+  test("GH-768: replacing text in a foreign SST book drops the replaced string; lint is clean") {
+    // xl appends the new string, re-points the cell and drops the entry no cell references any
+    // more (no sheet rides verbatim here), so the replaced text leaves the package.
     val source = baseParts ++ Map(
       "xl/sharedStrings.xml" -> sstXml("plain", "other"),
       "xl/worksheets/sheet1.xml" -> sstSheetXml(0, 1)
@@ -2317,17 +2316,27 @@ class WorkbookLintSpec extends FunSuite:
     yield out
     val bytes = edited.fold(err => fail(s"read/modify/write failed: $err"), identity)
     val sst = readZipEntry(bytes, "xl/sharedStrings.xml")
-    assert(sst.contains("<t>plain</t>"), sst) // the replaced text is still in the package
-    assert(sst.contains("""uniqueCount="3""""), sst)
-    val findings = WorkbookLint.lintBytes(bytes).fold(err => fail(err.message), identity)
-    assertEquals(
-      findings.map(_.category),
-      Vector(LintCategory.SharedStringOrphan),
-      findings.toString
+    assert(!sst.contains("<t>plain</t>"), sst)
+    assert(sst.contains("""uniqueCount="2""""), sst)
+    assertEquals(WorkbookLint.lintBytes(bytes), Right(Vector.empty[Finding]))
+  }
+
+  test("GH-768: an entry with no text is never an orphan (the placeholder xl writes)") {
+    val parts = baseParts ++ Map(
+      "xl/sharedStrings.xml" -> sstXml("", "kept", "secret"),
+      "xl/worksheets/sheet1.xml" -> sstSheetXml(1)
     )
-    assertEquals(findings.head.part, "xl/sharedStrings.xml")
+    val findings = lintOf(parts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.SharedStringOrphan))
     assert(findings.head.message.startsWith("1 of 3 shared string"), findings.head.message)
-    assert(findings.head.message.contains("index: 0"), findings.head.message)
+    assert(findings.head.message.contains("index: 2"), findings.head.message)
+    val rich = parts + ("xl/sharedStrings.xml" ->
+      s"""<sst xmlns="$nsMain" count="1" uniqueCount="3"><si><r><t/></r></si><si><t>kept</t></si><si><r><t>x</t></r></si></sst>""")
+    assert(lintOf(rich).head.message.contains("index: 2"), lintOf(rich).toString)
+    assertEquals(
+      WorkbookLint.lintStreamBytes(zipBytes(parts)),
+      WorkbookLint.lintBytes(zipBytes(parts))
+    )
   }
 
   private def readZipEntry(bytes: Array[Byte], entry: String): String =
@@ -2368,8 +2377,9 @@ class WorkbookLintSpec extends FunSuite:
 
   test("GH-460: a regenerated Excel-authored sheet keeps its mc:Ignorable prefixes declared") {
     // Excel roots carry mc:Ignorable="x14ac xr xr2 xr3": the writer must re-declare every one on
-    // the regenerated root, or the new rule would flag xl's own output. SharedStringOrphan is
-    // excluded here because the FOREIGN source already carries 8 orphans (see the fixture test).
+    // the regenerated root, or the new rule would flag xl's own output. The FOREIGN source carries
+    // 8 orphan shared strings (see the fixture test); its only sheet is regenerated, so the write
+    // drops them (GH-768) and the output lints clean.
     val path = TestFixtures.copyToTemp("named-styles-excel.xlsx")
     val edited = for
       wb <- XlsxReader.read(path)
@@ -2382,7 +2392,7 @@ class WorkbookLintSpec extends FunSuite:
     val findings = WorkbookLint.lintBytes(bytes).fold(err => fail(err.message), identity)
     assertEquals(
       findings.filter(f => newCategories.contains(f.category)).map(_.category),
-      Vector(LintCategory.SharedStringOrphan),
+      Vector.empty[LintCategory],
       findings.mkString("\n")
     )
   }
