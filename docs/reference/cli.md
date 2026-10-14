@@ -92,6 +92,14 @@ xl batch --schema                                  # JSON Schema of the batch do
 > pattern: exit 2). An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line;
 > any other wrong command line exits 2 with a one-line usage, the parser's error and
 > `run \`xl <verb> --help\``.
+>
+> Each verb takes only the globals that apply to it (`xl --help` lists them per verb). The write
+> verbs take all of them; the reads take `-f`, `-s`, `--max-size`, `--stream` and `--json`;
+> `functions`, `schema`, `rasterizers` and `new` take only `--json`. `lint` and the standalone
+> `batch --dry-run` accept `--max-size` and ignore it, so a `--max-size 0` prefix never breaks
+> them. Any other global a verb does not take exits 2 with `code: USAGE` and names the flag:
+> `xl --backend saxstax -f f.xlsx view A1` says `view does not take --backend`, and the hint says
+> why. When the line has a second mistake, the parser's error for that one is reported instead.
 
 > **The file is always `-f <path>`, never positional.** The first non-flag token on the command
 > line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
