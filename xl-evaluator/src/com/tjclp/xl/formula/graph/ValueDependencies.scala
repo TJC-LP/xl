@@ -63,9 +63,11 @@ private[xl] object ValueDependencies:
    * `home` read `home`, and its unqualified ones read its own sheet, so nothing here (`--with`'s
    * search for another sheet's formulas that read back into the overridden one).
    *
-   * With `names`, a defined name read as a value reads what its definition reads ([[Names]]), as
-   * resolved from `current`, the sheet the formula sits on (`home` when it is not given). Without,
-   * a name reads nothing: the placement guard catches a read through one at run time.
+   * With `names`, a defined name read as a value or in a range slot (`SUMIF(rng, …)`, GH-761) reads
+   * what its definition reads ([[Names]]), as resolved from `current`, the sheet the formula sits
+   * on (`home` when it is not given). A name bound to a range also sizes SUMIF's and AVERAGEIF's
+   * third argument as that range does. Without, a name reads nothing: the placement guard catches a
+   * read through one at run time.
    *
    * One reader serves many formulas on one sheet: each distinct range is expanded once for all of
    * them, as `DependencyGraph.fromSheet` does (GH-522). It is a single-use cache for one analysis:
@@ -110,14 +112,21 @@ private[xl] object ValueDependencies:
       def cell(at: ARef): Set[CellRange] =
         if referenceOnly then Set.empty else Set(CellRange(at, at))
       def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
-      // a defined name read as a value: what its definition reads on `home`
+      // a defined name's reads: what its definition reads on `home`, resolved from `current`
+      def resolved(qualifier: Option[SheetName], name: String): Set[CellRange] =
+        (names, home, current.orElse(home)) match
+          case (Some(resolver), Some(target), Some(from)) =>
+            resolver.reads(qualifier, name, from, target, bounds)
+          case _ => Set.empty
+      // a defined name read as a value
       def named(qualifier: Option[SheetName], name: String): Set[CellRange] =
-        if referenceOnly then Set.empty
-        else
-          (names, home, current.orElse(home)) match
-            case (Some(resolver), Some(target), Some(from)) =>
-              resolver.reads(qualifier, name, from, target, bounds)
-            case _ => Set.empty
+        if referenceOnly then Set.empty else resolved(qualifier, name)
+      // the range a defined name in a range slot names, resolved from `current`, when it names one
+      def namedRange(location: TExpr.RangeLocation): Option[(SheetName, CellRange)] =
+        (location, names, current.orElse(home)) match
+          case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from)) =>
+            resolver.range(scope, name, from)
+          case _ => None
       // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
       def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
       def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
@@ -135,6 +144,9 @@ private[xl] object ValueDependencies:
               location match
                 case TExpr.RangeLocation.Local(r, _) => if localReads then cells(r) else Set.empty
                 case TExpr.RangeLocation.CrossSheet(sheet, r, _) if local(sheet) => cells(r)
+                // GH-761: a defined name in a range slot (SUMIF(rng, …)) reads what it names, as
+                // a name read as a value does
+                case TExpr.RangeLocation.Name(name, scope) => resolved(scope, name)
                 case _ => Set.empty
         case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 
@@ -174,9 +186,19 @@ private[xl] object ValueDependencies:
         case TExpr.Aggregate(_, location) => arg(ArgValue.Range(location), false)
         case call: TExpr.Call[?] =>
           val name = call.spec.name
+          // GH-761: SUMIF and AVERAGEIF size their third argument to their first, a defined name
+          // in either slot as the range it names, as evaluation and DependencyGraph size it (#733)
           val args = ReferenceOperators.dependencyValues(
             name,
-            CriteriaRangeResize.resizedArgs(name, call.spec.argSpec.toValues(call.args))
+            CriteriaRangeResize.resizedArgs(
+              name,
+              call.spec.argSpec.toValues(call.args),
+              shapeOf = location => location.staticRange.orElse(namedRange(location).map(_._2)),
+              targetOf = location =>
+                namedRange(location).fold(location)((sheet, range) =>
+                  TExpr.RangeLocation.CrossSheet(sheet, range)
+                )
+            )
           )
           val passes = if referenceOnly then referencePassing.get(name) else None
           args.zipWithIndex.foldLeft(Set.empty[CellRange]) { case (acc, (a, index)) =>
@@ -219,6 +241,30 @@ private[xl] object ValueDependencies:
     private val memo =
       scala.collection.mutable.HashMap.empty[(DefinedName, String, String), Set[CellRange]]
     private val open = scala.collection.mutable.Set.empty[(DefinedName, String, String)]
+    // (name, qualifier, sheet it is read from) → the range it names, None when it names none
+    private val ranges = scala.collection.mutable.HashMap
+      .empty[(String, Option[String], String), Option[(SheetName, CellRange)]]
+
+    /**
+     * GH-761: the (sheet, range) a defined name in a range slot names, read from `current`, as
+     * evaluation resolves it ([[Evaluator.resolveRangeLocation]]): a name bound to a range or a
+     * cell, through any chain of names. None for a name that computes its reference (OFFSET,
+     * INDIRECT) or does not resolve. SUMIF and AVERAGEIF size their third argument by it (#733).
+     */
+    def range(
+      qualifier: Option[SheetName],
+      name: String,
+      current: SheetName
+    ): Option[(SheetName, CellRange)] =
+      ranges.getOrElseUpdate(
+        (DependencyGraph.resolutionKey(name), qualifier.map(fold), fold(current)),
+        wb(current).toOption.flatMap { sheet =>
+          Evaluator
+            .resolveRangeLocation(TExpr.RangeLocation.Name(name, qualifier), sheet, Some(wb))
+            .toOption
+            .map((target, r) => (target.name, r))
+        }
+      )
 
     /** Whether `wb` defines any name: without one, no formula reads through a name. */
     def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty

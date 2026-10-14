@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`eval --with` uncaches a reader through a defined name in a range slot** (#761): a cached
+  formula reading an overridden cell through a defined name in a function's range argument
+  (`SUMIF(rng,">0")`, `COUNTIF(rng,">5")` with `rng` naming the overridden cell's range) kept its
+  stale cache, while the same name read as a value (`SUM(rng)`) did not. `ValueDependencies`
+  mapped a `RangeLocation.Name` to no read; it now resolves the name through the reader's `Names`
+  as a value-position name is, under the same scoping rules (sheet-scoped over workbook-scoped,
+  resolved from the referencing or the qualifying sheet). A name in `SUMIF`'s or `AVERAGEIF`'s
+  range or sum range also sizes the sum range as evaluation does (#733): with `rng` naming
+  `Data!$B$1:$B$2`, `SUMIF(rng,">0",Data!C1)` reads C1:C2, as does `SUMIF(Data!B1:B2,">0",cost)`
+  with `cost` naming `Data!$C$1`, so `--with C2=0` uncaches both. Without `Names` (the
+  `eval --at` static check) nothing changes.
+
 ## [0.24.0] - 2026-10-12
 
 Excel parity in the evaluator, from three runs: the Weaver dogfood of 0.23.1 (#683), wave 31's
