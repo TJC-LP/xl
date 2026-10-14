@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical
+  write kept every entry of the source's shared-string table, so a label replaced, cleared or
+  deleted from every cell (or a removed sheet's strings) still rode in the package. The writer
+  now drops the entries its edit left unreferenced. An entry past every position an untouched
+  sheet references is dropped and the regenerated sheets are renumbered; one before such a
+  position becomes an empty `<si>`, so the untouched sheet still rides byte-for-byte. When every
+  sheet is regenerated (a one-sheet book, a sheet add/remove/reorder) every unreferenced entry is
+  dropped, old ones included. A surgical write that creates the table (the source had none)
+  builds it from the sheets it regenerates only, not from sheets copied with their inline
+  strings. **Breaking (behaviour):** the table of an edited book can shrink and change positions
+  where earlier versions only appended.
+- **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
+  to leak, so the lint no longer reports it; its message names the new options instead of the
+  fresh-write workaround.
+
+### Added
+
+- **`WriterConfig.compactSharedStrings` and `--compact-strings`** (#768): drop every shared
+  string no cell references, including the ones the source already carried, with no empty
+  entries; the untouched sheets that reference a later position are regenerated (values
+  unchanged), and a clean workbook is copied verbatim unless its table holds such an entry. The
+  CLI flag is global for the write verbs and `sheets hide|show`; with `--stream` it is refused
+  as `UNSUPPORTED_IN_STREAM` (a streaming write copies the table untouched). **Breaking
+  (binary):** `WriterConfig` gains a field, so its constructor, `apply` and `copy` change.
+
 ## [0.24.1] - 2026-10-14
 
 A patch release with one fix: `xl eval --with` no longer answers from a stale cache when a
