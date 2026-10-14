@@ -270,11 +270,11 @@
 
 ### Test Coverage
 
-**9,417 test cases** (the 0.24.1 release branch's `./mill __.test` run on 2026-10-14, with the xl-evaluator and xl-cli counts rerun after T() was added): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,418 test cases** (the 0.24.1 release branch's `./mill __.test` run on 2026-10-14, with the xl-evaluator and xl-cli counts rerun after T() was added): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3853 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 3854 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1362 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1909 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |

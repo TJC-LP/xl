@@ -110,21 +110,33 @@ class TFunctionSpec extends FunSuite:
     assertEquals(plain(ref"H9"), Right(CellValue.Error(CellError.Value)))
   }
 
-  test("GH-684: recalculation caches T() results (LibreOffice-saved probe)") {
-    // The cells and caches of the LibreOffice-saved probe in the #684 comment: a recalculation
-    // must reproduce every cache, where it used to fail each cell with "Unknown function 'T'".
-    def formula(expr: String, cached: CellValue): CellValue =
-      CellValue.Formula(expr, Some(cached), FormulaKind.Normal())
+  test("GH-684: T as a name prefix still parses cell and column references") {
+    val withT = book.put(sheet.put(ref"T1", text("in T1")).put(ref"T2", CellValue.Number(3)))
+    def at(formula: String): Either[String, CellValue] =
+      withT.evaluateFormula(formula, name).left.map(_.message)
+    assertEquals(at("=T1"), Right(text("in T1")))
+    assertEquals(at("=T(T1)"), Right(text("in T1")))
+    assertEquals(at("=SUM(T:T)"), Right(CellValue.Number(3)))
+  }
+
+  test("GH-684: recalculation computes T() results (LibreOffice-saved probe)") {
+    // The cells of the LibreOffice-saved probe in the #684 comment, written with no cached values:
+    // a recalculation must compute every value LibreOffice cached, where it used to fail each cell
+    // with "Unknown function 'T'". D7 and D8 read T() cells through the dependency graph.
+    def formula(expr: String): CellValue =
+      CellValue.Formula(expr, None, FormulaKind.Normal())
     val probe = Workbook(
       Sheet(name)
         .put(ref"A1", text("OldLabelAlpha"))
         .put(ref"B1", CellValue.Number(42))
-        .put(ref"D1", formula("T(A1)", text("OldLabelAlpha")))
-        .put(ref"D2", formula("T(B1)", empty))
-        .put(ref"D3", formula("T(E9)", empty))
-        .put(ref"D4", formula("T(BlankName)", empty))
-        .put(ref"D5", formula("T(1/0)", CellValue.Error(CellError.Div0)))
-        .put(ref"D6", formula("T(\"lit\")", text("lit")))
+        .put(ref"D1", formula("T(A1)"))
+        .put(ref"D2", formula("T(B1)"))
+        .put(ref"D3", formula("T(E9)"))
+        .put(ref"D4", formula("T(BlankName)"))
+        .put(ref"D5", formula("T(1/0)"))
+        .put(ref"D6", formula("T(\"lit\")"))
+        .put(ref"D7", formula("T(D1)&\"!\""))
+        .put(ref"D8", formula("T(D5)"))
     ).withDefinedName("BlankName", "Sheet1!$E$10")
     val result = probe.recalculate(Clock.system)
     assertEquals(result.errors, Vector.empty)
@@ -134,7 +146,9 @@ class TFunctionSpec extends FunSuite:
       ref"D3" -> empty,
       ref"D4" -> empty,
       ref"D5" -> CellValue.Error(CellError.Div0),
-      ref"D6" -> text("lit")
+      ref"D6" -> text("lit"),
+      ref"D7" -> text("OldLabelAlpha!"),
+      ref"D8" -> CellValue.Error(CellError.Div0)
     )
     val recalculated = result.workbook(name).fold(e => fail(e.message), identity)
     expected.foreach { (at, value) =>
