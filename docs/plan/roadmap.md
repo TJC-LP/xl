@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **124 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,394 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **124 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,401 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.24.0** (Excel parity in the evaluator — the Weaver dogfood of 0.23.1 (#683), wave 31's sweep of the wave-30 follow-ups (#697, #698–#704) and wave 32 (#705–#722, #756, #757): plain cells as Excel legacy formulas, dynamic-array authoring (`putf --array`), `eval --at`, XLOOKUP references and the `:` operator, ROW/COLUMN arrays, whole-column blank tails, sparse whole-axis arrays (#750), one lookup error channel, number-format parity; follow-ups #726, #736, #744)
+**Current Version**: **0.24.1** (one fix: `eval --with` drops the cache of a formula reading an overridden cell through a defined name in a range argument, or through a name sizing SUMIF's or AVERAGEIF's sum range (#761, #762); follow-up #763)
 
 ---
 
@@ -22,6 +22,15 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.24.1 — `eval --with` through range-slot names (Released 2026-10-14)
+
+One fix (#761, PR #762). The `--with` stale-reader search followed a defined name read as a value
+(`SUM(rng)`) but not one in a function's range argument (`SUMIF(rng,">0")`, `COUNTIF`, `VLOOKUP`),
+so such a reader kept its stale cache. Review of the fix found a sibling: SUMIF and AVERAGEIF size
+their sum range to their range through a name, as evaluation and the recalculation graph already did
+(#733). Both are fixed. Follow-up: #763 (readers through OFFSET or INDIRECT, directly or in a
+defined name).
 
 ### v0.24.0 — the Weaver wave, wave 31 and wave 32: Excel parity in the evaluator (Released 2026-10-12)
 

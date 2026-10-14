@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-10-14
+
+A patch release with one fix: `xl eval --with` no longer answers from a stale cache when a
+formula reads the overridden cell through a defined name in a function's range argument.
+
 ### Fixed
 
 - **`eval --with` uncaches a reader through a defined name in a range slot** (#761): a cached
