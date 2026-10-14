@@ -231,13 +231,17 @@ class ValueDependenciesSpec extends FunSuite:
     )
 
   /** What `formula`, sitting on `from`, reads on Data through `named`'s names. */
-  private def readsOnData(formula: String, from: String): Set[ARef] =
+  private def readsOnData(
+    formula: String,
+    from: String,
+    names: ValueDependencies.Names = ValueDependencies.Names(named)
+  ): Set[ARef] =
     ValueDependencies
       .Reader(
         Some(ref"A1:F10"),
         Some(SheetName.unsafe("Data")),
         localReads = from == "Data",
-        names = Some(ValueDependencies.Names(named)),
+        names = Some(names),
         current = Some(SheetName.unsafe(from))
       )
       .readRanges(parsed(formula))
@@ -283,6 +287,45 @@ class ValueDependenciesSpec extends FunSuite:
     val reader = ValueDependencies.Reader(Some(ref"A1:F10"), Some(SheetName.unsafe("Data")))
     assertEquals(reader.reads(parsed("=SUMIF(block,\">0\")")), Set.empty[ARef])
     assertEquals(reader.reads(parsed("=block*2")), Set.empty[ARef])
+    // nor does it size SUMIF's sum range, or get sized: the written ranges read as written
+    assertEquals(reader.reads(parsed("=SUMIF(block,\">0\",Data!$D$1)")), Set(ref"D1"))
+    assertEquals(reader.reads(parsed("=SUMIF(Data!D1:D2,\">0\",block)")), ref"D1:D2".cells.toSet)
+  }
+
+  test("GH-761: a name sizes SUMIF's and AVERAGEIF's sum range, or is sized, through names") {
+    // block is B1:C2: a sum range from D1 is summed over D1:E2, as evaluation sizes it (#733)
+    val blockAndD1E2 = ref"B1:C2".cells.toSet ++ ref"D1:E2".cells.toSet
+    assertEquals(readsOnData("=SUMIF(block,\">0\",Data!$D$1)", "Other"), blockAndD1E2)
+    assertEquals(readsOnData("=AVERAGEIF(block,\">0\",Data!$D$1)", "Other"), blockAndD1E2)
+    // a named sum range takes the criteria range's shape from its upper-left cell, through a
+    // chain of names too: rate and base name B1, summed over B1:B3 beside A1:A3
+    val a1a3AndB1B3 = ref"A1:A3".cells.toSet ++ ref"B1:B3".cells.toSet
+    assertEquals(readsOnData("=SUMIF(Data!A1:A3,\">0\",rate)", "Other"), a1a3AndB1B3)
+    assertEquals(readsOnData("=SUMIF(Data!A1:A3,\">0\",base)", "Other"), a1a3AndB1B3)
+    // SUMIFS sizes nothing: its sum range is read as written
+    assertEquals(
+      readsOnData("=SUMIFS(Data!$D$1,block,\">0\")", "Other"),
+      ref"B1:C2".cells.toSet + ref"D1"
+    )
+  }
+
+  test("GH-761: one Names resolves a sum range's name per qualifier and referencing sheet") {
+    // loc names Data!$A$1 for the workbook and Data!$B$1 on Other; one Names serves every reader
+    // of a --with search, so its memo must keep the three apart
+    val names = ValueDependencies.Names(named)
+    val sized = "=SUMIF(Data!D1:D2,\">0\",loc)"
+    assertEquals(
+      readsOnData(sized, "Data", names),
+      ref"D1:D2".cells.toSet ++ ref"A1:A2".cells.toSet
+    )
+    assertEquals(
+      readsOnData(sized, "Other", names),
+      ref"D1:D2".cells.toSet ++ ref"B1:B2".cells.toSet
+    )
+    assertEquals(
+      readsOnData("=SUMIF(Data!D1:D2,\">0\",Other!loc)", "Data", names),
+      ref"D1:D2".cells.toSet ++ ref"B1:B2".cells.toSet
+    )
   }
 
 object ValueDependenciesSpec:

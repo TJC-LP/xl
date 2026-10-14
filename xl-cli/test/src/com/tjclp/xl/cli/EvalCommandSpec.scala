@@ -1046,6 +1046,45 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(countif.stdout.contains("Result: 0 (number)"), countif.stdout)
   }
 
+  /**
+   * GH-761: Data: B1 = 10, B2 = 1, C1 = 5, C2 = 7. Names: rng = Data!$B$1:$B$2, cost = Data!$C$1.
+   * Other, each cached: A1 = SUMIF(rng,">0",Data!C1) (12), A2 = SUMIF(Data!B1:B2,">0",cost) (12),
+   * A3 = AVERAGEIF(rng,">0",Data!C1) (6): a sum range sized by a name, or a name sized, to C1:C2.
+   */
+  private val sizedReadBacks: Workbook =
+    val book = Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"B1", CellValue.Number(BigDecimal(10)))
+          .put(ref"B2", CellValue.Number(BigDecimal(1)))
+          .put(ref"C1", CellValue.Number(BigDecimal(5)))
+          .put(ref"C2", CellValue.Number(BigDecimal(7))),
+        Sheet("Other")
+          .put(ref"A1", cachedFormula("=SUMIF(rng,\">0\",Data!C1)", 12))
+          .put(ref"A2", cachedFormula("=SUMIF(Data!B1:B2,\">0\",cost)", 12))
+          .put(ref"A3", cachedFormula("=AVERAGEIF(rng,\">0\",Data!C1)", 6))
+      )
+    )
+    book.copy(metadata =
+      book.metadata.copy(definedNames =
+        Vector(DefinedName("rng", "Data!$B$1:$B$2"), DefinedName("cost", "Data!$C$1"))
+      )
+    )
+
+  test("GH-761: --with reaches a cached reader whose sum range a defined name sizes") {
+    // C2 = 0: each reader sums or averages C1:C2 (5 and 0), as Excel sizes the sum range to the
+    // criteria range. Before, C2 was no read of theirs and the caches (12, 12, 6) survived
+    val data = sizedReadBacks.sheets.headOption
+    val cases = List("=Other!A1" -> "5", "=Other!A2" -> "5", "=Other!A3" -> "2.5")
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(sizedReadBacks, data, formula, at, List("C2=0")).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _)
+  }
+
   test("GH-715: evala --with sees another sheet's cached read-back without its cache") {
     // evala goes through the same stale-reader search as eval: Other!A1 is 800, not its 20
     val data = cachedReadBacks.sheets.headOption
