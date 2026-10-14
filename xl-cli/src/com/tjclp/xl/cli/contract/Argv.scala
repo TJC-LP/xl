@@ -32,6 +32,7 @@ object Argv:
     "--stream" -> false,
     "--no-recalc" -> false,
     "--preserve-caches" -> false,
+    "--compact-strings" -> false,
     "--json" -> false,
     "--strict" -> false
   )

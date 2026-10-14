@@ -246,7 +246,16 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     val valueTaking =
       Set("-f", "--file", "-s", "--sheet", "-o", "--output", "--backend", "--max-size")
     val switches =
-      Set("-i", "--in-place", "--stream", "--no-recalc", "--preserve-caches", "--json", "--strict")
+      Set(
+        "-i",
+        "--in-place",
+        "--stream",
+        "--no-recalc",
+        "--preserve-caches",
+        "--compact-strings",
+        "--json",
+        "--strict"
+      )
     assertEquals(Argv.globals.keySet, valueTaking ++ switches)
     valueTaking.foreach(k => assertEquals(Argv.globals(k), true, k))
     switches.foreach(k => assertEquals(Argv.globals(k), false, k))
