@@ -9,17 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical
-  write kept every entry of the source's shared-string table, so a label replaced, cleared or
-  deleted from every cell (or a removed sheet's strings) still rode in the package. The writer
-  now drops the entries its edit left unreferenced. An entry past every position an untouched
-  sheet references is dropped and the regenerated sheets are renumbered; one before such a
-  position becomes an empty `<si>`, so the untouched sheet still rides byte-for-byte. When every
-  sheet is regenerated (a one-sheet book, a sheet add/remove/reorder) every unreferenced entry is
-  dropped, old ones included. A surgical write that creates the table (the source had none)
-  builds it from the sheets it regenerates only, not from sheets copied with their inline
-  strings. **Breaking (behaviour):** the table of an edited book can shrink and change positions
-  where earlier versions only appended.
+- **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical write
+  kept every entry of the source's shared-string table, so a label replaced, cleared or deleted from
+  every cell (or a removed sheet's strings) still rode in the package. The writer now drops the
+  entries its edit left unreferenced. An entry past every position an untouched sheet references is
+  dropped and the regenerated sheets are renumbered; one before such a position becomes an empty
+  `<si>`, so the untouched sheet still rides byte-for-byte. When every sheet is regenerated (a
+  one-sheet book, a sheet add/remove/reorder) every unreferenced entry is dropped, old ones
+  included. A `t="s"` index at or past the end of the table names no entry (ECMA-376 §18.4.9): it
+  pins nothing, and an untouched part that holds one is treated as malformed, so the write removes
+  no entry. A surgical write that creates the table (the source had none) builds it from the sheets
+  it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
+  the table of an edited book can shrink and change positions where earlier versions only appended.
 - **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
   to leak, so the lint no longer reports it; its message names the new options instead of the
   fresh-write workaround.

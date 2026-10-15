@@ -1666,15 +1666,19 @@ object XlsxWriter:
   /**
    * The shared-string references (`t="s"` cells) of a SOURCE sheet part, by SAX scan: their count
    * (GH-304 subtracts a modified sheet's pre-edit contribution from the preserved count attribute)
-   * and their positions (GH-768 orphan removal). A missing part references nothing; an unreadable
-   * one is Left.
+   * and their positions (GH-768 orphan removal), against a source table of `tableSize` entries
+   * (positions at or past it name no entry; see SharedStringCompaction). A missing part references
+   * nothing; an unreadable one is Left.
    */
   private def scanSourceSstReferences(
     source: SourceContent,
-    sheetPath: String
+    sheetPath: String,
+    tableSize: Int
   ): Either[String, SharedStringCompaction.RefScan] =
     Try(
-      withSourceZip(source)(_.withEntry(sheetPath)((_, in) => SharedStringCompaction.scan(in)))
+      withSourceZip(source)(
+        _.withEntry(sheetPath)((_, in) => SharedStringCompaction.scan(in, tableSize))
+      )
     ) match
       case Success(Some(scan)) => scan
       case Success(None) => Right(SharedStringCompaction.RefScan.empty)
@@ -1692,7 +1696,9 @@ object XlsxWriter:
         .toVector
         .sorted
         .foldLeft[Either[String, BitSet]](Right(BitSet.empty)) { (acc, path) =>
-          acc.flatMap(seen => scanSourceSstReferences(ctx.content, path).map(seen | _.indices))
+          acc.flatMap { seen =>
+            scanSourceSstReferences(ctx.content, path, table.strings.size).map(seen | _.indices)
+          }
         }
         .exists(referenced => table.strings.indices.exists(i => !referenced.contains(i)))
     }
@@ -1937,11 +1943,20 @@ object XlsxWriter:
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
 
+    // The source's shared-string table, parsed once per write; None when the source has none or it
+    // cannot be read.
+    lazy val parsedSourceSST: Option[SharedStrings] =
+      sourceContext.flatMap(ctx => parsePreservedSST(ctx.content))
+
     // One SAX scan per source sheet part, shared by the reference count (GH-304) and the orphan
-    // removal (GH-768). A missing part references nothing; an unreadable one is Left.
+    // removal (GH-768). A missing part references nothing; an unreadable one is Left. Positions are
+    // checked against the parsed table's size, so the scan holds at most one bit per entry.
     val sourceRefScans = mutable.Map.empty[String, Either[String, SharedStringCompaction.RefScan]]
     def sourceRefScan(ctx: SourceContext, path: String) =
-      sourceRefScans.getOrElseUpdate(path, scanSourceSstReferences(ctx.content, path))
+      sourceRefScans.getOrElseUpdate(
+        path,
+        scanSourceSstReferences(ctx.content, path, parsedSourceSST.fold(0)(_.strings.size))
+      )
     def sourceRefCount(ctx: SourceContext, path: String): Int =
       sourceRefScan(ctx, path).fold(_ => 0, _.count)
 
@@ -1991,7 +2006,7 @@ object XlsxWriter:
         SstPlan(Some(SharedStrings.fromWorkbook(workbook, escapeFormulas = true)), true)
       else if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
-        val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.content)).getOrElse(None)
+        val parsedSST = parsedSourceSST
 
         // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
         // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
@@ -2107,8 +2122,10 @@ object XlsxWriter:
      * table needs no empty entries; a part xl does not model (a macro sheet, a revision log) is never
      * regenerated, so it still pins the positions it references.
      *
-     * None keeps the GH-304 append/recount plan: nothing to remove, or a copied part could not be
-     * read (an unread part may reference any entry).
+     * None keeps the GH-304 append/recount plan: nothing to remove, a copied part could not be
+     * read (an unread part may reference any entry), or a copied part has a t="s" value that names
+     * no entry (an index at or past the table's size, ECMA-376 §18.4.9): such a part is malformed,
+     * so it is treated like an unreadable one and every entry is kept.
      */
     def removeOrphans(
       ctx: SourceContext,
@@ -2165,7 +2182,7 @@ object XlsxWriter:
             copiedPaths.foldLeft[Either[String, Vector[RefScan]]](Right(Vector.empty)) {
               (acc, path) => acc.flatMap(scans => sourceRefScan(ctx, path).map(scans :+ _))
             }
-        copiedScans.toOption.flatMap { scans =>
+        copiedScans.toOption.filter(_.forall(_.outOfRange == 0)).flatMap { scans =>
           val copiedReferenced = scans.foldLeft(BitSet.empty)(_ | _.indices)
           val orphans = released &~ copiedReferenced
           orphans.headOption.flatMap { firstOrphan =>
