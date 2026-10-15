@@ -19,9 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   slice instead of a map lookup per row, and still test every row with `CriteriaMatcher.matches`.
   A slice is built only when every formula in its box that the pass evaluates has already been
   evaluated (checked against the pass's own order, never against cache presence) and the copy
-  meets no uncached formula; otherwise the call scans as before. On the 20k-row raw-criteria
-  benchmark book a sequential recalculation drops from 130 s to 10.8 s (5.7 s with two threads);
-  name parses on `Tiny` drop from 3,456 to 15. Results are unchanged: property tests compare every
+  meets no uncached formula; otherwise the call scans as before. A column whose formulas are all
+  done gets one slice that serves every window of it; otherwise a window is sliced on its second
+  request, so running and sliding windows (`COUNTIF($A$2:A9,A9)`) scan as before instead of each
+  holding a copy of its rows. On the 20k-row raw-criteria
+  benchmark book a sequential recalculation drops from 151 s to 12.2 s, `writeChecked`'s
+  recalculation from 160 s to 13.1 s (6.4 s with two threads); name parses on `Tiny` drop from
+  3,456 to 15. Results are unchanged: property tests compare every
   cell, exact `BigDecimal` scale included, and every error with the caches on and off.
 
 ### Testing

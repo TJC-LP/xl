@@ -360,9 +360,11 @@ fit in 64 GB. Writing Tiny (`mode=checked`) takes 0.25 s.
 
 Per-pass caches (#767 PR 1): a pass caches each sheet's used range, each defined name's parsed body
 and static range, and column slices of tall single-column criteria ranges (`PassCache`); a slice is
-built only once the pass has evaluated every formula in its box. R20 (same machine and load, run
-back to back): 130.5 s before, 10.8 s after (`mode=parallel`: 5.7 s; `mode=checked`: 10.7 s), with
-9 slices built, no scan fallback, one used-range scan and 14 name parses. Matcher calls are
+built only once the pass has evaluated every formula in its box; a column whose formulas are all done
+gets one slice for every window of it, and any other window is sliced on its second request. R20
+(`-Xmx4g`, same machine and load, run back to back): `mode=recalc` 151.5 s before, 12.2 s after;
+`mode=checked` 160.2 s before, 13.1 s after; `mode=parallel` 6.4 s after; with 9 slices built, no
+scan fallback, one used-range scan and 14 name parses (116,875 before). Matcher calls are
 unchanged (161,824,716): every row is still tested; the criteria index removes them. H10 stays
 bound by its legacy graph until the compact graph lands.
 
