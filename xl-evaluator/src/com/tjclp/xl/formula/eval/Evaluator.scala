@@ -305,7 +305,8 @@ object Evaluator:
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail = NameTrail.empty
+    resolvingNames: NameTrail = NameTrail.empty,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): Either[EvalError, (Sheet, CellRange)] =
     location match
       case TExpr.RangeLocation.Local(range, _) =>
@@ -327,7 +328,7 @@ object Evaluator:
         Left(externalRefUnsupported(loc.toA1))
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
-        resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
+        resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames, counters)
       // GH-710: a LET name's reference lives in the LET environment, which only a function's
       // EvalContext carries (EvalContext.resolveRange)
       case TExpr.RangeLocation.Binding(name) =>
@@ -357,9 +358,10 @@ object Evaluator:
     scope: Option[SheetName],
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail
+    resolvingNames: NameTrail,
+    counters: RecalcCounters
   ): Either[EvalError, (Sheet, CellRange)] =
-    resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
+    resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames, counters).flatMap {
       case NameRangeTarget.Range(target, range) => Right((target, range))
       case NameRangeTarget.Computed(notARange) => Left(notARange)
     }
@@ -415,14 +417,15 @@ object Evaluator:
     scope: Option[SheetName],
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail
+    resolvingNames: NameTrail,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): Either[EvalError, NameRangeTarget] =
     def crossSheet(
       location: TExpr.RangeLocation,
       definingSheet: Sheet,
       guard: NameTrail
     ): Either[EvalError, NameRangeTarget] =
-      resolveRangeLocation(location, definingSheet, workbook, guard)
+      resolveRangeLocation(location, definingSheet, workbook, guard, counters)
         .map((target, range) => NameRangeTarget.Range(target, range))
     workbook match
       case None =>
@@ -442,6 +445,7 @@ object Evaluator:
             val node = NameWalk.Node(dn, definingSheet.name)
             val guard = resolvingNames.enter(node)
             resolvingNames.refusal(name, node).toLeft(()).flatMap { _ =>
+              counters.increment(RecalcCounters.Counter.NameParses)
               FormulaParser.parse(dn.formula) match
                 case Left(parseErr) =>
                   Left(
@@ -482,9 +486,16 @@ object Evaluator:
                     // GH-411: name→name chains follow like expression position, each hop as seen
                     // from its predecessor's defining sheet, under the shared cycle guard
                     case TExpr.NameRef(next) =>
-                      resolveNameRangeTarget(next, None, definingSheet, workbook, guard)
+                      resolveNameRangeTarget(next, None, definingSheet, workbook, guard, counters)
                     case TExpr.SheetNameRef(qualifier, next) =>
-                      resolveNameRangeTarget(next, Some(qualifier), definingSheet, workbook, guard)
+                      resolveNameRangeTarget(
+                        next,
+                        Some(qualifier),
+                        definingSheet,
+                        workbook,
+                        guard,
+                        counters
+                      )
                     // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
                     // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
                     case TExpr.ErrorLit(err, _) =>
@@ -526,7 +537,8 @@ object Evaluator:
     workbook: Option[Workbook],
     resolvingNames: NameTrail,
     bindings: Map[String, Any],
-    evalName: (String, Option[SheetName]) => Either[EvalError, Any]
+    evalName: (String, Option[SheetName]) => Either[EvalError, Any],
+    counters: RecalcCounters = RecalcCounters.disabled
   ): Either[EvalError, (Sheet, CellRange)] =
     def referenceOf(value: Any, notARange: EvalError): Either[EvalError, (Sheet, CellRange)] =
       value match
@@ -540,11 +552,12 @@ object Evaluator:
         case _ => Left(notARange)
     location match
       case TExpr.RangeLocation.Name(name, scope) =>
-        resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
-          case NameRangeTarget.Range(target, range) => Right((target, range))
-          case NameRangeTarget.Computed(notARange) =>
-            evalName(name, scope).flatMap(referenceOf(_, notARange))
-        }
+        resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames, counters)
+          .flatMap {
+            case NameRangeTarget.Range(target, range) => Right((target, range))
+            case NameRangeTarget.Computed(notARange) =>
+              evalName(name, scope).flatMap(referenceOf(_, notARange))
+          }
       case TExpr.RangeLocation.Binding(name) =>
         val notARange = EvalError.ErrorValue(
           CellError.Value,
@@ -555,7 +568,7 @@ object Evaluator:
           // Unreachable from formula text: the parser emits Binding only for a LET name in scope,
           // and evalLet binds every name before its body runs. A hand-built AST can still get here.
           case None => Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
-      case _ => resolveRangeLocation(location, currentSheet, workbook, resolvingNames)
+      case _ => resolveRangeLocation(location, currentSheet, workbook, resolvingNames, counters)
 
   // ===== GH-384: defined-name resolution =====
 
@@ -1022,7 +1035,8 @@ object Evaluator:
       // GH-715: a positioned evaluation's placement is never evaluated as a precedent of itself
       currentCell.flatMap(memo.guard(targetSheet, _)).foreach(error => break(Left(error)))
 
-      FormulaParser.parse(formulaStr) match
+      val counters = aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
+      counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(formulaStr)) match
         case Left(parseErr) =>
           Left(
             EvalError.EvalFailed(
@@ -1257,8 +1271,14 @@ object Evaluator:
    * `putIfAbsent` wins. Ineligible ranges are marked once, then every reader computes outside the
    * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
    * like successes.
+   *
+   * #767: `counters` is the pass's [[RecalcCounters]]; every production pass uses the disabled
+   * instance, and only the measured seams of `WorkbookEvaluator` supply an enabled one.
    */
-  private[formula] final class AggregateMemo(cachesAggregates: Boolean = true):
+  private[formula] final class AggregateMemo(
+    cachesAggregates: Boolean = true,
+    val counters: RecalcCounters = RecalcCounters.disabled
+  ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /**
@@ -1513,6 +1533,10 @@ private class EvaluatorImpl(
   protected def aggregateMemoOpt: Option[Evaluator.AggregateMemo] = aggregateMemo
 
   override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = aggregateMemo
+
+  /** #767: the pass's work counters; disabled outside a measured recalculation. */
+  protected def passCounters: RecalcCounters =
+    aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
 
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorImpl(
@@ -1815,7 +1839,8 @@ private class EvaluatorImpl(
               workbook,
               resolvingNames,
               bindings,
-              evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true)
+              evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true),
+              passCounters
             ) match
               // GH-630: a slot that IS an error value (`COUNT(#REF!)`, a name bound to `#N/A`)
               // follows the aggregate's error-argument policy, exactly as the Call form does
@@ -2528,6 +2553,7 @@ private class EvaluatorImpl(
     currentCell: Option[ARef],
     asReference: Boolean
   ): Either[EvalError, Any] =
+    passCounters.increment(RecalcCounters.Counter.NameParses)
     FormulaParser.parse(dn.formula) match
       case Left(parseErr) =>
         Left(

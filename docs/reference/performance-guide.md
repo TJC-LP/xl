@@ -320,6 +320,44 @@ sheet.put(newCells)
 - XL write: **4.5x faster, 80x less memory**
 - XL read: **4.4x faster, 80x less memory**
 
+### Recalculation benchmark (#767)
+
+`xl-evaluator.perf` (sources in `xl-evaluator/test-perf`) builds a synthetic freight-loads workbook
+(`LoadsBook`: a Loads sheet of keyed rows with whole-column defined names, Summary and Rate History
+sheets of COUNTIFS/SUMIFS/MINIFS/MAXIFS over them) and recalculates it with work counters and
+per-phase timing on. Shapes: `Tiny` (1,600 formulas, the CI gate), `H10` (10k rows, helper
+criteria, 38k formulas), `R20` (20k rows, raw criteria, 8k formulas), `Real` (33,233 rows, about
+188k formulas) and `RunTotal` (running totals over a formula column).
+
+```bash
+./mill xl-evaluator.perf.runMain com.tjclp.xl.formula.perf.LoadsBookMain shape=Tiny mode=recalc
+XL_PERF_HEAP=4g ./mill xl-evaluator.perf.runMain com.tjclp.xl.formula.perf.LoadsBookMain shape=Real mode=checked
+./mill xl-evaluator.perf.testForked      # the gates CI's non-blocking `perf` job runs
+```
+
+`mode` is `recalc`, `parallel`, `uncached` (what `Excel.writeChecked` computes) or `checked`
+(`recalculateUncached` plus `Excel.write`, timing the write). The module forks with `-Xmx2g`
+unless `XL_PERF_HEAP` says otherwise.
+
+Baseline on 0.24.1 (`mode=recalc`, sequential, `-XX:ActiveProcessorCount=2`, M4 Max under shared
+load). Phases are inclusive: Parse runs inside graph build and eval, criteria inside eval.
+
+| Phase (s) | Tiny | H10 | R20 |
+|---|---|---|---|
+| Graph build | 0.33 | 48.4 | 0.75 |
+| Parse (inside build and eval) | 0.14 | 0.73 | 0.40 |
+| Tarjan + blocked dependents | 0.02 | 5.35 | 0.01 |
+| Kahn | 0.07 | 23.7 | 0.01 |
+| Eval | 0.30 | 56.6 | 116.7 |
+| Criteria (inside eval) | 0.16 | 55.5 | 116.3 |
+| `Sheet.put` threading | 0.01 | 0.12 | 0.09 |
+| Wall | 0.8 | 134 | 118 |
+| Graph edges | 186,400 | 92,520,000 | 0 |
+| Matcher calls | 180,118 | 81,101,873 | 161,824,716 |
+
+H10 needs about 25 GB of heap for its 92.5M per-cell edges; `Real` with helper criteria does not
+fit in 64 GB. Writing Tiny (`mode=checked`) takes 0.25 s.
+
 ---
 
 ## Common Performance Pitfalls

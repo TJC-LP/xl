@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.functions.{
   ReferenceOperators
 }
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, NameWalk}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, NameWalk, RecalcCounters}
 
 import com.tjclp.xl.workbooks.Workbook
 
@@ -1558,9 +1558,13 @@ object DependencyGraph:
    *
    * This representation is intentionally internal: dirty-cone callers still need the public graph
    * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
+   *
+   * #767: `counters` times each formula parse as the `Parse` phase and records the graph's node and
+   * edge counts; the disabled default does neither.
    */
   private[formula] def fromWorkbookFormulaGraph(
-    workbook: com.tjclp.xl.workbooks.Workbook
+    workbook: com.tjclp.xl.workbooks.Workbook,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
     val formulas: Vector[(QualifiedRef, String)] = workbook.sheets.flatMap { sheet =>
       sheet.cells.flatMap { case (cellRef, cell) =>
@@ -1586,7 +1590,7 @@ object DependencyGraph:
     val canonicalSheet = sheetCanonicaliser(workbook)
     val nameRanges = NameRanges.empty
     val dependencies = formulas.iterator.map { case (ref, expression) =>
-      val deps = FormulaParser.parse(expression) match
+      val deps = counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(expression)) match
         case scala.util.Right(expr) =>
           extractQualifiedDependencies(
             expr,
@@ -1602,6 +1606,12 @@ object DependencyGraph:
       ref -> deps
     }.toMap
 
+    if counters.enabled then
+      counters.add(RecalcCounters.Counter.GraphNodes, dependencies.size.toLong)
+      counters.add(
+        RecalcCounters.Counter.GraphEdges,
+        dependencies.valuesIterator.map(_.size.toLong).sum
+      )
     (dependencies, reverseEdges(dependencies))
 
   /** One declared range and the formulas that read it. */

@@ -9,7 +9,9 @@ object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {
   override def moduleDeps = Seq(
     build.`xl-core`,
     build.`xl-ooxml`,
-    build.`xl-cats-effect`
+    build.`xl-cats-effect`,
+    // #767 RecalcBenchmark: the LoadsBook generator lives in the evaluator's perf module
+    build.`xl-evaluator`.perf
   )
 
   override def mvnDeps = super.mvnDeps() ++ Seq(
