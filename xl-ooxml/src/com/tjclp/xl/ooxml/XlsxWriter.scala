@@ -1677,6 +1677,24 @@ object XlsxWriter:
           .getOrElse(0)
       case _ => 0
 
+  /**
+   * True when one of `paths` holds a `t="s"` index at or past `tableSize`, or cannot be read
+   * (GH-781). Stops at the first such part.
+   */
+  private def copiedPartReferencesPastTable(
+    ctx: SourceContext,
+    paths: Vector[String],
+    tableSize: Int
+  ): Boolean =
+    paths.nonEmpty &&
+      Try(withSourceZip(ctx.content) { zip =>
+        paths.exists(path =>
+          zip
+            .withEntry(path)((_, in) => SharedStringBound.referencesPast(in, tableSize))
+            .getOrElse(false)
+        )
+      }).getOrElse(true)
+
   private def parsePreservedSST(source: SourceContent): Option[SharedStrings] =
     Try(withSourceZip(source)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
       case Failure(_) => None
@@ -1922,6 +1940,20 @@ object XlsxWriter:
       else Set.empty
     val livePreservableParts = preservableParts -- removalOrphans -- droppedCalcChain
 
+    // GH-781: the source parts this write copies byte for byte whose cells can reference the
+    // shared-string table — the worksheets of sheets it does not regenerate, and the preserved
+    // macro sheets and revision logs.
+    def copiedCellParts(ctx: SourceContext): Vector[String] =
+      val regenerated = sheetsToRegenerate.flatMap(sourceSheetPath(ctx, _))
+      val copiedSheets = workbook.sheets.indices
+        .filterNot(sheetsToRegenerate.contains)
+        .flatMap(sourceSheetPath(ctx, _))
+      (copiedSheets.toSet ++ livePreservableParts.filter(SharedStringBound.isCellBearingPart))
+        .filterNot(regenerated.contains)
+        .filter(ctx.partManifest.contains)
+        .toVector
+        .sorted
+
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
 
@@ -2014,7 +2046,22 @@ object XlsxWriter:
             )
           case None => modifiedSheetRefEntries.size
 
-        if newEntries.nonEmpty then
+        // GH-781: an appended string takes the next position, and a copied part's index at or past
+        // the source table's size (read as #REF!, ECMA-376 Part 1 §18.4.9) would come to name it.
+        // When a copied part holds such an index, nothing is appended: the regenerated sheets
+        // write their new strings as inline strings (§18.3.1.4 t="inlineStr"), so every copied
+        // index keeps naming what it named before the save. Padding the table up to the highest
+        // copied index instead would make those cells read as empty text, not #REF!, and would
+        // cost one entry per skipped position.
+        val appendBlocked = newEntries.nonEmpty && sourceContext.exists { ctx =>
+          copiedPartReferencesPastTable(
+            ctx,
+            copiedCellParts(ctx),
+            parsedSST.map(_.strings.size).getOrElse(0)
+          )
+        }
+
+        if newEntries.nonEmpty && !appendBlocked then
           // New strings detected → build SST from preserved + new entries only
           // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
           val combinedEntries =
@@ -2026,12 +2073,20 @@ object XlsxWriter:
           val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
           (Some(combinedSST), true)
         else
+          // GH-781: with the append blocked, a new string is written inline and is no reference
+          val keptTotalCount =
+            if appendBlocked then
+              math.max(
+                0,
+                exactTotalCount - modifiedSheetRefEntries.count(e => !preservedEntries.contains(e))
+              )
+            else exactTotalCount
           parsedSST match
-            case Some(preserved) if preserved.totalCount != exactTotalCount =>
+            case Some(preserved) if preserved.totalCount != keptTotalCount =>
               // GH-304: same strings, changed reference count → re-emit the SST with the exact
               // count. Entries are never pruned or reordered: preserved sheets' t="s" indices
               // must stay valid.
-              (Some(preserved.copy(totalCount = exactTotalCount)), true)
+              (Some(preserved.copy(totalCount = keptTotalCount)), true)
             case _ =>
               // No count drift → copy preserved SST verbatim for byte-perfect preservation
               (parsedSST, false)

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Appending a shared string no longer gives an out-of-range index a value** (#781): a `t="s"`
+  index at or past the end of `xl/sharedStrings.xml` names no entry (ECMA-376 Part 1, §18.4.9)
+  and reads as `#REF!`. When a surgical write copied such a part byte for byte and appended new
+  strings, the index came to name the appended string, so an untouched cell changed value. The
+  writer now scans the parts it copies (worksheets it does not regenerate, macro sheets, revision
+  log `<nc>`/`<oc>` values) and, when one names a position at or past the table, appends nothing:
+  the regenerated sheets write their new strings as inline strings (`t="inlineStr"`, §18.3.1.4)
+  and the table keeps its entries, with `count` covering only table references. The scan stops at
+  the first such index and keeps one value of at most 20 characters, so its memory does not depend
+  on the index values. A copied part that is not readable XML is treated the same way.
+
 ## [0.24.1] - 2026-10-14
 
 A patch release with one fix: `xl eval --with` no longer answers from a stale cache when a
