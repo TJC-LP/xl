@@ -77,8 +77,13 @@ class RecalcCountersSpec extends FunSuite:
     recalculateCounted(book, options, counters)
     val snap = counters.snapshot
     assertEquals(snap(Counter.GraphNodes), 5L)
-    // Out!A5 reads Out!A1 and Out!A2; the criteria calls read constants only
-    assertEquals(snap(Counter.GraphEdges), 2L)
+    // compact graph: point edges Out!A1 -> A5 and Out!A2 -> A5, three range nodes (Data!A1:A5,
+    // which `rng` resolves to as well, Data!B1:B5, Data!A:A) and five reader edges; Data holds no
+    // formula, so no segment node
+    assertEquals(snap(Counter.GraphEdges), 7L)
+    assertEquals(snap(Counter.RangeNodes), 3L)
+    // Tarjan walks each edge once, Kahn twice (in-degrees, then the order)
+    assertEquals(snap(Counter.GraphWork), 3L * 7L)
     assertEquals(snap(Counter.CriteriaScan), 4L)
     // COUNTIF 5 rows; COUNTIFS 5 rows on the first pair, then the 3 rows that passed it;
     // SUMIF 5; COUNTIF(Data!A:A) 5 rows after the used-range bound
@@ -88,13 +93,23 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.NameParses), 2L)
     Vector(
       Counter.VirtualNodes,
-      Counter.RangeNodes,
       Counter.CriteriaIndexed,
       Counter.CriteriaWindowOnly,
       Counter.CriteriaNotIndexable,
       Counter.SlicesBuilt,
       Counter.ScanFallbacks
     ).foreach(c => assertEquals(snap(c), 0L, c.toString))
+  }
+
+  test("the legacy engine counts formula-to-formula edges and no virtual work") {
+    val counters = RecalcCounters.create()
+    recalculateCounted(book, options, counters, RecalcEngine.Legacy)
+    val snap = counters.snapshot
+    assertEquals(snap(Counter.GraphNodes), 5L)
+    // Out!A5 reads Out!A1 and Out!A2; the criteria calls read constants only
+    assertEquals(snap(Counter.GraphEdges), 2L)
+    Vector(Counter.VirtualNodes, Counter.RangeNodes, Counter.GraphWork)
+      .foreach(c => assertEquals(snap(c), 0L, c.toString))
   }
 
   test("parallel and uncached passes count the same work") {
