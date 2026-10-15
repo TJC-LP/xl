@@ -1374,19 +1374,21 @@ object Evaluator:
    * instance, and only the measured seams of `WorkbookEvaluator` supply an enabled one. `passCache`
    * holds the pass's used ranges, static name resolutions and column slices ([[PassCache]]); it
    * exists when the memo caches aggregates and `columnCache` is on (the default; parity tests turn
-   * it off), with `limits` bounding what it holds.
+   * it off), with `limits` bounding what it holds. `criteriaIndex` (on by default; parity tests
+   * turn it off) lets criteria calls answer from the slices' equality indexes.
    */
   private[formula] final class AggregateMemo(
     cachesAggregates: Boolean = true,
     val counters: RecalcCounters = RecalcCounters.disabled,
     columnCache: Boolean = true,
-    limits: PassCache.Limits = PassCache.DefaultLimits
+    limits: PassCache.Limits = PassCache.DefaultLimits,
+    criteriaIndex: Boolean = true
   ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /** #767: the pass's caches; None for a memo that caches nothing or has them switched off. */
     val passCache: Option[PassCache] =
-      Option.when(cachesAggregates && columnCache)(new PassCache(limits, counters))
+      Option.when(cachesAggregates && columnCache)(new PassCache(limits, counters, criteriaIndex))
 
     /**
      * GH-711: SUMPRODUCT's blank tail asks whether a defined name reaches a random draw. Building

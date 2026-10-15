@@ -225,28 +225,30 @@ GitHub Actions runs:
 3. `./mill __.test` (All test modules)
 
 A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
-recalculation benchmark gates (`xl-evaluator/test-perf`, 17 tests). `__.test` does not select that
+recalculation benchmark gates (`xl-evaluator/test-perf`, 24 tests). `__.test` does not select that
 module. On the `Tiny` loads book it checks every formula cell against the v0.24.1 values
 (`loads-values-tiny.tsv`) and 40 oracle cells, and pins every work counter (`RecalcCounters`: graph
 edges, criteria scans, matcher calls, name parses, ...) to the current engine's values, under the
 module's `-Xmx2g` heap; a change to the recalculation algorithm updates the pinned counts in the
-same PR. See the recalculation benchmark section of
+same PR. On the 20k-row `R20` book it checks 40 oracle cells and gates the criteria index:
+every call indexed, matcher calls per call flat from 5k to 20k rows, at most a twentieth of the
+index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation benchmark section of
 `docs/reference/performance-guide.md`.
 
 ## Test Counts by Module
 
-As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus the 30 #767 cases in xl-evaluator (`RecalcCountersSpec`, `RecalcCountersLawSpec`, `PassCacheLawSpec`); macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus the 53 #767 cases in xl-evaluator (`RecalcCountersSpec`, `RecalcCountersLawSpec`, `PassCacheLawSpec`, `CriteriaIndexSpec`, `CriteriaIndexLawSpec`); macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3901 |
+| xl-evaluator | 3924 |
 | xl-core | 1872 |
 | xl-ooxml | 1362 |
 | xl-cli | 1909 |
 | xl-cats-effect | 209 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,465** |
+| **Total** | **9,488** |
 
 ## Test Quality Metrics
 
