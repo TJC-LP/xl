@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Per-pass recalculation caches** (#767): a recalculation pass (`recalculate`, parallel waves,
+  iterative acyclic segments, `recalculateUncached` and so `Excel.writeChecked`, after-edit)
+  now keeps, for its own lifetime, each sheet's used range (scanned once per sheet instead of once
+  per whole-column range per criteria call), each defined name's parsed body and static range
+  resolution (the range is cached, the sheet is bound again from the current workbook on every
+  read), and column slices of criteria ranges. COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and
+  MAXIFS read a single-column criteria range of at least `max(256, used rows / 16)` rows through a
+  slice instead of a map lookup per row, and still test every row with `CriteriaMatcher.matches`.
+  A slice is built only when every formula in its box that the pass evaluates has already been
+  evaluated (checked against the pass's own order, never against cache presence) and the copy
+  meets no uncached formula; otherwise the call scans as before. On the 20k-row raw-criteria
+  benchmark book a sequential recalculation drops from 130 s to 10.8 s (5.7 s with two threads);
+  name parses on `Tiny` drop from 3,456 to 15. Results are unchanged: property tests compare every
+  cell, exact `BigDecimal` scale included, and every error with the caches on and off.
+
 ### Testing
 
 - **Recalculation benchmark and work counters** (#767): the new `xl-evaluator.perf` module
