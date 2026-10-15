@@ -621,9 +621,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     val counters = ctx.counters
     counters.increment(RecalcCounters.Counter.CriteriaScan)
     val matches = counters.tally(RecalcCounters.Counter.MatcherCalls)
-    val result = counters.time(RecalcCounters.Phase.Criteria)(body(matches))
-    matches.flush()
-    result
+    // a defect thrown by `body` becomes a cell error in EvalDefect.xlGuard; its rows still count
+    try counters.time(RecalcCounters.Phase.Criteria)(body(matches))
+    finally matches.flush()
 
   /** `CriteriaMatcher.matches`, tallied (#767). */
   private def matchCounted(

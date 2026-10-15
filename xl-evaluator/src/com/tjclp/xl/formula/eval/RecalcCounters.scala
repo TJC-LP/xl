@@ -39,13 +39,14 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
   /**
    * Run `body` and add its wall time to `phase`. Disabled counters run the body without reading the
    * clock.
+   *
+   * `body` appears once in the expansion: an inline parameter is copied at every use, and a second
+   * use would compile each timed block (some are whole recalculation phases) twice.
    */
   inline def time[A](phase: RecalcCounters.Phase)(inline body: A): A =
-    if !enabled then body
-    else
-      val start = System.nanoTime()
-      try body
-      finally addNanos(phase, System.nanoTime() - start)
+    val start = if enabled then System.nanoTime() else 0L
+    try body
+    finally if enabled then addNanos(phase, System.nanoTime() - start)
 
   /** A fresh per-call tally for `counter`, or the shared no-op tally when disabled. */
   def tally(counter: RecalcCounters.Counter): RecalcCounters.Tally =
