@@ -24,4 +24,33 @@ object `package` extends build.XLModule {
       mvn"org.scalacheck::scalacheck:1.18.1"
     )
   }
+
+  /**
+   * #767 recalculation benchmark: the synthetic loads-book generator, its oracle samples, the
+   * counter gates and the `LoadsBookMain` harness. `__.test` does not select it (the module is not
+   * named `test`); CI runs it in the non-blocking `perf` job with
+   * `./mill -i xl-evaluator.perf.testForked`. The heap ceiling is the memory gate; `XL_PERF_HEAP`
+   * raises it for a manual run of a larger shape (default 2g).
+   */
+  object perf extends ScalaTests with build.XLTestModule {
+    override def moduleDir = super.moduleDir / os.up / "test-perf"
+
+    // Excel.write for the `mode=checked` harness run (what Excel.writeChecked does)
+    override def moduleDeps = super.moduleDeps ++ Seq(build.xl)
+
+    override def forkArgs = Task {
+      val heap = Task.env.getOrElse("XL_PERF_HEAP", "2g")
+      super.forkArgs() ++ Seq(
+        s"-Xmx$heap",
+        s"-Xms$heap",
+        "-XX:+ExitOnOutOfMemoryError",
+        "-XX:ActiveProcessorCount=2",
+        "-Dxl.perf=true"
+      )
+    }
+
+    override def mvnDeps = Seq(
+      mvn"org.scalameta::munit:1.0.3"
+    )
+  }
 }

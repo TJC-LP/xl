@@ -224,20 +224,31 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
+A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
+recalculation benchmark gates (`xl-evaluator/test-perf`, 26 tests). `__.test` does not select that
+module. On the `Tiny` loads book it checks every formula cell against the v0.24.1 values
+(`loads-values-tiny.tsv`) and 40 oracle cells, and pins every work counter (`RecalcCounters`: graph
+edges, criteria scans, matcher calls, name parses, ...) to the current engine's values, under the
+module's `-Xmx2g` heap; a change to the recalculation algorithm updates the pinned counts in the
+same PR. On the 20k-row `R20` book it checks 40 oracle cells and gates the criteria index:
+every call indexed, matcher calls per call flat from 5k to 20k rows, at most a twentieth of the
+index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation benchmark section of
+`docs/reference/performance-guide.md`.
+
 ## Test Counts by Module
 
-As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus the 89 #767 cases in xl-evaluator (counters, per-pass caches, criteria index and the compact recalculation graph); macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3856 |
+| xl-evaluator | 3960 |
 | xl-core | 1872 |
 | xl-ooxml | 1408 |
-| xl-cli | 1919 |
+| xl-cli | 1921 |
 | xl-cats-effect | 212 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,479** |
+| **Total** | **9,585** |
 
 ## Test Quality Metrics
 

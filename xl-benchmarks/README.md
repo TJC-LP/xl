@@ -115,6 +115,32 @@ Compares XL write backends: SaxStax vs ScalaXml.
 
 **Parameters**: `rows` = 1000, 10000, 100000
 
+### 7. RecalcBenchmark
+Whole-workbook recalculation of the synthetic freight-loads book (#767), one recalculation per
+invocation (`SingleShotTime`). The generator lives in the evaluator's `perf` module
+(`xl-evaluator/test-perf`, `LoadsBook`), which also holds the per-PR counter gates.
+
+**Benchmarks**:
+- `recalculate` - `recalculate(RecalcOptions(iterative = Off))` through the internal measured seam
+
+**Parameters**: `rows` = 5000, 10000, 20000; `crit` = `raw` (no helper columns, raw-column
+criteria) or `helper` (three helper formula columns per row, criteria on them); `counters` = `off`
+(the public path, disabled counters) or `on` (counted and timed). The `on`/`off` ratio is the cost
+of the instrumentation.
+
+Today's engine needs about 13 GB of heap for `rows=5000 crit=helper` and minutes per invocation at
+10k+ rows, so pick a subset and a heap:
+
+```bash
+./mill xl-benchmarks.runJmh RecalcBenchmark -p rows=2000 -p crit=raw -jvmArgsAppend -Xmx4g
+```
+
+The weekly `perf-trend.yml` workflow runs a subset and uploads the JSON results.
+
+Instrumentation cost, measured on 0.24.1 at `rows=1000` (6 iterations, `ActiveProcessorCount=2`,
+shared M4 Max): `raw` 3516 ± 119 ms off, 3454 ± 147 ms on; `helper` 9866 ± 403 ms off,
+9908 ± 450 ms on. The difference (-1.8%, +0.4%) is inside the run-to-run error.
+
 ## Interpreting Results
 
 JMH outputs results in the following format:

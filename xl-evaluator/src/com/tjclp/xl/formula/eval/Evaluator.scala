@@ -128,13 +128,18 @@ object Evaluator:
    *
    * Public/direct evaluation deliberately has no aggregate memo: its one-shot semantics and
    * allocation profile stay unchanged. WorkbookEvaluator alone creates this capability and shares
-   * it across the generation's sequential or parallel cell evaluations.
+   * it across the generation's sequential or parallel cell evaluations. #767: `position` is the
+   * slot the evaluated cell occupies in the pass's order, for one cell's evaluation; the pass makes
+   * one such evaluator per cell.
    */
   private[formula] def recalculationInstance(
     rng: Rng,
-    aggregateMemo: AggregateMemo
+    aggregateMemo: AggregateMemo,
+    position: EvalPosition = EvalPosition.None
   ): Evaluator =
-    TotalEvaluator(new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo)))
+    TotalEvaluator(
+      new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo), passPosition = position)
+    )
 
   /**
    * GH-695: [[instance]] plus a generation memo that records spill anchors' results (when
@@ -300,12 +305,16 @@ object Evaluator:
    *   the GH-384 name-cycle guard (the resolved names on the current resolution path, #691);
    *   callers inside the evaluator pass their ambient guard so a name's refersTo cannot re-enter
    *   itself through a range slot.
+   * @param memo
+   *   #767: the pass's aggregate memo, whose [[PassCache]] caches static name resolutions and whose
+   *   counters count name parses; None outside a recalculation
    */
   private[formula] def resolveRangeLocation(
     location: TExpr.RangeLocation,
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail = NameTrail.empty
+    resolvingNames: NameTrail = NameTrail.empty,
+    memo: Option[AggregateMemo] = None
   ): Either[EvalError, (Sheet, CellRange)] =
     location match
       case TExpr.RangeLocation.Local(range, _) =>
@@ -327,7 +336,7 @@ object Evaluator:
         Left(externalRefUnsupported(loc.toA1))
       // GH-394: a defined name in a range slot resolves through the name table
       case TExpr.RangeLocation.Name(name, scope) =>
-        resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames)
+        resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames, memo)
       // GH-710: a LET name's reference lives in the LET environment, which only a function's
       // EvalContext carries (EvalContext.resolveRange)
       case TExpr.RangeLocation.Binding(name) =>
@@ -357,9 +366,10 @@ object Evaluator:
     scope: Option[SheetName],
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail
+    resolvingNames: NameTrail,
+    memo: Option[AggregateMemo]
   ): Either[EvalError, (Sheet, CellRange)] =
-    resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
+    resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames, memo).flatMap {
       case NameRangeTarget.Range(target, range) => Right((target, range))
       case NameRangeTarget.Computed(notARange) => Left(notARange)
     }
@@ -410,20 +420,65 @@ object Evaluator:
       case Right(NameRangeTarget.Computed(_)) => true
       case _ => false
 
+  /**
+   * #767: the static walk, with the pass's cache in front of it. A walk that starts with an empty
+   * trail (no enclosing name resolution, so no cycle refusal can depend on the path) and ends in a
+   * range is recorded in the [[PassCache]] and answered from it afterwards, its sheet bound again
+   * from `workbook`. A computed name, an error and a walk inside another name's resolution are
+   * never cached.
+   */
   private def resolveNameRangeTarget(
     name: String,
     scope: Option[SheetName],
     currentSheet: Sheet,
     workbook: Option[Workbook],
-    resolvingNames: NameTrail
+    resolvingNames: NameTrail,
+    memo: Option[AggregateMemo] = None
   ): Either[EvalError, NameRangeTarget] =
+    def untraced(traced: TracedTarget): NameRangeTarget = traced match
+      case TracedTarget.Range(target, range, _) => NameRangeTarget.Range(target, range)
+      case TracedTarget.Computed(notARange) => NameRangeTarget.Computed(notARange)
+    (memo.flatMap(_.passCache), workbook) match
+      case (Some(passCache), Some(wb)) if resolvingNames.path.isEmpty =>
+        passCache.cachedName(name, scope, currentSheet, wb) match
+          case Some((target, range)) => Right(NameRangeTarget.Range(target, range))
+          case None =>
+            tracedNameTarget(name, scope, currentSheet, workbook, resolvingNames, memo).map {
+              traced =>
+                traced match
+                  case TracedTarget.Range(_, range, origin) =>
+                    passCache.recordName(name, scope, currentSheet, wb, origin, range)
+                  case TracedTarget.Computed(_) => ()
+                untraced(traced)
+            }
+      case _ =>
+        tracedNameTarget(name, scope, currentSheet, workbook, resolvingNames, memo).map(untraced)
+
+  /**
+   * #767: a [[NameRangeTarget]] that also says where its sheet came from, so a cached resolution
+   * binds the same sheet again: the reader's own sheet, or the workbook's sheet of that name.
+   */
+  private enum TracedTarget:
+    case Range(target: Sheet, range: CellRange, origin: PassCache.NameOrigin)
+    case Computed(notARange: EvalError)
+
+  private def tracedNameTarget(
+    name: String,
+    scope: Option[SheetName],
+    currentSheet: Sheet,
+    workbook: Option[Workbook],
+    resolvingNames: NameTrail,
+    memo: Option[AggregateMemo]
+  ): Either[EvalError, TracedTarget] =
     def crossSheet(
       location: TExpr.RangeLocation,
       definingSheet: Sheet,
       guard: NameTrail
-    ): Either[EvalError, NameRangeTarget] =
-      resolveRangeLocation(location, definingSheet, workbook, guard)
-        .map((target, range) => NameRangeTarget.Range(target, range))
+    ): Either[EvalError, TracedTarget] =
+      resolveRangeLocation(location, definingSheet, workbook, guard, memo)
+        .map((target, range) =>
+          TracedTarget.Range(target, range, PassCache.NameOrigin.Book(target.name))
+        )
     workbook match
       case None =>
         Left(
@@ -438,11 +493,19 @@ object Evaluator:
           case None =>
             Left(EvalError.EvalFailed(s"Name '$name' is not defined in this workbook.", None))
           case Some(dn) =>
-            val definingSheet = definedNameScope(wb, dn).getOrElse(currentSheet)
+            val scopeSheet = definedNameScope(wb, dn)
+            val definingSheet = scopeSheet.getOrElse(currentSheet)
+            // the reader's sheet of a chain hop is this name's defining sheet
+            val definingOrigin: PassCache.NameOrigin =
+              scopeSheet.fold(PassCache.NameOrigin.Reader)(s => PassCache.NameOrigin.Book(s.name))
+            def throughHop(traced: TracedTarget): TracedTarget = traced match
+              case TracedTarget.Range(target, range, PassCache.NameOrigin.Reader) =>
+                TracedTarget.Range(target, range, definingOrigin)
+              case other => other
             val node = NameWalk.Node(dn, definingSheet.name)
             val guard = resolvingNames.enter(node)
             resolvingNames.refusal(name, node).toLeft(()).flatMap { _ =>
-              FormulaParser.parse(dn.formula) match
+              parseNameBody(dn.formula, memo) match
                 case Left(parseErr) =>
                   Left(
                     EvalError.EvalFailed(
@@ -452,10 +515,10 @@ object Evaluator:
                     )
                   )
                 case Right(target) =>
-                  def range(at: Sheet, cells: CellRange): Either[EvalError, NameRangeTarget] =
-                    Right(NameRangeTarget.Range(at, cells))
+                  def range(cells: CellRange): Either[EvalError, TracedTarget] =
+                    Right(TracedTarget.Range(definingSheet, cells, definingOrigin))
                   target match
-                    case TExpr.RangeRef(cells, _) => range(definingSheet, cells)
+                    case TExpr.RangeRef(cells, _) => range(cells)
                     case TExpr.SheetRange(sheetName, cells, _) =>
                       crossSheet(
                         TExpr.RangeLocation.CrossSheet(sheetName, cells),
@@ -465,8 +528,8 @@ object Evaluator:
                     // Single-cell targets act as 1×1 ranges (names routinely point at one cell).
                     // A standalone ref at the top of a parsed formula surfaces as the TYPED
                     // Ref/SheetRef (the resolved-value rewrite); Poly forms are kept for safety.
-                    case TExpr.Ref(at, _, _) => range(definingSheet, CellRange(at, at))
-                    case TExpr.PolyRef(at, _) => range(definingSheet, CellRange(at, at))
+                    case TExpr.Ref(at, _, _) => range(CellRange(at, at))
+                    case TExpr.PolyRef(at, _) => range(CellRange(at, at))
                     case TExpr.SheetRef(sheetName, at, _, _) =>
                       crossSheet(
                         TExpr.RangeLocation.CrossSheet(sheetName, CellRange(at, at)),
@@ -482,9 +545,11 @@ object Evaluator:
                     // GH-411: name→name chains follow like expression position, each hop as seen
                     // from its predecessor's defining sheet, under the shared cycle guard
                     case TExpr.NameRef(next) =>
-                      resolveNameRangeTarget(next, None, definingSheet, workbook, guard)
+                      tracedNameTarget(next, None, definingSheet, workbook, guard, memo)
+                        .map(throughHop)
                     case TExpr.SheetNameRef(qualifier, next) =>
-                      resolveNameRangeTarget(next, Some(qualifier), definingSheet, workbook, guard)
+                      tracedNameTarget(next, Some(qualifier), definingSheet, workbook, guard, memo)
+                        .map(throughHop)
                     // GH-630: a name bound to an error literal IS that error (Excel: SUM(bad) with
                     // bad = #N/A is #N/A), so COUNT/COUNTA can triage it as an error argument
                     case TExpr.ErrorLit(err, _) =>
@@ -500,8 +565,22 @@ object Evaluator:
                         Some(s"name '$name' does not refer to a range (refersTo: ${dn.formula})")
                       )
                       if isConstant(other) then Left(notARange)
-                      else Right(NameRangeTarget.Computed(notARange))
+                      else Right(TracedTarget.Computed(notARange))
             }
+
+  /**
+   * A defined name's body, parsed once per pass when the pass has a [[PassCache]] (#767), else on
+   * every call; each actual parse counts as a `NameParses`.
+   */
+  private[formula] def parseNameBody(
+    formula: String,
+    memo: Option[AggregateMemo]
+  ): Either[ParseError, TExpr[?]] =
+    memo.flatMap(_.passCache) match
+      case Some(passCache) => passCache.parsedNameBody(formula)(FormulaParser.parse)
+      case None =>
+        memo.foreach(_.counters.increment(RecalcCounters.Counter.NameParses))
+        FormulaParser.parse(formula)
 
   /**
    * The (sheet, range) a range-typed argument slot names — THE resolver for a function's range slot
@@ -526,8 +605,34 @@ object Evaluator:
     workbook: Option[Workbook],
     resolvingNames: NameTrail,
     bindings: Map[String, Any],
-    evalName: (String, Option[SheetName]) => Either[EvalError, Any]
+    evalName: (String, Option[SheetName]) => Either[EvalError, Any],
+    memo: Option[AggregateMemo] = None
   ): Either[EvalError, (Sheet, CellRange)] =
+    resolveRangeSlotTraced(
+      location,
+      currentSheet,
+      workbook,
+      resolvingNames,
+      bindings,
+      evalName,
+      memo
+    )
+      .map((target, range, _) => (target, range))
+
+  /**
+   * [[resolveRangeSlot]], also saying whether the slot resolved statically (#767): a written range
+   * or cell, or a name bound to one, which a pass may serve from a [[ColumnSlice]]. A name that
+   * computes its reference and a LET name are not static.
+   */
+  private[formula] def resolveRangeSlotTraced(
+    location: TExpr.RangeLocation,
+    currentSheet: Sheet,
+    workbook: Option[Workbook],
+    resolvingNames: NameTrail,
+    bindings: Map[String, Any],
+    evalName: (String, Option[SheetName]) => Either[EvalError, Any],
+    memo: Option[AggregateMemo]
+  ): Either[EvalError, (Sheet, CellRange, Boolean)] =
     def referenceOf(value: Any, notARange: EvalError): Either[EvalError, (Sheet, CellRange)] =
       value match
         case RangeOperand(target, range) => Right((target, range))
@@ -540,22 +645,28 @@ object Evaluator:
         case _ => Left(notARange)
     location match
       case TExpr.RangeLocation.Name(name, scope) =>
-        resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames).flatMap {
-          case NameRangeTarget.Range(target, range) => Right((target, range))
-          case NameRangeTarget.Computed(notARange) =>
-            evalName(name, scope).flatMap(referenceOf(_, notARange))
-        }
+        resolveNameRangeTarget(name, scope, currentSheet, workbook, resolvingNames, memo)
+          .flatMap {
+            case NameRangeTarget.Range(target, range) => Right((target, range, true))
+            case NameRangeTarget.Computed(notARange) =>
+              evalName(name, scope)
+                .flatMap(referenceOf(_, notARange))
+                .map((target, range) => (target, range, false))
+          }
       case TExpr.RangeLocation.Binding(name) =>
         val notARange = EvalError.ErrorValue(
           CellError.Value,
           Some(s"LET name '$name' does not refer to a range")
         )
-        bindings.get(name) match
+        val bound = bindings.get(name) match
           case Some(value) => referenceOf(value, notARange)
           // Unreachable from formula text: the parser emits Binding only for a LET name in scope,
           // and evalLet binds every name before its body runs. A hand-built AST can still get here.
           case None => Left(EvalError.EvalFailed(s"LET name '$name' is not in scope", None))
-      case _ => resolveRangeLocation(location, currentSheet, workbook, resolvingNames)
+        bound.map((target, range) => (target, range, false))
+      case _ =>
+        resolveRangeLocation(location, currentSheet, workbook, resolvingNames, memo)
+          .map((target, range) => (target, range, true))
 
   // ===== GH-384: defined-name resolution =====
 
@@ -1022,7 +1133,8 @@ object Evaluator:
       // GH-715: a positioned evaluation's placement is never evaluated as a precedent of itself
       currentCell.flatMap(memo.guard(targetSheet, _)).foreach(error => break(Left(error)))
 
-      FormulaParser.parse(formulaStr) match
+      val counters = aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
+      counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(formulaStr)) match
         case Left(parseErr) =>
           Left(
             EvalError.EvalFailed(
@@ -1257,9 +1369,26 @@ object Evaluator:
    * `putIfAbsent` wins. Ineligible ranges are marked once, then every reader computes outside the
    * monitor. Results are immutable `Either[EvalError, BigDecimal]` values; errors memoize exactly
    * like successes.
+   *
+   * #767: `counters` is the pass's [[RecalcCounters]]; every production pass uses the disabled
+   * instance, and only the measured seams of `WorkbookEvaluator` supply an enabled one. `passCache`
+   * holds the pass's used ranges, static name resolutions and column slices ([[PassCache]]); it
+   * exists when the memo caches aggregates and `columnCache` is on (the default; parity tests turn
+   * it off), with `limits` bounding what it holds. `criteriaIndex` (on by default; parity tests
+   * turn it off) lets criteria calls answer from the slices' equality indexes.
    */
-  private[formula] final class AggregateMemo(cachesAggregates: Boolean = true):
+  private[formula] final class AggregateMemo(
+    cachesAggregates: Boolean = true,
+    val counters: RecalcCounters = RecalcCounters.disabled,
+    columnCache: Boolean = true,
+    limits: PassCache.Limits = PassCache.DefaultLimits,
+    criteriaIndex: Boolean = true
+  ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
+
+    /** #767: the pass's caches; None for a memo that caches nothing or has them switched off. */
+    val passCache: Option[PassCache] =
+      Option.when(cachesAggregates && columnCache)(new PassCache(limits, counters, criteriaIndex))
 
     /**
      * GH-711: SUMPRODUCT's blank tail asks whether a defined name reaches a random draw. Building
@@ -1487,7 +1616,10 @@ private class EvaluatorImpl(
   workbookPath: Option[String] = None,
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
   // SUMPRODUCT's shared extent, ambient below it: scope documented on EvalContext.Operands
-  arrayRangeBounds: Option[CellRange => CellRange] = None
+  arrayRangeBounds: Option[CellRange => CellRange] = None,
+  // #767: the pass slot of a top-level evaluation at its own slot; derived evaluators of the same
+  // formula keep it, a precedent evaluated on demand (a deeper evaluator) does not
+  passPosition: EvalPosition = EvalPosition.None
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -1514,6 +1646,10 @@ private class EvaluatorImpl(
 
   override private[formula] def generationMemo: Option[Evaluator.AggregateMemo] = aggregateMemo
 
+  /** #767: the pass's work counters; disabled outside a measured recalculation. */
+  protected def passCounters: RecalcCounters =
+    aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
+
   override private[formula] def withArrayResults: Evaluator =
     new EvaluatorImpl(
       allowArrayResults = true,
@@ -1522,7 +1658,8 @@ private class EvaluatorImpl(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds = arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds,
+      passPosition = passPosition
     )
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -1815,7 +1952,8 @@ private class EvaluatorImpl(
               workbook,
               resolvingNames,
               bindings,
-              evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true)
+              evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true),
+              aggregateMemo
             ) match
               // GH-630: a slot that IS an error value (`COUNT(#REF!)`, a name bound to `#N/A`)
               // follows the aggregate's error-argument policy, exactly as the Call form does
@@ -1942,7 +2080,8 @@ private class EvaluatorImpl(
       workbookPath,
       aggregateMemoOpt,
       placementGuard,
-      arrayRangeBounds = None
+      arrayRangeBounds = None,
+      passPosition = passPosition
     )
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -2001,7 +2140,8 @@ private class EvaluatorImpl(
         workbookPath,
         aggregateMemoOpt,
         placementGuard,
-        arrayRangeBounds = bounds
+        arrayRangeBounds = bounds,
+        passPosition = passPosition
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -2027,7 +2167,8 @@ private class EvaluatorImpl(
         nameReference =
           Some(evalNameRef(_, _, sheet, clock, workbook, currentCell, asReference = true)),
         arrayRangeBounds = arrayRangeBounds,
-        boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound)))
+        boundedArrayArg = Some((expr, bound) => evalArrayArg(expr, Some(bound))),
+        passPosition = passPosition
       )
     )
     // a reference position asks a function that returns a reference (`FunctionSpec.reference`)
@@ -2358,7 +2499,8 @@ private class EvaluatorImpl(
         workbookPath,
         aggregateMemoOpt,
         placementGuard,
-        arrayRangeBounds = arrayRangeBounds
+        arrayRangeBounds = arrayRangeBounds,
+        passPosition = passPosition
       )
     // An array evaluation binds references when a range slot reads a LET name (GH-710) or when
     // something inspects a reference's position or shape (GH-712). One flag for the whole LET,
@@ -2528,7 +2670,7 @@ private class EvaluatorImpl(
     currentCell: Option[ARef],
     asReference: Boolean
   ): Either[EvalError, Any] =
-    FormulaParser.parse(dn.formula) match
+    Evaluator.parseNameBody(dn.formula, aggregateMemoOpt) match
       case Left(parseErr) =>
         Left(
           EvalError.EvalFailed(
@@ -2575,7 +2717,8 @@ private class EvaluatorImpl(
               workbookPath,
               aggregateMemoOpt,
               placementGuard,
-              arrayRangeBounds = None
+              arrayRangeBounds = None,
+              passPosition = passPosition
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -3192,7 +3335,8 @@ private class EvaluatorWithDepth(
   aggregateMemo: Option[Evaluator.AggregateMemo] = None,
   // GH-715: required, so every derived evaluator decides it; see Evaluator.PlacementGuard
   guard: Option[Evaluator.PlacementGuard],
-  arrayRangeBounds: Option[CellRange => CellRange] = None
+  arrayRangeBounds: Option[CellRange => CellRange] = None,
+  passPosition: EvalPosition = EvalPosition.None
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
@@ -3200,7 +3344,8 @@ private class EvaluatorWithDepth(
       resolvingNames,
       workbookPath,
       aggregateMemo,
-      arrayRangeBounds = arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds,
+      passPosition = passPosition
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -3216,5 +3361,6 @@ private class EvaluatorWithDepth(
       workbookPath,
       aggregateMemo,
       guard,
-      arrayRangeBounds = arrayRangeBounds
+      arrayRangeBounds = arrayRangeBounds,
+      passPosition = passPosition
     )
