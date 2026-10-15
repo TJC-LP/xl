@@ -17,6 +17,7 @@ import com.tjclp.xl.ooxml.{
   FormulaStorage,
   OoxmlWorkbook,
   Relationships,
+  SharedStringIndex,
   XmlSecurity,
   XmlUtil
 }
@@ -128,8 +129,10 @@ enum LintCategory derives CanEqual:
 
   /**
    * A shared-string entry no `t="s"` cell references — its text still rides in the package, the
-   * scrubbing hazard of GH-567 — or a `t="s"` index past the table (the reader shows #REF!). The
-   * orphan half is a hygiene/privacy signal, not a repair class.
+   * scrubbing hazard of GH-567 — or a `t="s"` value that names no entry: an index past the table, a
+   * negative index, or a value SharedStringIndex does not read as an index (the reader shows #REF!
+   * or #VALUE!, and desktop Excel repairs the file). The orphan half is a hygiene/privacy signal,
+   * not a repair class.
    */
   case SharedStringOrphan
 
@@ -275,9 +278,9 @@ final case class Finding(
  *     Excel's own `[trash]/` leftovers are never findings); one finding per orphan part
  *   - shared-string entries no `t="s"` cell references (GH-567) — ONE finding on the SST part with
  *     the orphan count and first-5 INDICES (never the text: scrubbed content must not reappear in a
- *     lint log), plus `t="s"` indices past the table (the reader shows #REF!). xl's fresh writes
- *     lint clean; a surgical edit of a foreign SST book that replaces text leaves the old entry
- *     behind, which this finding reports (no compaction on write)
+ *     lint log), plus `t="s"` values that name no entry (SharedStringIndex). xl's fresh writes lint
+ *     clean; a surgical edit of a foreign SST book that replaces text leaves the old entry behind,
+ *     which this finding reports (no compaction on write)
  *   - a sheet-scoped `_xlnm._FilterDatabase` name disagreeing with the sheet's own `<autoFilter
  *     ref>` (#460) — a hygiene finding on workbook.xml per stale name; see
  *     [[LintCategory.AutoFilterNameMismatch]] for the Excel/LibreOffice evidence behind the tier
@@ -1180,7 +1183,7 @@ object WorkbookLint:
       hasFormula = formula.isDefined,
       hasV = firstV.isDefined,
       hasIs = firstIs.isDefined,
-      sstIndex = if cellType.contains("s") then firstV.flatMap(_.text.toIntOption) else None,
+      sstValue = if cellType.contains("s") then firstV.map(v => sstValueOf(v.text)) else None,
       leadingEquals = formulaText.exists(_.startsWith("=")),
       extOrdinals = formulaText.fold(Set.empty[Int])(externalOrdinals),
       arrayRef =
@@ -1232,9 +1235,10 @@ object WorkbookLint:
       private var emptyInline: EmptyInlineFacts = EmptyInlineFacts.empty
       private val sstRefs = new SstRefBuilder(ctx.sst)
       private var cell: Option[CellObs] = None
-      // GH-567: the current t="s" cell's FIRST <v> text, buffered like the formula text below —
-      // a shared-string index is at most a handful of digits, so the mode stays O(1) in rows
-      private var sstIndexText: Option[java.lang.StringBuilder] = None
+      // GH-567: the current t="s" cell's FIRST <v>, read by SharedStringIndex's accumulator, plus
+      // its first characters for the finding — both bounded, so the mode stays O(1) in rows
+      private var sstValueText: Option[(SharedStringIndex.Accumulator, java.lang.StringBuilder)] =
+        None
       // GH-460: prefix → the URIs bound to it by the open elements (innermost first), maintained
       // from the parser's prefix-mapping events — the SAX side of the DOM scope chain
       private var prefixScopes: Map[String, List[String]] = Map.empty
@@ -1324,7 +1328,7 @@ object WorkbookLint:
               hasFormula = false,
               hasV = false,
               hasIs = false,
-              sstIndex = None,
+              sstValue = None,
               leadingEquals = false,
               extOrdinals = Set.empty,
               arrayRef = None,
@@ -1337,7 +1341,7 @@ object WorkbookLint:
             formulaText = Some(new java.lang.StringBuilder)
           // GH-567: the first <v> of a t="s" cell carries the shared-string index
           if label == "v" && cell.exists(c => c.cellType.contains("s") && !c.hasV) then
-            sstIndexText = Some(new java.lang.StringBuilder)
+            sstValueText = Some((new SharedStringIndex.Accumulator, new java.lang.StringBuilder))
           cell = cell.map { open =>
             if label == "f" && !open.hasFormula then
               open.copy(
@@ -1385,7 +1389,10 @@ object WorkbookLint:
 
       override def characters(ch: Array[Char], start: Int, length: Int): Unit =
         formulaText.foreach(_.append(ch, start, length))
-        sstIndexText.foreach(_.append(ch, start, length))
+        sstValueText.foreach { (acc, sb) =>
+          acc.append(ch, start, length)
+          sb.append(ch, start, math.min(length, math.max(0, sstShownLength + 1 - sb.length)))
+        }
         xlfnCapture.foreach(_.text.append(ch, start, length))
 
       override def endElement(uri: String, localName: String, qName: String): Unit =
@@ -1412,8 +1419,11 @@ object WorkbookLint:
           }
           formulaText = None
         if label == "v" then
-          sstIndexText.foreach(sb => cell = cell.map(_.copy(sstIndex = sb.toString.toIntOption)))
-          sstIndexText = None
+          sstValueText.foreach { (acc, sb) =>
+            val value = acc.result.toRight(shownSstValue(sb.toString))
+            cell = cell.map(_.copy(sstValue = Some(value)))
+          }
+          sstValueText = None
         if depth == 3 && label == "c" then
           cell.foreach { obs =>
             dataTables = observeCell(dataTables, obs)
@@ -1444,7 +1454,7 @@ object WorkbookLint:
     hasFormula: Boolean,
     hasV: Boolean,
     hasIs: Boolean,
-    sstIndex: Option[Int],
+    sstValue: Option[Either[String, Int]],
     leadingEquals: Boolean,
     extOrdinals: Set[Int],
     arrayRef: Option[CellRange],
@@ -2876,15 +2886,32 @@ object WorkbookLint:
   /**
    * Per-part shared-string reference facts (GH-567), collected identically by both scanners: the
    * indices referenced by `t="s"` cells (a bit set bounded by the TABLE size, never the row count —
-   * an index past the table is counted, not stored), plus the first [[offenderSampleSize]]
-   * past-the-table cells with their index and the total. Unioned at workbook level for the orphan
-   * report. With an unreadable table nothing is recorded.
+   * a value naming no entry is counted, not stored), plus the first [[offenderSampleSize]] cells
+   * whose value names no entry, with that value, their total, and whether any of them is not empty
+   * (desktop Excel repairs such a value and opens an empty one as a blank cell). Unioned at
+   * workbook level for the orphan report. With an unreadable table nothing is recorded.
    */
   private final case class SstRefFacts(
     referenced: BitSet,
-    pastSample: Vector[(Option[ARef], Int)],
-    pastCount: Long
+    unnamedSample: Vector[(Option[ARef], Either[String, Int])],
+    unnamedCount: Long,
+    excelRepairs: Boolean
   )
+
+  /** At most this many characters of a value that names no entry appear in a finding. */
+  private val sstShownLength = 16
+
+  /** The cell value as a finding shows it: cut to [[sstShownLength]] characters. */
+  private def shownSstValue(text: String): String =
+    if text.length > sstShownLength then text.take(sstShownLength) + "…" else text
+
+  /**
+   * GH-567: a `t="s"` cell's first `<v>` as SharedStringIndex reads it — the position (Right), or
+   * the value as shown in a finding when it names none (Left). The rule the readers and the
+   * writer's reference scan use, so the lint reports exactly the cells they resolve to nothing.
+   */
+  private def sstValueOf(text: String): Either[String, Int] =
+    SharedStringIndex.parse(text).toRight(shownSstValue(text))
 
   /**
    * Scan-local accumulator: building the bit set copies its backing words only at capacity growth,
@@ -2896,23 +2923,29 @@ object WorkbookLint:
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private final class SstRefBuilder(table: Option[SstTableFacts]):
     private val referenced = BitSet.newBuilder
-    private val pastSample = Vector.newBuilder[(Option[ARef], Int)]
-    private var pastCount = 0L
+    private val unnamedSample = Vector.newBuilder[(Option[ARef], Either[String, Int])]
+    private var unnamedCount = 0L
+    private var excelRepairs = false
 
     def add(obs: CellObs): Unit =
-      (obs.sstIndex, table) match
-        case (Some(idx), Some(t)) if idx >= 0 && idx < t.count =>
+      (obs.sstValue, table) match
+        case (Some(Right(idx)), Some(t)) if idx < t.count =>
           referenced += idx
-        case (Some(idx), Some(_)) =>
-          if pastCount < offenderSampleSize then pastSample += ((obs.ref, idx))
-          pastCount += 1
+        case (Some(value), Some(_)) =>
+          if unnamedCount < offenderSampleSize then unnamedSample += ((obs.ref, value))
+          unnamedCount += 1
+          if value.fold(_.nonEmpty, _ => true) then excelRepairs = true
         case _ => ()
 
-    def result(): SstRefFacts = SstRefFacts(referenced.result(), pastSample.result(), pastCount)
+    def result(): SstRefFacts =
+      SstRefFacts(referenced.result(), unnamedSample.result(), unnamedCount, excelRepairs)
 
   /**
-   * GH-567, per sheet part: `t="s"` indices the table does not hold. The reader maps such a cell to
-   * #REF! and Excel repairs the file. ONE finding per part.
+   * GH-567, per sheet part: `t="s"` values that name no entry of the table (SharedStringIndex: an
+   * index at or past its size, a negative index, or a value that is not an index). XlsxReader reads
+   * such a cell as #REF! (an index past the table) or #VALUE! (any other value); desktop Excel
+   * repairs the file, except for an empty value, which it opens as a blank cell — so a part whose
+   * only such values are empty is a hygiene finding. ONE finding per part.
    */
   private def sstIndexFindings(
     part: String,
@@ -2920,17 +2953,23 @@ object WorkbookLint:
     table: Option[SstTableFacts]
   ): Vector[Finding] =
     table match
-      case Some(t) if facts.pastCount > 0L =>
-        val shown = facts.pastSample.map((r, idx) => s"${r.fold("<c>")(_.toA1)} → $idx")
-        val (firstRef, firstIdx) = facts.pastSample.headOption.getOrElse((None, 0))
+      case Some(t) if facts.unnamedCount > 0L =>
+        val shown = facts.unnamedSample.map { (r, value) =>
+          s"${r.fold("<c>")(_.toA1)} → ${value.fold(v => s"\"$v\"", _.toString)}"
+        }
+        val (firstRef, firstValue) =
+          facts.unnamedSample.headOption.getOrElse((None, Left("")))
         Vector(
           Finding(
             part,
             LintCategory.SharedStringOrphan,
-            s"""<c r="${firstRef.fold("")(_.toA1)}" t="s"><v>$firstIdx</v>""",
-            s"${facts.pastCount} cell(s) reference a shared-string index past the table " +
-              s"(${sampled(shown, facts.pastCount)}) — ${t.phrase}; xl reads such a cell as " +
-              "#REF! and Excel repairs the file"
+            s"""<c r="${firstRef.fold("")(_.toA1)}" t="s"><v>${firstValue
+                .fold(identity, _.toString)}</v>""",
+            s"${facts.unnamedCount} cell(s) hold a shared-string value that names no entry " +
+              s"(${sampled(shown, facts.unnamedCount)}) — ${t.phrase}; xl reads an index past " +
+              "the table as #REF! and any other such value as #VALUE!, and Excel repairs the " +
+              "file (an empty value excepted)",
+            if facts.excelRepairs then LintSeverity.Repair else LintSeverity.Hygiene
           )
         )
       case _ => Vector.empty

@@ -11,21 +11,23 @@ import org.scalacheck.{Gen, Prop}
 
 /**
  * The one rule every reader and the writer's reference scan use to read a `t="s"` value as a table
- * position (SharedStringIndex): optional XML whitespace, an optional `+`, ASCII digits up to
- * Int.MaxValue, an optional `.` and zeros, optional XML whitespace.
+ * position (SharedStringIndex): optional XML whitespace, an optional `+` or `-`, ASCII digits up to
+ * Int.MaxValue, optional XML whitespace, and no negative value (`-0` is 0). The fixed cases are the
+ * spellings desktop Excel was observed to open as an entry (no repair prompt) and to repair.
  */
 class SharedStringIndexSpec extends ScalaCheckSuite:
 
   // ========== reference rule ==========
 
-  private val Spec = "[ \t\r\n]*\\+?([0-9]+)(?:\\.0*)?[ \t\r\n]*".r
+  private val Spec = "[ \t\r\n]*([+-]?)([0-9]+)[ \t\r\n]*".r
 
   /** The rule written as a regular expression and a BigInt bound. */
   private def reference(value: String): Option[Int] = value match
-    case Spec(digits) => Some(BigInt(digits)).filter(_ <= Int.MaxValue).map(_.toInt)
+    case Spec(sign, digits) =>
+      Some(BigInt(digits)).filter(n => n <= Int.MaxValue && (sign != "-" || n == 0)).map(_.toInt)
     case _ => None
 
-  test("accepted spellings name the position") {
+  test("spellings Excel opens as an entry name the position") {
     val cases = Vector(
       "0" -> 0,
       "3" -> 3,
@@ -33,24 +35,33 @@ class SharedStringIndexSpec extends ScalaCheckSuite:
       "+03" -> 3,
       "03" -> 3,
       " 3 " -> 3,
+      " +3 " -> 3,
+      "\t3" -> 3,
+      "3\n" -> 3,
+      "3\r" -> 3,
       "\t\r\n3\n" -> 3,
-      "3.0" -> 3,
-      "3." -> 3,
-      "3.000" -> 3,
+      "-0" -> 0,
+      "-00" -> 0,
       "2147483647" -> Int.MaxValue,
       ("0" * 40 + "3") -> 3
     )
     cases.foreach((v, n) => assertEquals(SharedStringIndex.parse(v), Some(n), s"[$v]"))
   }
 
-  test("other spellings name no position") {
+  test("other spellings name no position (Excel repairs all but an empty value)") {
     val cases = Vector(
       "",
       "  ",
       "+",
+      "-",
       "-1",
-      "-0",
       "++3",
+      "+-3",
+      "--0",
+      "+ 3",
+      "3.0",
+      "3.",
+      "3.000",
       "3.5",
       "3.01",
       ".0",
@@ -67,7 +78,7 @@ class SharedStringIndexSpec extends ScalaCheckSuite:
   }
 
   test("the accumulator reads a value split at any point the same as whole") {
-    Vector("+03", " 3.0 ", "٣", ("0" * 25) + "17", "2147483648").foreach { v =>
+    Vector("+03", " -0 ", " 3.0 ", "-1", "٣", ("0" * 25) + "17", "2147483648").foreach { v =>
       (0 to v.length).foreach { cut =>
         val acc = new SharedStringIndex.Accumulator
         val chars = v.toCharArray
