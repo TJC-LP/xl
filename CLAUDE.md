@@ -416,7 +416,7 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,418 tests** by module: xl-evaluator (3856), xl-core (1872), xl-ooxml (1362), xl-cli (1907), xl-cats-effect (209), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**9,435 tests** by module: xl-evaluator (3871), xl-core (1872), xl-ooxml (1362), xl-cli (1909), xl-cats-effect (209), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
