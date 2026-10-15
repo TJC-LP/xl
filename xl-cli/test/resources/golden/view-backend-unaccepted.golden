@@ -1,0 +1,17 @@
+## args
+--backend
+scalaxml
+-f
+<DIR>/simple.xlsx
+-s
+Data
+view
+A1
+## exit
+2
+## stdout
+## stderr
+Error: view does not take --backend
+  code: USAGE
+  hint: drop --backend; --backend picks a write's XML writer; view writes no workbook. Run `xl view --help` for the usage
+usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …

@@ -19,7 +19,9 @@ import scala.util.matching.Regex
  * Supports 5 criteria patterns (Excel-compatible):
  *   - **Exact**: `"Apple"` or `42` → Cells equal to value
  *   - **Wildcard**: `"A*"`, `"*pple"`, `"A?ple"` → Pattern matching (* = any chars, ? = single
- *     char)
+ *     char). In an operand that contains `*` or `?`, `~*`, `~?` and `~~` stand for a literal `*`,
+ *     `?` and `~`. In an operand with neither, `~` is an ordinary character (GH-765): `"a~~b"`
+ *     matches only the text `a~~b`.
  *   - **Greater**: `">100"`, `">=50"` → Numeric comparison; `">m"` → Text comparison
  *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison; `"<m"` → Text comparison
  *   - **Not Equal**: `"<>0"` → Numeric inequality; `"<>x"` → Text inequality; bare `"<>"` →
@@ -131,8 +133,9 @@ object CriteriaMatcher:
             parseNumeric(operand) match
               case Some(n) => Compare(CompareOp.Neq, n)
               case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
-              case None if hasEscapeSequence(operand) =>
+              case None if hasWildcardChar(operand) =>
                 CompareText(CompareOp.Neq, unescapePattern(operand))
+              // GH-765: no `*` or `?`, so `~` is an ordinary character ("<>a~~b" is "a~~b")
               case None => CompareText(CompareOp.Neq, operand)
       // Greater than or equal: >=
       case _ if s.startsWith(">=") =>
@@ -165,10 +168,12 @@ object CriteriaMatcher:
       // Wildcard pattern
       case _ if hasUnescapedWildcard(s) =>
         Wildcard(s)
-      // Has escape sequences but no wildcards - unescape and exact match
-      case _ if hasEscapeSequence(s) =>
+      // Every `*` and `?` is escaped: an exact match on the unescaped text ("~*" is "*")
+      case _ if hasWildcardChar(s) =>
         Exact(ExprValue.Text(unescapePattern(s)))
-      // Plain string - exact match
+      // GH-765: no `*` or `?` at all, so Excel compares the text as written and `~` is an
+      // ordinary character: "a~~b" matches only "a~~b", and a cell used as its own criterion
+      // matches itself.
       case _ =>
         Exact(ExprValue.Text(s))
 
@@ -201,19 +206,11 @@ object CriteriaMatcher:
     }
 
   /**
-   * Check if string contains escape sequences (~*, ~?, or ~~).
+   * GH-765: whether the operand contains `*` or `?`, escaped or not. Excel reads `~` as an escape
+   * only in such an operand; without one the operand is compared as written.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def hasEscapeSequence(s: String): Boolean =
-    boundary {
-      var i = 0
-      while i < s.length - 1 do
-        if s.charAt(i) == '~' then
-          val next = s.charAt(i + 1)
-          if next == '*' || next == '?' || next == '~' then break(true)
-        i += 1
-      false
-    }
+  private def hasWildcardChar(s: String): Boolean =
+    s.exists(c => c == '*' || c == '?')
 
   /**
    * Remove escape characters from pattern (unescape ~* ~? ~~).
@@ -522,6 +519,11 @@ object CriteriaMatcher:
    *
    * Shared with SEARCH, which needs a substring search rather than the whole-value match criteria
    * use — one wildcard grammar (`*`, `?`, `~`-escapes) for both.
+   *
+   * `~` escapes only `*`, `?` and `~`; before any other character, and at the end, it is a literal
+   * tilde. Excel documents only the three escapes. A Microsoft Q&A thread suggests Excel drops the
+   * tilde before an ordinary character too ("a~b*" matching "abc"); no desktop-Excel observation
+   * confirms that yet, so this grammar is unchanged (GH-765).
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def wildcardRegexBody(pattern: String): String =

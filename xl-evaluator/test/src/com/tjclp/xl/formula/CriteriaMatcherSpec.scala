@@ -103,6 +103,11 @@ class CriteriaMatcherSpec extends FunSuite:
     assertEquals(parseValue("test~*"), exactValue("test*"))
   }
 
+  test("parse: ~ is an ordinary character in an operand with no * or ? (GH-765)") {
+    assertEquals(parseValue("a~~b"), exactValue("a~~b"))
+    assertEquals(parseValue("<>a~~b"), CompareText(CompareOp.Neq, "a~~b"))
+  }
+
   test("parse: mixed escaped and unescaped wildcards") {
     assertEquals(parseValue("~**"), Wildcard("~**"))
     assertEquals(parseValue("*~*"), Wildcard("*~*"))
