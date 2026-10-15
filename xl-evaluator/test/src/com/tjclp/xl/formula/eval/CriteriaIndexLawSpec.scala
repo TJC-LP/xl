@@ -143,7 +143,11 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
         // whole columns: the blank tail counts when every criterion matches a blank
         s"COUNTIFS(Data!A:A,$c1,Data!B:B,$c2)",
         s"COUNTIF(Data!A:A,$c1)",
-        s"SUMIFS(Data!C:C,Data!A:A,$c1,Data!D:D,$c2)"
+        s"SUMIFS(Data!C:C,Data!A:A,$c1,Data!D:D,$c2)",
+        // a whole-column defined name, and a dynamic criteria range beside a sliced one (the call
+        // scans: an unsliced range may read an uncached formula on any row)
+        s"COUNTIFS(acol,$c1,Data!B:B,$c2)",
+        s"SUMIFS($v,OFFSET(Data!A$fa,0,0,$rows,1),$c1,$b,$c2)"
       )
     yield f
 
@@ -191,7 +195,7 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
         case (s, (Some(v), i)) => s.put(ARef.from0(25, i), v)
         case (s, (None, _)) => s
       }
-      Workbook(Vector(dataSheet, otherSheet, outSheet))
+      Workbook(Vector(dataSheet, otherSheet, outSheet)).withDefinedName("acol", "Data!$A:$A")
 
   private val sequential =
     () => RecalcOptions(clock = clock, rng = Rng.seeded(5L), iterative = IterativeMode.Off)
@@ -292,7 +296,7 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     assertEquals(values.get(at("A1")), Some(num(lane3.size)))
     assertEquals(values.get(at("A2")), Some(num(lane3.sum)))
     assertEquals(values.get(at("A3")), Some(num(lane3.sum)))
-    assertEquals(values.get(at("A4")), Some(num(lane3.filter(_ <= 500).max)))
+    assertEquals(values.get(at("A4")), Some(num(lane3.filter(_ <= 500).foldLeft(0)(math.max))))
     assertEquals(values.get(at("A5")), Some(num(lane3.size)))
     val snap = counters.snapshot
     // six calls have an equality criterion; the last is window-only and scans
