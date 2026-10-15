@@ -26,6 +26,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and is implicitly intersected in a plain cell. `T` was an unknown function, so `xl recalc`, and
   `xl put` on a precedent, wrote every `T()` cell with no cached value; both now cache the values
   LibreOffice computes.
+- **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
+  take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
+  `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore
+  it: lint reads the zip parts with no size limit and a dry run reads no workbook. A global a verb
+  does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
+  the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
+  `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
+  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
+  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
+  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
+  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
+  and after the verb, against the parser, so the table cannot drift from the parser chains.
 
 ## [0.24.1] - 2026-10-14
 
