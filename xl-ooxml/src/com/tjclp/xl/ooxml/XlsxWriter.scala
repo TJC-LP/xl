@@ -139,7 +139,17 @@ object XlsxWriter:
 
       Right(report)
 
-    catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+    catch
+      case WriteRefused(err) => Left(err)
+      case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /**
+   * A write refused for its input, not for I/O: carries the typed error out of the write passes
+   * (which return a report, not an XLResult) to [[writeToTarget]], which returns it unchanged.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Null"))
+  private final case class WriteRefused(error: XLError)
+      extends RuntimeException(error.message, null, false, false)
 
   /**
    * Re-express DateTime cells as raw serial Numbers using the workbook's date system (GH-243).
@@ -2664,12 +2674,7 @@ object XlsxWriter:
     // §18.2.19); the model cannot see the kept names, so a clash is refused here.
     sheetLayout.kept
       .find(ref => workbook.sheets.exists(_.name.value.equalsIgnoreCase(ref.name.value)))
-      .foreach { ref =>
-        throw new IllegalArgumentException(
-          s"sheet name '${ref.name.value}' is already used by a non-worksheet sheet " +
-            "(chartsheet, dialog sheet or macro sheet) in this workbook"
-        )
-      }
+      .foreach(ref => throw WriteRefused(XLError.DuplicateSheet(ref.name.value)))
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match

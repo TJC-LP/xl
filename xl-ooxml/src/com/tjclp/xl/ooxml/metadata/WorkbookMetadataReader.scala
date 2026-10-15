@@ -108,7 +108,7 @@ object WorkbookMetadataReader:
           // names are renumbered to worksheet positions.
           allRefs <- parseSheetRefs(wbElem)
           sourceIndex = SourceSheetIndex(
-            allRefs.map(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_._1)))
+            allRefs.map(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_.relType)))
           )
           sheetRefs = allRefs.zip(sourceIndex.mask).collect { case (ref, true) => ref }
 
@@ -122,7 +122,7 @@ object WorkbookMetadataReader:
             val fullPath = rIdMap
               .get(ref.rId)
               .fold(s"xl/worksheets/sheet${ref.sheetId}.xml")(rel =>
-                Relationships.resolveWorkbookTarget(rel._2)
+                Relationships.resolveWorkbookTarget(rel.target)
               )
             val dimension = readDimensionFromWorksheet(zipFile, fullPath)
             Right(
@@ -160,15 +160,16 @@ object WorkbookMetadataReader:
           rIdMap = parseRelationships(wbRels)
           allRefs <- parseSheetRefs(wbElem)
         // GH-785: worksheets only, as `read` lists them
-        yield allRefs.filter(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_._1))).map {
-          ref =>
+        yield allRefs
+          .filter(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_.relType)))
+          .map { ref =>
             SheetInfo(
               name = ref.name,
               sheetId = ref.sheetId,
               state = ref.state,
               dimension = None
             )
-        }
+          }
       finally zipFile.close()
     }
 
@@ -258,8 +259,11 @@ object WorkbookMetadataReader:
       else Right(bytes)
     finally is.close()
 
-  /** Workbook relationships: id -> (type, target). */
-  private def parseRelationships(xmlOpt: Option[String]): Map[String, (String, String)] =
+  /** One workbook relationship's type and target. */
+  private final case class WbRel(relType: String, target: String)
+
+  /** Workbook relationships by id. */
+  private def parseRelationships(xmlOpt: Option[String]): Map[String, WbRel] =
     xmlOpt match
       case None => Map.empty
       case Some(xml) =>
@@ -269,7 +273,7 @@ object WorkbookMetadataReader:
             (elem \ "Relationship").collect { case e: Elem =>
               val id = e \@ "Id"
               val target = e \@ "Target"
-              id -> ((e \@ "Type") -> target)
+              id -> WbRel(e \@ "Type", target)
             }.toMap
 
   private def parseSheetRefs(wbElem: Elem): XLResult[Vector[SheetRefInternal]] =

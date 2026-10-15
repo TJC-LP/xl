@@ -51,6 +51,9 @@ final case class SourceSheetIndex(mask: Vector[Boolean]):
 
   private val nonWorksheetCount: Int = mask.count(!_)
 
+  /** `rank(i)`: the number of worksheets before `<sheets>` entry `i`. */
+  private val rank: Vector[Int] = mask.scanLeft(0)((n, isWs) => if isWs then n + 1 else n)
+
   /** True when every entry is a worksheet: the maps are then the identity. */
   def allWorksheets: Boolean = nonWorksheetCount == 0
 
@@ -62,7 +65,7 @@ final case class SourceSheetIndex(mask: Vector[Boolean]):
   def toModel(idx: Int): Option[Int] =
     if idx < 0 then Some(idx)
     else if idx >= mask.size then Some(idx - nonWorksheetCount)
-    else if mask(idx) then Some(mask.take(idx).count(identity))
+    else if mask(idx) then Some(rank(idx))
     else None
 
   /**
@@ -70,7 +73,7 @@ final case class SourceSheetIndex(mask: Vector[Boolean]):
    * the first worksheet after it (the caller clamps past the end).
    */
   def activeToModel(idx: Int): Int =
-    toModel(idx).getOrElse(mask.take(idx).count(identity))
+    toModel(idx).getOrElse(rank(idx))
 
   /**
    * Defined names in model positions: a `localSheetId` naming a worksheet is renumbered to its
@@ -141,7 +144,9 @@ final case class SheetLayout(slots: Vector[SheetLayout.Slot], source: SourceShee
 
   /**
    * The output `activeTab`. A source tab on a kept entry stays on that entry while the model's
-   * active sheet is still the one the reader derived from it; otherwise the model's sheet wins.
+   * active sheet is still the one the reader derived from it; otherwise the model's sheet wins. The
+   * model cannot tell an unchanged active sheet from one selected again, so selecting the derived
+   * worksheet explicitly also keeps the tab on the kept entry.
    */
   def activeTab(modelActive: Int, sourceActive: Option[Int]): Int =
     val clampedModel = OoxmlWorkbook.clampActiveTab(modelActive, modelCount)
@@ -185,7 +190,7 @@ object SheetLayout:
   ): SheetLayout =
     val refs = sourceRefs.toVector
     val mask = SheetKinds.worksheetMask(refs, sourceRels)
-    if mask.forall(isWs => isWs) then
+    if SourceSheetIndex(mask).allWorksheets then
       SheetLayout(Vector.tabulate(modelSourcePaths.size)(Slot.Model(_)), SourceSheetIndex(mask))
     else
       val targetById = sourceRels.relationships.iterator.map(rel => rel.id -> rel.target).toMap

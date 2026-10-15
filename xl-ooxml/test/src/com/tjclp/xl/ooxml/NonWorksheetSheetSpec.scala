@@ -72,7 +72,12 @@ class NonWorksheetSheetSpec extends FunSuite:
 <dialogsheet xmlns="$mainNs"><sheetViews><sheetView workbookViewId="0"/></sheetViews></dialogsheet>"""
   )
 
-  private val kinds = List(macroSheet, intlMacro, chartsheet, dialogsheet)
+  private val strictChartsheet = chartsheet.copy(
+    label = "Strict-namespace chartsheet",
+    relType = "http://purl.oclc.org/ooxml/officeDocument/relationships/chartsheet"
+  )
+
+  private val kinds = List(macroSheet, intlMacro, chartsheet, dialogsheet, strictChartsheet)
 
   private val dataName = SheetName.unsafe("Data")
   private val data2Name = SheetName.unsafe("Data2")
@@ -278,7 +283,7 @@ class NonWorksheetSheetSpec extends FunSuite:
     val output = Files.createTempFile("gh785-out", ".xlsm")
     val result = XlsxWriter.write(wb, output)
     assert(result.isLeft, s"expected the write to fail, got $result")
-    assert(result.left.exists(_.message.contains("non-worksheet sheet")), result.toString)
+    assertEquals(result, Left(com.tjclp.xl.error.XLError.DuplicateSheet("Other")))
     cleanup(source, output)
   }
 

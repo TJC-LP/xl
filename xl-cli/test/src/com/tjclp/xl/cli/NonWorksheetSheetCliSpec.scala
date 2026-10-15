@@ -85,3 +85,32 @@ class NonWorksheetSheetCliSpec extends CatsEffectSuite:
       assertEquals(entryText(out, macroPart), macroXml)
       assert(entryText(out, "xl/workbook.xml").contains("""name="Macro1""""))
   }
+
+  tmp.test("GH-785: a streamed put writes the worksheet and copies the macro sheet") { dir =>
+    val in = fixture(dir).toString
+    val out = dir.resolve("streamed.xlsm")
+    for
+      put <- CliHarness.run("-f", in, "-o", out.toString, "--stream", "put", "B2", "42")
+      after <- CliHarness.run("-f", out.toString, "view", "A1:B2")
+    yield
+      assertEquals(put.exit, 0, put.stderr)
+      assertEquals(after.exit, 0, after.stderr)
+      assert(after.stdout.contains("42"), after.stdout)
+      assertEquals(entryText(out, macroPart), macroXml)
+  }
+
+  tmp.test("GH-785: a worksheet named like the macro sheet is refused as a duplicate name") { dir =>
+    val in = fixture(dir).toString
+    val out = dir.resolve("clash.xlsm")
+    CliHarness
+      .run(
+        List("-f", in, "-o", out.toString, "batch", "-"),
+        """[{"op":"add-sheet","name":"macro1"}]"""
+      )
+      .map { run =>
+        assertNotEquals(run.exit, 0)
+        val all = run.stdout + run.stderr
+        assert(all.contains("Duplicate sheet name: 'Macro1'"), all)
+        assert(!Files.exists(out))
+      }
+  }

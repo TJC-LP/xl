@@ -122,6 +122,9 @@ case class OoxmlWorkbook(
    * reconciliation pass that regenerates workbook.xml.rels — renumbering them independently
    * (rId1..N) corrupted foreign files whose preserved rels number sheets after the theme part
    * (LibreOffice maps rId1 to the theme, so the first sheet resolved to xl/theme/theme1.xml).
+   * GH-785: assumes this workbook's `sheets` are worksheets only; a chartsheet, dialog sheet or
+   * macro sheet entry would be dropped. Pass the layout from [[SheetLayout.plan]] for such a
+   * source.
    */
   def updateSheets(
     newSheets: Vector[com.tjclp.xl.api.Sheet],
@@ -349,6 +352,11 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
   def fromDomain(wb: Workbook): OoxmlWorkbook =
     fromDomain(wb, None, sequentialRelIds(wb.sheets.size))
 
+  /**
+   * [[fromDomain]] with no kept `<sheet>` entries (GH-785): `preserved` must hold worksheets only.
+   * A preserved chartsheet, dialog sheet or macro sheet entry would be dropped while its
+   * relationship stays; pass the layout from [[SheetLayout.plan]] for such a source.
+   */
   def fromDomain(
     wb: Workbook,
     preserved: Option[OoxmlWorkbook],
