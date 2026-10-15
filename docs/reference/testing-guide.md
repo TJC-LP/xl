@@ -224,20 +224,28 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
+A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
+recalculation benchmark gates (`xl-evaluator/test-perf`, 16 tests). `__.test` does not select that
+module. On the `Tiny` loads book it checks 40 oracle cells and pins every work counter
+(`RecalcCounters`: graph edges, criteria scans, matcher calls, name parses, ...) to the current
+engine's values, under the module's `-Xmx2g` heap; a change to the recalculation algorithm updates
+the pinned counts in the same PR. See the recalculation benchmark section of
+`docs/reference/performance-guide.md`.
+
 ## Test Counts by Module
 
-As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus the 7 `RecalcCountersSpec` cases of #767 in xl-evaluator; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3839 |
+| xl-evaluator | 3846 |
 | xl-core | 1872 |
 | xl-ooxml | 1362 |
 | xl-cli | 1907 |
 | xl-cats-effect | 209 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,401** |
+| **Total** | **9,408** |
 
 ## Test Quality Metrics
 

@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Testing
+
+- **Recalculation benchmark and work counters** (#767): the new `xl-evaluator.perf` module
+  (`xl-evaluator/test-perf`) builds a synthetic freight-loads workbook in five shapes (`Tiny`,
+  `H10`, `R20`, `Real`, `RunTotal`) and recalculates it with internal work counters
+  (`RecalcCounters`: graph nodes and edges, criteria calls, `CriteriaMatcher.matches` calls,
+  used-range scans, defined-name parses) and per-phase timing (parse, graph build, Tarjan, Kahn,
+  eval, criteria, `Sheet.put`, write). `LoadsBookMain` prints the breakdown; on 0.24.1 the 10k-row
+  helper-criteria book spends 78 s of 134 s building and ordering a 92.5M-edge graph, and the
+  20k-row raw-criteria book 116 s of 118 s in criteria scans. A non-blocking CI `perf` job pins the
+  `Tiny` counters and 40 oracle cells under a 2 GB heap; `RecalcBenchmark` (JMH, counters off and
+  on) runs weekly in `perf-trend.yml`. Public entry points use disabled counters; results are
+  unchanged.
+
 ## [0.24.1] - 2026-10-14
 
 A patch release with one fix: `xl eval --with` no longer answers from a stale cache when a
