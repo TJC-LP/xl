@@ -1,6 +1,6 @@
 package com.tjclp.xl.ooxml
 
-import com.tjclp.xl.api.Workbook
+import com.tjclp.xl.api.{Sheet, Workbook}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.color.Color
@@ -334,8 +334,15 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    *   SharedStrings with deduplicated entries and total count
    */
   def fromWorkbook(wb: Workbook, escapeFormulas: Boolean = false): SharedStrings =
+    fromSheets(wb.sheets, escapeFormulas)
+
+  /**
+   * [[fromWorkbook]] over the given sheets only: a surgical write builds a fresh table from the
+   * sheets it regenerates, since a sheet copied verbatim keeps its own inline strings (GH-768).
+   */
+  def fromSheets(sheets: Iterable[Sheet], escapeFormulas: Boolean): SharedStrings =
     // Stream entries using iterator for lazy evaluation
-    val allEntries = wb.sheets.iterator.flatMap { sheet =>
+    val allEntries = sheets.iterator.flatMap { sheet =>
       sheet.cells.values.iterator.flatMap { cell =>
         cell.value match
           case com.tjclp.xl.cells.CellValue.Text(s) =>

@@ -19,16 +19,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such an operand stays a literal tilde (`"a~b*"` matches `a~bc`): a Microsoft Q&A thread suggests
   Excel drops it, but no Excel observation confirms that, so it is unchanged and noted in
   `docs/LIMITATIONS.md`. XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.
-- **Appending a shared string no longer gives an out-of-range index a value** (#781): a `t="s"`
-  index at or past the end of `xl/sharedStrings.xml` names no entry (ECMA-376 Part 1, §18.4.9)
-  and reads as `#REF!`. When a surgical write copied such a part byte for byte and appended new
-  strings, the index came to name the appended string, so an untouched cell changed value. The
-  writer now scans the parts it copies (worksheets it does not regenerate, macro sheets, revision
-  log `<nc>`/`<oc>` values) and, when one names a position at or past the table, appends nothing:
-  the regenerated sheets write their new strings as inline strings (`t="inlineStr"`, §18.3.1.4)
-  and the table keeps its entries, with `count` covering only table references. The scan stops at
-  the first such index and keeps one value of at most 20 characters, so its memory does not depend
-  on the index values. A copied part that is not readable XML is treated the same way.
+- **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical write
+  kept every entry of the source's shared-string table, so a label replaced, cleared or deleted from
+  every cell (or a removed sheet's strings) still rode in the package. The writer now drops the
+  entries its edit left unreferenced. An entry past every position an untouched sheet references is
+  dropped and the regenerated sheets are renumbered; one before such a position becomes an empty
+  `<si>`, so the untouched sheet still rides byte-for-byte. When every sheet is regenerated (a
+  one-sheet book, a sheet add/remove/reorder) every unreferenced entry is dropped, old ones
+  included. A `t="s"` index at or past the end of the table names no entry (ECMA-376 §18.4.9): it
+  pins nothing, and an untouched part that holds one is treated as malformed, so the write removes
+  no entry. A surgical write that creates the table (the source had none) builds it from the sheets
+  it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
+  the table of an edited book can shrink and change positions where earlier versions only appended.
+- **One rule reads a `t="s"` value as a table position** (#768): `XlsxReader`, both streaming
+  readers and the writer's reference scan read it the same way, so a position the writer
+  keeps is the position the readers resolve. The value names position `n` when it is optional XML
+  whitespace, an optional `+`, ASCII digits (leading zeros allowed) up to `Int.MaxValue`, an
+  optional `.` followed only by zeros, and optional XML whitespace. LibreOffice reads `+3`, `03`,
+  ` 3` and `3.0` as 3. **Behaviour change:** a value with surrounding whitespace or an integral
+  decimal (`3.0`) now resolves (it read as `#VALUE!` in `XlsxReader` and empty in the streaming
+  readers); a value in non-ASCII digits (Arabic-Indic `٣`, fullwidth `３`) or `-0` no longer
+  resolves (it read as the entry those digits spell; LibreOffice reads the non-ASCII digits as 0),
+  and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`.
+  The scan keeps no characters of a value, so a value padded with any number of zeros costs no
+  extra memory.
+- **Formula escaping keeps the positions a copied macro sheet or revision log references** (#783):
+  `FormulaInjectionPolicy.Escape` regenerates every worksheet and rebuilt the shared-string table
+  from the cells, but macro sheets and revision logs are copied byte for byte, so their `t="s"`
+  values came to name other strings or no entry. When such a part references the source table,
+  the table now keeps the source order up to the highest position those parts reference (an entry
+  nothing references becomes an empty `<si>`), and the cells' strings follow. A copied part that
+  cannot be read, or holds a value naming no entry, keeps every source entry and no string is
+  added (#781).
+- **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
+  to leak, so the lint no longer reports it; its message names the new options instead of the
+  fresh-write workaround.
+- **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
+  take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
+  `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore
+  it: lint reads the zip parts with no size limit and a dry run reads no workbook. A global a verb
+  does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
+  the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
+  `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
+  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
+  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
+  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
+  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
+  and after the verb, against the parser, so the table cannot drift from the parser chains.
+
+- **Adding a shared string no longer gives a copied cell's unresolved index a value** (#781): a
+  `t="s"` value that names no entry (an index at or past the end of `xl/sharedStrings.xml`,
+  ECMA-376 Part 1 §18.4.9, or a value the index rule above does not read) resolves to nothing:
+  `XlsxReader` reads it as `#REF!` (`#VALUE!` when the value is not an index), the streaming
+  readers as an empty cell, and desktop Excel reports the file as damaged and deletes the cell on
+  repair. When a surgical write copied such a part byte for byte and appended new strings, the
+  index came to name an appended string, so an untouched cell changed value. The writer now reads
+  the reference scans of the parts it copies (worksheets it does not regenerate, macro sheets,
+  revision-log `<nc>`/`<oc>` values) and, when one holds such a value or cannot be read, adds no
+  string: the copied part keeps its bytes, the regenerated sheets write their new strings inline
+  (`t="inlineStr"`, §18.3.1.4), the table keeps its entries, and `count` covers only table
+  references. The same holds when formula escaping builds the table and when a surgical write
+  would create a table the source did not have. Each copied part is scanned once per write, by
+  the scan orphan removal uses.
+
+### Added
+
+- **`WriterConfig.compactSharedStrings` and `--compact-strings`** (#768): drop every shared
+  string no cell references, including the ones the source already carried, with no empty
+  entries unless a part xl does not model (a macro sheet, a revision log) pins a later position;
+  the untouched sheets that reference a later position are regenerated (values
+  unchanged), and a clean workbook is copied verbatim unless its table holds such an entry. The
+  CLI flag is global for the write verbs and `sheets hide|show`; with `--stream` it is refused
+  as `UNSUPPORTED_IN_STREAM` (a streaming write copies the table untouched). **Breaking
+  (binary):** `WriterConfig` gains a field, so its constructor, `apply` and `copy` change.
 
 ## [0.24.1] - 2026-10-14
 

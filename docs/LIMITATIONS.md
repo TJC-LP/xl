@@ -393,19 +393,19 @@ date formatting #667 already fixed.
   default streaming output dialect from inline strings to SST as of GH-223)
 - RichText cells stay `inlineStr` even in SST mode (mixed dialects are valid OOXML)
 - Merged-cell emission from streaming writers (phase 3 of GH-223) is still future work
-- **A preserved table is never pruned on write (#567)**: the unified writer appends new strings
-  to the source's `xl/sharedStrings.xml` and re-points the edited cells — entries are never removed
-  or reordered, so untouched sheets keep their `t="s"` indices and their byte-preservation. A text
-  replacement, a sheet removal, a `--stream put` (which writes `inlineStr` and copies the table
-  verbatim), or an edit of one sheet in a multi-sheet inline-string book (the fresh table is built
-  from every sheet while the untouched sheets stay `inlineStr`) therefore leaves `<si>` entries no
-  cell references: a counterparty name scrubbed from every cell still rides in the package.
-  `xl lint` reports the class as `shared-string-orphan` (count + first five indices, never the
-  text) at severity `hygiene` — listed, exit 0, a `LINT_HYGIENE` warning; `lint --strict` makes it
-  exit 1; to drop the entries, write the workbook fresh — `XlsxWriter.write(Workbook(wb.sheets),
-  out)` has no source and rebuilds the table from the cells (every sheet is regenerated, so
-  untouched sheets lose byte-preservation). An opt-in on-write compaction
-  (`WriterConfig.compactSharedStrings`) is a follow-up; there is no CLI compaction yet
+- **Shared strings on a surgical write (#567, #768)**: the unified writer drops the
+  `xl/sharedStrings.xml` entries its edit left unreferenced (a replaced, cleared or deleted cell's
+  text, a removed sheet's strings). An untouched sheet keeps its bytes, so an entry before a
+  position it references becomes an empty `<si>` rather than shifting later entries; entries the
+  source already carried unreferenced stay unless every sheet is regenerated.
+  `WriterConfig.compactSharedStrings` (CLI `--compact-strings`) drops every unreferenced entry,
+  rewriting the untouched sheets that reference a later position; only a part xl does not model
+  (a macro sheet, a revision log's cell values) still pins positions with empty entries.
+  Residual: a `--stream put` writes `inlineStr` and copies the table verbatim, so text it replaces
+  stays in the table (`--compact-strings` is refused with `--stream`); `xl lint` reports that as
+  `shared-string-orphan` (count + first five indices, never the text) at severity `hygiene`, and
+  an in-memory write of the output with `--compact-strings` removes it
+  (`xl -f out.xlsx -o clean.xlsx recalc --compact-strings`)
 
 ---
 

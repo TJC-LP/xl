@@ -6,7 +6,7 @@ import fs2.{Stream, Pipe}
 import fs2.data.xml
 import fs2.data.xml.XmlEvent
 import com.tjclp.xl.cells.{CellValue, CellError}
-import com.tjclp.xl.ooxml.{SharedStrings, XmlUtil}
+import com.tjclp.xl.ooxml.{SharedStringIndex, SharedStrings, XmlUtil}
 
 /**
  * True streaming XML reader using fs2-data-xml for constant-memory reads.
@@ -207,7 +207,7 @@ object StreamingXmlReader:
           // Shared string reference - resolve using SST
           (for {
             sharedStrings <- sst
-            idx <- value.toIntOption
+            idx <- SharedStringIndex.parse(value)
             entry <- sharedStrings.apply(idx)
           } yield sharedStrings.toCellValue(entry))
             .getOrElse(CellValue.Empty)

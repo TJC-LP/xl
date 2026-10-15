@@ -222,7 +222,8 @@ class LintCommandSpec extends CatsEffectSuite:
    * An Excel-shaped book: the string lives in xl/sharedStrings.xml (`t="s"`), as every
    * Excel/LibreOffice/openpyxl-authored file stores text. Lints clean.
    */
-  private def sstZip(): Path =
+  /** A one-sheet SST book; `stale` adds a third entry no cell references. */
+  private def sstZip(stale: Boolean = false): Path =
     val parts = Map(
       "[Content_Types].xml" ->
         """<?xml version="1.0" encoding="UTF-8"?>
@@ -251,7 +252,11 @@ class LintCommandSpec extends CatsEffectSuite:
 </Relationships>""",
       "xl/sharedStrings.xml" ->
         s"""<?xml version="1.0" encoding="UTF-8"?>
-<sst xmlns="$nsMain" count="2" uniqueCount="2"><si><t>plain</t></si><si><t>other</t></si></sst>""",
+<sst xmlns="$nsMain" count="2" uniqueCount="${
+            if stale then 3 else 2
+          }"><si><t>plain</t></si><si><t>other</t></si>${
+            if stale then "<si><t>stale</t></si>" else ""
+          }</sst>""",
       "xl/worksheets/sheet1.xml" ->
         s"""<?xml version="1.0" encoding="UTF-8"?>
 <worksheet xmlns="$nsMain"><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c></row></sheetData></worksheet>"""
@@ -269,24 +274,30 @@ class LintCommandSpec extends CatsEffectSuite:
     path
 
   /**
-   * The skeptics' reproduction: `put A1 42` on an SST book writes a new file whose shared-string
-   * table still carries the replaced text (the writer never prunes a preserved table), so the ONE
-   * finding on xl's own output is `shared-string-orphan` — a hygiene finding.
+   * A book whose shared-string table carries an entry no cell references, so the ONE finding is
+   * `shared-string-orphan` — a hygiene finding.
    */
-  private def sstBookEditedByPut(): IO[Path] =
+  private def staleSstBook(): IO[Path] = IO(sstZip(stale = true))
+
+  /** `put A1 42` on the SST book: the replaced string leaves the table with the edit (GH-768). */
+  private def sstBookEditedByPut(
+    leading: Seq[String] = Nil,
+    trailing: Seq[String] = Nil
+  ): IO[Path] =
     for
-      source <- IO(sstZip())
+      source <- IO(sstZip(stale = true))
       out <- IO(Files.createTempFile("lint-cli-sst-put", ".xlsx"))
-      excel = ExcelIO.instance[IO]
-      wb <- excel.read(source)
-      sheet <- IO.fromEither(wb("Sheet1").left.map(e => new Exception(e.message)))
-      _ <- excel.write(wb.put(sheet.put(ref"A1" -> 42)), out)
+      _ <- IO(Files.delete(out))
+      args = Seq("-f", source.toString, "-s", "Sheet1", "-o", out.toString) ++ leading ++
+        Seq("put", "A1", "42") ++ trailing
+      result <- contract.CliHarness.run(args*)
+      _ <- IO(assertEquals(result.exit, 0, result.toString))
       _ <- IO(Files.deleteIfExists(source))
     yield out
 
-  test("lint: an SST book edited by put exits 0 — the orphan is a hygiene finding (PR #659)") {
+  test("lint: an SST book with an unreferenced entry exits 0 — a hygiene finding (PR #659)") {
     for
-      path <- sstBookEditedByPut()
+      path <- staleSstBook()
       code <- Main.runLint(path, LintFormat.Json)
       findings <- IO(WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity))
       _ <- IO(Files.deleteIfExists(path))
@@ -308,7 +319,7 @@ class LintCommandSpec extends CatsEffectSuite:
 
   test("lint --strict: the same book exits 1 (hygiene promoted to the gate)") {
     for
-      path <- sstBookEditedByPut()
+      path <- staleSstBook()
       code <- Main.runLint(path, LintFormat.Text, strict = true)
       _ <- IO(Files.deleteIfExists(path))
     yield assertEquals(code, ExitCode(1))
@@ -348,7 +359,7 @@ class LintCommandSpec extends CatsEffectSuite:
 
   test("lint: --strict is the global flag — accepted before and after the verb, end to end") {
     for
-      path <- sstBookEditedByPut()
+      path <- staleSstBook()
       after <- contract.CliHarness.run("lint", path.toString, "--strict")
       before <- contract.CliHarness.run("--strict", "lint", path.toString)
       lenient <- contract.CliHarness.run("--json", "lint", path.toString)
@@ -363,6 +374,56 @@ class LintCommandSpec extends CatsEffectSuite:
       assertEquals(envelope("ok").bool, true)
       assertEquals(envelope("data")("findings").arr.map(_("severity").str).toList, List("hygiene"))
       assertEquals(envelope("warnings").arr.map(_("code").str).toList, List("LINT_HYGIENE"))
+  }
+
+  test("GH-768: put drops the replaced string and the stale one; the output lints clean") {
+    for
+      path <- sstBookEditedByPut()
+      findings <- IO(WorkbookLint.lint(path).fold(err => fail(s"lint errored: $err"), identity))
+      wb <- ExcelIO.instance[IO].read(path)
+      _ <- IO(Files.deleteIfExists(path))
+    yield
+      assertEquals(findings, Vector.empty)
+      val sheet = wb("Sheet1").fold(e => fail(e.message), identity)
+      assertEquals(sheet(ref"B1").value, CellValue.Text("other"))
+  }
+
+  test("GH-768: --compact-strings is a global write flag, before or after the verb") {
+    for
+      before <- sstBookEditedByPut(leading = Seq("--compact-strings"))
+      after <- sstBookEditedByPut(trailing = Seq("--compact-strings"))
+      lintBefore <- IO(WorkbookLint.lint(before).fold(e => fail(e.message), identity))
+      lintAfter <- IO(WorkbookLint.lint(after).fold(e => fail(e.message), identity))
+      _ <- IO(Files.deleteIfExists(before)) *> IO(Files.deleteIfExists(after))
+    yield
+      assertEquals(lintBefore, Vector.empty)
+      assertEquals(lintAfter, Vector.empty)
+  }
+
+  test("GH-768: --compact-strings with --stream is refused as usage, nothing written") {
+    for
+      source <- IO(sstZip(stale = true))
+      out <- IO(Files.createTempFile("lint-cli-sst-stream", ".xlsx"))
+      _ <- IO(Files.delete(out))
+      r <- contract.CliHarness.run(
+        "--json",
+        "-f",
+        source.toString,
+        "-s",
+        "Sheet1",
+        "-o",
+        out.toString,
+        "--stream",
+        "--compact-strings",
+        "put",
+        "A1",
+        "42"
+      )
+      _ <- IO(Files.deleteIfExists(source))
+    yield
+      assertEquals(r.exit, 2, r.toString)
+      assertEquals(ujson.read(r.stdout)("error")("code").str, "UNSUPPORTED_IN_STREAM", r.stdout)
+      assert(!Files.exists(out))
   }
 
   test("lint: unreadable file exits 3 (a failure, not usage — ADR-017)") {

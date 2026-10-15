@@ -87,9 +87,10 @@ object Cli:
         backendOpt,
         maxSizeOpt,
         streamOpt,
+        compactStringsOpt,
         jsonOpt,
         sheetsCmd
-      ).mapN { (file, outOpt, inPlace, backend, maxSize, stream, mode, cmd) =>
+      ).mapN { (file, outOpt, inPlace, backend, maxSize, stream, compact, mode, cmd) =>
         runWithOutput(outOpt, inPlace, file, io, mode, cmd.verb) { (out, display) =>
           runResult(
             file,
@@ -100,6 +101,7 @@ object Cli:
             maxSize,
             stream,
             cmd,
+            WritePolicy(compactStrings = compact),
             io = io,
             mode = mode
           )
@@ -188,17 +190,22 @@ object Cli:
     // Lint: raw-zip structural validation (GH-397, no output file); custom exit codes.
     // The file arrives via -f or positionally (GH-422); exactly one form must be used. --stream
     // SAX-scans the sheet parts instead of parsing them (the same findings, GH-638). --strict is
-    // the global flag (Argv hoists it in front of the verb): hygiene findings fail the gate too
-    val lintOpts = (fileOpt.orNone, streamOpt, strictGlobalOpt, jsonOpt, lintCmd).mapN {
-      case (flagFile, stream, strict, mode, (cmd, positional)) =>
-        cmd match
-          case CliCommand.Lint(format) =>
-            resolveLintFile(flagFile, positional) match
-              case Right(file) =>
-                runLint(file, CliCommand.lintFormat(format, mode), io, mode, stream, strict)
-              case Left(msg) => emit(Outcome.failed("lint", CliError.usage(msg, None)), mode, io)
-          case other => internal("lint", s"Unexpected lint command: $other", io, mode)
-    }
+    // the global flag (Argv hoists it in front of the verb): hygiene findings fail the gate too.
+    // --max-size is accepted and changes nothing: lint reads the zip parts with no size limit,
+    // and callers that pass `--max-size 0` on every call must not have lint refuse the line
+    // (GH-766)
+    val lintOpts =
+      (fileOpt.orNone, maxSizeOpt, streamOpt, strictGlobalOpt, jsonOpt, lintCmd).mapN {
+        case (flagFile, _, stream, strict, mode, (cmd, positional)) =>
+          cmd match
+            case CliCommand.Lint(format) =>
+              resolveLintFile(flagFile, positional) match
+                case Right(file) =>
+                  runLint(file, CliCommand.lintFormat(format, mode), io, mode, stream, strict)
+                case Left(msg) =>
+                  emit(Outcome.failed("lint", CliError.usage(msg, None)), mode, io)
+            case other => internal("lint", s"Unexpected lint command: $other", io, mode)
+      }
 
     // Info commands: no file required
     val infoOpts = (jsonOpt, functionsCmd).mapN((mode, _) => runInfo(io, mode))
@@ -208,11 +215,16 @@ object Cli:
     // JSON Schema — need no --file or --output. Same shape as the other standalone runners: a bad
     // source (invalid JSON, missing file) is a diagnostic on stderr with the code's exit, never an
     // escaped exception (which IOApp would print as a trace with exit 1).
-    // (--stream is accepted and changes nothing: a dry run reads no workbook, and the document it
-    // validates is the one the streaming batch applies)
+    // (--stream and --max-size are accepted and change nothing: a dry run reads no workbook, and
+    // the document it validates is the one the streaming batch applies — GH-766)
     val batchDryRunOpts =
-      (streamOpt, jsonOpt, Opts.subcommand("batch", batchHelp)(batchStandaloneArgs)).mapN {
-        (_, mode, form) => batchStandaloneOutcome(form, io, mode).flatMap(emit(_, mode, io))
+      (
+        streamOpt,
+        maxSizeOpt,
+        jsonOpt,
+        Opts.subcommand("batch", batchHelp)(batchStandaloneArgs)
+      ).mapN { (_, _, mode, form) =>
+        batchStandaloneOutcome(form, io, mode).flatMap(emit(_, mode, io))
       }
 
     // The contract itself (ADR-017 §2.13): `xl schema [--json]`, no file required
@@ -245,52 +257,14 @@ object Cli:
     // so a parser that never takes it still renders its help
     val argv = if hoisted.contains("--help") then hoisted.filterNot(_ == "--stream") else hoisted
     val mode = if Argv.wantsJson(argv) then OutputMode.Json else OutputMode.Text
-    // GH-620: `--help` anywhere before `--` is a request for the verb's help, whatever else rides
-    // along: decline refuses `--help` behind an option or positional it did not expect (`--json
-    // --help`, `-f a.xlsx --help`, `view A1:B2 --help`), so the candidates of Argv.helpCandidates
-    // are tried in order and the first clean help wins; a positional workbook path gets the -f hint
+    // `verb` is Argv.verbOf(argv); parseLine handles `--help` (GH-620), usageError names the
+    // mistake (GH-619, GH-667, GH-676, GH-681, GH-766)
     def parse(verb: Option[String]): IO[ExitCode] =
-      val attempt = (args: List[String]) => command(io).parse(args, sys.env)
-      def parseLine(line: List[String]) =
-        if line.takeWhile(_ != "--").contains("--help") then
-          val attempts = Argv.helpCandidates(line).map(attempt)
-          attempts
-            .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
-            .getOrElse(attempts.headOption.getOrElse(attempt(line)))
-        else attempt(line)
-      // decline's first error, with the -f hint when a workbook path sat in a positional slot
-      def declineUsage(line: List[String], errors: List[String]): CliError =
-        val hint = Argv.misplacedFile(line, errors) match
-          case Some(path) =>
-            s"did you mean -f $path? xl takes the file as -f/--file; " +
-              "the positional argument is the range or verb argument"
-          case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
-        CliError.usage(
-          errors.headOption.fold("invalid command line") { first =>
-            if verb.isEmpty then compact(first) else first
-          },
-          Some(hint)
-        )
-      IO(parseLine(argv))
+      IO(parseLine(argv, io))
         .flatMap {
           case Right(handler) => handler
           case Left(help) if help.errors.nonEmpty =>
-            // GH-667/GH-676: a global the verb cannot take is the one mistake decline cannot name
-            // (its first error is the verb, not the flag — Argv.misuses). It is reported when the
-            // line without it parses; otherwise another mistake rides along (`view --bogus -o x`)
-            // and decline's error for the repaired line names that one first (GH-681)
-            val misuses = Argv.misuses(argv)
-            val error = (misuses.headOption, misuses.lastOption) match
-              case (Some(first), Some(last)) =>
-                val errors = (last.repaired :: last.fallback.toList).map { line =>
-                  parseLine(line).fold(_.errors, _ => Nil)
-                }
-                errors match
-                  case repairedErrors :: _ if errors.forall(_.nonEmpty) =>
-                    declineUsage(last.repaired, repairedErrors)
-                  case _ => CliError.usage(first.message, Some(first.hint))
-              case _ => declineUsage(argv, help.errors)
-            usageFailure(verb.getOrElse(""), error, mode, io)
+            usageFailure(verb.getOrElse(""), usageError(argv, help.errors, io), mode, io)
           case Left(help) => showHelp(verb.getOrElse(""), help.toString, mode, io)
         }
         .handleErrorWith { escaped =>
@@ -313,6 +287,59 @@ object Cli:
           case Some(error) => emit(Outcome.failed(word, error), mode, io)
           case None => parse(Some(word))
       case verb => parse(verb)
+
+  /**
+   * decline's parse of one (hoisted) command line. GH-620: `--help` anywhere before `--` is a
+   * request for the verb's help, whatever else rides along: decline refuses `--help` behind an
+   * option or positional it did not expect (`--json --help`, `-f a.xlsx --help`, `view A1:B2
+   * --help`), so the candidates of [[Argv.helpCandidates]] are tried in order and the first clean
+   * help wins.
+   */
+  private def parseLine(line: List[String], io: CliIO) =
+    val attempt = (args: List[String]) => command(io).parse(args, sys.env)
+    if line.takeWhile(_ != "--").contains("--help") then
+      val attempts = Argv.helpCandidates(line).map(attempt)
+      attempts
+        .collectFirst { case left @ Left(help) if help.errors.isEmpty => left }
+        .getOrElse(attempts.headOption.getOrElse(attempt(line)))
+    else attempt(line)
+
+  /**
+   * The USAGE error for a hoisted command line decline refused with `errors`. Parses only; runs no
+   * handler, so the contract suite checks it over every verb and global (ArgvSpec).
+   *
+   * A global the verb cannot take is the one mistake decline cannot name: its first error is the
+   * verb, not the flag (GH-667, GH-676, GH-766 — [[Argv.misuses]]). It is reported when the line
+   * without it parses; otherwise another mistake rides along (`view --bogus -o x`) and decline's
+   * error for the repaired line names that one first (GH-681).
+   */
+  private[cli] def usageError(argv: List[String], errors: List[String], io: CliIO): CliError =
+    val verb = Argv.verbOf(argv)
+    // decline's first error, with the -f hint when a workbook path sat in a positional slot
+    // (GH-619)
+    def declineUsage(line: List[String], lineErrors: List[String]): CliError =
+      val hint = Argv.misplacedFile(line, lineErrors) match
+        case Some(path) =>
+          s"did you mean -f $path? xl takes the file as -f/--file; " +
+            "the positional argument is the range or verb argument"
+        case None => s"run `xl ${verb.fold("")(_ + " ")}--help` for the usage"
+      CliError.usage(
+        lineErrors.headOption.fold("invalid command line") { first =>
+          if verb.isEmpty then compact(first) else first
+        },
+        Some(hint)
+      )
+    val misuses = Argv.misuses(argv)
+    (misuses.headOption, misuses.lastOption) match
+      case (Some(first), Some(last)) =>
+        val repairedErrors = (last.repaired :: last.fallback.toList).map { line =>
+          parseLine(line, io).fold(_.errors, _ => Nil)
+        }
+        repairedErrors match
+          case firstErrors :: _ if repairedErrors.forall(_.nonEmpty) =>
+            declineUsage(last.repaired, firstErrors)
+          case _ => CliError.usage(first.message, Some(first.hint))
+      case _ => declineUsage(argv, errors)
 
   /**
    * decline's first error, minus the one dump it embeds: with no verb at all it lists every

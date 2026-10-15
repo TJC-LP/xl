@@ -32,11 +32,13 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
 
 1. **Global flags go anywhere** on the command line, before or after the verb: `-f`/`--file`,
    `-s`/`--sheet`, `-o`/`--output`, `-i`/`--in-place`, `--stream`, `--max-size`, `--backend`,
-   `--no-recalc` (`--preserve-caches`), `--strict`, `--json`. `xl view A1:B2 -f f -s Data` is
+   `--no-recalc` (`--preserve-caches`), `--strict`, `--compact-strings`, `--json`. `xl view A1:B2 -f f -s Data` is
    `xl -f f -s Data view A1:B2`. The one exception: `--strict` right after `view` is view's own
    `--eval` gate, not the write gate. After `--` every token is data —
    `xl -f a.xlsx search -- --json` searches for the text `--json` (without the `--` the flag is
-   hoisted and `search` has no pattern: exit 2).
+   hoisted and `search` has no pattern: exit 2). A global the verb does not take is `USAGE` naming
+   it (`view does not take --backend`); `lint` and `batch --dry-run` accept `--max-size` and
+   ignore it.
 2. **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
    (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`; otherwise the only sheet of a
    single-sheet book (a `SHEET_AUTOSELECTED` warning under `--json`); otherwise `SHEET_REQUIRED`,
@@ -236,7 +238,7 @@ marks the others `[not with --stream]`). Every other write verb accepts the flag
 workbook in memory and only writes through the streaming writer, so it saves no memory. Refused up
 front with `UNSUPPORTED_IN_STREAM` (exit 2, before any read): `audit`, `deps`, `diff`, `eval`,
 `evala`, `new`, `functions`, `rasterizers`, `schema`, `describe --full`, `sheets --stats`,
-`view --eval`, `put --csv`, `--strict` on a streamed write, and a batch op the streaming writer
+`view --eval`, `put --csv`, `--strict` and `--compact-strings` on a streamed write, and a batch op the streaming writer
 cannot apply or whose `sheet`/qualified ref names a sheet other than the streamed one (refused by
 index before any byte is written; a streamed `style` merges as in memory, and an op that fails to
 apply is `BATCH_OP_FAILED` with its index). `view --format html|svg|png|jpeg|webp|pdf` needs the
@@ -330,8 +332,9 @@ interiors). The summary names the first error-valued cells with the evaluator's 
 - **A file that will not read** fails with `IO_READ` (exit 3) and a message naming the construct.
   Rebuild it with openpyxl, then xl works on the rebuilt file — and report the message upstream.
 - **Formula caches**: `xl lint` catches structure Excel would repair (exit 1; its hygiene tier —
-  a valid file carrying dead weight, e.g. a shared-string entry a `put` orphaned — is listed at
-  exit 0 unless `--strict`); `xl audit` catches numbers
+  a valid file carrying dead weight, e.g. a shared-string entry no cell references — is listed at
+  exit 0 unless `--strict`). A write drops the strings its own edit removed; pass
+  `--compact-strings` on a write to drop the ones the source already carried too; `xl audit` catches numbers
   that are wrong or uncached; `xl recalc` fills caches for readers that never recalculate
   (pandas, `openpyxl data_only=True`, previewers).
 

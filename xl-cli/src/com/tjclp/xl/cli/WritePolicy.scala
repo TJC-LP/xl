@@ -4,7 +4,7 @@ import scala.util.control.NoStackTrace
 
 /**
  * Cross-cutting posture for the write verbs, carried by the global `--no-recalc` /
- * `--preserve-caches` and `--strict` flags.
+ * `--preserve-caches`, `--strict` and `--compact-strings` flags.
  *
  * @param noRecalc
  *   GH-468: apply the edit and recalculate nothing — the escape hatch for books whose caches come
@@ -29,8 +29,18 @@ import scala.util.control.NoStackTrace
  *   non-convergence, data-table seed warnings — from "printed in the summary, exit 0" to exit 1; a
  *   strict failure publishes nothing (#677). The default stays advisory so interactive use is
  *   unchanged.
+ * @param compactStrings
+ *   GH-768: write with `WriterConfig.compactSharedStrings` — drop every shared string no cell
+ *   references, the ones the source already carried included, regenerating the untouched sheets
+ *   that reference a later position (their bytes change, their values do not). Without it a write
+ *   still drops the strings its own edit removed, leaving an empty entry where an untouched sheet
+ *   needs the positions kept.
  */
-final case class WritePolicy(noRecalc: Boolean = false, strict: Boolean = false) derives CanEqual
+final case class WritePolicy(
+  noRecalc: Boolean = false,
+  strict: Boolean = false,
+  compactStrings: Boolean = false
+) derives CanEqual
 
 object WritePolicy:
   /** Recalculate the dirty cone, report problems advisorily — the historical CLI behavior. */

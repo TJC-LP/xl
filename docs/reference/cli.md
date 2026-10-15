@@ -46,6 +46,7 @@ export PATH="$HOME/.local/bin:$PATH"
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
 --strict              # Write verbs: exit 1 when the write's recalculation reports problems, and write nothing
+--compact-strings     # Write verbs: drop every shared string no cell references (not with --stream)
 
 # Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed — only 0 writes a file
 # Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
@@ -92,6 +93,17 @@ xl batch --schema                                  # JSON Schema of the batch do
 > pattern: exit 2). An unknown verb exits 2 with `code: UNKNOWN_VERB` and a `did you mean:` line;
 > any other wrong command line exits 2 with a one-line usage, the parser's error and
 > `run \`xl <verb> --help\``.
+>
+> Each verb takes only the globals that apply to it (`xl --help` lists them per verb). The write
+> verbs take all of them; the reads take `-f`, `-s`, `--max-size`, `--stream` and `--json`;
+> `functions`, `schema`, `rasterizers` and `new` take only `--json`. `lint` and the standalone
+> `batch --dry-run` accept `--max-size` and ignore it, so a `--max-size 0` prefix never breaks
+> them. Any other global a verb does not take exits 2 with `code: USAGE` and names the flag:
+> `xl --backend saxstax -f f.xlsx view A1` says `view does not take --backend`, and the hint says
+> why. Without `-f`, `batch --dry-run` and `batch --schema` take only `--max-size`, `--stream` and
+> `--json` (`batch --dry-run does not take --no-recalc`); with `-f` the line is a batch on that file
+> and takes every global. When the line has a second mistake, the parser's error for that one is
+> reported instead.
 
 > **The file is always `-f <path>`, never positional.** The first non-flag token on the command
 > line is the verb, so `xl data.xlsx view A1:B4` takes `data.xlsx` for a verb and fails
@@ -2296,10 +2308,9 @@ the verb) promotes them to the gate.
   finding with the orphan count and the first five INDICES — never the text, so scrubbed content
   cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
   Excel repairs — severity `repair`). The orphan half is severity `hygiene`: a privacy signal, not
-  a repair class — a counterparty name scrubbed from every cell still rides in the package. xl's
-  fresh writes lint clean; a surgical edit of a foreign SST book that replaces or removes text
-  appends the new string and leaves the old entry behind — xl never prunes a preserved table —
-  which this finding reports without failing the gate (see the carve-out below). Under `--stream`
+  a repair class — a counterparty name scrubbed from every cell still rides in the package. An
+  entry with no text is never reported (it carries nothing; it is what an xl write leaves where an
+  untouched sheet must keep its positions, see the carve-out below). Under `--stream`
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
   `xlMacrosheet`) count as references like any worksheet's
@@ -2340,15 +2351,22 @@ stays "no findings at all"; the exit code is the gate.
 
 `xl lint` is read-only — it never repairs or rewrites the file. xl's own fresh writes always
 lint clean, and xl's own edits never introduce a repair finding; use it as a pre-send self-check
-in agent pipelines that splice or post-process workbooks. One documented carve-out (#567): a
-surgical edit of a foreign shared-string book that replaces or removes text — or that introduces
-a shared-string table into a multi-sheet inline-string book while copying an untouched sheet
-verbatim — leaves entries no cell references in `xl/sharedStrings.xml` (xl appends and re-points,
-it never prunes a preserved table), so that output reports `shared-string-orphan` — a hygiene
-finding, exit `0` — until the table is rebuilt: from the library, a fresh write of
-`Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
-no CLI compaction yet. `--strict` makes that finding fail the gate; `--format json` exposes
-`.findings[].category` and `.findings[].severity` for a finer filter.
+in agent pipelines that splice or post-process workbooks.
+
+**Shared strings on an edit (#768).** A write drops the `xl/sharedStrings.xml` entries its edit
+left unreferenced — a replaced, cleared or deleted cell's text, a removed sheet's strings — so the
+removed text is in no part of the output. An entry past every position an untouched sheet
+references is dropped and the regenerated sheets are renumbered; one before such a position
+becomes an empty `<si>` so the untouched sheet rides byte-for-byte (the lint does not report
+empty entries). Entries the source already carried unreferenced stay unless every sheet is
+regenerated anyway. `--compact-strings` (library: `WriterConfig.compactSharedStrings`) drops every
+unreferenced entry, old ones included, with no empty entries: the untouched sheets that reference
+a later position are rewritten (their values do not change), and a clean book is copied verbatim
+when it has nothing to drop. One carve-out: `--stream` writes copy the table untouched, so a
+streamed `put` that replaces text leaves the old entry for `shared-string-orphan` to report (a
+hygiene finding, exit `0`); `--compact-strings` is refused with `--stream`. `--strict` makes the
+finding fail the gate; `--format json` exposes `.findings[].category` and
+`.findings[].severity` for a finer filter.
 
 ---
 

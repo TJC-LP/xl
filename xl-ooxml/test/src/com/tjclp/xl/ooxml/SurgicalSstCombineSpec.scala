@@ -192,7 +192,9 @@ class SurgicalSstCombineSpec extends FunSuite:
       sstXml.contains("count=\"2\""),
       s"SST count should drop from 3 to 2 after a text→number overwrite. SST:\n$sstXml"
     )
-    assert(sstXml.contains("uniqueCount=\"3\""), s"entries must not be pruned. SST:\n$sstXml")
+    // GH-768: Alpha is referenced by no cell any more and no sheet rides verbatim → dropped
+    assert(sstXml.contains("uniqueCount=\"2\""), s"the released entry must go. SST:\n$sstXml")
+    assert(!sstXml.contains("Alpha"), s"the replaced text must leave the package. SST:\n$sstXml")
 
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
     assertEquals(textAt(reloaded, ref"A1"), None, "A1 should no longer be text")
@@ -223,19 +225,19 @@ class SurgicalSstCombineSpec extends FunSuite:
 
     val sstXml = new String(readEntry(output, "xl/sharedStrings.xml"), "UTF-8")
     // 4 source refs − 3 (deleted Sheet1) − 1 (Sheet2 pre-edit) + 2 (Sheet2 post-edit: Alpha+Delta)
-    // = 2. Entries are never pruned, Delta appends → uniqueCount=4.
+    // = 2. GH-768: Beta and Gamma left with Sheet1 and no sheet rides verbatim, so they are
+    // dropped; Delta appends → uniqueCount=2.
     assert(
       sstXml.contains("count=\"2\""),
       s"count must subtract the DELETED sheet's references and recount the edited sheet by " +
         s"IDENTITY (not by drifted index). SST:\n$sstXml"
     )
     assert(
-      sstXml.contains("uniqueCount=\"4\""),
-      s"uniqueCount should be 3 preserved + 1 new (Delta). SST:\n$sstXml"
+      sstXml.contains("uniqueCount=\"2\""),
+      s"uniqueCount should be Alpha + Delta. SST:\n$sstXml"
     )
-    existingStrings.foreach { s =>
-      assert(sstXml.contains(s"<t>$s</t>"), s"entry '$s' must never be pruned. SST:\n$sstXml")
-    }
+    assert(sstXml.contains("<t>Alpha</t>"), s"the referenced entry stays. SST:\n$sstXml")
+    assert(!sstXml.contains("Beta") && !sstXml.contains("Gamma"), s"released. SST:\n$sstXml")
 
     val reloaded = XlsxReader.read(output).fold(err => fail(s"Reload failed: $err"), identity)
     assertEquals(reloaded.sheetNames.map(_.value), Vector("Sheet2"))

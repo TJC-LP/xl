@@ -76,6 +76,17 @@ enum XmlBackend derives CanEqual:
  * The default backend is ScalaXml for stability. SaxStax (33% faster) is available for beta testing
  * via `--backend saxstax` CLI flag or `WriterConfig.saxStax`. Once SaxStax has been proven stable
  * in production, it will become the default.
+ *
+ * Shared strings (GH-768): a write that copies `xl/sharedStrings.xml` from its source always
+ * removes the entries its edit left unreferenced. An entry above every position an untouched sheet
+ * references is dropped; one below becomes an empty `<si>`, so the untouched sheets keep their
+ * bytes. `compactSharedStrings = true` drops every unreferenced entry instead, the ones the source
+ * already carried included, by regenerating the untouched sheets that reference a later position
+ * (their bytes change, their cell values do not). A clean workbook is then written through the
+ * surgical path when its table holds such an entry, and copied verbatim otherwise.
+ *
+ * @param compactSharedStrings
+ *   drop every shared string no cell references, renumbering `t="s"` cells as needed
  */
 case class WriterConfig(
   sstPolicy: SstPolicy = SstPolicy.Auto,
@@ -83,7 +94,8 @@ case class WriterConfig(
   prettyPrint: Boolean = false, // Compact XML for production (only applies to ScalaXml backend)
   backend: XmlBackend = XmlBackend.ScalaXml, // ScalaXml default for stability; SaxStax opt-in
   formulaInjectionPolicy: FormulaInjectionPolicy =
-    FormulaInjectionPolicy.None // Default: trust input
+    FormulaInjectionPolicy.None, // Default: trust input
+  compactSharedStrings: Boolean = false
 )
 
 object WriterConfig:

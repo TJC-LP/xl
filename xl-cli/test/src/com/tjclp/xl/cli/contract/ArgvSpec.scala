@@ -246,7 +246,16 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     val valueTaking =
       Set("-f", "--file", "-s", "--sheet", "-o", "--output", "--backend", "--max-size")
     val switches =
-      Set("-i", "--in-place", "--stream", "--no-recalc", "--preserve-caches", "--json", "--strict")
+      Set(
+        "-i",
+        "--in-place",
+        "--stream",
+        "--no-recalc",
+        "--preserve-caches",
+        "--compact-strings",
+        "--json",
+        "--strict"
+      )
     assertEquals(Argv.globals.keySet, valueTaking ++ switches)
     valueTaking.foreach(k => assertEquals(Argv.globals(k), true, k))
     switches.foreach(k => assertEquals(Argv.globals(k), false, k))
@@ -731,4 +740,286 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
         both.stderr
       )
       assert(!Files.exists(Path.of(out)))
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // GH-766: every global a verb does not take is named; lint and batch --dry-run take --max-size
+  // ---------------------------------------------------------------------------------------------
+
+  /** The verb's own arguments to try, in order: the first that parses is the verb's base line. */
+  private val baseArgs: Vector[List[String]] = Vector(
+    Nil,
+    List("A1"),
+    List("A1", "1"),
+    List("A1:B2"),
+    List("=1+1"),
+    List("1"),
+    List("A"),
+    List("1", "1"),
+    List("A", "1"),
+    List("Data"),
+    List("Data", "Copy"),
+    List("A1:B2", "D1"),
+    List("A1", "note"),
+    List("A1:B2", "--by", "A"),
+    List("b.json"),
+    List("data.csv", "A1"),
+    List("data.md", "A1"),
+    List("add", "Total", "Data!A1"),
+    List("list"),
+    List("add", "--type", "bar", "--data", "A1:B2", "--at", "D1"),
+    List("image.png", "A1"),
+    List("--zoom", "100"),
+    List("FF0000"),
+    List("--orientation", "landscape"),
+    List("--header", "x"),
+    List("Data", "--to", "1"),
+    List("image.png", "--at", "A1"),
+    List("-g", "g.xlsx"),
+    List("--where", "A > 1")
+  )
+
+  /** The global flags each base starts from: the write chain needs -f and -o, the reads -f. */
+  private val basePrefixes: Vector[List[String]] =
+    Vector(Nil, List("-f", "f.xlsx"), List("-f", "f.xlsx", "-o", "o.xlsx"))
+
+  /** The first command line for `verb` that decline parses, or `None`. */
+  private def baseLine(verb: String): Option[List[String]] =
+    (for
+      prefix <- basePrefixes.iterator
+      args <- baseArgs.iterator
+      line = prefix ++ (verb :: args)
+      if parses(line)
+    yield line).nextOption()
+
+  private def parses(line: List[String]): Boolean =
+    Cli.command(CliIO.system).parse(Argv.hoist(line), Map.empty).isRight
+
+  /**
+   * Forms of a verb whose globals differ from its base line's: the standalone `batch --dry-run` and
+   * `batch --schema` (no `-f`) take only --max-size, --stream and --json; `sheets hide` writes.
+   */
+  private val formBases: Vector[(String, List[String])] = Vector(
+    "batch" -> List("batch", "--dry-run", "b.json"),
+    "batch" -> List("batch", "--schema"),
+    "sheets" -> List("-f", "f.xlsx", "-o", "o.xlsx", "sheets", "hide", "Data")
+  )
+
+  test("GH-766: every verb, and every extra form, has a base command line that parses") {
+    val missing = Argv.verbs.filter(baseLine(_).isEmpty)
+    assertEquals(missing, Vector.empty[String])
+    assertEquals(formBases.filterNot((_, line) => parses(line)), Vector.empty)
+  }
+
+  /** A value for each value-taking global, by long name. */
+  private val globalValues: Map[String, String] = Map(
+    "--file" -> "g.xlsx",
+    "--sheet" -> "Data",
+    "--output" -> "p.xlsx",
+    "--backend" -> "saxstax",
+    "--max-size" -> "0"
+  )
+
+  /**
+   * Every spelling of every global, as the tokens it adds to a command line: the bare flag (with
+   * its value) and, for a value-taking long flag, the `--name=value` form.
+   */
+  private val globalSpellings: Vector[(String, List[String])] =
+    Argv.globals.toVector.sortBy(_._1).flatMap { (name, takesValue) =>
+      val long = Argv.longName(name)
+      if takesValue then
+        val value = globalValues.getOrElse(long, "x")
+        if name.startsWith("--") then
+          Vector(name -> List(name, value), name -> List(s"$name=$value"))
+        else Vector(name -> List(name, value))
+      else Vector(name -> List(name))
+    }
+
+  test(
+    "GH-766: every verb x every global, before or after the verb, parses or names the flag — " +
+      "and Argv.verbGlobals is exactly what the parser takes"
+  ) {
+    val io = CliIO.system
+    val verbBases = Argv.verbs.flatMap(verb => baseLine(verb).map(verb -> _).toList)
+    assertEquals(verbBases.size, Argv.verbs.size)
+    val bases = verbBases ++ formBases
+    val failures = for
+      (verb, base) <- bases
+      (name, tokens) <- globalSpellings
+      long = Argv.longName(name)
+      // a base that already carries the global (the write base's -f/-o) would only repeat it
+      if !base.exists(t => Argv.longName(t.takeWhile(_ != '=')) == long)
+      after <- Vector(false, true)
+      line = if after then base ++ tokens else tokens ++ base
+      ownFlag = after && Argv.verbOwned.get(verb).exists(_.contains(name))
+      argv = Argv.hoist(line)
+      failure <- (Schema.streamRefusal(verb), long) match
+        // a verb that refuses --stream does so before the parser, naming the flag (GH-638)
+        case (Some(refusal), "--stream") =>
+          Option.unless(refusal.message.contains("--stream"))(s"${line.mkString(" ")}: $refusal")
+        case _ =>
+          val accepted = ownFlag || Argv.acceptedGlobals(argv).exists(_._2.contains(long))
+          Cli.command(io).parse(argv, Map.empty) match
+            case Right(_) =>
+              Option.unless(accepted)(s"${line.mkString(" ")}: parses, table says refused")
+            case Left(help) =>
+              val error = Cli.usageError(argv, help.errors, io)
+              if accepted then Some(s"${line.mkString(" ")}: refused (${error.message})")
+              else
+                Option.unless(
+                  error.code == ErrorCode.USAGE &&
+                    error.message.startsWith(s"$verb ") &&
+                    error.message.contains(Argv.flagPair(long)) &&
+                    !error.message.contains("Unexpected argument")
+                )(s"${line.mkString(" ")}: ${error.message}")
+    yield failure
+    assertEquals(failures, Vector.empty[String])
+  }
+
+  test("GH-766: unacceptedGlobals reads globals as decline does") {
+    assertEquals(
+      Argv.unacceptedGlobals(List("--backend", "x", "-f", "f.xlsx", "view", "A1", "--no-recalc")),
+      Vector("--backend", "--no-recalc")
+    )
+    assertEquals(Argv.unacceptedGlobals(List("--max-size", "0", "-f", "f.xlsx", "lint")), Vector())
+    assertEquals(Argv.unacceptedGlobals(List("--max-size=0", "functions")), Vector("--max-size"))
+    // a verb's own flag after it is not the global; before it, it is
+    assertEquals(Argv.unacceptedGlobals(List("-f", "f.xlsx", "view", "A1", "--strict")), Vector())
+    assertEquals(
+      Argv.unacceptedGlobals(List("--strict", "-f", "f.xlsx", "view", "A1")),
+      Vector("--strict")
+    )
+    assertEquals(Argv.unacceptedGlobals(List("new", "o.xlsx", "--backend", "saxstax")), Vector())
+    assertEquals(
+      Argv.unacceptedGlobals(List("--backend", "saxstax", "new", "o.xlsx")),
+      Vector("--backend")
+    )
+    // a global's value is data; nothing behind `--` counts; an unknown verb has no table
+    assertEquals(Argv.unacceptedGlobals(List("-f", "--backend", "names")), Vector())
+    assertEquals(Argv.unacceptedGlobals(List("-f", "f.xlsx", "search", "--", "--strict")), Vector())
+    assertEquals(Argv.unacceptedGlobals(List("--backend", "x", "viwe")), Vector())
+    // the standalone batch forms take only --max-size, --stream and --json; with -f, every global
+    assertEquals(
+      Argv.unacceptedGlobals(
+        List("--no-recalc", "-s", "Data", "--max-size", "0", "batch", "--dry-run", "b.json")
+      ),
+      Vector("--no-recalc", "--sheet")
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("-o", "o.xlsx", "batch", "--schema")),
+      Vector("--output")
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("-f", "f.xlsx", "--no-recalc", "batch", "--dry-run", "b.json")),
+      Vector()
+    )
+    assertEquals(
+      Argv.unacceptedGlobals(List("--no-recalc", "batch", "b.json", "--", "--dry-run")),
+      Vector()
+    )
+    assertEquals(
+      Argv.acceptedGlobals(List("--strict", "batch", "--dry-run", "b.json")).map(_._1),
+      Some("batch --dry-run")
+    )
+  }
+
+  test("GH-766: Argv.sheetlessVerbs is exactly the verbs whose globals lack --sheet") {
+    assertEquals(
+      Argv.verbGlobals.collect { case (verb, globals) if !globals("--sheet") => verb }.toSet,
+      Argv.sheetlessVerbs.keySet
+    )
+  }
+
+  test("GH-766: `--max-size 0` runs lint in every position, and batch --dry-run") {
+    val simple = file("simple.xlsx")
+    val doc = file("dry-run-766.json")
+    for
+      _ <- IO.blocking(Files.writeString(Path.of(doc), """[{"op":"put","ref":"A2","value":1}]"""))
+      plain <- CliHarness.run("-f", simple, "lint")
+      front <- CliHarness.run("--max-size", "0", "-f", simple, "lint")
+      middle <- CliHarness.run("-f", simple, "--max-size", "0", "lint")
+      behind <- CliHarness.run("-f", simple, "lint", "--max-size", "0")
+      positional <- CliHarness.run("--max-size", "0", "lint", simple)
+      streamed <- CliHarness.run("-f", simple, "--stream", "lint", "--max-size", "0")
+      dryRun <- CliHarness.run("--max-size", "0", "batch", "--dry-run", doc)
+      dryRunPlain <- CliHarness.run("batch", "--dry-run", doc)
+    yield
+      Vector(front, middle, behind, positional, streamed).foreach { run =>
+        assertEquals(run.exit, plain.exit, run.stderr)
+        assertEquals(run.stdout, plain.stdout, run.stderr)
+      }
+      assertEquals(plain.exit, 0, plain.stderr)
+      assertEquals(dryRun.exit, 0, dryRun.stderr)
+      assertEquals(dryRun.stdout, dryRunPlain.stdout)
+  }
+
+  test("GH-766 + GH-768: sheets takes --compact-strings; a read names it as a global it refuses") {
+    val simple = file("simple.xlsx")
+    for
+      onlyOther <- CliHarness.run("-f", simple, "sheets", "--no-recalc", "--compact-strings")
+      onView <- CliHarness.run("-f", simple, "-s", "Data", "--compact-strings", "view", "A1")
+    yield
+      assertEquals(
+        Argv.unacceptedGlobals(List("-f", "f.xlsx", "--compact-strings", "sheets", "list")),
+        Vector()
+      )
+      assert(
+        parses(List("-f", "f.xlsx", "-o", "o.xlsx", "sheets", "hide", "Data", "--compact-strings"))
+      )
+      assertEquals(onlyOther.exit, 2, onlyOther.stderr)
+      assert(
+        onlyOther.stderr.startsWith("Error: sheets does not take --no-recalc\n"),
+        onlyOther.stderr
+      )
+      assertEquals(onView.exit, 2, onView.stderr)
+      assert(
+        onView.stderr.startsWith("Error: view does not take --compact-strings\n  code: USAGE\n"),
+        onView.stderr
+      )
+      assert(
+        onView.stderr.contains("hint: drop --compact-strings; --compact-strings drops the"),
+        onView.stderr
+      )
+  }
+
+  test("GH-766: a global the verb does not take is a USAGE error naming the flag") {
+    val simple = file("simple.xlsx")
+    for
+      backend <- CliHarness.run("--backend", "scalaxml", "-f", simple, "-s", "Data", "view", "A1")
+      noRecalc <- CliHarness.run("-f", simple, "sheets", "--no-recalc")
+      strict <- CliHarness.run("--strict", "-f", simple, "-s", "Data", "view", "A1")
+      maxSize <- CliHarness.run("--max-size", "0", "functions")
+      fileOnNew <- CliHarness.run("-f", simple, "new", file("never-766.xlsx"))
+      two <- CliHarness.run("-f", simple, "--preserve-caches", "lint", "--backend", "saxstax")
+      json <- CliHarness.run("--json", "--max-size", "0", "schema")
+      dryRun <- CliHarness.run("--no-recalc", "batch", "--dry-run", "b.json", "-s", "Data")
+    yield
+      def check(run: CliRun, message: String, hint: String): Unit =
+        assertEquals(run.exit, 2, run.stderr)
+        assertEquals(run.stdout, "")
+        assert(run.stderr.startsWith(s"Error: $message\n  code: USAGE\n"), run.stderr)
+        assert(run.stderr.contains(s"  hint: $hint"), run.stderr)
+        assert(!run.stderr.contains("Unexpected argument"), run.stderr)
+      check(backend, "view does not take --backend", "drop --backend; --backend picks a write's")
+      check(noRecalc, "sheets does not take --no-recalc", "drop --no-recalc; --no-recalc applies")
+      check(strict, "view does not take --strict", "drop --strict; view's own --strict gates")
+      check(maxSize, "functions does not take --max-size", "drop --max-size; functions reads no")
+      check(fileOnNew, "new does not take -f/--file", "drop -f/--file; new creates the file it")
+      check(
+        two,
+        "lint does not take --preserve-caches, --backend",
+        "drop --preserve-caches, --backend; --preserve-caches applies"
+      )
+      check(
+        dryRun,
+        "batch --dry-run does not take --no-recalc, -s/--sheet",
+        "drop --no-recalc, -s/--sheet; batch --dry-run without -f reads and writes no workbook"
+      )
+      assert(dryRun.stderr.contains("Run `xl batch --help` for the usage"), dryRun.stderr)
+      assert(!Files.exists(Path.of(file("never-766.xlsx"))))
+      assertEquals(json.exit, 2, json.stdout)
+      val envelope = ujson.read(json.stdout)
+      assertEquals(envelope("verb"), ujson.Str("schema"))
+      assertEquals(envelope("error")("code"), ujson.Str("USAGE"))
+      assertEquals(envelope("error")("message"), ujson.Str("schema does not take --max-size"))
   }

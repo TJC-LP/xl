@@ -87,6 +87,8 @@ import com.tjclp.xl.cli.output.Format
  *   - `--strict` — write verbs only (GH-496): exit 1 when the write's recalculation reports formula
  *     errors, non-convergence, or data-table seed warnings; the output is then withheld, `-o` and
  *     `-i` alike (#677)
+ *   - `--compact-strings` — write verbs only (GH-768): drop every unreferenced shared string,
+ *     regenerating untouched sheets where the table must be renumbered
  *   - `--json` — every verb (ADR-017 §2.4): print the result, success or failure, as one JSON
  *     envelope `{ok, exitCode, verb, version, data, warnings, error}` on stdout; `--format json`
  *     payloads ride inside it unchanged
@@ -260,9 +262,22 @@ object Main extends IOApp:
       )
       .orFalse
 
-  /** Cross-cutting write posture (GH-468/GH-496), parsed before the verb like -f/-o/--stream. */
+  /**
+   * GH-768: drop every unreferenced shared string on write (see [[WritePolicy.compactStrings]]).
+   */
+  private[cli] val compactStringsOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "compact-strings",
+        "Write verbs: drop every shared string no cell references from xl/sharedStrings.xml, the ones the source already carried included, renumbering cells as needed (untouched sheets that reference a later entry are rewritten; their values do not change). Without it a write still drops the strings its own edit removed, leaving an empty entry where an untouched sheet needs the positions kept. Not with --stream."
+      )
+      .orFalse
+
+  /**
+   * Cross-cutting write posture (GH-468/GH-496/GH-768), parsed before the verb like -f/-o/--stream.
+   */
   private[cli] val writePolicyOpt: Opts[WritePolicy] =
-    (noRecalcOpt, strictGlobalOpt).mapN(WritePolicy.apply)
+    (noRecalcOpt, strictGlobalOpt, compactStringsOpt).mapN(WritePolicy.apply)
 
   /**
    * Global `--json` (ADR-017 §2.4): the result — success or failure — as one JSON envelope on
@@ -757,11 +772,11 @@ lenient reader accepts silently:
     xl/styles.xml (actual <dxf> children, not the count attribute)
   - zip entries no relationship reaches from _rels/.rels (dead weight, or a
     forgotten Relationship; never a repair, but the bytes travel) [hygiene]
-  - shared-string entries no t="s" cell references (count + first five
-    INDICES, never the text) [hygiene] and t="s" indices past the table
-    (#REF!); xl never prunes a preserved table, so a text-replacing edit of
-    a foreign shared-string book reports the orphan until the table is
-    rebuilt
+  - shared-string entries with text that no t="s" cell references (count +
+    first five INDICES, never the text) [hygiene] and t="s" indices past the
+    table (#REF!); an xl write drops the strings its edit removed (an empty
+    entry where an untouched sheet keeps its positions, never reported) but
+    keeps the ones the source already carried unless --compact-strings
   - a sheet's hidden _xlnm._FilterDatabase name naming another range, sheet
     or #REF! than its <autoFilter ref> (a stale name; Excel opens the filter
     intact and keeps the name) [hygiene]
@@ -798,7 +813,9 @@ EXIT CODES:
   2 = usage (no file, or a file given both ways)
   3 = error (unreadable file, missing/malformed core part, ...)
 
-Docs: xl lint is read-only; it never repairs or rewrites the file.
+Docs: xl lint is read-only; it never repairs or rewrites the file. It
+applies no uncompressed-size limit, so --max-size is accepted and changes
+nothing (`xl --max-size 0 -f F lint` runs the lint).
 
 EXAMPLES:
   xl lint deliverable.xlsx && echo "safe to send"        # repair-clean
@@ -2039,19 +2056,24 @@ EXAMPLES:
     mode: OutputMode = OutputMode.Text
   ): IO[Outcome] =
     Ref.of[IO, Vector[Warning]](Vector.empty).flatMap { warnings =>
-      execute(
-        filePath,
-        sheetNameOpt,
-        outputOpt,
-        backendOpt,
-        maxSizeOpt,
-        stream,
-        cmd,
-        policy,
-        io,
-        warnings,
-        mode
-      ).attempt.flatMap { attempt =>
+      // GH-768: refused before any read; a streaming write never rewrites the shared-string table
+      val run =
+        if stream && policy.compactStrings then IO.raiseError(compactStringsInStream)
+        else
+          execute(
+            filePath,
+            sheetNameOpt,
+            outputOpt,
+            backendOpt,
+            maxSizeOpt,
+            stream,
+            cmd,
+            policy,
+            io,
+            warnings,
+            mode
+          )
+      run.attempt.flatMap { attempt =>
         warnings.get.map { collected =>
           attempt match
             case Right(payload) =>
@@ -2782,9 +2804,9 @@ EXAMPLES:
    * repair/normalize the very structure lint inspects (GH-397).
    *
    * The tier split (PR #659 review): `shared-string-orphan`'s orphan half and `unreferenced-part`
-   * report a valid file that opens intact everywhere, and xl's own `put`/`clear`/`--stream put` of
-   * any shared-string book leaves an orphan by design (the writer never prunes a preserved table),
-   * so gating on them would fail the documented `xl lint && send` check on xl's own output.
+   * report a valid file that opens intact everywhere: a foreign book often carries both, and xl's
+   * own `--stream put` copies the shared-string table untouched, so gating on them would fail the
+   * documented `xl lint && send` check on books that open cleanly.
    */
   private[cli] def runLint(
     file: Path,
@@ -2924,7 +2946,7 @@ EXAMPLES:
       case CliCommand.Sheets(SheetsAction.Hide(name, veryHide)) =>
         // Hide requires loading workbook and writing output
         requireOutputAction(outputOpt, "sheets hide") { outputPath =>
-          val config = buildWriterConfig(backendOpt)
+          val config = buildWriterConfig(backendOpt, policy)
           readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
             SheetCommands.hideSheet(wb, name, veryHide, outputPath, config, stream)
           }
@@ -2932,7 +2954,7 @@ EXAMPLES:
       case CliCommand.Sheets(SheetsAction.Show(name)) =>
         // Show requires loading workbook and writing output
         requireOutputAction(outputOpt, "sheets show") { outputPath =>
-          val config = buildWriterConfig(backendOpt)
+          val config = buildWriterConfig(backendOpt, policy)
           readWorkbook(excel, filePath, readerConfig).flatMap { wb =>
             SheetCommands.showSheet(wb, name, outputPath, config, stream)
           }
@@ -3327,11 +3349,11 @@ EXAMPLES:
       action match
         case SheetsAction.List(_) => WorkbookCommands.sheets(wb)
         case SheetsAction.Hide(name, veryHide) =>
-          requireOutput("sheets hide", outputOpt, backendOpt, stream)(
+          requireOutput("sheets hide", outputOpt, backendOpt, stream, policy)(
             SheetCommands.hideSheet(wb, name, veryHide, _, _, _)
           )
         case SheetsAction.Show(name) =>
-          requireOutput("sheets show", outputOpt, backendOpt, stream)(
+          requireOutput("sheets show", outputOpt, backendOpt, stream, policy)(
             SheetCommands.showSheet(wb, name, _, _, _)
           )
 
@@ -3371,12 +3393,12 @@ EXAMPLES:
 
     // Write commands (require output)
     case CliCommand.Put(refStr, values, csvSplit, detect) =>
-      requireOutput("put", outputOpt, backendOpt, stream)(
+      requireOutput("put", outputOpt, backendOpt, stream, policy)(
         WriteCommands.put(wb, sheetOpt, refStr, values, _, _, _, csvSplit, detect, policy, warn)
       )
 
     case CliCommand.PutFormula(refStr, formulas, array) =>
-      requireOutput("putf", outputOpt, backendOpt, stream)(
+      requireOutput("putf", outputOpt, backendOpt, stream, policy)(
         WriteCommands.putFormula(wb, sheetOpt, refStr, formulas, _, _, _, policy, warn, array)
       )
 
@@ -3401,69 +3423,70 @@ EXAMPLES:
           borderColor,
           replace
         ) =>
-      requireOutput("style", outputOpt, backendOpt, stream) { (outputPath, config, streamWrite) =>
-        WriteCommands.style(
-          wb,
-          sheetOpt,
-          rangeStr,
-          bold,
-          italic,
-          underline,
-          bg,
-          fg,
-          fontSize,
-          fontName,
-          align,
-          valign,
-          wrap,
-          numFormat,
-          border,
-          borderTop,
-          borderRight,
-          borderBottom,
-          borderLeft,
-          borderColor,
-          replace,
-          outputPath,
-          config,
-          streamWrite
-        )
+      requireOutput("style", outputOpt, backendOpt, stream, policy) {
+        (outputPath, config, streamWrite) =>
+          WriteCommands.style(
+            wb,
+            sheetOpt,
+            rangeStr,
+            bold,
+            italic,
+            underline,
+            bg,
+            fg,
+            fontSize,
+            fontName,
+            align,
+            valign,
+            wrap,
+            numFormat,
+            border,
+            borderTop,
+            borderRight,
+            borderBottom,
+            borderLeft,
+            borderColor,
+            replace,
+            outputPath,
+            config,
+            streamWrite
+          )
       }
 
     case CliCommand.RowOp(rowNum, height, hide, show) =>
-      requireOutput("row", outputOpt, backendOpt, stream)(
+      requireOutput("row", outputOpt, backendOpt, stream, policy)(
         WriteCommands.row(wb, sheetOpt, rowNum, height, hide, show, _, _, _)
       )
 
     case CliCommand.ColOp(colStr, width, hide, show, autoFit) =>
-      requireOutput("col", outputOpt, backendOpt, stream)(
+      requireOutput("col", outputOpt, backendOpt, stream, policy)(
         WriteCommands.col(wb, sheetOpt, colStr, width, hide, show, autoFit, _, _, _)
       )
 
     // Row/column outline grouping (GH-421)
     case CliCommand.GroupRows(rows, level, collapsed) =>
-      requireOutput("group-rows", outputOpt, backendOpt, stream)(
+      requireOutput("group-rows", outputOpt, backendOpt, stream, policy)(
         WriteCommands.groupRows(wb, sheetOpt, rows, level, collapsed, _, _, _)
       )
 
     case CliCommand.GroupCols(cols, level, collapsed) =>
-      requireOutput("group-cols", outputOpt, backendOpt, stream)(
+      requireOutput("group-cols", outputOpt, backendOpt, stream, policy)(
         WriteCommands.groupCols(wb, sheetOpt, cols, level, collapsed, _, _, _)
       )
 
     case CliCommand.UngroupRows(rows) =>
-      requireOutput("ungroup-rows", outputOpt, backendOpt, stream)(
+      requireOutput("ungroup-rows", outputOpt, backendOpt, stream, policy)(
         WriteCommands.ungroupRows(wb, sheetOpt, rows, _, _, _)
       )
 
     case CliCommand.UngroupCols(cols) =>
-      requireOutput("ungroup-cols", outputOpt, backendOpt, stream)(
+      requireOutput("ungroup-cols", outputOpt, backendOpt, stream, policy)(
         WriteCommands.ungroupCols(wb, sheetOpt, cols, _, _, _)
       )
 
     // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
-      requireOutput("batch", outputOpt, backendOpt, stream)(
+      requireOutput("batch", outputOpt, backendOpt, stream, policy)(
         WriteCommands.batch(wb, sheetOpt, source, _, _, _, policy, io.stdin, warn)
       )
 
@@ -3471,7 +3494,7 @@ EXAMPLES:
       runRecalc(wb, outputOpt, backendOpt, stream, recalc, policy, warn).map(_._1)
 
     case CliCommand.Import(csvPath, startRefOpt, delim, skipHeader, enc, newSheetOpt, noInfer) =>
-      requireOutput("import", outputOpt, backendOpt, stream) {
+      requireOutput("import", outputOpt, backendOpt, stream, policy) {
         (outputPath, writerConfig, streamWrite) =>
           ImportCommands.importCsv(
             wb,
@@ -3490,7 +3513,7 @@ EXAMPLES:
       }
 
     case CliCommand.ImportMarkdown(mdPath, startRefOpt, skipHeader, newSheetOpt, noInfer) =>
-      requireOutput("import-md", outputOpt, backendOpt, stream) {
+      requireOutput("import-md", outputOpt, backendOpt, stream, policy) {
         (outputPath, writerConfig, streamWrite) =>
           ImportCommands.importMarkdown(
             wb,
@@ -3508,17 +3531,17 @@ EXAMPLES:
 
     // Sheet management commands
     case CliCommand.AddSheet(name, afterOpt, beforeOpt) =>
-      requireOutput("add-sheet", outputOpt, backendOpt, stream)(
+      requireOutput("add-sheet", outputOpt, backendOpt, stream, policy)(
         SheetCommands.addSheet(wb, name, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.RemoveSheet(name) =>
-      requireOutput("remove-sheet", outputOpt, backendOpt, stream)(
+      requireOutput("remove-sheet", outputOpt, backendOpt, stream, policy)(
         SheetCommands.removeSheet(wb, name, _, _, _)
       )
 
     case CliCommand.RenameSheet(oldName, newName) =>
-      requireOutput("rename-sheet", outputOpt, backendOpt, stream)(
+      requireOutput("rename-sheet", outputOpt, backendOpt, stream, policy)(
         SheetCommands.renameSheet(wb, oldName, newName, _, _, _)
       )
 
@@ -3528,94 +3551,94 @@ EXAMPLES:
         // -s still writes a workbook-scoped name — no auto-select). The write policy is the batch
         // twin's: readers of the changed name are recalculated unless --no-recalc (#659 review).
         case NameAction.Add(nm, refersTo) =>
-          requireOutput("name add", outputOpt, backendOpt, stream)(
+          requireOutput("name add", outputOpt, backendOpt, stream, policy)(
             SheetCommands.nameAdd(wb, sheetOpt.map(_.name), nm, refersTo, _, _, _, policy, warn)
           )
         case NameAction.Remove(nm) =>
-          requireOutput("name rm", outputOpt, backendOpt, stream)(
+          requireOutput("name rm", outputOpt, backendOpt, stream, policy)(
             SheetCommands.nameRemove(wb, sheetOpt.map(_.name), nm, _, _, _, policy, warn)
           )
 
     case CliCommand.MoveSheet(name, toIndexOpt, afterOpt, beforeOpt) =>
-      requireOutput("move-sheet", outputOpt, backendOpt, stream)(
+      requireOutput("move-sheet", outputOpt, backendOpt, stream, policy)(
         SheetCommands.moveSheet(wb, name, toIndexOpt, afterOpt, beforeOpt, _, _, _)
       )
 
     case CliCommand.CopySheet(sourceName, targetName) =>
-      requireOutput("copy-sheet", outputOpt, backendOpt, stream)(
+      requireOutput("copy-sheet", outputOpt, backendOpt, stream, policy)(
         SheetCommands.copySheet(wb, sourceName, targetName, _, _, _)
       )
 
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
-      requireOutput("merge", outputOpt, backendOpt, stream)(
+      requireOutput("merge", outputOpt, backendOpt, stream, policy)(
         CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
       )
 
     case CliCommand.Unmerge(rangeStr) =>
-      requireOutput("unmerge", outputOpt, backendOpt, stream)(
+      requireOutput("unmerge", outputOpt, backendOpt, stream, policy)(
         CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _)
       )
 
     case CliCommand.AddComment(refStr, text, author) =>
-      requireOutput("comment", outputOpt, backendOpt, stream)(
+      requireOutput("comment", outputOpt, backendOpt, stream, policy)(
         CommentCommands.addComment(wb, sheetOpt, refStr, text, author, _, _, _)
       )
 
     case CliCommand.RemoveComment(refStr) =>
-      requireOutput("remove-comment", outputOpt, backendOpt, stream)(
+      requireOutput("remove-comment", outputOpt, backendOpt, stream, policy)(
         CommentCommands.removeComment(wb, sheetOpt, refStr, _, _, _)
       )
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
-      requireOutput("clear", outputOpt, backendOpt, stream)(
+      requireOutput("clear", outputOpt, backendOpt, stream, policy)(
         CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn)
       )
 
     case CliCommand.Fill(source, target, direction) =>
-      requireOutput("fill", outputOpt, backendOpt, stream)(
+      requireOutput("fill", outputOpt, backendOpt, stream, policy)(
         WriteCommands.fill(wb, sheetOpt, source, target, direction, _, _, _, policy, warn)
       )
 
     case CliCommand.AutoFit(columnsOpt) =>
-      requireOutput("autofit", outputOpt, backendOpt, stream)(
+      requireOutput("autofit", outputOpt, backendOpt, stream, policy)(
         WriteCommands.autoFit(wb, sheetOpt, columnsOpt, _, _, _)
       )
 
     case CliCommand.Sort(rangeStr, sortKeys, hasHeader) =>
-      requireOutput("sort", outputOpt, backendOpt, stream)(
+      requireOutput("sort", outputOpt, backendOpt, stream, policy)(
         WriteCommands.sort(wb, sheetOpt, rangeStr, sortKeys, hasHeader, _, _, _)
       )
 
     case CliCommand.Freeze(refStr) =>
-      requireOutput("freeze", outputOpt, backendOpt, stream)(
+      requireOutput("freeze", outputOpt, backendOpt, stream, policy)(
         WriteCommands.freeze(wb, sheetOpt, refStr, _, _, _)
       )
 
     case CliCommand.Unfreeze =>
-      requireOutput("unfreeze", outputOpt, backendOpt, stream)(
+      requireOutput("unfreeze", outputOpt, backendOpt, stream, policy)(
         WriteCommands.unfreeze(wb, sheetOpt, _, _, _)
       )
 
     // Sheet appearance & print setup (GH-358)
     case CliCommand.SheetViewOp(gridlines, zoom, tabSelected) =>
-      requireOutput("sheet-view", outputOpt, backendOpt, stream)(
+      requireOutput("sheet-view", outputOpt, backendOpt, stream, policy)(
         WriteCommands.sheetView(wb, sheetOpt, gridlines, zoom, tabSelected, _, _, _)
       )
 
     case CliCommand.TabColorOp(color, clear) =>
-      requireOutput("tab-color", outputOpt, backendOpt, stream)(
+      requireOutput("tab-color", outputOpt, backendOpt, stream, policy)(
         WriteCommands.tabColor(wb, sheetOpt, color, clear, _, _, _)
       )
 
     // Sheet-level autoFilter authoring (GH-432)
     case CliCommand.AutoFilterOp(range, clear) =>
-      requireOutput("autofilter", outputOpt, backendOpt, stream)(
+      requireOutput("autofilter", outputOpt, backendOpt, stream, policy)(
         WriteCommands.autoFilter(wb, sheetOpt, range, clear, _, _, _)
       )
 
     case CliCommand.PageSetupOp(orientation, scale, fitToWidth, fitToHeight, fitToPage) =>
-      requireOutput("page-setup", outputOpt, backendOpt, stream)(
+      requireOutput("page-setup", outputOpt, backendOpt, stream, policy)(
         WriteCommands.pageSetup(
           wb,
           sheetOpt,
@@ -3640,7 +3663,7 @@ EXAMPLES:
           differentOddEven,
           differentFirst
         ) =>
-      requireOutput("header-footer", outputOpt, backendOpt, stream)(
+      requireOutput("header-footer", outputOpt, backendOpt, stream, policy)(
         WriteCommands.headerFooter(
           wb,
           sheetOpt,
@@ -3660,7 +3683,7 @@ EXAMPLES:
 
     // Conditional formatting (GH-324)
     case CliCommand.CfAdd(range, rule, bold, italic, underline, strike, bg, fg) =>
-      requireOutput("cf add", outputOpt, backendOpt, stream)(
+      requireOutput("cf add", outputOpt, backendOpt, stream, policy)(
         WriteCommands.cfAdd(
           wb,
           sheetOpt,
@@ -3682,7 +3705,7 @@ EXAMPLES:
       WriteCommands.cfList(wb, sheetOpt)
 
     case CliCommand.Copy(source, target, valuesOnly) =>
-      requireOutput("copy", outputOpt, backendOpt, stream)(
+      requireOutput("copy", outputOpt, backendOpt, stream, policy)(
         WriteCommands.copyRange(wb, sheetOpt, source, target, valuesOnly, _, _, _, policy, warn)
       )
 
@@ -3697,7 +3720,7 @@ EXAMPLES:
           legend,
           at
         ) =>
-      requireOutput("chart add", outputOpt, backendOpt, stream)(
+      requireOutput("chart add", outputOpt, backendOpt, stream, policy)(
         ChartCommands.chartAdd(
           wb,
           sheetOpt,
@@ -3717,27 +3740,27 @@ EXAMPLES:
       )
 
     case CliCommand.AddImage(imagePath, at, size) =>
-      requireOutput("add-image", outputOpt, backendOpt, stream)(
+      requireOutput("add-image", outputOpt, backendOpt, stream, policy)(
         ChartCommands.addImage(wb, sheetOpt, imagePath, at, size, _, _, _)
       )
 
     case CliCommand.InsertRows(at, count) =>
-      requireOutput("insert-rows", outputOpt, backendOpt, stream)(
+      requireOutput("insert-rows", outputOpt, backendOpt, stream, policy)(
         WriteCommands.insertRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteRows(at, count) =>
-      requireOutput("delete-rows", outputOpt, backendOpt, stream)(
+      requireOutput("delete-rows", outputOpt, backendOpt, stream, policy)(
         WriteCommands.deleteRows(wb, sheetOpt, at, count, _, _, _, policy, warn)
       )
 
     case CliCommand.InsertColumns(col, count) =>
-      requireOutput("insert-cols", outputOpt, backendOpt, stream)(
+      requireOutput("insert-cols", outputOpt, backendOpt, stream, policy)(
         WriteCommands.insertColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
 
     case CliCommand.DeleteColumns(col, count) =>
-      requireOutput("delete-cols", outputOpt, backendOpt, stream)(
+      requireOutput("delete-cols", outputOpt, backendOpt, stream, policy)(
         WriteCommands.deleteColumns(wb, sheetOpt, col, count, _, _, _, policy, warn)
       )
 
@@ -3776,12 +3799,23 @@ EXAMPLES:
     commandName: String,
     outputOpt: Option[Path],
     backendOpt: Option[XmlBackend],
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default
   )(f: (Path, WriterConfig, Boolean) => IO[A]): IO[A] =
-    val config = backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
+    val config = buildWriterConfig(backendOpt, policy)
     outputOpt.fold(
       IO.raiseError[A](outputRequired(missingOutputError(commandName)))
     )(path => f(path, config, stream))
+
+  /**
+   * GH-768: a streaming write copies xl/sharedStrings.xml untouched, so it cannot drop entries;
+   * refused as usage before any read rather than ignored.
+   */
+  private def compactStringsInStream: CliException =
+    unsupportedInStream(
+      "--compact-strings is not supported with --stream (a streaming write copies the shared-string table untouched)",
+      "omit --stream; use --max-size <MB> for a large file"
+    )
 
   /** `recalc`: its summary plus the typed facts `--json` adds to it (#678). */
   private def runRecalc(
@@ -3805,7 +3839,7 @@ EXAMPLES:
         )
       )
     else
-      requireOutput("recalc", outputOpt, backendOpt, stream)(
+      requireOutput("recalc", outputOpt, backendOpt, stream, policy)(
         WriteCommands.recalcReport(wb, _, _, _, cmd.tables, policy, cmd.parallel, warn)
       )
 
@@ -3949,9 +3983,14 @@ EXAMPLES:
       case None =>
         IO.raiseError(outputRequired(missingOutputError(commandName)))
 
-  /** Build WriterConfig from CLI backend option */
-  private def buildWriterConfig(backendOpt: Option[XmlBackend]): WriterConfig =
-    backendOpt.fold(WriterConfig.default)(b => WriterConfig(backend = b))
+  /** Build WriterConfig from the CLI backend option and write posture */
+  private def buildWriterConfig(
+    backendOpt: Option[XmlBackend],
+    policy: WritePolicy = WritePolicy.default
+  ): WriterConfig =
+    backendOpt
+      .fold(WriterConfig.default)(b => WriterConfig(backend = b))
+      .copy(compactSharedStrings = policy.compactStrings)
 
   /** Build ReaderConfig from CLI maxSize option (in MB). 0 means unlimited. */
   private def buildReaderConfig(maxSizeOpt: Option[Long]): ReaderConfig =

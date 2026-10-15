@@ -4,7 +4,7 @@ schema
 0
 ## stdout
 xl <VERSION> — 65 verbs. `xl <verb> --help` shows a verb's options; `xl schema --json` prints this contract as JSON.
-Globals (accepted anywhere on the command line): --json -f|--file -s|--sheet --max-size -o|--output -i|--in-place --backend --stream --no-recalc --preserve-caches --strict
+Globals (accepted anywhere on the command line): --json -f|--file -s|--sheet --max-size -o|--output -i|--in-place --backend --stream --no-recalc --preserve-caches --compact-strings --strict
 NEEDS: -f an input workbook; -s ONE sheet (a qualified ref, else -s, else the only sheet of a single-sheet book); -o|-i an output; --stream runs in O(1) memory.
 STREAM: o1 runs in O(1) memory under --stream (not …: the verb's own flags it refuses there); backend loads the workbook and only writes through the streaming writer; refused is UNSUPPORTED_IN_STREAM (exit 2) before any read.
 Exit codes:
