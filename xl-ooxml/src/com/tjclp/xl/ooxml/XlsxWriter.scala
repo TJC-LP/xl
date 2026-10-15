@@ -2649,6 +2649,28 @@ object XlsxWriter:
           case None => withTheme
         (OoxmlWorkbook.sequentialRelIds(workbook.sheets.size), withMetadata)
 
+    // GH-785: the source's chartsheet, dialog sheet and macro sheet <sheet> entries are not in
+    // the model; the layout puts them back among the model's sheets (their parts and rels ride the
+    // verbatim copy) and renumbers model positions to <sheets> positions.
+    val sheetLayout: SheetLayout = preservedStructWb match
+      case Some(wb) =>
+        SheetLayout.plan(
+          wb.sheets,
+          preservedStructWbRels.getOrElse(Relationships.empty),
+          sheetSourcePaths
+        )
+      case None => SheetLayout.identity(workbook.sheets.size)
+    // Sheet names are unique across <sheets>, compared case-insensitively (ECMA-376 Part 1,
+    // §18.2.19); the model cannot see the kept names, so a clash is refused here.
+    sheetLayout.kept
+      .find(ref => workbook.sheets.exists(_.name.value.equalsIgnoreCase(ref.name.value)))
+      .foreach { ref =>
+        throw new IllegalArgumentException(
+          s"sheet name '${ref.name.value}' is already used by a non-worksheet sheet " +
+            "(chartsheet, dialog sheet or macro sheet) in this workbook"
+        )
+      }
+
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
@@ -2659,23 +2681,28 @@ object XlsxWriter:
         // GH-294: the model's activeSheetIndex is overlaid on the preserved bookViews (model
         // wins; unmodeled view attributes ride through), clamped like the fromDomain path.
         val updated = preserved
-          .updateSheets(workbook.sheets, workbook.metadata.sheetStates, sheetRelIds)
+          .updateSheets(workbook.sheets, workbook.metadata.sheetStates, sheetRelIds, sheetLayout)
           .withActiveTab(
-            OoxmlWorkbook.clampActiveTab(workbook.activeSheetIndex, workbook.sheets.size)
+            preserved.layoutActiveTab(sheetLayout, workbook.activeSheetIndex, workbook.sheets.size)
           )
         // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
         // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
         updated.copy(definedNames =
-          OoxmlWorkbook
-            .reconcileDefinedNames(updated.definedNames, workbook.effectiveDefinedNames)
+          OoxmlWorkbook.reconcileDefinedNames(
+            updated.definedNames,
+            sheetLayout.namesToOutput(
+              workbook.effectiveDefinedNames,
+              OoxmlWorkbook.parseDefinedNames(preserved.definedNames)
+            )
+          )
         )
       case None =>
         // Fallback for programmatically created workbooks OR when metadata was modified — fresh
         // sheets/definedNames from the domain (GH-236/GH-259) with preserved workbook-level
         // elements (fileVersion, calcPr, workbookProtection, bookViews siblings, extLst, ...)
         // carried through when a source exists (GH-320).
-        OoxmlWorkbook.fromDomain(workbook, preservedStructWb, sheetRelIds)
+        OoxmlWorkbook.fromDomain(workbook, preservedStructWb, sheetRelIds, sheetLayout)
 
     // GH-242: document properties are model-driven. The reader parses docProps/core.xml and
     // app.xml into WorkbookMetadata (and marks them parsed, so they are never copied verbatim);

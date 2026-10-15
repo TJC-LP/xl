@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Workbooks with a macro sheet, chartsheet or dialog sheet read** (#785): a `<sheets>` entry
+  whose relationship is `xlMacrosheet`, `xlIntlMacrosheet`, `chartsheet` or `dialogsheet` was read
+  as a worksheet, so `XlsxReader`, `Excel.read`, `xl view`/`put` failed with `Missing worksheet`
+  and `xl sheets` with `Worksheet not found for sheet index 2`. These entries are now left out of
+  the model, which holds worksheets only, and a write keeps each one's `<sheet>` element (name,
+  sheetId, r:id, state), part, relationships and content type unchanged. Each stays after the
+  worksheet it followed in the source; when that worksheet is removed, after the nearest earlier
+  one still present, or first. `localSheetId` and `activeTab` index `<sheets>` (ECMA-376 Part 1
+  §18.2.5, §18.2.30), so both are renumbered: a model sheet's position counts worksheets only, and
+  on write the positions are mapped back, so a name scoped to a worksheet after a macro sheet keeps
+  its scope through add, delete, rename and reorder. A name scoped to the macro sheet itself is
+  not in the model and is written back from the source with its new position; an `activeTab` on a
+  macro sheet reads as the next worksheet and stays on the macro sheet while the active sheet is
+  unchanged. A worksheet named like a kept entry (case-insensitively) fails the write. The light
+  metadata reader (`Excel.readMetadata`, `xl sheets`, `xl names`) lists worksheets only and
+  renumbers scopes the same way, and the stream readers use the same rule. Macro sheets'
+  shared-string indices stay valid on write (#771, #782).
+
 - **A criterion with no `*` or `?` compares `~` literally** (#765): SUMIF(S), COUNTIF(S),
   AVERAGEIF(S), MINIFS and MAXIFS folded `~~` to `~` (and `~*`/`~?` patterns) in every criterion,
   so `"a~~b"` matched the text `a~b`, and a cell holding `a~~b` used as its own criterion
