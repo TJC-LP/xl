@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator, RecalcCounters}
+import com.tjclp.xl.formula.eval.{EvalError, EvalPosition, Evaluator, RecalcCounters}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
@@ -242,11 +242,20 @@ final case class EvalContext(
    * (`#REF!` for an OFFSET off the grid); a name or LET name holding a value is `#VALUE!`, as in
    * Excel.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[formula] def resolveRange(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange)] =
-    Evaluator.resolveRangeSlot(
+    resolveRangeTraced(location).map((target, range, _) => (target, range))
+
+  /**
+   * #767: [[resolveRange]], also saying whether the slot resolved statically (a written range or
+   * cell, or a name bound to one), the only kind a pass serves from a column slice.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  private[formula] def resolveRangeTraced(
+    location: TExpr.RangeLocation
+  ): Either[EvalError, (Sheet, CellRange, Boolean)] =
+    Evaluator.resolveRangeSlotTraced(
       location,
       sheet,
       workbook,
@@ -257,8 +266,14 @@ final case class EvalContext(
         val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
         evalReference(named.asInstanceOf[TExpr[Any]])
       },
-      counters
+      aggregateMemo
     )
+
+  /**
+   * #767: the slot of the pass this call's formula evaluates at, defined only for a top-level
+   * evaluation at its own slot (see [[com.tjclp.xl.formula.eval.EvalPosition]]).
+   */
+  private[formula] def passPosition: EvalPosition = operands.passPosition
 
 object EvalContext:
   /**
@@ -286,6 +301,10 @@ object EvalContext:
    * `boundArrayRange` — by `FunctionSpecsBase.boundedReferenceValues`, only for an axis that runs
    * to the sheet's edge, so a finite reference keeps its declared shape under it, and by ROW and
    * COLUMN for a computed reference.
+   *
+   * `passPosition` (#767): the slot of the recalculation pass the formula evaluates at, when it is
+   * evaluated at its own slot; what lets a criteria call read a
+   * [[com.tjclp.xl.formula.eval.ColumnSlice]].
    */
   private[formula] final case class Operands(
     arrayMode: Boolean,
@@ -294,7 +313,8 @@ object EvalContext:
     nameTrail: Evaluator.NameTrail = Evaluator.NameTrail.empty,
     nameReference: Option[(String, Option[SheetName]) => Either[EvalError, Any]] = None,
     arrayRangeBounds: Option[CellRange => CellRange] = None,
-    boundedArrayArg: Option[(TExpr[Any], CellRange => CellRange) => Either[EvalError, Any]] = None
+    boundedArrayArg: Option[(TExpr[Any], CellRange => CellRange) => Either[EvalError, Any]] = None,
+    passPosition: EvalPosition = EvalPosition.None
   )
 
   private[formula] object Operands:

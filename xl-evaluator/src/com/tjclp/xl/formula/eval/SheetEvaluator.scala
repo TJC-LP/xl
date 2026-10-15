@@ -1062,6 +1062,15 @@ object SheetEvaluator:
       case _ => sheet.put(ref, value)
 
   /**
+   * #767: whether [[threadComputed]] at `ref` may change which cells of `sheet` are populated: it
+   * does unless the cell holds a formula record, whose cache alone it rewrites.
+   */
+  private[eval] def threadChangesStructure(sheet: Sheet, ref: ARef): Boolean =
+    sheet.cells.get(ref).map(_.value) match
+      case Some(_: CellValue.Formula) => false
+      case _ => true
+
+  /**
    * GH-274: strip stale formula caches from the given cells.
    *
    * Used on the deferred dynamic bucket before threading an evaluation fold: a dynamic read

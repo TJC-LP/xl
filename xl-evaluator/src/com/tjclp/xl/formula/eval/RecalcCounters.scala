@@ -62,10 +62,11 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph has no virtual or range nodes, and the per-pass slice
-   * cache and criteria index do not exist yet, so `VirtualNodes`, `RangeNodes`, `CriteriaIndexed`,
-   * `CriteriaWindowOnly`, `CriteriaNotIndexable`, `SlicesBuilt` and `ScanFallbacks` stay 0 until
-   * the code that owns them lands; every criteria call is a `CriteriaScan` today.
+   * What a pass counts. The legacy graph has no virtual or range nodes, and the criteria index does
+   * not exist yet, so `VirtualNodes`, `RangeNodes`, `CriteriaIndexed`, `CriteriaWindowOnly` and
+   * `CriteriaNotIndexable` stay 0 until the code that owns them lands; every criteria call is a
+   * `CriteriaScan` today, whether it reads its ranges through a column slice ([[PassCache]]) or
+   * cell by cell.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -95,16 +96,23 @@ private[formula] object RecalcCounters:
     /** `CriteriaMatcher.matches` calls made by the criteria functions' row loops. */
     case MatcherCalls
 
-    /** Per-pass column slices built. */
+    /** Per-pass column slices built ([[PassCache]]). */
     case SlicesBuilt
 
-    /** Criteria calls that wanted a slice and fell back to the scan. */
+    /**
+     * Criteria calls that wanted a slice (a tall enough single-column range, read at the formula's
+     * own pass slot) and fell back to the scan: the pass had not finished the box's formulas, one
+     * of them held no cache, or the cell budget was spent.
+     */
     case ScanFallbacks
 
-    /** `Sheet.usedRange` scans made to bound whole-column or whole-row ranges. */
+    /**
+     * `Sheet.usedRange` scans made to bound whole-column or whole-row ranges and to size slices; a
+     * pass scans each sheet once per structural generation.
+     */
     case UsedRangeScans
 
-    /** Defined-name bodies parsed during evaluation. */
+    /** Defined-name bodies parsed during evaluation; a pass parses each distinct body once. */
     case NameParses
 
   /** Where a pass spends its time. `Write` is measured by the caller that writes the file. */
