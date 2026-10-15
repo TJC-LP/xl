@@ -133,7 +133,11 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     "",
     " ",
     "2025-01-02",
-    "2025-01-02T00:00"
+    "2025-01-02T00:00",
+    // numbers whose stripped form has no Int scale: no number key, residual
+    "100E+2147483647",
+    "1E+2147483647",
+    "10E-2147483647"
   )
 
   private val numbers: Vector[BigDecimal] =
@@ -154,10 +158,16 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
       dateTimes.map(CellValue.DateTime(_)) ++
       errors.map(CellValue.Error(_))
 
+  /**
+   * A number whose stripped form has no `Int` scale. Kept out of the pools that are deduplicated:
+   * Scala's `BigDecimal.hashCode` throws for it.
+   */
+  private val hugeNumber: CellValue = CellValue.Number(BigDecimal("100E+2147483647"))
+
   private val values: Vector[CellValue] =
     plainValues ++
-      plainValues.filter(_ != CellValue.Empty).map(v => CellValue.Formula("A1", Some(v))) :+
-      CellValue.Formula("A1", None)
+      plainValues.filter(_ != CellValue.Empty).map(v => CellValue.Formula("A1", Some(v))) ++
+      Vector(hugeNumber, CellValue.Formula("A1", Some(hugeNumber)), CellValue.Formula("A1", None))
 
   private val criterionValues: Vector[ExprValue] =
     texts.map(ExprValue.Text(_)) ++
@@ -259,6 +269,74 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     Prop.forAll(genValue, genCriterion) { (v, q) =>
       val problem = violation(v, q)
       Prop(problem.isEmpty) :| problem.getOrElse("")
+    }
+  }
+
+  test("a number whose stripped form has no Int scale gets no key and never throws") {
+    val huge = BigDecimal("100E+2147483647")
+    assertEquals(CriteriaKeys.strip(huge), None)
+    assertEquals(CriteriaKeys.cellKeys(CellValue.Number(huge)), CriteriaKeys.CellKeys.Residual)
+    assertEquals(
+      CriteriaKeys.cellKeys(CellValue.Text("100E+2147483647")),
+      CriteriaKeys.CellKeys.Residual
+    )
+    assertEquals(CriteriaKeys.lookup(CriteriaMatcher.Exact(ExprValue.Number(huge))), None)
+    assertEquals(
+      CriteriaKeys.lookup(CriteriaMatcher.parse(ExprValue.Text("100E+2147483647"))),
+      None
+    )
+    // the other end of the scale strips normally
+    assertEquals(
+      CriteriaKeys.strip(BigDecimal("10E-2147483647")),
+      Some(MatchKey.Num(new java.math.BigDecimal("1E-2147483646")))
+    )
+    assertEquals(CriteriaKeys.strip(BigDecimal("4.20")), CriteriaKeys.strip(BigDecimal("4.2")))
+    assertEquals(
+      CriteriaKeys.strip(BigDecimal("0.000")),
+      Some(MatchKey.Num(java.math.BigDecimal.ZERO))
+    )
+  }
+
+  // ---------- the index as a filter, end to end ----------
+
+  private val genAnyColumn: Gen[Vector[CellValue]] =
+    Gen
+      .choose(0, 60)
+      .flatMap(n => Gen.listOfN(n, genValue.filter(_ != CellValue.Formula("A1", None))))
+      .map(_.toVector)
+
+  property("filter law: every offset whose indexed criteria all match is a candidate") {
+    Prop.forAll(
+      Gen
+        .choose(1, 3)
+        .flatMap(k =>
+          Gen.listOfN(k, Gen.zip(Gen.choose(0, 10), genAnyColumn, Gen.choose(0, 15), genCriterion))
+        ),
+      Gen.choose(1, 60)
+    ) { (columns, n) =>
+      val pairs = columns.zipWithIndex.flatMap { case ((r0, values, offset, q), i) =>
+        CriteriaKeys
+          .lookup(q)
+          .map(keys =>
+            (new ColumnSlice(data, i, 0, 1048575, r0, IArray.from(values), 0L), keys, offset, q)
+          )
+      }
+      val result = CriteriaCandidates.compute(
+        pairs.map((s, keys, offset, _) => CriteriaCandidates.Pair(EqIndex.build(s), keys, offset)),
+        n
+      )
+      val matching = (0 until n).filter(i =>
+        pairs.forall((s, _, offset, q) => CriteriaMatcher.matches(s.valueAt(offset + i), q))
+      )
+      result match
+        case Some(offsets) =>
+          val listed = offsets.toVector
+          Prop(
+            matching.forall(listed.contains)
+          ) :| s"missing ${matching.filterNot(listed.contains)}" &&
+          Prop(listed == listed.distinct.sorted) :| s"not ascending and distinct: $listed" &&
+          Prop(listed.forall(i => i >= 0 && i < n)) :| s"outside 0 until $n: $listed"
+        case None => Prop.passed
     }
   }
 
@@ -419,7 +497,8 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
           Prop(offsets.toVector == model.toVector) :| s"$offsets != $model" &&
           Prop(matching.forall(offsets.contains)) :| "a matching offset is missing"
         // the call tests every offset: allowed only when listing would not pay
-        case None => Prop(smallest.min > n / 2) :| s"no candidates although $smallest <= ${n / 2}"
+        case None =>
+          Prop(smallest.forall(_ > n / 2)) :| s"no candidates although $smallest <= ${n / 2}"
     }
   }
 
@@ -498,4 +577,27 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     val again = noMemo.candidates(List((s, keys, 0)), 600)
     assertEquals(again.map(_.length), Some(20))
     assert(!noMemo.candidates(List((s, keys, 0)), 600).zip(again).exists(_ eq _))
+  }
+
+  test("memoised candidate lists never use up the budget an index needs") {
+    val sheet = (0 until 600).foldLeft(com.tjclp.xl.sheets.Sheet(data)) { (s, r) =>
+      s.put(com.tjclp.xl.addressing.ARef.from0(0, r), CellValue.Text(s"k${r % 30}"))
+        .put(com.tjclp.xl.addressing.ARef.from0(1, r), CellValue.Text(s"j${r % 30}"))
+    }
+    def sliceAt(cache: PassCache, col: Int): ColumnSlice =
+      cache.slice(sheet, col, 0, 599, EvalPosition.at(0)) match
+        case PassCache.SliceAnswer.Use(s) => s
+        case other => fail(other.toString)
+    val probe = passCache(PassCache.DefaultLimits)
+    val bytesA = probe.eqIndex(sliceAt(probe, 0)).fold(0L)(_.bytes)
+    val bytesB = probe.eqIndex(sliceAt(probe, 1)).fold(0L)(_.bytes)
+    // room for both indexes twice over: lists may take half of it, never the second index's share
+    val cache = passCache(PassCache.DefaultLimits.copy(maxIndexBytes = 2 * (bytesA + bytesB)))
+    val a = sliceAt(cache, 0)
+    val keys = List(MatchKey.Text("k7"))
+    // distinct windows of column A, each its own memoised list, well past the budget
+    (0 until 300).foreach(offset =>
+      assert(cache.candidates(List((a, keys, offset)), 300).isDefined)
+    )
+    assert(cache.eqIndex(sliceAt(cache, 1)).isDefined, "the second column's index was refused")
   }

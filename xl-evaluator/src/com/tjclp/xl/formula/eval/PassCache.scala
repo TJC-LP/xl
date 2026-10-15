@@ -209,6 +209,7 @@ private[formula] final class PassCache(
     indexes.clear()
     candidateMemo.clear()
     indexBytes.set(0L)
+    memoBytes.set(0L)
     readiness.set(Some(Deferred(() => ready)))
 
   /** Whether [[begin]] armed the cell-content caches. */
@@ -429,6 +430,7 @@ private[formula] final class PassCache(
   private val candidateMemo =
     new ConcurrentHashMap[CriteriaCandidates.MemoKey, CandidatesEntry]()
   private val indexBytes = new AtomicLong(0L)
+  private val memoBytes = new AtomicLong(0L)
 
   /** Whether criteria calls may use equality indexes. */
   def indexing: Boolean = criteriaIndex && active
@@ -445,7 +447,8 @@ private[formula] final class PassCache(
    * The candidate offsets of a criteria call whose indexed pairs are `pairs` (each: its slice, its
    * lookup keys and its range's first row) over `n` rows, computed once per pass for equal pairs
    * and `n` while the budget lasts; `None` when an index is missing or every offset must be tested
-   * ([[CriteriaCandidates.compute]]).
+   * ([[CriteriaCandidates.compute]]). Memoised lists hold at most half of `maxIndexBytes`, so they
+   * never use the budget up before the indexes they are computed from.
    */
   def candidates(
     pairs: List[(ColumnSlice, List[MatchKey], Int)],
@@ -466,7 +469,8 @@ private[formula] final class PassCache(
         )
       val entry = candidateMemo.computeIfAbsent(key, _ => new CandidatesEntry(() => compute))
       val result = entry.value
-      if !entry.charged(indexBytes, limits.maxIndexBytes) then candidateMemo.remove(key, entry)
+      if !entry.charged(indexBytes, memoBytes, limits.maxIndexBytes) then
+        candidateMemo.remove(key, entry)
       result
 
   /** A slice's index, built on first use and charged against the pass's index budget. */
@@ -485,7 +489,8 @@ private[formula] object PassCache:
    * is sliced only when it spans at least `max(minSliceRows, usedRows / sliceRowsDivisor)` rows
    * (smaller windows scan, or read a slice that covers them); a box whose column is not ready is
    * sliced on its `boxDemand`-th request. `maxIndexBytes` caps what equality indexes and memoised
-   * candidate lists hold together. Past a cap a call scans; results are unaffected.
+   * candidate lists hold together, the lists at most half of it. Past a cap a call scans; results
+   * are unaffected.
    */
   final case class Limits(
     maxCachedCells: Long = 64L * 1024 * 1024,
@@ -546,12 +551,20 @@ private[formula] object PassCache:
     lazy val value: Option[ArraySeq.ofInt] = compute()
     private val charge = new java.util.concurrent.atomic.AtomicInteger(0)
 
-    /** Whether the entry fits the budget `used` tracks (charging it once); false evicts it. */
-    def charged(used: AtomicLong, max: Long): Boolean =
+    /**
+     * Whether the entry fits the budget (charging it once): `used` (indexes and lists together) at
+     * most `max`, and `memo` (lists alone) at most half of it. False evicts it.
+     */
+    def charged(used: AtomicLong, memo: AtomicLong, max: Long): Boolean =
       if charge.compareAndSet(0, 1) then
         val bytes = CriteriaCandidates.bytes(value)
-        if used.addAndGet(bytes) > max then
+        if memo.addAndGet(bytes) > max / 2 then
+          memo.addAndGet(-bytes)
+          charge.set(2)
+          false
+        else if used.addAndGet(bytes) > max then
           used.addAndGet(-bytes)
+          memo.addAndGet(-bytes)
           charge.set(2)
           false
         else true

@@ -83,23 +83,33 @@ private[formula] object CriteriaKeys:
     while i < s.length && !Character.isSurrogate(s.charAt(i)) do i += 1
     i < s.length
 
-  /** `n` without trailing zeros: value-equal numbers (`4.20`, `4.2`) give equal keys. */
-  def strip(n: BigDecimal): java.math.BigDecimal = n.bigDecimal.stripTrailingZeros
+  /**
+   * The key of `n` without trailing zeros: value-equal numbers (`4.20`, `4.2`) give equal keys.
+   * `None` when the stripped form's scale does not fit an `Int` (`100E+2147483647`), where
+   * `BigDecimal.stripTrailingZeros` throws; every value-equal number has the same stripped form, so
+   * all of them get `None`. Stripping removes fewer zeros than the precision, so a scale at least
+   * that far above `Int.MinValue` never overflows and skips the `Try`.
+   */
+  def strip(n: BigDecimal): Option[MatchKey] =
+    val bd = n.bigDecimal
+    if bd.scale.toLong - bd.precision > Int.MinValue.toLong then
+      Some(MatchKey.Num(bd.stripTrailingZeros))
+    else scala.util.Try(bd.stripTrailingZeros).toOption.map(MatchKey.Num(_))
 
   private def textKeys(s: String): CellKeys =
     if hasSurrogate(s) then CellKeys.Residual
     else
       val text = MatchKey.Text(fold(s))
       CriteriaMatcher.parseNumeric(s) match
-        case Some(n) => CellKeys.Two(text, MatchKey.Num(strip(n)))
+        case Some(n) => strip(n).fold(CellKeys.Residual)(CellKeys.Two(text, _))
         case None => CellKeys.One(text)
 
   /**
    * The keys of a cell value, as `matchesExact` compares it: text by its fold (and its number when
    * it parses as one), a number by its stripped value, a boolean as itself and as 1 or 0, an error
    * by its code. A date-time matches text, dates and serial numbers by rules no single key
-   * captures, so it is residual, as is text with a surrogate and any value this match does not
-   * list.
+   * captures, so it is residual, as is text with a surrogate, a number (or numeric text) whose
+   * stripped form has no `Int` scale ([[strip]]), and any value this match does not list.
    */
   def cellKeys(value: CellValue): CellKeys =
     value match
@@ -110,7 +120,7 @@ private[formula] object CriteriaKeys:
         val plain = rt.toPlainText
         if hasSurrogate(plain) then CellKeys.Residual
         else CellKeys.One(MatchKey.Text(fold(plain)))
-      case CellValue.Number(n) => CellKeys.One(MatchKey.Num(strip(n)))
+      case CellValue.Number(n) => strip(n).fold(CellKeys.Residual)(CellKeys.One(_))
       case CellValue.Bool(b) => CellKeys.Two(MatchKey.Bool(b), if b then one else zero)
       case CellValue.Error(e) => CellKeys.One(MatchKey.Err(e))
       case CellValue.Formula(_, Some(cached), _) => cellKeys(cached)
@@ -133,13 +143,15 @@ private[formula] object CriteriaKeys:
           case ExprValue.Text(s) =>
             val folded = fold(s)
             val text = MatchKey.Text(folded)
-            val number = CriteriaMatcher.parseNumeric(s).map(n => MatchKey.Num(strip(n)))
             val bool =
               if folded == "true" then Some(MatchKey.Bool(true))
               else if folded == "false" then Some(MatchKey.Bool(false))
               else None
-            Some(text :: number.toList ::: bool.toList)
-          case ExprValue.Number(n) => Some(List(MatchKey.Num(strip(n))))
+            // numeric text whose number has no key is not indexed
+            CriteriaMatcher.parseNumeric(s) match
+              case Some(n) => strip(n).map(number => text :: number :: bool.toList)
+              case None => Some(text :: bool.toList)
+          case ExprValue.Number(n) => strip(n).map(List(_))
           case ExprValue.Bool(b) => Some(List(MatchKey.Bool(b), if b then trueKey else falseKey))
           case ExprValue.Date(_) | ExprValue.DateTime(_) => Some(Nil)
           case ExprValue.Cell(CellValue.Error(e)) => Some(List(MatchKey.Err(e)))
