@@ -235,18 +235,18 @@ same PR. See the recalculation benchmark section of
 
 ## Test Counts by Module
 
-As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus 42 #767 cases in xl-evaluator (the counters and the compact recalculation graph); macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus 46 #767 cases in xl-evaluator (the counters and the compact recalculation graph); macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3881 |
+| xl-evaluator | 3885 |
 | xl-core | 1872 |
 | xl-ooxml | 1362 |
 | xl-cli | 1907 |
 | xl-cats-effect | 209 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,443** |
+| **Total** | **9,447** |
 
 ## Test Quality Metrics
 
