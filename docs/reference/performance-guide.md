@@ -368,6 +368,27 @@ scan fallback, one used-range scan and 14 name parses (116,875 before). Matcher 
 unchanged (161,824,716): every row is still tested; the criteria index removes them. H10 stays
 bound by its legacy graph until the compact graph lands.
 
+Criteria index (#767 PR 2): each slice gets an equality index on first use (`EqIndex`, posting lists
+of the rows holding each folded text, stripped number, boolean or error), and a criteria call whose
+ranges all read through slices tests only the rows every equality criterion selects, still with
+`CriteriaMatcher.matches` for every criterion. Comparisons, wildcards, `<>` and `""` are not
+indexed; a call with no indexed criterion, or whose smallest selection is more than half its rows,
+tests every row. Candidate lists are memoised for the pass, so the Rate History columns that share
+lane, carrier and year criteria share one list. `LoadsBookMain index=off` turns the index off.
+Same machine, run back to back:
+
+| Run | Index off | Index on |
+|---|---|---|
+| R20 `mode=recalc` | 10.9 s, 161,824,716 matcher calls | 2.3 s, 613,617 |
+| R20 rows=5000 `mode=recalc` | 3.9 s, 41,418,819 | 2.3 s, 500,790 |
+| R20 `mode=checked` (write 1.1 s) | | 3.4 s |
+| R20 `mode=parallel` | | 2.4 s |
+| Real `crit=raw mode=checked`, `-Xmx4g` (88k formulas, write 2.3 s) | | 9.4 s, 5,449,218 |
+| Tiny matcher calls | 180,118 | 1,478 |
+
+Every R20 and Real call is indexed (none window-only). With the index, R20 spends 0.9 s building the
+legacy graph and 1.0 s in criteria calls.
+
 ---
 
 ## Common Performance Pitfalls
