@@ -270,14 +270,14 @@
 
 ### Test Coverage
 
-**9,490 test cases** (9,401 verified via `./mill __.test`, 2026-10-14, the 0.24.1 release branch, plus the 89 #767 cases (`RecalcCountersSpec`, `RecalcCountersLawSpec`, `PassCacheLawSpec`, `CriteriaIndexSpec`, `CriteriaIndexLawSpec`, `CompactGraphSpec`, `IntervalIndexSpec`, `LongIntMapSpec`, `RecalcEngineParitySpec`), verified via `./mill xl-evaluator.test`): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,524 test cases** (9,435 verified via `./mill __.test`, 2026-10-14, the 0.24.1 release branch, plus the 89 #767 cases (`RecalcCountersSpec`, `RecalcCountersLawSpec`, `PassCacheLawSpec`, `CriteriaIndexSpec`, `CriteriaIndexLawSpec`, `CompactGraphSpec`, `IntervalIndexSpec`, `LongIntMapSpec`, `RecalcEngineParitySpec`), verified via `./mill xl-evaluator.test`): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3928 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1362 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1907 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 1909 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 209 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |

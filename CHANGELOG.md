@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A criterion with no `*` or `?` compares `~` literally** (#765): SUMIF(S), COUNTIF(S),
+  AVERAGEIF(S), MINIFS and MAXIFS folded `~~` to `~` (and `~*`/`~?` patterns) in every criterion,
+  so `"a~~b"` matched the text `a~b`, and a cell holding `a~~b` used as its own criterion
+  (`COUNTIFS(A:A,A2)`) missed itself. An operand with no `*` and no `?`, after any `<>` or `=`, is
+  now compared as written, as desktop Excel does: a key pre-escaped with
+  `SUBSTITUTE(key,"~","~~")` counted in xl and LibreOffice and not in Excel. A bare or `<>` operand
+  containing `*` or `?` keeps the escape grammar (`~*`, `~?`, `~~`). A `~` before an ordinary character in
+  such an operand stays a literal tilde (`"a~b*"` matches `a~bc`): a Microsoft Q&A thread suggests
+  Excel drops it, but no Excel observation confirms that, so it is unchanged and noted in
+  `docs/LIMITATIONS.md`. XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.
+
+- **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
+  take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
+  `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore
+  it: lint reads the zip parts with no size limit and a dry run reads no workbook. A global a verb
+  does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
+  the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
+  `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
+  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
+  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
+  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
+  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
+  and after the verb, against the parser, so the table cannot drift from the parser chains.
+
+### Added
+
+- **`T(value)`** (#684): text returns itself (a rich-text cell its plain text); a number, boolean,
+  date or empty cell returns `""`; a formula cell answers `T` of its cached value; an error
+  propagates (`T(1/0)` is `#DIV/0!`). A range lifts element-wise: it spills in an array context
+  and is implicitly intersected in a plain cell. `T` was an unknown function, so `xl recalc`, and
+  `xl put` on a precedent, wrote every `T()` cell with no cached value; both now cache the values
+  LibreOffice computes.
+
 ### Changed
 
 - **Recalculation evaluates in one canonical order** (#767): whole-workbook `recalculate` and
