@@ -30,13 +30,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Criteria index** (#767): COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS whose criteria
   ranges all read through the pass's column slices now test only the rows their equality criteria
   can match. Each slice gets an index on first use (rows by case-folded text, number without
-  trailing zeros, boolean and error value; date-times and text with surrogate characters are
-  candidates for every lookup); the rows every equality criterion selects are intersected, and
+  trailing zeros, boolean and error value; date-times, text with surrogate characters and numbers
+  too large to strip are candidates for every lookup); the rows every equality criterion selects are intersected, and
   equal calls in a pass share the result. Every candidate is still tested with the unchanged
   matcher for every criterion, in row order, so sums, first errors and MIN/MAX are unchanged.
   Comparisons, wildcards, `<>` and `""` are not indexed, and a call whose smallest selection is
   more than half its rows tests every row, as before. Indexes and shared results are capped at
-  256 MB per pass. On the 20k-row raw-criteria benchmark book a sequential recalculation drops from
+  256 MB per pass, shared results at half of it. On the 20k-row raw-criteria benchmark book a sequential recalculation drops from
   10.9 s to 2.3 s (matcher calls from 161.8M to 0.6M); the real-shape book with raw criteria (33,233
   rows, 88k formulas) goes through `writeChecked` in 9.4 s under a 4 GB heap. Property tests
   check that every matching row is a candidate over edge-case text (dotted and dotless I, sharp
