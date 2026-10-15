@@ -233,7 +233,7 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
     assertNoText(out, "Stale")
   }
 
-  test("GH-783: formula escaping keeps every entry when a copied part cannot be read") {
+  test("GH-783: formula escaping adds no string when a copied part cannot be read (GH-781)") {
     val source = rewriteEntry(
       book(
         Vector("OldLabelAlpha", "KeepMe"),
@@ -244,11 +244,13 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
       _ => "<revisions><rcc><nc"
     )
     val out = editSheet(source, "Sheet1", WriterConfig.secure)(_.put(ref"A1" -> "NewLabelBeta"))
-    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe", "NewLabelBeta"))
+    // the log may reference any position, so the table keeps every entry and gains none
+    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe"))
+    assert(new String(entry(out, "xl/worksheets/sheet1.xml"), "UTF-8").contains("inlineStr"))
     assertEquals(texts(out, "Sheet1"), Map("A1" -> "NewLabelBeta", "A2" -> "KeepMe"))
   }
 
-  test("GH-768: an untouched part that cannot be read keeps every entry (the old append plan)") {
+  test("GH-768: an untouched part that cannot be read keeps every entry and gains none (GH-781)") {
     // the revision log is not well-formed, so it may reference any position
     val source = rewriteEntry(
       book(
@@ -260,7 +262,9 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
       _ => "<revisions><rcc><nc"
     )
     val out = editSheet(source, "Sheet1")(_.put(ref"A1" -> "NewLabelBeta"))
-    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe", "NewLabelBeta"))
+    // an appended entry could be a position the log names, so the new string is written inline
+    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe"))
+    assert(new String(entry(out, "xl/worksheets/sheet1.xml"), "UTF-8").contains("inlineStr"))
     assertEquals(
       entry(out, "xl/revisions/revisionLog1.xml").toSeq,
       entry(source, "xl/revisions/revisionLog1.xml").toSeq

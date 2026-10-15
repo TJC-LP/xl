@@ -9,7 +9,13 @@ enum SstPolicy derives CanEqual:
   /** Auto-detect based on heuristics (default) */
   case Auto
 
-  /** Always use SST regardless of content */
+  /**
+   * Always use SST regardless of content.
+   *
+   * A surgical write of a source with no `xl/sharedStrings.xml` writes no table when a part it
+   * copies byte for byte holds a `t="s"` cell (GH-781): that cell's index names no entry, and a new
+   * table would give it one. The regenerated sheets then write their strings inline.
+   */
   case Always
 
   /** Never use SST (inline strings only) */
@@ -85,6 +91,14 @@ enum XmlBackend derives CanEqual:
  * (their bytes change, their cell values do not). A clean workbook is then written through the
  * surgical path when its table holds such an entry, and copied verbatim otherwise.
  *
+ * No string is added to the table while a part the write copies byte for byte holds a `t="s"` value
+ * that names no entry (GH-781): an added string would give that value an entry. The source table
+ * then ships with its entries, the regenerated sheets write new strings inline (`t="inlineStr"`),
+ * and with no source table none is written, whatever `sstPolicy` says.
+ *
+ * @param sstPolicy
+ *   when a write builds a shared-string table; [[SstPolicy.Always]] still writes none in the case
+ *   above
  * @param compactSharedStrings
  *   drop every shared string no cell references, renumbering `t="s"` cells as needed
  */

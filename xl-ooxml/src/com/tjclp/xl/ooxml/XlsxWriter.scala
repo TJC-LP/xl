@@ -2000,6 +2000,7 @@ object XlsxWriter:
     // - If modified sheets only use existing SST strings → copy verbatim (byte-perfect preservation)
     // - If no source SST → generate according to policy
     // - GH-768: entries no cell references after the edit leave the table (see removeOrphans)
+    // - GH-781: no string is added while a copied part holds a value naming no entry (appendBlocked)
     def planSharedStrings(regen: Set[Int]): SstPlan =
       if escapeFormulas && sourceHasSharedStrings then escapedSharedStrings(regen)
       else if sourceHasSharedStrings then
@@ -2066,9 +2067,12 @@ object XlsxWriter:
             removeOrphans(ctx, preserved, newEntries, regen)
           case _ => None
 
+        // GH-781: checked only once orphan removal declined (it never plans with such a part)
+        lazy val blocked = sourceContext.exists(appendBlocked(_, regen))
+
         orphanRemoval match
           case Some(plan) => plan
-          case None if newEntries.nonEmpty =>
+          case None if newEntries.nonEmpty && !blocked =>
             // New strings detected → build SST from preserved + new entries only
             // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
             val combinedEntries =
@@ -2080,11 +2084,21 @@ object XlsxWriter:
             val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
             SstPlan(Some(combinedSST), true)
           case None =>
+            // GH-781: with the append blocked, a new string is written inline and is no reference
+            val keptTotalCount =
+              if newEntries.nonEmpty then
+                math.max(
+                  0,
+                  exactTotalCount - modifiedSheetRefEntries.count(e =>
+                    !preservedEntries.contains(e)
+                  )
+                )
+              else exactTotalCount
             parsedSST match
-              case Some(preserved) if preserved.totalCount != exactTotalCount =>
+              case Some(preserved) if preserved.totalCount != keptTotalCount =>
                 // GH-304: same strings, changed reference count → re-emit the SST with the exact
                 // count, same entries in the same order.
-                SstPlan(Some(preserved.copy(totalCount = exactTotalCount)), true)
+                SstPlan(Some(preserved.copy(totalCount = keptTotalCount)), true)
               case _ =>
                 // No count drift → copy preserved SST verbatim for byte-perfect preservation
                 SstPlan(parsedSST, false)
@@ -2103,7 +2117,11 @@ object XlsxWriter:
             if SharedStrings.shouldUseSST(workbook) && fromWritten.strings.nonEmpty then
               Some(fromWritten)
             else None
-        SstPlan(generated, generated.isDefined)
+        // GH-781: a copied part's t="s" value names no entry of an absent table; a new table
+        // would give it one, so the regenerated sheets keep their strings inline instead
+        if generated.isDefined && sourceContext.exists(appendBlocked(_, regen)) then
+          SstPlan(None, false)
+        else SstPlan(generated, generated.isDefined)
 
     /*
      * The source parts a write that emits `written` from the model copies byte for byte and whose
@@ -2125,46 +2143,67 @@ object XlsxWriter:
       (modeled, unmodeled)
 
     /*
+     * GH-781: whether this write must add no string to the table. An added string takes a position
+     * past the source table's end, and a t="s" value in a copied part that names no entry (an
+     * index at or past the table's size, or a value SharedStringIndex does not read as an index,
+     * counted in RefScan.outOfRange) could come to name it, changing a cell nobody edited. A part
+     * that cannot be read may hold such a value. When a copied part holds one, nothing is added
+     * and the regenerated sheets write their new strings inline (ECMA-376 Part 1, §18.3.1.4
+     * t="inlineStr"). The scans are the ones orphan removal uses (sourceRefScan), so each copied
+     * part is read at most once per write.
+     */
+    def appendBlocked(ctx: SourceContext, regen: Set[Int]): Boolean =
+      val (modeled, unmodeled) = copiedCellBearingParts(ctx, writtenFromModel(regen))
+      (modeled.iterator.map(_._2) ++ unmodeled.iterator)
+        .exists(sourceRefScan(ctx, _).fold(_ => true, _.outOfRange > 0))
+
+    /*
      * Formula escaping regenerates every worksheet (regeneratedSheets), so the table is built from
      * the cells. A macro sheet or revision log is still copied byte for byte and keeps the source
      * positions its t="s" values name (GH-783). When such a part references the source table, the
      * table keeps the source order up to the highest position the copied parts reference (an entry
      * neither they nor a cell reference becomes empty, as in removeOrphans; the rest above it are
-     * dropped), and the cells' strings follow. A copied part that cannot be read, or that holds a
-     * value naming no entry, keeps every source entry.
+     * dropped), and the cells' strings follow. When a copied part blocks an append
+     * (appendBlocked), the source table ships with its entries unchanged and a cell whose escaped
+     * text it lacks is written inline.
      */
     def escapedSharedStrings(regen: Set[Int]): SstPlan =
-      import SharedStringCompaction.RefScan
       val built = SharedStrings.fromWorkbook(workbook, escapeFormulas = true)
       (sourceContext, parsedSourceSST) match
         case (Some(ctx), Some(preserved)) =>
           val (modeled, unmodeled) = copiedCellBearingParts(ctx, writtenFromModel(regen))
-          val copied = modeled.map(_._2) ++ unmodeled
-          val scans = copied.foldLeft[Either[String, Vector[RefScan]]](Right(Vector.empty)) {
-            (acc, path) => acc.flatMap(ss => sourceRefScan(ctx, path).map(ss :+ _))
-          }
-          val kept: Vector[SSTEntry] = scans match
-            case Right(ss) if ss.forall(_.outOfRange == 0) =>
-              val referenced = ss.foldLeft(BitSet.empty)(_ | _.indices)
-              referenced.lastOption.fold(Vector.empty[SSTEntry]) { pinnedMax =>
+          val scans = (modeled.map(_._2) ++ unmodeled).map(sourceRefScan(ctx, _))
+          val copiedCount = scans.map(_.fold(_ => 0, _.count)).sum
+          if appendBlocked(ctx, regen) then
+            val cellEntries: Iterator[SSTEntry] =
+              workbook.sheets.iterator.flatMap(_.cells.valuesIterator).flatMap { cell =>
+                cell.value match
+                  case CellValue.Text(str) => Some(Left(CellValue.escape(str)))
+                  case CellValue.RichText(rt) => Some(Right(rt))
+                  case _ => None
+              }
+            val inTable = cellEntries.count(_.fold(preserved.indexOf, preserved.indexOf).isDefined)
+            SstPlan(Some(preserved.copy(totalCount = inTable + copiedCount)), true)
+          else
+            val referenced =
+              scans.foldLeft(BitSet.empty)((acc, s) => acc | s.fold(_ => BitSet.empty, _.indices))
+            referenced.lastOption match
+              case None => SstPlan(Some(built), true)
+              case Some(pinnedMax) =>
                 val cellEntries = built.strings.toSet
                 val orphans = BitSet.fromSpecific(
                   preserved.strings.indices.filter(i =>
                     !referenced.contains(i) && !cellEntries.contains(preserved.strings(i))
                   )
                 )
-                SharedStringCompaction.withoutOrphans(preserved.strings, orphans, pinnedMax)
-              }
-            case _ => preserved.strings
-          if kept.isEmpty then SstPlan(Some(built), true)
-          else
-            val keptSet = kept.toSet
-            val copiedCount = scans.fold(_ => 0, _.map(_.count).sum)
-            val table = SharedStrings.fromDedupedEntries(
-              kept ++ built.strings.filterNot(keptSet.contains),
-              built.totalCount + copiedCount
-            )
-            SstPlan(Some(table), true)
+                val kept =
+                  SharedStringCompaction.withoutOrphans(preserved.strings, orphans, pinnedMax)
+                val keptSet = kept.toSet
+                val table = SharedStrings.fromDedupedEntries(
+                  kept ++ built.strings.filterNot(keptSet.contains),
+                  built.totalCount + copiedCount
+                )
+                SstPlan(Some(table), true)
         case _ => SstPlan(Some(built), true)
 
     /*
@@ -2185,7 +2224,8 @@ object XlsxWriter:
      * None keeps the GH-304 append/recount plan: nothing to remove, a copied part could not be
      * read (an unread part may reference any entry), or a copied part has a t="s" value that names
      * no entry (an index at or past the table's size, ECMA-376 §18.4.9): such a part is malformed,
-     * so it is treated like an unreadable one and every entry is kept.
+     * so it is treated like an unreadable one and every entry is kept. In those two cases
+     * appendBlocked also holds, so the plan adds no string either (GH-781).
      */
     def removeOrphans(
       ctx: SourceContext,
