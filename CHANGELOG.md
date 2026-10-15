@@ -76,21 +76,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
   takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
   and after the verb, against the parser, so the table cannot drift from the parser chains.
-
 - **Adding a shared string no longer gives a copied cell's unresolved index a value** (#781): a
-  `t="s"` value that names no entry (an index at or past the end of `xl/sharedStrings.xml`,
-  ECMA-376 Part 1 §18.4.9, or a value the index rule above does not read) resolves to nothing:
-  `XlsxReader` reads it as `#REF!` (`#VALUE!` when the value is not an index), the streaming
-  readers as an empty cell, and desktop Excel reports the file as damaged and deletes the cell on
-  repair. When a surgical write copied such a part byte for byte and appended new strings, the
-  index came to name an appended string, so an untouched cell changed value. The writer now reads
-  the reference scans of the parts it copies (worksheets it does not regenerate, macro sheets,
-  revision-log `<nc>`/`<oc>` values) and, when one holds such a value or cannot be read, adds no
-  string: the copied part keeps its bytes, the regenerated sheets write their new strings inline
-  (`t="inlineStr"`, §18.3.1.4), the table keeps its entries, and `count` covers only table
-  references. The same holds when formula escaping builds the table and when a surgical write
-  would create a table the source did not have. Each copied part is scanned once per write, by
-  the scan orphan removal uses.
+  `t="s"` value that names no entry (an index at or past the end of `xl/sharedStrings.xml`, ECMA-376
+  Part 1 §18.4.9, a negative index, or a value the index rule above does not read) resolves to
+  nothing: `XlsxReader` reads it as `#REF!` (`#VALUE!` when the value is not an index or is
+  negative), and the streaming readers as an empty cell. Desktop Excel for Mac 16.114 shows its
+  repair prompt for such a value and, on repair, deletes the cell for an index past the end or a
+  negative one and keeps any other value as a text cell holding the value as written (an empty value
+  it opens as a blank cell, with no prompt). When a surgical write copied such a part byte for byte
+  and appended new strings, the index came to name an appended string, so an untouched cell changed
+  value. The writer now reads the reference scans of the parts it copies (worksheets it does not
+  regenerate, macro sheets, revision-log `<nc>`/`<oc>` values) and, when one holds such a value or
+  cannot be read, adds no string: the copied part keeps its bytes, the regenerated sheets write
+  their new strings inline (`t="inlineStr"`, §18.3.1.4), the table keeps its entries, and `count`
+  covers only table references (a copied part's `t="s"` cells included). The same holds when formula
+  escaping builds the table (the source table ships unchanged), and a surgical write that would
+  create a table the source did not have writes none, even with `SstPolicy.Always`. Each copied part
+  is scanned once per write, by the scan orphan removal uses.
 
 ### Added
 

@@ -25,6 +25,8 @@ class SstAppendOutOfRangeSpec extends FunSuite:
 
   private val table = Vector("Alpha", "Beta", "Gamma")
 
+  private val mainNs = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+
   // ========== Writer ==========
 
   test(
@@ -181,6 +183,30 @@ class SstAppendOutOfRangeSpec extends FunSuite:
     cleanup(source, output)
   }
 
+  test("GH-781: escaping with a blocked append counts a copied macro sheet's t=\"s\" cells") {
+    // the macro sheet is copied byte for byte; its index 5 names no entry, so the append is
+    // blocked, and its three t="s" cells stay table references in the count
+    val macroXml = s"""<?xml version="1.0" encoding="UTF-8"?>
+<xm:macrosheet xmlns="$mainNs" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+  <sheetData><row r="1"><c r="A1" t="s"><v>1</v></c><c r="B1" t="s"><v>1</v></c><c r="C1" t="s"><v>5</v></c></row></sheetData>
+</xm:macrosheet>"""
+    val source = fixture(sheet2Index = "2", macroSheet = Some(macroXml))
+    val output = editAndWrite(source, "NewText", WriterConfig.secure)
+    assertEquals(
+      entry(output, "xl/macrosheets/sheet1.xml").toSeq,
+      entry(source, "xl/macrosheets/sheet1.xml").toSeq
+    )
+    val sst = text(output, "xl/sharedStrings.xml")
+    assert(!sst.contains("NewText"), sst)
+    assert(sst.contains("<si><t>Alpha</t></si><si><t>Beta</t></si><si><t>Gamma</t></si>"), sst)
+    // Sheet1!A1 (Alpha) and Sheet2!A1 (Gamma) plus the macro sheet's three cells
+    assert(sst.contains("count=\"5\""), sst)
+    val reloaded = read(output)
+    assertEquals(valueAt(reloaded, "Sheet1", ref"A2"), Some(CellValue.Text("NewText")))
+    assertEquals(valueAt(reloaded, "Sheet2", ref"A1"), Some(CellValue.Text("Gamma")))
+    cleanup(source, output)
+  }
+
   test("GH-781: a write creates no table while a copied part holds a t=\"s\" value") {
     // the source has no table, so Sheet2!A1's index names nothing; a new table would name it
     val source = fixture(sheet2Index = "0", withTable = false)
@@ -248,7 +274,8 @@ class SstAppendOutOfRangeSpec extends FunSuite:
     sheet2Index: String,
     sheet1Index: String = "0",
     extra: Map[String, String] = Map.empty,
-    withTable: Boolean = true
+    withTable: Boolean = true,
+    macroSheet: Option[String] = None
   ): Path =
     val path = Files.createTempFile("gh781-fixture", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -270,6 +297,9 @@ class SstAppendOutOfRangeSpec extends FunSuite:
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="$ws"/>
   <Override PartName="/xl/worksheets/sheet2.xml" ContentType="$ws"/>
+""" + macroSheet.fold("")(_ =>
+          """<Override PartName="/xl/macrosheets/sheet1.xml" ContentType="application/vnd.ms-excel.macrosheet+xml"/>"""
+        ) + """
 """ + (if withTable then
          """<Override PartName="/xl/sharedStrings.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sharedStrings+xml"/>"""
        else "") + """
@@ -298,6 +328,9 @@ class SstAppendOutOfRangeSpec extends FunSuite:
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
   <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
+""" + macroSheet.fold("")(_ =>
+          """<Relationship Id="rId4" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet1.xml"/>"""
+        ) + """
 """ + (if withTable then
          """<Relationship Id="rId3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/>"""
        else "") + """
@@ -312,6 +345,7 @@ class SstAppendOutOfRangeSpec extends FunSuite:
         )
       put("xl/worksheets/sheet1.xml", sheetXml(sheet1Index))
       put("xl/worksheets/sheet2.xml", sheetXml(sheet2Index))
+      macroSheet.foreach(put("xl/macrosheets/sheet1.xml", _))
       extra.foreach(put)
     finally out.close()
     path
