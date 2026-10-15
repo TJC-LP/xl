@@ -1846,7 +1846,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     // #670 LOOKUP and XMATCH
     assert(functions.contains("LOOKUP"))
     assert(functions.contains("XMATCH"))
-    assertEquals(functions.length, 124)
+    // #684 T
+    assert(functions.contains("T"))
+    assertEquals(functions.length, 125)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

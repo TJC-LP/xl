@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   such an operand stays a literal tilde (`"a~b*"` matches `a~bc`): a Microsoft Q&A thread suggests
   Excel drops it, but no Excel observation confirms that, so it is unchanged and noted in
   `docs/LIMITATIONS.md`. XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.
+### Added
+- **`T(value)`** (#684): text returns itself (a rich-text cell its plain text); a number, boolean,
+  date or empty cell returns `""`; a formula cell answers `T` of its cached value; an error
+  propagates (`T(1/0)` is `#DIV/0!`). A range lifts element-wise: it spills in an array context
+  and is implicitly intersected in a plain cell. `T` was an unknown function, so `xl recalc`, and
+  `xl put` on a precedent, wrote every `T()` cell with no cached value; both now cache the values
+  LibreOffice computes.
 ### Testing
 - **Recalculation benchmark and work counters** (#767): the new `xl-evaluator.perf` module
   (`xl-evaluator/test-perf`) builds a synthetic freight-loads workbook in five shapes (`Tiny`,
