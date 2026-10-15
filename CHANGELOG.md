@@ -20,9 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   §18.2.5, §18.2.30), so both are renumbered: a model sheet's position counts worksheets only, and
   on write the positions are mapped back, so a name scoped to a worksheet after a macro sheet keeps
   its scope through add, delete, rename and reorder. A name scoped to the macro sheet itself is
-  not in the model and is written back from the source with its new position; an `activeTab` on a
-  macro sheet reads as the next worksheet and stays on the macro sheet while the active sheet is
-  unchanged. A worksheet named like a kept entry (case-insensitively) fails the write with
+  not in the model and is written back from the source with its new position and its text as
+  written (a worksheet it names that was renamed or deleted is not rewritten). An `activeTab` on a
+  macro sheet reads as the next worksheet (else the last) and stays on the macro sheet while that
+  worksheet is still the active sheet, including after a reorder; selecting it again explicitly
+  cannot be told apart and also keeps the tab on the macro sheet. A worksheet named like a kept entry (case-insensitively) fails the write with
   `XLError.DuplicateSheet`. The light metadata reader (`Excel.readMetadata`, `xl sheets`,
   `xl names`) lists worksheets only and renumbers scopes the same way. The stream readers
   (`readStream`, `readStreamByIndex`, `readSheetStream`) skip the same four kinds, so their indices

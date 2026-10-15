@@ -287,6 +287,36 @@ class NonWorksheetSheetSpec extends FunSuite:
     cleanup(source, output)
   }
 
+  test("GH-785: a macro sheet first in <sheets> stays first through edits") {
+    val source = fixture(macroSheet, otherFirst = true)
+    val wb = read(source)
+    assertEquals(wb.sheetNames.map(_.value), Seq("Data", "Data2"))
+    assertEquals(wb.metadata.definedNames.find(_.name == "Local").flatMap(_.localSheetId), Some(1))
+    val edited = wb.addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+    val output = write(edited)
+    assertEquals(sheetEntries(output).map(_._1), Vector("Other", "Data", "Data2", "New"))
+    val written = names(output)
+    assert(written.contains(("Local", Some(2), "Data2!$A$1")), written.toString)
+    assert(written.contains(("MacroLocal", Some(0), "Other!$A$1")), written.toString)
+    cleanup(source, output)
+  }
+
+  test("GH-785: a tab on the macro sheet follows it through a reorder") {
+    val source = fixture(macroSheet, activeTab = Some(1))
+    // the reader makes Data2 (model 1) active; the reorder moves it, and the active sheet, to 0
+    val wb = read(source).reorder(Vector(data2Name, dataName)).fold(e => fail(e.message), identity)
+    assertEquals(wb.activeSheetIndex, 0)
+    val output = write(wb)
+    // <sheets> is now Data2, Data, Other: the active sheet is still Data2, so the tab stays on
+    // the macro sheet at its new position
+    assertEquals(sheetEntries(output).map(_._1), Vector("Data2", "Data", "Other"))
+    assertEquals(activeTab(output), Some(2))
+    // selecting another worksheet moves the tab to it
+    val moved = write(wb.setActiveSheet(1).fold(e => fail(e.message), identity))
+    assertEquals(activeTab(moved), Some(1))
+    cleanup(source, output, moved)
+  }
+
   // ========== Layout ==========
 
   test("GH-785: SourceSheetIndex keeps out-of-range indices out of range both ways") {
@@ -323,13 +353,24 @@ class NonWorksheetSheetSpec extends FunSuite:
 
   // ========== Fixture ==========
 
-  private def fixture(kind: Kind, activeTab: Option[Int] = None): Path =
+  /** `otherFirst`: `<sheets>` is Other, Data, Data2 (MacroLocal then has localSheetId 0). */
+  private def fixture(
+    kind: Kind,
+    activeTab: Option[Int] = None,
+    otherFirst: Boolean = false
+  ): Path =
     val path = Files.createTempFile("gh785-src", ".xlsm")
     val zip = new ZipOutputStream(Files.newOutputStream(path))
     def put(name: String, content: String): Unit =
       zip.putNextEntry(new ZipEntry(name))
       zip.write(content.getBytes(StandardCharsets.UTF_8))
       zip.closeEntry()
+    val data = """<sheet name="Data" sheetId="1" r:id="rId1"/>"""
+    val other = """<sheet name="Other" sheetId="2" r:id="rId2"/>"""
+    val sheetEntries =
+      (if otherFirst then other + data else data + other) +
+        """<sheet name="Data2" sheetId="3" r:id="rId3"/>"""
+    val otherIdx = if otherFirst then 0 else 1
     val bookViews =
       activeTab.fold("")(t => s"""<bookViews><workbookView activeTab="$t"/></bookViews>""")
     try
@@ -346,7 +387,7 @@ class NonWorksheetSheetSpec extends FunSuite:
       put(
         "xl/workbook.xml",
         s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="$mainNs" xmlns:r="$relNs">$bookViews<sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Other" sheetId="2" r:id="rId2"/><sheet name="Data2" sheetId="3" r:id="rId3"/></sheets><definedNames><definedName name="_xlnm.Auto_Open">Other!$$A$$1</definedName><definedName name="_xlnm.Print_Titles" localSheetId="2">Data2!$$1:$$1</definedName><definedName name="Local" localSheetId="2">Data2!$$A$$1</definedName><definedName name="MacroLocal" localSheetId="1">Other!$$A$$1</definedName></definedNames></workbook>"""
+<workbook xmlns="$mainNs" xmlns:r="$relNs">$bookViews<sheets>$sheetEntries</sheets><definedNames><definedName name="_xlnm.Auto_Open">Other!$$A$$1</definedName><definedName name="_xlnm.Print_Titles" localSheetId="2">Data2!$$1:$$1</definedName><definedName name="Local" localSheetId="2">Data2!$$A$$1</definedName><definedName name="MacroLocal" localSheetId="$otherIdx">Other!$$A$$1</definedName></definedNames></workbook>"""
       )
       put(
         "xl/_rels/workbook.xml.rels",

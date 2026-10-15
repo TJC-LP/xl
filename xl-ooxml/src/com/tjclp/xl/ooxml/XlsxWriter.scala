@@ -117,39 +117,48 @@ object XlsxWriter:
         case Some(ctx) => dated.copy(sourceContext = Some(ctx.reconciledWith(dated)))
         case None => dated
 
-      val report = normalized.sourceContext match
+      normalized.sourceContext match
         case Some(ctx)
             if ctx.isClean && !escapeFormulas &&
               !(config.compactSharedStrings && sourceHasSharedStringOrphans(ctx)) =>
           // Clean workbook → verbatim copy (ultra-fast), to a file or a stream alike (GH-516)
           copyVerbatim(ctx, target)
-          WriteReport.empty
+          Right(WriteReport.empty)
 
         case Some(ctx) =>
-          // Surgical mode with source: use atomic temp file to prevent corruption
-          target match
-            case OutputPath(destPath) =>
-              writeAtomically(normalized, Some(ctx), destPath, config)
-            case _ =>
-              unifiedWrite(normalized, normalized.sourceContext, target, config)
+          // GH-785: refused before any byte is written
+          keptSheetNameClash(normalized, ctx).map { _ =>
+            // Surgical mode with source: use atomic temp file to prevent corruption
+            target match
+              case OutputPath(destPath) =>
+                writeAtomically(normalized, Some(ctx), destPath, config)
+              case _ =>
+                unifiedWrite(normalized, normalized.sourceContext, target, config)
+          }
 
         case None =>
           // No source context: safe to write directly (no surgical preservation)
-          unifiedWrite(normalized, None, target, config)
+          Right(unifiedWrite(normalized, None, target, config))
 
-      Right(report)
-
-    catch
-      case WriteRefused(err) => Left(err)
-      case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+    catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
 
   /**
-   * A write refused for its input, not for I/O: carries the typed error out of the write passes
-   * (which return a report, not an XLResult) to [[writeToTarget]], which returns it unchanged.
+   * GH-785: sheet names are unique across `<sheets>`, compared case-insensitively (ECMA-376 Part 1,
+   * §18.2.19). The model does not hold the source's chartsheet, dialog sheet and macro sheet
+   * entries the write keeps, so a model sheet named like one is [[XLError.DuplicateSheet]].
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Null"))
-  private final case class WriteRefused(error: XLError)
-      extends RuntimeException(error.message, null, false, false)
+  private def keptSheetNameClash(workbook: Workbook, ctx: SourceContext): XLResult[Unit] =
+    val (_, _, rels, preserved) = parsePreservedStructure(ctx.content)
+    preserved
+      .flatMap { wb =>
+        val mask = SheetKinds.worksheetMask(wb.sheets, rels.getOrElse(Relationships.empty))
+        wb.sheets.zip(mask).collectFirst {
+          case (ref, false)
+              if workbook.sheets.exists(_.name.value.equalsIgnoreCase(ref.name.value)) =>
+            ref
+        }
+      }
+      .fold[XLResult[Unit]](Right(()))(ref => Left(XLError.DuplicateSheet(ref.name.value)))
 
   /**
    * Re-express DateTime cells as raw serial Numbers using the workbook's date system (GH-243).
@@ -2670,11 +2679,7 @@ object XlsxWriter:
           sheetSourcePaths
         )
       case None => SheetLayout.identity(workbook.sheets.size)
-    // Sheet names are unique across <sheets>, compared case-insensitively (ECMA-376 Part 1,
-    // §18.2.19); the model cannot see the kept names, so a clash is refused here.
-    sheetLayout.kept
-      .find(ref => workbook.sheets.exists(_.name.value.equalsIgnoreCase(ref.name.value)))
-      .foreach(ref => throw WriteRefused(XLError.DuplicateSheet(ref.name.value)))
+    // a model sheet named like a kept entry was refused before this pass (keptSheetNameClash)
 
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match

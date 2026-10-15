@@ -98,7 +98,11 @@ final case class SourceSheetIndex(mask: Vector[Boolean]):
  * Worksheets are identified by their source part path, so renames and reorders carry the kept
  * entries with them.
  */
-final case class SheetLayout(slots: Vector[SheetLayout.Slot], source: SourceSheetIndex):
+final case class SheetLayout(
+  slots: Vector[SheetLayout.Slot],
+  source: SourceSheetIndex,
+  modelOfSource: Map[Int, Int] = Map.empty
+):
   import SheetLayout.Slot
 
   private val modelCount: Int = slots.count {
@@ -128,7 +132,9 @@ final case class SheetLayout(slots: Vector[SheetLayout.Slot], source: SourceShee
 
   /**
    * The `<definedNames>` content in output positions: the model's names renumbered, followed by the
-   * source's names scoped to a kept entry, renumbered to where that entry now sits.
+   * source's names scoped to a kept entry, renumbered to where that entry now sits. The text of a
+   * name scoped to a kept entry is written as the source has it: a worksheet it refers to that was
+   * renamed or deleted is not rewritten.
    */
   def namesToOutput(
     model: Vector[DefinedName],
@@ -144,16 +150,21 @@ final case class SheetLayout(slots: Vector[SheetLayout.Slot], source: SourceShee
 
   /**
    * The output `activeTab`. A source tab on a kept entry stays on that entry while the model's
-   * active sheet is still the one the reader derived from it; otherwise the model's sheet wins. The
-   * model cannot tell an unchanged active sheet from one selected again, so selecting the derived
+   * active sheet is still the worksheet the reader made active for it (the next worksheet, else the
+   * last), found by its source part so a reorder keeps the match; otherwise the model's sheet wins.
+   * The model cannot tell an unchanged active sheet from one selected again, so selecting that
    * worksheet explicitly also keeps the tab on the kept entry.
    */
   def activeTab(modelActive: Int, sourceActive: Option[Int]): Int =
     val clampedModel = OoxmlWorkbook.clampActiveTab(modelActive, modelCount)
     sourceActive
       .flatMap { src =>
-        val derived = OoxmlWorkbook.clampActiveTab(source.activeToModel(src), modelCount)
-        positionOfSource.get(src).filter(_ => derived == clampedModel)
+        val mask = source.mask
+        val derivedSource =
+          (src + 1 until mask.size).find(mask).orElse((src - 1 to 0 by -1).find(mask))
+        positionOfSource
+          .get(src)
+          .filter(_ => derivedSource.flatMap(modelOfSource.get).contains(clampedModel))
       }
       .getOrElse(toOutput(clampedModel))
 
@@ -199,6 +210,7 @@ object SheetLayout:
           .get(ref.relationshipId)
           .map(Relationships.resolveWorkbookTarget)
           .getOrElse(s"xl/worksheets/sheet${ref.sheetId}.xml")
+      val paths: Vector[String] = refs.map(sourcePath)
       val modelIndexByPath: Map[String, Int] =
         modelSourcePaths.zipWithIndex.collect { case (Some(path), m) => path -> m }.toMap
 
@@ -208,7 +220,7 @@ object SheetLayout:
         case i if !mask(i) =>
           val anchor = (i - 1 to 0 by -1).iterator
             .filter(mask)
-            .flatMap(j => modelIndexByPath.get(sourcePath(refs(j))))
+            .flatMap(j => modelIndexByPath.get(paths(j)))
             .nextOption()
             .getOrElse(-1)
           anchor -> Slot.Kept(refs(i), i)
@@ -217,4 +229,6 @@ object SheetLayout:
       val slots = keptAfter(-1) ++ modelSourcePaths.indices.toVector.flatMap(m =>
         Slot.Model(m) +: keptAfter(m)
       )
-      SheetLayout(slots, SourceSheetIndex(mask))
+      val modelOfSource: Map[Int, Int] =
+        paths.indices.filter(mask).flatMap(j => modelIndexByPath.get(paths(j)).map(j -> _)).toMap
+      SheetLayout(slots, SourceSheetIndex(mask), modelOfSource)
