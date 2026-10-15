@@ -92,8 +92,8 @@ jobs:
       - name: Test
         run: ./mill -i __.test
 
-  # #767: the recalculation benchmark (xl-evaluator.perf): the Tiny loads book against its 40
-  # oracle cells, its pinned work counters (graph edges, criteria scans, matcher calls, ...) and the
+  # #767: the recalculation benchmark (xl-evaluator.perf): every formula value of the Tiny loads
+  # book, its pinned work counters (graph edges, criteria scans, matcher calls, ...) and the
   # module's -Xmx2g heap ceiling. `__.test` in `build` does not select this module. The job is
   # non-blocking (continue-on-error) until its timings have been stable for about two weeks; then
   # it becomes a required check.
