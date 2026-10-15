@@ -128,7 +128,7 @@ object LoadsBookHarness:
     (Vector(
       s"== $label",
       f"  wall                   ${run.wallSeconds}%10.3f s",
-      f"  heap peak              ${run.heapPeakBytes.toDouble / 1e9}%10.3f GB",
+      f"  heap pool peaks (sum)  ${run.heapPeakBytes.toDouble / 1e9}%10.3f GB",
       s"  errors                 ${run.result.errors.size}",
       "  -- counters"
     ) ++ counts ++ Vector(
