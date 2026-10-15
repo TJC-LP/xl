@@ -9,20 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.25.0] - 2026-10-15
 
-Recalculation is faster and uses far less memory (#767): each pass keeps per-pass caches of used
-ranges, defined-name resolutions and criteria column slices, the `*IFS` functions test only the
-rows an equality criteria index selects, and the dependency graph has one node per distinct range
-read and per segment of a formula column instead of one edge per cell in a range. A synthetic
-workbook of 187,699 formulas over 33,233 rows, shaped like a real customer book, now goes through
-`writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory. Evaluation within
-a wave now follows one canonical order, which `RecalcResult.errors` and seeded `RAND` draws
-reflect. Shared strings an edit leaves unreferenced are removed on write (#768), with
-`WriterConfig.compactSharedStrings` and `--compact-strings` to drop every unreferenced entry, and
-every reader, the writer and the `shared-string-orphan` lint read a `t="s"` value with one rule
-that matches desktop Excel; appending strings no longer changes an out-of-range index in a copied
-sheet (#781), and formula escaping keeps the positions a copied macro sheet or revision log
-references (#783). Also: a criterion with no `*` or `?` compares `~` literally (#765), `T()` is
-supported (#684), and a global flag a verb does not take is named in a `USAGE` error (#766).
+Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
+ranges, defined-name resolutions and criteria column slices; the `*IFS` functions test only the rows
+an equality criteria index selects; and the dependency graph has one node per distinct range read
+and per segment of a formula column instead of one edge per cell in a range. A synthetic workbook of
+187,699 formulas over 33,233 rows, shaped like a real customer book, now goes through `writeChecked`
+in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory. Evaluation follows one canonical
+order, which `RecalcResult.errors` and seeded `RAND` draws reflect (**Breaking**, behaviour).
+
+Shared strings an edit leaves unreferenced are removed on write (#768, **Breaking**, behaviour), and
+`WriterConfig.compactSharedStrings` / `--compact-strings` drop every unreferenced entry (**Breaking**,
+binary: `WriterConfig` gains a field). Every reader, the writer and the `shared-string-orphan` lint
+read a `t="s"` value with one rule that matches desktop Excel; appending strings no longer changes an
+out-of-range index in a copied sheet (#781), and formula escaping keeps the positions a copied macro
+sheet or revision log references (#783).
+
+Also: a criterion with no `*` or `?` compares `~` literally (#765), `T()` is supported (#684), and a
+global flag a verb does not take is named in a `USAGE` error (#766).
 
 ### Fixed
 
@@ -145,7 +148,8 @@ supported (#684), and a global flag a verb does not take is named in a `USAGE` e
   them, each in grid order (row 2 before row 10), then evaluation failures in evaluation order; a
   seeded `RAND`/`RANDBETWEEN`/`RANDARRAY` draws across cells in that order; a parallel
   recalculation still returns exactly the sequential result, errors included. The order no longer
-  depends on `ARef` hashing.
+  depends on `ARef` hashing. **Breaking (behaviour):** code that compared `RecalcResult.errors`
+  order or seeded `RAND` sequences across versions sees a different order.
 
 ### Performance
 
@@ -180,11 +184,10 @@ supported (#684), and a global flag a verb does not take is named in a `USAGE` e
   capped at 256 MB per pass, shared results at half of it. On the 20k-row raw-criteria benchmark
   book a sequential recalculation drops from 10.9 s to 2.3 s (matcher calls from 161.8M to 0.6M);
   the real-shape book with raw criteria (33,233 rows, 88k formulas) goes through `writeChecked` in
-  9.4 s under a 4 GB heap. Property tests
-  check that every matching row is a candidate over edge-case text (dotted and dotless I, sharp
-  s, final sigma, Kelvin sign, surrogates), numeric text, booleans, date-times and errors, that the
-  case fold agrees with `equalsIgnoreCase` on every BMP character, and that results are identical
-  with the index on and off.
+  9.4 s under a 4 GB heap. Property tests check that every matching row is a candidate over
+  edge-case text (dotted and dotless I, sharp s, final sigma, Kelvin sign, surrogates), numeric
+  text, booleans, date-times and errors, that the case fold agrees with `equalsIgnoreCase` on every
+  BMP character, and that results are identical with the index on and off.
 
 - **Numeric text in criteria** (#767): criteria matching no longer parses text that cannot start a
   number (anything but a sign, a point or a digit after trimming) through an exception; results

@@ -31,8 +31,8 @@ books shaped like a real customer book came first (`xl-evaluator/test-perf`, a n
 ordering a 92.5M-edge graph, and the 20k-row raw-criteria book 116 s of 118 s in criteria scans.
 Per-pass caches, an equality criteria index and a compact graph with range and segment nodes
 followed; the 187,699-formula book now goes through `writeChecked` in about 7.6 s under a 4 GB
-heap, where 0.24.1 ran out of memory. Evaluation follows one canonical order (breaking only in what
-it makes observable: error order, seeded `RAND` draws).
+heap, where 0.24.1 ran out of memory. Evaluation follows one canonical order (**Breaking** behaviour: the order of
+`RecalcResult.errors` and seeded `RAND` draws change).
 
 **Shared strings (#768, #781, #783).** A write drops the strings its edit left unreferenced, with
 `WriterConfig.compactSharedStrings` / `--compact-strings` for every unreferenced entry; one
