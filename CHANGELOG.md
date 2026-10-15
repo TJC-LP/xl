@@ -67,7 +67,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   book recalculates within a 2 GB heap (peak 1.4 GB; it needed about 25 GB), and a 200k-row running
   total builds and orders its graph in 1.6 s. Results are unchanged: property
   tests compare reachability, cycles, order, SCC condensation, waves and every `RecalcResult` field
-  against the previous per-cell graph, which stays one release as an internal fallback.
+  against the previous per-cell graph, which stays one release as an internal fallback. With the
+  per-pass caches and the criteria index, the real-shape book with helper criteria (33,233 rows,
+  187,699 formulas) now goes through `writeChecked` in 7.6 s under a 4 GB heap. It completes under
+  1 GB as well; every earlier engine ran out of memory on it at 4 GB.
 
 ### Testing
 

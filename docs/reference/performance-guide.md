@@ -397,6 +397,24 @@ heap peak 1.4 GB under `-Xmx2g`; the 40 oracle cells are unchanged. A 200k-row r
 gates both graphs: `GraphEdges + VirtualNodes <= 40 x (formulas + ranges)` on H10, and Tarjan plus
 Kahn walking at most `3 x (formulas + ranges) x log2(rows)` edges on `RunTotal(200k)`.
 
+With the compact graph, the per-pass caches and the criteria index together, `LoadsBookMain` at
+`-Xmx4g` (direct JVM, `ActiveProcessorCount=2`, shared machine) measures:
+
+| Run | Wall | Phases | Counters |
+|---|---|---|---|
+| Real `mode=checked` (helper criteria, 187,699 formulas) | 7.6 s | graph build 2.2 s (parse 1.7 s, nested in build and eval), eval 2.9 s (criteria 1.3 s), write 1.9 s | 665,906 edges, 99,696 segment nodes, 88,000 calls indexed, 808,484 matcher calls, 0 scan fallbacks |
+| Real `crit=raw mode=checked` (88,000 formulas) | 7.0 s | graph build 1.9 s, eval 3.0 s, write 1.6 s | 5,449,218 matcher calls |
+| H10 `mode=recalc` | 2.4 s | graph build 0.9 s, eval 1.3 s | 75,766 matcher calls (81.1M with scans) |
+| R20 `mode=recalc` | 1.9 s | | 613,617 matcher calls |
+
+The Real helper book also completes under `-Xmx1g` (8.7 s). Every earlier engine runs out of memory
+on it at `-Xmx4g`, and the compact graph without the index did not finish in 15 minutes. A full dump
+of its 187,699 formula values is identical with the index on and off, and between sequential and
+parallel recalculation. In a JFR profile of the Real `checked` run, formula parsing is the largest
+CPU cost (about 22% of samples): each formula is parsed once while the graph is built and again
+when it is evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and the
+criteria calls (about 15%, of which about 5% is building the column slices).
+
 ---
 
 ## Common Performance Pitfalls
