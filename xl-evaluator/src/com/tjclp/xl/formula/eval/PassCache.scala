@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicLong, AtomicReference}
 
-import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -159,14 +159,14 @@ private[formula] final class ColumnSlice(
 
 /**
  * #767 per-pass caches, owned by one [[Evaluator.AggregateMemo]] and living as long as it: the used
- * range of each sheet, static defined-name resolutions, parsed name bodies, and range-box
- * [[ColumnSlice]]s.
+ * range of each sheet, static defined-name resolutions, parsed name bodies, and [[ColumnSlice]]s
+ * (one per column when the column is ready, else per requested box).
  *
  * Name caches are valid whenever the memo caches at all: a resolution depends only on the name
  * table and the sheet list, which every entry records and checks, and a parse only on its text.
  * Used ranges and slices depend on cell contents, so they wait for [[begin]], which the passes that
  * thread their own sheets call with the [[Readiness]] of the order they are about to run. Until
- * then (a Jacobi round's memo, a memo a test drives by hand) every request scans.
+ * then (a memo a test drives by hand) every request scans.
  *
  * Every structure here is safe under parallel waves: a used range or a slice is computed once
  * (single flight), so the counters it adds are the same in sequential and parallel passes.
@@ -179,9 +179,17 @@ private[formula] final class PassCache(val limits: PassCache.Limits, counters: R
   /**
    * Arm the cell-content caches for a pass that runs in the order `ready` describes. The
    * [[Readiness]] is built on the first slice request, so a pass that never asks for a slice never
-   * pays for it.
+   * pays for it. Used ranges, generations and slices recorded before are dropped: they describe
+   * another pass's sheets. The pass calls this before it evaluates anything.
    */
-  def begin(ready: => Readiness): Unit = readiness.set(Some(Deferred(() => ready)))
+  def begin(ready: => Readiness): Unit =
+    generations.clear()
+    usedRanges.clear()
+    slices.clear()
+    covering.clear()
+    demands.clear()
+    cachedCells.set(0L)
+    readiness.set(Some(Deferred(() => ready)))
 
   /** Whether [[begin]] armed the cell-content caches. */
   def active: Boolean = readiness.get().isDefined
@@ -280,13 +288,26 @@ private[formula] final class PassCache(val limits: PassCache.Limits, counters: R
 
   private val slices = new ConcurrentHashMap[SliceKey, SliceEntry]()
   private val covering = new ConcurrentHashMap[(SheetName, Int), Vector[ColumnSlice]]()
+  private val demands = new ConcurrentHashMap[SliceKey, Int]()
   private val cachedCells = new AtomicLong(0L)
 
   /**
    * The slice that serves rows `a..b` of column `col` on `sheet` (the reader's threaded snapshot)
-   * for a reader at `at`: an already-built slice whose domain covers them, or one built now over
-   * `a..b` when the box is tall enough and [[Readiness]] says its formulas are done. `Small` and
-   * `Ineligible` take today's scan without counting; `Refused` is a fallback the caller counts.
+   * for a reader at `at`.
+   *
+   *   - An already-built slice whose domain covers `a..b` serves any request, whatever its height.
+   *   - A box shorter than `max(minSliceRows, usedRows / sliceRowsDivisor)` builds nothing
+   *     (`Small`).
+   *   - Otherwise the whole column is tried first: its domain is every row, its held rows the
+   *     sheet's used rows, and it serves every later window of the column. It needs [[Readiness]]
+   *     over the used rows.
+   *   - When the whole column is not ready, the box `a..b` itself is built, but only on its
+   *     `boxDemand`-th request in the generation (the second, by default): a window asked for once
+   *     (a running `COUNTIF($A$2:A9,…)`, a sliding window) would copy as many cells as its scan
+   *     reads and hold them for the pass, so the requests before scan.
+   *
+   * `Refused` (readiness, an uncached formula in the box, the cell budget, or a box's request below
+   * `boxDemand` after the whole column was refused) is a fallback the caller counts.
    */
   def slice(sheet: Sheet, col: Int, a: Int, b: Int, at: EvalPosition): SliceAnswer =
     readiness.get() match
@@ -306,15 +327,42 @@ private[formula] final class PassCache(val limits: PassCache.Limits, counters: R
             val threshold = math.max(limits.minSliceRows, usedRows / limits.sliceRowsDivisor)
             if b - a + 1 < threshold then SliceAnswer.Small
             else
-              val r0 = used.fold(a)(u => math.max(a, u.rowStart.index0))
-              val r1 = used.fold(a - 1)(u => math.min(b, u.rowEnd.index0))
-              val entry = slices.computeIfAbsent(SliceKey(name, col, a, b, gen), _ => SliceEntry())
-              entry.getOrBuild {
-                if !deferred.value.allows(name, col, r0, r1, at) then scala.None
-                else build(sheet, col, a, b, r0, r1, gen)
-              } match
+              val wholeColumn = buildBox(sheet, col, 0, Row.MaxIndex0, used, gen, deferred, at)
+              wholeColumn match
                 case Some(built) => SliceAnswer.Use(built)
-                case scala.None => SliceAnswer.Refused
+                case scala.None =>
+                  val box = SliceKey(name, col, a, b, gen)
+                  if demands.merge(box, 1, _ + _) < limits.boxDemand then SliceAnswer.Refused
+                  else
+                    buildBox(sheet, col, a, b, used, gen, deferred, at) match
+                      case Some(built) => SliceAnswer.Use(built)
+                      case scala.None => SliceAnswer.Refused
+
+  /**
+   * The slice of rows `a..b` of `col`, held over the used rows inside them, built once per
+   * generation. `None` when [[Readiness]] refuses it at `at` (not remembered: a later slot may
+   * pass), or when the copy meets an uncached formula or the cell budget is spent (remembered for
+   * the generation: once readiness has passed, every formula of the box the pass evaluates is done
+   * and every other cell keeps its value, so a later copy would meet the same cells).
+   */
+  private def buildBox(
+    sheet: Sheet,
+    col: Int,
+    a: Int,
+    b: Int,
+    used: Option[CellRange],
+    gen: Long,
+    deferred: Deferred,
+    at: EvalPosition
+  ): Option[ColumnSlice] =
+    val name = sheet.name
+    val r0 = used.fold(a)(u => math.max(a, u.rowStart.index0))
+    val r1 = used.fold(a - 1)(u => math.min(b, u.rowEnd.index0))
+    slices
+      .computeIfAbsent(SliceKey(name, col, a, b, gen), _ => SliceEntry())
+      .getOrBuild(deferred.value.allows(name, col, r0, r1, at))(
+        build(sheet, col, a, b, r0, r1, gen)
+      )
 
   /**
    * Copy rows `r0..r1` of `col`, or nothing when one holds an uncached formula (a value the pass
@@ -360,13 +408,14 @@ private[formula] object PassCache:
   /**
    * Bounds on what one pass holds. `maxCachedCells` caps the cells all slices hold together; a box
    * is sliced only when it spans at least `max(minSliceRows, usedRows / sliceRowsDivisor)` rows
-   * (smaller windows scan, or read a slice that covers them). Past a cap a call scans; results are
-   * unaffected.
+   * (smaller windows scan, or read a slice that covers them); a box whose column is not ready is
+   * sliced on its `boxDemand`-th request. Past a cap a call scans; results are unaffected.
    */
   final case class Limits(
     maxCachedCells: Long = 64L * 1024 * 1024,
     minSliceRows: Int = 256,
-    sliceRowsDivisor: Int = 16
+    sliceRowsDivisor: Int = 16,
+    boxDemand: Int = 2
   )
 
   val DefaultLimits: Limits = Limits()
@@ -375,7 +424,10 @@ private[formula] object PassCache:
   enum SliceAnswer:
     case Use(slice: ColumnSlice)
 
-    /** Readiness or the cell budget refused the build: the call scans and counts a fallback. */
+    /**
+     * Readiness, an uncached formula, the cell budget or the repeat-demand rule refused the build:
+     * the call scans and counts a fallback.
+     */
     case Refused
 
     /** The box is below the size threshold: the call scans. */
@@ -411,16 +463,23 @@ private[formula] object PassCache:
 
   private final case class SliceKey(sheet: SheetName, col: Int, a: Int, b: Int, generation: Long)
 
-  /** Single-flight build of one slice; a refusal is not remembered (the next request retries). */
+  /**
+   * Single-flight build of one slice. A readiness refusal is not remembered (the next request
+   * retries); a build that failed after readiness passed is (see `buildBox`).
+   */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
   private final class SliceEntry:
     private var built: Option[ColumnSlice] = scala.None
+    private var failed: Boolean = false
 
-    def getOrBuild(build: => Option[ColumnSlice]): Option[ColumnSlice] = synchronized {
-      built match
-        case found @ Some(_) => found
-        case scala.None =>
-          val result = build
-          built = result
-          result
-    }
+    def getOrBuild(ready: => Boolean)(build: => Option[ColumnSlice]): Option[ColumnSlice] =
+      synchronized {
+        built match
+          case found @ Some(_) => found
+          case scala.None if failed || !ready => scala.None
+          case scala.None =>
+            val result = build
+            built = result
+            failed = result.isEmpty
+            result
+      }

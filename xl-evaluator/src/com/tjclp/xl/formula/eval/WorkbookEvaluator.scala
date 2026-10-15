@@ -932,7 +932,8 @@ object WorkbookEvaluator:
           // at round end, so a range touching members is fixed for the round and its aggregate may
           // be shared by the members that read it; never across rounds, where the same range
           // changes. Under Gauss–Seidel members change mid-round, so the engine asks for a fresh
-          // evaluator per member evaluation instead.
+          // evaluator per member evaluation instead. #767: these memos carry no per-pass cache
+          // (no slices inside a fixpoint), so a round allocates none.
           val outcome =
             jacobiFixpoint(
               wb,
@@ -944,7 +945,7 @@ object WorkbookEvaluator:
               rng =>
                 Evaluator.recalculationInstance(
                   rng,
-                  new Evaluator.AggregateMemo
+                  new Evaluator.AggregateMemo(columnCache = false)
                 ),
               seed
             )

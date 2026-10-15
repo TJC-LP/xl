@@ -37,8 +37,9 @@ class PassCacheLawSpec extends ScalaCheckSuite:
   private val Rows = 40
   private val Last = Rows + 1
 
-  /** Slices at every height: the threshold is 1 row. */
-  private val eager = PassCache.Limits(minSliceRows = 1, sliceRowsDivisor = Int.MaxValue)
+  /** Slices at every height (the threshold is 1 row), and every box on its first request. */
+  private val eager =
+    PassCache.Limits(minSliceRows = 1, sliceRowsDivisor = Int.MaxValue, boxDemand = 1)
 
   private def cachesOn(counters: RecalcCounters = RecalcCounters.disabled) =
     new Evaluator.AggregateMemo(counters = counters, limits = eager)
@@ -249,6 +250,42 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
+  /** An edit of the stale book: a constant, a cleared cell, or a helper replaced. */
+  private def genEdit: Gen[(ARef, Option[CellValue])] =
+    for
+      r <- Gen.choose(2, Last)
+      edit <- Gen.oneOf(
+        Gen.choose(-2, 9).map(n => (ARef.from0(0, r - 1), Some(num(n)))),
+        Gen.const((ARef.from0(0, r - 1), None)),
+        Gen
+          .oneOf(s"A$r*3", s"""IF(A$r>2,"hi",A$r)""", s"F${math.max(2, r - 1)}+1")
+          .map(f => (ARef.from0(5, r - 1), Some(CellValue.Formula(f, Some(num(-5)))))),
+        Gen.oneOf(num(4), CellValue.Text("hi")).map(v => (ARef.from0(5, r - 1), Some(v)))
+      )
+    yield edit
+
+  property("stale-cache law: after-edit with the caches on equals off, for every kind of edit") {
+    Prop.forAll(genStaleBook, Gen.choose(1, 3).flatMap(n => Gen.listOfN(n, genEdit))) {
+      (book, edits) =>
+        val edited = book.workbook
+          .update(
+            data,
+            s =>
+              edits.foldLeft(s) {
+                case (acc, (ref, Some(v))) => acc.put(ref, v)
+                case (acc, (ref, None)) => acc.remove(ref)
+              }
+          )
+          .fold(e => fail(e.toString), identity)
+        val refs = edits.map(_._1).toSet
+        exactlySame(
+          DependentRecalculation.recalculateAfterEdit(edited, data, refs, clock, cachesOn()),
+          DependentRecalculation.recalculateAfterEdit(edited, data, refs, clock, cachesOff()),
+          s"after-edit $edits"
+        )
+    }
+  }
+
   property("the stale-cache law is not vacuous: its acyclic books build slices") {
     // a cycle through F blocks every reader of F, so only acyclic books must slice
     Prop.forAll(genStaleBook) { book =>
@@ -364,6 +401,88 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     assert(!SheetEvaluator.threadChangesStructure(sheet, at("A3")))
     cache.structureChanged(data)
     assertEquals(cache.usedRange(grown).map(_.toA1), Some("A1:B9"))
+  }
+
+  test("running windows build one slice per column, never one per window") {
+    // B{n} = COUNTIF($A$2:A{n},A{n}) over constants, D{n} = COUNTIF($C$2:C{n},">10") over the
+    // formula column C{n} = A{n}*2: every window is a different box. With default thresholds each
+    // window past the size threshold would otherwise copy and keep its own slice (quadratic cells).
+    val n = 1200
+    val sheet = (2 to n + 1).foldLeft(Sheet(data)) { (s, r) =>
+      s.put(ARef.from0(0, r - 1), num(r % 17))
+        .put(ARef.from0(1, r - 1), CellValue.Formula(s"COUNTIF($$A$$2:A$r,A$r)", Some(num(-1))))
+        .put(ARef.from0(2, r - 1), CellValue.Formula(s"A$r*2", Some(num(-1))))
+        .put(ARef.from0(3, r - 1), CellValue.Formula(s"""COUNTIF($$C$$2:C$r,">10")""", None))
+    }
+    val wb = Workbook(Vector(sheet))
+    Vector(sequential(), parallel()).foreach { options =>
+      val counters = RecalcCounters.create()
+      val on = recalculateWithMemo(wb, options, new Evaluator.AggregateMemo(counters = counters))
+      assertEquals(on, recalculateWithMemo(wb, options, cachesOff()))
+      assertEquals(on.evaluated.get(data).flatMap(_.get(at(s"B${n + 1}"))), Some(num(71)))
+      assert(counters.snapshot(Counter.SlicesBuilt) <= 2L, counters.snapshot.render)
+    }
+  }
+
+  test("a memo used for a second pass forgets the first pass's slices and used ranges") {
+    val memo = cachesOn()
+    val first = recalculateWithMemo(wrongCaches, sequential(), memo)
+    // the second book has the same shape and different constants: a slice kept from the first
+    // pass would answer with the first book's helper values
+    val changed = wrongCaches
+      .update(data, s => (2 to 301).foldLeft(s)((acc, r) => acc.put(ARef.from0(0, r - 1), num(1))))
+      .fold(e => fail(e.toString), identity)
+    val second = recalculateWithMemo(changed, sequential(), memo)
+    assertEquals(second, recalculateWithMemo(changed, sequential(), cachesOff()))
+    assertNotEquals(outValues(first), outValues(second))
+  }
+
+  test("readiness decides a build at each slot; a failed copy is remembered, a refusal is not") {
+    // F2..F400 are formulas; F300 evaluates at slot 10, every other one at slot 0
+    val sheet = (2 to 400).foldLeft(Sheet(data)) { (s, r) =>
+      s.put(ARef.from0(5, r - 1), CellValue.Formula(s"A$r", Some(num(r))))
+    }
+    val slots = (2 to 400).map { r =>
+      com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef(data, ARef.from0(5, r - 1)) ->
+        (if r == 300 then 10 else 0)
+    }.toMap
+    val counters = RecalcCounters.create()
+    val cache = new PassCache(PassCache.DefaultLimits, counters)
+    cache.begin(Readiness.build(slots, Set.empty))
+    def ask(a: Int, b: Int, slot: Int) = cache.slice(sheet, 5, a, b, EvalPosition.at(slot))
+    def served(answer: PassCache.SliceAnswer): Boolean = answer match
+      case PassCache.SliceAnswer.Use(_) => true
+      case _ => false
+    // before F300 is done: the column and any box over F300 are refused, every time
+    assertEquals(ask(1, 399, 5), PassCache.SliceAnswer.Refused)
+    assertEquals(ask(1, 399, 5), PassCache.SliceAnswer.Refused)
+    // a box clear of F300 is built on its second request and then serves contained boxes
+    assertEquals(ask(1, 290, 5), PassCache.SliceAnswer.Refused)
+    ask(1, 290, 5) match
+      case PassCache.SliceAnswer.Use(slice) => assertEquals(slice.valueAt(9), num(10))
+      case other => fail(other.toString)
+    assert(served(ask(3, 280, 5)))
+    // after F300 is done: the whole column is built and serves every window
+    ask(1, 399, 11) match
+      case PassCache.SliceAnswer.Use(slice) =>
+        assertEquals(slice.valueAt(299), num(300))
+        assertEquals(slice.valueAt(5000), CellValue.Empty)
+      case other => fail(other.toString)
+    assert(served(ask(350, 360, 12)))
+    assertEquals(counters.snapshot(Counter.SlicesBuilt), 2L)
+
+    // an uncached formula: the column copy fails once and is not copied again
+    val holed = sheet.put(ARef.from0(5, 199), CellValue.Formula("A200", None))
+    val again = new PassCache(PassCache.DefaultLimits, RecalcCounters.disabled)
+    again.begin(Readiness.build(slots, Set.empty))
+    // first request: the column copy fails; second: the box's own copy fails
+    assertEquals(again.slice(holed, 5, 1, 399, EvalPosition.at(11)), PassCache.SliceAnswer.Refused)
+    assertEquals(again.slice(holed, 5, 1, 399, EvalPosition.at(11)), PassCache.SliceAnswer.Refused)
+    // a copy would now succeed, but both failures stand for the generation
+    assertEquals(again.slice(sheet, 5, 1, 399, EvalPosition.at(11)), PassCache.SliceAnswer.Refused)
+    // a new generation copies again
+    again.structureChanged(data)
+    assert(served(again.slice(sheet, 5, 1, 399, EvalPosition.at(11))))
   }
 
   // ---------- names ----------
@@ -514,12 +633,24 @@ class PassCacheLawSpec extends ScalaCheckSuite:
         s"SUMIFS(Other!B:B,Data!A:A,$c4,Other!A:A,$c5)",
         s"MAXIFS(Data!B:B,Other!A:A,$c6)",
         s"COUNTIF(Other!$window,$c3)",
-        s"SUM(COUNTIF(Data!$window,{1,2,\"x\"}))"
+        s"SUM(COUNTIF(Data!$window,{1,2,\"x\"}))",
+        // slots a slice never serves: a LET name, a computed name, two columns; and SUMIF's
+        // sum range sized from its corner
+        s"LET(r,Data!$window,COUNTIF(r,$c1))",
+        s"COUNTIF(dyn,$c2)",
+        s"COUNTIF(Data!A3:B12,$c4)",
+        s"SUMIF(Data!$window,$c5,Data!B3)",
+        s"COUNTIFS(stat,$c6,Data!$sumWindow,$c1)"
       )
       val outSheet = formulas.zipWithIndex.foldLeft(Sheet(out)) { case (s, (f, i)) =>
         s.put(ARef.from0(0, i), CellValue.Formula(f))
       }
       Workbook(Vector(dataSheet, otherSheet, outSheet))
+        .withDefinedName("dyn", "INDEX(Data!$A:$A,1):INDEX(Data!$A:$A,20)")
+        .withDefinedName(
+          "stat",
+          "Data!" + window.replaceAll("([A-Z]+)", "\\$$1").replaceAll("([0-9]+)", "\\$$1")
+        )
 
   property("function parity: the slice path equals the scan path for every criteria function") {
     Prop.forAll(genParityBook) { book =>
