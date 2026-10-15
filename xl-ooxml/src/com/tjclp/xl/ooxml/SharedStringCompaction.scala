@@ -23,11 +23,12 @@ import org.xml.sax.helpers.DefaultHandler
  * §18.3.1.4, `t` attribute value `s`; §18.4.9 `sst`) and a revision log's `<nc>`/`<oc>` new and old
  * cell values (§18.11, both of type CT_Cell).
  *
- * A `t="s"` value is a zero-based index into the table's `<si>` items (§18.4.9 `sst`), so an index
- * at or past the table's size, or one that is not a non-negative integer, names no entry. Such a
- * reference keeps nothing, so it never enters [[RefScan.indices]]; it is counted in
- * [[RefScan.outOfRange]] instead. A copied part with such a reference is malformed, so the write
- * keeps every entry of the table, as it does for a part it cannot read.
+ * A `t="s"` value is a zero-based index into the table's `<si>` items (§18.4.9 `sst`), read with
+ * [[SharedStringIndex]] (the readers' rule), so an index at or past the table's size, or a value
+ * that rule does not read as an index, names no entry. Such a reference keeps nothing, so it never
+ * enters [[RefScan.indices]]; it is counted in [[RefScan.outOfRange]] instead. A copied part with
+ * such a reference is malformed, so the write keeps every entry of the table, as it does for a part
+ * it cannot read.
  */
 private[ooxml] object SharedStringCompaction:
 
@@ -40,7 +41,7 @@ private[ooxml] object SharedStringCompaction:
    *   the number of `t="s"` sheet cells, `<c>` only (the table's `count` attribute counts them)
    * @param outOfRange
    *   the number of `t="s"` cell values (`<c>`, `<nc>`, `<oc>`) that name no entry: an index at or
-   *   past the table's size, or a value that is not a non-negative integer
+   *   past the table's size, or a value [[SharedStringIndex]] does not read as an index
    */
   final case class RefScan(indices: BitSet, count: Int, outOfRange: Int) derives CanEqual:
     /** The highest position referenced, or -1 when the part references none. */
@@ -57,9 +58,10 @@ private[ooxml] object SharedStringCompaction:
 
   /**
    * SAX scan of a sheet part for its `t="s"` cells, against a table of `tableSize` entries. Only
-   * indices below `tableSize` enter [[RefScan.indices]], so the scan's memory is bounded by the
-   * table, not by the values in the part. `Left` when the part is not well-formed XML; the caller
-   * then keeps every entry (an unread part may reference any of them).
+   * indices below `tableSize` enter [[RefScan.indices]], and a value is read without keeping its
+   * characters ([[SharedStringIndex.Accumulator]]), so the scan's memory is bounded by the table,
+   * not by the values in the part. `Left` when the part is not well-formed XML; the caller then
+   * keeps every entry (an unread part may reference any of them).
    */
   def scan(in: InputStream, tableSize: Int): Either[String, RefScan] =
     try
@@ -94,7 +96,7 @@ private[ooxml] object SharedStringCompaction:
     private var outOfRange = 0
     private var inSharedCell = false
     private var inValue = false
-    private val value = new java.lang.StringBuilder
+    private val value = new SharedStringIndex.Accumulator
 
     def result(): RefScan = RefScan(indices.toImmutable, count, outOfRange)
 
@@ -114,7 +116,7 @@ private[ooxml] object SharedStringCompaction:
           if inSharedCell && name == "c" then count += 1
         case "v" if inSharedCell =>
           inValue = true
-          value.setLength(0)
+          value.reset()
         case _ => ()
 
     override def characters(ch: Array[Char], start: Int, length: Int): Unit =
@@ -124,7 +126,7 @@ private[ooxml] object SharedStringCompaction:
       label(localName, qName) match
         case "v" if inValue =>
           inValue = false
-          value.toString.trim.toIntOption.filter(i => i >= 0 && i < tableSize) match
+          value.result.filter(_ < tableSize) match
             case Some(idx) => indices += idx
             case None => outOfRange += 1
         case "c" | "nc" | "oc" => inSharedCell = false

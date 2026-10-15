@@ -21,6 +21,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no entry. A surgical write that creates the table (the source had none) builds it from the sheets
   it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
   the table of an edited book can shrink and change positions where earlier versions only appended.
+- **One rule reads a `t="s"` value as a table position** (#768): `XlsxReader`, both streaming
+  readers and the writer's reference scan read it the same way, so a position the writer
+  keeps is the position the readers resolve. The value names position `n` when it is optional XML
+  whitespace, an optional `+`, ASCII digits (leading zeros allowed) up to `Int.MaxValue`, an
+  optional `.` followed only by zeros, and optional XML whitespace. LibreOffice reads `+3`, `03`,
+  ` 3` and `3.0` as 3. **Behaviour change:** a value with surrounding whitespace or an integral
+  decimal (`3.0`) now resolves (it read as `#VALUE!` in `XlsxReader` and empty in the streaming
+  readers); a value in non-ASCII digits (Arabic-Indic `٣`, fullwidth `３`) or `-0` no longer
+  resolves (it read as the entry those digits spell; LibreOffice reads the non-ASCII digits as 0),
+  and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`.
+  The scan keeps no characters of a value, so a value padded with any number of zeros costs no
+  extra memory.
+- **Formula escaping keeps the positions a copied macro sheet or revision log references** (#783):
+  `FormulaInjectionPolicy.Escape` regenerates every worksheet and rebuilt the shared-string table
+  from the cells, but macro sheets and revision logs are copied byte for byte, so their `t="s"`
+  values came to name other strings or no entry. When such a part references the source table,
+  the table now keeps the source order up to the highest position those parts reference (an entry
+  nothing references becomes an empty `<si>`), and the cells' strings follow. A copied part that
+  cannot be read, or holds a value naming no entry, keeps every source entry.
 - **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
   to leak, so the lint no longer reports it; its message names the new options instead of the
   fresh-write workaround.

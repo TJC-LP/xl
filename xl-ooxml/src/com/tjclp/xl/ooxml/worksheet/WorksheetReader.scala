@@ -17,6 +17,7 @@ import com.tjclp.xl.ooxml.{
   FormulaKindCodec,
   FormulaStorage,
   SharedFormula,
+  SharedStringIndex,
   SharedStrings,
   XmlReadable
 }
@@ -389,10 +390,11 @@ object WorksheetReader extends XmlReadable[OoxmlWorksheet]:
           case _ => Left(s"$cellType <is> is not an Elem")
 
       case "s" =>
-        // SST index - resolve using SharedStrings table
+        // SST index - resolve using SharedStrings table (SharedStringIndex: the rule the writer's
+        // reference scan uses too)
         (elem \ "v").headOption.map(_.text) match
           case Some(idxStr) =>
-            idxStr.toIntOption match
+            SharedStringIndex.parse(idxStr) match
               case Some(idx) =>
                 (for {
                   sharedStrings <- sst

@@ -202,6 +202,52 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
       assertEquals(texts(out, "Sheet2"), Map("A1" -> "Kept1"))
   }
 
+  test("GH-783: formula escaping keeps the positions a copied revision log references") {
+    // escaping regenerates both sheets; the revision log is still copied byte for byte
+    val source = book(
+      Vector("Gone0", "Kept1", "Gone2", "RevisionText"),
+      Vector(Vector("A1" -> 0, "A2" -> 2), Vector("A1" -> 1)),
+      revisionLog = Some(Vector("A1" -> 3, "A2" -> 1))
+    )
+    val out = editSheet(source, "Sheet1", WriterConfig.secure)(
+      _.remove(ref"A1").put(ref"A2" -> "NewText")
+    )
+    assertEquals(
+      entry(out, "xl/revisions/revisionLog1.xml").toSeq,
+      entry(source, "xl/revisions/revisionLog1.xml").toSeq
+    )
+    assertEquals(sstTexts(out), Vector("", "Kept1", "", "RevisionText", "NewText"))
+    assertSstCounts(out, count = 2, unique = 5)
+    assertNoText(out, "Gone0")
+    assertNoText(out, "Gone2")
+    assertEquals(texts(out, "Sheet1"), Map("A2" -> "NewText"))
+    assertEquals(texts(out, "Sheet2"), Map("A1" -> "Kept1"))
+  }
+
+  test("GH-783: formula escaping with no copied part builds the table from the cells") {
+    val out = editSheet(twoSheets("Stale"), "Sheet1", WriterConfig.secure)(
+      _.put(ref"A1" -> "NewLabelBeta")
+    )
+    assertEquals(sstTexts(out).toSet, Set("NewLabelBeta", "KeepMe", "Sheet2Only", "Tail"))
+    assertNoText(out, "OldLabelAlpha")
+    assertNoText(out, "Stale")
+  }
+
+  test("GH-783: formula escaping keeps every entry when a copied part cannot be read") {
+    val source = rewriteEntry(
+      book(
+        Vector("OldLabelAlpha", "KeepMe"),
+        Vector(Vector("A1" -> 0, "A2" -> 1)),
+        revisionLog = Some(Vector("A1" -> 1))
+      ),
+      "xl/revisions/revisionLog1.xml",
+      _ => "<revisions><rcc><nc"
+    )
+    val out = editSheet(source, "Sheet1", WriterConfig.secure)(_.put(ref"A1" -> "NewLabelBeta"))
+    assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe", "NewLabelBeta"))
+    assertEquals(texts(out, "Sheet1"), Map("A1" -> "NewLabelBeta", "A2" -> "KeepMe"))
+  }
+
   test("GH-768: an untouched part that cannot be read keeps every entry (the old append plan)") {
     // the revision log is not well-formed, so it may reference any position
     val source = rewriteEntry(

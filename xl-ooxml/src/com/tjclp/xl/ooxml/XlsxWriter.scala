@@ -2001,9 +2001,7 @@ object XlsxWriter:
     // - If no source SST → generate according to policy
     // - GH-768: entries no cell references after the edit leave the table (see removeOrphans)
     def planSharedStrings(regen: Set[Int]): SstPlan =
-      if escapeFormulas && sourceHasSharedStrings then
-        // Escaping regenerates every sheet, so a table built from the cells holds no orphan.
-        SstPlan(Some(SharedStrings.fromWorkbook(workbook, escapeFormulas = true)), true)
+      if escapeFormulas && sourceHasSharedStrings then escapedSharedStrings(regen)
       else if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = parsedSourceSST
@@ -2108,6 +2106,68 @@ object XlsxWriter:
         SstPlan(generated, generated.isDefined)
 
     /*
+     * The source parts a write that emits `written` from the model copies byte for byte and whose
+     * cells can reference the shared-string table: the worksheets of the other sheets (with their
+     * sheet index), and the preserved macro sheets and revision logs xl does not model.
+     */
+    def copiedCellBearingParts(
+      ctx: SourceContext,
+      written: Vector[Int]
+    ): (Vector[(Int, String)], Vector[String]) =
+      val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
+      val modeled = workbook.sheets.indices
+        .filterNot(written.contains)
+        .flatMap(idx => sourceSheetPath(ctx, idx).map(idx -> _))
+        .toVector
+      val unmodeled = (preservableParts -- removalOrphans).toVector.sorted
+        .filter(SharedStringCompaction.isCellBearingPart)
+        .filterNot(p => claimed.contains(p) || deletedSheetParts.contains(p))
+      (modeled, unmodeled)
+
+    /*
+     * Formula escaping regenerates every worksheet (regeneratedSheets), so the table is built from
+     * the cells. A macro sheet or revision log is still copied byte for byte and keeps the source
+     * positions its t="s" values name (GH-783). When such a part references the source table, the
+     * table keeps the source order up to the highest position the copied parts reference (an entry
+     * neither they nor a cell reference becomes empty, as in removeOrphans; the rest above it are
+     * dropped), and the cells' strings follow. A copied part that cannot be read, or that holds a
+     * value naming no entry, keeps every source entry.
+     */
+    def escapedSharedStrings(regen: Set[Int]): SstPlan =
+      import SharedStringCompaction.RefScan
+      val built = SharedStrings.fromWorkbook(workbook, escapeFormulas = true)
+      (sourceContext, parsedSourceSST) match
+        case (Some(ctx), Some(preserved)) =>
+          val (modeled, unmodeled) = copiedCellBearingParts(ctx, writtenFromModel(regen))
+          val copied = modeled.map(_._2) ++ unmodeled
+          val scans = copied.foldLeft[Either[String, Vector[RefScan]]](Right(Vector.empty)) {
+            (acc, path) => acc.flatMap(ss => sourceRefScan(ctx, path).map(ss :+ _))
+          }
+          val kept: Vector[SSTEntry] = scans match
+            case Right(ss) if ss.forall(_.outOfRange == 0) =>
+              val referenced = ss.foldLeft(BitSet.empty)(_ | _.indices)
+              referenced.lastOption.fold(Vector.empty[SSTEntry]) { pinnedMax =>
+                val cellEntries = built.strings.toSet
+                val orphans = BitSet.fromSpecific(
+                  preserved.strings.indices.filter(i =>
+                    !referenced.contains(i) && !cellEntries.contains(preserved.strings(i))
+                  )
+                )
+                SharedStringCompaction.withoutOrphans(preserved.strings, orphans, pinnedMax)
+              }
+            case _ => preserved.strings
+          if kept.isEmpty then SstPlan(Some(built), true)
+          else
+            val keptSet = kept.toSet
+            val copiedCount = scans.fold(_ => 0, _.map(_.count).sum)
+            val table = SharedStrings.fromDedupedEntries(
+              kept ++ built.strings.filterNot(keptSet.contains),
+              built.totalCount + copiedCount
+            )
+            SstPlan(Some(table), true)
+        case _ => SstPlan(Some(built), true)
+
+    /*
      * GH-768: the entries of the preserved table no cell references once this write lands, removed
      * so that text an edit took out of every cell leaves the package. A part copied verbatim keeps
      * its t="s" positions, so an orphan at or below the highest position such a part references
@@ -2152,16 +2212,7 @@ object XlsxWriter:
       val writtenReferenced: BitSet =
         writtenEntries.iterator.flatMap(lookup(preserved, _)).to(BitSet)
 
-      val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
-      val copiedModeled: Vector[(Int, String)] =
-        workbook.sheets.indices
-          .filterNot(written.contains)
-          .flatMap(idx => sourceSheetPath(ctx, idx).map(idx -> _))
-          .toVector
-      val copiedUnmodeled: Vector[String] =
-        (preservableParts -- removalOrphans).toVector.sorted
-          .filter(SharedStringCompaction.isCellBearingPart)
-          .filterNot(p => claimed.contains(p) || deletedSheetParts.contains(p))
+      val (copiedModeled, copiedUnmodeled) = copiedCellBearingParts(ctx, written)
       val copiedPaths = copiedModeled.map(_._2) ++ copiedUnmodeled
       val allEntries = BitSet.fromSpecific(preserved.strings.indices)
 
