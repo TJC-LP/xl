@@ -2,7 +2,9 @@ package com.tjclp.xl.formula.perf
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.eval.{IterativeMode, RecalcCounters, RecalcEngine, RecalcOptions}
 import com.tjclp.xl.formula.eval.RecalcCounters.{Counter, Phase}
+import com.tjclp.xl.formula.eval.WorkbookEvaluator
 import com.tjclp.xl.formula.perf.LoadsBookHarness.Mode
 import munit.FunSuite
 
@@ -38,17 +40,19 @@ class RecalcPerfGatesSpec extends FunSuite:
   private lazy val parallel = runTiny(Mode.Parallel)
 
   /**
-   * Today's engine on Tiny: the legacy per-cell graph; the per-pass column slices (#767 PR 1), one
-   * per criteria column the book reads (8 of the Loads columns), one used-range scan (the Loads
-   * sheet, sizing those slices), and one parse per distinct defined-name body; every criteria call
-   * answered from the equality index (#767 PR 2), testing only its candidate rows (180,118 matcher
-   * calls when every row was tested).
+   * Today's engine on Tiny: the compact graph (11 range nodes, 1,197 segment nodes over the three
+   * helper columns, 5,001 edges where the legacy per-cell graph had 186,400; Tarjan and Kahn walk
+   * them three times); the per-pass column slices (#767 PR 1), one per criteria column the book
+   * reads (8 of the Loads columns), one used-range scan (the Loads sheet, sizing those slices), and
+   * one parse per distinct defined-name body; every criteria call answered from the equality index
+   * (#767 PR 2), testing only its candidate rows (180,118 matcher calls when every row was tested).
    */
   private val TinyCounts: Map[Counter, Long] = Map(
     Counter.GraphNodes -> 1600L,
-    Counter.GraphEdges -> 186400L,
-    Counter.VirtualNodes -> 0L,
-    Counter.RangeNodes -> 0L,
+    Counter.GraphEdges -> 5001L,
+    Counter.VirtualNodes -> 1197L,
+    Counter.RangeNodes -> 11L,
+    Counter.GraphWork -> 15003L,
     Counter.CriteriaIndexed -> 400L,
     Counter.CriteriaWindowOnly -> 0L,
     Counter.CriteriaNotIndexable -> 0L,
@@ -143,7 +147,7 @@ class RecalcPerfGatesSpec extends FunSuite:
     }
   }
 
-  test("RunTotal: running totals equal the closed form; the legacy graph is quadratic") {
+  test("RunTotal: running totals equal the closed form; the compact graph is O(n log n)") {
     val rows = 300
     val run = LoadsBookHarness.run(LoadsBook.runTotal(rows), Mode.Recalc)
     assertEquals(run.result.errors, Vector.empty)
@@ -155,6 +159,18 @@ class RecalcPerfGatesSpec extends FunSuite:
       assertEquals(value.map(LoadsBookHarness.show), expected.map(LoadsBookHarness.show), s"D$r")
     }
     assertEquals(run.counters(Counter.GraphNodes), 2L * rows)
-    // D_n reads C_2..C_n: 1 + 2 + ... + rows edges
-    assertEquals(run.counters(Counter.GraphEdges), rows.toLong * (rows + 1) / 2)
+    assertEquals(run.counters(Counter.RangeNodes), rows.toLong)
+    // C's segment tree (rows - 1 nodes, 2 * rows - 2 edges), at most 2 log2(rows) canonical
+    // pieces per D_n, one reader edge each
+    val log2 = 32 - Integer.numberOfLeadingZeros(rows)
+    assert(run.counters(Counter.GraphEdges) <= 2L * rows * (log2 + 2), run.counters.render)
+    // the legacy graph: D_n reads C_2..C_n, 1 + 2 + ... + rows edges
+    val legacy = RecalcCounters.create()
+    WorkbookEvaluator.recalculateCounted(
+      LoadsBook.runTotal(rows),
+      RecalcOptions(iterative = IterativeMode.Off),
+      legacy,
+      RecalcEngine.Legacy
+    )
+    assertEquals(legacy.snapshot(Counter.GraphEdges), rows.toLong * (rows + 1) / 2)
   }
