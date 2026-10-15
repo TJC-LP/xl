@@ -211,10 +211,11 @@ Subcommands:
           - zip entries no relationship reaches from _rels/.rels (dead weight, or a
             forgotten Relationship; never a repair, but the bytes travel) [hygiene]
           - shared-string entries with text that no t="s" cell references (count +
-            first five INDICES, never the text) [hygiene] and t="s" indices past the
-            table (#REF!); an xl write drops the strings its edit removed (an empty
-            entry where an untouched sheet keeps its positions, never reported) but
-            keeps the ones the source already carried unless --compact-strings
+            first five INDICES, never the text) [hygiene] and t="s" values that name
+            no entry: past the table (#REF!), negative or not an index (#VALUE!);
+            an xl write drops the strings its edit removed (an empty entry where an
+            untouched sheet keeps its positions, never reported) but keeps the ones
+            the source already carried unless --compact-strings
           - a sheet's hidden _xlnm._FilterDatabase name naming another range, sheet
             or #REF! than its <autoFilter ref> (a stale name; Excel opens the filter
             intact and keeps the name) [hygiene]

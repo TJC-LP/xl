@@ -32,17 +32,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
   the table of an edited book can shrink and change positions where earlier versions only appended.
 - **One rule reads a `t="s"` value as a table position** (#768): `XlsxReader`, both streaming
-  readers and the writer's reference scan read it the same way, so a position the writer
-  keeps is the position the readers resolve. The value names position `n` when it is optional XML
-  whitespace, an optional `+`, ASCII digits (leading zeros allowed) up to `Int.MaxValue`, an
-  optional `.` followed only by zeros, and optional XML whitespace. LibreOffice reads `+3`, `03`,
-  ` 3` and `3.0` as 3. **Behaviour change:** a value with surrounding whitespace or an integral
-  decimal (`3.0`) now resolves (it read as `#VALUE!` in `XlsxReader` and empty in the streaming
-  readers); a value in non-ASCII digits (Arabic-Indic `٣`, fullwidth `３`) or `-0` no longer
-  resolves (it read as the entry those digits spell; LibreOffice reads the non-ASCII digits as 0),
-  and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`.
-  The scan keeps no characters of a value, so a value padded with any number of zeros costs no
-  extra memory.
+  readers, the single-cell reader behind `ExcelIO.streamCellDetails`, the writer's reference scan
+  and `shared-string-orphan` read it the same way, so a position the writer keeps is the position
+  the readers resolve. The value names position `n` when it is optional XML whitespace, an optional
+  `+` or `-`, ASCII digits (leading zeros allowed) up to `Int.MaxValue`, and optional XML
+  whitespace, with no negative value. This is what desktop Excel for Mac 16.114 did with a
+  four-entry table: it opened `3`, ` 3 `, `3` after a tab or before an LF or CR, `+3`, ` +3 `, `03`
+  as the fourth entry and `-0`, `-00` as the first, with no repair prompt; it repaired `3.0`, `3.`,
+  `3.5`, `3e0`, `3 3`, `+ 3`, `+-3`, `--0`, a no-break space before `3`, `٣` (Arabic-Indic) and `３`
+  (fullwidth) into a text cell holding the value as written, removed the cell for `4` (past the end)
+  and `-1`, and opened an empty value as a blank cell. **Behaviour change:** a value with
+  surrounding XML whitespace now resolves (it read as `#VALUE!` in `XlsxReader` and empty in the
+  streaming readers); a value in non-ASCII digits no longer resolves (it read as the entry those
+  digits spell), and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`. The scan
+  keeps no characters of a value, so a value padded with any number of zeros costs no extra memory.
 - **Formula escaping keeps the positions a copied macro sheet or revision log references** (#783):
   `FormulaInjectionPolicy.Escape` regenerates every worksheet and rebuilt the shared-string table
   from the cells, but macro sheets and revision logs are copied byte for byte, so their `t="s"`
@@ -54,6 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
   to leak, so the lint no longer reports it; its message names the new options instead of the
   fresh-write workaround.
+- **`shared-string-orphan` reports every `t="s"` value that names no entry** (#768, #567): the
+  lint read a value with `toIntOption`, so it skipped a value that is not an index (`3.0`, `3e0`,
+  `٣`) and reported `-1` as past the table. It now reads the value with the readers' rule above and
+  reports, per sheet part, every value that names no entry (an index past the table, a negative
+  index, or a value that is not an index), showing a value that is not an index as written (at
+  most 16 characters). The finding is severity `repair`, or `hygiene` when every such value is
+  empty, which Excel opens as a blank cell.
 - **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
   take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
   `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore

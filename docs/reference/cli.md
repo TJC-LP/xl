@@ -2306,8 +2306,12 @@ the verb) promotes them to the gate.
   travel with every copy of the file. Severity `hygiene`
 - **`shared-string-orphan`** — an `xl/sharedStrings.xml` entry no `t="s"` cell references (ONE
   finding with the orphan count and the first five INDICES — never the text, so scrubbed content
-  cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
-  Excel repairs — severity `repair`). The orphan half is severity `hygiene`: a privacy signal, not
+  cannot resurface in a lint log), or a `t="s"` value that names no entry — an index past the
+  table, a negative index, or a value that is not an index such as `3.0` (the reader shows `#REF!`
+  for an index past the table and `#VALUE!` otherwise; Excel repairs — severity `repair`, or
+  `hygiene` when every such value is empty, which Excel opens as a blank cell). A value names an
+  entry by the rule the readers use: optional whitespace, an optional `+` or `-`, ASCII digits,
+  optional whitespace, never negative (`-0` is entry 0). The orphan half is severity `hygiene`: a privacy signal, not
   a repair class — a counterparty name scrubbed from every cell still rides in the package. An
   entry with no text is never reported (it carries nothing; it is what an xl write leaves where an
   untouched sheet must keep its positions, see the carve-out below). Under `--stream`

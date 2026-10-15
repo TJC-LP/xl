@@ -2170,6 +2170,28 @@ class WorkbookLintSpec extends FunSuite:
     "xl/worksheets/sheet1.xml" -> sstSheetXml(0, 1, 2, 7)
   )
 
+  /** One row of `t="s"` cells holding `values` as written (A1, B1, ...). */
+  private def sstValueSheetXml(values: String*): String = worksheetWith(
+    "<sheetData><row r=\"1\">" +
+      values.zipWithIndex.map { (v, i) =>
+        s"""<c r="${('A' + i).toChar}1" t="s"><v>$v</v></c>"""
+      }.mkString +
+      "</row></sheetData>"
+  )
+
+  // " 2 ", "+1" and "-0" name entries 2, 1 and 0 (Excel opens them so); "3.0", "-1" and "٣" name
+  // none (Excel repairs each) and are reported with the past-the-table index 7
+  private val unnamedSstParts: Map[String, String] = baseParts ++ Map(
+    "xl/sharedStrings.xml" -> sstXml("alpha", "beta", "gamma"),
+    "xl/worksheets/sheet1.xml" -> sstValueSheetXml(" 2 ", "+1", "-0", "3.0", "-1", "٣", "7")
+  )
+
+  // an empty value names no entry, but Excel opens it as a blank cell without a repair
+  private val emptySstValueParts: Map[String, String] = baseParts ++ Map(
+    "xl/sharedStrings.xml" -> sstXml("alpha"),
+    "xl/worksheets/sheet1.xml" -> sstValueSheetXml("0", "")
+  )
+
   private val noSstPartParts: Map[String, String] =
     baseParts - "xl/sharedStrings.xml" + ("xl/worksheets/sheet1.xml" -> sstSheetXml(0))
 
@@ -2202,6 +2224,31 @@ class WorkbookLintSpec extends FunSuite:
     assert(f.message.contains("D1 → 7"), f.message)
     assert(f.message.contains("holds 3 <si>"), f.message)
     assert(f.message.contains("#REF!"), f.message)
+  }
+
+  test("GH-567: a value that is not an index is reported with the past-the-table indices") {
+    val findings = lintOf(unnamedSstParts)
+    assertEquals(findings.map(_.category), Vector(LintCategory.SharedStringOrphan))
+    val f = findings.head
+    assertEquals(f.part, "xl/worksheets/sheet1.xml")
+    assertEquals(f.severity, LintSeverity.Repair)
+    assertEquals(f.locator, """<c r="D1" t="s"><v>3.0</v>""")
+    assert(f.message.startsWith("4 cell(s)"), f.message)
+    assert(f.message.contains("""D1 → "3.0", E1 → "-1", F1 → "٣", G1 → 7"""), f.message)
+    // A1..C1 name entries 2, 1 and 0, so no entry is an orphan
+    assertEquals(lintStreamOf(unnamedSstParts), findings)
+  }
+
+  test("GH-567: an empty t=\"s\" value alone is a hygiene finding (Excel opens it blank)") {
+    val findings = lintOf(emptySstValueParts)
+    assertEquals(
+      findings.map(f => (f.part, f.severity)),
+      Vector(
+        ("xl/worksheets/sheet1.xml", LintSeverity.Hygiene)
+      )
+    )
+    assert(findings.head.message.contains("B1 → \"\""), findings.head.message)
+    assertEquals(lintStreamOf(emptySstValueParts), findings)
   }
 
   test("GH-567: a t=\"s\" cell in a book with no shared-string part is the same class") {
@@ -2794,6 +2841,8 @@ class WorkbookLintSpec extends FunSuite:
     "orphan shared strings" -> orphanSstParts,
     "unioned shared strings" -> unionSstParts,
     "past-table shared-string index" -> pastTableSstParts,
+    "shared-string values that are not an index" -> unnamedSstParts,
+    "empty shared-string value" -> emptySstValueParts,
     "t=s without a shared-string part" -> noSstPartParts,
     "malformed shared strings" -> malformedSstParts,
     // #460 item 5: the sheet's direct-child <autoFilter ref> capture (SAX depth 1 vs DOM children)
