@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Recalculation evaluates in one canonical order** (#767): whole-workbook `recalculate` and
+  `recalculateUncached` (what `Excel.writeChecked` runs) evaluate formulas in the
+  dependency-first order that always takes the top-left ready formula next (sheet name, then row,
+  then column), where they used the hash order of the formula set. Values are unchanged; three
+  things become observable: `RecalcResult.errors` lists circular references, then cells blocked by
+  them, each in grid order (row 2 before row 10), then evaluation failures in evaluation order; a
+  seeded `RAND`/`RANDBETWEEN`/`RANDARRAY` draws across cells in that order; a parallel
+  recalculation still returns exactly the sequential result, errors included. The order no longer
+  depends on `ARef` hashing. Ships in 0.25.0.
+
 ### Performance
 
 - **Per-pass recalculation caches** (#767): a recalculation pass (`recalculate`, parallel waves,
@@ -46,6 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Numeric text in criteria** (#767): criteria matching no longer parses text that cannot start a
   number (anything but a sign, a point or a digit after trimming) through an exception; results
   are unchanged.
+
+- **Compact recalculation graph** (#767): recalculation orders formulas with a graph that has one
+  node per formula, per distinct range read and per segment of a formula column, so a formula
+  reading a range costs O(log rows) edges instead of one edge per formula inside the range. On the
+  10k-row helper-criteria benchmark book the graph drops from 92.5M edges to 116k (build, Tarjan and
+  Kahn from 77 s to 1.0 s; the whole recalculation from 134 s to 49 s, now all criteria scans), the
+  book recalculates within a 2 GB heap (peak 1.4 GB; it needed about 25 GB), and a 200k-row running
+  total builds and orders its graph in 1.6 s. Results are unchanged: property
+  tests compare reachability, cycles, order, SCC condensation, waves and every `RecalcResult` field
+  against the previous per-cell graph, which stays one release as an internal fallback.
 
 ### Testing
 

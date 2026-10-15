@@ -574,6 +574,32 @@ object RecalcResult:
     cycleReports: Vector[SccReport] = Vector.empty,
     reasons: Map[QualifiedRef, String] = Map.empty
   ): RecalcResult =
+    cacheResultsWith(
+      wb,
+      successful,
+      failures,
+      (failed, pinned) =>
+        DependencyGraph.qualifiedTransitiveDependents(
+          dependents.view.mapValues(_ -- pinned).toMap,
+          failed
+        ),
+      cycleReports,
+      reasons
+    )
+
+  /**
+   * [[cacheResults]] with the invalidation walk supplied: `dependentsOf(failed, pinned)` is every
+   * formula reachable from `failed` through readers, the failed cells excluded, never passing
+   * through a pinned cell (#767: the compact graph answers it without a reverse map).
+   */
+  private[eval] def cacheResultsWith(
+    wb: Workbook,
+    successful: Map[SheetName, Map[ARef, CellValue]],
+    failures: Vector[CellEvalError],
+    dependentsOf: (Set[QualifiedRef], Set[QualifiedRef]) => Set[QualifiedRef],
+    cycleReports: Vector[SccReport],
+    reasons: Map[QualifiedRef, String]
+  ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
         case Some(CellValue.Formula(expression, _, _)) => expression
@@ -591,11 +617,7 @@ object RecalcResult:
               QualifiedRef(sheet.name, ref)
           }
         }.toSet
-        val invalidationEdges = dependents.view.mapValues(_ -- pinned).toMap
-        failedRefs ++ DependencyGraph.qualifiedTransitiveDependents(
-          invalidationEdges,
-          failedRefs
-        )
+        failedRefs ++ dependentsOf(failedRefs, pinned)
     val additionalErrors = (invalid -- failedRefs).toVector
       .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
       .map(q =>

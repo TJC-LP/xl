@@ -389,6 +389,14 @@ Same machine, run back to back:
 Every R20 and Real call is indexed (none window-only). With the index, R20 spends 0.9 s building the
 legacy graph and 1.0 s in criteria calls.
 
+With the compact graph (#767: one node per formula, per distinct range and per formula-column
+segment, so a range read costs O(log rows) edges), H10's graph has 116,024 edges and 29,997 segment
+nodes: build 0.97 s, Tarjan 0.01 s, Kahn 0.02 s, wall 49 s (eval, all criteria scans, is the rest),
+heap peak 1.4 GB under `-Xmx2g`; the 40 oracle cells are unchanged. A 200k-row running total
+(`RunTotal`) builds, cycle-checks and orders its 3.5M-edge graph in 1.6 s. `CompactGraphGatesSpec`
+gates both graphs: `GraphEdges + VirtualNodes <= 40 x (formulas + ranges)` on H10, and Tarjan plus
+Kahn walking at most `3 x (formulas + ranges) x log2(rows)` edges on `RunTotal(200k)`.
+
 ---
 
 ## Common Performance Pitfalls
