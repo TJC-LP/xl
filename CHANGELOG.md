@@ -17,9 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   eval, criteria, `Sheet.put`, write). `LoadsBookMain` prints the breakdown; on 0.24.1 the 10k-row
   helper-criteria book spends 78 s of 134 s building and ordering a 92.5M-edge graph, and the
   20k-row raw-criteria book 116 s of 118 s in criteria scans. A non-blocking CI `perf` job pins the
-  `Tiny` counters and 40 oracle cells under a 2 GB heap; `RecalcBenchmark` (JMH, counters off and
-  on) runs weekly in `perf-trend.yml`. Public entry points use disabled counters; results are
-  unchanged.
+  `Tiny` counters and every `Tiny` formula value under a 2 GB heap; `RecalcBenchmark` (JMH,
+  counters off and on) runs weekly in `perf-trend.yml`. Public entry points use disabled counters,
+  and a property test checks that a counted recalculation returns exactly what the public one does
+  in every `RecalcOptions` mode; results are unchanged.
 
 ## [0.24.1] - 2026-10-14
 
