@@ -72,6 +72,34 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
     }
   }
 
+  /** Tall books: the depth-0 wave alone usually exceeds the parallel path's sequential cutoff. */
+  private val genTall: Gen[Workbook] = CompactGraphGens.genWorkbookOf(40)
+
+  /** The widest wave a parallel recalculation of `wb` would run (its cyclic core removed). */
+  private def widestWave(wb: Workbook): Int =
+    val graph = RecalcGraph.build(wb, RecalcEngine.Compact, RecalcCounters.disabled)
+    val core = graph.cyclicCore
+    val removed = core ++ graph.dependents(core, Set.empty)
+    graph.order(removed).fold(_ => 0, o => o.waves(o.order).map(_.length).maxOption.getOrElse(0))
+
+  test("the tall generator reaches the parallel path: waves wider than its cutoff") {
+    val books =
+      (1 to 20).flatMap(i => genTall(Gen.Parameters.default, org.scalacheck.rng.Seed(i.toLong)))
+    assert(books.count(widestWave(_) >= 16) >= books.size / 2, books.map(widestWave).toString)
+  }
+
+  property("parallel over tall books: Compact equals Legacy and the sequential pass") {
+    Prop.forAll(genTall) { wb =>
+      val par = RecalcOptions(clock = clock, iterative = IterativeMode.Off, parallelism = 4)
+      val seq = par.copy(parallelism = 1)
+      val compact = run(RecalcEngine.Compact, par)(wb)
+      Prop.all(
+        same(compact, run(RecalcEngine.Legacy, par)(wb), "parallel"),
+        same(compact, run(RecalcEngine.Compact, seq)(wb), "parallel vs sequential")
+      )
+    }
+  }
+
   property("recalculateUncached: Compact equals Legacy") {
     Prop.forAll(genBook) { wb =>
       def opts = RecalcOptions(clock = clock, rng = Rng.seeded(7L), iterative = IterativeMode.Off)

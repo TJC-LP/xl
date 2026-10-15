@@ -177,6 +177,26 @@ class CompactGraphSpec extends ScalaCheckSuite:
     }
   }
 
+  property("member reads: direct legacy reads among any member set, one component or many") {
+    Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
+      val f = fixture(wb)
+      def expected(members: Set[QualifiedRef]): Map[QualifiedRef, Set[QualifiedRef]] =
+        members.iterator
+          .map(q => q -> (f.deps(q) & members - q))
+          .filter(_._2.nonEmpty)
+          .toMap
+      def compact(members: Set[QualifiedRef]): Map[QualifiedRef, Set[QualifiedRef]] =
+        f.graph.memberPrecedents(f.ids(members)).map((r, ps) => f.ref(r) -> f.refs(ps))
+      val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
+      val mixed = all.zipWithIndex.collect { case (q, i) if i % 2 == 0 => q }.toSet
+      val sccs = DependencyGraph.qualifiedSccOrder(f.deps).map(_.members.toSet)
+      Prop.all(
+        (Prop(compact(mixed) == expected(mixed)) :| s"mixed $mixed") +:
+          sccs.map(m => Prop(compact(m) == expected(m)) :| s"component $m")*
+      )
+    }
+  }
+
   property("waves: longest-path depths equal the legacy depth over the pruned graph") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val f = fixture(wb)
@@ -338,4 +358,36 @@ class CompactGraphSpec extends ScalaCheckSuite:
     assertEquals(g.cyclicFormulas, BitSet.empty)
     assertEquals(g.kahn(BitSet.empty).formulaOrder.toVector, (0 until n).toVector)
     assertEquals(g.reach(BitSet(0), BitSet.empty).formulas.size, n - 1)
+  }
+
+  test("segment trees: for every column size up to 70, a range reaches exactly its formulas") {
+    // the bottom-up layout puts leaves at m..2m-1 for any m, so for m not a power of two some
+    // internal nodes cover non-adjacent leaves; the canonical pieces of a window must still be
+    // exactly the formulas inside it
+    val rnd = new scala.util.Random(767)
+    (1 to 70).foreach { m =>
+      // column A holds `1` formulas on the odd rows 1, 3, ..., 2m - 1, so windows can start and
+      // end on blank rows; column C holds one reader per window
+      val last = 2 * m
+      val all = for a <- 1 to last; b <- a to last yield (a, b)
+      val windows = if all.size <= 200 then all else Vector.fill(200)(all(rnd.nextInt(all.size)))
+      val formulas = (0 until m).map(i => ("S", s"A${2 * i + 1}", "1")) ++
+        windows.zipWithIndex.map { case ((a, b), k) => ("S", s"C${k + 1}", s"SUM(A$a:A$b)") }
+      val g = CompactGraph.build(CompactGraphGens.book(formulas*))
+      (0 until m).foreach { i =>
+        val row = 2 * i + 1
+        val self = g.nodes.lookup(QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, row - 1)))
+        val reached = self.fold(Set.empty[String])(n =>
+          g.reach(BitSet(n), BitSet.empty)
+            .formulas
+            .iterator
+            .map(g.nodes.qualified(_).ref.toA1)
+            .toSet
+        )
+        val expected = windows.zipWithIndex.collect {
+          case ((a, b), k) if a <= row && row <= b => s"C${k + 1}"
+        }.toSet
+        assertEquals(reached, expected, s"m=$m, A$row")
+      }
+    }
   }
