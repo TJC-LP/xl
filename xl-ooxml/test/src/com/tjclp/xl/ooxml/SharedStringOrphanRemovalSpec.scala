@@ -309,6 +309,74 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
     assertEquals(texts(out, "Sheet2"), Map("A1" -> "untouched text"))
   }
 
+  // ========== a t="s" index that names no entry (ECMA-376 §18.4.9) ==========
+
+  /** The indices past the end of a 3-entry table: one just past it, and Int.MaxValue. */
+  private val pastEnd = Vector(3, Int.MaxValue)
+
+  test("GH-768: an edited sheet's index past the table neither pins an entry nor fails the write") {
+    for bad <- pastEnd; config <- Vector(WriterConfig(), compact) do
+      val source = book(
+        Vector("Gone0", "Kept1", "Kept2"),
+        Vector(Vector("A1" -> 0, "A2" -> bad), Vector("A1" -> 1, "A2" -> 2))
+      )
+      val out = editSheet(source, "Sheet1", config)(_.remove(ref"A1").remove(ref"A2"))
+      val clue = s"bad=$bad $config"
+      assertNoText(out, "Gone0")
+      assertEquals(texts(out, "Sheet2"), Map("A1" -> "Kept1", "A2" -> "Kept2"), clue)
+      assertEquals(texts(out, "Sheet1"), Map.empty[String, String], clue)
+      assertOrphanLintClean(out)
+  }
+
+  test("GH-768: an untouched part with an index past the table keeps the table unchanged") {
+    for bad <- pastEnd; config <- Vector(WriterConfig(), compact) do
+      val source = book(
+        Vector("OldLabelAlpha", "KeepMe", "Sheet2Only"),
+        Vector(Vector("A1" -> 0, "A2" -> 1), Vector("A1" -> 2, "A2" -> bad))
+      )
+      // the edit releases OldLabelAlpha and adds no string
+      val out = editSheet(source, "Sheet1", config)(_.remove(ref"A1"))
+      val clue = s"bad=$bad $config"
+      // the untouched sheet is malformed, so the write keeps every entry, as for an unread part
+      assertEquals(sstTexts(out), Vector("OldLabelAlpha", "KeepMe", "Sheet2Only"), clue)
+      assertEquals(
+        entry(out, "xl/worksheets/sheet2.xml").toSeq,
+        entry(source, "xl/worksheets/sheet2.xml").toSeq,
+        clue
+      )
+      assertEquals(texts(out, "Sheet1"), Map("A2" -> "KeepMe"), clue)
+      assertEquals(texts(out, "Sheet2"), Map("A1" -> "Sheet2Only"), clue)
+  }
+
+  test("GH-768: a scan holds one bit per table entry at most, whatever index a cell names") {
+    val scan = scanCells(Vector("0", "2", "3", Int.MaxValue.toString, "-1", "x"), tableSize = 3)
+    assertEquals(scan.indices, scala.collection.immutable.BitSet(0, 2))
+    assertEquals(scan.outOfRange, 4)
+    assertEquals(scan.count, 6)
+    assertEquals(scan.maxIndex, 2)
+    assert(scan.indices.toBitMask.length <= 1, scan.indices.toBitMask.length.toString)
+  }
+
+  property("GH-768: a scan keeps exactly the indices below the table's size") {
+    val genIndex = Gen.frequency(4 -> Gen.choose(0, 40), 1 -> Gen.choose(0, Int.MaxValue))
+    Prop.forAll(Gen.listOf(genIndex), Gen.choose(0, 40)) { (indices, tableSize) =>
+      val scan = scanCells(indices.toVector.map(_.toString), tableSize)
+      val (in, out) = indices.partition(_ < tableSize)
+      assertEquals(scan.indices, scala.collection.immutable.BitSet.fromSpecific(in))
+      assertEquals(scan.outOfRange, out.size)
+      assert(scan.indices.toBitMask.length <= tableSize / 64 + 1)
+    }
+  }
+
+  private def scanCells(values: Vector[String], tableSize: Int): SharedStringCompaction.RefScan =
+    val cells = values.zipWithIndex
+      .map((v, i) => s"""<c r="A${i + 1}" t="s"><v>$v</v></c>""")
+      .mkString
+    val xml = s"<worksheet><sheetData><row r=\"1\">$cells</row></sheetData></worksheet>"
+    SharedStringCompaction
+      .scan(new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8)), tableSize)
+      .fold(e => fail(e), identity)
+
   // ========== round-trip property ==========
 
   private val pool = Vector("alpha", "beta", "gamma", "delta", "epsilon", "zeta")

@@ -22,6 +22,12 @@ import org.xml.sax.helpers.DefaultHandler
  * Only cells with `t="s"` reference the table: a worksheet or macro sheet's `<c>` (ECMA-376 Part 1,
  * §18.3.1.4, `t` attribute value `s`; §18.4.9 `sst`) and a revision log's `<nc>`/`<oc>` new and old
  * cell values (§18.11, both of type CT_Cell).
+ *
+ * A `t="s"` value is a zero-based index into the table's `<si>` items (§18.4.9 `sst`), so an index
+ * at or past the table's size, or one that is not a non-negative integer, names no entry. Such a
+ * reference keeps nothing, so it never enters [[RefScan.indices]]; it is counted in
+ * [[RefScan.outOfRange]] instead. A copied part with such a reference is malformed, so the write
+ * keeps every entry of the table, as it does for a part it cannot read.
  */
 private[ooxml] object SharedStringCompaction:
 
@@ -29,16 +35,19 @@ private[ooxml] object SharedStringCompaction:
    * The shared-string references of one sheet part.
    *
    * @param indices
-   *   the table positions its `t="s"` cells name
+   *   the table positions its `t="s"` cells name, each below the table's size
    * @param count
    *   the number of `t="s"` sheet cells, `<c>` only (the table's `count` attribute counts them)
+   * @param outOfRange
+   *   the number of `t="s"` cell values (`<c>`, `<nc>`, `<oc>`) that name no entry: an index at or
+   *   past the table's size, or a value that is not a non-negative integer
    */
-  final case class RefScan(indices: BitSet, count: Int) derives CanEqual:
+  final case class RefScan(indices: BitSet, count: Int, outOfRange: Int) derives CanEqual:
     /** The highest position referenced, or -1 when the part references none. */
     def maxIndex: Int = indices.lastOption.getOrElse(-1)
 
   object RefScan:
-    val empty: RefScan = RefScan(BitSet.empty, 0)
+    val empty: RefScan = RefScan(BitSet.empty, 0, 0)
 
   /** Parts whose cells can reference the table: worksheets, macro sheets and revision logs. */
   def isCellBearingPart(path: String): Boolean =
@@ -47,13 +56,15 @@ private[ooxml] object SharedStringCompaction:
       !path.contains("/_rels/") && path.endsWith(".xml")
 
   /**
-   * SAX scan of a sheet part for its `t="s"` cells. `Left` when the part is not well-formed XML;
-   * the caller then keeps every entry (an unread part may reference any of them).
+   * SAX scan of a sheet part for its `t="s"` cells, against a table of `tableSize` entries. Only
+   * indices below `tableSize` enter [[RefScan.indices]], so the scan's memory is bounded by the
+   * table, not by the values in the part. `Left` when the part is not well-formed XML; the caller
+   * then keeps every entry (an unread part may reference any of them).
    */
-  def scan(in: InputStream): Either[String, RefScan] =
+  def scan(in: InputStream, tableSize: Int): Either[String, RefScan] =
     try
       val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-      val handler = new RefHandler
+      val handler = new RefHandler(tableSize)
       parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(in)), handler)
       Right(handler.result())
     catch
@@ -77,14 +88,15 @@ private[ooxml] object SharedStringCompaction:
     }.toVector
 
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private final class RefHandler extends DefaultHandler:
+  private final class RefHandler(tableSize: Int) extends DefaultHandler:
     private val indices = mutable.BitSet.empty
     private var count = 0
+    private var outOfRange = 0
     private var inSharedCell = false
     private var inValue = false
     private val value = new java.lang.StringBuilder
 
-    def result(): RefScan = RefScan(indices.toImmutable, count)
+    def result(): RefScan = RefScan(indices.toImmutable, count, outOfRange)
 
     private def label(localName: String, qName: String): String =
       if localName.nonEmpty then localName else qName.substring(qName.indexOf(':') + 1)
@@ -112,6 +124,8 @@ private[ooxml] object SharedStringCompaction:
       label(localName, qName) match
         case "v" if inValue =>
           inValue = false
-          value.toString.trim.toIntOption.filter(_ >= 0).foreach(indices += _)
+          value.toString.trim.toIntOption.filter(i => i >= 0 && i < tableSize) match
+            case Some(idx) => indices += idx
+            case None => outOfRange += 1
         case "c" | "nc" | "oc" => inSharedCell = false
         case _ => ()
