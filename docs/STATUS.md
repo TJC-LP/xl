@@ -270,11 +270,11 @@
 
 ### Test Coverage
 
-**9,411 test cases** (9,401 verified via `./mill __.test`, 2026-10-14, the 0.24.1 release branch, plus the 10 #767 counter cases (`RecalcCountersSpec`, `RecalcCountersLawSpec`), verified via `./mill xl-evaluator.test`): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,443 test cases** (9,401 verified via `./mill __.test`, 2026-10-14, the 0.24.1 release branch, plus 42 #767 cases in xl-evaluator — counters (`RecalcCountersSpec`, `RecalcCountersLawSpec`) and the compact recalculation graph (`CompactGraphSpec`, `IntervalIndexSpec`, `LongIntMapSpec`, `RecalcEngineParitySpec`) — verified via `./mill xl-evaluator.test`): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3849 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 3881 | parser, evaluator, 124-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1362 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1907 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
