@@ -46,6 +46,7 @@ export PATH="$HOME/.local/bin:$PATH"
 --no-recalc           # Write verbs: apply the edit, recalculate nothing (alias --preserve-caches)
 --preserve-caches     # Same flag, spelled for the intent
 --strict              # Write verbs: exit 1 when the write's recalculation reports problems, and write nothing
+--compact-strings     # Write verbs: drop every shared string no cell references (not with --stream)
 
 # Exit codes: 0 ok · 1 findings/gate (diff, lint, --strict; never a failure) · 2 usage · 3 failed — only 0 writes a file
 # Results on stdout; errors (Error: <message> + code:/hint: lines) and warnings on stderr
@@ -2305,12 +2306,15 @@ the verb) promotes them to the gate.
   travel with every copy of the file. Severity `hygiene`
 - **`shared-string-orphan`** — an `xl/sharedStrings.xml` entry no `t="s"` cell references (ONE
   finding with the orphan count and the first five INDICES — never the text, so scrubbed content
-  cannot resurface in a lint log), or a `t="s"` index past the table (the reader shows `#REF!`,
-  Excel repairs — severity `repair`). The orphan half is severity `hygiene`: a privacy signal, not
-  a repair class — a counterparty name scrubbed from every cell still rides in the package. xl's
-  fresh writes lint clean; a surgical edit of a foreign SST book that replaces or removes text
-  appends the new string and leaves the old entry behind — xl never prunes a preserved table —
-  which this finding reports without failing the gate (see the carve-out below). Under `--stream`
+  cannot resurface in a lint log), or a `t="s"` value that names no entry — an index past the
+  table, a negative index, or a value that is not an index such as `3.0` (the reader shows `#REF!`
+  for an index past the table and `#VALUE!` otherwise; Excel repairs — severity `repair`, or
+  `hygiene` when every such value is empty, which Excel opens as a blank cell). A value names an
+  entry by the rule the readers use: optional whitespace, an optional `+` or `-`, ASCII digits,
+  optional whitespace, never negative (`-0` is entry 0). The orphan half is severity `hygiene`: a privacy signal, not
+  a repair class — a counterparty name scrubbed from every cell still rides in the package. An
+  entry with no text is never reported (it carries nothing; it is what an xl write leaves where an
+  untouched sheet must keep its positions, see the carve-out below). Under `--stream`
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
   `xlMacrosheet`) count as references like any worksheet's
@@ -2351,15 +2355,22 @@ stays "no findings at all"; the exit code is the gate.
 
 `xl lint` is read-only — it never repairs or rewrites the file. xl's own fresh writes always
 lint clean, and xl's own edits never introduce a repair finding; use it as a pre-send self-check
-in agent pipelines that splice or post-process workbooks. One documented carve-out (#567): a
-surgical edit of a foreign shared-string book that replaces or removes text — or that introduces
-a shared-string table into a multi-sheet inline-string book while copying an untouched sheet
-verbatim — leaves entries no cell references in `xl/sharedStrings.xml` (xl appends and re-points,
-it never prunes a preserved table), so that output reports `shared-string-orphan` — a hygiene
-finding, exit `0` — until the table is rebuilt: from the library, a fresh write of
-`Workbook(wb.sheets)` (no source, every sheet regenerated) rebuilds it from the cells; there is
-no CLI compaction yet. `--strict` makes that finding fail the gate; `--format json` exposes
-`.findings[].category` and `.findings[].severity` for a finer filter.
+in agent pipelines that splice or post-process workbooks.
+
+**Shared strings on an edit (#768).** A write drops the `xl/sharedStrings.xml` entries its edit
+left unreferenced — a replaced, cleared or deleted cell's text, a removed sheet's strings — so the
+removed text is in no part of the output. An entry past every position an untouched sheet
+references is dropped and the regenerated sheets are renumbered; one before such a position
+becomes an empty `<si>` so the untouched sheet rides byte-for-byte (the lint does not report
+empty entries). Entries the source already carried unreferenced stay unless every sheet is
+regenerated anyway. `--compact-strings` (library: `WriterConfig.compactSharedStrings`) drops every
+unreferenced entry, old ones included, with no empty entries: the untouched sheets that reference
+a later position are rewritten (their values do not change), and a clean book is copied verbatim
+when it has nothing to drop. One carve-out: `--stream` writes copy the table untouched, so a
+streamed `put` that replaces text leaves the old entry for `shared-string-orphan` to report (a
+hygiene finding, exit `0`); `--compact-strings` is refused with `--stream`. `--strict` makes the
+finding fail the gate; `--format json` exposes `.findings[].category` and
+`.findings[].severity` for a finer filter.
 
 ---
 

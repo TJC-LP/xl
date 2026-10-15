@@ -145,6 +145,14 @@ object Schema:
     ),
     GlobalDoc("--preserve-caches", None, "Alias for --no-recalc"),
     GlobalDoc(
+      "--compact-strings",
+      None,
+      "Write verbs: drop every shared string no cell references, the ones the source already " +
+        "carried included, rewriting untouched sheets that reference a later entry (values " +
+        "unchanged); without it a write drops only the strings its own edit removed, leaving an " +
+        "empty entry where an untouched sheet needs the positions kept. Not with --stream"
+    ),
+    GlobalDoc(
       "--strict",
       None,
       "Write verbs: exit 1 and write nothing when the recalculation reports formula errors, " +

@@ -32,6 +32,7 @@ object Argv:
     "--stream" -> false,
     "--no-recalc" -> false,
     "--preserve-caches" -> false,
+    "--compact-strings" -> false,
     "--json" -> false,
     "--strict" -> false
   )
@@ -185,7 +186,16 @@ object Argv:
       "eval" -> (readGlobals - "--stream"),
       "evala" -> (readGlobals - "--stream"),
       "sheets" ->
-        Set("--file", "--output", "--in-place", "--backend", "--max-size", "--stream", "--json"),
+        Set(
+          "--file",
+          "--output",
+          "--in-place",
+          "--backend",
+          "--max-size",
+          "--stream",
+          "--compact-strings",
+          "--json"
+        ),
       "names" -> (readGlobals - "--sheet")
     ) ++ Vector("bounds", "view", "cell", "search", "stats", "filter", "describe", "audit", "deps")
       .map(_ -> readGlobals)
@@ -237,6 +247,9 @@ object Argv:
       case ("new", "--file") => "new creates the file it names: `xl new <file>`"
       case (_, "--file" | "--max-size") => s"$verb reads no workbook"
       case (_, "--backend") => s"--backend picks a write's XML writer; $verb writes no workbook"
+      case (_, "--compact-strings") =>
+        s"--compact-strings drops the unreferenced shared strings of a workbook an edit writes; " +
+          s"$verb edits none"
       case (_, "--no-recalc" | "--preserve-caches") =>
         s"$long applies to the recalculation a cell write runs; $verb runs none"
       case (_, "--strict") =>

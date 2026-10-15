@@ -268,7 +268,10 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // SST should be REGENERATED (not byte-identical) because "Updated Text" is a new string
     // This prevents inline string corruption that Excel rejects
-    assert(outputSst.length >= sourceSst.length, "Output SST should contain original + new strings")
+    assert(
+      new String(outputSst, "UTF-8").contains("Updated Text"),
+      "Output SST should contain the new string"
+    )
     assert(
       !java.util.Arrays.equals(outputSst, sourceSst),
       "SST should be regenerated for new strings"

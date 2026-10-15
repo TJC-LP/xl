@@ -246,7 +246,16 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
     val valueTaking =
       Set("-f", "--file", "-s", "--sheet", "-o", "--output", "--backend", "--max-size")
     val switches =
-      Set("-i", "--in-place", "--stream", "--no-recalc", "--preserve-caches", "--json", "--strict")
+      Set(
+        "-i",
+        "--in-place",
+        "--stream",
+        "--no-recalc",
+        "--preserve-caches",
+        "--compact-strings",
+        "--json",
+        "--strict"
+      )
     assertEquals(Argv.globals.keySet, valueTaking ++ switches)
     valueTaking.foreach(k => assertEquals(Argv.globals(k), true, k))
     switches.foreach(k => assertEquals(Argv.globals(k), false, k))
@@ -942,6 +951,35 @@ class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
       assertEquals(plain.exit, 0, plain.stderr)
       assertEquals(dryRun.exit, 0, dryRun.stderr)
       assertEquals(dryRun.stdout, dryRunPlain.stdout)
+  }
+
+  test("GH-766 + GH-768: sheets takes --compact-strings; a read names it as a global it refuses") {
+    val simple = file("simple.xlsx")
+    for
+      onlyOther <- CliHarness.run("-f", simple, "sheets", "--no-recalc", "--compact-strings")
+      onView <- CliHarness.run("-f", simple, "-s", "Data", "--compact-strings", "view", "A1")
+    yield
+      assertEquals(
+        Argv.unacceptedGlobals(List("-f", "f.xlsx", "--compact-strings", "sheets", "list")),
+        Vector()
+      )
+      assert(
+        parses(List("-f", "f.xlsx", "-o", "o.xlsx", "sheets", "hide", "Data", "--compact-strings"))
+      )
+      assertEquals(onlyOther.exit, 2, onlyOther.stderr)
+      assert(
+        onlyOther.stderr.startsWith("Error: sheets does not take --no-recalc\n"),
+        onlyOther.stderr
+      )
+      assertEquals(onView.exit, 2, onView.stderr)
+      assert(
+        onView.stderr.startsWith("Error: view does not take --compact-strings\n  code: USAGE\n"),
+        onView.stderr
+      )
+      assert(
+        onView.stderr.contains("hint: drop --compact-strings; --compact-strings drops the"),
+        onView.stderr
+      )
   }
 
   test("GH-766: a global the verb does not take is a USAGE error naming the flag") {

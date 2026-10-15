@@ -87,9 +87,10 @@ object Cli:
         backendOpt,
         maxSizeOpt,
         streamOpt,
+        compactStringsOpt,
         jsonOpt,
         sheetsCmd
-      ).mapN { (file, outOpt, inPlace, backend, maxSize, stream, mode, cmd) =>
+      ).mapN { (file, outOpt, inPlace, backend, maxSize, stream, compact, mode, cmd) =>
         runWithOutput(outOpt, inPlace, file, io, mode, cmd.verb) { (out, display) =>
           runResult(
             file,
@@ -100,6 +101,7 @@ object Cli:
             maxSize,
             stream,
             cmd,
+            WritePolicy(compactStrings = compact),
             io = io,
             mode = mode
           )

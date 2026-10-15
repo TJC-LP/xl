@@ -10,6 +10,7 @@ import com.tjclp.xl.ooxml.{
   FormulaKindCodec,
   FormulaStorage,
   SharedFormula,
+  SharedStringIndex,
   SharedStrings,
   XmlSecurity,
   XmlUtil
@@ -380,7 +381,7 @@ object SaxSingleCellReader:
         case Some("s") =>
           (for {
             sharedStrings <- sst
-            idx <- value.toIntOption
+            idx <- SharedStringIndex.parse(value)
             entry <- sharedStrings.apply(idx)
           } yield sharedStrings.toCellValue(entry))
             .getOrElse(CellValue.Empty)

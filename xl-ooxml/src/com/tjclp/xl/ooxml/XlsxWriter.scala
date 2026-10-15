@@ -11,7 +11,7 @@ import java.io.{
 import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import java.nio.file.{Files, Path, Paths, StandardCopyOption}
 import java.nio.charset.StandardCharsets
-import scala.collection.immutable.ArraySeq
+import scala.collection.immutable.{ArraySeq, BitSet}
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
 import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
@@ -118,7 +118,9 @@ object XlsxWriter:
         case None => dated
 
       val report = normalized.sourceContext match
-        case Some(ctx) if ctx.isClean && !escapeFormulas =>
+        case Some(ctx)
+            if ctx.isClean && !escapeFormulas &&
+              !(config.compactSharedStrings && sourceHasSharedStringOrphans(ctx)) =>
           // Clean workbook → verbatim copy (ultra-fast), to a file or a stream alike (GH-516)
           copyVerbatim(ctx, target)
           WriteReport.empty
@@ -243,6 +245,17 @@ object XlsxWriter:
       .distinct
       .take(SheetMetadataPart.variantCount)
       .toSet
+
+  /**
+   * How a write ships xl/sharedStrings.xml: the table the regenerated sheets encode against,
+   * whether it is written (false copies the source part verbatim), and the untouched sheets that
+   * must be regenerated before the table can drop an entry (GH-768, compactSharedStrings).
+   */
+  private final case class SstPlan(
+    sst: Option[SharedStrings],
+    regenerate: Boolean,
+    extraRegenerated: Set[Int] = Set.empty
+  )
 
   /**
    * What a write decided that its caller may need to report — taken from the plan the write
@@ -1651,32 +1664,52 @@ object XlsxWriter:
         yield Some(worksheet)
 
   /**
+   * The shared-string references (`t="s"` cells) of a SOURCE sheet part, by SAX scan: their count
+   * (GH-304 subtracts a modified sheet's pre-edit contribution from the preserved count attribute)
+   * and their positions (GH-768 orphan removal), against a source table of `tableSize` entries
+   * (positions at or past it name no entry; see SharedStringCompaction). A missing part references
+   * nothing; an unreadable one is Left.
+   */
+  private def scanSourceSstReferences(
+    source: SourceContent,
+    sheetPath: String,
+    tableSize: Int
+  ): Either[String, SharedStringCompaction.RefScan] =
+    Try(
+      withSourceZip(source)(
+        _.withEntry(sheetPath)((_, in) => SharedStringCompaction.scan(in, tableSize))
+      )
+    ) match
+      case Success(Some(scan)) => scan
+      case Success(None) => Right(SharedStringCompaction.RefScan.empty)
+      case Failure(e) => Left(s"Failed to read $sheetPath: ${e.getMessage}")
+
+  /**
+   * GH-768: whether the source table holds an entry no sheet part of the package references (the
+   * check `compactSharedStrings` makes before copying a clean workbook verbatim). False when the
+   * table or a sheet part cannot be read: the surgical path would keep every entry anyway.
+   */
+  private def sourceHasSharedStringOrphans(ctx: SourceContext): Boolean =
+    parsePreservedSST(ctx.content).exists { table =>
+      ctx.partManifest.entries.keysIterator
+        .filter(SharedStringCompaction.isCellBearingPart)
+        .toVector
+        .sorted
+        .foldLeft[Either[String, BitSet]](Right(BitSet.empty)) { (acc, path) =>
+          acc.flatMap { seen =>
+            scanSourceSstReferences(ctx.content, path, table.strings.size).map(seen | _.indices)
+          }
+        }
+        .exists(referenced => table.strings.indices.exists(i => !referenced.contains(i)))
+    }
+
+  /**
    * Parse SharedStrings from source ZIP for modified sheet cell encoding.
    *
    * CRITICAL: Modified sheets need the SST to encode cells as t="s" (SST references) instead of
    * t="inlineStr" (inline strings). We copy the SST verbatim to output, but parse it here so
    * modified sheets can reference the same indices as unmodified sheets.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  /**
-   * Count shared-string references (sheetData cells with t="s") in a SOURCE worksheet (GH-304).
-   *
-   * Used to subtract a modified sheet's pre-edit contribution from the preserved SST count
-   * attribute, so the sheet's actual post-edit references can be added back. Returns 0 when the
-   * part is missing or unparseable (a new sheet, or a degenerate source).
-   */
-  private def countSourceSstReferences(source: SourceContent, sheetPath: String): Int =
-    Try(withSourceZip(source)(zip => readZipEntry(zip, sheetPath))) match
-      case Success(Some(xmlString)) =>
-        XmlSecurity
-          .parseSafe(xmlString, sheetPath)
-          .toOption
-          .map { elem =>
-            (elem \ "sheetData" \ "row" \ "c").count(c => (c \ "@t").text == "s")
-          }
-          .getOrElse(0)
-      case _ => 0
-
   private def parsePreservedSST(source: SourceContent): Option[SharedStrings] =
     Try(withSourceZip(source)(zip => readZipEntry(zip, "xl/sharedStrings.xml"))) match
       case Failure(_) => None
@@ -1905,36 +1938,73 @@ object XlsxWriter:
         removalOrphanedParts(ctx, workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet)
       case _ => Set.empty
 
-    val sheetsToRegenerate = regeneratedSheets(workbook, tracker, config)
-
-    // xl/calcChain.xml lists every formula cell by sheet id, and Excel checks it on open: an entry
-    // naming a cell that holds no formula triggers the repair prompt. xl neither reads nor emits
-    // the part, and a regenerated worksheet may have added, moved or removed formula cells, so the
-    // source chain leaves the package (part, Override, Relationship) whenever a worksheet is
-    // rewritten or a sheet is removed. Excel rebuilds the chain on its next save; its absence does
-    // not force a recalculation on open. A clean write copies the archive verbatim and never
-    // reaches this path (GH-555).
-    // see: https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain
-    val droppedCalcChain: Set[String] =
-      if sourceContext.exists(_.partManifest.contains(XmlUtil.calcChainPath)) &&
-        (sheetsToRegenerate.nonEmpty || tracker.deletedSheets.nonEmpty)
-      then Set(XmlUtil.calcChainPath)
-      else Set.empty
-    val livePreservableParts = preservableParts -- removalOrphans -- droppedCalcChain
+    val baseRegeneratedSheets = regeneratedSheets(workbook, tracker, config)
 
     val sharedStringsPath = "xl/sharedStrings.xml"
     val sourceHasSharedStrings = sourceContext.exists(_.partManifest.contains(sharedStringsPath))
+
+    // The source's shared-string table, parsed once per write; None when the source has none or it
+    // cannot be read.
+    lazy val parsedSourceSST: Option[SharedStrings] =
+      sourceContext.flatMap(ctx => parsePreservedSST(ctx.content))
+
+    // One SAX scan per source sheet part, shared by the reference count (GH-304) and the orphan
+    // removal (GH-768). A missing part references nothing; an unreadable one is Left. Positions are
+    // checked against the parsed table's size, so the scan holds at most one bit per entry.
+    val sourceRefScans = mutable.Map.empty[String, Either[String, SharedStringCompaction.RefScan]]
+    def sourceRefScan(ctx: SourceContext, path: String) =
+      sourceRefScans.getOrElseUpdate(
+        path,
+        scanSourceSstReferences(ctx.content, path, parsedSourceSST.fold(0)(_.strings.size))
+      )
+    def sourceRefCount(ctx: SourceContext, path: String): Int =
+      sourceRefScan(ctx, path).fold(_ => 0, _.count)
+
+    // GH-315: a DELETED sheet's source parts are the manifest's worksheet parts no live sheet
+    // claims (identity-keyed and rename-stable, so only genuinely deleted parts remain).
+    val deletedSheetParts: Vector[String] = sourceContext
+      .filter(_.modificationTracker.deletedSheets.nonEmpty)
+      .map { ctx =>
+        val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
+        ctx.partManifest.entries.keysIterator
+          .filter(p => p.startsWith("xl/worksheets/") && !p.startsWith("xl/worksheets/_rels/"))
+          .filterNot(claimed)
+          .toVector
+          .sorted
+      }
+      .getOrElse(Vector.empty)
+
+    // One entry per text cell of the given sheets, in deterministic ref order (GH-277: the SST
+    // count attribute counts references).
+    def textCellEntries(idxs: Vector[Int]): Vector[SSTEntry] =
+      idxs.flatMap { idx =>
+        workbook.sheets.lift(idx).toList.flatMap { sheet =>
+          sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
+            cell.value match
+              case CellValue.Text(str) => Some(Left(str))
+              case CellValue.RichText(rt) => Some(Right(rt))
+              case _ => None
+          }
+        }
+      }
+
+    // The sheets whose parts this write emits from the model: the regenerated ones plus any sheet
+    // with no source part (GH-323).
+    def writtenFromModel(regen: Set[Int]): Vector[Int] = sourceContext match
+      case Some(ctx) =>
+        (regen ++ workbook.sheets.indices.filter(sourceSheetPath(ctx, _).isEmpty)).toVector.sorted
+      case None => workbook.sheets.indices.toVector
 
     // SST Strategy:
     // - If modified sheets have new strings not in preserved SST → regenerate (to avoid inline string corruption)
     // - If modified sheets only use existing SST strings → copy verbatim (byte-perfect preservation)
     // - If no source SST → generate according to policy
-    val (sst, regenerateSharedStrings) =
-      if escapeFormulas && sourceHasSharedStrings then
-        (Some(SharedStrings.fromWorkbook(workbook, escapeFormulas = true)), true)
+    // - GH-768: entries no cell references after the edit leave the table (see removeOrphans)
+    def planSharedStrings(regen: Set[Int]): SstPlan =
+      if escapeFormulas && sourceHasSharedStrings then escapedSharedStrings(regen)
       else if sourceHasSharedStrings then
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
-        val parsedSST = sourceContext.map(ctx => parsePreservedSST(ctx.content)).getOrElse(None)
+        val parsedSST = parsedSourceSST
 
         // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
         // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
@@ -1954,16 +2024,7 @@ object XlsxWriter:
         // counts references) in deterministic ref order, and compared EXACTLY — no Unicode
         // normalization, byte-different spellings are different strings (GH-277/GH-289).
         val modifiedSheetRefEntries: Vector[Either[String, RichText]] =
-          sstAccountedSheets.flatMap { idx =>
-            workbook.sheets.lift(idx).toList.flatMap { sheet =>
-              sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
-                cell.value match
-                  case CellValue.Text(str) => Some(Left(str))
-                  case CellValue.RichText(rt) => Some(Right(rt))
-                  case _ => None
-              }
-            }
-          }
+          textCellEntries(sstAccountedSheets)
 
         val preservedEntries: Set[Either[String, RichText]] =
           parsedSST.map(_.strings.toSet).getOrElse(Set.empty)
@@ -1983,27 +2044,13 @@ object XlsxWriter:
         val preEditModifiedRefs = sourceContext
           .map { ctx =>
             sstAccountedSheets
-              .map(idx =>
-                sourceSheetPath(ctx, idx).fold(0)(countSourceSstReferences(ctx.content, _))
-              )
+              .map(idx => sourceSheetPath(ctx, idx).fold(0)(sourceRefCount(ctx, _)))
               .sum
           }
           .getOrElse(0)
-        // GH-315: a DELETED sheet's references leave the workbook with it. Deleted source parts
-        // are the manifest's worksheet parts not claimed by any live sheet (identity-keyed and
-        // rename-stable, so only genuinely deleted parts remain).
+        // GH-315: a DELETED sheet's references leave the workbook with it.
         val deletedSheetRefs = sourceContext
-          .filter(_.modificationTracker.deletedSheets.nonEmpty)
-          .map { ctx =>
-            val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
-            ctx.partManifest.entries.keysIterator
-              .filter(p => p.startsWith("xl/worksheets/") && !p.startsWith("xl/worksheets/_rels/"))
-              .filterNot(claimed)
-              .toVector
-              .sorted
-              .map(countSourceSstReferences(ctx.content, _))
-              .sum
-          }
+          .map(ctx => deletedSheetParts.map(sourceRefCount(ctx, _)).sum)
           .getOrElse(0)
         val exactTotalCount = parsedSST match
           case Some(preserved) =>
@@ -2014,37 +2061,224 @@ object XlsxWriter:
             )
           case None => modifiedSheetRefEntries.size
 
-        if newEntries.nonEmpty then
-          // New strings detected → build SST from preserved + new entries only
-          // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
-          val combinedEntries =
-            parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
+        val orphanRemoval = (sourceContext, parsedSST) match
+          case (Some(ctx), Some(preserved)) =>
+            removeOrphans(ctx, preserved, newEntries, regen)
+          case _ => None
 
-          // Create new SST with combined entries — exact-string keys for plain entries (GH-289),
-          // full-run-structure keys for RichText entries (GH-303); exact per-reference total
-          // count for the modified sheets (GH-304)
-          val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
-          (Some(combinedSST), true)
-        else
-          parsedSST match
-            case Some(preserved) if preserved.totalCount != exactTotalCount =>
-              // GH-304: same strings, changed reference count → re-emit the SST with the exact
-              // count. Entries are never pruned or reordered: preserved sheets' t="s" indices
-              // must stay valid.
-              (Some(preserved.copy(totalCount = exactTotalCount)), true)
-            case _ =>
-              // No count drift → copy preserved SST verbatim for byte-perfect preservation
-              (parsedSST, false)
+        orphanRemoval match
+          case Some(plan) => plan
+          case None if newEntries.nonEmpty =>
+            // New strings detected → build SST from preserved + new entries only
+            // Do NOT use SharedStrings.fromWorkbook (includes ALL sheets, even binary system sheets!)
+            val combinedEntries =
+              parsedSST.map(_.strings).getOrElse(Vector.empty) ++ newEntries
+
+            // Create new SST with combined entries — exact-string keys for plain entries (GH-289),
+            // full-run-structure keys for RichText entries (GH-303); exact per-reference total
+            // count for the modified sheets (GH-304)
+            val combinedSST = SharedStrings.fromDedupedEntries(combinedEntries, exactTotalCount)
+            SstPlan(Some(combinedSST), true)
+          case None =>
+            parsedSST match
+              case Some(preserved) if preserved.totalCount != exactTotalCount =>
+                // GH-304: same strings, changed reference count → re-emit the SST with the exact
+                // count, same entries in the same order.
+                SstPlan(Some(preserved.copy(totalCount = exactTotalCount)), true)
+              case _ =>
+                // No count drift → copy preserved SST verbatim for byte-perfect preservation
+                SstPlan(parsedSST, false)
       else
-        // No source SST - generate if policy allows
+        // No source SST - generate if policy allows. A surgical write builds the table from the
+        // sheets it writes: a sheet copied verbatim keeps its inline strings, so its text in the
+        // table would be referenced by no cell (GH-768).
+        val written = sourceContext match
+          case Some(_) => writtenFromModel(regen).flatMap(workbook.sheets.lift)
+          case None => workbook.sheets
+        val fromWritten = SharedStrings.fromSheets(written, escapeFormulas)
         val generated = config.sstPolicy match
-          case SstPolicy.Always => Some(SharedStrings.fromWorkbook(workbook, escapeFormulas))
+          case SstPolicy.Always => Some(fromWritten)
           case SstPolicy.Never => None
           case SstPolicy.Auto =>
-            if SharedStrings.shouldUseSST(workbook) then
-              Some(SharedStrings.fromWorkbook(workbook, escapeFormulas))
+            if SharedStrings.shouldUseSST(workbook) && fromWritten.strings.nonEmpty then
+              Some(fromWritten)
             else None
-        (generated, generated.isDefined)
+        SstPlan(generated, generated.isDefined)
+
+    /*
+     * The source parts a write that emits `written` from the model copies byte for byte and whose
+     * cells can reference the shared-string table: the worksheets of the other sheets (with their
+     * sheet index), and the preserved macro sheets and revision logs xl does not model.
+     */
+    def copiedCellBearingParts(
+      ctx: SourceContext,
+      written: Vector[Int]
+    ): (Vector[(Int, String)], Vector[String]) =
+      val claimed = workbook.sheets.indices.flatMap(sourceSheetPath(ctx, _)).toSet
+      val modeled = workbook.sheets.indices
+        .filterNot(written.contains)
+        .flatMap(idx => sourceSheetPath(ctx, idx).map(idx -> _))
+        .toVector
+      val unmodeled = (preservableParts -- removalOrphans).toVector.sorted
+        .filter(SharedStringCompaction.isCellBearingPart)
+        .filterNot(p => claimed.contains(p) || deletedSheetParts.contains(p))
+      (modeled, unmodeled)
+
+    /*
+     * Formula escaping regenerates every worksheet (regeneratedSheets), so the table is built from
+     * the cells. A macro sheet or revision log is still copied byte for byte and keeps the source
+     * positions its t="s" values name (GH-783). When such a part references the source table, the
+     * table keeps the source order up to the highest position the copied parts reference (an entry
+     * neither they nor a cell reference becomes empty, as in removeOrphans; the rest above it are
+     * dropped), and the cells' strings follow. A copied part that cannot be read, or that holds a
+     * value naming no entry, keeps every source entry.
+     */
+    def escapedSharedStrings(regen: Set[Int]): SstPlan =
+      import SharedStringCompaction.RefScan
+      val built = SharedStrings.fromWorkbook(workbook, escapeFormulas = true)
+      (sourceContext, parsedSourceSST) match
+        case (Some(ctx), Some(preserved)) =>
+          val (modeled, unmodeled) = copiedCellBearingParts(ctx, writtenFromModel(regen))
+          val copied = modeled.map(_._2) ++ unmodeled
+          val scans = copied.foldLeft[Either[String, Vector[RefScan]]](Right(Vector.empty)) {
+            (acc, path) => acc.flatMap(ss => sourceRefScan(ctx, path).map(ss :+ _))
+          }
+          val kept: Vector[SSTEntry] = scans match
+            case Right(ss) if ss.forall(_.outOfRange == 0) =>
+              val referenced = ss.foldLeft(BitSet.empty)(_ | _.indices)
+              referenced.lastOption.fold(Vector.empty[SSTEntry]) { pinnedMax =>
+                val cellEntries = built.strings.toSet
+                val orphans = BitSet.fromSpecific(
+                  preserved.strings.indices.filter(i =>
+                    !referenced.contains(i) && !cellEntries.contains(preserved.strings(i))
+                  )
+                )
+                SharedStringCompaction.withoutOrphans(preserved.strings, orphans, pinnedMax)
+              }
+            case _ => preserved.strings
+          if kept.isEmpty then SstPlan(Some(built), true)
+          else
+            val keptSet = kept.toSet
+            val copiedCount = scans.fold(_ => 0, _.map(_.count).sum)
+            val table = SharedStrings.fromDedupedEntries(
+              kept ++ built.strings.filterNot(keptSet.contains),
+              built.totalCount + copiedCount
+            )
+            SstPlan(Some(table), true)
+        case _ => SstPlan(Some(built), true)
+
+    /*
+     * GH-768: the entries of the preserved table no cell references once this write lands, removed
+     * so that text an edit took out of every cell leaves the package. A part copied verbatim keeps
+     * its t="s" positions, so an orphan at or below the highest position such a part references
+     * becomes an empty entry and one above it is dropped (SharedStringCompaction.withoutOrphans);
+     * the regenerated parts look every string up again. When no part is copied, every entry no
+     * regenerated cell references is dropped.
+     *
+     * Without compactSharedStrings, only the entries this edit released are considered (those the
+     * regenerated or deleted parts referenced before the edit), so a write that removes no string
+     * scans no untouched part. With it, every entry is considered, and the untouched sheets that
+     * reference a position past the first orphan are regenerated instead (extraRegenerated) so the
+     * table needs no empty entries; a part xl does not model (a macro sheet, a revision log) is never
+     * regenerated, so it still pins the positions it references.
+     *
+     * None keeps the GH-304 append/recount plan: nothing to remove, a copied part could not be
+     * read (an unread part may reference any entry), or a copied part has a t="s" value that names
+     * no entry (an index at or past the table's size, ECMA-376 §18.4.9): such a part is malformed,
+     * so it is treated like an unreadable one and every entry is kept.
+     */
+    def removeOrphans(
+      ctx: SourceContext,
+      preserved: SharedStrings,
+      newEntries: Vector[SSTEntry],
+      regen: Set[Int]
+    ): Option[SstPlan] =
+      import SharedStringCompaction.RefScan
+      val written = writtenFromModel(regen)
+      // one entry per text cell; order does not matter here, so no per-cell sort
+      val writtenEntries: Vector[SSTEntry] =
+        written.iterator
+          .flatMap(workbook.sheets.lift)
+          .flatMap(_.cells.valuesIterator)
+          .flatMap { cell =>
+            cell.value match
+              case CellValue.Text(str) => Some(Left(str))
+              case CellValue.RichText(rt) => Some(Right(rt))
+              case _ => None
+          }
+          .toVector
+      def lookup(table: SharedStrings, entry: SSTEntry): Option[Int] =
+        entry.fold(table.indexOf, table.indexOf)
+      val writtenReferenced: BitSet =
+        writtenEntries.iterator.flatMap(lookup(preserved, _)).to(BitSet)
+
+      val (copiedModeled, copiedUnmodeled) = copiedCellBearingParts(ctx, written)
+      val copiedPaths = copiedModeled.map(_._2) ++ copiedUnmodeled
+      val allEntries = BitSet.fromSpecific(preserved.strings.indices)
+
+      val candidates: BitSet =
+        if copiedPaths.isEmpty || config.compactSharedStrings then allEntries
+        else
+          val preEdit = (written.flatMap(sourceSheetPath(ctx, _)) ++ deletedSheetParts)
+            .map(p => sourceRefScan(ctx, p).fold(_ => BitSet.empty, _.indices))
+            .foldLeft(BitSet.empty)(_ | _)
+          preEdit & allEntries
+      val released = candidates &~ writtenReferenced
+
+      if released.isEmpty then None
+      else
+        val copiedScans: Either[String, Vector[RefScan]] =
+          if copiedPaths.isEmpty then Right(Vector.empty)
+          else
+            copiedPaths.foldLeft[Either[String, Vector[RefScan]]](Right(Vector.empty)) {
+              (acc, path) => acc.flatMap(scans => sourceRefScan(ctx, path).map(scans :+ _))
+            }
+        copiedScans.toOption.filter(_.forall(_.outOfRange == 0)).flatMap { scans =>
+          val copiedReferenced = scans.foldLeft(BitSet.empty)(_ | _.indices)
+          val orphans = released &~ copiedReferenced
+          orphans.headOption.flatMap { firstOrphan =>
+            val blocking = copiedModeled.zip(scans).collect {
+              case ((idx, _), scan) if scan.maxIndex > firstOrphan => idx
+            }
+            if config.compactSharedStrings && blocking.nonEmpty then
+              Some(SstPlan(None, false, extraRegenerated = blocking.toSet))
+            else
+              val pinnedMax = scans.foldLeft(-1)((m, s) => math.max(m, s.maxIndex))
+              val kept =
+                SharedStringCompaction.withoutOrphans(preserved.strings, orphans, pinnedMax)
+              val entries = kept ++ newEntries
+              val table = SharedStrings.fromDedupedEntries(entries, 0)
+              val count =
+                scans.map(_.count).sum + writtenEntries.count(lookup(table, _).isDefined)
+              Some(SstPlan(Some(table.copy(totalCount = count)), true))
+          }
+        }
+
+    // compactSharedStrings: the untouched sheets that pinned an orphan are regenerated, and the
+    // table is planned again with them among the written sheets (the set only grows, so this ends).
+    @scala.annotation.tailrec
+    def settleSharedStrings(regen: Set[Int]): (SstPlan, Set[Int]) =
+      val plan = planSharedStrings(regen)
+      if plan.extraRegenerated.isEmpty then (plan, regen)
+      else settleSharedStrings(regen ++ plan.extraRegenerated)
+    val (sstPlan, sheetsToRegenerate) = settleSharedStrings(baseRegeneratedSheets)
+    val sst = sstPlan.sst
+    val regenerateSharedStrings = sstPlan.regenerate
+
+    // xl/calcChain.xml lists every formula cell by sheet id, and Excel checks it on open: an entry
+    // naming a cell that holds no formula triggers the repair prompt. xl neither reads nor emits
+    // the part, and a regenerated worksheet may have added, moved or removed formula cells, so the
+    // source chain leaves the package (part, Override, Relationship) whenever a worksheet is
+    // rewritten or a sheet is removed. Excel rebuilds the chain on its next save; its absence does
+    // not force a recalculation on open. A clean write copies the archive verbatim and never
+    // reaches this path (GH-555).
+    // see: https://learn.microsoft.com/en-us/office/open-xml/spreadsheet/working-with-the-calculation-chain
+    val droppedCalcChain: Set[String] =
+      if sourceContext.exists(_.partManifest.contains(XmlUtil.calcChainPath)) &&
+        (sheetsToRegenerate.nonEmpty || tracker.deletedSheets.nonEmpty)
+      then Set(XmlUtil.calcChainPath)
+      else Set.empty
+    val livePreservableParts = preservableParts -- removalOrphans -- droppedCalcChain
 
     val sharedStringsInOutput = sourceHasSharedStrings || regenerateSharedStrings
     // Regenerated sheets ALWAYS encode against whatever SST ships in the output — preserved,

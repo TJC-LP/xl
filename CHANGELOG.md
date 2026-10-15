@@ -33,6 +33,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
   and after the verb, against the parser, so the table cannot drift from the parser chains.
 
+- **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical write
+  kept every entry of the source's shared-string table, so a label replaced, cleared or deleted from
+  every cell (or a removed sheet's strings) still rode in the package. The writer now drops the
+  entries its edit left unreferenced. An entry past every position an untouched sheet references is
+  dropped and the regenerated sheets are renumbered; one before such a position becomes an empty
+  `<si>`, so the untouched sheet still rides byte-for-byte. When every sheet is regenerated (a
+  one-sheet book, a sheet add/remove/reorder) every unreferenced entry is dropped, old ones
+  included. A `t="s"` index at or past the end of the table names no entry (ECMA-376 §18.4.9): it
+  pins nothing, and an untouched part that holds one is treated as malformed, so the write removes
+  no entry. A surgical write that creates the table (the source had none) builds it from the sheets
+  it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
+  the table of an edited book can shrink and change positions where earlier versions only appended.
+
+- **One rule reads a `t="s"` value as a table position** (#768): `XlsxReader`, both streaming
+  readers, the single-cell reader behind `ExcelIO.streamCellDetails`, the writer's reference scan
+  and `shared-string-orphan` read it the same way, so a position the writer keeps is the position
+  the readers resolve. The value names position `n` when it is optional XML whitespace, an optional
+  `+` or `-`, ASCII digits (leading zeros allowed) up to `Int.MaxValue`, and optional XML
+  whitespace, with no negative value. This is what desktop Excel for Mac 16.114 did with a
+  four-entry table: it opened `3`, ` 3 `, `3` after a tab or before an LF or CR, `+3`, ` +3 `, `03`
+  as the fourth entry and `-0`, `-00` as the first, with no repair prompt; it repaired `3.0`, `3.`,
+  `3.5`, `3e0`, `3 3`, `+ 3`, `+-3`, `--0`, a no-break space before `3`, `٣` (Arabic-Indic) and `３`
+  (fullwidth) into a text cell holding the value as written, removed the cell for `4` (past the end)
+  and `-1`, and opened an empty value as a blank cell. **Behaviour change:** a value with
+  surrounding XML whitespace now resolves (it read as `#VALUE!` in `XlsxReader` and empty in the
+  streaming readers); a value in non-ASCII digits no longer resolves (it read as the entry those
+  digits spell), and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`. The scan
+  keeps no characters of a value, so a value padded with any number of zeros costs no extra memory.
+
+- **Formula escaping keeps the positions a copied macro sheet or revision log references** (#783):
+  `FormulaInjectionPolicy.Escape` regenerates every worksheet and rebuilt the shared-string table
+  from the cells, but macro sheets and revision logs are copied byte for byte, so their `t="s"`
+  values came to name other strings or no entry. When such a part references the source table,
+  the table now keeps the source order up to the highest position those parts reference (an entry
+  nothing references becomes an empty `<si>`), and the cells' strings follow. A copied part that
+  cannot be read, or holds a value naming no entry, keeps every source entry.
+
+- **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
+  to leak, so the lint no longer reports it; its message names the new options instead of the
+  fresh-write workaround.
+
+- **`shared-string-orphan` reports every `t="s"` value that names no entry** (#768, #567): the
+  lint read a value with `toIntOption`, so it skipped a value that is not an index (`3.0`, `3e0`,
+  `٣`) and reported `-1` as past the table. It now reads the value with the readers' rule above and
+  reports, per sheet part, every value that names no entry (an index past the table, a negative
+  index, or a value that is not an index), showing a value that is not an index as written (at
+  most 16 characters). The finding is severity `repair`, or `hygiene` when every such value is
+  empty, which Excel opens as a blank cell.
+
 ### Added
 
 - **`T(value)`** (#684): text returns itself (a rich-text cell its plain text); a number, boolean,
@@ -41,6 +90,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and is implicitly intersected in a plain cell. `T` was an unknown function, so `xl recalc`, and
   `xl put` on a precedent, wrote every `T()` cell with no cached value; both now cache the values
   LibreOffice computes.
+
+- **`WriterConfig.compactSharedStrings` and `--compact-strings`** (#768): drop every shared
+  string no cell references, including the ones the source already carried, with no empty
+  entries unless a part xl does not model (a macro sheet, a revision log) pins a later position;
+  the untouched sheets that reference a later position are regenerated (values
+  unchanged), and a clean workbook is copied verbatim unless its table holds such an entry. The
+  CLI flag is global for the write verbs and `sheets hide|show`; with `--stream` it is refused
+  as `UNSUPPORTED_IN_STREAM` (a streaming write copies the table untouched). **Breaking
+  (binary):** `WriterConfig` gains a field, so its constructor, `apply` and `copy` change.
 
 ### Changed
 
@@ -74,6 +132,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recalculation from 160 s to 13.1 s (6.4 s with two threads); name parses on `Tiny` drop from
   3,456 to 15. Results are unchanged: property tests compare every
   cell, exact `BigDecimal` scale included, and every error with the caches on and off.
+
 - **Criteria index** (#767): COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS whose criteria
   ranges all read through the pass's column slices now test only the rows their equality criteria
   can match. Each slice gets an index on first use (rows by case-folded text, number without
@@ -90,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   s, final sigma, Kelvin sign, surrogates), numeric text, booleans, date-times and errors, that the
   case fold agrees with `equalsIgnoreCase` on every BMP character, and that results are identical
   with the index on and off.
+
 - **Numeric text in criteria** (#767): criteria matching no longer parses text that cannot start a
   number (anything but a sign, a point or a digit after trimming) through an exception; results
   are unchanged.

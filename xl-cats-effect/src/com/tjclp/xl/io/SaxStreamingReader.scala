@@ -8,7 +8,14 @@ import org.xml.sax.{InputSource, Attributes}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
 import com.tjclp.xl.cells.{CellValue, CellError, FormulaKind}
-import com.tjclp.xl.ooxml.{CellMetadataIndex, FormulaKindCodec, SharedStrings, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{
+  CellMetadataIndex,
+  FormulaKindCodec,
+  SharedStringIndex,
+  SharedStrings,
+  XmlSecurity,
+  XmlUtil
+}
 import java.util.concurrent.{ArrayBlockingQueue, BlockingQueue}
 import java.util.concurrent.atomic.AtomicBoolean
 import com.tjclp.xl.addressing.{ARef, CellRange}
@@ -480,7 +487,7 @@ object SaxStreamingReader:
         case Some("s") =>
           (for {
             sharedStrings <- sst
-            idx <- value.toIntOption
+            idx <- SharedStringIndex.parse(value)
             entry <- sharedStrings.apply(idx)
           } yield sharedStrings.toCellValue(entry))
             .getOrElse(CellValue.Empty)

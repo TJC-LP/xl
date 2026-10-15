@@ -1,0 +1,90 @@
+package com.tjclp.xl.ooxml
+
+/**
+ * The table position a `t="s"` cell value names (ECMA-376 Part 1, §18.3.1.4 `c`, `t` value `s`;
+ * §18.4.9 `sst`: a zero-based index into the table's `<si>` items).
+ *
+ * Every reader, the writer's reference scan and the lint read the value with this one rule, so a
+ * position the writer keeps is the position the readers resolve. The rule is the one desktop Excel
+ * applies when it opens a file. The value names position `n` when it is, in order:
+ *   - optional XML whitespace (space, tab, CR, LF);
+ *   - an optional `+` or `-`;
+ *   - one or more ASCII digits `0`-`9` (leading zeros allowed) whose value is at most
+ *     `Int.MaxValue`;
+ *   - optional XML whitespace;
+ *
+ * and the digits' value is zero or the sign is not `-` (`-0` and `-00` name position 0).
+ *
+ * Anything else names no position: an empty value, a negative index, a second sign or a space after
+ * the sign, a decimal point (`3.0`, `3.`), a fraction, an exponent, two numbers (`3 3`), a no-break
+ * space, and digits outside ASCII (Arabic-Indic `٣`, fullwidth `３`). Desktop Excel opens a cell
+ * holding any of these, or an index at or past the table's end, only after repairing the file (an
+ * empty value excepted, which it reads as a blank cell).
+ *
+ * [[Accumulator]] applies the rule to a value delivered in pieces (SAX `characters` calls) without
+ * keeping its characters: it holds one state and one running value, so a value of any length,
+ * including one padded with any number of leading zeros, costs the same memory.
+ */
+private[xl] object SharedStringIndex:
+
+  /** The position `value` names, or None when it names none (see the object doc). */
+  def parse(value: CharSequence): Option[Int] =
+    val acc = new Accumulator
+    acc.append(value)
+    acc.result
+
+  /** One value's parse state, fed piece by piece. Reusable after [[reset]]. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  final class Accumulator:
+    // 0 leading whitespace, 1 after the sign, 2 digits, 4 trailing whitespace, 5 names no position
+    private var state = 0
+    private var negative = false
+    private var value = 0L
+
+    def reset(): Unit =
+      state = 0
+      negative = false
+      value = 0L
+
+    def append(text: CharSequence): Unit =
+      var i = 0
+      while i < text.length do
+        step(text.charAt(i))
+        i += 1
+
+    def append(ch: Array[Char], start: Int, length: Int): Unit =
+      var i = start
+      while i < start + length do
+        step(ch(i))
+        i += 1
+
+    /** The position read so far, or None when the value read so far names none. */
+    def result: Option[Int] =
+      if (state == 2 || state == 4) && (!negative || value == 0L) then Some(value.toInt)
+      else None
+
+    private def isXmlSpace(c: Char): Boolean =
+      c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
+    private def step(c: Char): Unit =
+      val digit = c >= '0' && c <= '9'
+      state = state match
+        case 0 =>
+          if isXmlSpace(c) then 0
+          else if c == '+' then 1
+          else if c == '-' then
+            negative = true
+            1
+          else if digit then addDigit(c)
+          else 5
+        case 1 => if digit then addDigit(c) else 5
+        case 2 =>
+          if digit then addDigit(c)
+          else if isXmlSpace(c) then 4
+          else 5
+        case 4 => if isXmlSpace(c) then 4 else 5
+        case _ => 5
+
+    private def addDigit(c: Char): Int =
+      value = value * 10 + (c - '0')
+      if value > Int.MaxValue then 5 else 2
