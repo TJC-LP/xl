@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-10-15
+
+Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
+ranges, defined-name resolutions and criteria column slices; the `*IFS` functions test only the rows
+an equality criteria index selects; and the dependency graph has one node per distinct range read
+and per segment of a formula column instead of one edge per cell in a range. A synthetic workbook of
+187,699 formulas over 33,233 rows, shaped like a real customer book, now goes through `writeChecked`
+in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory. Evaluation follows one canonical
+order, which `RecalcResult.errors` and seeded `RAND` draws reflect (**Breaking**, behaviour).
+
+Shared strings an edit leaves unreferenced are removed on write (#768, **Breaking**, behaviour), and
+`WriterConfig.compactSharedStrings` / `--compact-strings` drop every unreferenced entry (**Breaking**,
+binary: `WriterConfig` gains a field). Every reader, the writer and the `shared-string-orphan` lint
+read a `t="s"` value with one rule that matches desktop Excel; appending strings no longer changes an
+out-of-range index in a copied sheet (#781), and formula escaping keeps the positions a copied macro
+sheet or revision log references (#783).
+
+Also: a criterion with no `*` or `?` compares `~` literally (#765), `T()` is supported (#684), and a
+global flag a verb does not take is named in a `USAGE` error (#766).
+
 ### Fixed
 
 - **A criterion with no `*` or `?` compares `~` literally** (#765): SUMIF(S), COUNTIF(S),
@@ -128,7 +148,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   them, each in grid order (row 2 before row 10), then evaluation failures in evaluation order; a
   seeded `RAND`/`RANDBETWEEN`/`RANDARRAY` draws across cells in that order; a parallel
   recalculation still returns exactly the sequential result, errors included. The order no longer
-  depends on `ARef` hashing. Ships in 0.25.0.
+  depends on `ARef` hashing. **Breaking (behaviour):** code that compared `RecalcResult.errors`
+  order or seeded `RAND` sequences across versions sees a different order.
 
 ### Performance
 
@@ -145,28 +166,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   meets no uncached formula; otherwise the call scans as before. A column whose formulas are all
   done gets one slice that serves every window of it; otherwise a window is sliced on its second
   request, so running and sliding windows (`COUNTIF($A$2:A9,A9)`) scan as before instead of each
-  holding a copy of its rows. On the 20k-row raw-criteria
-  benchmark book a sequential recalculation drops from 151 s to 12.2 s, `writeChecked`'s
-  recalculation from 160 s to 13.1 s (6.4 s with two threads); name parses on `Tiny` drop from
-  3,456 to 15. Results are unchanged: property tests compare every
-  cell, exact `BigDecimal` scale included, and every error with the caches on and off.
+  holding a copy of its rows. On the 20k-row raw-criteria benchmark book a sequential
+  recalculation drops from 151 s to 12.2 s, `writeChecked`'s recalculation from 160 s to 13.1 s
+  (6.4 s with two threads); name parses on `Tiny` drop from 3,456 to 15. Results are unchanged:
+  property tests compare every cell, exact `BigDecimal` scale included, and every error with the
+  caches on and off.
 
 - **Criteria index** (#767): COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS whose criteria
   ranges all read through the pass's column slices now test only the rows their equality criteria
   can match. Each slice gets an index on first use (rows by case-folded text, number without
   trailing zeros, boolean and error value; date-times, text with surrogate characters and numbers
-  too large to strip are candidates for every lookup); the rows every equality criterion selects are intersected, and
-  equal calls in a pass share the result. Every candidate is still tested with the unchanged
-  matcher for every criterion, in row order, so sums, first errors and MIN/MAX are unchanged.
-  Comparisons, wildcards, `<>` and `""` are not indexed, and a call whose smallest selection is
-  more than half its rows tests every row, as before. Indexes and shared results are capped at
-  256 MB per pass, shared results at half of it. On the 20k-row raw-criteria benchmark book a sequential recalculation drops from
-  10.9 s to 2.3 s (matcher calls from 161.8M to 0.6M); the real-shape book with raw criteria (33,233
-  rows, 88k formulas) goes through `writeChecked` in 9.4 s under a 4 GB heap. Property tests
-  check that every matching row is a candidate over edge-case text (dotted and dotless I, sharp
-  s, final sigma, Kelvin sign, surrogates), numeric text, booleans, date-times and errors, that the
-  case fold agrees with `equalsIgnoreCase` on every BMP character, and that results are identical
-  with the index on and off.
+  too large to strip are candidates for every lookup); the rows every equality criterion selects
+  are intersected, and equal calls in a pass share the result. Every candidate is still tested
+  with the unchanged matcher for every criterion, in row order, so sums, first errors and MIN/MAX
+  are unchanged. Comparisons, wildcards, `<>` and `""` are not indexed, and a call whose smallest
+  selection is more than half its rows tests every row, as before. Indexes and shared results are
+  capped at 256 MB per pass, shared results at half of it. On the 20k-row raw-criteria benchmark
+  book a sequential recalculation drops from 10.9 s to 2.3 s (matcher calls from 161.8M to 0.6M);
+  the real-shape book with raw criteria (33,233 rows, 88k formulas) goes through `writeChecked` in
+  9.4 s under a 4 GB heap. Property tests check that every matching row is a candidate over
+  edge-case text (dotted and dotless I, sharp s, final sigma, Kelvin sign, surrogates), numeric
+  text, booleans, date-times and errors, that the case fold agrees with `equalsIgnoreCase` on every
+  BMP character, and that results are identical with the index on and off.
 
 - **Numeric text in criteria** (#767): criteria matching no longer parses text that cannot start a
   number (anything but a sign, a point or a digit after trimming) through an exception; results
@@ -178,9 +199,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   10k-row helper-criteria benchmark book the graph drops from 92.5M edges to 116k (build, Tarjan and
   Kahn from 77 s to 1.0 s; the whole recalculation from 134 s to 49 s, now all criteria scans), the
   book recalculates within a 2 GB heap (peak 1.4 GB; it needed about 25 GB), and a 200k-row running
-  total builds and orders its graph in 1.6 s. Results are unchanged: property
-  tests compare reachability, cycles, order, SCC condensation, waves and every `RecalcResult` field
-  against the previous per-cell graph, which stays one release as an internal fallback. With the
+  total builds and orders its graph in 1.6 s. Results are unchanged: property tests compare
+  reachability, cycles, order, SCC condensation, waves and every `RecalcResult` field against the
+  previous per-cell graph, which stays one release as an internal fallback. With the
   per-pass caches and the criteria index, the real-shape book with helper criteria (33,233 rows,
   187,699 formulas) now goes through `writeChecked` in 7.6 s under a 4 GB heap. It completes under
   1 GB as well; every earlier engine ran out of memory on it at 4 GB.

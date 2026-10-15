@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -218,7 +218,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -383,7 +383,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -417,7 +417,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -463,7 +463,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -518,7 +518,7 @@ For Excel-style format inheritance on formula entry, use the opt-in
 |--------|---------|
 | `workbook` | The workbook with every successful formula cached (`Formula(expr, Some(value))`) |
 | `evaluated` | `Map[SheetName, Map[ARef, CellValue]]` — computed values for inspection |
-| `errors` | `Vector[CellEvalError]` — per-cell **host failures** (parse errors, missing sheets, cycle participants, cells blocked by a cycle). Since 0.14.0, Excel **error values** (`#DIV/0!`, `#N/A`, …) are *results*, not failures — they cache like any value and do not appear here |
+| `errors` | `Vector[CellEvalError]` — per-cell **host failures** (parse errors, missing sheets, cycle participants, cells blocked by a cycle). Since 0.14.0, Excel **error values** (`#DIV/0!`, `#N/A`, …) are *results*, not failures — they cache like any value and do not appear here. Since 0.25.0 ([#767](https://github.com/TJC-LP/xl/issues/767)) whole-workbook recalculation evaluates in one canonical order (dependency-first, the top-left ready formula next: sheet name, then row, then column), and `errors` lists circular references, then cells blocked by them, each in grid order, then evaluation failures in evaluation order; seeded `RAND`/`RANDBETWEEN`/`RANDARRAY` draws follow the same order |
 | `excelErrors` | (0.14.0) `Vector[(SheetName, ARef, CellError)]` — cells whose cached result is an Excel error value, sorted; inspect when you want to surface `#DIV/0!`s without treating them as host failures |
 | `isClean` | `true` when `errors.isEmpty` — a workbook full of cached `#DIV/0!`s is "clean" (the recalculation succeeded; the errors are data) |
 | `toEither` | `Right(workbook)` when clean, `Left(errors)` otherwise — for fail-hard pipelines |
@@ -747,7 +747,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -887,7 +887,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -913,7 +913,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -1001,7 +1001,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.24.1
+//> using dep com.tjclp::xl:0.25.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -1026,6 +1026,12 @@ Streaming writes: `Stream.emits(rows).through(excel.writeStream(path, "Sheet1"))
 streamed dates show as dates. The streaming reads also read the workbook rels and the cell-metadata
 part (dynamic arrays) under the default ZIP limits; `excel.withStreamLimits(config)` (since 0.24.0,
 [#714](https://github.com/TJC-LP/xl/issues/714)) sets others.
+
+Every write drops the shared strings its own edit left unreferenced (since 0.25.0,
+[#768](https://github.com/TJC-LP/xl/issues/768)), so an edited book's `xl/sharedStrings.xml` can
+shrink and its positions change. To drop the unreferenced entries the source already carried too,
+write with `excel.writeWith(wb, path, com.tjclp.xl.ooxml.WriterConfig(compactSharedStrings = true))`
+(the CLI's `--compact-strings`).
 
 ## Going further
 
