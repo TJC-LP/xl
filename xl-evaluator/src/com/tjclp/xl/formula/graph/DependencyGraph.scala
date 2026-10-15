@@ -1320,9 +1320,10 @@ object DependencyGraph:
    * on a 50k-formula workbook was 81% of an entire recalculation's allocation. Iteration stays over
    * the same collections in the same order, so the emitted order is unchanged: FIFO queue seeded in
    * `allNodes` iteration order, newly-ready nodes appended in the iteration order of the filtered
-   * dependents set. The FIFO discipline is additionally load-bearing for parallel recalculation: it
-   * keeps longest-path depth classes contiguous, so folding completed waves preserves the exact
-   * sequential error order. A replacement queue must retain that level-monotone property.
+   * dependents set. #767: whole-workbook recalculation no longer orders with this FIFO (its seed
+   * order is the CHAMP hash order of the node set); it uses the grid-ordered
+   * [[canonicalTopologicalSort]] or `CompactGraph.kahn`, and re-lists a parallel pass's errors in
+   * that order.
    */
   @SuppressWarnings(Array("org.wartremover.warts.While"))
   private def kahnOrder[K](
@@ -1944,6 +1945,41 @@ object DependencyGraph:
   ): Either[Set[QualifiedRef], List[QualifiedRef]] =
     kahnOrder(dependencies, dependents)
 
+  /**
+   * #767: the canonical evaluation order of the workbook-level graph — Kahn's algorithm whose ready
+   * set is a min-heap in grid order ([[QualifiedRef.gridKey]]), i.e. the lexicographically smallest
+   * topological order. Its result is a function of the graph's value, never of Map/Set iteration
+   * order; `CompactGraph.kahn` emits the same order. Left carries the nodes it could not order.
+   * `RecalcEngine.Legacy` orders with it.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.While"))
+  private[formula] def canonicalTopologicalSort(
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
+    dependents: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Either[Set[QualifiedRef], List[QualifiedRef]] =
+    val allNodes = dependencies.keySet
+    val inDegree = scala.collection.mutable.HashMap.empty[QualifiedRef, Int]
+    allNodes.foreach { node =>
+      inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
+    }
+    val ready = new java.util.PriorityQueue[QualifiedRef](
+      math.max(1, allNodes.size),
+      QualifiedRef.gridOrdering
+    )
+    allNodes.foreach(node => if inDegree(node) == 0 then ready.add(node))
+    val ordered = scala.collection.mutable.ListBuffer.empty[QualifiedRef]
+    while !ready.isEmpty do
+      val node = ready.poll()
+      ordered += node
+      dependents.getOrElse(node, Set.empty).foreach { dep =>
+        if allNodes.contains(dep) then
+          val remaining = inDegree(dep) - 1
+          inDegree(dep) = remaining
+          if remaining == 0 then ready.add(dep)
+      }
+    if ordered.size == allNodes.size then scala.util.Right(ordered.toList)
+    else scala.util.Left(allNodes -- ordered)
+
   /** Unbounded range expansion — the original `fromWorkbook` semantics. */
   private val unboundedQualifiedCells: (SheetName, CellRange) => Set[QualifiedRef] =
     (sheet, range) => range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
@@ -2069,7 +2105,8 @@ object DependencyGraph:
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
     canonicalSheet: SheetName => SheetName = identity,
-    nameRanges: NameRanges = NameRanges.empty
+    nameRanges: NameRanges = NameRanges.empty,
+    parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption
   ): Set[QualifiedRef] =
     // #691: defined names expand from a queue, breadth-first, never by recursion: the formula is
     // scanned, then each resolved name it reaches — keyed on the node (the definition and the sheet
@@ -2095,7 +2132,8 @@ object DependencyGraph:
       names.next() match
         case None => acc
         case Some((node, depth)) =>
-          val body = FormulaParser.parse(node.definition.formula).toOption
+          // #767: `parseName` lets a whole-graph build parse each name body once
+          val body = parseName(node.definition.formula)
           drain(body.fold(acc)(target => union(acc, extract(target, node.sheet, depth))))
     drain(extract(expr, currentSheet, 0))
 

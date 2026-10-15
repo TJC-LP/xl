@@ -62,10 +62,11 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph has no virtual or range nodes, and the per-pass slice
-   * cache and criteria index do not exist yet, so `VirtualNodes`, `RangeNodes`, `CriteriaIndexed`,
-   * `CriteriaWindowOnly`, `CriteriaNotIndexable`, `SlicesBuilt` and `ScanFallbacks` stay 0 until
-   * the code that owns them lands; every criteria call is a `CriteriaScan` today.
+   * What a pass counts. The legacy graph (`RecalcEngine.Legacy`) has no virtual or range nodes and
+   * does not count `GraphWork`; the per-pass slice cache and criteria index do not exist yet, so
+   * `CriteriaIndexed`, `CriteriaWindowOnly`, `CriteriaNotIndexable`, `SlicesBuilt` and
+   * `ScanFallbacks` stay 0 until the code that owns them lands; every criteria call is a
+   * `CriteriaScan` today.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -79,6 +80,12 @@ private[formula] object RecalcCounters:
 
     /** Distinct (sheet, range) nodes of the compact graph. */
     case RangeNodes
+
+    /**
+     * Edges walked by the compact graph's passes: Tarjan, Kahn's in-degree count and order, and the
+     * reachability walks (blocked cells, the dynamic bucket, invalidation). 0 for the legacy graph.
+     */
+    case GraphWork
 
     /** Criteria calls answered through the equality index. */
     case CriteriaIndexed
