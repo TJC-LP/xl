@@ -7,11 +7,10 @@ import com.tjclp.xl.formula.perf.LoadsBookHarness.Mode
 import munit.FunSuite
 
 /**
- * #767 benchmark gates, characterisation mode: on `Tiny` only, every counter is pinned to the value
+ * #767 benchmark gates on `Tiny`, characterisation mode: every counter is pinned to the value
  * today's engine produces, and the 40 oracle cells to the values it computes. A PR that changes the
  * algorithm updates the pinned counts in its own diff; a PR that changes a value fails the oracle.
- * The fork's `-Xmx2g` ceiling is the heap gate. Wall-clock gates and the larger shapes switch on
- * with the criteria index (design §12.3).
+ * The fork's `-Xmx2g` ceiling is the heap gate. The `R20` gates are in [[CriteriaIndexGatesSpec]].
  */
 class RecalcPerfGatesSpec extends FunSuite:
 
@@ -39,21 +38,22 @@ class RecalcPerfGatesSpec extends FunSuite:
   private lazy val parallel = runTiny(Mode.Parallel)
 
   /**
-   * Today's engine on Tiny: the legacy per-cell graph, every criteria call walking every row,
-   * through the per-pass column slices (#767 PR 1): one slice per criteria column the book reads (8
-   * of the Loads columns), one used-range scan (the Loads sheet, sizing those slices), and one
-   * parse per distinct defined-name body.
+   * Today's engine on Tiny: the legacy per-cell graph; the per-pass column slices (#767 PR 1), one
+   * per criteria column the book reads (8 of the Loads columns), one used-range scan (the Loads
+   * sheet, sizing those slices), and one parse per distinct defined-name body; every criteria call
+   * answered from the equality index (#767 PR 2), testing only its candidate rows (180,118 matcher
+   * calls when every row was tested).
    */
   private val TinyCounts: Map[Counter, Long] = Map(
     Counter.GraphNodes -> 1600L,
     Counter.GraphEdges -> 186400L,
     Counter.VirtualNodes -> 0L,
     Counter.RangeNodes -> 0L,
-    Counter.CriteriaIndexed -> 0L,
+    Counter.CriteriaIndexed -> 400L,
     Counter.CriteriaWindowOnly -> 0L,
     Counter.CriteriaNotIndexable -> 0L,
-    Counter.CriteriaScan -> 400L,
-    Counter.MatcherCalls -> 180118L,
+    Counter.CriteriaScan -> 0L,
+    Counter.MatcherCalls -> 1478L,
     Counter.SlicesBuilt -> 8L,
     Counter.ScanFallbacks -> 0L,
     Counter.UsedRangeScans -> 1L,
@@ -128,8 +128,19 @@ class RecalcPerfGatesSpec extends FunSuite:
     // pass: one scan (before the per-pass cache, one per range per call: 34 per Summary row x 8
     // rows + 64 per Rate History row x 24 rows = 1,808)
     assertEquals(run.counters(Counter.UsedRangeScans), 1L)
-    assertEquals(run.counters(Counter.CriteriaScan), 400L)
+    assertEquals(run.counters(Counter.CriteriaIndexed), 400L)
     assertEquals(run.counters(Counter.ScanFallbacks), 0L)
+  }
+
+  test("criteria index on and off: the same workbook and errors on Tiny, in every mode") {
+    Vector(Mode.Recalc, Mode.Parallel, Mode.Uncached).foreach { mode =>
+      val on = LoadsBookHarness.run(tiny.workbook, mode)
+      val off = LoadsBookHarness.run(tiny.workbook, mode, criteriaIndex = false)
+      assertEquals(on.result.workbook, off.result.workbook, mode.toString)
+      assertEquals(on.result.errors, off.result.errors, mode.toString)
+      assertEquals(off.counters(Counter.CriteriaIndexed), 0L)
+      assertEquals(off.counters(Counter.MatcherCalls), 180118L)
+    }
   }
 
   test("RunTotal: running totals equal the closed form; the legacy graph is quadratic") {

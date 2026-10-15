@@ -62,11 +62,10 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph has no virtual or range nodes, and the criteria index does
-   * not exist yet, so `VirtualNodes`, `RangeNodes`, `CriteriaIndexed`, `CriteriaWindowOnly` and
-   * `CriteriaNotIndexable` stay 0 until the code that owns them lands; every criteria call is a
-   * `CriteriaScan` today, whether it reads its ranges through a column slice ([[PassCache]]) or
-   * cell by cell.
+   * What a pass counts. The legacy graph has no virtual or range nodes, so `VirtualNodes` and
+   * `RangeNodes` stay 0 until the compact graph lands. Every criteria call counts once as
+   * `CriteriaIndexed` or `CriteriaScan`; a call with no indexed criterion also counts once as
+   * `CriteriaWindowOnly` or `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -81,16 +80,22 @@ private[formula] object RecalcCounters:
     /** Distinct (sheet, range) nodes of the compact graph. */
     case RangeNodes
 
-    /** Criteria calls answered through the equality index. */
+    /** Criteria calls that tested only the candidate rows of the equality index. */
     case CriteriaIndexed
 
-    /** Criteria calls whose criteria are all numeric windows (no equality pair). */
+    /**
+     * Criteria calls whose criteria are all numeric windows (`>`, `>=`, `<`, `<=` against a
+     * number), so no equality index applies.
+     */
     case CriteriaWindowOnly
 
-    /** Criteria calls with no indexable criterion. */
+    /** Criteria calls with no indexed criterion that are not window-only. */
     case CriteriaNotIndexable
 
-    /** Criteria calls answered by walking every row of their ranges. */
+    /**
+     * Criteria calls that walked every row of their ranges (through a column slice or cell by
+     * cell): no indexed criterion, a range without a slice, or candidates too many to list.
+     */
     case CriteriaScan
 
     /** `CriteriaMatcher.matches` calls made by the criteria functions' row loops. */

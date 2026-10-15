@@ -79,7 +79,10 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.GraphNodes), 5L)
     // Out!A5 reads Out!A1 and Out!A2; the criteria calls read constants only
     assertEquals(snap(Counter.GraphEdges), 2L)
+    // every call walks its rows (these ranges are too short to slice, so none is indexed); the
+    // three `">2"` calls have only a numeric window, COUNTIFS also an indexable "x" (#767 PR 2)
     assertEquals(snap(Counter.CriteriaScan), 4L)
+    assertEquals(snap(Counter.CriteriaWindowOnly), 3L)
     // COUNTIF 5 rows; COUNTIFS 5 rows on the first pair, then the 3 rows that passed it;
     // SUMIF 5; COUNTIF(Data!A:A) 5 rows after the used-range bound
     assertEquals(snap(Counter.MatcherCalls), 5L + 8L + 5L + 5L)
@@ -91,7 +94,6 @@ class RecalcCountersSpec extends FunSuite:
       Counter.VirtualNodes,
       Counter.RangeNodes,
       Counter.CriteriaIndexed,
-      Counter.CriteriaWindowOnly,
       Counter.CriteriaNotIndexable,
       Counter.SlicesBuilt,
       Counter.ScanFallbacks

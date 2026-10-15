@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{
   ColumnSlice,
+  CriteriaKeys,
   EvalError,
   Evaluator,
   CriteriaMatcher,
@@ -623,26 +624,91 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         )
 
   /**
-   * #767: one criteria call (COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS, MAXIFS): counted as a
-   * scan, timed as the `Criteria` phase, its row matches tallied locally and added to
-   * `MatcherCalls` once.
+   * #767: what one criteria call counts. Its row matches are tallied locally and added to
+   * `MatcherCalls` once; the call counts as `CriteriaIndexed` when it tested only the candidate
+   * rows of the equality index, else as `CriteriaScan`; a call with no indexed criterion also
+   * counts as `CriteriaWindowOnly` (every criterion a numeric `>`, `>=`, `<` or `<=`) or
+   * `CriteriaNotIndexable`. Confined to the thread running the call.
    */
-  private def criteriaCall[A](ctx: EvalContext)(body: RecalcCounters.Tally => A): A =
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private final class CriteriaCall(val matches: RecalcCounters.Tally, counting: Boolean):
+    private var indexed = false
+    private var shape: Option[RecalcCounters.Counter] = None
+
+    def answeredByIndex(): Unit = indexed = true
+
+    /** Record the kind of the call's criteria, once they are parsed. */
+    def criteria(parsed: List[CriteriaMatcher.Criterion]): Unit =
+      shape =
+        if !counting then None
+        else if parsed.exists(CriteriaKeys.lookup(_).isDefined) then None
+        else if parsed.nonEmpty && parsed.forall(CriteriaKeys.isNumericWindow) then
+          Some(RecalcCounters.Counter.CriteriaWindowOnly)
+        else Some(RecalcCounters.Counter.CriteriaNotIndexable)
+
+    def flush(counters: RecalcCounters): Unit =
+      matches.flush()
+      counters.increment(
+        if indexed then RecalcCounters.Counter.CriteriaIndexed
+        else RecalcCounters.Counter.CriteriaScan
+      )
+      shape.foreach(counters.increment)
+
+  /**
+   * #767: one criteria call (COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS, MAXIFS), timed as the
+   * `Criteria` phase and counted by [[CriteriaCall]].
+   */
+  private def criteriaCall[A](ctx: EvalContext)(body: CriteriaCall => A): A =
     val counters = ctx.counters
-    counters.increment(RecalcCounters.Counter.CriteriaScan)
-    val matches = counters.tally(RecalcCounters.Counter.MatcherCalls)
+    val call =
+      new CriteriaCall(counters.tally(RecalcCounters.Counter.MatcherCalls), counters.enabled)
     // a defect thrown by `body` becomes a cell error in EvalDefect.xlGuard; its rows still count
-    try counters.time(RecalcCounters.Phase.Criteria)(body(matches))
-    finally matches.flush()
+    try counters.time(RecalcCounters.Phase.Criteria)(body(call))
+    finally call.flush(counters)
 
   /** `CriteriaMatcher.matches`, tallied (#767). */
   private def matchCounted(
-    tally: RecalcCounters.Tally,
+    call: CriteriaCall,
     value: CellValue,
     criterion: CriteriaMatcher.Criterion
   ): Boolean =
-    tally.increment()
+    call.matches.increment()
     CriteriaMatcher.matches(value, criterion)
+
+  /**
+   * #767: the offsets a criteria call over `n` rows must test, ascending; `None` for every offset
+   * `0 until n`.
+   *
+   * Offsets are listed only when every criteria range reads through a column slice and at least one
+   * criterion is indexed ([[CriteriaKeys.lookup]]): then the candidates are the offsets every
+   * indexed criterion's equality index selects ([[PassCache.candidates]]). Every candidate is still
+   * tested with `CriteriaMatcher.matches` for every criterion, in order, so the call counts the
+   * same rows as testing every offset: an offset left out matches no indexed criterion. The
+   * functions that use this read every criteria value from a slice (never a `Left`) and compute
+   * only on matching rows, in ascending order, so they add the same values in the same order and
+   * meet the same first error.
+   */
+  private def candidateOffsets(
+    ctx: EvalContext,
+    call: CriteriaCall,
+    columns: List[(CriteriaColumn, CriteriaMatcher.Criterion)],
+    n: Int
+  ): Option[IndexedSeq[Int]] =
+    call.criteria(columns.map(_._2))
+    val sliced = columns.map((column, criterion) => column.sliced.map((_, criterion)))
+    val pairs = sliced.flatten.flatMap { case ((slice, firstRow), criterion) =>
+      CriteriaKeys.lookup(criterion).map(keys => (slice, keys, firstRow))
+    }
+    if n <= 0 || sliced.exists(_.isEmpty) || pairs.isEmpty then None
+    else
+      ctx.aggregateMemo
+        .flatMap(_.passCache)
+        .filter(_.indexing)
+        .flatMap(_.candidates(pairs, n))
+        .map { offsets =>
+          call.answeredByIndex()
+          offsets
+        }
 
   /**
    * #767: one criteria range of a criteria call, as its row loop reads it — from the pass's column
@@ -654,12 +720,16 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     /** The value at offset `idx` of the walked range, in its row-major order. */
     def at(idx: Int): Either[EvalError, CellValue]
 
+    /** The slice read and the sheet row of offset 0, when the range reads through a slice. */
+    def sliced: Option[(ColumnSlice, Int)]
+
     /** The value at `ref`, a cell of the walked range. */
     def atRef(ref: ARef): Either[EvalError, CellValue]
 
   private final class SlicedColumn(slice: ColumnSlice, firstRow: Int) extends CriteriaColumn:
     def at(idx: Int): Either[EvalError, CellValue] = Right(slice.valueAt(firstRow + idx))
     def atRef(ref: ARef): Either[EvalError, CellValue] = Right(slice.valueAt(ref.row.index0))
+    def sliced: Option[(ColumnSlice, Int)] = Some((slice, firstRow))
 
   private final class ScannedColumn(
     sheet: com.tjclp.xl.sheets.Sheet,
@@ -670,6 +740,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     private lazy val cells: Vector[ARef] = range.cells.toVector
     def at(idx: Int): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, cells(idx), ctx)
     def atRef(ref: ARef): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, ref, ctx)
+    def sliced: Option[(ColumnSlice, Int)] = None
 
   /**
    * #767: the reader for the walked criteria range `range` on `sheet`, and whether the call wanted
@@ -727,6 +798,21 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     val (column, refused) = criteriaColumn(ctx, sheet, range, static)
     if refused then ctx.counters.increment(RecalcCounters.Counter.ScanFallbacks)
     column
+
+  /**
+   * #767: the cells a one-range criteria call (COUNTIF, SUMIF, AVERAGEIF) tests, in row-major
+   * order: every cell of `range`, or only the index's candidates ([[candidateOffsets]]).
+   */
+  private def visitedRefs(
+    ctx: EvalContext,
+    call: CriteriaCall,
+    tests: CriteriaColumn,
+    criterion: CriteriaMatcher.Criterion,
+    range: CellRange
+  ): Iterator[ARef] =
+    candidateOffsets(ctx, call, List((tests, criterion)), range.size) match
+      case Some(offsets) => offsets.iterator.map(cellAt(range, _))
+      case None => range.cells
 
   /** The cell at offset `idx` of `range` in its row-major order ([[CellRange.cells]]). */
   private def cellAt(range: CellRange, idx: Int): ARef =
@@ -971,7 +1057,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria, sumRangeLocationOpt) = args
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalValue(ctx, criteria).flatMap { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           val effectiveLocation = sumRangeLocationOpt.getOrElse(rangeLocation)
@@ -1003,8 +1089,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               val criteriaRange = constrainRange(criteriaRange0, bounds)
               val tests = criteriaColumnOf(ctx, criteriaSheet, criteriaRange, criteriaStatic)
 
-              // GH-192: Use iterator-based folding (no .toList) for memory efficiency
-              criteriaRange.cells
+              // GH-192: Use iterator-based folding (no .toList) for memory efficiency; #767: only
+              // the index's candidate rows when it has them
+              visitedRefs(ctx, call, tests, criterion, criteriaRange)
                 .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
                   case (Left(err), _) => Left(err)
                   case (Right(acc), testRef) =>
@@ -1015,7 +1102,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         // GH-631: the summed cell sits at the same offset from sum_range's origin as
                         // testRef from range's origin; one past the grid edge contributes nothing
                         CriteriaRangeResize.pairedCell(testRef, criteriaRange0, sumRange0) match
-                          case Some(sumRef) if matchCounted(matches, testValue, criterion) =>
+                          case Some(sumRef) if matchCounted(call, testValue, criterion) =>
                             resolveNumericPolicing(
                               sumSheet,
                               sumRef,
@@ -1042,7 +1129,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria) = args
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalValue(ctx, criteria).flatMap { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           // GH-192: Resolve target sheet for cross-sheet support
@@ -1055,12 +1142,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               // GH-192: Use iterator-based folding (no .toList) for memory efficiency
               val trimmed =
                 blankCriteriaCount(cellsTrimmed(criteriaRange0, constrainedRange), List(criterion))
-              constrainedRange.cells
+              visitedRefs(ctx, call, tests, criterion, constrainedRange)
                 .foldLeft[Either[EvalError, Int]](Right(0)) {
                   case (Left(err), _) => Left(err)
                   case (Right(count), ref) =>
                     tests.atRef(ref).map { testValue =>
-                      if matchCounted(matches, testValue, criterion) then count + 1 else count
+                      if matchCounted(call, testValue, criterion) then count + 1 else count
                     }
                 }
                 .map(count => BigDecimal(count.toLong + trimmed))
@@ -1076,7 +1163,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (sumRangeLocation, conditions) = args
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalCriteriaValues(ctx, conditions)
           .flatMap { criteriaValues =>
             val parsedConditions = parseConditions(conditions, criteriaValues)
@@ -1117,38 +1204,39 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 // GH-192: index tracking over the row-major cells; #767: each criteria range reads
                 // through a column slice when the pass has one for it
                 val criteriaCells = criteriaColumns(ctx, constrainedConditions)
+                val n = constrainedSumRange.size
 
-                (0 until constrainedSumRange.size).foldLeft[Either[EvalError, BigDecimal]](
-                  Right(BigDecimal(0))
-                ) {
-                  case (Left(err), _) => Left(err)
-                  case (Right(acc), idx) =>
-                    // Check all conditions
-                    val matchResult =
-                      criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
-                        case (Left(err), _) => Left(err)
-                        case (Right(false), _) => Right(false) // Short-circuit
-                        case (Right(true), (column, criterion)) =>
-                          column.at(idx).map { testValue =>
-                            matchCounted(matches, testValue, criterion)
-                          }
+                candidateOffsets(ctx, call, criteriaCells, n)
+                  .getOrElse(0 until n)
+                  .foldLeft[Either[EvalError, BigDecimal]](Right(BigDecimal(0))) {
+                    case (Left(err), _) => Left(err)
+                    case (Right(acc), idx) =>
+                      // Check all conditions
+                      val matchResult =
+                        criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                          case (Left(err), _) => Left(err)
+                          case (Right(false), _) => Right(false) // Short-circuit
+                          case (Right(true), (column, criterion)) =>
+                            column.at(idx).map { testValue =>
+                              matchCounted(call, testValue, criterion)
+                            }
+                        }
+                      matchResult.flatMap { allMatch =>
+                        if allMatch then
+                          resolveNumericPolicing(
+                            sumSheet,
+                            cellAt(constrainedSumRange, idx),
+                            ctx,
+                            "SUMIFS",
+                            propagateErrors = true
+                          )
+                            .map {
+                              case Some(n) => acc + n
+                              case None => acc
+                            }
+                        else Right(acc)
                       }
-                    matchResult.flatMap { allMatch =>
-                      if allMatch then
-                        resolveNumericPolicing(
-                          sumSheet,
-                          cellAt(constrainedSumRange, idx),
-                          ctx,
-                          "SUMIFS",
-                          propagateErrors = true
-                        )
-                          .map {
-                            case Some(n) => acc + n
-                            case None => acc
-                          }
-                      else Right(acc)
-                    }
-                }
+                  }
               }
             yield result
           }
@@ -1166,7 +1254,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     fnName: String,
     ctx: EvalContext
   ): Either[EvalError, Vector[BigDecimal]] =
-    criteriaCall(ctx) { matches =>
+    criteriaCall(ctx) { call =>
       evalCriteriaValues(ctx, conditions).flatMap { criteriaValues =>
         val parsedConditions = parseConditions(conditions, criteriaValues)
         // GH-394: resolve first (Name locations have no static range), then validate dimensions
@@ -1201,34 +1289,35 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             }
             // #767: each criteria range reads through a column slice when the pass has one for it
             val criteriaCells = criteriaColumns(ctx, constrainedConditions)
-            (0 until constrainedValueRange.size).foldLeft[Either[EvalError, Vector[BigDecimal]]](
-              Right(Vector.empty)
-            ) {
-              case (Left(err), _) => Left(err)
-              case (Right(acc), idx) =>
-                val matchResult =
-                  criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
-                    case (Left(err), _) => Left(err)
-                    case (Right(false), _) => Right(false)
-                    case (Right(true), (column, criterion)) =>
-                      column.at(idx).map(tv => matchCounted(matches, tv, criterion))
+            val n = constrainedValueRange.size
+            candidateOffsets(ctx, call, criteriaCells, n)
+              .getOrElse(0 until n)
+              .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
+                case (Left(err), _) => Left(err)
+                case (Right(acc), idx) =>
+                  val matchResult =
+                    criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
+                      case (Left(err), _) => Left(err)
+                      case (Right(false), _) => Right(false)
+                      case (Right(true), (column, criterion)) =>
+                        column.at(idx).map(tv => matchCounted(call, tv, criterion))
+                    }
+                  matchResult.flatMap { allMatch =>
+                    if allMatch then
+                      resolveNumericPolicing(
+                        valueSheet,
+                        cellAt(constrainedValueRange, idx),
+                        ctx,
+                        fnName,
+                        propagateErrors = true
+                      )
+                        .map {
+                          case Some(n) => acc :+ n
+                          case None => acc
+                        }
+                    else Right(acc)
                   }
-                matchResult.flatMap { allMatch =>
-                  if allMatch then
-                    resolveNumericPolicing(
-                      valueSheet,
-                      cellAt(constrainedValueRange, idx),
-                      ctx,
-                      fnName,
-                      propagateErrors = true
-                    )
-                      .map {
-                        case Some(n) => acc :+ n
-                        case None => acc
-                      }
-                  else Right(acc)
-                }
-            }
+              }
           }
         yield result
       }
@@ -1266,7 +1355,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       Arity.AtLeast(2),
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (conditions, ctx) =>
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalCriteriaValues(ctx, conditions)
           .flatMap { criteriaValues =>
             val parsedConditions = parseConditions(conditions, criteriaValues)
@@ -1331,7 +1420,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     val criteriaCells = criteriaColumns(ctx, constrainedConditions)
                     val refCount = constrainedConditions.headOption.map(_._2.size).getOrElse(0)
 
-                    (0 until refCount)
+                    candidateOffsets(ctx, call, criteriaCells, refCount)
+                      .getOrElse(0 until refCount)
                       .foldLeft[Either[EvalError, Int]](Right(0)) {
                         case (Left(err), _) => Left(err)
                         case (Right(count), idx) =>
@@ -1342,7 +1432,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                               case (Right(false), _) => Right(false) // Short-circuit
                               case (Right(true), (column, criterion)) =>
                                 column.at(idx).map { testValue =>
-                                  matchCounted(matches, testValue, criterion)
+                                  matchCounted(call, testValue, criterion)
                                 }
                             }
                           matchResult.map { allMatch =>
@@ -1362,7 +1452,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (rangeLocation, criteria, avgRangeLocationOpt) = args
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalValue(ctx, criteria).flatMap { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           val effectiveLocation = avgRangeLocationOpt.getOrElse(rangeLocation)
@@ -1390,8 +1480,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               val criteriaRange = constrainRange(criteriaRange0, bounds)
               val tests = criteriaColumnOf(ctx, criteriaSheet, criteriaRange, criteriaStatic)
 
-              // GH-192: Use iterator-based folding (no .toList) for memory efficiency
-              criteriaRange.cells
+              // GH-192: Use iterator-based folding (no .toList) for memory efficiency; #767: only
+              // the index's candidate rows when it has them
+              visitedRefs(ctx, call, tests, criterion, criteriaRange)
                 .foldLeft[Either[EvalError, (BigDecimal, Int)]](Right((BigDecimal(0), 0))) {
                   case (Left(err), _) => Left(err)
                   case (Right((accSum, accCount)), testRef) =>
@@ -1400,7 +1491,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       .atRef(testRef)
                       .flatMap { testValue =>
                         CriteriaRangeResize.pairedCell(testRef, criteriaRange0, avgRange0) match
-                          case Some(avgRef) if matchCounted(matches, testValue, criterion) =>
+                          case Some(avgRef) if matchCounted(call, testValue, criterion) =>
                             resolveNumericPolicing(
                               avgSheet,
                               avgRef,
@@ -1432,7 +1523,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (args, ctx) =>
       val (avgRangeLocation, conditions) = args
-      criteriaCall(ctx) { matches =>
+      criteriaCall(ctx) { call =>
         evalCriteriaValues(ctx, conditions)
           .flatMap { criteriaValues =>
             val parsedConditions = parseConditions(conditions, criteriaValues)
@@ -1474,7 +1565,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 // through a column slice when the pass has one for it
                 val criteriaCells = criteriaColumns(ctx, constrainedConditions)
 
-                (0 until constrainedAvgRange.size)
+                val n = constrainedAvgRange.size
+                candidateOffsets(ctx, call, criteriaCells, n)
+                  .getOrElse(0 until n)
                   .foldLeft[Either[EvalError, (BigDecimal, Int)]](Right((BigDecimal(0), 0))) {
                     case (Left(err), _) => Left(err)
                     case (Right((accSum, accCount)), idx) =>
@@ -1485,7 +1578,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                           case (Right(false), _) => Right(false) // Short-circuit
                           case (Right(true), (column, criterion)) =>
                             column.at(idx).map { testValue =>
-                              matchCounted(matches, testValue, criterion)
+                              matchCounted(call, testValue, criterion)
                             }
                         }
                       matchResult.flatMap { allMatch =>

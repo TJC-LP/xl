@@ -7,7 +7,13 @@ import scala.jdk.CollectionConverters.*
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.{IterativeMode, RecalcCounters, RecalcOptions, RecalcResult}
+import com.tjclp.xl.formula.eval.{
+  Evaluator,
+  IterativeMode,
+  RecalcCounters,
+  RecalcOptions,
+  RecalcResult
+}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator
 import com.tjclp.xl.io.Excel
 import com.tjclp.xl.workbooks.Workbook
@@ -47,30 +53,34 @@ object LoadsBookHarness:
 
   /**
    * Run `mode` over `workbook`. `measured = false` passes the disabled counters, which is what the
-   * public entry points do (the JMH benchmark compares the two). `Checked` writes to `out`, or to a
-   * temporary file it deletes.
+   * public entry points do (the JMH benchmark compares the two). `criteriaIndex = false` turns the
+   * criteria index off (the gates compare the two). `Checked` writes to `out`, or to a temporary
+   * file it deletes.
    */
   def run(
     workbook: Workbook,
     mode: Mode,
     measured: Boolean = true,
     threads: Int = 2,
-    out: Option[Path] = None
+    out: Option[Path] = None,
+    criteriaIndex: Boolean = true
   ): Run =
     val counters = if measured then RecalcCounters.create() else RecalcCounters.disabled
     val options = RecalcOptions(
       iterative = IterativeMode.Off,
       parallelism = if mode == Mode.Parallel then threads else 1
     )
+    // the memo every public entry point builds, with the index switch
+    def memo = new Evaluator.AggregateMemo(counters = counters, criteriaIndex = criteriaIndex)
     resetHeapPeaks()
     val start = System.nanoTime()
     val result = mode match
       case Mode.Recalc | Mode.Parallel =>
-        WorkbookEvaluator.recalculateCounted(workbook, options, counters)
+        WorkbookEvaluator.recalculateWithMemo(workbook, options, memo)
       case Mode.Uncached =>
-        WorkbookEvaluator.recalculateUncachedCounted(workbook, options, counters)
+        WorkbookEvaluator.recalculateUncachedWithMemo(workbook, options, memo)
       case Mode.Checked =>
-        val recalculated = WorkbookEvaluator.recalculateUncachedCounted(workbook, options, counters)
+        val recalculated = WorkbookEvaluator.recalculateUncachedWithMemo(workbook, options, memo)
         val path = out.getOrElse(Files.createTempFile("xl-perf-", ".xlsx"))
         val writeStart = System.nanoTime()
         Excel.write(recalculated.workbook, path.toString)

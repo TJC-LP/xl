@@ -239,14 +239,27 @@ object CriteriaMatcher:
 
   /**
    * Parse string as BigDecimal, handling Excel's flexible numeric syntax.
+   *
+   * `BigDecimal(String)` accepts only text that starts with a sign, a point or a digit (any
+   * `Character.isDigit` digit, not only ASCII), so text that starts with anything else is not a
+   * number and is refused before the parse, which would throw and catch an exception for it.
+   * `CriteriaIndexSpec` pins this to [[parseNumericByParse]] on random and adversarial text. The
+   * criteria index (#767) keys numeric text with this same function.
    */
-  private def parseNumeric(s: String): Option[BigDecimal] =
+  private[formula] def parseNumeric(s: String): Option[BigDecimal] =
     val trimmed = s.trim
     if trimmed.isEmpty then None
     else
-      scala.util
-        .Try(BigDecimal(trimmed))
-        .toOption
+      val first = trimmed.charAt(0)
+      if first == '+' || first == '-' || first == '.' || Character.isDigit(first) then
+        scala.util.Try(BigDecimal(trimmed)).toOption
+      else None
+
+  /** [[parseNumeric]] without the leading-character check: the reference its test compares to. */
+  private[eval] def parseNumericByParse(s: String): Option[BigDecimal] =
+    val trimmed = s.trim
+    if trimmed.isEmpty then None
+    else scala.util.Try(BigDecimal(trimmed)).toOption
 
   /**
    * Test if a cell value matches a criterion.
