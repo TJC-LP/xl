@@ -1,0 +1,11 @@
+## args
+--max-size
+0
+-f
+<DIR>/simple.xlsx
+lint
+## exit
+0
+## stdout
+<DIR>/simple.xlsx: clean (no findings)
+## stderr

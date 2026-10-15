@@ -798,7 +798,9 @@ EXIT CODES:
   2 = usage (no file, or a file given both ways)
   3 = error (unreadable file, missing/malformed core part, ...)
 
-Docs: xl lint is read-only; it never repairs or rewrites the file.
+Docs: xl lint is read-only; it never repairs or rewrites the file. It
+applies no uncompressed-size limit, so --max-size is accepted and changes
+nothing (`xl --max-size 0 -f F lint` runs the lint).
 
 EXAMPLES:
   xl lint deliverable.xlsx && echo "safe to send"        # repair-clean

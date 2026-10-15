@@ -141,6 +141,120 @@ object Argv:
   /** The spellings of the sheet global. */
   private val sheetGlobals: Set[String] = Set("-s", "--sheet")
 
+  /** The short spelling of each global that has one, by long name. */
+  private val shortSpelling: Map[String, String] = Map(
+    "--file" -> "-f",
+    "--sheet" -> "-s",
+    "--output" -> "-o",
+    "--in-place" -> "-i"
+  )
+
+  /** A global's long name from either spelling (`-f` → `--file`). */
+  def longName(spelling: String): String =
+    shortSpelling
+      .collectFirst { case (long, short) if short == spelling => long }
+      .getOrElse(spelling)
+
+  /** How errors name a global: both spellings when it has a short one (`-o/--output`). */
+  def flagPair(long: String): String = shortSpelling.get(long).fold(long)(short => s"$short/$long")
+
+  /** Every global by long name. */
+  private val allGlobals: Set[String] = globals.keySet.map(longName)
+
+  /** The globals a verb reading one workbook takes. */
+  private val readGlobals: Set[String] =
+    Set("--file", "--sheet", "--max-size", "--stream", "--json")
+
+  /**
+   * GH-766: the globals each verb takes, by long name — the union over the parser chains that carry
+   * the verb in [[com.tjclp.xl.cli.Cli.program]]. A verb not listed is a write on the sheet-write
+   * chain, which takes every global (lazy: [[verbs]] is defined below). ArgvSpec pins the table
+   * against the parser over every verb and every global, so the two cannot drift. `lint` and the
+   * standalone `batch --dry-run` accept `--max-size` and ignore it; a verb's own flag under a
+   * global's name ([[verbOwned]]) is not a global after that verb.
+   */
+  lazy val verbGlobals: Map[String, Set[String]] =
+    val noWorkbook = Set("--json")
+    val explicit: Map[String, Set[String]] = Map(
+      "rasterizers" -> noWorkbook,
+      "functions" -> noWorkbook,
+      "schema" -> noWorkbook,
+      "new" -> noWorkbook,
+      "diff" -> (readGlobals - "--stream"),
+      "lint" -> Set("--file", "--max-size", "--stream", "--strict", "--json"),
+      "eval" -> (readGlobals - "--stream"),
+      "evala" -> (readGlobals - "--stream"),
+      "sheets" ->
+        Set("--file", "--output", "--in-place", "--backend", "--max-size", "--stream", "--json"),
+      "names" -> (readGlobals - "--sheet")
+    ) ++ Vector("bounds", "view", "cell", "search", "stats", "filter", "describe", "audit", "deps")
+      .map(_ -> readGlobals)
+    verbs.map(verb => verb -> explicit.getOrElse(verb, allGlobals)).toMap
+
+  /**
+   * The globals the standalone `batch --dry-run <source>` and `batch --schema` take (the
+   * `batchDryRunOpts` chain in [[com.tjclp.xl.cli.Cli.program]]): they read and write no workbook.
+   * With `-f` the line is a batch on that file and takes every global (its dry run ignores them).
+   */
+  private val batchStandaloneGlobals: Set[String] = Set("--max-size", "--stream", "--json")
+
+  /** The batch flags that make a line without `-f` a standalone batch form. */
+  private val batchStandaloneFlags: Set[String] = Set("--dry-run", "--schema")
+
+  /**
+   * The verb as the error names it, with the globals that form of it takes: [[verbGlobals]], except
+   * `batch --dry-run` and `batch --schema` without `-f/--file`, which take only
+   * [[batchStandaloneGlobals]]. `None` for an unknown verb.
+   */
+  def acceptedGlobals(args: List[String]): Option[(String, Set[String])] =
+    verbIndex(args).flatMap { at =>
+      args.lift(at).flatMap { verb =>
+        verbGlobals.get(verb).map { accepted =>
+          val standalone = Option
+            .when(verb == "batch" && globalAmong(args, Set("-f", "--file")).isEmpty) {
+              args.drop(at + 1).takeWhile(_ != "--").find(batchStandaloneFlags.contains)
+            }
+            .flatten
+          standalone.fold((verb, accepted))(flag => (s"$verb $flag", batchStandaloneGlobals))
+        }
+      }
+    }
+
+  /**
+   * Why `verb` (as [[acceptedGlobals]] names it) does not take the global `long`: the hint after
+   * "drop <flag>;". The output and sheet globals have their own rules in [[misuses]]; `--stream` is
+   * refused before the parser ([[Schema.streamRefusal]]).
+   */
+  private def unacceptedReason(verb: String, long: String): String =
+    (verb, long) match
+      case ("batch --dry-run" | "batch --schema", _) =>
+        s"$verb without -f reads and writes no workbook; it takes only --max-size, --stream " +
+          "and --json"
+      case ("view", "--strict") =>
+        "view's own --strict gates --eval and goes after the verb (`xl view A1 --eval --strict`)"
+      case ("new", "--backend") =>
+        "new's own --backend goes after the verb (`xl new out.xlsx --backend saxstax`)"
+      case ("new", "--file") => "new creates the file it names: `xl new <file>`"
+      case (_, "--file" | "--max-size") => s"$verb reads no workbook"
+      case (_, "--backend") => s"--backend picks a write's XML writer; $verb writes no workbook"
+      case (_, "--no-recalc" | "--preserve-caches") =>
+        s"$long applies to the recalculation a cell write runs; $verb runs none"
+      case (_, "--strict") =>
+        s"--strict gates a write's recalculation and lint's hygiene findings; $verb has neither"
+      case _ => s"$verb takes no $long"
+
+  /**
+   * GH-766: the globals on the command line that its verb does not take ([[acceptedGlobals]]), as
+   * long names in the order they appear, each once. Read as decline reads them (a global's value is
+   * data, nothing behind `--` counts) and split at the verb as [[sheetOnSheetlessVerb]] is: behind
+   * the verb, a flag the verb owns ([[verbOwned]]) is its own option. Empty for an unknown verb.
+   */
+  def unacceptedGlobals(args: List[String]): Vector[String] =
+    acceptedGlobals(args).fold(Vector.empty[String]) { (_, accepted) =>
+      val refused = globals.keySet.filterNot(name => accepted.contains(longName(name)))
+      aroundVerb(args, refused)(globalsAmong(_, _), _ ++ _).map(longName).distinct
+    }
+
   /**
    * GH-676: the [[sheetlessVerbs]] verb given the `-s/--sheet` global, read as decline reads it (a
    * global's value is data, nothing behind `--` counts, and `--sheet` after `new` is new's own
@@ -181,8 +295,9 @@ object Argv:
   /**
    * Every misuse on the command line, in the order the runner reports them, each repairing the line
    * the previous one left: an output global on a verb that never writes, the sheet global on a
-   * [[sheetlessVerbs]] verb, an output global on `new`. The last one's `repaired` is the line with
-   * every misuse removed.
+   * [[sheetlessVerbs]] verb, an output global on `new`, then any other global the verb does not
+   * take ([[unacceptedGlobals]], GH-766: `lint does not take --backend`). The last one's `repaired`
+   * is the line with every misuse removed.
    */
   def misuses(args: List[String]): Vector[Misuse] =
     val readOnlyOutput = (line: List[String]) =>
@@ -229,7 +344,22 @@ object Argv:
           positional
         )
       }
-    Vector(readOnlyOutput, sheetless, newOutput)
+    val unaccepted = (line: List[String]) =>
+      acceptedGlobals(line).flatMap { (verb, _) =>
+        val flags = unacceptedGlobals(line)
+        Option.when(flags.nonEmpty) {
+          val pairs = flags.map(flagPair).mkString(", ")
+          val spellings = globals.keySet.filter(name => flags.contains(longName(name)))
+          val reasons = flags.map(unacceptedReason(verb, _)).distinct.mkString("; ")
+          Misuse(
+            s"$verb does not take $pairs",
+            s"drop $pairs; $reasons. Run `xl ${verb.takeWhile(_ != ' ')} --help` for the usage",
+            aroundVerb(line, spellings)(dropGlobals(_, _), _ ++ _),
+            None
+          )
+        }
+      }
+    Vector(readOnlyOutput, sheetless, newOutput, unaccepted)
       .foldLeft((args, Vector.empty[Misuse])) { case ((line, found), rule) =>
         rule(line).fold((line, found))(misuse => (misuse.repaired, found :+ misuse))
       }
@@ -257,6 +387,19 @@ object Argv:
           case Some((_, takesValue)) => scan(if takesValue then tail.drop(1) else tail)
           case None => scan(tail)
     scan(args.takeWhile(_ != "--"))
+
+  /** Every one of the named globals on the command line, in order (the rule of [[globalAmong]]). */
+  private def globalsAmong(args: List[String], names: Set[String]): Vector[String] =
+    @tailrec
+    def scan(tokens: List[String], found: Vector[String]): Vector[String] = tokens match
+      case Nil => found
+      case token :: tail =>
+        globalOf(token) match
+          case Some((name, takesValue)) =>
+            val next = if takesValue then tail.drop(1) else tail
+            scan(next, if names.contains(name) then found :+ name else found)
+          case None => scan(tail, found)
+    scan(args.takeWhile(_ != "--"), Vector.empty)
 
   /**
    * `f` over the command line with the named globals, split at the verb: in front of it every
