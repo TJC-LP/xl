@@ -17,12 +17,17 @@ class RecalcPerfGatesSpec extends FunSuite:
 
   private val tiny = LoadsBook.build(LoadsBook.Tiny)
 
+  private def resource(name: String): String =
+    val stream = getClass.getResourceAsStream(name)
+    try new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+    finally stream.close()
+
   private val oracle: Vector[(String, String)] =
-    val stream = getClass.getResourceAsStream("/loads-oracle-tiny.tsv")
-    val text =
-      try new String(stream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
-      finally stream.close()
-    LoadsBookHarness.parseOracle(text)
+    LoadsBookHarness.parseOracle(resource("/loads-oracle-tiny.tsv"))
+
+  /** Every formula cell of Tiny as 0.24.1 computes it (1,600 lines, 765 of them non-zero). */
+  private val fullOracle: Vector[String] =
+    resource("/loads-values-tiny.tsv").linesIterator.filter(_.nonEmpty).toVector
 
   private def runTiny(mode: Mode): LoadsBookHarness.Run =
     val run = LoadsBookHarness.run(tiny.workbook, mode)
@@ -69,6 +74,16 @@ class RecalcPerfGatesSpec extends FunSuite:
     assertOracle(parallel)
   }
 
+  test("Tiny recalculate, writeChecked and parallel: every formula cell equals the full oracle") {
+    assertEquals(fullOracle.size, tiny.totalFormulas)
+    Vector(recalc, checked, parallel).foreach { run =>
+      val actual = LoadsBookHarness.valueLines(run.result.workbook)
+      val diff = actual.zip(fullOracle).filter(_ != _).take(5)
+      assertEquals(diff, Vector.empty)
+      assertEquals(actual.size, fullOracle.size)
+    }
+  }
+
   test("Tiny recalculate: counters characterise today's engine") {
     assertEquals(recalc.counters.counters, TinyCounts)
   }
@@ -97,11 +112,13 @@ class RecalcPerfGatesSpec extends FunSuite:
     assert(unmeasured.counters.counters.values.forall(_ == 0L))
   }
 
-  test("whole-column names: the same oracle cells, every criteria range bounded by a scan") {
+  test("whole-column names: the same values, every criteria range bounded by a scan") {
     val whole = LoadsBook.build(LoadsBook.Tiny.copy(wholeColumns = true))
     val run = LoadsBookHarness.run(whole.workbook, Mode.Recalc)
     println(LoadsBookHarness.report("Tiny wholeColumns", run))
     assertOracle(run)
+    // the header row the whole columns add is text, which no criterion and no MIN/MAX picks up
+    assertEquals(LoadsBookHarness.valueLines(run.result.workbook), fullOracle)
     // every criteria call scans the used range once per range it reads (value range plus criteria
     // ranges): 34 per Summary row x 8 rows + 64 per Rate History row x 24 rows
     assertEquals(run.counters(Counter.UsedRangeScans), 34L * 8 + 64L * 24)

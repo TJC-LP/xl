@@ -29,8 +29,17 @@ object LoadsBookMain:
       .collect { case Array(k, v) => k -> v }
       .toMap
     def int(key: String): Option[Int] = kv.get(key).flatMap(_.toIntOption)
-    val mode =
-      kv.get("mode").flatMap(LoadsBookHarness.Mode.parse).getOrElse(LoadsBookHarness.Mode.Recalc)
+    // an unknown shape or mode stops the run: a silent default would print a RESULT line labelled
+    // with the requested name for a run of a different book
+    def refuse(message: String): Nothing =
+      System.err.println(message)
+      sys.exit(2)
+    val mode = kv.get("mode") match
+      case None => LoadsBookHarness.Mode.Recalc
+      case Some(m) =>
+        LoadsBookHarness.Mode
+          .parse(m)
+          .getOrElse(refuse(s"unknown mode=$m; one of recalc, parallel, uncached, checked"))
     val threads = int("threads").getOrElse(2)
     val out = kv.get("out").map(Path.of(_))
     val shapeName = kv.getOrElse("shape", "Tiny")
@@ -41,7 +50,9 @@ object LoadsBookMain:
         val rows = int("rows").getOrElse(2000)
         (s"RunTotal rows=$rows", LoadsBook.runTotal(rows), None)
       else
-        val preset = LoadsBook.preset(shapeName).getOrElse(LoadsBook.Tiny)
+        val preset = LoadsBook
+          .preset(shapeName)
+          .getOrElse(refuse(s"unknown shape=$shapeName; one of Tiny, H10, R20, Real, RunTotal"))
         val shape = preset.copy(
           rows = int("rows").getOrElse(preset.rows),
           aggs = int("aggs").getOrElse(preset.aggs),

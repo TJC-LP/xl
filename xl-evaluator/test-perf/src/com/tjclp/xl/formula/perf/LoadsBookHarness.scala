@@ -106,6 +106,24 @@ object LoadsBookHarness:
   def oracleLines(built: LoadsBook.Built, wb: Workbook): Vector[String] =
     built.sampleRefs.map(ref => s"$ref\t${sampleValue(wb, ref)}")
 
+  /**
+   * `Sheet!A1<TAB>value` for every formula cell of `wb`, sheet by sheet in workbook order, then row
+   * by row: the full-book oracle (`loads-values-tiny.tsv`).
+   */
+  def valueLines(wb: Workbook): Vector[String] =
+    wb.sheets.flatMap { sheet =>
+      sheet.cells.toVector
+        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
+        .collect {
+          case (ref, cell) if isFormula(cell.value) =>
+            s"${sheet.name.value}!${ref.toA1}\t${show(cell.value)}"
+        }
+    }
+
+  private def isFormula(value: CellValue): Boolean = value match
+    case _: CellValue.Formula => true
+    case _ => false
+
   /** Parse an oracle file's `ref<TAB>value` lines. */
   def parseOracle(text: String): Vector[(String, String)] =
     text.linesIterator
