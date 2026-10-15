@@ -35,12 +35,16 @@ object DependentRecalculation:
    * (`ReferenceScan`) contains a dirty cell, or is unbounded. A missing graph edge cannot prove
    * independence, but the formula's text often can; readers it cannot bound stay always-dirty.
    * Unaffected formulas retain their caches and do not consume clock or randomness capabilities.
+   *
+   * #767: `memo` is the pass's aggregate memo (the per-pass caches live in it); the parity laws
+   * supply one with the caches switched off or with small slice thresholds.
    */
   private[xl] def recalculateAfterEdit(
     wb: Workbook,
     sheetName: SheetName,
     modifiedRefs: Set[ARef],
-    clock: Clock
+    clock: Clock,
+    memo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
   ): RecalcResult =
     if modifiedRefs.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
     else
@@ -96,9 +100,27 @@ object DependentRecalculation:
             SheetEvaluator.stripFormulaCaches(sheet, stripBySheet.getOrElse(sheet.name, Set.empty))
           }
           val positions = wb.sheets.zipWithIndex.map((sheet, i) => sheet.name -> i).toMap
-          val memo = new Evaluator.AggregateMemo
           if Evaluator.mayReadSpills(wb) then memo.trackSpills()
-          val evaluator = Evaluator.recalculationInstance(Rng.system, memo)
+          // #767: one slot per cone member in evaluation order. Cells outside the cone keep caches
+          // the edit cannot affect; the stripped cells this pass never evaluates (cyclic and
+          // blocked ones, in or out of the cone) refuse every slice over them.
+          val slots = ordered.iterator.zipWithIndex.toMap
+          memo.passCache.foreach(
+            _.begin(
+              Readiness.build(
+                slots,
+                stripBySheet.iterator.flatMap { (sheet, refs) =>
+                  refs.iterator.map(QualifiedRef(sheet, _))
+                }.toSet
+              )
+            )
+          )
+          def evaluatorFor(q: QualifiedRef): Evaluator =
+            Evaluator.recalculationInstance(
+              Rng.system,
+              memo,
+              WorkbookEvaluator.callerPosition(slots, dynamicClosure, q)
+            )
           val initial = WorkbookEvaluator.PassState(initialSheets, Map.empty, cycleErrors)
           val WorkbookEvaluator.PassState(_, values, errors, reasons) =
             ordered.foldLeft(initial) { (state, q) =>
@@ -110,13 +132,13 @@ object DependentRecalculation:
                       SheetEvaluator.evaluateCellOutcome(
                         state.sheets(position),
                         q.ref,
-                        evaluator,
+                        evaluatorFor(q),
                         calculationClock,
                         Some(wb.copy(sheets = state.sheets))
                       )
                     }
                   result match
-                    case Right(outcome) => state.computed(position, q, outcome)
+                    case Right(outcome) => state.computed(position, q, outcome, memo.passCache)
                     case Left(error) => state.failed(position, q, error)
             }
           RecalcResult.cacheResults(wb, values, errors, dependents, reasons = reasons)

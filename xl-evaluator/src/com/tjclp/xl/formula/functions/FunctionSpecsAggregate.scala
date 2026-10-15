@@ -2,9 +2,11 @@ package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{
+  ColumnSlice,
   EvalError,
   Evaluator,
   CriteriaMatcher,
+  PassCache,
   Aggregator,
   ArrayResult,
   ArrayArithmetic,
@@ -54,7 +56,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * reads [[usedArea]] instead, whose dropped cells only COUNTBLANK observes ([[blanksTrimmed]]).
    */
   private def computeBounds(
-    counters: RecalcCounters,
+    ctx: EvalContext,
     ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
   ): (Option[RowBounds], Option[ColBounds]) =
     val hasFullColumn = ranges.exists(_._1.isFullColumn)
@@ -62,9 +64,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     if !hasFullColumn && !hasFullRow then (None, None)
     else
       // Computing usedRange scans every populated cell. Bounded ranges need no shared bounds, so
-      // keep that scan entirely off their hot path.
-      counters.add(RecalcCounters.Counter.UsedRangeScans, ranges.size.toLong)
-      val usedRanges = ranges.flatMap(_._2.usedRange)
+      // keep that scan entirely off their hot path; #767: a recalculation pass scans each sheet
+      // once per structural generation (PassCache.usedRange)
+      val usedRanges = ranges.flatMap((_, sheet) => usedRangeOf(ctx, sheet))
       val rowBounds =
         if hasFullColumn then
           if usedRanges.isEmpty then None
@@ -86,6 +88,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             Some((Column.from0(minCol), Column.from0(maxCol)))
         else None
       (rowBounds, colBounds)
+
+  /** `sheet.usedRange`, through the pass's cache when the call has one (#767). */
+  private def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
+    ctx.aggregateMemo.flatMap(_.passCache) match
+      case Some(passCache) => passCache.usedRange(sheet)
+      case None =>
+        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
+        sheet.usedRange
 
   /**
    * GH-192: Constrain full-column/row ranges to shared bounds.
@@ -634,6 +644,94 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     tally.increment()
     CriteriaMatcher.matches(value, criterion)
 
+  /**
+   * #767: one criteria range of a criteria call, as its row loop reads it — from the pass's column
+   * slice when the call may use one, else cell by cell as before ([[evalCellValueForMatch]]). A
+   * slice holds no uncached formula, so where a scan would read `Right(cached)` or `Right(value)`
+   * the slice reads the same value; every row is still tested with `CriteriaMatcher.matches`.
+   */
+  private sealed trait CriteriaColumn:
+    /** The value at offset `idx` of the walked range, in its row-major order. */
+    def at(idx: Int): Either[EvalError, CellValue]
+
+    /** The value at `ref`, a cell of the walked range. */
+    def atRef(ref: ARef): Either[EvalError, CellValue]
+
+  private final class SlicedColumn(slice: ColumnSlice, firstRow: Int) extends CriteriaColumn:
+    def at(idx: Int): Either[EvalError, CellValue] = Right(slice.valueAt(firstRow + idx))
+    def atRef(ref: ARef): Either[EvalError, CellValue] = Right(slice.valueAt(ref.row.index0))
+
+  private final class ScannedColumn(
+    sheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    ctx: EvalContext
+  ) extends CriteriaColumn:
+    // GH-192: built only when the loop indexes it
+    private lazy val cells: Vector[ARef] = range.cells.toVector
+    def at(idx: Int): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, cells(idx), ctx)
+    def atRef(ref: ARef): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, ref, ctx)
+
+  /**
+   * #767: the reader for the walked criteria range `range` on `sheet`, and whether the call wanted
+   * a slice and was refused one (a `ScanFallbacks`). A slice serves a single-column range that its
+   * slot resolved statically (`static`), read by a formula evaluated at its own pass slot outside a
+   * positioned evaluation, when the pass's [[PassCache]] has or can build one.
+   */
+  private def criteriaColumn(
+    ctx: EvalContext,
+    sheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    static: Boolean
+  ): (CriteriaColumn, Boolean) =
+    val answer =
+      if !static || range.width != 1 || range.height <= 0 || ctx.placementGuard.isDefined then
+        PassCache.SliceAnswer.Ineligible
+      else
+        ctx.aggregateMemo
+          .flatMap(_.passCache)
+          .fold(PassCache.SliceAnswer.Ineligible)(
+            _.slice(
+              sheet,
+              range.colStart.index0,
+              range.rowStart.index0,
+              range.rowEnd.index0,
+              ctx.passPosition
+            )
+          )
+    answer match
+      case PassCache.SliceAnswer.Use(slice) =>
+        (SlicedColumn(slice, range.rowStart.index0), false)
+      case PassCache.SliceAnswer.Refused => (ScannedColumn(sheet, range, ctx), true)
+      case PassCache.SliceAnswer.Small | PassCache.SliceAnswer.Ineligible =>
+        (ScannedColumn(sheet, range, ctx), false)
+
+  /** The readers of a call's criteria ranges; one `ScanFallbacks` when any was refused a slice. */
+  private def criteriaColumns(
+    ctx: EvalContext,
+    conditions: List[(com.tjclp.xl.sheets.Sheet, CellRange, CriteriaMatcher.Criterion, Boolean)]
+  ): List[(CriteriaColumn, CriteriaMatcher.Criterion)] =
+    val read = conditions.map { case (sheet, range, criterion, static) =>
+      val (column, refused) = criteriaColumn(ctx, sheet, range, static)
+      (column, criterion, refused)
+    }
+    if read.exists(_._3) then ctx.counters.increment(RecalcCounters.Counter.ScanFallbacks)
+    read.map((column, criterion, _) => (column, criterion))
+
+  /** [[criteriaColumn]] for a call with one criteria range, counting its fallback. */
+  private def criteriaColumnOf(
+    ctx: EvalContext,
+    sheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    static: Boolean
+  ): CriteriaColumn =
+    val (column, refused) = criteriaColumn(ctx, sheet, range, static)
+    if refused then ctx.counters.increment(RecalcCounters.Counter.ScanFallbacks)
+    column
+
+  /** The cell at offset `idx` of `range` in its row-major order ([[CellRange.cells]]). */
+  private def cellAt(range: CellRange, idx: Int): ARef =
+    ARef.from0(range.colStart.index0 + idx % range.width, range.rowStart.index0 + idx / range.width)
+
   private def evalCriteriaValues(
     ctx: EvalContext,
     conditions: RangeCriteriaList
@@ -663,15 +761,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   private def resolveConditions(
     parsedConditions: List[(TExpr.RangeLocation, CriteriaMatcher.Criterion)],
     ctx: EvalContext
-  ): Either[EvalError, List[(com.tjclp.xl.sheets.Sheet, CellRange, CriteriaMatcher.Criterion)]] =
+  ): Either[
+    EvalError,
+    List[(com.tjclp.xl.sheets.Sheet, CellRange, CriteriaMatcher.Criterion, Boolean)]
+  ] =
     parsedConditions.foldLeft[Either[
       EvalError,
-      List[(com.tjclp.xl.sheets.Sheet, CellRange, CriteriaMatcher.Criterion)]
+      List[(com.tjclp.xl.sheets.Sheet, CellRange, CriteriaMatcher.Criterion, Boolean)]
     ]](Right(List.empty)) {
       case (Left(err), _) => Left(err)
       case (Right(acc), (loc, criterion)) =>
-        ctx.resolveRange(loc).map { case (sheet, range) =>
-          acc :+ (sheet, range, criterion)
+        // #767: the flag says whether the slot resolved statically (criteriaColumn)
+        ctx.resolveRangeTraced(loc).map { case (sheet, range, static) =>
+          acc :+ (sheet, range, criterion, static)
         }
     }
 
@@ -724,7 +826,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     fnName: String
   ): Either[EvalError, Vector[BigDecimal]] =
     ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
-      val bounds = computeBounds(ctx.counters, List((range, targetSheet)))
+      val bounds = computeBounds(ctx, List((range, targetSheet)))
       val constrainedRange = constrainRange(range, bounds)
       constrainedRange.cells
         .foldLeft[Either[EvalError, Vector[BigDecimal]]](Right(Vector.empty)) {
@@ -878,16 +980,16 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static range),
           // so the dimension validation moved after it — same Excel semantics, resolved shapes.
           for
-            resolvedCriteria <- ctx.resolveRange(rangeLocation)
+            resolvedCriteria <- ctx.resolveRangeTraced(rangeLocation)
             resolvedSum <- ctx.resolveRange(effectiveLocation)
-            (criteriaSheet, criteriaRange0) = resolvedCriteria
+            (criteriaSheet, criteriaRange0, criteriaStatic) = resolvedCriteria
             (sumSheet, sumRangeAsWritten) = resolvedSum
             // GH-631: Excel sizes sum_range to range from its upper-left cell — SUMIF(A1:A10,">0",C1)
             // sums C1:C10 — never a dimension error
             sumRange0 = CriteriaRangeResize.resize(sumRangeAsWritten, criteriaRange0)
             result <- {
               val bounds = computeBounds(
-                ctx.counters,
+                ctx,
                 List(
                   (criteriaRange0, criteriaSheet),
                   (sumRange0, sumSheet)
@@ -899,6 +1001,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               // walks A3.. while C4:C1048576 keeps its origin, and offsetting from the clipped A3
               // paired A3 with C4 instead of C6 (a silent wrong sum).
               val criteriaRange = constrainRange(criteriaRange0, bounds)
+              val tests = criteriaColumnOf(ctx, criteriaSheet, criteriaRange, criteriaStatic)
 
               // GH-192: Use iterator-based folding (no .toList) for memory efficiency
               criteriaRange.cells
@@ -906,7 +1009,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   case (Left(err), _) => Left(err)
                   case (Right(acc), testRef) =>
                     // Evaluate test cell value (may be uncached formula)
-                    evalCellValueForMatch(criteriaSheet, testRef, ctx)
+                    tests
+                      .atRef(testRef)
                       .flatMap { testValue =>
                         // GH-631: the summed cell sits at the same offset from sum_range's origin as
                         // testRef from range's origin; one past the grid edge contributes nothing
@@ -942,22 +1046,24 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         evalValue(ctx, criteria).flatMap { criteriaValue =>
           val criterion = CriteriaMatcher.parse(criteriaValue)
           // GH-192: Resolve target sheet for cross-sheet support
-          ctx.resolveRange(rangeLocation).flatMap { case (criteriaSheet, criteriaRange0) =>
-            // GH-192: Constrain full-column/row ranges to used area for performance
-            val bounds = computeBounds(ctx.counters, List((criteriaRange0, criteriaSheet)))
-            val constrainedRange = constrainRange(criteriaRange0, bounds)
-            // GH-192: Use iterator-based folding (no .toList) for memory efficiency
-            val trimmed =
-              blankCriteriaCount(cellsTrimmed(criteriaRange0, constrainedRange), List(criterion))
-            constrainedRange.cells
-              .foldLeft[Either[EvalError, Int]](Right(0)) {
-                case (Left(err), _) => Left(err)
-                case (Right(count), ref) =>
-                  evalCellValueForMatch(criteriaSheet, ref, ctx).map { testValue =>
-                    if matchCounted(matches, testValue, criterion) then count + 1 else count
-                  }
-              }
-              .map(count => BigDecimal(count.toLong + trimmed))
+          ctx.resolveRangeTraced(rangeLocation).flatMap {
+            case (criteriaSheet, criteriaRange0, static) =>
+              // GH-192: Constrain full-column/row ranges to used area for performance
+              val bounds = computeBounds(ctx, List((criteriaRange0, criteriaSheet)))
+              val constrainedRange = constrainRange(criteriaRange0, bounds)
+              val tests = criteriaColumnOf(ctx, criteriaSheet, constrainedRange, static)
+              // GH-192: Use iterator-based folding (no .toList) for memory efficiency
+              val trimmed =
+                blankCriteriaCount(cellsTrimmed(criteriaRange0, constrainedRange), List(criterion))
+              constrainedRange.cells
+                .foldLeft[Either[EvalError, Int]](Right(0)) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(count), ref) =>
+                    tests.atRef(ref).map { testValue =>
+                      if matchCounted(matches, testValue, criterion) then count + 1 else count
+                    }
+                }
+                .map(count => BigDecimal(count.toLong + trimmed))
           }
         }
       }
@@ -984,7 +1090,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               resolved <- resolveConditions(parsedConditions, ctx)
               _ <- resolved
                 .collectFirst {
-                  case (_, range, _)
+                  case (_, range, _, _)
                       if range.width != sumRange0.width || range.height != sumRange0.height =>
                     // GH-631: Excel's #VALUE! — the *IFS family never resizes
                     EvalError.ErrorValue(
@@ -998,24 +1104,21 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 .getOrElse(Right(()))
               result <- {
                 val bounds = computeBounds(
-                  ctx.counters,
+                  ctx,
                   (sumRange0, sumSheet) ::
-                    resolved.map { case (sheet, range, _) => (range, sheet) }
+                    resolved.map { case (sheet, range, _, _) => (range, sheet) }
                 )
                 // GH-192: Constrain full-column/row ranges to shared bounds
                 val constrainedSumRange = constrainRange(sumRange0, bounds)
-                val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
-                  (sheet, constrainRange(range, bounds), criterion)
+                val constrainedConditions = resolved.map { case (sheet, range, criterion, static) =>
+                  (sheet, constrainRange(range, bounds), criterion, static)
                 }
 
-                // GH-192: Use iterator-based folding with index tracking
-                val sumCells = constrainedSumRange.cells.toVector
-                val criteriaCells =
-                  constrainedConditions.map { case (sheet, range, criterion) =>
-                    (sheet, range.cells.toVector, criterion)
-                  }
+                // GH-192: index tracking over the row-major cells; #767: each criteria range reads
+                // through a column slice when the pass has one for it
+                val criteriaCells = criteriaColumns(ctx, constrainedConditions)
 
-                sumCells.indices.foldLeft[Either[EvalError, BigDecimal]](
+                (0 until constrainedSumRange.size).foldLeft[Either[EvalError, BigDecimal]](
                   Right(BigDecimal(0))
                 ) {
                   case (Left(err), _) => Left(err)
@@ -1025,9 +1128,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
                         case (Left(err), _) => Left(err)
                         case (Right(false), _) => Right(false) // Short-circuit
-                        case (Right(true), (criteriaSheet, cells, criterion)) =>
-                          val testRef = cells(idx)
-                          evalCellValueForMatch(criteriaSheet, testRef, ctx).map { testValue =>
+                        case (Right(true), (column, criterion)) =>
+                          column.at(idx).map { testValue =>
                             matchCounted(matches, testValue, criterion)
                           }
                       }
@@ -1035,7 +1137,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       if allMatch then
                         resolveNumericPolicing(
                           sumSheet,
-                          sumCells(idx),
+                          cellAt(constrainedSumRange, idx),
                           ctx,
                           "SUMIFS",
                           propagateErrors = true
@@ -1075,7 +1177,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           resolved <- resolveConditions(parsedConditions, ctx)
           _ <- resolved
             .collectFirst {
-              case (_, range, _)
+              case (_, range, _, _)
                   if range.width != valueRange0.width || range.height != valueRange0.height =>
                 // GH-631: Excel's #VALUE! — the *IFS family never resizes
                 EvalError.ErrorValue(
@@ -1089,19 +1191,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             .getOrElse(Right(()))
           result <- {
             val bounds = computeBounds(
-              ctx.counters,
+              ctx,
               (valueRange0, valueSheet) ::
-                resolved.map { case (sheet, range, _) => (range, sheet) }
+                resolved.map { case (sheet, range, _, _) => (range, sheet) }
             )
             val constrainedValueRange = constrainRange(valueRange0, bounds)
-            val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
-              (sheet, constrainRange(range, bounds), criterion)
+            val constrainedConditions = resolved.map { case (sheet, range, criterion, static) =>
+              (sheet, constrainRange(range, bounds), criterion, static)
             }
-            val valueCells = constrainedValueRange.cells.toVector
-            val criteriaCells = constrainedConditions.map { case (sheet, range, criterion) =>
-              (sheet, range.cells.toVector, criterion)
-            }
-            valueCells.indices.foldLeft[Either[EvalError, Vector[BigDecimal]]](
+            // #767: each criteria range reads through a column slice when the pass has one for it
+            val criteriaCells = criteriaColumns(ctx, constrainedConditions)
+            (0 until constrainedValueRange.size).foldLeft[Either[EvalError, Vector[BigDecimal]]](
               Right(Vector.empty)
             ) {
               case (Left(err), _) => Left(err)
@@ -1110,16 +1210,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
                     case (Left(err), _) => Left(err)
                     case (Right(false), _) => Right(false)
-                    case (Right(true), (criteriaSheet, cells, criterion)) =>
-                      evalCellValueForMatch(criteriaSheet, cells(idx), ctx).map(tv =>
-                        matchCounted(matches, tv, criterion)
-                      )
+                    case (Right(true), (column, criterion)) =>
+                      column.at(idx).map(tv => matchCounted(matches, tv, criterion))
                   }
                 matchResult.flatMap { allMatch =>
                   if allMatch then
                     resolveNumericPolicing(
                       valueSheet,
-                      valueCells(idx),
+                      cellAt(constrainedValueRange, idx),
                       ctx,
                       fnName,
                       propagateErrors = true
@@ -1181,9 +1279,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 // range), so the dimension validation runs on the resolved shapes.
                 resolveConditions(parsedConditions, ctx)
                   .flatMap { resolved =>
-                    val dimensionError = resolved.headOption.flatMap { case (_, firstRange, _) =>
+                    val dimensionError = resolved.headOption.flatMap { case (_, firstRange, _, _) =>
                       resolved.collectFirst {
-                        case (_, range, _)
+                        case (_, range, _, _)
                             if range.width != firstRange.width ||
                               range.height != firstRange.height =>
                           // GH-631: Excel's #VALUE! — the *IFS family never resizes
@@ -1201,14 +1299,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   }
                   .flatMap { resolved =>
                     val bounds = computeBounds(
-                      ctx.counters,
-                      resolved.map { case (sheet, range, _) =>
+                      ctx,
+                      resolved.map { case (sheet, range, _, _) =>
                         (range, sheet)
                       }
                     )
                     // GH-192: Constrain full-column/row ranges to shared bounds
-                    val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
-                      (sheet, constrainRange(range, bounds), criterion)
+                    val constrainedConditions = resolved.map {
+                      case (sheet, range, criterion, static) =>
+                        (sheet, constrainRange(range, bounds), criterion, static)
                     }
                     // the ranges share one shape and one bound, so each trimmed position is blank
                     // in every range: it counts when every criterion matches a blank. Each range's
@@ -1219,7 +1318,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                     // agreeing COUNTIFS tests in WholeColumnBlankTailSpec never reach it)
                     val trimmedCounts = resolved
                       .zip(constrainedConditions)
-                      .map { case ((_, range, _), (_, constrained, _)) =>
+                      .map { case ((_, range, _, _), (_, constrained, _, _)) =>
                         cellsTrimmed(range, constrained)
                       }
                       .distinct
@@ -1227,12 +1326,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       case List(count) => blankCriteriaCount(count, resolved.map(_._3))
                       case _ => 0L
 
-                    // GH-192: Use iterator-based folding with index tracking
-                    val criteriaCells =
-                      constrainedConditions.map { case (sheet, range, criterion) =>
-                        (sheet, range.cells.toVector, criterion)
-                      }
-                    val refCount = criteriaCells.headOption.map(_._2.length).getOrElse(0)
+                    // GH-192: index tracking over the row-major cells; #767: each criteria range
+                    // reads through a column slice when the pass has one for it
+                    val criteriaCells = criteriaColumns(ctx, constrainedConditions)
+                    val refCount = constrainedConditions.headOption.map(_._2.size).getOrElse(0)
 
                     (0 until refCount)
                       .foldLeft[Either[EvalError, Int]](Right(0)) {
@@ -1243,12 +1340,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                             criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
                               case (Left(err), _) => Left(err)
                               case (Right(false), _) => Right(false) // Short-circuit
-                              case (Right(true), (criteriaSheet, cells, criterion)) =>
-                                val testRef = cells(idx)
-                                evalCellValueForMatch(criteriaSheet, testRef, ctx)
-                                  .map { testValue =>
-                                    matchCounted(matches, testValue, criterion)
-                                  }
+                              case (Right(true), (column, criterion)) =>
+                                column.at(idx).map { testValue =>
+                                  matchCounted(matches, testValue, criterion)
+                                }
                             }
                           matchResult.map { allMatch =>
                             if allMatch then count + 1 else count
@@ -1276,15 +1371,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           // GH-394: resolution now also yields the ranges (Name locations have no static range),
           // so the dimension validation moved after it — same Excel semantics, resolved shapes.
           for
-            resolvedCriteria <- ctx.resolveRange(rangeLocation)
+            resolvedCriteria <- ctx.resolveRangeTraced(rangeLocation)
             resolvedAvg <- ctx.resolveRange(effectiveLocation)
-            (criteriaSheet, criteriaRange0) = resolvedCriteria
+            (criteriaSheet, criteriaRange0, criteriaStatic) = resolvedCriteria
             (avgSheet, avgRangeAsWritten) = resolvedAvg
             // GH-631: Excel sizes average_range to range from its upper-left cell, like SUMIF
             avgRange0 = CriteriaRangeResize.resize(avgRangeAsWritten, criteriaRange0)
             result <- {
               val bounds = computeBounds(
-                ctx.counters,
+                ctx,
                 List(
                   (criteriaRange0, criteriaSheet),
                   (avgRange0, avgSheet)
@@ -1293,6 +1388,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               // GH-192: the walked CRITERIA range is constrained; the pairing uses the unconstrained
               // origins (see SUMIF above)
               val criteriaRange = constrainRange(criteriaRange0, bounds)
+              val tests = criteriaColumnOf(ctx, criteriaSheet, criteriaRange, criteriaStatic)
 
               // GH-192: Use iterator-based folding (no .toList) for memory efficiency
               criteriaRange.cells
@@ -1300,7 +1396,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   case (Left(err), _) => Left(err)
                   case (Right((accSum, accCount)), testRef) =>
                     // Evaluate test cell value (may be uncached formula)
-                    evalCellValueForMatch(criteriaSheet, testRef, ctx)
+                    tests
+                      .atRef(testRef)
                       .flatMap { testValue =>
                         CriteriaRangeResize.pairedCell(testRef, criteriaRange0, avgRange0) match
                           case Some(avgRef) if matchCounted(matches, testValue, criterion) =>
@@ -1349,7 +1446,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               resolved <- resolveConditions(parsedConditions, ctx)
               _ <- resolved
                 .collectFirst {
-                  case (_, range, _)
+                  case (_, range, _, _)
                       if range.width != avgRange0.width || range.height != avgRange0.height =>
                     // GH-631: Excel's #VALUE! — the *IFS family never resizes
                     EvalError.ErrorValue(
@@ -1363,24 +1460,21 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 .getOrElse(Right(()))
               result <- {
                 val bounds = computeBounds(
-                  ctx.counters,
+                  ctx,
                   (avgRange0, avgSheet) ::
-                    resolved.map { case (sheet, range, _) => (range, sheet) }
+                    resolved.map { case (sheet, range, _, _) => (range, sheet) }
                 )
                 // GH-192: Constrain full-column/row ranges to shared bounds
                 val constrainedAvgRange = constrainRange(avgRange0, bounds)
-                val constrainedConditions = resolved.map { case (sheet, range, criterion) =>
-                  (sheet, constrainRange(range, bounds), criterion)
+                val constrainedConditions = resolved.map { case (sheet, range, criterion, static) =>
+                  (sheet, constrainRange(range, bounds), criterion, static)
                 }
 
-                // GH-192: Use iterator-based folding with index tracking
-                val avgCells = constrainedAvgRange.cells.toVector
-                val criteriaCells =
-                  constrainedConditions.map { case (sheet, range, criterion) =>
-                    (sheet, range.cells.toVector, criterion)
-                  }
+                // GH-192: index tracking over the row-major cells; #767: each criteria range reads
+                // through a column slice when the pass has one for it
+                val criteriaCells = criteriaColumns(ctx, constrainedConditions)
 
-                avgCells.indices
+                (0 until constrainedAvgRange.size)
                   .foldLeft[Either[EvalError, (BigDecimal, Int)]](Right((BigDecimal(0), 0))) {
                     case (Left(err), _) => Left(err)
                     case (Right((accSum, accCount)), idx) =>
@@ -1389,9 +1483,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         criteriaCells.foldLeft[Either[EvalError, Boolean]](Right(true)) {
                           case (Left(err), _) => Left(err)
                           case (Right(false), _) => Right(false) // Short-circuit
-                          case (Right(true), (criteriaSheet, cells, criterion)) =>
-                            val testRef = cells(idx)
-                            evalCellValueForMatch(criteriaSheet, testRef, ctx).map { testValue =>
+                          case (Right(true), (column, criterion)) =>
+                            column.at(idx).map { testValue =>
                               matchCounted(matches, testValue, criterion)
                             }
                         }
@@ -1399,7 +1492,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         if allMatch then
                           resolveNumericPolicing(
                             avgSheet,
-                            avgCells(idx),
+                            cellAt(constrainedAvgRange, idx),
                             ctx,
                             "AVERAGEIFS",
                             propagateErrors = true
@@ -1711,7 +1804,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           allRangesWithSheets.flatMap { rangesWithSheets =>
             // GH-192/197: Compute shared bounds across ALL ranges (locations + expressions)
             val bounds: (Option[RowBounds], Option[ColBounds]) =
-              if rangesWithSheets.nonEmpty then computeBounds(ctx.counters, rangesWithSheets)
+              if rangesWithSheets.nonEmpty then computeBounds(ctx, rangesWithSheets)
               else (None, None)
 
             // A computed reference takes the shared extent only for axes represented in the

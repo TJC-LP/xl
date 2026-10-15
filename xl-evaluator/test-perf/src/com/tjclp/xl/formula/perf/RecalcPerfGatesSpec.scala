@@ -38,7 +38,12 @@ class RecalcPerfGatesSpec extends FunSuite:
   private lazy val checked = runTiny(Mode.Checked)
   private lazy val parallel = runTiny(Mode.Parallel)
 
-  /** Today's engine on Tiny: the legacy per-cell graph, every criteria call a full scan. */
+  /**
+   * Today's engine on Tiny: the legacy per-cell graph, every criteria call walking every row,
+   * through the per-pass column slices (#767 PR 1): one slice per criteria column the book reads (8
+   * of the Loads columns), one used-range scan (the Loads sheet, sizing those slices), and one
+   * parse per distinct defined-name body.
+   */
   private val TinyCounts: Map[Counter, Long] = Map(
     Counter.GraphNodes -> 1600L,
     Counter.GraphEdges -> 186400L,
@@ -49,10 +54,10 @@ class RecalcPerfGatesSpec extends FunSuite:
     Counter.CriteriaNotIndexable -> 0L,
     Counter.CriteriaScan -> 400L,
     Counter.MatcherCalls -> 180118L,
-    Counter.SlicesBuilt -> 0L,
+    Counter.SlicesBuilt -> 8L,
     Counter.ScanFallbacks -> 0L,
-    Counter.UsedRangeScans -> 0L,
-    Counter.NameParses -> 3456L
+    Counter.UsedRangeScans -> 1L,
+    Counter.NameParses -> 15L
   )
 
   private def assertOracle(run: LoadsBookHarness.Run): Unit =
@@ -112,17 +117,19 @@ class RecalcPerfGatesSpec extends FunSuite:
     assert(unmeasured.counters.counters.values.forall(_ == 0L))
   }
 
-  test("whole-column names: the same values, every criteria range bounded by a scan") {
+  test("whole-column names: the same values, one used-range scan for the whole pass") {
     val whole = LoadsBook.build(LoadsBook.Tiny.copy(wholeColumns = true))
     val run = LoadsBookHarness.run(whole.workbook, Mode.Recalc)
     println(LoadsBookHarness.report("Tiny wholeColumns", run))
     assertOracle(run)
     // the header row the whole columns add is text, which no criterion and no MIN/MAX picks up
     assertEquals(LoadsBookHarness.valueLines(run.result.workbook), fullOracle)
-    // every criteria call scans the used range once per range it reads (value range plus criteria
-    // ranges): 34 per Summary row x 8 rows + 64 per Rate History row x 24 rows
-    assertEquals(run.counters(Counter.UsedRangeScans), 34L * 8 + 64L * 24)
+    // the whole-column ranges are all on Loads, whose populated cells never change during the
+    // pass: one scan (before the per-pass cache, one per range per call: 34 per Summary row x 8
+    // rows + 64 per Rate History row x 24 rows = 1,808)
+    assertEquals(run.counters(Counter.UsedRangeScans), 1L)
     assertEquals(run.counters(Counter.CriteriaScan), 400L)
+    assertEquals(run.counters(Counter.ScanFallbacks), 0L)
   }
 
   test("RunTotal: running totals equal the closed form; the legacy graph is quadratic") {
