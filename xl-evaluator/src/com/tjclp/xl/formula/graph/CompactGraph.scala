@@ -486,21 +486,31 @@ private[formula] final class CompactGraph private (
    * Member-to-member reads inside a set of formulas: for each member, the members it reads, found
    * by walking from every member through virtual nodes up to the next formula. Self-reads are left
    * out (they are back edges by definition in `withinComponentOrder`).
+   *
+   * When every member lies in one strongly connected component (the Gauss-Seidel caller), a virtual
+   * path between two members stays inside that component, so the walk never leaves it: the range
+   * nodes of a cyclic block are not expanded into their many readers outside the block.
    */
   @SuppressWarnings(Array("org.wartremover.warts.While"))
   def memberPrecedents(members: BitSet): Map[Int, Set[Int]] =
     val f = formulaCount
+    val compOf = components.compOf
+    val memberComps = members.iterator.map(compOf(_)).distinct.take(2).toVector
+    val within: Int => Boolean = memberComps match
+      case Vector(only) => v => compOf(v) == only
+      case _ => _ => true
     val acc = mutable.HashMap.empty[Int, Set[Int]]
     members.foreach { u =>
       val seen = mutable.HashSet.empty[Int]
       val pending = mutable.ArrayDeque.empty[Int]
-      foreachSucc(u)(pending.append)
+      def enqueue(v: Int): Unit = if within(v) then pending.append(v)
+      foreachSucc(u)(enqueue)
       while pending.nonEmpty do
         val s = pending.removeHead()
         if seen.add(s) then
           if s < f then
             if s != u && members.contains(s) then acc.update(s, acc.getOrElse(s, Set.empty) + u)
-          else foreachSucc(s)(pending.append)
+          else foreachSucc(s)(enqueue)
     }
     acc.toMap
 
