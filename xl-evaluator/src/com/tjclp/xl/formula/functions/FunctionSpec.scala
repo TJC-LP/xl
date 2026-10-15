@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{EvalError, Evaluator, RecalcCounters}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
@@ -179,6 +179,10 @@ final case class EvalContext(
   private[formula] def passMemo: Evaluator.EvalMemo =
     memo.getOrElse(new Evaluator.EvalMemo(placementGuard))
 
+  /** #767: the pass's work counters; disabled outside a measured recalculation. */
+  private[formula] def counters: RecalcCounters =
+    aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
+
   /**
    * Whether the formula evaluates as an array (an array formula, `evala`, SUMPRODUCT's arguments)
    * or as a plain cell's legacy formula, where a reference in a value position is implicitly
@@ -252,7 +256,8 @@ final case class EvalContext(
         // a context built outside the evaluator: the generic reference path
         val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
         evalReference(named.asInstanceOf[TExpr[Any]])
-      }
+      },
+      counters
     )
 
 object EvalContext:
