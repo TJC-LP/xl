@@ -512,11 +512,16 @@ object XlsxReader:
       // GH-714: the dynamic-array `cm` indices, resolved through the metadata part
       cellMetadata <- readCellMetadata(workbookRels, parts, retainedDrawings, source, config)
 
+      // GH-785: the model holds worksheets only; chartsheets, dialog sheets and macro sheets stay
+      // in the package untouched, and every <sheets> index is renumbered to worksheet positions
+      sourceIndex = SourceSheetIndex(SheetKinds.worksheetMask(ooxmlWb.sheets, workbookRels))
+      worksheetRefs = ooxmlWb.sheets.zip(sourceIndex.mask).collect { case (ref, true) => ref }
+
       // Parse sheets and collect comment/drawing mappings (GH-221)
       parsedSheets <- parseSheets(
         parts,
         retainedDrawings,
-        ooxmlWb.sheets,
+        worksheetRefs,
         sst,
         styles,
         workbookRels,
@@ -525,10 +530,10 @@ object XlsxReader:
       (sheets, commentPathMapping) = (parsedSheets.sheets, parsedSheets.commentPathMapping)
 
       // Parse defined names from workbook.xml (shared with the surgical writer)
-      definedNames = OoxmlWorkbook.parseDefinedNames(ooxmlWb.definedNames)
+      definedNames = sourceIndex.namesToModel(OoxmlWorkbook.parseDefinedNames(ooxmlWb.definedNames))
 
       // Extract sheet visibility states from OOXML
-      sheetStates = ooxmlWb.sheets
+      sheetStates = worksheetRefs
         .filter(_.state.nonEmpty)
         .map(ref => ref.name -> ref.state)
         .toMap
@@ -539,7 +544,7 @@ object XlsxReader:
       // GH-294: bookViews/workbookView activeTab → activeSheetIndex, clamped leniently into
       // [0, sheetCount-1] (malformed or out-of-range values must never fail a read)
       activeSheetIndex = OoxmlWorkbook.clampActiveTab(
-        OoxmlWorkbook.parseActiveTab(ooxmlWb.bookViews).getOrElse(0),
+        sourceIndex.activeToModel(OoxmlWorkbook.parseActiveTab(ooxmlWb.bookViews).getOrElse(0)),
         sheets.size
       )
 

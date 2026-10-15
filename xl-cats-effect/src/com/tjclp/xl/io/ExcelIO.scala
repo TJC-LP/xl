@@ -18,6 +18,7 @@ import com.tjclp.xl.ooxml.{
   OoxmlComments,
   OoxmlStyles,
   Relationships,
+  SheetKinds,
   SheetMetadataPart,
   SstPolicy,
   XlsxReader,
@@ -765,7 +766,8 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
                       rId = sheetElem.attribute(relsNamespace, "id").map(_.text).getOrElse("")
                       relationship = relTargets.get(rId)
                       maybeWorksheetPath = relationship match
-                        case Some(rel) if rel.relType != XmlUtil.relTypeWorksheet => None
+                        // GH-785: the full reader's rule, so stream indices match the model's
+                        case Some(rel) if !SheetKinds.isWorksheet(Some(rel.relType)) => None
                         case Some(rel) =>
                           Some(resolveRelatedPartPath("xl/workbook.xml", rel.target))
                         case None =>

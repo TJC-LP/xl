@@ -243,12 +243,12 @@ As of the 0.24.1 release (2026-10-14), from the full-suite JUnit reports, plus t
 |--------|-------|
 | xl-evaluator | 3960 |
 | xl-core | 1872 |
-| xl-ooxml | 1408 |
-| xl-cli | 1921 |
-| xl-cats-effect | 212 |
+| xl-ooxml | 1434 |
+| xl-cli | 1924 |
+| xl-cats-effect | 213 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,585** |
+| **Total** | **9,615** |
 
 ## Test Quality Metrics
 

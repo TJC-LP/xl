@@ -117,29 +117,48 @@ object XlsxWriter:
         case Some(ctx) => dated.copy(sourceContext = Some(ctx.reconciledWith(dated)))
         case None => dated
 
-      val report = normalized.sourceContext match
+      normalized.sourceContext match
         case Some(ctx)
             if ctx.isClean && !escapeFormulas &&
               !(config.compactSharedStrings && sourceHasSharedStringOrphans(ctx)) =>
           // Clean workbook → verbatim copy (ultra-fast), to a file or a stream alike (GH-516)
           copyVerbatim(ctx, target)
-          WriteReport.empty
+          Right(WriteReport.empty)
 
         case Some(ctx) =>
-          // Surgical mode with source: use atomic temp file to prevent corruption
-          target match
-            case OutputPath(destPath) =>
-              writeAtomically(normalized, Some(ctx), destPath, config)
-            case _ =>
-              unifiedWrite(normalized, normalized.sourceContext, target, config)
+          // GH-785: refused before any byte is written
+          keptSheetNameClash(normalized, ctx).map { _ =>
+            // Surgical mode with source: use atomic temp file to prevent corruption
+            target match
+              case OutputPath(destPath) =>
+                writeAtomically(normalized, Some(ctx), destPath, config)
+              case _ =>
+                unifiedWrite(normalized, normalized.sourceContext, target, config)
+          }
 
         case None =>
           // No source context: safe to write directly (no surgical preservation)
-          unifiedWrite(normalized, None, target, config)
-
-      Right(report)
+          Right(unifiedWrite(normalized, None, target, config))
 
     catch case e: Exception => Left(XLError.IOError(s"Failed to write XLSX: ${e.getMessage}"))
+
+  /**
+   * GH-785: sheet names are unique across `<sheets>`, compared case-insensitively (ECMA-376 Part 1,
+   * §18.2.19). The model does not hold the source's chartsheet, dialog sheet and macro sheet
+   * entries the write keeps, so a model sheet named like one is [[XLError.DuplicateSheet]].
+   */
+  private def keptSheetNameClash(workbook: Workbook, ctx: SourceContext): XLResult[Unit] =
+    val (_, _, rels, preserved) = parsePreservedStructure(ctx.content)
+    preserved
+      .flatMap { wb =>
+        val mask = SheetKinds.worksheetMask(wb.sheets, rels.getOrElse(Relationships.empty))
+        wb.sheets.zip(mask).collectFirst {
+          case (ref, false)
+              if workbook.sheets.exists(_.name.value.equalsIgnoreCase(ref.name.value)) =>
+            ref
+        }
+      }
+      .fold[XLResult[Unit]](Right(()))(ref => Left(XLError.DuplicateSheet(ref.name.value)))
 
   /**
    * Re-express DateTime cells as raw serial Numbers using the workbook's date system (GH-243).
@@ -2649,6 +2668,19 @@ object XlsxWriter:
           case None => withTheme
         (OoxmlWorkbook.sequentialRelIds(workbook.sheets.size), withMetadata)
 
+    // GH-785: the source's chartsheet, dialog sheet and macro sheet <sheet> entries are not in
+    // the model; the layout puts them back among the model's sheets (their parts and rels ride the
+    // verbatim copy) and renumbers model positions to <sheets> positions.
+    val sheetLayout: SheetLayout = preservedStructWb match
+      case Some(wb) =>
+        SheetLayout.plan(
+          wb.sheets,
+          preservedStructWbRels.getOrElse(Relationships.empty),
+          sheetSourcePaths
+        )
+      case None => SheetLayout.identity(workbook.sheets.size)
+    // a model sheet named like a kept entry was refused before this pass (keptSheetNameClash)
+
     // Use preserved workbook structure if available, otherwise create minimal
     val ooxmlWb = preservedWorkbook match
       case Some(preserved) =>
@@ -2659,23 +2691,28 @@ object XlsxWriter:
         // GH-294: the model's activeSheetIndex is overlaid on the preserved bookViews (model
         // wins; unmodeled view attributes ride through), clamped like the fromDomain path.
         val updated = preserved
-          .updateSheets(workbook.sheets, workbook.metadata.sheetStates, sheetRelIds)
+          .updateSheets(workbook.sheets, workbook.metadata.sheetStates, sheetRelIds, sheetLayout)
           .withActiveTab(
-            OoxmlWorkbook.clampActiveTab(workbook.activeSheetIndex, workbook.sheets.size)
+            preserved.layoutActiveTab(sheetLayout, workbook.activeSheetIndex, workbook.sheets.size)
           )
         // GH-259: print names (_xlnm.Print_Area/_xlnm.Print_Titles) are modeled on Sheet.pageSetup,
         // so a sheet edit can change them WITHOUT marking metadata modified. Reconcile: keep the
         // preserved definedNames bytes when the model agrees, otherwise regenerate the element.
         updated.copy(definedNames =
-          OoxmlWorkbook
-            .reconcileDefinedNames(updated.definedNames, workbook.effectiveDefinedNames)
+          OoxmlWorkbook.reconcileDefinedNames(
+            updated.definedNames,
+            sheetLayout.namesToOutput(
+              workbook.effectiveDefinedNames,
+              OoxmlWorkbook.parseDefinedNames(preserved.definedNames)
+            )
+          )
         )
       case None =>
         // Fallback for programmatically created workbooks OR when metadata was modified — fresh
         // sheets/definedNames from the domain (GH-236/GH-259) with preserved workbook-level
         // elements (fileVersion, calcPr, workbookProtection, bookViews siblings, extLst, ...)
         // carried through when a source exists (GH-320).
-        OoxmlWorkbook.fromDomain(workbook, preservedStructWb, sheetRelIds)
+        OoxmlWorkbook.fromDomain(workbook, preservedStructWb, sheetRelIds, sheetLayout)
 
     // GH-242: document properties are model-driven. The reader parses docProps/core.xml and
     // app.xml into WorkbookMetadata (and marks them parsed, so they are never copied verbatim);
