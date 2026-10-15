@@ -9,7 +9,7 @@ Usage:
     xl [--json] schema
     xl [--json] new
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--json] diff
-    xl [--file <path>] [--stream] [--strict] [--json] lint
+    xl [--file <path>] [--max-size <integer>] [--stream] [--strict] [--json] lint
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] eval
     xl [--file <path>] [--sheet <string>] [--max-size <integer>] [--json] evala
     xl --file <path> [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--compact-strings] [--json] sheets
@@ -23,7 +23,7 @@ Usage:
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] describe
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] audit
     xl --file <path> [--sheet <string>] [--max-size <integer>] [--stream] [--json] deps
-    xl [--stream] [--json] batch
+    xl [--stream] [--max-size <integer>] [--json] batch
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--compact-strings] [--json] put
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--compact-strings] [--json] putf
     xl --file <path> [--sheet <string>] [--output <path>] [--in-place] [--backend <string>] [--max-size <integer>] [--stream] [--no-recalc] [--preserve-caches] [--strict] [--compact-strings] [--json] style
@@ -251,7 +251,9 @@ Subcommands:
           2 = usage (no file, or a file given both ways)
           3 = error (unreadable file, missing/malformed core part, ...)
 
-        Docs: xl lint is read-only; it never repairs or rewrites the file.
+        Docs: xl lint is read-only; it never repairs or rewrites the file. It
+        applies no uncompressed-size limit, so --max-size is accepted and changes
+        nothing (`xl --max-size 0 -f F lint` runs the lint).
 
         EXAMPLES:
           xl lint deliverable.xlsx && echo "safe to send"        # repair-clean

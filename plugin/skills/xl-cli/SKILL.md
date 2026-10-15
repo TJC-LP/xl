@@ -36,7 +36,9 @@ usage: xl [-f FILE] [-s SHEET] [-o OUT | -i] [--json] <verb> …
    `xl -f f -s Data view A1:B2`. The one exception: `--strict` right after `view` is view's own
    `--eval` gate, not the write gate. After `--` every token is data —
    `xl -f a.xlsx search -- --json` searches for the text `--json` (without the `--` the flag is
-   hoisted and `search` has no pattern: exit 2).
+   hoisted and `search` has no pattern: exit 2). A global the verb does not take is `USAGE` naming
+   it (`view does not take --backend`); `lint` and `batch --dry-run` accept `--max-size` and
+   ignore it.
 2. **ONE sheet rule**, for every verb, batch op and `--stream` path: a sheet-qualified ref
    (`'Q1 Report'!A1:D9`) names the sheet; otherwise `-s`; otherwise the only sheet of a
    single-sheet book (a `SHEET_AUTOSELECTED` warning under `--json`); otherwise `SHEET_REQUIRED`,
