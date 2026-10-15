@@ -9,6 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A criterion with no `*` or `?` compares `~` literally** (#765): SUMIF(S), COUNTIF(S),
+  AVERAGEIF(S), MINIFS and MAXIFS folded `~~` to `~` (and `~*`/`~?` patterns) in every criterion,
+  so `"a~~b"` matched the text `a~b`, and a cell holding `a~~b` used as its own criterion
+  (`COUNTIFS(A:A,A2)`) missed itself. An operand with no `*` and no `?`, after any `<>` or `=`, is
+  now compared as written, as desktop Excel does: a key pre-escaped with
+  `SUBSTITUTE(key,"~","~~")` counted in xl and LibreOffice and not in Excel. A bare or `<>` operand
+  containing `*` or `?` keeps the escape grammar (`~*`, `~?`, `~~`). A `~` before an ordinary character in
+  such an operand stays a literal tilde (`"a~b*"` matches `a~bc`): a Microsoft Q&A thread suggests
+  Excel drops it, but no Excel observation confirms that, so it is unchanged and noted in
+  `docs/LIMITATIONS.md`. XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.
+
+- **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
+  take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
+  `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore
+  it: lint reads the zip parts with no size limit and a dry run reads no workbook. A global a verb
+  does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
+  the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
+  `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
+  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
+  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
+  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
+  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
+  and after the verb, against the parser, so the table cannot drift from the parser chains.
+
 - **Text an edit removes leaves `xl/sharedStrings.xml`** (#768, follow-up to #567): a surgical write
   kept every entry of the source's shared-string table, so a label replaced, cleared or deleted from
   every cell (or a removed sheet's strings) still rode in the package. The writer now drops the
@@ -21,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no entry. A surgical write that creates the table (the source had none) builds it from the sheets
   it regenerates only, not from sheets copied with their inline strings. **Breaking (behaviour):**
   the table of an edited book can shrink and change positions where earlier versions only appended.
+
 - **One rule reads a `t="s"` value as a table position** (#768): `XlsxReader`, both streaming
   readers, the single-cell reader behind `ExcelIO.streamCellDetails`, the writer's reference scan
   and `shared-string-orphan` read it the same way, so a position the writer keeps is the position
@@ -36,6 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streaming readers); a value in non-ASCII digits no longer resolves (it read as the entry those
   digits spell), and `XlsxReader` reads a negative value as `#VALUE!` rather than `#REF!`. The scan
   keeps no characters of a value, so a value padded with any number of zeros costs no extra memory.
+
 - **Formula escaping keeps the positions a copied macro sheet or revision log references** (#783):
   `FormulaInjectionPolicy.Escape` regenerates every worksheet and rebuilt the shared-string table
   from the cells, but macro sheets and revision logs are copied byte for byte, so their `t="s"`
@@ -43,9 +69,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the table now keeps the source order up to the highest position those parts reference (an entry
   nothing references becomes an empty `<si>`), and the cells' strings follow. A copied part that
   cannot be read, or holds a value naming no entry, keeps every source entry.
+
 - **`shared-string-orphan` skips entries with no text** (#768): an empty `<si>` carries nothing
   to leak, so the lint no longer reports it; its message names the new options instead of the
   fresh-write workaround.
+
 - **`shared-string-orphan` reports every `t="s"` value that names no entry** (#768, #567): the
   lint read a value with `toIntOption`, so it skipped a value that is not an index (`3.0`, `3e0`,
   `٣`) and reported `-1` as past the table. It now reads the value with the readers' rule above and
@@ -53,20 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   index, or a value that is not an index), showing a value that is not an index as written (at
   most 16 characters). The finding is severity `repair`, or `hygiene` when every such value is
   empty, which Excel opens as a blank cell.
-- **`--max-size` no longer breaks `lint` or `batch --dry-run`; every other global a verb does not
-  take is named** (#766): `xl -f f.xlsx --max-size 0 lint` (in any position) runs the lint, and
-  `xl --max-size 0 batch --dry-run b.json` validates the document. Both accept the flag and ignore
-  it: lint reads the zip parts with no size limit and a dry run reads no workbook. A global a verb
-  does not take was reported as `Unexpected argument: <verb>`; it is now `USAGE` (exit 2) naming
-  the flag, with a hint: `view does not take --backend`, `sheets does not take --no-recalc`,
-  `functions does not take --max-size`, `new does not take -f/--file`, and `--strict` before
-  `view` points at view's own `--strict` after the verb. Without `-f`, `batch --dry-run` and
-  `batch --schema` name the other globals too (`batch --dry-run does not take --no-recalc`; it was
-  `Missing expected flag --file!`). `Argv.verbGlobals` is the table of the globals each verb
-  takes; `ArgvSpec` checks every verb (and the standalone batch forms) with every global, before
-  and after the verb, against the parser, so the table cannot drift from the parser chains.
 
 ### Added
+
+- **`T(value)`** (#684): text returns itself (a rich-text cell its plain text); a number, boolean,
+  date or empty cell returns `""`; a formula cell answers `T` of its cached value; an error
+  propagates (`T(1/0)` is `#DIV/0!`). A range lifts element-wise: it spills in an array context
+  and is implicitly intersected in a plain cell. `T` was an unknown function, so `xl recalc`, and
+  `xl put` on a precedent, wrote every `T()` cell with no cached value; both now cache the values
+  LibreOffice computes.
 
 - **`WriterConfig.compactSharedStrings` and `--compact-strings`** (#768): drop every shared
   string no cell references, including the ones the source already carried, with no empty
@@ -76,6 +99,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI flag is global for the write verbs and `sheets hide|show`; with `--stream` it is refused
   as `UNSUPPORTED_IN_STREAM` (a streaming write copies the table untouched). **Breaking
   (binary):** `WriterConfig` gains a field, so its constructor, `apply` and `copy` change.
+
+### Changed
+
+- **Recalculation evaluates in one canonical order** (#767): whole-workbook `recalculate` and
+  `recalculateUncached` (what `Excel.writeChecked` runs) evaluate formulas in the
+  dependency-first order that always takes the top-left ready formula next (sheet name, then row,
+  then column), where they used the hash order of the formula set. Values are unchanged; three
+  things become observable: `RecalcResult.errors` lists circular references, then cells blocked by
+  them, each in grid order (row 2 before row 10), then evaluation failures in evaluation order; a
+  seeded `RAND`/`RANDBETWEEN`/`RANDARRAY` draws across cells in that order; a parallel
+  recalculation still returns exactly the sequential result, errors included. The order no longer
+  depends on `ARef` hashing. Ships in 0.25.0.
+
+### Performance
+
+- **Per-pass recalculation caches** (#767): a recalculation pass (`recalculate`, parallel waves,
+  iterative acyclic segments, `recalculateUncached` and so `Excel.writeChecked`, after-edit)
+  now keeps, for its own lifetime, each sheet's used range (scanned once per sheet instead of once
+  per whole-column range per criteria call), each defined name's parsed body and static range
+  resolution (the range is cached, the sheet is bound again from the current workbook on every
+  read), and column slices of criteria ranges. COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and
+  MAXIFS read a single-column criteria range of at least `max(256, used rows / 16)` rows through a
+  slice instead of a map lookup per row, and still test every row with `CriteriaMatcher.matches`.
+  A slice is built only when every formula in its box that the pass evaluates has already been
+  evaluated (checked against the pass's own order, never against cache presence) and the copy
+  meets no uncached formula; otherwise the call scans as before. A column whose formulas are all
+  done gets one slice that serves every window of it; otherwise a window is sliced on its second
+  request, so running and sliding windows (`COUNTIF($A$2:A9,A9)`) scan as before instead of each
+  holding a copy of its rows. On the 20k-row raw-criteria
+  benchmark book a sequential recalculation drops from 151 s to 12.2 s, `writeChecked`'s
+  recalculation from 160 s to 13.1 s (6.4 s with two threads); name parses on `Tiny` drop from
+  3,456 to 15. Results are unchanged: property tests compare every
+  cell, exact `BigDecimal` scale included, and every error with the caches on and off.
+
+- **Criteria index** (#767): COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS whose criteria
+  ranges all read through the pass's column slices now test only the rows their equality criteria
+  can match. Each slice gets an index on first use (rows by case-folded text, number without
+  trailing zeros, boolean and error value; date-times, text with surrogate characters and numbers
+  too large to strip are candidates for every lookup); the rows every equality criterion selects are intersected, and
+  equal calls in a pass share the result. Every candidate is still tested with the unchanged
+  matcher for every criterion, in row order, so sums, first errors and MIN/MAX are unchanged.
+  Comparisons, wildcards, `<>` and `""` are not indexed, and a call whose smallest selection is
+  more than half its rows tests every row, as before. Indexes and shared results are capped at
+  256 MB per pass, shared results at half of it. On the 20k-row raw-criteria benchmark book a sequential recalculation drops from
+  10.9 s to 2.3 s (matcher calls from 161.8M to 0.6M); the real-shape book with raw criteria (33,233
+  rows, 88k formulas) goes through `writeChecked` in 9.4 s under a 4 GB heap. Property tests
+  check that every matching row is a candidate over edge-case text (dotted and dotless I, sharp
+  s, final sigma, Kelvin sign, surrogates), numeric text, booleans, date-times and errors, that the
+  case fold agrees with `equalsIgnoreCase` on every BMP character, and that results are identical
+  with the index on and off.
+
+- **Numeric text in criteria** (#767): criteria matching no longer parses text that cannot start a
+  number (anything but a sign, a point or a digit after trimming) through an exception; results
+  are unchanged.
+
+- **Compact recalculation graph** (#767): recalculation orders formulas with a graph that has one
+  node per formula, per distinct range read and per segment of a formula column, so a formula
+  reading a range costs O(log rows) edges instead of one edge per formula inside the range. On the
+  10k-row helper-criteria benchmark book the graph drops from 92.5M edges to 116k (build, Tarjan and
+  Kahn from 77 s to 1.0 s; the whole recalculation from 134 s to 49 s, now all criteria scans), the
+  book recalculates within a 2 GB heap (peak 1.4 GB; it needed about 25 GB), and a 200k-row running
+  total builds and orders its graph in 1.6 s. Results are unchanged: property
+  tests compare reachability, cycles, order, SCC condensation, waves and every `RecalcResult` field
+  against the previous per-cell graph, which stays one release as an internal fallback. With the
+  per-pass caches and the criteria index, the real-shape book with helper criteria (33,233 rows,
+  187,699 formulas) now goes through `writeChecked` in 7.6 s under a 4 GB heap. It completes under
+  1 GB as well; every earlier engine ran out of memory on it at 4 GB.
+
+### Testing
+
+- **Recalculation benchmark and work counters** (#767): the new `xl-evaluator.perf` module
+  (`xl-evaluator/test-perf`) builds a synthetic freight-loads workbook in five shapes (`Tiny`,
+  `H10`, `R20`, `Real`, `RunTotal`) and recalculates it with internal work counters
+  (`RecalcCounters`: graph nodes and edges, criteria calls, `CriteriaMatcher.matches` calls,
+  used-range scans, defined-name parses) and per-phase timing (parse, graph build, Tarjan, Kahn,
+  eval, criteria, `Sheet.put`, write). `LoadsBookMain` prints the breakdown; on 0.24.1 the 10k-row
+  helper-criteria book spends 78 s of 134 s building and ordering a 92.5M-edge graph, and the
+  20k-row raw-criteria book 116 s of 118 s in criteria scans. A non-blocking CI `perf` job pins the
+  `Tiny` counters and every `Tiny` formula value under a 2 GB heap; `RecalcBenchmark` (JMH,
+  counters off and on) runs weekly in `perf-trend.yml`. Public entry points use disabled counters,
+  and a property test checks that a counted recalculation returns exactly what the public one does
+  in every `RecalcOptions` mode; results are unchanged. The perf job also gates the criteria index
+  on the 20k-row book (#767): 40 oracle cells, every call indexed, matcher calls per call flat from
+  5k to 20k rows, at most a twentieth of the index-off matcher calls, and a 30 s backstop.
 
 ## [0.24.1] - 2026-10-14
 

@@ -1,0 +1,66 @@
+name: Perf Trend
+
+# #767: the weekly recalculation trend. Runs the JMH RecalcBenchmark (synthetic loads book, counters
+# off and on) on the shapes a hosted runner fits and uploads the JSON results. It never gates: the
+# per-PR `perf` job in ci.yml holds the deterministic gates. Today's engine needs ~13 GB for the
+# 5k-row helper-criteria book and minutes per invocation at 10k+ rows, so the helper shape runs at
+# 2k rows here; the grid grows as the fast-recalc work lands.
+
+on:
+  schedule:
+    - cron: "41 6 * * 1" # Mondays 06:41 UTC
+  workflow_dispatch:
+
+jobs:
+  jmh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: coursier/setup-action@v1
+        with:
+          jvm: temurin:25
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/.scalafmt.conf', '**/.scalafix.conf') }}
+          restore-keys: |
+            ${{ runner.os }}-coursier-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.mill
+          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-mill-
+
+      - name: RecalcBenchmark, raw criteria (5k rows)
+        run: >-
+          ./mill -i xl-benchmarks.runJmh RecalcBenchmark
+          -p rows=5000 -p crit=raw
+          -jvmArgsAppend -Xmx8g
+          -rf json -rff "$GITHUB_WORKSPACE/recalc-raw.json"
+
+      - name: RecalcBenchmark, helper criteria (2k rows)
+        run: >-
+          ./mill -i xl-benchmarks.runJmh RecalcBenchmark
+          -p rows=2000 -p crit=helper
+          -jvmArgsAppend -Xmx8g
+          -rf json -rff "$GITHUB_WORKSPACE/recalc-helper.json"
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recalc-benchmark-${{ github.run_id }}
+          path: recalc-*.json
+          if-no-files-found: warn

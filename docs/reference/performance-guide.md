@@ -320,6 +320,101 @@ sheet.put(newCells)
 - XL write: **4.5x faster, 80x less memory**
 - XL read: **4.4x faster, 80x less memory**
 
+### Recalculation benchmark (#767)
+
+`xl-evaluator.perf` (sources in `xl-evaluator/test-perf`) builds a synthetic freight-loads workbook
+(`LoadsBook`: a Loads sheet of keyed rows with whole-column defined names, Summary and Rate History
+sheets of COUNTIFS/SUMIFS/MINIFS/MAXIFS over them) and recalculates it with work counters and
+per-phase timing on. Shapes: `Tiny` (1,600 formulas, the CI gate), `H10` (10k rows, helper
+criteria, 38k formulas), `R20` (20k rows, raw criteria, 8k formulas), `Real` (33,233 rows, about
+188k formulas) and `RunTotal` (running totals over a formula column).
+
+```bash
+./mill xl-evaluator.perf.runMain com.tjclp.xl.formula.perf.LoadsBookMain shape=Tiny mode=recalc
+XL_PERF_HEAP=4g ./mill xl-evaluator.perf.runMain com.tjclp.xl.formula.perf.LoadsBookMain shape=Real mode=checked
+./mill xl-evaluator.perf.testForked      # the gates CI's non-blocking `perf` job runs
+```
+
+`mode` is `recalc`, `parallel`, `uncached` (what `Excel.writeChecked` computes) or `checked`
+(`recalculateUncached` plus `Excel.write`, timing the write). The module forks with `-Xmx2g`
+unless `XL_PERF_HEAP` says otherwise.
+
+Baseline on 0.24.1 (`mode=recalc`, sequential, `-XX:ActiveProcessorCount=2`, M4 Max under shared
+load). Phases are inclusive: Parse runs inside graph build and eval, criteria inside eval.
+
+| Phase (s) | Tiny | H10 | R20 |
+|---|---|---|---|
+| Graph build | 0.33 | 48.4 | 0.75 |
+| Parse (inside build and eval) | 0.14 | 0.73 | 0.40 |
+| Tarjan + blocked dependents | 0.02 | 5.35 | 0.01 |
+| Kahn | 0.07 | 23.7 | 0.01 |
+| Eval | 0.30 | 56.6 | 116.7 |
+| Criteria (inside eval) | 0.16 | 55.5 | 116.3 |
+| `Sheet.put` threading | 0.01 | 0.12 | 0.09 |
+| Wall | 0.8 | 134 | 118 |
+| Graph edges | 186,400 | 92,520,000 | 0 |
+| Matcher calls | 180,118 | 81,101,873 | 161,824,716 |
+
+H10 needs about 25 GB of heap for its 92.5M per-cell edges; `Real` with helper criteria does not
+fit in 64 GB. Writing Tiny (`mode=checked`) takes 0.25 s.
+
+Per-pass caches (#767 PR 1): a pass caches each sheet's used range, each defined name's parsed body
+and static range, and column slices of tall single-column criteria ranges (`PassCache`); a slice is
+built only once the pass has evaluated every formula in its box; a column whose formulas are all done
+gets one slice for every window of it, and any other window is sliced on its second request. R20
+(`-Xmx4g`, same machine and load, run back to back): `mode=recalc` 151.5 s before, 12.2 s after;
+`mode=checked` 160.2 s before, 13.1 s after; `mode=parallel` 6.4 s after; with 9 slices built, no
+scan fallback, one used-range scan and 14 name parses (116,875 before). Matcher calls are
+unchanged (161,824,716): every row is still tested; the criteria index removes them. H10 stays
+bound by its legacy graph until the compact graph lands.
+
+Criteria index (#767 PR 2): each slice gets an equality index on first use (`EqIndex`, posting lists
+of the rows holding each folded text, stripped number, boolean or error), and a criteria call whose
+ranges all read through slices tests only the rows every equality criterion selects, still with
+`CriteriaMatcher.matches` for every criterion. Comparisons, wildcards, `<>` and `""` are not
+indexed; a call with no indexed criterion, or whose smallest selection is more than half its rows,
+tests every row. Candidate lists are memoised for the pass, so the Rate History columns that share
+lane, carrier and year criteria share one list. `LoadsBookMain index=off` turns the index off.
+Same machine, run back to back:
+
+| Run | Index off | Index on |
+|---|---|---|
+| R20 `mode=recalc` | 10.9 s, 161,824,716 matcher calls | 2.3 s, 613,617 |
+| R20 rows=5000 `mode=recalc` | 3.9 s, 41,418,819 | 2.3 s, 500,790 |
+| R20 `mode=checked` (write 1.1 s) | | 3.4 s |
+| R20 `mode=parallel` | | 2.4 s |
+| Real `crit=raw mode=checked`, `-Xmx4g` (88k formulas, write 2.3 s) | | 9.4 s, 5,449,218 |
+| Tiny matcher calls | 180,118 | 1,478 |
+
+Every R20 and Real call is indexed (none window-only). With the index, R20 spends 0.9 s building the
+legacy graph and 1.0 s in criteria calls.
+
+With the compact graph (#767: one node per formula, per distinct range and per formula-column
+segment, so a range read costs O(log rows) edges), H10's graph has 116,024 edges and 29,997 segment
+nodes: build 0.97 s, Tarjan 0.01 s, Kahn 0.02 s, wall 49 s (eval, all criteria scans, is the rest),
+heap peak 1.4 GB under `-Xmx2g`; the 40 oracle cells are unchanged. A 200k-row running total
+(`RunTotal`) builds, cycle-checks and orders its 3.5M-edge graph in 1.6 s. `CompactGraphGatesSpec`
+gates both graphs: `GraphEdges + VirtualNodes <= 40 x (formulas + ranges)` on H10, and Tarjan plus
+Kahn walking at most `3 x (formulas + ranges) x log2(rows)` edges on `RunTotal(200k)`.
+
+With the compact graph, the per-pass caches and the criteria index together, `LoadsBookMain` at
+`-Xmx4g` (direct JVM, `ActiveProcessorCount=2`, shared machine) measures:
+
+| Run | Wall | Phases | Counters |
+|---|---|---|---|
+| Real `mode=checked` (helper criteria, 187,699 formulas) | 7.6 s | graph build 2.2 s (parse 1.7 s, nested in build and eval), eval 2.9 s (criteria 1.3 s), write 1.9 s | 665,906 edges, 99,696 segment nodes, 88,000 calls indexed, 808,484 matcher calls, 0 scan fallbacks |
+| Real `crit=raw mode=checked` (88,000 formulas) | 7.0 s | graph build 1.9 s, eval 3.0 s, write 1.6 s | 5,449,218 matcher calls |
+| H10 `mode=recalc` | 2.4 s | graph build 0.9 s, eval 1.3 s | 75,766 matcher calls (81.1M with scans) |
+| R20 `mode=recalc` | 1.9 s | | 613,617 matcher calls |
+
+The Real helper book also completes under `-Xmx1g` (8.7 s). Every earlier engine runs out of memory
+on it at `-Xmx4g`, and the compact graph without the index did not finish in 15 minutes. A full dump
+of its 187,699 formula values is identical with the index on and off, and between sequential and
+parallel recalculation. In a JFR profile of the Real `checked` run, formula parsing is the largest
+CPU cost (about 22% of samples): each formula is parsed once while the graph is built and again
+when it is evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and the
+criteria calls (about 15%, of which about 5% is building the column slices).
+
 ---
 
 ## Common Performance Pitfalls

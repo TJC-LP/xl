@@ -215,3 +215,41 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       case CellValue.Formula(_, Some(cached), _) => numericCoercionNCell(cached)
       case CellValue.Error(err) => Left(EvalError.ErrorValue(err, Some("N")))
       case _ => Right(BigDecimal(0))
+
+  /**
+   * GH-684: T(value) — N's text counterpart. Microsoft's "T function" page: "If value is or refers
+   * to text, T returns value. If value does not refer to text, T returns "" (empty text)." Rich
+   * text is text, so it returns its plain text. A formula cell answers T of its cached value.
+   *
+   * The T page does not mention errors. An error value propagates, as the "N function" page states
+   * for N and as LibreOffice caches `T(1/0)` (`#DIV/0!`). A range argument lifts element-wise
+   * (`ArrayLift.all`): it spills in an array context and is implicitly intersected in a plain cell.
+   *
+   * see: https://support.microsoft.com/en-us/office/t-function-fb83aeec-45e7-4924-af95-53e073541228
+   * see: https://support.microsoft.com/en-us/office/n-function-a624cad1-3635-4208-b54a-29733d1278c9
+   */
+  val t: FunctionSpec[String] { type Args = UnaryCellValue } =
+    FunctionSpec.simple[String, UnaryCellValue](
+      "T",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    ) { (expr, ctx) =>
+      evalValue(ctx, expr).flatMap(textCoercionT)
+    }
+
+  private def textCoercionT(value: ExprValue): Either[EvalError, String] =
+    value match
+      case ExprValue.Text(s) => Right(s)
+      case ExprValue.Cell(cv) => textCoercionTCell(cv)
+      case ExprValue.Number(_) | ExprValue.Bool(_) | ExprValue.Date(_) | ExprValue.DateTime(_) |
+          ExprValue.Opaque(_) =>
+        Right("")
+
+  @annotation.tailrec
+  private def textCoercionTCell(cv: CellValue): Either[EvalError, String] =
+    cv match
+      case CellValue.Text(s) => Right(s)
+      case CellValue.RichText(rt) => Right(rt.toPlainText)
+      case CellValue.Formula(_, Some(cached), _) => textCoercionTCell(cached)
+      case CellValue.Error(err) => Left(EvalError.ErrorValue(err, Some("T")))
+      case _ => Right("")

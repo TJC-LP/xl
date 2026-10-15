@@ -601,7 +601,7 @@ object SheetEvaluator:
             kind match
               case _: FormulaKind.ArrayFormula =>
                 val arrayEvaluator = evaluator.withArrayResults
-                parseFormula(expr).flatMap { parsed =>
+                parseCounted(expr, arrayEvaluator).flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
                   val result = cellOutcome(expr, raw)
                   // GH-695: the raw result goes to the generation memo for this generation's `x#`
@@ -789,9 +789,14 @@ object SheetEvaluator:
     // intersect with, so it evaluates as the same formula typed into a new Excel 365 cell would:
     // as an array, showing its top-left value. `@range` still needs the position.
     val positioned = if currentCell.isDefined then evaluator else evaluator.withArrayResults
-    parseFormula(formula).flatMap(expr =>
+    parseCounted(formula, evaluator).flatMap(expr =>
       cellOutcome(formula, positioned.eval(expr, sheet, clock, workbook, currentCell))
     )
+
+  /** #767: [[parseFormula]] timed as the `Parse` phase of the evaluator's pass. */
+  private def parseCounted(formula: String, evaluator: Evaluator): XLResult[TExpr[?]] =
+    val counters = evaluator.generationMemo.fold(RecalcCounters.disabled)(_.counters)
+    counters.time(RecalcCounters.Phase.Parse)(parseFormula(formula))
 
   /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
   private[eval] def parseFormula(formula: String): XLResult[TExpr[?]] =
@@ -1055,6 +1060,15 @@ object SheetEvaluator:
           case _: CellValue.Formula => sheet.put(ref, f.copy(cachedValue = None))
           case computed => sheet.put(ref, f.copy(cachedValue = Some(computed)))
       case _ => sheet.put(ref, value)
+
+  /**
+   * #767: whether [[threadComputed]] at `ref` may change which cells of `sheet` are populated: it
+   * does unless the cell holds a formula record, whose cache alone it rewrites.
+   */
+  private[eval] def threadChangesStructure(sheet: Sheet, ref: ARef): Boolean =
+    sheet.cells.get(ref).map(_.value) match
+      case Some(_: CellValue.Formula) => false
+      case _ => true
 
   /**
    * GH-274: strip stale formula caches from the given cells.
