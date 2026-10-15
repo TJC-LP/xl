@@ -349,7 +349,7 @@ Header/footer strings support Excel codes — `&P` page, `&N` total pages, `&D` 
 | `QualifiedGraph.of(wb).declaredPrecedentsOf(q)` / `.declaredPrecedents(q, depth)` / `.occupiedIn(range)` | `Vector[QualifiedGraph.Node]` / `Vector[Vector[Node]]` / `Set[QualifiedRef]` | 0.24.0: the view `xl deps` and `xl cell` print — a range a formula reads is ONE `Node.Range(r)` (`r.a1` is Excel's spelling, `A:A`), a cell `Node.Cell(ref)`; `occupiedIn` lists a range's value-holding cells; layers sorted by `QualifiedGraph.nodeOrder`. `QualifiedGraph` gained the `rangeCells` field: build it with `QualifiedGraph.of` |
 | `Clock.system` / `Clock.fixedDate(LocalDate)` | `Clock` | deterministic TODAY()/NOW() |
 
-`RecalcResult`: `.workbook` (successful formulas cached), `.evaluated: Map[SheetName, Map[ARef, CellValue]]`, `.errors: Vector[CellEvalError]`, `.isClean`, `.toEither`; 0.24.0 ([#692](https://github.com/TJC-LP/xl/issues/692)) adds `.errorCells: Vector[ErrorValueCell]` — the first 10 Excel error values with the evaluator's reason (`sheet`, `ref`, `error`, `reason: Option[String]`, `render`: `S!B2 #N/A — VLOOKUP exact match not found: …`), the cells the summary line names.
+`RecalcResult`: `.workbook` (successful formulas cached), `.evaluated: Map[SheetName, Map[ARef, CellValue]]`, `.errors: Vector[CellEvalError]` (0.25.0, [#767](https://github.com/TJC-LP/xl/issues/767): circular references, then cells blocked by them, each in grid order, then evaluation failures in the canonical evaluation order — dependency-first, top-left ready formula next, which seeded `RAND` draws also follow), `.isClean`, `.toEither`; 0.24.0 ([#692](https://github.com/TJC-LP/xl/issues/692)) adds `.errorCells: Vector[ErrorValueCell]` — the first 10 Excel error values with the evaluator's reason (`sheet`, `ref`, `error`, `reason: Option[String]`, `render`: `S!B2 #N/A — VLOOKUP exact match not found: …`), the cells the summary line names.
 
 **Formula syntax notes (0.13.0)**: percent postfix `=A1*10%` / `=10%` / `=(1+5%)^2` parses, evaluates (`10%` → exact `0.1`), broadcasts over ranges, and prints byte-identically (never rewritten to `/100`). Leading unary plus is preserved through print (`=+A1`, `=++A1`, `=2^+2` round-trip; evaluation is pure identity). Defined names resolve — `=IF(case=2,…)`, `=entry_mult*ltm_ebitda`, `=SUM(rev_range)` evaluate against workbook- and sheet-scoped names (sheet-scoped shadows global) and contribute dependency edges; unresolvable names are clean per-cell errors.
 
@@ -387,11 +387,18 @@ excel.writeStream(path, "Sheet1")             // fs2.Pipe[IO, RowData, Unit]
 excel.writeStreamsSeq(path, Seq("S1" -> rows1, "S2" -> rows2))  // multi-sheet, sequential
 excel.writeStreamStyledWithAutoDetect(path, "Sheet1", styles) // 0.24.0 (#675): fs2.Pipe[IO, StyledRowData, Unit] — two-pass, accurate <dimension>, a style table
 excel.withStreamLimits(XlsxReader.ReaderConfig.default)      // 0.24.0 (#714): the ZIP limits streaming reads apply to workbook rels + cell metadata
+excel.writeWith(wb, path, com.tjclp.xl.ooxml.WriterConfig(compactSharedStrings = true)) // 0.25.0 (#768): drop every unreferenced shared string
 
 case class RowData(rowIndex: Int /* 1-based */, cells: Map[Int /* 0-based col */, CellValue])
 ```
 
 Run effects at the script edge with `.unsafeRunSync()`.
+
+Shared strings on write (0.25.0, [#768](https://github.com/TJC-LP/xl/issues/768)): every write drops
+the strings its own edit left unreferenced, so the table of an edited book can shrink and change
+positions. `WriterConfig.compactSharedStrings = true` (through `excel.writeWith`; the CLI's
+`--compact-strings`) also drops the unreferenced entries the source already carried; untouched
+sheets that pin a later position are regenerated with their values unchanged.
 
 ## Display
 
