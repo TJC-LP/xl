@@ -9,7 +9,7 @@ import scala.xml.*
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
-import com.tjclp.xl.ooxml.{OoxmlWorkbook, Relationships, XmlSecurity}
+import com.tjclp.xl.ooxml.{OoxmlWorkbook, Relationships, SheetKinds, SourceSheetIndex, XmlSecurity}
 import com.tjclp.xl.workbooks.DefinedName
 
 /**
@@ -103,8 +103,14 @@ object WorkbookMetadataReader:
           wbRels <- readPartOpt(zipFile, "xl/_rels/workbook.xml.rels", config)
           rIdMap = parseRelationships(wbRels)
 
-          // Parse sheets from workbook.xml
-          sheetRefs <- parseSheetRefs(wbElem)
+          // Parse sheets from workbook.xml. GH-785: worksheets only, like the full reader —
+          // chartsheet, dialog sheet and macro sheet entries are not listed, and sheet-scoped
+          // names are renumbered to worksheet positions.
+          allRefs <- parseSheetRefs(wbElem)
+          sourceIndex = SourceSheetIndex(
+            allRefs.map(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_.relType)))
+          )
+          sheetRefs = allRefs.zip(sourceIndex.mask).collect { case (ref, true) => ref }
 
           // For each sheet, read dimension from worksheet (stop at sheetData)
           sheetsWithDimensions <- sheetRefs.traverse { ref =>
@@ -115,7 +121,9 @@ object WorkbookMetadataReader:
             // sheet lost its <dimension> and the streaming used range fell back to a scan.
             val fullPath = rIdMap
               .get(ref.rId)
-              .fold(s"xl/worksheets/sheet${ref.sheetId}.xml")(Relationships.resolveWorkbookTarget)
+              .fold(s"xl/worksheets/sheet${ref.sheetId}.xml")(rel =>
+                Relationships.resolveWorkbookTarget(rel.target)
+              )
             val dimension = readDimensionFromWorksheet(zipFile, fullPath)
             Right(
               SheetInfo(
@@ -127,7 +135,7 @@ object WorkbookMetadataReader:
             )
           }
         yield
-          val definedNames = parseDefinedNames(wbElem)
+          val definedNames = sourceIndex.namesToModel(parseDefinedNames(wbElem))
           // GH-243: surface the 1904 date system flag so streaming consumers can interpret
           // date serials with the correct epoch (shared parser with the full reader).
           val date1904 = com.tjclp.xl.ooxml.OoxmlWorkbook.parseDate1904(
@@ -148,15 +156,20 @@ object WorkbookMetadataReader:
         for
           wbXml <- readPart(zipFile, "xl/workbook.xml", ReaderConfig.default)
           wbElem <- XmlSecurity.parseSafe(wbXml, "xl/workbook.xml")
-          sheetRefs <- parseSheetRefs(wbElem)
-        yield sheetRefs.map { ref =>
-          SheetInfo(
-            name = ref.name,
-            sheetId = ref.sheetId,
-            state = ref.state,
-            dimension = None
-          )
-        }
+          wbRels <- readPartOpt(zipFile, "xl/_rels/workbook.xml.rels", ReaderConfig.default)
+          rIdMap = parseRelationships(wbRels)
+          allRefs <- parseSheetRefs(wbElem)
+        // GH-785: worksheets only, as `read` lists them
+        yield allRefs
+          .filter(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_.relType)))
+          .map { ref =>
+            SheetInfo(
+              name = ref.name,
+              sheetId = ref.sheetId,
+              state = ref.state,
+              dimension = None
+            )
+          }
       finally zipFile.close()
     }
 
@@ -246,7 +259,11 @@ object WorkbookMetadataReader:
       else Right(bytes)
     finally is.close()
 
-  private def parseRelationships(xmlOpt: Option[String]): Map[String, String] =
+  /** One workbook relationship's type and target. */
+  private final case class WbRel(relType: String, target: String)
+
+  /** Workbook relationships by id. */
+  private def parseRelationships(xmlOpt: Option[String]): Map[String, WbRel] =
     xmlOpt match
       case None => Map.empty
       case Some(xml) =>
@@ -256,7 +273,7 @@ object WorkbookMetadataReader:
             (elem \ "Relationship").collect { case e: Elem =>
               val id = e \@ "Id"
               val target = e \@ "Target"
-              id -> target
+              id -> WbRel(e \@ "Type", target)
             }.toMap
 
   private def parseSheetRefs(wbElem: Elem): XLResult[Vector[SheetRefInternal]] =

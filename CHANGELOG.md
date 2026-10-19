@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.25.0] - 2026-10-15
+## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
 ranges, defined-name resolutions and criteria column slices; the `*IFS` functions test only the rows
@@ -24,10 +24,34 @@ read a `t="s"` value with one rule that matches desktop Excel; appending strings
 out-of-range index in a copied sheet (#781), and formula escaping keeps the positions a copied macro
 sheet or revision log references (#783).
 
-Also: a criterion with no `*` or `?` compares `~` literally (#765), `T()` is supported (#684), and a
-global flag a verb does not take is named in a `USAGE` error (#766).
+Also: a criterion with no `*` or `?` compares `~` literally (#765), `T()` is supported (#684), a
+global flag a verb does not take is named in a `USAGE` error (#766), and a workbook with an Excel 4.0
+macro sheet, chartsheet or dialog sheet reads, keeping that sheet as it was on write (#785).
 
 ### Fixed
+
+- **Workbooks with a macro sheet, chartsheet or dialog sheet read** (#785): a `<sheets>` entry
+  whose relationship is `xlMacrosheet`, `xlIntlMacrosheet`, `chartsheet` or `dialogsheet` was read
+  as a worksheet, so `XlsxReader`, `Excel.read`, `xl view`/`put` failed with `Missing worksheet`
+  and `xl sheets` with `Worksheet not found for sheet index 2`. These entries are now left out of
+  the model, which holds worksheets only, and a write keeps each one's `<sheet>` element (name,
+  sheetId, r:id, state), part, relationships and content type unchanged. Each stays after the
+  worksheet it followed in the source; when that worksheet is removed, after the nearest earlier
+  one still present, or first. `localSheetId` and `activeTab` index `<sheets>` (ECMA-376 Part 1
+  §18.2.5, §18.2.30), so both are renumbered: a model sheet's position counts worksheets only, and
+  on write the positions are mapped back, so a name scoped to a worksheet after a macro sheet keeps
+  its scope through add, delete, rename and reorder. A name scoped to the macro sheet itself is
+  not in the model and is written back from the source with its new position and its text as
+  written (a worksheet it names that was renamed or deleted is not rewritten). An `activeTab` on a
+  macro sheet reads as the next worksheet (else the last) and stays on the macro sheet while that
+  worksheet is still the active sheet, including after a reorder; selecting it again explicitly
+  cannot be told apart and also keeps the tab on the macro sheet. A worksheet named like a kept entry (case-insensitively) fails the write with
+  `XLError.DuplicateSheet`. The light metadata reader (`Excel.readMetadata`, `xl sheets`,
+  `xl names`) lists worksheets only and renumbers scopes the same way. The stream readers
+  (`readStream`, `readStreamByIndex`, `readSheetStream`) skip the same four kinds, so their indices
+  match the model; they previously skipped every relationship type other than the Transitional
+  `worksheet`, and now stream an entry of any other type as a worksheet, as the full reader does.
+  Macro sheets' shared-string indices stay valid on write (#771, #782).
 
 - **A criterion with no `*` or `?` compares `~` literally** (#765): SUMIF(S), COUNTIF(S),
   AVERAGEIF(S), MINIFS and MAXIFS folded `~~` to `~` (and `~*`/`~?` patterns) in every criterion,
