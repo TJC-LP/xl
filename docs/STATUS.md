@@ -270,13 +270,13 @@
 
 ### Test Coverage
 
-**9,615 test cases** (the xl-evaluator, xl-core, xl-ooxml, xl-cli and xl-cats-effect counts from their JUnit reports, `./mill` on 2026-10-15; xl-agent and the xl prelude probes from the 0.24.1 release branch's `./mill __.test`, 2026-10-14): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,616 test cases** (the xl-evaluator, xl-core, xl-ooxml, xl-cli and xl-cats-effect counts from their JUnit reports, `./mill` on 2026-10-15; xl-agent and the xl prelude probes from the 0.24.1 release branch's `./mill __.test`, 2026-10-14): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1434 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |

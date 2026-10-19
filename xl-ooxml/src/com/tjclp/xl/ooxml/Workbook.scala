@@ -98,7 +98,8 @@ case class OoxmlWorkbook(
    */
   def layoutActiveTab(layout: SheetLayout, modelActive: Int, modelCount: Int): Int =
     if layout.kept.isEmpty then OoxmlWorkbook.clampActiveTab(modelActive, modelCount)
-    else layout.activeTab(modelActive, OoxmlWorkbook.parseActiveTab(bookViews))
+    // a missing activeTab is the spec default 0, as the reader takes it
+    else layout.activeTab(modelActive, Some(OoxmlWorkbook.parseActiveTab(bookViews).getOrElse(0)))
 
   /**
    * Update sheets while preserving all workbook metadata.

@@ -301,6 +301,16 @@ class NonWorksheetSheetSpec extends FunSuite:
     cleanup(source, output)
   }
 
+  test(
+    "GH-785: with no activeTab, a macro sheet first in <sheets> keeps the tab through a cell edit"
+  ) {
+    // workbookView/@activeTab defaults to 0, so the macro sheet is the active tab
+    val source = fixture(macroSheet, otherFirst = true)
+    val output = write(putA2(read(source), "NewText"))
+    assert(activeTab(output).forall(_ == 0), s"tab moved off the macro sheet: ${activeTab(output)}")
+    cleanup(source, output)
+  }
+
   test("GH-785: a tab on the macro sheet follows it through a reorder") {
     val source = fixture(macroSheet, activeTab = Some(1))
     // the reader makes Data2 (model 1) active; the reorder moves it, and the active sheet, to 0
