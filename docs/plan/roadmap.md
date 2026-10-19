@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-10-12
+**Last Updated**: 2026-10-19
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **125 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,435 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **125 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,616 tests passing; one existing performance comparison ignored.
 
-**Current Version**: **0.24.1** (one fix: `eval --with` drops the cache of a formula reading an overridden cell through a defined name in a range argument, or through a name sizing SUMIF's or AVERAGEIF's sum range (#761, #762); follow-up #763)
+**Current Version**: **0.25.0** (recalculation speed and memory: per-pass caches, an equality criteria index and a compact dependency graph, one canonical evaluation order (#767); shared-string hygiene (#768, #781, #783); `~` in criteria (#765), `T()` (#684), CLI global-flag errors (#766), macro sheets and chartsheets in `<sheets>` (#785))
 
 ---
 
@@ -22,6 +22,26 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.25.0 — recalculation speed and shared-string hygiene (Released 2026-10-19)
+
+**Recalculation (#767, PRs #776–#779, four stacked parts).** Work counters and synthetic benchmark
+books shaped like a real customer book came first (`xl-evaluator/test-perf`, a non-blocking CI
+`perf` job); they showed the 10k-row helper-criteria book spending 78 s of 134 s building and
+ordering a 92.5M-edge graph, and the 20k-row raw-criteria book 116 s of 118 s in criteria scans.
+Per-pass caches, an equality criteria index and a compact graph with range and segment nodes
+followed; the 187,699-formula book now goes through `writeChecked` in about 7.6 s under a 4 GB
+heap, where 0.24.1 ran out of memory. Evaluation follows one canonical order (**Breaking** behaviour: the order of
+`RecalcResult.errors` and seeded `RAND` draws change).
+
+**Shared strings (#768, #781, #783).** A write drops the strings its edit left unreferenced, with
+`WriterConfig.compactSharedStrings` / `--compact-strings` for every unreferenced entry; one
+Excel-matching rule reads a `t="s"` value in every reader, the writer and the lint; appending
+strings and formula escaping keep the positions copied parts reference.
+
+**Also:** `~` in a criterion with no wildcard (#765), `T()` (#684), globals a verb does not take
+named in a `USAGE` error (#766), and workbooks with a macro sheet, chartsheet or dialog sheet
+(#785).
 
 ### v0.24.1 — `eval --with` through range-slot names (Released 2026-10-14)
 
