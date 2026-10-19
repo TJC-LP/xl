@@ -361,6 +361,42 @@ class ExcelIOSpec extends CatsEffectSuite:
     )
   }
 
+  tempDir.test("GH-785: a macro sheet in <sheets> is skipped by stream, read and metadata alike") {
+    dir =>
+      val path = dir.resolve("macro-between.xlsm")
+      val excel = ExcelIO.instance[IO]
+      val ns = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+      val rel = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+      def ws(v: Int) =
+        s"""<worksheet xmlns="$ns"><sheetData><row r="1"><c r="A1"><v>$v</v></c></row></sheetData></worksheet>"""
+      IO(
+        writeZipEntries(
+          path,
+          "xl/workbook.xml" ->
+            s"""<workbook xmlns="$ns" xmlns:r="$rel"><sheets><sheet name="Data" sheetId="1" r:id="rId1"/><sheet name="Macro1" sheetId="2" r:id="rId2"/><sheet name="Data2" sheetId="3" r:id="rId3"/></sheets><definedNames><definedName name="Local" localSheetId="2">Data2!$$A$$1</definedName></definedNames></workbook>""",
+          "xl/_rels/workbook.xml.rels" ->
+            s"""<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="$rel/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.microsoft.com/office/2006/relationships/xlMacrosheet" Target="macrosheets/sheet1.xml"/><Relationship Id="rId3" Type="$rel/worksheet" Target="worksheets/sheet2.xml"/></Relationships>""",
+          "xl/worksheets/sheet1.xml" -> ws(1),
+          "xl/worksheets/sheet2.xml" -> ws(2),
+          "xl/macrosheets/sheet1.xml" ->
+            s"""<xm:macrosheet xmlns="$ns" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main"><sheetData/></xm:macrosheet>"""
+        )
+      ) *> (
+        for
+          second <- excel.readStreamByIndex(path, 2).compile.toVector
+          named <- excel.readSheetStream(path, "Data2").compile.toVector
+          meta <- excel.readMetadata(path)
+          wb <- excel.read(path)
+        yield
+          val two = Vector(RowData(1, Map(0 -> CellValue.Number(BigDecimal(2)))))
+          assertEquals(second, two)
+          assertEquals(named, two)
+          assertEquals(meta.sheets.map(_.name.value), Vector("Data", "Data2"))
+          assertEquals(meta.definedNames.flatMap(_.localSheetId), Vector(1))
+          assertEquals(wb.sheetNames.map(_.value), Seq("Data", "Data2"))
+      )
+  }
+
   tempDir.test("writeStream: creates file from row stream") { dir =>
     val path = dir.resolve("streamed.xlsx")
     val excel = ExcelIO.instance[IO]

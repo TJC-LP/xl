@@ -93,6 +93,15 @@ case class OoxmlWorkbook(
     copy(bookViews = OoxmlWorkbook.buildBookViews(bookViews, activeTab))
 
   /**
+   * The `<sheets>` position of the model's active sheet under `layout` (GH-785), read against this
+   * (source) workbook's own activeTab; equal to the clamped model index when nothing is kept.
+   */
+  def layoutActiveTab(layout: SheetLayout, modelActive: Int, modelCount: Int): Int =
+    if layout.kept.isEmpty then OoxmlWorkbook.clampActiveTab(modelActive, modelCount)
+    // a missing activeTab is the spec default 0, as the reader takes it
+    else layout.activeTab(modelActive, Some(OoxmlWorkbook.parseActiveTab(bookViews).getOrElse(0)))
+
+  /**
    * Update sheets while preserving all workbook metadata.
    *
    * Maps domain sheets to SheetRefs, preserving original sheetIds from the source file. For new
@@ -114,17 +123,35 @@ case class OoxmlWorkbook(
    * reconciliation pass that regenerates workbook.xml.rels — renumbering them independently
    * (rId1..N) corrupted foreign files whose preserved rels number sheets after the theme part
    * (LibreOffice maps rId1 to the theme, so the first sheet resolved to xl/theme/theme1.xml).
+   * GH-785: assumes this workbook's `sheets` are worksheets only; a chartsheet, dialog sheet or
+   * macro sheet entry would be dropped. Pass the layout from [[SheetLayout.plan]] for such a
+   * source.
    */
   def updateSheets(
     newSheets: Vector[com.tjclp.xl.api.Sheet],
     stateOverrides: Map[SheetName, Option[String]],
     relationshipIds: Seq[String]
   ): OoxmlWorkbook =
+    updateSheets(newSheets, stateOverrides, relationshipIds, SheetLayout.identity(newSheets.size))
+
+  /**
+   * Update sheets with explicit relationship ids, placing the source's non-worksheet `<sheet>`
+   * entries where `layout` puts them (GH-785). Kept entries are emitted verbatim and never match a
+   * model sheet; their sheetIds still seed fresh-id allocation, so ids stay unique.
+   */
+  def updateSheets(
+    newSheets: Vector[com.tjclp.xl.api.Sheet],
+    stateOverrides: Map[SheetName, Option[String]],
+    relationshipIds: Seq[String],
+    layout: SheetLayout
+  ): OoxmlWorkbook =
     // Fresh sheetId allocation threads through the pass (seeded with the preserved max, which
     // already covers every matched sheet's id) so multiple unmatched sheets in one session —
     // multi-add, multi-rename — get DISTINCT ids; ECMA-376 requires sheetId uniqueness. Mirrors
     // the rId counter in Relationships.reconcileWorkbook.
     val seedMaxId = sheets.map(_.sheetId).maxOption.getOrElse(0)
+    val keptRefs = layout.kept.toSet
+    val worksheetRefs = sheets.filterNot(keptRefs.contains)
     val (updatedRefs, _) = newSheets.zipWithIndex
       .foldLeft((Vector.empty[SheetRef], seedMaxId)) { case ((acc, maxId), (sheet, idx)) =>
         val relId = relationshipIds.lift(idx).getOrElse(s"rId${idx + 1}")
@@ -132,7 +159,7 @@ case class OoxmlWorkbook(
         val overriddenState = stateOverrides.get(sheet.name)
 
         // Try to find original SheetRef to preserve sheetId
-        sheets.find(_.name == sheet.name) match
+        worksheetRefs.find(_.name == sheet.name) match
           case Some(original) =>
             // Use override if present, otherwise preserve original state
             val finalState = overriddenState.getOrElse(original.state)
@@ -143,7 +170,7 @@ case class OoxmlWorkbook(
             val finalState = overriddenState.getOrElse(None)
             (acc :+ SheetRef(sheet.name, newId, relId, finalState), newId)
       }
-    copy(sheets = updatedRefs)
+    copy(sheets = layout.interleave(updatedRefs))
 
   /**
    * Preserved CT_Workbook children from `otherElements` with the given label, in source order
@@ -327,6 +354,18 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
     fromDomain(wb, None, sequentialRelIds(wb.sheets.size))
 
   /**
+   * [[fromDomain]] with no kept `<sheet>` entries (GH-785): `preserved` must hold worksheets only.
+   * A preserved chartsheet, dialog sheet or macro sheet entry would be dropped while its
+   * relationship stays; pass the layout from [[SheetLayout.plan]] for such a source.
+   */
+  def fromDomain(
+    wb: Workbook,
+    preserved: Option[OoxmlWorkbook],
+    relationshipIds: Seq[String]
+  ): OoxmlWorkbook =
+    fromDomain(wb, preserved, relationshipIds, SheetLayout.identity(wb.sheets.size))
+
+  /**
    * Create workbook.xml from the domain model, carrying preserved workbook-level elements through
    * when the source structure is available (GH-320 — the metadata-modified path).
    *
@@ -336,21 +375,26 @@ object OoxmlWorkbook extends XmlReadable[OoxmlWorkbook]:
    * calcPr, extLst, and otherElements (workbookProtection, pivotCaches, externalReferences, ...) —
    * the worksheet-level preserved-metadata machinery applied at workbook level. The relationship
    * ids come from the rels reconciliation pass (see [[Relationships.reconcileWorkbook]]) so every
-   * emitted `r:id` resolves.
+   * emitted `r:id` resolves. GH-785: `layout` places the preserved non-worksheet `<sheet>` entries
+   * and renumbers the model's sheet positions (active tab, `localSheetId`) to `<sheets>` positions.
    */
   def fromDomain(
     wb: Workbook,
     preserved: Option[OoxmlWorkbook],
-    relationshipIds: Seq[String]
+    relationshipIds: Seq[String],
+    layout: SheetLayout
   ): OoxmlWorkbook =
     preserved match
       case Some(p) =>
-        p.updateSheets(wb.sheets, wb.metadata.sheetStates, relationshipIds)
+        p.updateSheets(wb.sheets, wb.metadata.sheetStates, relationshipIds, layout)
           // GH-294: model activeTab overlaid on the preserved bookViews (siblings ride through)
-          .withActiveTab(clampActiveTab(wb.activeSheetIndex, wb.sheets.size))
+          .withActiveTab(p.layoutActiveTab(layout, wb.activeSheetIndex, wb.sheets.size))
           .copy(
             workbookPr = reconcileDate1904(p.workbookPr, wb.metadata.date1904),
-            definedNames = reconcileDefinedNames(p.definedNames, wb.effectiveDefinedNames),
+            definedNames = reconcileDefinedNames(
+              p.definedNames,
+              layout.namesToOutput(wb.effectiveDefinedNames, parseDefinedNames(p.definedNames))
+            ),
             calcPr = reconcileCalcPr(p.calcPr, wb.metadata.calcPr)
           )
       case None =>
