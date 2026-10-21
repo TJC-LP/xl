@@ -49,8 +49,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
   - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
     **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
-    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` and `VLOOKUP("1",t,2,FALSE)` returned
-    the row of TRUE and now return the row of the number 1 and of the text `1`.
+    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
+    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
+    of the text `1`.
   - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
     `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
     `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
