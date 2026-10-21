@@ -164,11 +164,12 @@ xl batch --schema                                  # JSON Schema of the batch do
 > the whole book instead (a `-s` given to `describe`, `names` or `sheets` is still validated: a name
 > that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
-> work under `--stream` writes. `-s` and a verb's qualified ref match a sheet name as Excel matches a
-> reference: the exact spelling first, else the one sheet equal to it ignoring case, so `-s data`
-> is the sheet `Data` (#752). A spelling that matches two sheets differing only by case and is
-> neither of them is `INVALID_REFERENCE`. A batch op's `sheet` and `scope` keys, and the qualifier
-> of a ref inside batch JSON, still match exactly.
+> work under `--stream` writes. Every sheet name the CLI takes — `-s`, a qualified ref, a sheet
+> verb's argument (`remove-sheet data`, `move-sheet --after data`), and in batch JSON an op's
+> `sheet` and `scope` keys and a ref's qualifier — matches a sheet as Excel matches a reference:
+> the exact spelling first, else the one sheet equal to it ignoring case, so `-s data` is the sheet
+> `Data` (#752). A spelling that matches two sheets differing only by case and is neither of them
+> is `INVALID_REFERENCE`.
 
 > **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
 > without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
@@ -405,9 +406,8 @@ xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
 A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
 fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
 replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
-of the `name add` above on its own output. `-s` matches the sheet ignoring case, like every verb's
-`-s` (#752); the batch twins' `scope` key names it exactly as spelled, like every op's `sheet` key
-(`SHEET_NOT_FOUND` with the sheet as a candidate for a case variant).
+of the `name add` above on its own output. `-s` and the batch twins' `scope` key match the sheet
+as every sheet key does: the exact spelling first, else ignoring case (#752).
 
 `name add|rm` are writes like `putf`: a changed binding recalculates the formulas that read the
 name (through aliases, named ranges, local shadows and cross-sheet references) and the summary
@@ -1743,8 +1743,10 @@ conditional formats, data validations). A dependent that mentions the sheet but 
 refuses the whole rename before anything is written: `FORMULA_ERROR` (exit 3) with `location`
 naming the cell (`sheet` and `ref`) — or the sheet alone for a conditional format or data
 validation — the parser's own diagnostic in the message and a hint to fix or replace that formula
-first. An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would reject
-`INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE` (exit 2).
+first. A sheet argument matches as `-s` does, ignoring case (`remove-sheet scratch` removes
+`Scratch`, #752). An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would
+reject `INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE`
+(exit 2).
 
 ---
 

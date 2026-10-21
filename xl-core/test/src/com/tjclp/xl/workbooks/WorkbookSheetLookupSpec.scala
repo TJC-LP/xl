@@ -62,3 +62,41 @@ class WorkbookSheetLookupSpec extends FunSuite:
     assertEquals(name("Ärger").folded, name("äRGER").folded)
     assertEquals(name("SHEET1").folded, "sheet1")
   }
+
+  test("update, upsert, remove, delete, rename and setSheetState match a name the same way") {
+    def names(result: XLResult[Workbook]): XLResult[Seq[String]] =
+      result.map(_.sheetNames.map(_.value))
+    val b2 = ARef.from0(1, 1)
+    val updated = wb.update(name("data"), _.put(b2, CellValue.Number(BigDecimal(2))))
+    assertEquals(names(updated), Right(Seq("Data", "Summary")))
+    assertEquals(
+      updated.flatMap(_(name("Data"))).map(_(b2).value),
+      Right(CellValue.Number(BigDecimal(2)))
+    )
+    // upsert updates the tab rather than adding a second tab Excel treats as the same name
+    val upserted = wb.upsert(name("DATA"), _.put(b2, CellValue.Number(BigDecimal(3))))
+    assertEquals(upserted.sheetNames.map(_.value), Seq("Data", "Summary"))
+    assertEquals(names(wb.remove(name("summary"))), Right(Seq("Data")))
+    assertEquals(names(wb.delete(name("SUMMARY"))), Right(Seq("Data")))
+    assertEquals(names(wb.rename(name("data"), name("Inputs"))), Right(Seq("Inputs", "Summary")))
+    assertEquals(
+      wb.setSheetState(name("summary"), Some("hidden")).map(_.getSheetState(name("Summary"))),
+      Right(Some("hidden"))
+    )
+    assertEquals(
+      wb.update(name("Nope"), identity),
+      Left(XLError.SheetNotFound("Nope", Vector("Data", "Summary")))
+    )
+  }
+
+  test("a defined name's sheet scope takes the exact spelling first on tabs differing by case") {
+    val twins = Workbook(Vector(data, Sheet("DATA"), summary))
+    def scopeOf(scope: String): XLResult[Option[Int]] =
+      twins
+        .withDefinedName("x", "DATA!$A$1", name(scope))
+        .map(_.metadata.definedNames.find(_.name == "x").flatMap(_.localSheetId))
+    assertEquals(scopeOf("Data"), Right(Some(0)))
+    assertEquals(scopeOf("DATA"), Right(Some(1)))
+    assertEquals(scopeOf("summary"), Right(Some(2)))
+    assert(scopeOf("data").isLeft, "a third spelling of the twins is refused")
+  }

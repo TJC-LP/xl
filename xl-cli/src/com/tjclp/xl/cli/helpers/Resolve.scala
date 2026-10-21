@@ -161,7 +161,7 @@ object Resolve:
    * The tab's own spelling of `name` among `names` ([[named]]'s rule over names alone), so a
    * streaming path that goes on to look the sheet up by name finds it.
    */
-  private def resolveAmong(names: Vector[SheetName], name: SheetName): Either[CliError, SheetName] =
+  def resolveAmong(names: Vector[SheetName], name: SheetName): Either[CliError, SheetName] =
     SheetName.indexIn(names, name).map(names(_)).left.map(notResolved(names, name))
 
   /**
@@ -219,6 +219,8 @@ object Resolve:
   /**
    * A target ref qualified with a sheet other than the op's `sheet` key is a contradiction —
    * `BATCH_OP_INVALID` naming the op and its index; `subject` says which ref (`ref 'Other!A1'`).
+   * The two are compared ignoring case (#752: `data!A1` with `"sheet": "Data"` names one sheet),
+   * since this check runs before the workbook is read.
    */
   def opSheetAgreement(
     index: Int,
@@ -228,7 +230,7 @@ object Resolve:
     declared: Option[SheetName]
   ): Either[CliError, Unit] =
     (qualified, declared) match
-      case (Some(named), Some(sheet)) if named != sheet =>
+      case (Some(named), Some(sheet)) if named.folded != sheet.folded =>
         Left(
           invalidOp(
             index,

@@ -441,7 +441,8 @@ object StreamingWriteCommands:
       // Resolve the one worksheet this batch streams (workbook.xml only), then refuse by index
       // every op that would land anywhere else
       (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, sheetNameOpt, scoped)
-      _ <- refuseOtherSheets(scoped, sheetName)
+      meta <- readMeta(sourcePath)
+      _ <- refuseOtherSheets(scoped, meta.sheets.map(_.name), sheetName)
 
       // A ref qualified with the streamed sheet is honoured as its bare form
       ops = scoped.map(s => s.copy(op = OpRegistry.unqualified(s.op)))
@@ -535,10 +536,19 @@ object StreamingWriteCommands:
     val qualified = OpRegistry.targetRefs(s.op).flatMap(r => OpRegistry.qualifiedSheet(r).toList)
     (s.sheet.toList ++ qualified).toVector.distinct
 
-  /** Ops whose `sheet` key or qualified target ref names a sheet other than the streamed one. */
-  private def refuseOtherSheets(scoped: Vector[ScopedOp], streamed: String): IO[Unit] =
-    val rejects = scoped.filter(s => namedSheets(s).exists(_.value != streamed))
-    val others = rejects.flatMap(namedSheets).map(_.value).filter(_ != streamed).distinct
+  /**
+   * Ops whose `sheet` key or qualified target ref names a sheet other than the streamed one, each
+   * name matched among `names` as the in-memory path matches it (#752: exact, else ignoring case).
+   */
+  private def refuseOtherSheets(
+    scoped: Vector[ScopedOp],
+    names: Vector[SheetName],
+    streamed: String
+  ): IO[Unit] =
+    def elsewhere(name: SheetName): Boolean =
+      Resolve.resolveAmong(names, name).fold(_ => name.value, _.value) != streamed
+    val rejects = scoped.filter(s => namedSheets(s).exists(elsewhere))
+    val others = rejects.flatMap(namedSheets).filter(elsewhere).map(_.value).distinct
     refuse(
       rejects,
       s"target ${others.mkString(", ")} rather than the streamed worksheet '$streamed', " +
@@ -594,8 +604,8 @@ object StreamingWriteCommands:
     val names = meta.sheets.map(_.name)
     def failed(cause: CliException): IO[SheetName] = IO.raiseError(BatchParser.opFailed(s, cause))
     namedSheets(s).headOption.orElse(Resolve.only(meta)) match
-      case Some(name) if names.contains(name) => IO.pure(name)
-      case Some(name) => failed(BatchParser.sheetNotFound(names.map(_.value), name))
+      case Some(name) =>
+        Resolve.resolveAmong(names, name).fold(e => failed(CliException(e)), IO.pure)
       case None =>
         val verb = s"batch ${OpRegistry.nameOf(s.op)}"
         failed(CliException(Resolve.sheetRequired(verb, names.map(_.value))))

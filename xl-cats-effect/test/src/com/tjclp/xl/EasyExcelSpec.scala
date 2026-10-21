@@ -228,6 +228,22 @@ class EasyExcelSpec extends CatsEffectSuite:
     }
   }
 
+  test("#752: readSheet matches a name in any case, as wb(name) does") {
+    withTempXlsx("test-readsheet-case") { tempFile =>
+      Excel.write(twoSheets, tempFile.toString)
+      assertEquals(
+        Excel.readSheet(tempFile.toString, "summary").map(_.name.value),
+        Right("Summary")
+      )
+      assertEquals(Excel.readSheet(tempFile.toString, "DATA").map(_.name.value), Right("Data"))
+      // a string no tab could carry is a missing sheet, not a different error
+      assertEquals(
+        Excel.readSheet(tempFile.toString, "a:b"),
+        Left(XLError.SheetNotFound("a:b", Vector("Data", "Summary")))
+      )
+    }
+  }
+
   test("GH-615: readSheet on a missing sheet is Left(SheetNotFound) naming the candidates") {
     withTempXlsx("test-readsheet-missing") { tempFile =>
       Excel.write(twoSheets, tempFile.toString)

@@ -1,7 +1,7 @@
 package com.tjclp.xl.io
 
 import cats.effect.Async
-import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -394,14 +394,15 @@ object Excel:
    * sheet — its message lists them and its `candidates` ("did you mean") name the nearest, which
    * `orExit` prints the way `xl -s` does — and a read that fails with a domain error (`IOError`,
    * `ParseError`, `SecurityError`: a missing, corrupt or over-limit file) is `Left` of that error
-   * rather than the exception `read` throws. Exact-name lookup, like `Workbook.apply(SheetName)`
-   * and the CLI's `-s`. The returned sheet is detached from its workbook: a cross-sheet formula
-   * needs `read` and `wb.evaluateFormula`.
+   * rather than the exception `read` throws. The name is matched as `Workbook.apply(SheetName)` and
+   * the CLI's `-s` match it (#752): the exact spelling first, else the one sheet equal to it
+   * ignoring case, so `"data"` reads the tab `Data`. The returned sheet is detached from its
+   * workbook: a cross-sheet formula needs `read` and `wb.evaluateFormula`.
    *
    * @param path
    *   File path (string)
    * @param sheet
-   *   Sheet name as spelled on the tab
+   *   Sheet name, in any case
    * @return
    *   the sheet, or `SheetNotFound(sheet, available)` (code `SHEET_NOT_FOUND`), or the read's own
    *   domain error
@@ -413,9 +414,10 @@ object Excel:
       try Right(read(path))
       catch case e: XLException => Left(e.error)
     loaded.flatMap { wb =>
-      wb.sheets
-        .find(_.name.value == sheet)
+      // A string no tab could carry names no sheet: the same SheetNotFound as a missing tab
+      SheetName(sheet).toOption
         .toRight(XLError.SheetNotFound(sheet, wb.sheets.map(_.name.value)))
+        .flatMap(wb(_))
     }
 
   /**

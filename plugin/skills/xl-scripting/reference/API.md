@@ -155,7 +155,7 @@ Typed reads see through a formula's cached value (since 0.20.0; GH-477): `Formul
 | `Workbook("Name")` | `Workbook` (literal) | one named sheet |
 | `Workbook.empty` | `Workbook` | contains default "Sheet1" |
 | `wb.sheets` | `Vector[Sheet]` | |
-| `wb("Sales")` / `wb(SheetName)` / `wb(0)` | `XLResult[Sheet]` | 0.22.0 ([#615](https://github.com/TJC-LP/xl/issues/615)): a miss is `SheetNotFound(name, available)` carrying every sheet name, so `orExit(wb("Sumary"))` prints `did you mean: Summary`; `update`/`remove`/`rename`/`setSheetState` carry the same |
+| `wb("Sales")` / `wb(SheetName)` / `wb(0)` | `XLResult[Sheet]` | 0.22.0 ([#615](https://github.com/TJC-LP/xl/issues/615)): a miss is `SheetNotFound(name, available)` carrying every sheet name, so `orExit(wb("Sumary"))` prints `did you mean: Summary`; `update`/`remove`/`rename`/`setSheetState` carry the same. Names match as Excel matches a reference (#752): exact first, else ignoring case, so `wb("data")` is `Data` — the same rule for `update`/`upsert`/`remove`/`delete`/`rename`/`setSheetState` and Edit targets |
 | `wb.put(sheet)` | `Workbook` | add-or-replace by name, total |
 | `wb.upsert("Name", f: Sheet => Sheet)` | `Workbook` (literal) / `XLResult` (runtime) | update-or-create, total |
 | `wb.update("Name", f)` | `XLResult[Workbook]` | fails if sheet absent |
@@ -364,7 +364,7 @@ SUM, SUMIF, SUMIFS, SUMPRODUCT, COUNT, COUNTA, COUNTBLANK, COUNTIF, COUNTIFS, AV
 | Method | Notes |
 |--------|-------|
 | `Excel.read(path: String): Workbook` | throws `XLException`/IO errors at this edge |
-| `Excel.readSheet(path, name: String): XLResult[Sheet]` | 0.22.0: one sheet by exact name — `Excel.read` plus the lookup, so the whole workbook is loaded (stream one sheet of a large file with `ExcelIO.readSheetStream`); a missing name is `Left(SheetNotFound(name, available))` — the message lists the available sheets, `.candidates` the nearest ("did you mean") — and a missing/corrupt/over-limit file `Left` of the reader's `IOError`/`ParseError`/`SecurityError`; unwrap with `orExit(...)` or `.unsafe`. 0.21.0 returned `Sheet` and threw `XLException` |
+| `Excel.readSheet(path, name: String): XLResult[Sheet]` | 0.22.0: one sheet by name, matched as `wb(name)` matches it (exact, else ignoring case: `"data"` reads `Data`) — `Excel.read` plus the lookup, so the whole workbook is loaded (stream one sheet of a large file with `ExcelIO.readSheetStream`); a missing name is `Left(SheetNotFound(name, available))` — the message lists the available sheets, `.candidates` the nearest ("did you mean") — and a missing/corrupt/over-limit file `Left` of the reader's `IOError`/`ParseError`/`SecurityError`; unwrap with `orExit(...)` or `.unsafe`. 0.21.0 returned `Sheet` and threw `XLException` |
 | `Excel.readMetadata(path): LightMetadata` | 0.21.0: `sheets` (`SheetInfo`: name, sheetId, state, dimension), `definedNames`, `date1904` — no cells loaded, instant on any file size, the inflated parts held to `Excel.read`'s ZIP-bomb limits; `XLException` on an unreadable or over-limit package |
 | `Excel.write(wb, path: String): Unit` | also accepts `XLResult[Workbook]`; writes formulas with whatever cache they carry — never for a freshly built model |
 | `Excel.writeChecked(wb, path: String): RecalcResult` | 0.21.0: compute ONLY the uncached formulas (`recalculateUncached`), write, return the result — every existing cache is written byte for byte; overloads take `RecalcOptions` or accept `XLResult[Workbook]` |

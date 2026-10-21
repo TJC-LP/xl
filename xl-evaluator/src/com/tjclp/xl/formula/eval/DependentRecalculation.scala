@@ -52,7 +52,9 @@ object DependentRecalculation:
       val (graph, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb)
       val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
       val dynamic = DependencyGraph.dynamicCells(wb)
-      val seeds = modifiedRefs.map(QualifiedRef(sheetName, _))
+      // #752: the graph's nodes carry each tab's own spelling; a seed in another case must match
+      val sheet = DependencyGraph.sheetCanonicaliser(wb)(sheetName)
+      val seeds = modifiedRefs.map(QualifiedRef(sheet, _))
       val affected = DependencyGraph.editCone(wb, seeds, index, dynamic).intersect(graph.keySet)
       val affectedGraph = graph.filter((ref, _) => affected.contains(ref))
       val allCyclic = DependencyGraph.qualifiedCyclicNodes(graph)
@@ -223,7 +225,8 @@ object DependentRecalculation:
      * clock for date/time functions.
      *
      * @param sheetName
-     *   The sheet where cells were modified
+     *   The sheet where cells were modified, matched as `Workbook.apply` matches it (#752: exact,
+     *   else ignoring case)
      * @param modifiedRefs
      *   Set of cell references that have been modified on that sheet
      * @return
@@ -248,7 +251,9 @@ object DependentRecalculation:
       if modifiedRefs.isEmpty then wb
       else
         val calculationClock = WorkbookEvaluator.pinnedCalculationClock(clock)
-        val qualifiedRefs = modifiedRefs.map(ref => QualifiedRef(sheetName, ref))
+        // #752: the graph's nodes carry each tab's own spelling; a seed in another case must match
+        val sheet = DependencyGraph.sheetCanonicaliser(wb)(sheetName)
+        val qualifiedRefs = modifiedRefs.map(ref => QualifiedRef(sheet, ref))
         // GH-274: dynamic-reference cells (INDIRECT) on ANY sheet are always dirty — their
         // resolved targets are invisible to the static graph, so every sheet's dynamic cells
         // join the seeds (and the recalc set) unconditionally.

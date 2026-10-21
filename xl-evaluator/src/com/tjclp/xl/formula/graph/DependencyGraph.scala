@@ -307,15 +307,18 @@ object DependencyGraph:
   private[xl] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
     val positions =
       workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
+    val canonical = sheetCanonicaliser(workbook)
     val resolve = NameWalk.resolver(workbook)
     val parsed = scala.collection.mutable.HashMap.empty[String, Option[TExpr[?]]]
 
     def parse(text: String): Option[TExpr[?]] =
       parsed.getOrElseUpdate(text, FormulaParser.parse(text).toOption)
 
-    // The node a reference resolves to; None when its qualifier names no sheet or no such name.
+    // The node a reference resolves to; None when its qualifier names no sheet (#752: matched as
+    // evaluation matches it, ignoring case) or no such name.
     def target(qualifier: Option[SheetName], name: String, current: SheetName) =
-      if qualifier.exists(!positions.contains(_)) then None else resolve(qualifier, name, current)
+      if qualifier.exists(q => !positions.contains(canonical(q))) then None
+      else resolve(qualifier, name, current)
 
     // A node's hit: an unparseable definition, or a reference that resolves to nothing. Stepped
     // once per node by the walk.

@@ -3,6 +3,9 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
+import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 import munit.FunSuite
@@ -78,4 +81,52 @@ class SheetNameCaseSpec extends FunSuite:
     assertEquals(twins.evaluateFormula("=Data!A1", "Summary"), Right(num(1)))
     assertEquals(twins.evaluateFormula("=DATA!A1", "Summary"), Right(num(2)))
     assert(twins.evaluateFormula("=data!A1", "Summary").isLeft)
+  }
+
+  test(
+    "the dependency graph resolves a case-variant qualifier on a defined name as evaluation does"
+  ) {
+    // rate is scoped to Data (5) and to Other; Other!B1 reads Data's through `data!rate`
+    val wb = Workbook(
+      Vector(
+        sheetWith("Data", "A1" -> num(5)),
+        sheetWith(
+          "Other",
+          "A1" -> num(9),
+          "B1" -> formula("data!rate"),
+          "B2" -> formula("Data!rate"),
+          "B3" -> formula("data!dyn")
+        )
+      )
+    ).copy(metadata =
+      Workbook().metadata.copy(definedNames =
+        Vector(
+          DefinedName("rate", "Data!$A$1", localSheetId = Some(0)),
+          DefinedName("rate", "Other!$A$1", localSheetId = Some(1)),
+          DefinedName("dyn", "INDIRECT(\"Data!A1\")", localSheetId = Some(0))
+        )
+      )
+    )
+    val other = SheetName.unsafe("Other")
+    def at(ref: String) = QualifiedRef(other, a1(ref))
+    assertEquals(wb.evaluateFormula("=data!rate", "Other"), Right(num(5)))
+    // not an "unresolved name" reader: `xl audit` reported Other!B1 before
+    assertEquals(DependencyGraph.unresolvedReaders(wb), Set.empty[QualifiedRef])
+    // a name reaching INDIRECT through a case-variant qualifier is a dynamic reader
+    assert(DependencyGraph.dynamicCells(wb).contains(at("B3")), "data!dyn reads INDIRECT")
+    assert(!DependencyGraph.dynamicCells(wb).contains(at("B1")))
+  }
+
+  test("recalculateDependents seeds a case-variant sheet name onto the tab's cells") {
+    val wb = Workbook(
+      Vector(
+        sheetWith("Data", "A1" -> num(1)),
+        sheetWith("Summary", "A1" -> CellValue.Formula("Data!A1*2", Some(num(2))))
+      )
+    )
+    val lower = SheetName.unsafe("data")
+    val edited =
+      wb(lower).map(s => wb.put(s.put(a1("A1"), num(10)))).fold(e => fail(e.message), identity)
+    val recalculated = edited.recalculateDependents(lower, Set(a1("A1")))
+    assertEquals(cached(recalculated, "Summary", "A1"), Some(num(20)))
   }

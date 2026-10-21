@@ -653,6 +653,51 @@ class EditInterpreterSpec extends FunSuite:
     )
   }
 
+  test("#752: a sheet an edit names matches as Workbook.apply does: exact, else ignoring case") {
+    given FormulaSupport = blindRename
+    val lower = SheetName.unsafe("data")
+    val upper = SheetName.unsafe("OTHER")
+    def names(r: XLResult[Workbook]) = r.map(_.sheetNames.map(_.value))
+    // the default sheet and a qualifier, each in another case, land on the tabs as spelled
+    val put = baseWorkbook.editIn(lower)(
+      Edit.Put(Loc(None, a1("Z1")), num(1), None),
+      Edit.Put(Loc(Some(upper), a1("Z2")), num(2), None)
+    )
+    assertEquals(names(put), Right(Seq("Data", "Other")))
+    assertEquals(put.flatMap(_(data)).map(_(a1("Z1")).value), Right(num(1)))
+    assertEquals(put.flatMap(_(other)).map(_(a1("Z2")).value), Right(num(2)))
+    assertEquals(
+      names(baseWorkbook.edit(Edit.Put(Loc(Some(lower), a1("Z1")), num(1), None))),
+      Right(Seq("Data", "Other"))
+    )
+    // the workbook-level edits
+    assertEquals(names(apply(baseWorkbook, Edit.RemoveSheet(upper))), Right(Seq("Data")))
+    assertEquals(
+      names(apply(baseWorkbook, Edit.MoveSheet(upper, None, None, Some(lower)))),
+      Right(Seq("Other", "Data"))
+    )
+    assertEquals(
+      names(apply(baseWorkbook, Edit.MoveSheet(lower, None, Some(upper), None))),
+      Right(Seq("Other", "Data"))
+    )
+    assertEquals(
+      failure(baseWorkbook, Edit.MoveSheet(data, None, Some(lower), None)).root,
+      XLError.InvalidArgument("move-sheet", "cannot move a sheet relative to itself")
+    )
+    assertEquals(
+      names(apply(baseWorkbook, Edit.RenameSheet(lower, SheetName.unsafe("Renamed")))),
+      Right(Seq("Renamed", "Other"))
+    )
+    val copied = apply(baseWorkbook, Edit.CopySheet(lower, SheetName.unsafe("Data2")))
+    assertEquals(copied.flatMap(_(SheetName.unsafe("Data2"))).map(_.cells), Right(baseData.cells))
+    val hidden = apply(baseWorkbook, Edit.HideSheet(upper, veryHidden = false))
+    assertEquals(hidden.map(_.getSheetState(other)), Right(Some("hidden")))
+    assertEquals(
+      failure(baseWorkbook, Edit.RemoveSheet(missing)).root,
+      XLError.SheetNotFound("Nope", Vector("Data", "Other"))
+    )
+  }
+
   test(
     "defined names: workbook-scoped replace, sheet-scoped add, remove; a missing name is refused"
   ) {

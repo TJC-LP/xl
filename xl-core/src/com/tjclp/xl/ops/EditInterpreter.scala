@@ -162,13 +162,15 @@ private[xl] object EditInterpreter:
 
   // ===== THE sheet rule =====
 
-  private def findSheet(wb: Workbook, name: SheetName): XLResult[Sheet] =
-    wb.sheets.find(_.name == name).toRight(XLError.SheetNotFound(name.value, sheetNames(wb)))
+  // `Workbook.apply`'s rule (#752): the exact spelling first, else the one sheet whose name is
+  // equal ignoring case, as Excel matches a reference's sheet qualifier.
+  private def findSheet(wb: Workbook, name: SheetName): XLResult[Sheet] = wb(name)
 
-  private def indexOf(wb: Workbook, name: SheetName): XLResult[Int] =
-    wb.sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value, sheetNames(wb)))
-      case i => Right(i)
+  private def indexOf(wb: Workbook, name: SheetName): XLResult[Int] = wb.sheetIndexOf(name)
+
+  /** The tab's own spelling of `name`, for the edits that go on to compare names. */
+  private def tabName(wb: Workbook, name: SheetName): XLResult[SheetName] =
+    findSheet(wb, name).map(_.name)
 
   /** The names a `SheetNotFound` offers as candidates (GH-615). */
   private def sheetNames(wb: Workbook): Vector[String] = wb.sheets.map(_.name.value)
@@ -370,17 +372,21 @@ private[xl] object EditInterpreter:
 
         case Edit.RemoveSheet(sheetName) => workbookLevel(wb.remove(sheetName))
 
-        case Edit.RenameSheet(from, to) => workbookLevel(fs.renameSheet(wb, from, to))
+        case Edit.RenameSheet(from, to) =>
+          workbookLevel(tabName(wb, from).flatMap(fs.renameSheet(wb, _, to)))
 
-        case Edit.MoveSheet(sheetName, toIndex, after, before) =>
+        case Edit.MoveSheet(requested, toIndex, after, before) =>
+          val sheetName = tabName(wb, requested).getOrElse(requested)
           val rest = wb.sheets.map(_.name).filterNot(_ == sheetName)
-          def relativeTo(anchor: SheetName, offset: Int): XLResult[Int] =
-            if anchor == sheetName then
-              Left(XLError.InvalidArgument(name, "cannot move a sheet relative to itself"))
-            else
-              rest.indexOf(anchor) match
-                case -1 => Left(XLError.SheetNotFound(anchor.value, sheetNames(wb)))
-                case i => Right(i + offset)
+          def relativeTo(requestedAnchor: SheetName, offset: Int): XLResult[Int] =
+            tabName(wb, requestedAnchor).flatMap { anchor =>
+              if anchor == sheetName then
+                Left(XLError.InvalidArgument(name, "cannot move a sheet relative to itself"))
+              else
+                rest.indexOf(anchor) match
+                  case -1 => Left(XLError.SheetNotFound(anchor.value, sheetNames(wb)))
+                  case i => Right(i + offset)
+            }
           val position: XLResult[Int] = (toIndex, after, before) match
             case (Some(i), _, _) =>
               if i >= 0 && i <= rest.size then Right(i)
