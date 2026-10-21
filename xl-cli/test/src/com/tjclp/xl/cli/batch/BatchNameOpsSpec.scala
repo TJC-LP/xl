@@ -150,13 +150,14 @@ class BatchNameOpsSpec extends CatsEffectSuite:
     }
   }
 
-  test("scope names the sheet exactly as spelled: a case variant is -s's SHEET_NOT_FOUND") {
-    // #659 review: `scope` is documented as the verb's `-s`, and `-s data` on a book with `Data`
-    // is SHEET_NOT_FOUND with the sheet as its candidate; `scope` was the one sheet key in batch
-    // JSON that matched case-insensitively. One rule for every sheet key.
+  test("scope names the sheet exactly as spelled: a case variant is SHEET_NOT_FOUND") {
+    // #659 review: `scope` matches like every op's `sheet` key, exactly as spelled, with the sheet
+    // as the did-you-mean candidate. The verb's `-s` resolves case-insensitively since #752, so
+    // `-s data name add` scopes the name to `Data`.
     val addOut = fresh("name-ops-scope-case-add.xlsx")
     val rmOut = fresh("name-ops-scope-case-rm.xlsx")
     val scoped = fresh("name-ops-scope-case-scoped.xlsx")
+    val verbOut = fresh("name-ops-scope-case-verb.xlsx")
     for
       add <- batch(
         named,
@@ -176,10 +177,11 @@ class BatchNameOpsSpec extends CatsEffectSuite:
         "--json"
       )
       verb <- CliHarness.run(
-        List("-f", named, "-s", "data", "-o", addOut.toString, "--json") ++
+        List("-f", named, "-s", "data", "-o", verbOut.toString, "--json") ++
           List("name", "add", "Loc", "Data!$A$1"),
         ""
       )
+      verbNames <- names(verbOut)
     yield
       for (run, index) <- List(add -> 2, rm -> 1) do
         assertEquals(run.exit, 3, run.stderr)
@@ -193,15 +195,9 @@ class BatchNameOpsSpec extends CatsEffectSuite:
         assertEquals(error("candidates"), ujson.Arr(ujson.Str("Data")))
         assertEquals(error("location")("opIndex"), ujson.Num(index))
       assert(!Files.exists(addOut) && !Files.exists(rmOut), "a refused scope writes nothing")
-      // the verb's own refusal for the same spelling: same text, same candidates
-      assertEquals(verb.exit, 3, verb.stderr)
-      val verbError = ujson.read(verb.stdout)("error")
-      assertEquals(verbError("code"), ujson.Str("SHEET_NOT_FOUND"))
-      assertEquals(
-        verbError("message"),
-        ujson.Str("Sheet not found: data. Available: Data, Summary")
-      )
-      assertEquals(verbError("candidates"), ujson.Arr(ujson.Str("Data")))
+      // #752: the verb's `-s data` is the tab `Data`
+      assertEquals(verb.exit, 0, verb.stderr)
+      assert(verbNames.contains(("Loc", "Data!$A$1", ujson.Str("Data"))), verbNames.toString)
   }
 
   test("a `sheet` key on define-name is not its scope: UNKNOWN_PROPERTY, the name stays global") {

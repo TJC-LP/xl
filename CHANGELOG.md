@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sheet name in a reference matches its sheet ignoring case, as in Excel** (#752):
+  `Workbook.apply(SheetName)` tries the exact spelling first, then the one sheet whose name is equal
+  ignoring case (`SheetName.folded`, lower case under the root locale, the fold the dependency graph
+  already used). The evaluator resolves every qualified reference through it, so on a book with the
+  sheet `Data`, `=data!B1`, `=SUM(DATA!A:A)`, `=INDIRECT("data!B1")` and a sheet-qualified defined
+  name `=data!rate` read `Data`. `seedDataTables(sheetName)` and the CLI's `-s` and qualified refs
+  use the same rule; a batch op's `sheet` and `scope` keys, and the qualifier of a ref inside batch
+  JSON, still match exactly. A spelling that matches two sheets differing only by case (a book
+  Excel refuses to save) and is neither of them is refused with `XLError.InvalidReference` rather
+  than resolved to one of them; the exact spellings still resolve. **Behaviour change:** these
+  lookups were `SheetNotFound` (a formula's value was an evaluation error, and `xl -s data` was
+  `SHEET_NOT_FOUND`, exit 3); they now return the `Data` sheet. `seedDataTables` with an unknown
+  sheet now lists the workbook's sheets in `SheetNotFound.available`, as `Workbook.apply` does.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

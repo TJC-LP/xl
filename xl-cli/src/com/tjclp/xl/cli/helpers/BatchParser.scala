@@ -2443,9 +2443,10 @@ object BatchParser:
    * A `define-name` / `remove-name` op's `scope` — the verb's `-s` — as the sheet it names:
    * `INVALID_SHEET_NAME` (the verb's) for a name Excel rejects, `SHEET_NOT_FOUND` with the CLI's
    * one text and did-you-mean candidates for a sheet the book lacks — exactly as spelled, the rule
-   * of `-s` and of every op's `sheet` key (#659 review: `scope` was the one sheet key that matched
-   * case-insensitively). None is the workbook scope. The mutation itself is
-   * `SheetCommands.defineName` / `removeName` (GH-462); the caller adds the op index.
+   * of every op's `sheet` key (#659 review: `scope` was the one sheet key that matched
+   * case-insensitively; the verb's `-s` matches ignoring case since #752). None is the workbook
+   * scope. The mutation itself is `SheetCommands.defineName` / `removeName` (GH-462); the caller
+   * adds the op index.
    */
   private def nameScope(wb: Workbook, scope: Option[String]): IO[Option[SheetName]] =
     scope.fold(IO.pure(Option.empty[SheetName])) { s =>

@@ -164,7 +164,11 @@ xl batch --schema                                  # JSON Schema of the batch do
 > the whole book instead (a `-s` given to `describe`, `names` or `sheets` is still validated: a name
 > that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
-> work under `--stream` writes.
+> work under `--stream` writes. `-s` and a verb's qualified ref match a sheet name as Excel matches a
+> reference: the exact spelling first, else the one sheet equal to it ignoring case, so `-s data`
+> is the sheet `Data` (#752). A spelling that matches two sheets differing only by case and is
+> neither of them is `INVALID_REFERENCE`. A batch op's `sheet` and `scope` keys, and the qualifier
+> of a ref inside batch JSON, still match exactly.
 
 > **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
 > without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
@@ -401,9 +405,9 @@ xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
 A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
 fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
 replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
-of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
-verb's `-s`; so does the batch twins' `scope` key (`SHEET_NOT_FOUND` with the sheet as a
-candidate for a case variant — one rule for every sheet key).
+of the `name add` above on its own output. `-s` matches the sheet ignoring case, like every verb's
+`-s` (#752); the batch twins' `scope` key names it exactly as spelled, like every op's `sheet` key
+(`SHEET_NOT_FOUND` with the sheet as a candidate for a case variant).
 
 `name add|rm` are writes like `putf`: a changed binding recalculates the formulas that read the
 name (through aliases, named ranges, local shadows and cross-sheet references) and the summary
