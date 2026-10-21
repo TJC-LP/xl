@@ -446,6 +446,35 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
   }
 
+  test(
+    "GH-789: --stream putf summary names the mode for a cell, a dragged range and explicit formulas"
+  ) {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val source = Sheet("Test").put(ARef.from0(1, 0), CellValue.Number(BigDecimal(1)))
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+      def summary(target: String, formulas: List[String]): String =
+        StreamingWriteCommands
+          .putFormula(sourcePath, outputPath, Some("Test"), target, formulas)
+          .unsafeRunSync()
+          .linesIterator
+          .next()
+
+      assertEquals(summary("A1", List("=B1")), "Put formula → A1 (streaming)")
+      assertEquals(
+        summary("A1:A3", List("=B1")),
+        "Applied formula to 3 cells in A1:A3 (streaming, with anchor-aware dragging)"
+      )
+      assertEquals(
+        summary("A1:A2", List("=B1", "=B2")),
+        "Put 2 formulas to A1:A2 (streaming, explicit, no dragging)"
+      )
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
   test("--stream putf of several formulas names the cell whose formula does not parse") {
     val sourcePath = tempXlsx()
     val outputPath = tempXlsx()

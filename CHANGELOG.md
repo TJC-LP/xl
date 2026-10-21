@@ -16,9 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
   written.
   Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
-  `=B3*C3`, `=B4*C4` and `=B5*C5`. Its summary line reads `Applied formula to N cells in <range>
-  (streaming, with anchor-aware dragging)` instead of `Filled <range> with formula (streaming, no
-  dragging)`.
+  `=B3*C3`, `=B4*C4` and `=B5*C5`.
+  Behaviour change: the `--stream putf` summary lines changed. One formula over a range printed
+  `Filled <range> with formula (streaming, no dragging)` and now prints `Applied formula to N cells
+  in <range> (streaming, with anchor-aware dragging)`. One formula to one cell printed
+  `Put formula → <cell> (streaming, no dragging)` and now prints `Put formula → <cell> (streaming)`.
+  Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
+  `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
 
 ### Testing
 
