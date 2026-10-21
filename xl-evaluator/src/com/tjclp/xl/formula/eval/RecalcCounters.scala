@@ -127,9 +127,10 @@ private[formula] object RecalcCounters:
     case NameParses
 
     /**
-     * Formula cell texts parsed by the graph build and by evaluation (#790). The compact graph
-     * parses each formula once and evaluation reuses that parse, so a pass parses again only a
-     * formula the build could not parse or whose text changed after it.
+     * Formula cell texts parsed by the graph build, by cell evaluation (its external-reference pin
+     * check included) and by iterative fixpoints (#790). The compact graph parses each formula once
+     * and the pass reuses that parse, so it parses again only a formula the build could not parse
+     * or whose text changed after it.
      */
     case FormulaParses
 

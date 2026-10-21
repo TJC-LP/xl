@@ -415,10 +415,13 @@ largest CPU cost (about 22% of samples): each formula was parsed once while the 
 again when it was evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and
 the criteria calls (about 15%, of which about 5% is building the column slices).
 
-Since #790 evaluation reuses the graph build's parse of each formula cell (looked up by the cell and
-checked against its current text), so the `FormulaParses` counter of a Real pass is 187,699, one
-per formula. Evaluation parses again only a formula the build could not parse or whose text has
-changed since; under the legacy engine, which keeps no parse, it parses every formula again.
+Since #790 a pass reuses the graph build's parse of each formula cell (looked up by the cell and
+checked against its current text) for cell evaluation, the external-reference pin check of a cached
+formula containing `[`, iterative fixpoints over cycle members, the dynamic-cell scan and the pin
+check of a pass with failures. The `FormulaParses` counter of a Real pass is 187,699, one per
+formula. A pass parses again only a formula the build could not parse or whose text has changed
+since; under the legacy engine, which keeps no parse, evaluation parses every formula again. The
+data-table seeder's what-if fixpoints parse their cycle members themselves.
 
 ---
 

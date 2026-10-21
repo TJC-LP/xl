@@ -11,12 +11,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
   iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while
-  building the dependency graph and again when evaluating it. Evaluation, and the scan for dynamic
-  (`INDIRECT`/`OFFSET`) cells, now reuse the graph build's parse of a cell while the cell still holds
-  the text it was parsed from; a formula whose text differs is parsed again. On the 187,699-formula
+  building the dependency graph and again when evaluating it. A cached formula whose text contains
+  `[` (a closed-workbook reference such as `[1]Sheet!A1`, or a `[` in a string) was parsed a third
+  time to decide whether its cache is pinned, and each member of a cycle under iterative calculation
+  was parsed again by the fixpoint. Cell evaluation, that pin check, iterative fixpoints, the scan
+  for dynamic (`INDIRECT`/`OFFSET`) cells and the pin check of a pass with failures now reuse the
+  graph build's parse of a cell while the cell still holds the text it was parsed from; a formula
+  whose text differs, or that the build could not parse, is parsed again. On the 187,699-formula
   synthetic book (`LoadsBookMain shape=Real`) a pass makes 187,699 formula parses, one per formula.
   The pass holds those parses until it ends. Results are unchanged: a property test compares every
-  cell, exact `BigDecimal` scale included, and every error with the reuse on and off.
+  cell, exact `BigDecimal` scale included, and every error with the reuse on and off, in sequential,
+  parallel and iterative passes. The data-table seeder's what-if fixpoints still parse their cycle
+  members themselves.
 
 ## [0.25.0] - 2026-10-19
 

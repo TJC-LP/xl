@@ -322,7 +322,7 @@ class PassCacheLawSpec extends ScalaCheckSuite:
 
   property("the parse-cache law is not vacuous: on, a pass parses each formula once; off, more") {
     Prop.forAll(genStaleBook) { book =>
-      Prop.all(Vector(sequential, parallel).map { options =>
+      Prop.all(Vector(sequential, parallel, iterative).map { options =>
         val on = RecalcCounters.create()
         val off = RecalcCounters.create()
         recalculateWithMemo(book.workbook, options(), cachesOn(on))

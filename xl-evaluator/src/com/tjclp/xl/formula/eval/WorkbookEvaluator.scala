@@ -1004,7 +1004,10 @@ object WorkbookEvaluator:
                   rng,
                   new Evaluator.AggregateMemo(columnCache = false)
                 ),
-              seed
+              seed,
+              // #790: a member reuses the graph build's parse of its formula
+              (q, text) =>
+                SheetEvaluator.parseFormulaCell(text, q.sheet, Some(q.ref), Some(generationMemo))
             )
           // a member's last-round value carries no reason: the round's diagnostic is not kept
           val folded = members.foldLeft(state) { case (st, (q, idx, _)) =>
@@ -1077,7 +1080,8 @@ object WorkbookEvaluator:
             failures,
             graph.dependents,
             cycleReports,
-            reasons
+            reasons,
+            parsesOf(generationMemo)
           )
         )
 
@@ -1282,15 +1286,17 @@ object WorkbookEvaluator:
     rng: Rng,
     roundEvaluator: Rng => Evaluator,
     seedValues: Map[QualifiedRef, CellValue],
-    parse: String => XLResult[TExpr[?]] = SheetEvaluator.parseFormula
+    parse: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
+      SheetEvaluator.parseFormula(text)
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
-    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them).
+    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them), made at
+    // the first member holding the text (#790: `parse` may reuse the build's parse of that cell).
     val parsedText: Map[String, XLResult[TExpr[?]]] =
-      members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
+      members.distinctBy(_._3).map((q, _, text) => text -> parse(q, text)).toMap
     val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
       members.map((q, _, text) => q -> parsedText(text)).toMap
     // Each member's formula kind, read from the book: an array formula member (a CSE record or a
@@ -1312,7 +1318,7 @@ object WorkbookEvaluator:
     // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
     val pinnedConstant: Map[QualifiedRef, CellValue] =
       members.flatMap { (q, _, text) =>
-        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q)))).map(q -> _)
+        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q))), parsedText).map(q -> _)
       }.toMap
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric

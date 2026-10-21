@@ -143,6 +143,58 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(counters.snapshot(Counter.FormulaParses), 10L)
   }
 
+  test("#790: an iterative pass reuses the build's parses for the members of a cycle") {
+    // A1 = B1/2+1 and B1 = A1/2+1 converge to 2; the fixpoint evaluates both members
+    val cycle = Workbook(
+      Vector(
+        Sheet(data)
+          .put(ref(0, 0), CellValue.Formula("B1/2+1"))
+          .put(ref(1, 0), CellValue.Formula("A1/2+1"))
+      )
+    )
+    val iterative = options.copy(iterative = IterativeMode.Force(IterativeCalc(100, 0.001)))
+    val counters = RecalcCounters.create()
+    val result = recalculateCounted(cycle, iterative, counters)
+    assertEquals(counters.snapshot(Counter.FormulaParses), 2L)
+    assertSame(result, cycle.recalculate(iterative))
+    assert(result.converged)
+    // the legacy engine keeps no parse: the fixpoint parses both members again, and counts it
+    val legacy = RecalcCounters.create()
+    recalculateCounted(cycle, iterative, legacy, RecalcEngine.Legacy)
+    assertEquals(legacy.snapshot(Counter.FormulaParses), 4L)
+  }
+
+  test("#790: the external-reference pin check shares the parse that evaluates the cell") {
+    // B1:B50 hold a '[' in a string literal and a cache, so each one is pin-checked and evaluated;
+    // C1 is a cached closed-workbook reference, which stays pinned at its cache
+    val withBrackets = (0 until 50).foldLeft(Sheet(data).put(ref(0, 0), num(1))) { (s, i) =>
+      s.put(
+        ref(1, i),
+        CellValue.Formula(s"""IF(A1=1,"[x]","y")&$i""", Some(CellValue.Text("old")))
+      )
+    }
+    val sheetWithExternal =
+      withBrackets.put(ref(2, 0), CellValue.Formula("[1]Other!A1", Some(num(7))))
+    val book = Workbook(Vector(sheetWithExternal))
+    val counters = RecalcCounters.create()
+    val result = recalculateCounted(book, options, counters)
+    assertEquals(counters.snapshot(Counter.FormulaParses), 51L)
+    assertSame(result, book.recalculate(options))
+    val cells = result.workbook(data).fold(e => fail(e.toString), identity).cells
+    assertEquals(
+      cells.get(ref(1, 7)).map(_.value),
+      Some(CellValue.Formula("""IF(A1=1,"[x]","y")&7""", Some(CellValue.Text("[x]7"))))
+    )
+    assertEquals(
+      cells.get(ref(2, 0)).map(_.value),
+      Some(CellValue.Formula("[1]Other!A1", Some(num(7))))
+    )
+    // the legacy engine parses each formula in its build and once more to pin-check and evaluate
+    val legacy = RecalcCounters.create()
+    recalculateCounted(book, options, legacy, RecalcEngine.Legacy)
+    assertEquals(legacy.snapshot(Counter.FormulaParses), 102L)
+  }
+
   test("phases are timed when measured, and the disabled instance never records anything") {
     val counters = RecalcCounters.create()
     recalculateCounted(book, options, counters)
