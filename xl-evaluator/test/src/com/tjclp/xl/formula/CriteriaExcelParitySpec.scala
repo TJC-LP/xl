@@ -187,3 +187,47 @@ class CriteriaExcelParitySpec extends FunSuite:
   test("#731: a bare <> matches every cell but a truly empty one") {
     check("=SUMIF(A1:A14,\"<>\",B1:B14)", rows(1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14))
   }
+
+  // ===== A second grid: an error inside the range a criteria function adds up =====
+
+  /**
+   * A1:A4 = 4, 5, `=NA()`, "x"; M1:M3 = "#NAMEX", the text "#NAME?", a #NAME? error; N1:N2 = a
+   * #NAME? error, "#NAMEX". Desktop Excel (Microsoft 365 for Mac) results.
+   */
+  private val errorSheet: Sheet =
+    Sheet("Data")
+      .put(ref"A1", CellValue.Number(4))
+      .put(ref"A2", CellValue.Number(5))
+      .put(ref"A3", CellValue.Formula("NA()", Some(na)))
+      .put(ref"A4", CellValue.Text("x"))
+      .put(ref"M1", CellValue.Text("#NAMEX"))
+      .put(ref"M2", CellValue.Text("#NAME?"))
+      .put(ref"M3", CellValue.Formula("XYZ()", Some(CellValue.Error(CellError.Name))))
+      .put(ref"N1", CellValue.Formula("XYZ()", Some(CellValue.Error(CellError.Name))))
+      .put(ref"N2", CellValue.Text("#NAMEX"))
+
+  private def checkErr(formula: String, expected: CellValue)(implicit loc: munit.Location): Unit =
+    assertEquals(errorSheet.evaluateFormula(formula), Right(expected), formula)
+
+  test("#731: a <> criterion over its own range returns the error cell it now matches") {
+    checkErr("=SUMIF(A1:A4,\"<>4\")", na)
+    checkErr("=SUMIF(A1:A4,\"<>x\")", na)
+    checkErr("=SUMIF(A1:A4,\"<>\")", na)
+    checkErr("=AVERAGEIF(A1:A4,\"<>4\")", na)
+    checkErr("=MAXIFS(A1:A4,A1:A4,\"<>4\")", na)
+    checkErr("=MINIFS(A1:A4,A1:A4,\"<>4\")", na)
+    checkErr("=SUMIFS(A1:A4,A1:A4,\"<>4\")", na)
+    // the idiom that leaves the error out
+    checkErr("=SUMIF(A1:A4,\"<>#N/A\")", num(9))
+    checkErr("=COUNTIF(A1:A4,\"<>4\")", num(3))
+    checkErr("=SUMIF(A1:A4,\">4\")", num(5))
+  }
+
+  test("#774: a match_mode 2 lookup value spelling #NAME? is a text pattern, not the error") {
+    checkErr("=XMATCH(\"#NAME?\",M1:M3,2)", num(1))
+    checkErr("=XMATCH(\"#NAME?\",M2:M3,2)", num(1))
+    checkErr("=XMATCH(\"#NAME~?\",M1:M3,2)", num(2))
+    checkErr("=XMATCH(\"#NAME?\",N1:N2,2)", num(2))
+    checkErr("=XMATCH(\"#N/A\",A1:A4,2)", na)
+    checkErr("=XMATCH(\"#NAME?\",M2:M2,0)", num(1))
+  }
