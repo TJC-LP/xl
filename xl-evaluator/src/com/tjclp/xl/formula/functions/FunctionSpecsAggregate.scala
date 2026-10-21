@@ -220,7 +220,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   /**
    * GH-395: the per-CELL triage shared by the raw-range fold and direct single-cell reference
-   * arguments — COUNTA counts non-empty, COUNTBLANK counts empty, numeric mode resolves the
+   * arguments — COUNTA counts non-empty, COUNTBLANK counts blank (#731), numeric mode resolves the
    * effective value (recursively evaluating uncached formulas), polices carried errors per the
    * aggregator's policy (GH-344 item 6), then extracts-or-skips. Factored so =COUNT(A1, A2) with a
    * blank A2 triages A2 exactly like the 1×1 range =COUNT(A2:A2) would (Excel ignores it) instead
@@ -233,8 +233,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
-    // GH-715: COUNTA and COUNTBLANK read the cell's record without evaluating it; a positioned
-    // evaluation's placement is still read, so its guard decides
+    // GH-715: COUNTA reads the cell's record without evaluating it, and COUNTBLANK evaluates only an
+    // uncached formula; a positioned evaluation's placement is still read, so its guard decides
     ctx.placementGuard match
       case Some(guard) =>
         guard.check(targetSheet, at) match
@@ -256,10 +256,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case CellValue.Empty => Right(acc)
         case _ => Right(agg.combine(acc, aggregateCountUnit))
     else if agg.countsEmpty then
-      // COUNTBLANK mode: count only empty cells
+      // COUNTBLANK mode: count empty cells and empty text (#731). An uncached formula is resolved
+      // as COUNTIF resolves it; its error value is not blank
       cellValue match
-        case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
-        case _ => Right(acc)
+        case CellValue.Formula(_, None, _) =>
+          evalCellValueForMatch(targetSheet, at, ctx) match
+            case Right(resolved) =>
+              Right(if Aggregator.isEmptyText(resolved) then countBlank(agg, acc) else acc)
+            case Left(err) => EvalError.toErrorValue(err).map(_ => acc).toRight(err)
+        case _ => Right(if Aggregator.isBlankForCount(cellValue) then countBlank(agg, acc) else acc)
     else
       // Standard numeric mode: resolve the effective value, police carried errors
       // per the aggregator's policy (GH-344 item 6), then extract-or-skip
@@ -274,6 +279,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case Some(n) => agg.combine(acc, n)
           case None => acc
         }
+
+  /** One more blank cell counted by COUNTBLANK. */
+  private def countBlank[A](agg: Aggregator[A], acc: A): A = agg.combine(acc, aggregateCountUnit)
 
   /**
    * The cells an aggregate folds for one reference: a whole column or row within the sheet's used
@@ -396,7 +404,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   /**
    * Fold an aggregate argument that evaluated to a value, not a reference: an array's elements, or
-   * a scalar.
+   * a scalar. COUNTBLANK takes a reference only, so a value or an array is `#VALUE!` (#731), as
+   * Excel computes `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` and `COUNTBLANK(IF(TRUE,5,6))` in a
+   * single cell.
    */
   private def foldEvaluatedArg[A](
     agg: Aggregator[A],
@@ -404,6 +414,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     acc: A
   ): Either[EvalError, A] =
     evaluated match
+      case _ if agg.countsEmpty =>
+        Left(
+          EvalError.ErrorValue(
+            CellError.Value,
+            Some(s"${agg.name} takes a reference, not a value or an array")
+          )
+        )
       case ar: ArrayResult =>
         // #750: one step per group of equal cells, so a sparse array's fill folds in closed form
         ar.tally.foldLeft[Either[EvalError, A]](Right(acc)) {
@@ -411,17 +428,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case (Right(current), (cellValue, n)) => triageElements(agg, current, cellValue, n)
         }
       case value: BigDecimal =>
-        // GH-395: a numeric scalar (literal, arithmetic result) is never blank —
-        // COUNTBLANK must not count it (=COUNTBLANK(5) is 0); COUNTA counts it
+        // GH-395: a numeric scalar (literal, arithmetic result) is never blank: COUNTA counts it
         Right(
           if agg.countsNonEmpty then agg.combine(acc, aggregateCountUnit)
-          else if agg.countsEmpty then acc
           else agg.combine(acc, value)
         )
       case other =>
-        // GH-395: non-numeric scalars triage on their CellValue shape — only a genuine
-        // CellValue.Empty counts for COUNTBLANK (and is NOT counted by COUNTA); the
-        // numeric-mode error policing is unchanged
+        // GH-395: non-numeric scalars triage on their CellValue shape: a genuine CellValue.Empty
+        // is NOT counted by COUNTA; the numeric-mode error policing is unchanged
         triageValue(agg, acc, ArrayArithmetic.anyToCellValue(other), typed = true)
 
   /**
@@ -440,9 +454,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case CellValue.Empty => Right(acc)
         case _ => Right(agg.combineN(acc, aggregateCountUnit, n))
     else if agg.countsEmpty then
-      cellValue match
-        case CellValue.Empty => Right(agg.combineN(acc, aggregateCountUnit, n))
-        case _ => Right(acc)
+      Right(
+        if Aggregator.isBlankForCount(cellValue) then agg.combineN(acc, aggregateCountUnit, n)
+        else acc
+      )
     else
       ArrayArithmetic.carriedError(cellValue) match
         case Some(err) if agg.propagatesErrors => Left(propagatedElementError(agg.name, err))
@@ -469,9 +484,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case CellValue.Empty => Right(acc)
         case _ => Right(agg.combine(acc, aggregateCountUnit))
     else if agg.countsEmpty then
-      cellValue match
-        case CellValue.Empty => Right(agg.combine(acc, aggregateCountUnit))
-        case _ => Right(acc)
+      Right(if Aggregator.isBlankForCount(cellValue) then countBlank(agg, acc) else acc)
     else
       ArrayArithmetic.carriedError(cellValue) match
         case Some(err) if agg.propagatesErrors => Left(propagatedElementError(agg.name, err))
