@@ -1565,11 +1565,11 @@ object DependencyGraph:
    * `SUM($A$1:$A$5000)` over a constant driver column — the value-preserving graph has no range
    * edges at all, while [[fromWorkbookBounded]] retains and repeatedly traverses 49.5 million.
    *
-   * Range lookup scans only the target sheet's formula refs and is memoized by range. Single-cell
-   * references are filtered against the same formula-node set after name resolution. Consequently
-   * this graph is exactly `fromWorkbookBounded` with every non-formula successor removed, without
-   * first allocating those successors. Formula evaluation itself is unchanged and still reads the
-   * complete ranges from the workbook snapshot.
+   * Range lookup searches the target sheet's formula cells by column and row ([[FormulaColumns]])
+   * and is memoized by range. Single-cell references are filtered against the same formula-node set
+   * after name resolution. Consequently this graph is exactly `fromWorkbookBounded` with every
+   * non-formula successor removed, without first allocating those successors. Formula evaluation
+   * itself is unchanged and still reads the complete ranges from the workbook snapshot.
    *
    * This representation is intentionally internal: dirty-cone callers still need the public graph
    * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
@@ -1591,15 +1591,12 @@ object DependencyGraph:
       }
     }
     val formulaNodes = formulas.iterator.map(_._1).toSet
-    val refsBySheet: Map[SheetName, Vector[ARef]] =
-      formulas.groupMap(_._1.sheet)(_._1.ref)
+    val formulaColumns: Map[SheetName, FormulaColumns] =
+      formulas.groupMap(_._1.sheet)(_._1.ref).view.mapValues(FormulaColumns(_)).toMap
     val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
-      refsBySheet
-        .getOrElse(sheet, Vector.empty)
-        .iterator
-        .filter(range.contains)
-        .map(ref => QualifiedRef(sheet, ref))
-        .toSet
+      formulaColumns.get(sheet) match
+        case Some(columns) => columns.within(range).map(ref => QualifiedRef(sheet, ref)).toSet
+        case None => Set.empty
     }
 
     val canonicalSheet = sheetCanonicaliser(workbook)
@@ -2011,6 +2008,46 @@ object DependencyGraph:
    * mid-build). The captured mutable map is intentionally build-local and unsynchronized: callers
    * must invoke the returned closure only from the single graph-building thread.
    */
+  /**
+   * One sheet's formula cells by column, columns and each column's rows ascending, so the formula
+   * cells inside a range cost two binary searches per covered column plus the cells found. A scan
+   * of every formula per distinct range made a column of running totals, each reading its own
+   * `B1:B{r}`, quadratic in the rows (#743).
+   */
+  private final class FormulaColumns(
+    columns: scala.collection.immutable.ArraySeq[Int],
+    rowsOf: Map[Int, scala.collection.immutable.ArraySeq[Int]]
+  ):
+    def within(range: CellRange): Iterator[ARef] =
+      val firstCol = range.colStart.index0
+      val lastCol = range.colEnd.index0
+      val firstRow = range.rowStart.index0
+      val lastRow = range.rowEnd.index0
+      Iterator
+        .range(columns.search(firstCol).insertionPoint, columns.length)
+        .map(columns)
+        .takeWhile(_ <= lastCol)
+        .flatMap { col =>
+          val rows = rowsOf.getOrElse(col, scala.collection.immutable.ArraySeq.empty[Int])
+          Iterator
+            .range(rows.search(firstRow).insertionPoint, rows.length)
+            .map(rows)
+            .takeWhile(_ <= lastRow)
+            .map(row => ARef.from0(col, row))
+        }
+
+  private object FormulaColumns:
+    def apply(refs: Vector[ARef]): FormulaColumns =
+      val rowsOf = refs
+        .groupMap(_.col.index0)(_.row.index0)
+        .view
+        .mapValues(rows => scala.collection.immutable.ArraySeq.from(rows.distinct.sorted))
+        .toMap
+      new FormulaColumns(
+        scala.collection.immutable.ArraySeq.from(rowsOf.keys.toVector.sorted),
+        rowsOf
+      )
+
   private def memoizedCells(
     expand: (SheetName, CellRange) => Set[QualifiedRef]
   ): (SheetName, CellRange) => Set[QualifiedRef] =

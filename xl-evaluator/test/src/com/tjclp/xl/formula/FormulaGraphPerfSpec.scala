@@ -55,6 +55,54 @@ class FormulaGraphPerfSpec extends FunSuite:
       s"formula-only graph took ${elapsedMs}ms for $formulaCount shared driver ranges"
     )
 
+  test("range lookup finds formula cells across columns, rows and whole-row/column ranges"):
+    // formulas in A..E rows 1..20 (every other cell), read through ranges of each shape
+    val grid = (for col <- 0 until 5; row <- 0 until 20 if (col + row) % 2 == 0 yield (col, row))
+      .foldLeft(Sheet(SheetName.unsafe("S"))) { case (sheet, (col, row)) =>
+        sheet.put(ARef.from0(col, row), formula(s"=${col + row}"))
+      }
+    val readers = Vector(
+      "=SUM(B3:D9)",
+      "=SUM(2:4)",
+      "=SUM(B:C)",
+      "=SUM(A20:E20)",
+      "=SUM(E1:E1)",
+      "=SUM(F1:H30)",
+      "=SUM(A21:E40)"
+    )
+    val sheet = readers.zipWithIndex.foldLeft(grid) { case (current, (text, i)) =>
+      current.put(ARef.from0(10, i), formula(text))
+    }
+    val wb = Workbook(sheet)
+    val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
+    val expected = bounded.view.mapValues(_ & bounded.keySet).toMap
+    val (actual, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+    assertEquals(actual, expected)
+    // the reader of B3:D9 depends on exactly the grid formulas inside it
+    val inBox =
+      for col <- 1 to 3; row <- 2 to 8 if (col + row) % 2 == 0
+      yield DependencyGraph.QualifiedRef(sheet.name, ARef.from0(col, row))
+    assertEquals(actual(DependencyGraph.QualifiedRef(sheet.name, ARef.from0(10, 0))), inBox.toSet)
+
+  test("#743: an INDEX(…,ROW()) running total builds the formula graph in linear time"):
+    // each row reads its own B1:B{r}, a distinct range per row; a scan of every formula per range
+    // was quadratic (about 3 s at 20,000 rows)
+    val rows = 50000
+    val sheet = (1 to rows).foldLeft(Sheet(SheetName.unsafe("S"))) { (current, row) =>
+      current
+        .put(ARef.from0(1, row - 1), number(row))
+        .put(ARef.from0(2, row - 1), formula("=SUM($B$1:INDEX(B:B,ROW()))"))
+    }
+    val wb = Workbook(sheet)
+
+    val started = System.nanoTime()
+    val (dependencies, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+    val elapsedMs = (System.nanoTime() - started) / 1000000L
+
+    assertEquals(dependencies.size, rows)
+    assert(dependencies.valuesIterator.forall(_.isEmpty))
+    assert(elapsedMs < 5000L, s"formula-only graph took ${elapsedMs}ms for $rows running totals")
+
   test("formula cells inside ranges remain topology precedents"):
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", number(1))

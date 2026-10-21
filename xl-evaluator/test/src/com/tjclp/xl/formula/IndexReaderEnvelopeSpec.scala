@@ -129,6 +129,24 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
     }
   }
 
+  test("#743 limit: INDEX under a `:` operand not fixed for the reader, or in a name, keeps B:B") {
+    // Excel gives 10 for both; xl still reports the whole array, so both are (false) cycles. A
+    // `:` whose operand is CHOOSE is classified without a reader, and a name body is expanded once
+    // for every reader, so neither folds ROW(). LIMITATIONS.md states both.
+    def legacyCyclic(wb: Workbook): Set[QualifiedRef] =
+      val (formulaGraph, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+      val legacy = DependencyGraph.qualifiedCyclicNodes(formulaGraph)
+      val compactGraph = CompactGraph.build(wb)
+      val compact = compactGraph.cyclicFormulas.iterator.map(compactGraph.nodes.qualified).toSet
+      assertEquals(compact, legacy, "compact vs legacy")
+      legacy
+    val choose = issue.put(at("B5"), F("SUM(B1:CHOOSE(1,INDEX(B:B,ROW()-1)))"))
+    assertEquals(legacyCyclic(Workbook(Vector(choose))), Set(q("B5")))
+    val named = Workbook(Vector(issue.put(at("B5"), F("SUM(B1:prev)"))))
+      .withDefinedName("prev", "INDEX(S!$B:$B,ROW()-1)")
+    assertEquals(legacyCyclic(named), Set(q("B5")))
+  }
+
   // ===== laws =====
 
   /** A1:F10 of numbers, so every INDEX the laws write selects a value. */
