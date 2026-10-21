@@ -249,6 +249,37 @@ class SstAppendOutOfRangeSpec extends FunSuite:
     cleanup(source, output)
   }
 
+  test("GH-784: inline strings in a sheet regenerated without being modified enter the table") {
+    // Adding a sheet regenerates every sheet, and each regenerated sheet encodes its text through
+    // the shipped table, so Sheet2's inline string becomes a t="s" reference to an appended entry.
+    val macroXml = s"""<?xml version="1.0" encoding="UTF-8"?>
+<xm:macrosheet xmlns="$mainNs" xmlns:xm="http://schemas.microsoft.com/office/excel/2006/main">
+  <sheetData><row r="1"><c r="A1" t="s"><v>1</v></c><c r="B1" t="s"><v>2</v></c></row></sheetData>
+</xm:macrosheet>"""
+    val sheet2 = s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="$mainNs"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Zeta</t></is></c></row></sheetData></worksheet>"""
+    val source = fixture(
+      sheet2Index = "0",
+      macroSheet = Some(macroXml),
+      sstCount = 3,
+      sheet2Xml = Some(sheet2)
+    )
+    val edited =
+      read(source).addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+    val output = Files.createTempFile("gh784-out", ".xlsx")
+    XlsxWriter.write(edited, output).fold(err => fail(s"Write failed: $err"), identity)
+
+    val sst = text(output, "xl/sharedStrings.xml")
+    assert(sst.contains("<t>Zeta</t>"), sst)
+    assert(sst.contains("count=\"4\""), sst)
+    assert(sst.contains("uniqueCount=\"4\""), sst)
+    val written2 = text(output, "xl/worksheets/sheet2.xml")
+    assert(written2.contains("t=\"s\""), written2)
+    assert(!written2.contains("inlineStr"), written2)
+    assertEquals(valueAt(read(output), "Sheet2", ref"A1"), Some(CellValue.Text("Zeta")))
+    cleanup(source, output)
+  }
+
   // ========== Fixture helpers ==========
 
   private def editAndWrite(
@@ -300,7 +331,8 @@ class SstAppendOutOfRangeSpec extends FunSuite:
     extra: Map[String, String] = Map.empty,
     withTable: Boolean = true,
     macroSheet: Option[String] = None,
-    sstCount: Int = 2
+    sstCount: Int = 2,
+    sheet2Xml: Option[String] = None
   ): Path =
     val path = Files.createTempFile("gh781-fixture", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))
@@ -369,7 +401,7 @@ class SstAppendOutOfRangeSpec extends FunSuite:
             table.map(s => s"<si><t>$s</t></si>").mkString + "</sst>"
         )
       put("xl/worksheets/sheet1.xml", sheetXml(sheet1Index))
-      put("xl/worksheets/sheet2.xml", sheetXml(sheet2Index))
+      put("xl/worksheets/sheet2.xml", sheet2Xml.getOrElse(sheetXml(sheet2Index)))
       macroSheet.foreach(put("xl/macrosheets/sheet1.xml", _))
       extra.foreach(put)
     finally out.close()
