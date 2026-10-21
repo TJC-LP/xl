@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import scala.collection.immutable.BitSet
 
-import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph}
+import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.workbooks.Workbook
 
@@ -44,6 +44,9 @@ private[eval] sealed trait RecalcGraph:
   /** `DependencyGraph.withinComponentOrder` over the reads among `members`. */
   def withinComponentOrder(members: Vector[QualifiedRef]): Vector[QualifiedRef]
 
+  /** #790: the formula parses the build made, for the pass's evaluation to reuse. */
+  def parses: FormulaParses
+
 private[eval] object RecalcGraph:
 
   /** An order of the formulas outside a removal set. */
@@ -71,6 +74,8 @@ private[eval] object RecalcGraph:
   /** `RecalcEngine.Compact`: questions answered over formula ids, converted at the boundary. */
   private final class Compact(graph: CompactGraph, counters: RecalcCounters) extends RecalcGraph:
     private val table = graph.nodes
+
+    def parses: FormulaParses = graph.parses
 
     private def ids(refs: IterableOnce[QualifiedRef]): BitSet =
       BitSet.fromSpecific(refs.iterator.flatMap(table.lookup))
@@ -126,6 +131,9 @@ private[eval] object RecalcGraph:
     deps: Map[QualifiedRef, Set[QualifiedRef]],
     reverse: Map[QualifiedRef, Set[QualifiedRef]]
   ) extends RecalcGraph:
+
+    /** The per-cell graph keeps no parse. */
+    def parses: FormulaParses = FormulaParses.none
 
     lazy val cyclicCore: Set[QualifiedRef] = DependencyGraph.qualifiedCyclicNodes(deps)
 

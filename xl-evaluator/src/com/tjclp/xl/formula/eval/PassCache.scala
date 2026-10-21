@@ -9,6 +9,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.formula.graph.FormulaParses
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -173,13 +174,15 @@ private[formula] object ColumnSlice:
  * range of each sheet, static defined-name resolutions, parsed name bodies, [[ColumnSlice]]s (one
  * per column when the column is ready, else per requested box), and, when `criteriaIndex` is on,
  * each slice's equality index ([[EqIndex]]) and the candidate rows of criteria calls
- * ([[CriteriaCandidates]]).
+ * ([[CriteriaCandidates]]). When `parseCache` is on, it also holds the formula parses of the pass's
+ * graph build ([[FormulaParses]], #790).
  *
- * Name caches are valid whenever the memo caches at all: a resolution depends only on the name
- * table and the sheet list, which every entry records and checks, and a parse only on its text.
- * Used ranges and slices depend on cell contents, so they wait for [[begin]], which the passes that
- * thread their own sheets call with the [[Readiness]] of the order they are about to run. Until
- * then (a memo a test drives by hand) every request scans.
+ * Name caches and formula parses are valid whenever the memo caches at all: a resolution depends
+ * only on the name table and the sheet list, which every entry records and checks, and a parse only
+ * on its text, which every formula parse is looked up with. Used ranges and slices depend on cell
+ * contents, so they wait for [[begin]], which the passes that thread their own sheets call with the
+ * [[Readiness]] of the order they are about to run. Until then (a memo a test drives by hand) every
+ * request scans.
  *
  * Every structure here is safe under parallel waves: a used range or a slice is computed once
  * (single flight), so the counters it adds are the same in sequential and parallel passes.
@@ -187,7 +190,8 @@ private[formula] object ColumnSlice:
 private[formula] final class PassCache(
   val limits: PassCache.Limits,
   counters: RecalcCounters,
-  criteriaIndex: Boolean = true
+  criteriaIndex: Boolean = true,
+  parseCache: Boolean = true
 ):
   import PassCache.*
 
@@ -249,6 +253,21 @@ private[formula] final class PassCache(
   private def scanUsedRange(sheet: Sheet): Option[CellRange] =
     counters.increment(RecalcCounters.Counter.UsedRangeScans)
     sheet.usedRange
+
+  // ----- formula parses -----
+
+  private val formulaParses = new AtomicReference[FormulaParses](FormulaParses.none)
+
+  /**
+   * #790: the parses of the graph build of the pass about to run, which evaluation looks up before
+   * it parses a formula cell; ignored when the parse cache is off. [[begin]] keeps them: a parse
+   * depends on its text alone.
+   */
+  def useParses(parses: FormulaParses): Unit =
+    if parseCache then formulaParses.set(parses)
+
+  /** The formula parses [[useParses]] supplied, or none. */
+  def parses: FormulaParses = formulaParses.get()
 
   // ----- defined names -----
 

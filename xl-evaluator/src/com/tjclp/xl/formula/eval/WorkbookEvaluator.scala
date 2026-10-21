@@ -5,7 +5,7 @@ import java.util.concurrent.{ExecutionException, Executors, Future, ThreadFactor
 
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.eval.SheetEvaluator.CellOutcome
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -424,6 +424,8 @@ object WorkbookEvaluator:
       val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
         RecalcGraph.build(wb, engine, counters)
       )
+      // #790: evaluation reuses the build's parse of each formula
+      memo.passCache.foreach(_.useParses(graph.parses))
 
       def formulaText(q: QualifiedRef): String =
         wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -461,7 +463,7 @@ object WorkbookEvaluator:
           // GH-274: dynamic readers and their static dependents evaluate last, as in the full pass,
           // but no cache is stripped — a cached cell stays byte-identical by contract.
           val bucket = counters.time(RecalcCounters.Phase.Dynamic) {
-            val dynamic = DependencyGraph.dynamicCells(wb) -- skipped
+            val dynamic = DependencyGraph.dynamicCells(wb, parsesOf(memo)) -- skipped
             if dynamic.isEmpty then Set.empty[QualifiedRef]
             else dynamic ++ graph.dependents(dynamic, skipped)
           }
@@ -506,6 +508,10 @@ object WorkbookEvaluator:
           counters.time(RecalcCounters.Phase.Finalize)(
             RecalcResult.cacheResults(wb, values, errors, Map.empty, reasons = reasons)
           )
+
+  /** #790: the formula parses `memo`'s pass reuses (none when it has no pass cache). */
+  private def parsesOf(memo: Evaluator.AggregateMemo): FormulaParses =
+    memo.passCache.fold(FormulaParses.none)(_.parses)
 
   /** The message of a formula Kahn could not order (unreachable once cycles are removed). */
   private def unresolvable(unordered: RecalcGraph.Unordered): String =
@@ -570,6 +576,8 @@ object WorkbookEvaluator:
     val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
       RecalcGraph.build(wb, engine, counters)
     )
+    // #790: evaluation reuses the build's parse of each formula
+    generationMemo.passCache.foreach(_.useParses(graph.parses))
 
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -635,7 +643,9 @@ object WorkbookEvaluator:
         // cross-sheet static dependent of a dynamic cell defers with it. Dynamic-free workbooks
         // take the identity path.
         val dynamicAll: Set[QualifiedRef] =
-          counters.time(RecalcCounters.Phase.Dynamic)(DependencyGraph.dynamicCells(wb))
+          counters.time(RecalcCounters.Phase.Dynamic)(
+            DependencyGraph.dynamicCells(wb, parsesOf(generationMemo))
+          )
         val dynamic: Set[QualifiedRef] = dynamicAll -- removed
         val bucket = counters.time(RecalcCounters.Phase.Dynamic) {
           if dynamic.isEmpty then Set.empty[QualifiedRef]
@@ -994,7 +1004,10 @@ object WorkbookEvaluator:
                   rng,
                   new Evaluator.AggregateMemo(columnCache = false)
                 ),
-              seed
+              seed,
+              // #790: a member reuses the graph build's parse of its formula
+              (q, text) =>
+                SheetEvaluator.parseFormulaCell(text, q.sheet, Some(q.ref), Some(generationMemo))
             )
           // a member's last-round value carries no reason: the round's diagnostic is not kept
           val folded = members.foldLeft(state) { case (st, (q, idx, _)) =>
@@ -1067,7 +1080,8 @@ object WorkbookEvaluator:
             failures,
             graph.dependents,
             cycleReports,
-            reasons
+            reasons,
+            parsesOf(generationMemo)
           )
         )
 
@@ -1272,15 +1286,17 @@ object WorkbookEvaluator:
     rng: Rng,
     roundEvaluator: Rng => Evaluator,
     seedValues: Map[QualifiedRef, CellValue],
-    parse: String => XLResult[TExpr[?]] = SheetEvaluator.parseFormula
+    parse: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
+      SheetEvaluator.parseFormula(text)
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
-    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them).
+    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them), made at
+    // the first member holding the text (#790: `parse` may reuse the build's parse of that cell).
     val parsedText: Map[String, XLResult[TExpr[?]]] =
-      members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
+      members.distinctBy(_._3).map((q, _, text) => text -> parse(q, text)).toMap
     val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
       members.map((q, _, text) => q -> parsedText(text)).toMap
     // Each member's formula kind, read from the book: an array formula member (a CSE record or a
@@ -1302,7 +1318,7 @@ object WorkbookEvaluator:
     // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
     val pinnedConstant: Map[QualifiedRef, CellValue] =
       members.flatMap { (q, _, text) =>
-        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q)))).map(q -> _)
+        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q))), parsedText).map(q -> _)
       }.toMap
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric

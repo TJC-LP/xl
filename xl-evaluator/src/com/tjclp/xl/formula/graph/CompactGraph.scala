@@ -58,7 +58,8 @@ private[formula] final class CompactGraph private (
   columnIndex: LongMap[IntervalIndex],
   wideIndex: Map[Int, IntervalIndex],
   constKeys: IArray[Long],
-  constReaders: IArray[Int]
+  constReaders: IArray[Int],
+  val parses: FormulaParses
 ):
   import CompactGraph.*
 
@@ -549,7 +550,8 @@ private[formula] object CompactGraph:
    * Build the graph of `wb`. Each formula is parsed once (timed as [[RecalcCounters.Phase.Parse]])
    * and its reads extracted with the legacy extractor in range-recording mode, with the precise
    * VLOOKUP/HLOOKUP strips of the ordering graph; each defined-name body is parsed once per build.
-   * `counters` also receives the node and edge counts.
+   * The parses are kept as [[parses]] for the pass's evaluation (#790). `counters` also receives
+   * the node and edge counts.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def build(wb: Workbook, counters: RecalcCounters = RecalcCounters.disabled): CompactGraph =
@@ -570,6 +572,7 @@ private[formula] object CompactGraph:
     val constReaders = new IntBuf()
     val selfReads = mutable.BitSet.empty
     val scratch = new IntBuf()
+    val parsed = new Array[Option[TExpr[?]]](f)
 
     def intern(sheet: Int, range: CellRange): Int =
       val r0 = range.start.row.index0
@@ -601,7 +604,10 @@ private[formula] object CompactGraph:
     while i < f do
       val sheetName = nodes.sheetNames(nodes.sheet(i))
       scratch.clear()
-      counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(texts(i))) match
+      counters.increment(RecalcCounters.Counter.FormulaParses)
+      val parse = counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(texts(i)))
+      parsed(i) = parse.toOption
+      parse match
         case Right(expr) =>
           val points = DependencyGraph.extractQualifiedDependencies(
             expr,
@@ -813,7 +819,8 @@ private[formula] object CompactGraph:
       LongMap.from(narrow.iterator.map((k, t) => k -> index(t))),
       wide.iterator.map((k, t) => k -> index(t)).toMap,
       IArray.unsafeFromArray(constKeys.toArray),
-      IArray.unsafeFromArray(constReaders.toArray)
+      IArray.unsafeFromArray(constReaders.toArray),
+      FormulaParses.of(nodes, texts, IArray.unsafeFromArray(parsed))
     )
 
   /** First index of `sorted` whose element is at least `x`. */
