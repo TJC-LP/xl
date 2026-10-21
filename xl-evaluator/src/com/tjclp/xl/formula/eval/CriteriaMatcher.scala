@@ -508,16 +508,13 @@ object CriteriaMatcher:
       case None => false
 
   /**
-   * Extract text value from cell for wildcard matching.
+   * Extract text value from cell for wildcard matching (#780): only text matches a wildcard, as in
+   * desktop Excel, where `"*"` counts no number, boolean, error or blank. A formula's empty text
+   * (`=""`) is text.
    */
   private def extractText(cellValue: CellValue): Option[String] =
     cellValue match
       case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) =>
-        // Format without trailing zeros for matching
-        val plain = n.bigDecimal.stripTrailingZeros().toPlainString
-        Some(plain)
-      case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.RichText(rt) => Some(rt.toPlainText)
       case CellValue.Formula(_, Some(cached), _) => extractText(cached)
       // GH-197: Uncached formula - can't extract text without evaluation context

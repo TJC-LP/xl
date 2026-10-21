@@ -91,10 +91,49 @@ private[formula] object CriteriaKeys:
    * that far above `Int.MinValue` never overflows and skips the `Try`.
    */
   def strip(n: BigDecimal): Option[MatchKey] =
+    stripped(n).map(MatchKey.Num(_))
+
+  /** `n` without trailing zeros, or `None` where `stripTrailingZeros` throws ([[strip]]). */
+  private def stripped(n: BigDecimal): Option[java.math.BigDecimal] =
     val bd = n.bigDecimal
-    if bd.scale.toLong - bd.precision > Int.MinValue.toLong then
-      Some(MatchKey.Num(bd.stripTrailingZeros))
-    else scala.util.Try(bd.stripTrailingZeros).toOption.map(MatchKey.Num(_))
+    if bd.scale.toLong - bd.precision > Int.MinValue.toLong then Some(bd.stripTrailingZeros)
+    else scala.util.Try(bd.stripTrailingZeros).toOption
+
+  /** The largest scale magnitude [[numberText]] writes in plain notation. */
+  private val MaxPlainScale = 400L
+
+  /**
+   * #780: a number as text, total and canonical: value-equal numbers (`4.20`, `4.2`) give the same
+   * text. A number whose stripped scale is within ±400 (every double, and more) is written plainly
+   * without trailing zeros (`4.2`, `1000`), as `toPlainString` writes it; any other in scientific
+   * notation (`1E+999999999`), where `toPlainString` would build a string of up to two billion
+   * characters. Where `stripTrailingZeros` throws (`100E+2147483647`), the zeros are counted in a
+   * `Long` exponent instead.
+   */
+  def numberText(n: BigDecimal): String =
+    stripped(n) match
+      case Some(s) if math.abs(s.scale.toLong) <= MaxPlainScale => s.toPlainString
+      case Some(s) => s.toString
+      case None => scientific(n.bigDecimal)
+
+  /** `bd` as `<d>[.<digits>]E<sign><exponent>`, its trailing zeros moved into a `Long` exponent. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def scientific(bd: java.math.BigDecimal): String =
+    var unscaled = bd.unscaledValue
+    var exponent = -bd.scale.toLong
+    if unscaled.signum == 0 then "0"
+    else
+      var divided = unscaled.divideAndRemainder(java.math.BigInteger.TEN)
+      while divided(1).signum == 0 do
+        unscaled = divided(0)
+        exponent += 1
+        divided = unscaled.divideAndRemainder(java.math.BigInteger.TEN)
+      val digits = unscaled.abs.toString
+      val sign = if unscaled.signum < 0 then "-" else ""
+      val mantissa =
+        if digits.length == 1 then digits else s"${digits.charAt(0)}.${digits.substring(1)}"
+      val adjusted = exponent + digits.length - 1
+      s"$sign${mantissa}E${if adjusted < 0 then "-" else "+"}${math.abs(adjusted)}"
 
   private def textKeys(s: String): CellKeys =
     if hasSurrogate(s) then CellKeys.Residual

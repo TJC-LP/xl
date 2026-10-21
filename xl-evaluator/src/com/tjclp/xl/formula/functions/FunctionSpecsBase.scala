@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaKeys,
   CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
@@ -918,7 +919,7 @@ trait FunctionSpecsBase:
   protected def extractTextForMatch(cv: CellValue): Option[String] =
     cv match
       case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
+      case CellValue.Number(n) => Some(CriteriaKeys.numberText(n))
       case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
       case _ => None

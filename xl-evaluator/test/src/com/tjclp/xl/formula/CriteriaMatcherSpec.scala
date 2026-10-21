@@ -347,17 +347,14 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(cell, Wildcard("test~~value")))
   }
 
-  test("matches: wildcard on number cell") {
-    val cell = CellValue.Number(BigDecimal(12345))
-    assert(matches(cell, Wildcard("123*")))
-    assert(matches(cell, Wildcard("*45")))
-    assert(matches(cell, Wildcard("1234?")))
-  }
-
-  test("matches: wildcard on boolean cell") {
-    val cell = CellValue.Bool(true)
-    assert(matches(cell, Wildcard("TR*")))
-    assert(matches(cell, Wildcard("*UE")))
+  test("#780: a wildcard never matches a number or boolean cell") {
+    // desktop Excel: COUNTIF(r,"*") counts text cells only
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("123*")))
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("*")))
+    assert(!matches(CellValue.Bool(true), Wildcard("TR*")))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.NA), Wildcard("*")))
+    assert(matches(CellValue.Text("12345"), Wildcard("123*")))
+    assert(matches(CellValue.Formula("\"\"", Some(CellValue.Text(""))), Wildcard("*")))
   }
 
   test("matches: wildcard on empty cell fails") {

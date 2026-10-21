@@ -297,6 +297,31 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     )
   }
 
+  test("#780: numberText is total, canonical, and plain for ordinary numbers") {
+    def text(s: String) = CriteriaKeys.numberText(BigDecimal(s))
+    assertEquals(text("4.20"), "4.2")
+    assertEquals(text("4.2"), "4.2")
+    assertEquals(text("1E+3"), "1000")
+    assertEquals(text("1000.00"), "1000")
+    assertEquals(text("-0.50"), "-0.5")
+    assertEquals(text("0.000"), "0")
+    assertEquals(text("1E+300"), "1" + "0" * 300)
+    assertEquals(text("1E-300"), "0." + "0" * 299 + "1")
+    // past ±400 places: scientific, never a string of up to two billion characters
+    assertEquals(text("1E+999999999"), "1E+999999999")
+    assertEquals(text("12.5E+999999999"), "1.25E+1000000000")
+    assertEquals(text("1E-999999999"), "1E-999999999")
+    // stripTrailingZeros throws here; value-equal forms still give one text
+    val huge =
+      BigDecimal(new java.math.BigDecimal(java.math.BigInteger.valueOf(100), Int.MinValue + 1))
+    val sameValue =
+      BigDecimal(new java.math.BigDecimal(java.math.BigInteger.valueOf(1000), Int.MinValue + 2))
+    assertEquals(CriteriaKeys.numberText(huge), "1E+2147483649")
+    assertEquals(CriteriaKeys.numberText(sameValue), "1E+2147483649")
+    assertEquals(CriteriaKeys.numberText(-huge), "-1E+2147483649")
+    assertEquals(text("100E+2147483647"), "1E+2147483649")
+  }
+
   // ---------- the index as a filter, end to end ----------
 
   private val genAnyColumn: Gen[Vector[CellValue]] =
