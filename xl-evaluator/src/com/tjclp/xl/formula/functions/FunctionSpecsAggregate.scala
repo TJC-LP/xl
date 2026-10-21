@@ -20,7 +20,7 @@ import com.tjclp.xl.formula.eval.{
 import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 
 trait FunctionSpecsAggregate extends FunctionSpecsBase:
   import ArgSpec.NumericArg
@@ -256,14 +256,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         case CellValue.Empty => Right(acc)
         case _ => Right(agg.combine(acc, aggregateCountUnit))
     else if agg.countsEmpty then
-      // COUNTBLANK mode: count empty cells and empty text (#731). An uncached formula is resolved
-      // as COUNTIF resolves it; its error value is not blank
+      // COUNTBLANK mode: count empty cells and empty text (#731). An uncached formula is evaluated
+      // to see whether its value is "". A formula xl cannot evaluate (an unknown function, a
+      // cross-sheet reference without a workbook) is not blank, as Excel shows an error value in
+      // such a cell; an uncached data table holds a number, so it is not evaluated. Only a circular
+      // reference fails the whole count
       cellValue match
+        case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(acc)
         case CellValue.Formula(_, None, _) =>
           evalCellValueForMatch(targetSheet, at, ctx) match
             case Right(resolved) =>
               Right(if Aggregator.isEmptyText(resolved) then countBlank(agg, acc) else acc)
-            case Left(err) => EvalError.toErrorValue(err).map(_ => acc).toRight(err)
+            case Left(err: EvalError.CircularRef) => Left(err)
+            case Left(_) => Right(acc)
         case _ => Right(if Aggregator.isBlankForCount(cellValue) then countBlank(agg, acc) else acc)
     else
       // Standard numeric mode: resolve the effective value, police carried errors
@@ -279,6 +284,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
           case Some(n) => agg.combine(acc, n)
           case None => acc
         }
+
+  /** COUNTBLANK's `#VALUE!` for an argument that is a value or an array, not a reference (#731). */
+  private def notAReference[A](agg: Aggregator[A]): EvalError =
+    EvalError.ErrorValue(
+      CellError.Value,
+      Some(s"${agg.name} takes a reference, not a value or an array")
+    )
+
+  /** Whether `expr` is a spill reference (`x#`, stored `ANCHORARRAY(x)`), the operand of `#`. */
+  private def isSpillReference(expr: TExpr[?]): Boolean = expr match
+    case call: TExpr.Call[?] => call.spec.name == "ANCHORARRAY"
+    case TExpr.Coerced(inner, _) => isSpillReference(inner)
+    case _ => false
 
   /** One more blank cell counted by COUNTBLANK. */
   private def countBlank[A](agg: Aggregator[A], acc: A): A = agg.combine(acc, aggregateCountUnit)
@@ -404,23 +422,34 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   /**
    * Fold an aggregate argument that evaluated to a value, not a reference: an array's elements, or
-   * a scalar. COUNTBLANK takes a reference only, so a value or an array is `#VALUE!` (#731), as
-   * Excel computes `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` and `COUNTBLANK(IF(TRUE,5,6))` in a
-   * single cell.
+   * a scalar. COUNTBLANK takes a reference only (#731): a spill reference (`spill`, `x#`) counts
+   * the spill's cells that hold `""`, an error value is that error (`COUNTBLANK(INDIRECT("zzz"))`
+   * is `#REF!`), and any other value or array is `#VALUE!`, as Excel computes
+   * `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` and `COUNTBLANK(IF(TRUE,5,6))` in a single cell.
    */
   private def foldEvaluatedArg[A](
     agg: Aggregator[A],
     evaluated: Any,
-    acc: A
+    acc: A,
+    spill: Boolean
   ): Either[EvalError, A] =
     evaluated match
-      case _ if agg.countsEmpty =>
-        Left(
-          EvalError.ErrorValue(
-            CellError.Value,
-            Some(s"${agg.name} takes a reference, not a value or an array")
-          )
-        )
+      case ar: ArrayResult if agg.countsEmpty && spill =>
+        // a spill cell holds its element's value, a blank element spilling as 0: only "" is blank
+        Right(ar.tally.foldLeft(acc) { case (current, (cellValue, n)) =>
+          if cellValue != CellValue.Empty && Aggregator.isBlankForCount(cellValue) then
+            agg.combineN(current, aggregateCountUnit, n)
+          else current
+        })
+      case other if agg.countsEmpty =>
+        // a reference function that failed (INDIRECT of a bad address, OFFSET off the grid)
+        // returns its error as a value or a 1x1 array
+        val single = other match
+          case ar: ArrayResult => Option.when(ar.cellCount == 1L)(ar(0, 0))
+          case scalar => Some(ArrayArithmetic.anyToCellValue(scalar))
+        single.flatMap(ArrayArithmetic.carriedError) match
+          case Some(err) => Left(EvalError.ErrorValue(err, Some(s"${agg.name}: ${err.toExcel}")))
+          case None => Left(notAReference(agg))
       case ar: ArrayResult =>
         // #750: one step per group of equal cells, so a sparse array's fill folds in closed form
         ar.tally.foldLeft[Either[EvalError, A]](Right(acc)) {
@@ -589,7 +618,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 // a reference IF/CHOOSE selected, or a range name: folded like a written range
                 case RangeOperand(targetSheet, range) =>
                   foldReference(agg, targetSheet, range, ctx, acc)
-                case evaluated => valueOnly(foldEvaluatedArg(agg, evaluated, acc))
+                case evaluated =>
+                  valueOnly(foldEvaluatedArg(agg, evaluated, acc, isSpillReference(expr)))
               }
             )
 

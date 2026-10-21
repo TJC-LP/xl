@@ -2,8 +2,8 @@ package com.tjclp.xl.formula
 
 import munit.FunSuite
 
-import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.addressing.{CellRange, SheetName}
+import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.richtext.{RichText, TextRun}
@@ -139,4 +139,77 @@ class CountBlankExcelParitySpec extends FunSuite:
     check("=COUNTBLANK(Data!A1:A3+0)", value)
     check("=COUNTBLANK(Data!A1:A14&\"\")", value)
     check("=COUNTBLANK(TRANSPOSE(Data!A1:A3))", value)
+  }
+
+  // ===== Review: spill references, cells xl cannot evaluate, error values =====
+
+  private def range(a1: String): CellRange = CellRange.parse(a1).fold(fail(_), identity)
+
+  /** D1 spills 1, "", 3 over D1:D3, cached: one cell of the spill holds "". */
+  private val spillSheet: Sheet =
+    Sheet("Data")
+      .put(
+        ref"D1",
+        CellValue.Formula(
+          "IF({1;0;1},{1;2;3},\"\")",
+          Some(num(1)),
+          FormulaKind.ArrayFormula(range("D1:D3"))
+        )
+      )
+      .put(ref"D2", CellValue.Text(""))
+      .put(ref"D3", num(3))
+
+  test("#731: a spill reference counts the spill's cells that hold \"\"") {
+    assertEquals(spillSheet.evaluateFormula("=COUNTBLANK(D1#)"), Right(num(1)))
+    assertEquals(spillSheet.evaluateFormula("=COUNTBLANK(ANCHORARRAY(D1))"), Right(num(1)))
+    assertEquals(
+      spillSheet.evaluateFormula("=COUNTBLANK(D1#)", currentCell = Some(ref"F5")),
+      Right(num(1))
+    )
+    assertEquals(spillSheet.evaluateFormula("=COUNTA(D1#)"), Right(num(3)))
+    val recalc = spillSheet.put(ref"F1", CellValue.Formula("COUNTBLANK(D1#)", None))
+    assertEquals(recalc.evaluateWithDependencyCheck().map(_.get(ref"F1")), Right(Some(num(1))))
+  }
+
+  test("#731: an uncached spill counts its \"\" elements; a blank element spills as 0") {
+    val sheet = Sheet("Data")
+      .put(ref"A1", num(1))
+      .put(ref"A2", CellValue.Text(""))
+      .put(ref"F1", CellValue.Formula("A1:A4", None))
+    assertEquals(sheet.evaluateFormula("=COUNTBLANK(F1#)"), Right(num(1)))
+    // `x#` on a constant is #REF!, and COUNTBLANK propagates it (Excel: COUNTBLANK(B1#) over the
+    // constant "q" is #REF!)
+    assertEquals(
+      sheet.evaluateFormula("=COUNTBLANK(A2#)"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+  }
+
+  test("#731: a formula xl cannot evaluate in COUNTBLANK's range is not blank") {
+    val dt: FormulaKind.DataTable =
+      FormulaKind.DataTable(range("B2:B3"), false, false, Some(ref"A1"), None)
+    val withTable = Sheet("S").put(ref"B2", CellValue.dataTable(dt)).put(ref"A1", num(1))
+    assertEquals(withTable.evaluateFormula("=COUNTBLANK(B2:B4)"), Right(num(2)))
+    val unknown = Sheet("S").put(ref"A1", CellValue.Formula("FOOBAR(1)", None))
+    assertEquals(unknown.evaluateFormula("=COUNTBLANK(A1:A2)"), Right(num(1)))
+    val crossSheet = Sheet("S").put(ref"A1", CellValue.Formula("Other!A1", None))
+    assertEquals(crossSheet.evaluateFormula("=COUNTBLANK(A1:A2)"), Right(num(1)))
+  }
+
+  test("#731: an argument that evaluates to an error value is that error") {
+    val sheet = Sheet("S").put(ref"A1", num(1))
+    val ref = CellValue.Error(CellError.Ref)
+    assertEquals(
+      sheet.evaluateFormula("=COUNTBLANK(INDIRECT(\"zzz\"))", currentCell = Some(ref"C1")),
+      Right(ref)
+    )
+    assertEquals(
+      sheet.evaluateFormula("=COUNTBLANK(OFFSET(A1,-1,0))", currentCell = Some(ref"C1")),
+      Right(ref)
+    )
+    assertEquals(sheet.evaluateFormula("=COUNTBLANK(INDIRECT(\"zzz\"))"), Right(ref))
+    assertEquals(
+      sheet.evaluateFormula("=COUNTBLANK(IF(TRUE,NA(),5))"),
+      Right(CellValue.Error(CellError.NA))
+    )
   }

@@ -52,14 +52,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
     now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
     returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
-    or XLOOKUP returns, and for an intersection. COUNTA still counts `""` cells.
+    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
+    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
   - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
     a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
     `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
     `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
+  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
+    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
+    `#REF!`.
   - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
-    COUNTIF does. A COUNTBLANK whose range holds its own uncached formula is now a circular
-    reference when evaluated alone, as the matching COUNTIF already was.
+    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
+    without a workbook) is not blank and the rest of the range is still counted; an uncached data
+    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
+    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
 
 ## [0.25.0] - 2026-10-19
 
