@@ -447,7 +447,7 @@ object WorkbookAudit:
   ): (SheetName, Option[SheetName], String) => NameWalk.Reach =
     if wb.metadata.definedNames.isEmpty then (_, _, _) => NameWalk.Reach.Absent
     else
-      val resolve = NameWalk.resolver(wb, DependencyGraph.sheetCanonicaliser(wb))
+      val resolve = NameWalk.resolver(wb)
       val parsed = mutable.HashMap.empty[String, Option[TExpr[?]]]
       // stepped once per node by the walk
       def step(node: NameWalk.Node): NameWalk.Step[NameWalk.Node] =

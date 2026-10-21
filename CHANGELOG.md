@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A sheet name matches its sheet ignoring case, as in Excel** (#752): `Workbook.apply(SheetName)`
+  tries the exact spelling first, then the one sheet whose name is equal ignoring case
+  (`SheetName.folded`, lower case under the root locale, the fold the dependency graph already
+  used). Every lookup of a sheet by name uses this rule:
+  - formulas: on a book with the sheet `Data`, `=data!B1`, `=SUM(DATA!A:A)`, `=INDIRECT("data!B1")`
+    and a sheet-qualified defined name `=data!rate` read `Data`; the dependency graph resolves the
+    qualifier the same way, so `xl audit` no longer lists `=data!rate` under "Unresolved names"
+    and such a cell is no longer treated as an always-dirty reader;
+  - the library: `wb.update`, `upsert`, `remove`, `delete`, `rename`, `setSheetState`, the scope of
+    `withDefinedName` / `removeDefinedName`, the Edit algebra's sheet targets (`wb.edit`,
+    `wb.editIn`), `recalculateDependents`, `seedDataTables(sheetName)` and `Excel.readSheet`;
+  - the CLI: `-s`, a verb's qualified ref, the sheet verbs' arguments (`remove-sheet`,
+    `rename-sheet`, `move-sheet`, `copy-sheet`, `add-sheet --after/--before`, `sheets hide|show`),
+    and in batch JSON an op's `sheet` and `scope` keys and a target ref's qualifier, in memory and
+    under `--stream`.
+
+  A spelling that matches two sheets differing only by case (a book Excel refuses to save) and is
+  neither of them is refused with `XLError.InvalidReference` (`INVALID_REFERENCE`) rather than
+  resolved to one of them; the exact spellings still resolve, and a defined name's scope given as
+  `DATA` on such a book now attaches to `DATA`, not the first tab equal to it ignoring case.
+  **Behaviour change:** these lookups were `SheetNotFound` (a formula's value was an evaluation
+  error, `xl -s data` and a batch op naming `data` were `SHEET_NOT_FOUND`, exit 3, and
+  `recalculateDependents(SheetName("data"), refs)` refreshed nothing); they now resolve to the
+  `Data` sheet. **Behaviour change:** a batch op whose `sheet` key and ref qualifier differ only by
+  case (`"sheet": "Data"`, `"ref": "data!A1"`) was `BATCH_OP_INVALID`; it is now one sheet.
+  `seedDataTables` with an unknown sheet now lists the workbook's sheets in
+  `SheetNotFound.available`, as `Workbook.apply` does. `Excel.readSheet` with a string no tab could
+  carry is `SheetNotFound`, as before. `wb.put(sheet)` still adds or replaces by exact name.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

@@ -43,7 +43,7 @@ object AppearanceOps:
    */
   def syncFilterDatabase(wb: Workbook, name: SheetName, range: CellRange): Workbook =
     def absolute(ref: ARef): String = s"$$${ref.col.toLetter}$$${ref.row.index1}"
-    val idx = wb.sheets.indexWhere(_.name == name)
+    val idx = wb.sheetIndexOf(name).getOrElse(-1)
     val body = s"${SheetName.quoteForFormula(name.value)}!${absolute(range.start)}:" +
       absolute(range.end)
     val names = wb.metadata.definedNames

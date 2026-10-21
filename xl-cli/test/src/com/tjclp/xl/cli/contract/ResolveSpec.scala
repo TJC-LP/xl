@@ -122,6 +122,55 @@ class ResolveSpec extends CatsEffectSuite with ScalaCheckSuite:
     assertEquals(qualified.message, "Sheet not found: Dat. Available: Data, Summary")
   }
 
+  test("#752: -s and a qualifier name a sheet in any case, as Excel resolves a reference") {
+    assertEquals(Resolve.sheet(two, Some("data"), "view").map(_.name), Right(data))
+    assertEquals(
+      Resolve.default(two, Some("SUMMARY"), takesSheet = true).map(_.map(_.name)),
+      Right(Some(summary))
+    )
+    assertEquals(sheetOf(Resolve.target(two, None, "data!A1", "view")), "Data")
+    assertEquals(sheetOf(Resolve.target(two, Some("summary"), "A1", "view")), "Summary")
+    // over metadata the resolved name is the tab's own spelling, which the streaming paths use
+    assertEquals(Resolve.sheetName(metaTwo, Some("data"), None, "view"), Right(data))
+    assertEquals(
+      Resolve.sheetName(metaTwo, None, Some(SheetName.unsafe("DATA")), "view"),
+      Right(data)
+    )
+    assertEquals(Resolve.knownAmong(metaTwo.sheets.map(_.name), "summary"), Right(summary))
+  }
+
+  test("#752: tabs differing only by case refuse a third spelling instead of guessing") {
+    val upper = SheetName.unsafe("DATA")
+    val twins = two.put(Sheet(upper))
+    assertEquals(Resolve.sheet(twins, Some("DATA"), "view").map(_.name), Right(upper))
+    assertEquals(Resolve.sheet(twins, Some("Data"), "view").map(_.name), Right(data))
+    val flag = error(Resolve.sheet(twins, Some("data"), "view"))
+    assertEquals(flag.code, "INVALID_REFERENCE")
+    assert(flag.message.contains("'Data', 'DATA'"), flag.message)
+    val streamed = error(Resolve.sheetName(meta(data, upper), Some("data"), None, "view"))
+    assertEquals(streamed.code, "INVALID_REFERENCE")
+  }
+
+  test("#752: `-s data` reads and writes the Data tab, in memory and streaming") {
+    val out = file("case-put.xlsx")
+    for
+      lower <- CliHarness.run("-f", file("simple.xlsx"), "-s", "data", "view", "A1:B2")
+      exact <- CliHarness.run("-f", file("simple.xlsx"), "-s", "Data", "view", "A1:B2")
+      streamed <- CliHarness
+        .run("-f", file("simple.xlsx"), "-s", "data", "--stream", "view", "A1:B2")
+      put <- CliHarness.run("-f", file("simple.xlsx"), "-o", out, "-s", "data", "put", "A9", "5")
+      cell <- CliHarness.run("-f", out, "cell", "Data!A9")
+      sheets <- CliHarness.run("-f", out, "sheets")
+    yield
+      assertEquals(lower.exit, 0, lower.stderr)
+      assertEquals(lower.stdout, exact.stdout)
+      assertEquals(streamed.exit, 0, streamed.stderr)
+      assert(streamed.stdout.contains("Hello"), streamed.stdout)
+      assertEquals(put.exit, 0, put.stderr)
+      assert(cell.stdout.contains("5"), cell.stdout)
+      assert(!sheets.stdout.contains("data"), s"no new sheet: ${sheets.stdout}")
+  }
+
   test("an invalid -s is INVALID_SHEET_NAME; an unparseable ref is INVALID_REFERENCE") {
     assertEquals(error(Resolve.sheet(two, Some("Bad:Name"), "view")).code, "INVALID_SHEET_NAME")
     assertEquals(

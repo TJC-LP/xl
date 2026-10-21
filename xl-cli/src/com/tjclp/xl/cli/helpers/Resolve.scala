@@ -88,9 +88,12 @@ object Resolve:
       case None =>
         onlySheet(wb).toRight(sheetRequired(verb, wb.sheets.map(_.name.value)))
 
-  /** Step 1's lookup on its own: the sheet a qualifier names, else `SHEET_NOT_FOUND`. */
+  /**
+   * Step 1's lookup on its own: the sheet a qualifier names, matched as Excel matches a reference
+   * (`Workbook.apply`, #752: exact, else equal ignoring case), else `SHEET_NOT_FOUND`.
+   */
   def named(wb: Workbook, name: SheetName): Either[CliError, Sheet] =
-    wb.sheets.find(_.name == name).toRight(sheetNotFound(wb.sheets.map(_.name.value), name.value))
+    wb.sheetIndexOf(name).map(wb.sheets(_)).left.map(notResolved(wb.sheets.map(_.name), name))
 
   /**
    * The run's default sheet, resolved once before dispatch: `-s` by name (`INVALID_SHEET_NAME` /
@@ -135,9 +138,7 @@ object Resolve:
     qualified: Option[SheetName],
     verb: String
   ): Either[CliError, SheetName] =
-    def known(name: SheetName): Either[CliError, SheetName] =
-      if names.contains(name) then Right(name)
-      else Left(sheetNotFound(names.map(_.value), name.value))
+    def known(name: SheetName): Either[CliError, SheetName] = resolveAmong(names, name)
     qualified match
       case Some(qualifier) => known(qualifier)
       case None =>
@@ -154,9 +155,23 @@ object Resolve:
 
   /** [[knownName]] over the sheet names alone. */
   def knownAmong(names: Vector[SheetName], name: String): Either[CliError, SheetName] =
-    validSheetName(name).flatMap { sn =>
-      if names.contains(sn) then Right(sn) else Left(sheetNotFound(names.map(_.value), sn.value))
-    }
+    validSheetName(name).flatMap(resolveAmong(names, _))
+
+  /**
+   * The tab's own spelling of `name` among `names` ([[named]]'s rule over names alone), so a
+   * streaming path that goes on to look the sheet up by name finds it.
+   */
+  def resolveAmong(names: Vector[SheetName], name: SheetName): Either[CliError, SheetName] =
+    SheetName.indexIn(names, name).map(names(_)).left.map(notResolved(names, name))
+
+  /**
+   * A failed lookup as the CLI reports it: `SHEET_NOT_FOUND` with its legacy text, any other
+   * refusal (a name ambiguous between tabs differing only by case) as the domain renders it.
+   */
+  private def notResolved(names: Vector[SheetName], name: SheetName)(err: XLError): CliError =
+    err match
+      case _: XLError.SheetNotFound => sheetNotFound(names.map(_.value), name.value)
+      case other => CliError.fromXLError(other, None)
 
   /** Step 3's premise over metadata. */
   def only(meta: LightMetadata): Option[SheetName] = onlyAmong(meta.sheets.map(_.name))
@@ -204,6 +219,8 @@ object Resolve:
   /**
    * A target ref qualified with a sheet other than the op's `sheet` key is a contradiction —
    * `BATCH_OP_INVALID` naming the op and its index; `subject` says which ref (`ref 'Other!A1'`).
+   * The two are compared ignoring case (#752: `data!A1` with `"sheet": "Data"` names one sheet),
+   * since this check runs before the workbook is read.
    */
   def opSheetAgreement(
     index: Int,
@@ -213,7 +230,7 @@ object Resolve:
     declared: Option[SheetName]
   ): Either[CliError, Unit] =
     (qualified, declared) match
-      case (Some(named), Some(sheet)) if named != sheet =>
+      case (Some(named), Some(sheet)) if named.folded != sheet.folded =>
         Left(
           invalidOp(
             index,

@@ -77,7 +77,11 @@ Excel.write(updated, "output.xlsx")
   `candidates` name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does;
   a missing, corrupt or over-limit file is `Left` of the reader's own `IOError`/`ParseError`/
   `SecurityError`. (0.21.0 threw an `XLException` instead.) `wb(name)`, `wb.update`, `wb.remove`,
-  `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0).
+  `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0). All of them, the Edit
+  algebra's sheet targets and `recalculateDependents` match a sheet name as Excel matches a
+  reference (#752): the exact spelling first, else the one sheet equal to it ignoring case, so
+  `wb("data")` is the tab `Data`; a spelling that folds onto two tabs differing only by case and
+  is neither of them is `InvalidReference`.
   `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
   dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
   limits as `Excel.read`.
