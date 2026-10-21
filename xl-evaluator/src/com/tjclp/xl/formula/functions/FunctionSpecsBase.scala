@@ -6,7 +6,6 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
-  CriteriaKeys,
   CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
@@ -494,7 +493,7 @@ trait FunctionSpecsBase:
     lookupLine(range, targetSheet, ctx).find(forward = !descending)(matches)
 
   /**
-   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 through [[wildcardLookupMatcher]]) in
+   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2, through [[exactMatcher]]) in
    * search_mode's direction, through [[findLookupPosition]]: the first key in search order that
    * `keyMatches`. search_mode 2 / -2 (the binary searches) are answered by the same walk in their
    * direction, which agrees on the sorted data they require (GH-55).
@@ -509,14 +508,18 @@ trait FunctionSpecsBase:
     findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0)(keyMatches)
 
   /**
-   * #774: XLOOKUP/XMATCH match_mode 2's test of a key. A text lookup value is read with the lookup
-   * escape grammar ([[CriteriaMatcher.lookupPattern]]): with no unescaped wildcard left it is
-   * compared exactly ([[matchesLookupExact]]) after every `~x` becomes `x`, otherwise only text
-   * keys can match the pattern. Any other lookup value is compared exactly.
+   * The exact lookup plane's test of a key, one for MATCH type 0, XMATCH and XLOOKUP (match_mode 0
+   * or 2), and exact VLOOKUP and HLOOKUP (#693): numbers, text and logicals never cross
+   * ([[matchesLookupExact]]). With `wildcards` — MATCH type 0, exact VLOOKUP/HLOOKUP and match_mode
+   * 2, as desktop Excel applies them — a text lookup value is read with the lookup escape grammar
+   * ([[CriteriaMatcher.lookupPattern]], #774): with no unescaped wildcard left it is compared
+   * exactly after every `~x` becomes `x`, otherwise only a text key (empty text included, never a
+   * blank) can match the pattern. Without them (XMATCH/XLOOKUP match_mode 0) the value is compared
+   * as written.
    */
-  protected def wildcardLookupMatcher(lookup: ExprValue): CellValue => Boolean =
+  protected def exactMatcher(lookup: ExprValue, wildcards: Boolean): CellValue => Boolean =
     lookup match
-      case ExprValue.Text(text) =>
+      case ExprValue.Text(text) if wildcards =>
         CriteriaMatcher.lookupPattern(text) match
           case CriteriaMatcher.LookupPattern.Literal(literal) =>
             val value = ExprValue.Text(literal)
@@ -524,6 +527,15 @@ trait FunctionSpecsBase:
           case CriteriaMatcher.LookupPattern.Pattern(wildcard) =>
             cv => CriteriaMatcher.matches(cv, wildcard)
       case other => cv => matchesLookupExact(cv, other)
+
+  /**
+   * #693: MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0, as desktop Excel
+   * does (`MATCH(blank,r,0)` finds the 0 key, never a blank one).
+   */
+  protected def blankLookupAsZero(lookup: ExprValue): ExprValue =
+    lookup match
+      case ExprValue.Cell(CellValue.Empty) => ExprValue.Number(BigDecimal(0))
+      case other => other
 
   /**
    * A lookup's read of a key cell: a failure to evaluate it is the Excel error it carries, or
@@ -899,46 +911,22 @@ trait FunctionSpecsBase:
       case other => other
 
   /**
-   * GH-467: exact equality for the MATCH/XLOOKUP lookup plane, over a lookup value already passed
-   * through [[normalizeLookupValue]]. Total and blank-safe: a blank cell matches nothing (a
-   * default-equal fallback here made blanks "match" every lookup value, shifting MATCH positions
-   * over ranges with holes), mismatched types match nothing, and DateTime cells compare by their
-   * Excel serial so date lookups find date columns.
+   * GH-467: exact equality for the lookup plane, over a lookup value already passed through
+   * [[normalizeLookupValue]]. Total and blank-safe: a blank cell matches nothing (a default-equal
+   * fallback here made blanks "match" every lookup value, shifting MATCH positions over ranges with
+   * holes), mismatched types match nothing (`"10"` never finds 10, nor 1 TRUE), DateTime cells
+   * compare by their Excel serial so date lookups find date columns, and rich text is text
+   * ([[ScalarCoercion.cellText]], #775).
    */
   protected def matchesLookupExact(cv: CellValue, lookup: ExprValue): Boolean =
     (cv, lookup) match
       case (CellValue.Number(n), ExprValue.Number(v)) => n == v
       case (CellValue.DateTime(dt), ExprValue.Number(v)) =>
         BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == v
-      case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
       case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
       case (CellValue.Formula(_, Some(cached), _), v) => matchesLookupExact(cached, v)
+      case (key, ExprValue.Text(v)) => ScalarCoercion.cellText(key).exists(_.equalsIgnoreCase(v))
       case _ => false
-
-  /** Extract text for matching, coercing numbers and booleans to strings. */
-  protected def extractTextForMatch(cv: CellValue): Option[String] =
-    cv match
-      case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) => Some(CriteriaKeys.numberText(n))
-      case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
-      case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
-      case _ => None
-
-  /**
-   * Extract numeric for matching, parsing text as numbers.
-   *
-   * GH-488: a DateTime cell yields its Excel serial, so a date-typed VLOOKUP/HLOOKUP key finds a
-   * date key column (dates ARE numbers in Excel's comparison plane — same judgment as
-   * [[normalizeLookupValue]] and GH-449's numeric-boundary coercion).
-   */
-  protected def extractNumericForMatch(cv: CellValue): Option[BigDecimal] =
-    cv match
-      case CellValue.Number(n) => Some(n)
-      case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
-      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
-      case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
-      case CellValue.Formula(_, Some(cached), _) => extractNumericForMatch(cached)
-      case _ => None
 
   /** Validate that two ranges have the same dimensions. */
   protected def validateDimensions(

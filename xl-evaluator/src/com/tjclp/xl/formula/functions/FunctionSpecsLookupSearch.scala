@@ -63,8 +63,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       _ <- matchModeError("XLOOKUP", matchMode, call)
       _ <- searchModeError("XLOOKUP", searchMode, call)
       index <- matchMode match
-        case 0 => line.find(forward)(matchesLookupExact(_, lookup))
-        case 2 => line.find(forward)(wildcardLookupMatcher(lookup))
+        case 0 => line.find(forward)(exactMatcher(lookup, wildcards = false))
+        case 2 => line.find(forward)(exactMatcher(lookup, wildcards = true))
         case -1 | 1 => approximate
         // unreachable: the mode was validated above; kept total so a mode that slipped through
         // would get the same #VALUE! rather than the approximate search
@@ -115,9 +115,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
 
   /**
    * VLOOKUP/HLOOKUP's search over the key line: approximate (range_lookup TRUE) through the shared
-   * plane, the last of a run of equal keys winning as Excel's binary search lands; exact by the
-   * key's own type, text case-insensitively, stopping at the first match. A blank lookup value
-   * matches nothing (LibreOffice: `VLOOKUP(blank,{"Empty";"x";0},1,FALSE)` is `#N/A`).
+   * plane, the last of a run of equal keys winning as Excel's binary search lands; exact through
+   * the lookup plane's [[exactMatcher]] with wildcards, as MATCH type 0 (#693: `"10"` never finds
+   * 10, and `"a*"` finds `apple`), stopping at the first match.
    */
   private def legacyLookupIndex(
     line: LookupLine,
@@ -128,13 +128,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       line.storedKeys.map(keys =>
         approximateMatch(keys.zipWithIndex.map(_.swap), lookup, -1, lastOnTie = true)
       )
-    else
-      val matches: Option[CellValue => Boolean] = lookup match
-        case ExprValue.Text(text) => Some(extractTextForMatch(_).exists(_.equalsIgnoreCase(text)))
-        case ExprValue.Number(n) => Some(extractNumericForMatch(_).contains(n))
-        case ExprValue.Bool(_) => Some(matchesLookupExact(_, lookup))
-        case _ => None
-      matches.fold(Right(None))(line.find(forward = true))
+    else line.find(forward = true)(exactMatcher(lookup, wildcards = true))
 
   val vlookup: FunctionSpec[CellValue] { type Args = VlookupArgs } =
     FunctionSpec.simple[CellValue, VlookupArgs](
@@ -146,8 +140,9 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       val rangeLookupExpr = rangeLookupOpt.getOrElse(TExpr.Lit(true))
       for
         lookupValue <- evalValue(ctx, lookupExpr)
-        // GH-488: one lookup plane for MATCH/XLOOKUP/VLOOKUP/HLOOKUP (dates as serials)
-        normalizedLookup = normalizeLookupValue(lookupValue)
+        // GH-488: one lookup plane for MATCH/XLOOKUP/VLOOKUP/HLOOKUP (dates as serials); a
+        // blank lookup value is the number 0 (#693)
+        normalizedLookup = blankLookupAsZero(normalizeLookupValue(lookupValue))
         _ <- lookupValueError("VLOOKUP", normalizedLookup)
         colIndex <- ctx.evalExpr(colIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
@@ -216,7 +211,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       for
         lookupValue <- evalValue(ctx, lookupExpr)
         // GH-488: shared lookup plane (see VLOOKUP above)
-        normalizedLookup = normalizeLookupValue(lookupValue)
+        normalizedLookup = blankLookupAsZero(normalizeLookupValue(lookupValue))
         _ <- lookupValueError("HLOOKUP", normalizedLookup)
         rowIndex <- ctx.evalExpr(rowIndexExpr)
         rangeMatch <- ctx.evalExpr(rangeLookupExpr)
