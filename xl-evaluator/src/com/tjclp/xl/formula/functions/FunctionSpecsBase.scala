@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaKeys,
   CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
@@ -493,34 +494,36 @@ trait FunctionSpecsBase:
     lookupLine(range, targetSheet, ctx).find(forward = !descending)(matches)
 
   /**
-   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's
-   * direction, through [[findLookupPosition]]: the first key in search order that equals the lookup
-   * value in the lookup plane, or matches the wildcard criterion. search_mode 2 / -2 (the binary
-   * searches) are answered by the same walk in their direction, which agrees on the sorted data
-   * they require (GH-55).
+   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 through [[wildcardLookupMatcher]]) in
+   * search_mode's direction, through [[findLookupPosition]]: the first key in search order that
+   * `keyMatches`. search_mode 2 / -2 (the binary searches) are answered by the same walk in their
+   * direction, which agrees on the sorted data they require (GH-55).
    */
   protected def exactLookupPosition(
     range: CellRange,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext,
-    lookup: ExprValue,
-    wildcard: Option[CriteriaMatcher.Wildcard],
+    keyMatches: CellValue => Boolean,
     searchMode: Int
   ): Either[EvalError, Option[Int]] =
-    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0) { cv =>
-      matchesLookupExact(cv, lookup) || wildcard.exists(CriteriaMatcher.matches(cv, _))
-    }
+    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0)(keyMatches)
 
   /**
-   * The wildcard criterion a text lookup value spells (`*`, `?`, `~` escapes), for match_mode 2.
+   * #774: XLOOKUP/XMATCH match_mode 2's test of a key. A text lookup value is read with the lookup
+   * escape grammar ([[CriteriaMatcher.lookupPattern]]): with no unescaped wildcard left it is
+   * compared exactly ([[matchesLookupExact]]) after every `~x` becomes `x`, otherwise only text
+   * keys can match the pattern. Any other lookup value is compared exactly.
    */
-  protected def wildcardCriterion(lookup: ExprValue): Option[CriteriaMatcher.Wildcard] =
+  protected def wildcardLookupMatcher(lookup: ExprValue): CellValue => Boolean =
     lookup match
       case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case _ => None
+        CriteriaMatcher.lookupPattern(text) match
+          case CriteriaMatcher.LookupPattern.Literal(literal) =>
+            val value = ExprValue.Text(literal)
+            cv => matchesLookupExact(cv, value)
+          case CriteriaMatcher.LookupPattern.Pattern(wildcard) =>
+            cv => CriteriaMatcher.matches(cv, wildcard)
+      case other => cv => matchesLookupExact(cv, other)
 
   /**
    * A lookup's read of a key cell: a failure to evaluate it is the Excel error it carries, or
@@ -916,7 +919,7 @@ trait FunctionSpecsBase:
   protected def extractTextForMatch(cv: CellValue): Option[String] =
     cv match
       case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
+      case CellValue.Number(n) => Some(CriteriaKeys.numberText(n))
       case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
       case _ => None

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
