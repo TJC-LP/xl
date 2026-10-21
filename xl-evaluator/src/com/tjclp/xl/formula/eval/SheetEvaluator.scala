@@ -601,7 +601,7 @@ object SheetEvaluator:
             kind match
               case _: FormulaKind.ArrayFormula =>
                 val arrayEvaluator = evaluator.withArrayResults
-                parseCounted(expr, arrayEvaluator).flatMap { parsed =>
+                parseCounted(expr, arrayEvaluator, sheet.name, Some(ref)).flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
                   val result = cellOutcome(expr, raw)
                   // GH-695: the raw result goes to the generation memo for this generation's `x#`
@@ -789,26 +789,31 @@ object SheetEvaluator:
     // intersect with, so it evaluates as the same formula typed into a new Excel 365 cell would:
     // as an array, showing its top-left value. `@range` still needs the position.
     val positioned = if currentCell.isDefined then evaluator else evaluator.withArrayResults
-    parseCounted(formula, evaluator).flatMap(expr =>
+    parseCounted(formula, evaluator, sheet.name, currentCell).flatMap(expr =>
       cellOutcome(formula, positioned.eval(expr, sheet, clock, workbook, currentCell))
     )
 
-  /** #767: [[parseFormula]] timed as the `Parse` phase of the evaluator's pass. */
-  private def parseCounted(formula: String, evaluator: Evaluator): XLResult[TExpr[?]] =
-    val counters = evaluator.generationMemo.fold(RecalcCounters.disabled)(_.counters)
-    counters.time(RecalcCounters.Phase.Parse)(parseFormula(formula))
+  /**
+   * #767: [[parseFormula]] timed as the `Parse` phase of the evaluator's pass. #790: the formula of
+   * `cell` on `sheet` reuses the parse the pass's graph build made of it.
+   */
+  private def parseCounted(
+    formula: String,
+    evaluator: Evaluator,
+    sheet: SheetName,
+    cell: Option[ARef]
+  ): XLResult[TExpr[?]] =
+    Evaluator
+      .parseFormulaCell(formula, sheet, cell, evaluator.generationMemo)
+      .left
+      .map(parseFailure(formula, _))
 
   /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
   private[eval] def parseFormula(formula: String): XLResult[TExpr[?]] =
-    FormulaParser
-      .parse(formula)
-      .left
-      .map(parseError =>
-        XLError.FormulaError(
-          formula,
-          s"Parse error: ${ParseError.describe(parseError)}"
-        )
-      )
+    FormulaParser.parse(formula).left.map(parseFailure(formula, _))
+
+  private def parseFailure(formula: String, parseError: ParseError): XLError =
+    XLError.FormulaError(formula, s"Parse error: ${ParseError.describe(parseError)}")
 
   /**
    * The evaluate half of [[evaluateFormulaWith]] for an ALREADY PARSED formula — GH-537: an

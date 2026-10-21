@@ -46,6 +46,10 @@ class PassCacheLawSpec extends ScalaCheckSuite:
 
   private def cachesOff() = new Evaluator.AggregateMemo(columnCache = false)
 
+  /** Every per-pass cache on except the reuse of the graph build's formula parses (#790). */
+  private def parsesOff(counters: RecalcCounters = RecalcCounters.disabled) =
+    new Evaluator.AggregateMemo(counters = counters, limits = eager, parseCache = false)
+
   private def num(n: Int): CellValue = CellValue.Number(BigDecimal(n))
   private def at(a1: String): ARef = ARef.parse(a1).fold(e => fail(e.toString), identity)
 
@@ -294,6 +298,79 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       val snap = counters.snapshot
       Prop(book.cyclic || snap(Counter.SlicesBuilt) > 0L) :| s"no slice built: ${snap.render}"
     }
+  }
+
+  // ---------- #790: formula parses reused from the graph build ----------
+
+  property("parse-cache law: reusing the build's parses equals parsing again, every pass") {
+    Prop.forAll(genStaleBook) { book =>
+      Prop.all(
+        Vector(sequential, parallel, iterative).map { options =>
+          exactlySame(
+            recalculateWithMemo(book.workbook, options(), cachesOn()),
+            recalculateWithMemo(book.workbook, options(), parsesOff()),
+            s"parses ${options().parallelism} ${options().iterative}"
+          )
+        } :+ exactlySame(
+          recalculateUncachedWithMemo(book.workbook, sequential(), cachesOn()),
+          recalculateUncachedWithMemo(book.workbook, sequential(), parsesOff()),
+          "parses uncached"
+        )*
+      )
+    }
+  }
+
+  property("the parse-cache law is not vacuous: on, a pass parses each formula once; off, more") {
+    Prop.forAll(genStaleBook) { book =>
+      Prop.all(Vector(sequential, parallel).map { options =>
+        val on = RecalcCounters.create()
+        val off = RecalcCounters.create()
+        recalculateWithMemo(book.workbook, options(), cachesOn(on))
+        recalculateWithMemo(book.workbook, options(), parsesOff(off))
+        val formulas = on.snapshot(Counter.GraphNodes)
+        Prop(on.snapshot(Counter.FormulaParses) == formulas) :| s"on: ${on.snapshot.render}" &&
+        Prop(off.snapshot(Counter.FormulaParses) > formulas) :| s"off: ${off.snapshot.render}"
+      }*)
+    }
+  }
+
+  test("a formula whose text changed after the build is parsed again") {
+    // the memo holds the parses of `wrongCaches`; the after-edit pass runs on a book whose F2
+    // reads A2*3: a reused parse of A2*2 would compute F2 = 2 and its readers from it
+    val memo = cachesOn()
+    memo.passCache.foreach(
+      _.useParses(com.tjclp.xl.formula.graph.CompactGraph.build(wrongCaches).parses)
+    )
+    val edited = wrongCaches
+      .update(data, _.put(at("F2"), CellValue.Formula("A2*3", Some(num(-1)))))
+      .fold(e => fail(e.toString), identity)
+    val reused =
+      DependentRecalculation.recalculateAfterEdit(edited, data, Set(at("F2")), clock, memo)
+    assertEquals(
+      reused,
+      DependentRecalculation.recalculateAfterEdit(edited, data, Set(at("F2")), clock, cachesOff())
+    )
+    assertEquals(reused.evaluated.get(data).flatMap(_.get(at("F2"))), Some(num(3)))
+  }
+
+  test("build parses answer only for their own cell and text, unparseable formulas never") {
+    // an extreme-exponent literal: a hash of its BigDecimal throws (#780), and no lookup takes one
+    val text = "A1+100E+2147483646"
+    val sheet = Sheet(data)
+      .put(at("A1"), num(1))
+      .put(at("B1"), CellValue.Formula(text))
+      .put(at("B2"), CellValue.Formula("SUM(("))
+    val parses =
+      com.tjclp.xl.formula.graph.CompactGraph.build(Workbook(Vector(sheet))).parses
+    assertEquals(
+      parses.get(data, at("B1"), text).map(_.toString),
+      com.tjclp.xl.formula.parser.FormulaParser.parse(text).toOption.map(_.toString)
+    )
+    assert(parses.get(data, at("B1"), text).isDefined)
+    assertEquals(parses.get(data, at("B1"), "A1+1"), None)
+    assertEquals(parses.get(data, at("C1"), text), None)
+    assertEquals(parses.get(other, at("B1"), text), None)
+    assertEquals(parses.get(data, at("B2"), "SUM(("), None)
   }
 
   // ---------- fixed cases ----------

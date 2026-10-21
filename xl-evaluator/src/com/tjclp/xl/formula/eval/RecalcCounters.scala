@@ -126,6 +126,13 @@ private[formula] object RecalcCounters:
     /** Defined-name bodies parsed during evaluation; a pass parses each distinct body once. */
     case NameParses
 
+    /**
+     * Formula cell texts parsed by the graph build and by evaluation (#790). The compact graph
+     * parses each formula once and evaluation reuses that parse, so a pass parses again only a
+     * formula the build could not parse or whose text changed after it.
+     */
+    case FormulaParses
+
   /** Where a pass spends its time. `Write` is measured by the caller that writes the file. */
   enum Phase derives CanEqual:
     case Parse, GraphBuild, Tarjan, Kahn, Dynamic, Eval, Criteria, SheetPut, Finalize, Write

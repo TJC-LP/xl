@@ -125,6 +125,24 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(counted(recalculateUncachedCounted(book, options, _)), sequential)
   }
 
+  test("#790: a pass parses each formula once, in the graph build, and evaluation reuses it") {
+    Vector[(String, RecalcCounters => RecalcResult)](
+      "sequential" -> (recalculateCounted(book, options, _)),
+      "parallel" -> (recalculateCounted(book, options.copy(parallelism = 2), _)),
+      "uncached" -> (recalculateUncachedCounted(book, options, _))
+    ).foreach { (label, run) =>
+      val counters = RecalcCounters.create()
+      run(counters)
+      assertEquals(counters.snapshot(Counter.FormulaParses), 5L, label)
+    }
+  }
+
+  test("#790: the legacy engine keeps no parse, so evaluation parses each formula again") {
+    val counters = RecalcCounters.create()
+    recalculateCounted(book, options, counters, RecalcEngine.Legacy)
+    assertEquals(counters.snapshot(Counter.FormulaParses), 10L)
+  }
+
   test("phases are timed when measured, and the disabled instance never records anything") {
     val counters = RecalcCounters.create()
     recalculateCounted(book, options, counters)
