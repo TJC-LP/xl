@@ -1308,7 +1308,9 @@ class EvalCommandSpec extends CatsEffectSuite:
           case Left(e: CliException) => assertEquals(e.error.code, "INVALID_REFERENCE", at)
           case other => fail(s"evala --at $at: expected INVALID_REFERENCE, got $other")
         }
-    refused("ZZZZ9") >> refused("not a ref") >> refused("D5:D6")
+    // `$C$2`: a ref argument is written without `$` anchors, for --at as for every verb
+    refused("ZZZZ9") >> refused("not a ref") >> refused("D5:D6") >> refused("$C$2") >>
+      refused("'My Sheet'!$C$2")
   }
 
   test("#727: a qualified evala --at anchors on, and evaluates against, the sheet it names") {

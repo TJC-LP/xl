@@ -724,7 +724,12 @@ object ReadCommands:
    * Every formula [[DependencyGraph.dynamicCells]] lists (#763) is stale from the start, whatever
    * `changed` holds: its reads are known only to evaluation, so `SUM(OFFSET(Data!B1,0,0,2,1))`
    * reads Data!B2 though no range it names contains it. Its readers are then found like any stale
-   * cell's.
+   * cell's. A sheet holding one then gets an index even when no override touches it, so the
+   * formulas that could read another sheet are gathered once, in one pass over the book, by the
+   * sheet names their text qualifies ([[qualifiedSheets]]): an index visits its own sheet's
+   * formulas and those candidates. Indexing every sheet then costs one pass over the book's cells,
+   * plus, per sheet, the formulas that mention a defined name (a name may hide any sheet), not a
+   * pass over the book per sheet.
    *
    * The maps, sets and bit set below are local to one call and never escape it: the result is a
    * new, immutable workbook.
@@ -771,37 +776,62 @@ object ReadCommands:
           .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
       )
 
-    def readersOf(target: Int): Readers =
-      val readers = Readers()
-      val name = sheets(target).name
-      val bounds = sheets(target).usedRange
-      // a reference qualified with the target spells its name, perhaps quoted, then `!`, in any
-      // case; a name may hide one, so a formula mentioning a name is read too
-      val qualified = java.util.regex.Pattern.compile(
-        "'?" + java.util.regex.Pattern.quote(name.value.replace("'", "''")) + "'?!",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-      )
+    // every formula that could read a sheet other than its own, gathered in one pass over the
+    // book: by each sheet name its text qualifies a reference with (folded, [[qualifiedSheets]]),
+    // and every formula mentioning a defined name, which may hide one. An index for one target
+    // then visits that sheet's formulas and these candidates, never every cell of the book, so
+    // indexing every sheet a dynamic cell sits on costs O(cells), not O(sheets x cells)
+    lazy val crossReaders: (Map[String, Vector[(Int, ARef, String)]], Vector[(Int, ARef, String)]) =
+      val qualifying = mutable.HashMap.empty[String, mutable.ArrayBuffer[(Int, ARef, String)]]
+      val naming = mutable.ArrayBuffer.empty[(Int, ARef, String)]
       sheets.indices.foreach { at =>
-        val reader = ValueDependencies.Reader(
-          bounds,
-          Some(name),
-          localReads = at == target,
-          names = Some(names),
-          current = Some(sheets(at).name)
-        )
         sheets(at).cells.foreach { (ref, cell) =>
           cell.value match
             // GH-430: a data table's cells are pinned value sources
             case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
-            case CellValue.Formula(text, _, _)
-                if at == target || qualified.matcher(text).find() ||
-                  mentionsName((at, ref), text) =>
-              parse((at, ref), text).foreach { expr =>
-                val read = reader.readRanges(expr).toVector
-                if read.nonEmpty then readers.register(idOf((at, ref)), read)
+            case CellValue.Formula(text, _, _) =>
+              qualifiedSheets(text).foreach { sheet =>
+                qualifying.getOrElseUpdate(sheet, mutable.ArrayBuffer.empty) += ((at, ref, text))
               }
+              if mentionsName((at, ref), text) then naming += ((at, ref, text))
             case _ => ()
         }
+      }
+      (qualifying.view.mapValues(_.toVector).toMap, naming.toVector)
+
+    def readersOf(target: Int): Readers =
+      val readers = Readers()
+      val name = sheets(target).name
+      val bounds = sheets(target).usedRange
+      val reader = mutable.HashMap.empty[Int, ValueDependencies.Reader]
+      def readerOn(at: Int): ValueDependencies.Reader =
+        reader.getOrElseUpdate(
+          at,
+          ValueDependencies.Reader(
+            bounds,
+            Some(name),
+            localReads = at == target,
+            names = Some(names),
+            current = Some(sheets(at).name)
+          )
+        )
+      def index(at: Int, ref: ARef, text: String): Unit =
+        parse((at, ref), text).foreach { expr =>
+          val read = readerOn(at).readRanges(expr).toVector
+          if read.nonEmpty then readers.register(idOf((at, ref)), read)
+        }
+      sheets(target).cells.foreach { (ref, cell) =>
+        cell.value match
+          // GH-430: a data table's cells are pinned value sources
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case CellValue.Formula(text, _, _) => index(target, ref, text)
+          case _ => ()
+      }
+      // another sheet's formula reads the target only through a reference qualified with its
+      // name, perhaps behind a defined name
+      val (qualifying, naming) = crossReaders
+      (qualifying.getOrElse(foldSheet(name.value), Vector.empty) ++ naming).distinct.foreach {
+        (at, ref, text) => if at != target then index(at, ref, text)
       }
       readers
 
@@ -841,6 +871,34 @@ object ReadCommands:
               case _ => s
           })
         }
+
+  /**
+   * The sheet names `text` qualifies a reference with, each folded by [[foldSheet]]: `Data` for
+   * `Data!B1`, `my sheet's` for `'My Sheet''s'!B1`. A prefilter for [[uncacheReaders]]: it may list
+   * a name that qualifies nothing (text inside a string literal, `[1]Data!` of an external book),
+   * never miss one the parser reads. An unquoted name runs back from its `!` to a character no
+   * unquoted sheet name holds; a quoted one is matched whole, `''` an escaped quote.
+   */
+  private[cli] def qualifiedSheets(text: String): Set[String] =
+    if text.indexOf('!') < 0 then Set.empty
+    else
+      // two scans, so a quoted match that spans a string literal (`"'"&Data!A1&"'!"`) never hides
+      // an unquoted qualifier inside it
+      (QuotedSheet.findAllMatchIn(text).map(_.group(1).replace("''", "'")) ++
+        UnquotedSheet.findAllMatchIn(text).map(_.group(1))).map(foldSheet).toSet
+
+  /**
+   * A sheet name folded as `String.equalsIgnoreCase` compares (each character upper-cased, then
+   * lower-cased), the comparison [[ValueDependencies.Reader]] makes.
+   */
+  private def foldSheet(name: String): String =
+    name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
+
+  /** A quoted qualifier up to its `!`, group 1 its name still escaped. */
+  private val QuotedSheet = """'((?:[^']|'')+)'!""".r
+
+  /** An unquoted qualifier up to its `!`: no character an unquoted sheet name cannot hold. */
+  private val UnquotedSheet = """([^\s'!(),+\-*/^&=<>%:;{}"\[\]]+)!""".r
 
   /** A token of formula text that could be a defined name, for [[uncacheReaders]]'s prefilter. */
   private val NameToken = """[\p{L}_\\][\p{L}\p{N}_.\\?]*""".r

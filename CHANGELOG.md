@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
   Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
   and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
-  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`.
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
 
 ## [0.25.0] - 2026-10-19
 
