@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A running total through `INDEX(…, ROW()-1)` is no longer a circular reference** (#743, #745).
+  INDEX at a position written with literals, `ROW()` and `COLUMN()` (combined with `+`, `-` and
+  `*`) now depends only on the cells it selects for the formula that holds it, in every dependency
+  graph: the sheet and workbook graphs, the compact recalculation graph, the edit cone and the
+  `eval --with`/`--at` checks. A position that does not fold this way (one that reads a cell, a
+  fraction, a row outside the array) keeps the whole array as before. Internally, each
+  reference-computing function now declares where its result lies (an envelope hook on its spec)
+  rather than the graph matching INDEX and XLOOKUP by identity.
+  - **Behaviour change:** `=SUM(B1:INDEX(B:B,ROW()-1))` in B5 was reported as a circular
+    reference; it now evaluates to `SUM(B1:B4)`. `=SUM(B1:INDEX(B:B,ROW()))`,
+    which reads its own cell, is still circular.
+  - **Behaviour change:** an edit to a cell inside INDEX's array but outside its folded selection
+    (B6 for `=INDEX(B:B,ROW()-1)` in B5) used to mark the formula dirty; it no longer does.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
