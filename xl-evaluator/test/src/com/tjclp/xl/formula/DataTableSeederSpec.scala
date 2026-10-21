@@ -209,7 +209,7 @@ class DataTableSeederSpec extends FunSuite:
     val wb = Workbook(Sheet("S").put(ref"A1", num(1)))
     assertEquals(
       wb.seedDataTables(SheetName.unsafe("NoSuch")),
-      Left(XLError.SheetNotFound("NoSuch")): XLResult[Workbook]
+      Left(XLError.SheetNotFound("NoSuch", Vector("S"))): XLResult[Workbook]
     )
   }
 
@@ -228,6 +228,21 @@ class DataTableSeederSpec extends FunSuite:
     val out = sheetNamed(seeded, "S")
     assertEquals(out(ref"F10").value, CellValue.dataTable(colKind("F10:F10", "A2"), Some(num(300))))
     assertEquals(out(ref"H10").value, CellValue.dataTable(colKind("H10:H10", "A2"), None))
+  }
+
+  test("#752: a sheet name in another case seeds the tab it names") {
+    val sheet = Sheet("S")
+      .put(ref"A2", num(4))
+      .put(ref"F9", CellValue.Formula("A2*100"))
+      .put(ref"E10", num(3))
+      .put(ref"F10", CellValue.dataTable(colKind("F10:F10", "A2"), None))
+    val seeded = Workbook(sheet)
+      .seedDataTables(SheetName.unsafe("s"))
+      .fold(err => fail(s"seeding failed: $err"), identity)
+    assertEquals(
+      sheetNamed(seeded, "S")(ref"F10").value,
+      CellValue.dataTable(colKind("F10:F10", "A2"), Some(num(300)))
+    )
   }
 
   test("seedDataTables() covers every sheet and resolves cross-sheet upstream refs") {

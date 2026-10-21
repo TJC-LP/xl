@@ -2060,17 +2060,19 @@ object DependencyGraph:
    *   Set of qualified cell references used in the expression
    */
   /**
-   * The workbook's spelling of every sheet name, keyed case-insensitively: a formula's qualifier
-   * (`sheet1!A1` on a book whose tab is `Sheet1`) is folded onto the tab it resolves to in Excel,
-   * so the graph has one node per cell rather than a phantom per spelling. A qualifier naming no
-   * sheet is returned as written. The first sheet wins for a duplicated name, like `indexWhere`.
+   * The workbook's spelling of every sheet name, resolved by `Workbook.apply`'s rule (#752): a
+   * formula's qualifier (`sheet1!A1` on a book whose tab is `Sheet1`) is folded onto the tab it
+   * resolves to in Excel, so the graph has one node per cell rather than a phantom per spelling. A
+   * qualifier naming no sheet, or folding onto two tabs that differ only by case and spelling
+   * neither, is returned as written.
    */
   private[xl] def sheetCanonicaliser(workbook: Workbook): SheetName => SheetName =
+    val exact: Set[SheetName] = workbook.sheets.iterator.map(_.name).toSet
     val byFold: Map[String, SheetName] =
-      workbook.sheets.reverseIterator
-        .map(sheet => sheet.name.value.toLowerCase(java.util.Locale.ROOT) -> sheet.name)
-        .toMap
-    sheet => byFold.getOrElse(sheet.value.toLowerCase(java.util.Locale.ROOT), sheet)
+      workbook.sheets
+        .groupBy(_.name.folded)
+        .collect { case (key, Vector(only)) => key -> only.name }
+    sheet => if exact.contains(sheet) then sheet else byFold.getOrElse(sheet.folded, sheet)
 
   /**
    * What `expr`, a formula on `sheet`, reads on that sheet, never expanded: each cell it names and

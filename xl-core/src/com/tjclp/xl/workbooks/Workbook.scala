@@ -24,11 +24,20 @@ final case class Workbook(
     if index >= 0 && index < sheets.size then Right(sheets(index))
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Get sheet by name */
+  /**
+   * Get sheet by name, matched as Excel matches a reference's sheet qualifier (#752): the exact
+   * spelling first, else the one sheet whose name is equal ignoring case, so `data` reads the tab
+   * `Data`. A name that folds onto two tabs differing only by case and spells neither is
+   * [[XLError.InvalidReference]] ([[SheetName.indexIn]]).
+   */
   def apply(name: SheetName): XLResult[Sheet] =
-    sheets
-      .find(_.name == name)
-      .toRight(XLError.SheetNotFound(name.value, sheetNameValues))
+    sheetIndexOf(name).map(sheets(_))
+
+  /** The position of the sheet `name` resolves to under [[apply]]'s rule. */
+  private[xl] def sheetIndexOf(name: SheetName): XLResult[Int] =
+    sheets.indexWhere(_.name == name) match
+      case -1 => SheetName.indexIn(sheets.map(_.name), name)
+      case exact => Right(exact)
 
   /**
    * Get sheet by name string.

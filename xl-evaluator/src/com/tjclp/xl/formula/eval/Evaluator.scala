@@ -683,8 +683,7 @@ object Evaluator:
     currentSheet: SheetName,
     name: String
   ): Option[DefinedName] =
-    val sheetIdx = wb.sheets.indexWhere(_.name == currentSheet)
-    lookupDefinedNameAt(wb, Option.when(sheetIdx >= 0)(sheetIdx), name)
+    lookupDefinedNameAt(wb, wb.sheetIndexOf(currentSheet).toOption, name)
 
   /**
    * [[lookupDefinedName]] with the sheet position already resolved — for callers that loop over
