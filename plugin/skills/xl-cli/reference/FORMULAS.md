@@ -150,7 +150,9 @@ it are hand-written semantics worth knowing.
 **Aggregates and criteria.** `SUM`, `COUNT`, `AVERAGE`, `MIN`, `MAX`, `MEDIAN`, `STDEV`, `VAR` and
 their variants are variadic: `=SUM(1,2,3)`, `=SUM(A1:A5, B1:B5)`, `=SUM(A1, 5, B1:B3)`. Criteria for
 `SUMIF`/`COUNTIF`/`AVERAGEIF`/`SUMIFS`/`COUNTIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` follow Excel:
-`">100"`, `"<>0"`, `"Yes"`, and `*`/`?` wildcards (`"Widget*"`). `~*`, `~?` and `~~` match a literal
+`">100"`, `"<>0"`, `"Yes"`, and `*`/`?` wildcards (`"Widget*"`), which match text cells only.
+`"<>0"` counts every cell but the number 0: blanks, text and errors too. `"=a*"` is the same
+wildcard as `"a*"`; a bare `"="` counts truly empty cells. `~*`, `~?` and `~~` match a literal
 `*`, `?` and `~`, but only in a criterion that contains a `*` or `?`; without one, `~` is an ordinary
 character (`"a~~b"` matches only `a~~b`). So to match a text key exactly, use it as is when it has no
 `*` or `?`, and otherwise escape every `~`, `*` and `?` (not `SUBSTITUTE(key,"~","~~")` alone).
