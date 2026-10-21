@@ -118,9 +118,6 @@ object CriteriaMatcher:
       // GH-565: a criteria string that spells an Excel error literal IS that error value — Excel
       // parses criteria like formula text, so "#N/A" matches #N/A error cells, never the text
       // "#N/A". Checked before the wildcard rule: "#NAME?" contains a '?' but is not a pattern.
-      // Shared consequence: XLOOKUP's wildcard detector (FunctionSpecsLookupSearch) reuses this
-      // parse, so a wildcard-mode lookup value spelled exactly "#NAME?" is an error literal there
-      // too, not a one-character pattern — the same reading Excel gives it.
       case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err)))
       // Not equal: <>
       // GH-466: non-numeric operands are text inequality (bare "<>" = non-blank);
@@ -213,7 +210,9 @@ object CriteriaMatcher:
     s.exists(c => c == '*' || c == '?')
 
   /**
-   * Remove escape characters from pattern (unescape ~* ~? ~~).
+   * Remove escape characters from a pattern: `~x` is `x` for every character `x` (`~*`, `~?`, `~~`
+   * and `~b` alike); a `~` at the end stays a literal tilde. Desktop Excel reads `~` this way in a
+   * criterion operand with a `*` or `?` and in an XMATCH/XLOOKUP match_mode 2 lookup value.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def unescapePattern(s: String): String =
@@ -222,17 +221,29 @@ object CriteriaMatcher:
     while i < s.length do
       val c = s.charAt(i)
       if c == '~' && i + 1 < s.length then
-        val next = s.charAt(i + 1)
-        if next == '*' || next == '?' || next == '~' then
-          sb.append(next)
-          i += 2
-        else
-          sb.append(c)
-          i += 1
+        sb.append(s.charAt(i + 1))
+        i += 2
       else
         sb.append(c)
         i += 1
     sb.toString
+
+  /**
+   * #774: an XMATCH/XLOOKUP match_mode 2 lookup value, read with the escape grammar whether or not
+   * it holds a wildcard. Unlike a criterion operand (GH-765), a lookup value always drops each `~`
+   * before a character: `"a~~b"` finds `a~b` and `"~4"` finds the text `4`.
+   */
+  enum LookupPattern derives CanEqual:
+    /** No unescaped `*` or `?`: the key must equal this text, every `~x` read as `x`. */
+    case Literal(text: String)
+
+    /** An unescaped `*` or `?` remains: the key must be text that matches the pattern. */
+    case Pattern(wildcard: Wildcard)
+
+  /** #774: how a match_mode 2 lookup value spelled `text` matches a key ([[LookupPattern]]). */
+  def lookupPattern(text: String): LookupPattern =
+    if hasUnescapedWildcard(text) then LookupPattern.Pattern(Wildcard(text))
+    else LookupPattern.Literal(unescapePattern(text))
 
   /**
    * Parse string as BigDecimal, handling Excel's flexible numeric syntax.
@@ -471,9 +482,7 @@ object CriteriaMatcher:
    *   - `*` matches any sequence of characters (including empty)
    *   - `?` matches exactly one character
    *   - Matching is case-insensitive
-   *   - `~*` escapes literal asterisk
-   *   - `~?` escapes literal question mark
-   *   - `~~` escapes literal tilde
+   *   - `~x` is a literal `x`, for every character `x`
    */
   private def matchesWildcard(cellValue: CellValue, pattern: String): Boolean =
     extractText(cellValue) match
@@ -505,28 +514,34 @@ object CriteriaMatcher:
    * Handles:
    *   - `*` → `.*`
    *   - `?` → `.`
-   *   - `~*` → literal asterisk
-   *   - `~?` → literal question mark
-   *   - `~~` → literal tilde
+   *   - `~x` → literal `x`, for every character `x` ([[patternRegexBody]])
    *   - Other regex metacharacters are escaped
    *   - Matching is case-insensitive
    */
   private def wildcardToRegex(pattern: String): Regex =
-    s"(?i)^${wildcardRegexBody(pattern)}$$".r // (?i) for case-insensitive
+    s"(?i)^${patternRegexBody(pattern)}$$".r // (?i) for case-insensitive
 
   /**
-   * GH-476: the UNANCHORED regex body for an Excel wildcard pattern.
+   * GH-476: the UNANCHORED regex body for an Excel wildcard pattern, as SEARCH reads it.
    *
-   * Shared with SEARCH, which needs a substring search rather than the whole-value match criteria
-   * use — one wildcard grammar (`*`, `?`, `~`-escapes) for both.
-   *
-   * `~` escapes only `*`, `?` and `~`; before any other character, and at the end, it is a literal
-   * tilde. Excel documents only the three escapes. A Microsoft Q&A thread suggests Excel drops the
-   * tilde before an ordinary character too ("a~b*" matching "abc"); no desktop-Excel observation
-   * confirms that yet, so this grammar is unchanged (GH-765).
+   * SEARCH needs a substring search rather than the whole-value match criteria use. Here `~`
+   * escapes only `*`, `?` and `~`, the three escapes Microsoft documents; before any other
+   * character, and at the end, it is a literal tilde (not checked against Excel for SEARCH).
+   * Criteria and lookups drop the tilde before any character ([[patternRegexBody]]).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def wildcardRegexBody(pattern: String): String =
+    regexBody(pattern, tildeEscapesAny = false)
+
+  /**
+   * The regex body of a criterion or match_mode 2 pattern: `~x` is a literal `x` for every
+   * character `x`, so desktop Excel's `"a~b*"` matches `abc` and `ab` and not `a~b`; a `~` at the
+   * end is a literal tilde.
+   */
+  private def patternRegexBody(pattern: String): String =
+    regexBody(pattern, tildeEscapesAny = true)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def regexBody(pattern: String, tildeEscapesAny: Boolean): String =
     val sb = new StringBuilder
     var i = 0
     while i < pattern.length do
@@ -534,7 +549,7 @@ object CriteriaMatcher:
       if c == '~' && i + 1 < pattern.length then
         // Escape sequence
         val next = pattern.charAt(i + 1)
-        if next == '*' || next == '?' || next == '~' then
+        if tildeEscapesAny || next == '*' || next == '?' || next == '~' then
           sb.append(escapeRegexChar(next))
           i += 2
         else
