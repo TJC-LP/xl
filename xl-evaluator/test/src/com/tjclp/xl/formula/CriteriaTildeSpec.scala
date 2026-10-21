@@ -92,9 +92,10 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
       val criterion = parse(ExprValue.Cell(text(s)))
       assert(matches(text(s), criterion), s)
       assertEquals(matches(text(other), criterion), other.equalsIgnoreCase(s), s"$s vs $other")
+      // a bare "<>" (s empty) matches every cell but a truly empty one, empty text included
       assertEquals(
         matches(text(other), parse(ExprValue.Text(s"<>$s"))),
-        !other.equalsIgnoreCase(s),
+        s.isEmpty || !other.equalsIgnoreCase(s),
         s"<>$s vs $other"
       )
     }

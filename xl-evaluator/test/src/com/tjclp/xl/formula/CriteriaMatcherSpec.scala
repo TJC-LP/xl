@@ -296,9 +296,11 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(CellValue.Text("banana"), crit))
   }
 
-  test("matches: errors and uncached formulas never match text comparison (GH-466)") {
+  test("matches: errors match <>x, uncached formulas never match it (GH-466, #731)") {
     val crit = parseValue("<>x")
-    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    // desktop Excel counts error cells under every <> criterion
+    assert(matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), parseValue(">x")))
     assert(!matches(CellValue.Formula("=A1", None), crit))
     assert(matches(CellValue.Formula("=A1", Some(CellValue.Text("y"))), crit))
     assert(!matches(CellValue.Formula("=A1", Some(CellValue.Text("x"))), crit))

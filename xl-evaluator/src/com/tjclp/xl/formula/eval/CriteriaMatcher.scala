@@ -136,7 +136,8 @@ object CriteriaMatcher:
         operand match
           case ErrorLiteral(err) => NotError(err) // GH-565
           case _ =>
-            parseNumeric(operand) match
+            // a number past Excel's range ("1E+999999999") is text here, as in desktop Excel
+            parseNumeric(operand).filter(_.abs <= MaxExcelNumber) match
               case Some(n) => Compare(CompareOp.Neq, n)
               case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
               case None if hasWildcardChar(operand) =>
@@ -185,6 +186,9 @@ object CriteriaMatcher:
     // ordinary character: "a~~b" matches only "a~~b", and a cell used as its own criterion
     // matches itself.
     else Exact(ExprValue.Text(s))
+
+  /** The largest magnitude an Excel number has (an IEEE double's). */
+  private val MaxExcelNumber: BigDecimal = BigDecimal(Double.MaxValue)
 
   /**
    * GH-565: extractor for the seven Excel error literals (`#N/A`, `#DIV/0!`, ...). Letter case is
@@ -396,34 +400,52 @@ object CriteriaMatcher:
           case _ => false
 
   /**
-   * Numeric comparison matching.
+   * Numeric comparison matching. `"<>n"` (#731) matches every cell but a number (or date) equal to
+   * `n`: blanks, text (the text `"4"` included, although `"=4"` matches it too), booleans and
+   * errors all match, as in desktop Excel. Uncached formulas never match.
    */
   private def matchesCompare(
     cellValue: CellValue,
     op: CompareOp,
     threshold: BigDecimal
   ): Boolean =
-    extractNumeric(cellValue) match
-      case Some(value) =>
-        op match
-          case CompareOp.Gt => value > threshold
-          case CompareOp.Gte => value >= threshold
-          case CompareOp.Lt => value < threshold
-          case CompareOp.Lte => value <= threshold
-          case CompareOp.Neq => value != threshold
-      case None => false
+    op match
+      case CompareOp.Neq => !isNumberEqual(cellValue, threshold)
+      case _ =>
+        extractNumeric(cellValue) match
+          case Some(value) =>
+            op match
+              case CompareOp.Gt => value > threshold
+              case CompareOp.Gte => value >= threshold
+              case CompareOp.Lt => value < threshold
+              case CompareOp.Lte => value <= threshold
+              case CompareOp.Neq => value != threshold // Unreachable: Neq handled above
+          case None => false
+
+  /**
+   * #731: whether a cell is a number equal to `n`, the one kind of cell `"<>n"` leaves out. An
+   * uncached formula counts as equal, so it never matches `"<>n"`.
+   */
+  private def isNumberEqual(cellValue: CellValue, n: BigDecimal): Boolean =
+    cellValue match
+      case CellValue.Number(value) => value == n
+      case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == n
+      case CellValue.Formula(_, Some(cached), _) => isNumberEqual(cached, n)
+      case CellValue.Formula(_, None, _) => true
+      case _ => false
 
   /**
    * Text comparison matching (GH-466), for criteria like "<>x" and ">m".
    *
    * Excel semantics:
    *   - `<>text` is a negated exact match with the same coercion rules as [[Exact]], so numbers,
-   *     booleans and blank cells all match `"<>x"` (they are not equal to "x"). Bare `"<>"`
-   *     (operand "") therefore matches exactly the non-blank cells.
+   *     booleans, blank cells and error cells all match `"<>x"` (they are not equal to "x"). Bare
+   *     `"<>"` (operand "") matches every cell but a truly empty one, a formula's empty text
+   *     (`=""`) and errors included (#731).
    *   - Ordering operators (`>`, `>=`, `<`, `<=`) compare text case-insensitively and only apply to
-   *     text values: numbers, booleans and blanks never satisfy a text ordering criterion (Excel
-   *     criteria comparisons are type-segregated).
-   *   - Error cells and uncached formulas never match.
+   *     text values: numbers, booleans, blanks and errors never satisfy a text ordering criterion
+   *     (Excel criteria comparisons are type-segregated).
+   *   - Uncached formulas never match.
    */
   private def matchesCompareText(
     cellValue: CellValue,
@@ -431,11 +453,15 @@ object CriteriaMatcher:
     operand: String
   ): Boolean =
     cellValue match
-      case CellValue.Error(_) => false
+      case CellValue.Error(_) => op == CompareOp.Neq
       case CellValue.Formula(_, Some(cached), _) => matchesCompareText(cached, op, operand)
       case CellValue.Formula(_, None, _) => false
       case other =>
         op match
+          case CompareOp.Neq if operand.isEmpty =>
+            other match
+              case CellValue.Empty => false
+              case _ => true
           case CompareOp.Neq => !matchesExact(other, ExprValue.Text(operand))
           case CompareOp.Gt | CompareOp.Gte | CompareOp.Lt | CompareOp.Lte =>
             extractOrderableText(other) match
@@ -465,12 +491,11 @@ object CriteriaMatcher:
   /**
    * Negated wildcard matching (GH-466), for criteria like "<>A*".
    *
-   * Matches cells that do NOT match the pattern (blanks included, consistent with `<>text`); error
-   * cells and uncached formulas never match.
+   * Matches cells that do NOT match the pattern: every cell that is not text (numbers, booleans,
+   * blanks and errors, #780) and text that does not match. Uncached formulas never match.
    */
   private def matchesNotWildcard(cellValue: CellValue, pattern: String): Boolean =
     cellValue match
-      case CellValue.Error(_) => false
       case CellValue.Formula(_, Some(cached), _) => matchesNotWildcard(cached, pattern)
       case CellValue.Formula(_, None, _) => false
       case other => !matchesWildcard(other, pattern)

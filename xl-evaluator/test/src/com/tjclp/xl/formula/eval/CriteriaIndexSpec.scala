@@ -231,8 +231,9 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
 
   test("what is not indexed: empty text, comparisons, wildcards, negations, other cells") {
     def lookup(v: ExprValue) = CriteriaKeys.lookup(CriteriaMatcher.parse(v))
-    Vector("", "=", ">5", "<=x", "<>x", "<>", "a*", "?", "<>#N/A", "𐐀").foreach { s =>
-      assertEquals(lookup(ExprValue.Text(s)), None, s)
+    Vector("", "=", ">5", "<=x", "<>x", "<>", "<>4", "a*", "=a*", "?", "<>#N/A", "𐐀").foreach {
+      s =>
+        assertEquals(lookup(ExprValue.Text(s)), None, s)
     }
     assertEquals(lookup(ExprValue.Cell(CellValue.Empty)), None)
     assertEquals(lookup(ExprValue.Cell(CellValue.Formula("A1", None))), None)
