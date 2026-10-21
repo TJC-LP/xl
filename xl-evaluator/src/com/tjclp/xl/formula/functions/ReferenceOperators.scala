@@ -140,13 +140,13 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
   /**
    * INDEX's first slot: a location exactly as before, an operator call (area_num picks among its
-   * areas), a range-operator call (GH-713: `INDEX(A1:INDEX(A:A,5),2)`) or an array constant (INDEX
-   * indexes the constant's values). Any other expression keeps the range slot's parse error.
+   * areas), a range-operator call (GH-713: `INDEX(A1:INDEX(A:A,5),2)`), or a value: an array
+   * constant, a scalar (#725: `INDEX(5,1)`, a 1x1 array) or any expression that is no reference
+   * shape (`INDEX(1+2,1)`, `INDEX(SUM(A1:A3),1)`), whose value INDEX indexes. A call that returns a
+   * reference (OFFSET, INDIRECT, IF, …) keeps the range slot's parse error (#723).
    */
   val indexOperand: ArgSpec[Operand] = operandSpec(e =>
-    isOperatorCall(e) || RangeOperatorCall.unapply(e).isDefined || (e match
-      case TExpr.Lit(_: ArrayResult) => true
-      case _ => false)
+    isOperatorCall(e) || RangeOperatorCall.unapply(e).isDefined || !isReferenceShape(e)
   )
 
   private def operandText(operand: Operand, printer: ArgPrinter): String = operand match
@@ -777,7 +777,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     // drop this match (a new one falls to `Unknown` today: sound, but always dynamic).
     case call: TExpr.Call[?] if call.spec eq FunctionSpecs.index =>
       call.args.asInstanceOf[IndexArgs]._1 match
-        case Right(TExpr.Lit(_: ArrayResult)) => Envelope.NoCells
+        // a value (an array constant, a scalar, arithmetic): INDEX indexes it, naming no cells
+        case Right(value) if !isReferenceShape(value) => Envelope.NoCells
         case array => within(envelope(array, shapeOf), covered = true)
     case call: TExpr.Call[?] if call.spec eq FunctionSpecs.xlookup =>
       within(envelope(Left(call.args.asInstanceOf[XLookupArgs]._3), shapeOf), covered = true)

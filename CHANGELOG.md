@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **ROWS and COLUMNS of an error are that error** (#725): an argument that evaluates to an error
+  value is the result, as in Excel: an OFFSET off the top, left or bottom edge, a name or LET name
+  computing one, an INDIRECT to a missing sheet, `NA()`. A reference to a cell holding an error is
+  still a reference (`ROWS(A6)` is 1), also through a LET (`ROWS(LET(x,A6,x))` is 1), and an
+  array keeps its shape whatever it holds, written, named or LET-bound (`ROWS({1,#N/A;2,3})` is 2,
+  `ROWS({#N/A})` and `ROWS(arrNA)` with `arrNA = {#N/A}` are 1). A LET in a reference position
+  binds references in an array context as it does in a plain cell. **Behaviour change:**
+  `ROWS(OFFSET(A1,-1,0,10,1))` and `ROWS(dynRef)` with `dynRef = OFFSET(Sheet1!$A$1,-1,0,10,1)`
+  were 1 and are now `#REF!`;
+  `ROWS(NA())` and `ROWS(INDEX({#N/A},1))` were 1 and are now `#N/A`.
+- **INDEX over a scalar or any other value** (#725, #753): INDEX's first argument may be a value,
+  indexed as an array, a scalar as a 1x1 one. Index 1, 0 or omitted gives the value with its type
+  (`INDEX("",1)` is text, `INDEX(TRUE,1,1)` TRUE); out of bounds or area_num 2 is `#REF!`; a
+  negative or text index, or area_num 0, is `#VALUE!`; an array row_num spreads
+  (`SUM(INDEX(5,{1,1}))` is 10). The value is evaluated as an array, outside SUMPRODUCT's shared
+  extent (`INDEX(A1:A3*2,2)`). A call returning a reference there (OFFSET, INDIRECT, IF, CHOOSE,
+  XLOOKUP) is still a parse error (#723). **Behaviour change:** `INDEX(5,1)`, `INDEX(1+2,1)` and
+  `INDEX(SUM(A1:A3),1)` were parse errors and are now the value; `INDEX(konst,1)` with a name
+  `konst = 5`, and `LET(x,5,INDEX(x,1))`, were `#VALUE!` and are now 5. A name bound to an array,
+  constant or computed, is indexed too: `INDEX(arrThree,2)` with `arrThree = {1,2,3}` was
+  `#VALUE!` and is now 2.
+- **Two-argument IF** (#723, part a): `IF(test, value_if_true)` parses, and a false test gives the
+  logical FALSE; the test is coerced as in the three-argument form. Over an array test the
+  unmatched elements are FALSE, which SUM, COUNT and MAX skip and COUNTA counts. An empty third
+  argument is unchanged: `IF(FALSE,5,)` is 0. **Behaviour change:** `IF(FALSE,5)` was a parse
+  error ("expected 3 arguments") and is now FALSE; a workbook cell holding one now recalculates.
+
+### Changed
+
+- **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
+  Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
+  call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
+- **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
+  #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
+  needs the new arm, and fails to compile under `-Werror` until it has one.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{EvalError, EvalPosition, Evaluator, RecalcCounters}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, EvalPosition, Evaluator, RecalcCounters}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
@@ -460,7 +460,16 @@ object FunctionSpec:
       args: A0,
       ctx: EvalContext
     ): Option[Either[EvalError, Any]] =
-      Some(referenceFn(args, ctx))
+      // #725: an error the call computes instead of a reference (OFFSET off the grid, INDIRECT to
+      // a missing sheet, INDEX picking an error element) is the error value, not a 1x1 array of
+      // it: ROWS of it is the error, while ROWS of an array holding one keeps the array's shape
+      Some(referenceFn(args, ctx).map {
+        case ar: ArrayResult if ar.rows == 1 && ar.cols == 1 =>
+          ar(0, 0) match
+            case error: CellValue.Error => error
+            case _ => ar
+        case other => other
+      })
     override def render(args: A0, printer: ArgPrinter): String =
       renderFn.map(_(args, printer)).getOrElse(super.render(args, printer))
 
