@@ -2784,10 +2784,9 @@ private class EvaluatorImpl(
               case CellValue.Empty => Right(acc)
               case _ => Right(agg.combine(acc, BigDecimal(1)))
           else if agg.countsEmpty then
-            // COUNTBLANK mode: count only empty cells
-            cell.value match
-              case CellValue.Empty => Right(agg.combine(acc, BigDecimal(1)))
-              case _ => Right(acc)
+            // COUNTBLANK mode: count empty cells and empty text (#731); a formula reads as its value
+            if Aggregator.isBlankForCount(cell.value) then Right(agg.combine(acc, BigDecimal(1)))
+            else Right(acc)
           else
             ArrayArithmetic.carriedError(cell.value) match
               case Some(err) if agg.propagatesErrors =>
