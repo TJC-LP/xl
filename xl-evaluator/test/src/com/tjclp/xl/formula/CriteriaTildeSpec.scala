@@ -19,8 +19,8 @@ import com.tjclp.xl.sheets.Sheet
  *   - An operand with a `*` or `?` keeps the escape grammar: `~x` is a literal `x` for every
  *     character `x` (`~*`, `~?`, `~~`, and `~b` too, as desktop Excel reads `"a~b*"`); a `~` at the
  *     end is a literal tilde.
- *   - XLOOKUP/XMATCH match_mode 2 read every lookup value with the escape grammar (#774); SEARCH is
- *     unchanged.
+ *   - XLOOKUP/XMATCH match_mode 2 read every lookup value with the escape grammar (#774), and a
+ *     trailing lone `~` drops there (#693); SEARCH is unchanged.
  */
 class CriteriaTildeSpec extends ScalaCheckSuite:
 
@@ -175,7 +175,8 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     check("=XMATCH(\"a~~b\",A1:A6,2)", num(1))
     check("=XLOOKUP(\"a~~b\",A1:A6,B1:B6,,2)", num(1))
     check("=XMATCH(\"a~~b*\",A1:A6,2)", num(1))
-    check("=XMATCH(\"x~\",A1:A6,2)", num(5))
+    // a trailing lone ~ drops, as in MATCH type 0 (#693): "x~" finds x, not the text x~
+    check("=XMATCH(\"x~\",A1:A6,2)", num(6))
   }
 
   test("GH-765: SEARCH keeps its ~ escapes") {

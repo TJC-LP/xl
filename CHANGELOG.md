@@ -45,6 +45,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
     one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
     numbers in scientific notation.
+- **One exact lookup test for MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP; rich text is text**
+  (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
+  - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
+    **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
+    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
+    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
+    of the text `1`.
+  - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
+    `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
+    `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
+    `10` and the text `abc`. XMATCH and XLOOKUP still apply wildcards only in match_mode 2.
+  - A `~` with nothing after it drops from a lookup value that takes wildcards (MATCH type 0, exact
+    VLOOKUP/HLOOKUP, match_mode 2). **Behaviour change:** `MATCH("a~",r,0)` and
+    `XMATCH("a~",r,2)` found the text `a~` and now find the text `a`.
+  - **Behaviour change:** MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0.
+    `MATCH(A6,r,0)` over a blank A6 was `#N/A` and now finds the 0 key.
+  - **Behaviour change:** MATCH over a range with more than one row and more than one column is
+    `#N/A` in every match_type. `MATCH("fig",G1:I5,0)` returned the row-major position (4) and now
+    returns `#N/A`.
+  - A rich-text key matches its plain text in every exact lookup. **Behaviour change:**
+    `MATCH("kiwi",r,0)`, `XLOOKUP("kiwi",…)` and `VLOOKUP("kiwi",…,FALSE)` missed a rich-text
+    `kiwi` (`#N/A`) and now find it.
+  - **Behaviour change:** `ISTEXT` of a rich-text cell was FALSE and is now TRUE. UNIQUE reads rich
+    text as its plain text (rich `kiwi`, `kiwi` and `KIWI` were two rows and are now one), and SORT
+    places rich text among the text instead of after it.
+
+### Added
+
+- `ISNONTEXT` (#775): TRUE for a number, logical, error or blank cell, FALSE for text, empty text
+  and rich text.
 
 ## [0.25.0] - 2026-10-19
 

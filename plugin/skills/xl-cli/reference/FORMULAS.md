@@ -62,6 +62,7 @@ it are hand-written semantics worth knowing.
 | `ISERR` | 1 | cell | — |
 | `ISERROR` | 1 | cell | — |
 | `ISNA` | 1 | cell | — |
+| `ISNONTEXT` | 1 | cell | — |
 | `ISNUMBER` | 1 | cell | — |
 | `ISTEXT` | 1 | cell | — |
 | `LARGE` | 2 | range, integer | — |

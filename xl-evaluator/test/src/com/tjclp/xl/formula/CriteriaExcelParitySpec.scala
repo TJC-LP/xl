@@ -84,7 +84,7 @@ class CriteriaExcelParitySpec extends FunSuite:
   test("#774: match_mode 2 drops a ~ before any character, wildcard or not") {
     check("=XMATCH(\"a~~b\",A1:A14,2)", num(13))
     check("=XMATCH(\"~4\",A1:A14,2)", num(11))
-    // a lone trailing ~ stays a literal tilde ("a~" is in no cell)
+    // a lone trailing ~ drops (#693), and no cell holds "a"
     check("=XMATCH(\"a~\",A1:A14,2)", na)
   }
 

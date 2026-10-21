@@ -245,9 +245,11 @@ object CriteriaMatcher:
     sb.toString
 
   /**
-   * #774: an XMATCH/XLOOKUP match_mode 2 lookup value, read with the escape grammar whether or not
-   * it holds a wildcard. Unlike a criterion operand (GH-765), a lookup value always drops each `~`
-   * before a character: `"a~~b"` finds `a~b` and `"~4"` finds the text `4`.
+   * #774: a lookup value that takes wildcards (MATCH type 0, exact VLOOKUP/HLOOKUP, XMATCH/XLOOKUP
+   * match_mode 2), read with the escape grammar whether or not it holds a wildcard. Unlike a
+   * criterion operand (GH-765), a lookup value always drops each `~` before a character: `"a~~b"`
+   * finds `a~b` and `"~4"` finds the text `4`. A `~` with nothing after it drops too (#693): `"a~"`
+   * finds `a`, and a lone `"~"` is the empty pattern.
    */
   enum LookupPattern derives CanEqual:
     /** No unescaped `*` or `?`: the key must equal this text, every `~x` read as `x`. */
@@ -256,10 +258,13 @@ object CriteriaMatcher:
     /** An unescaped `*` or `?` remains: the key must be text that matches the pattern. */
     case Pattern(wildcard: Wildcard)
 
-  /** #774: how a match_mode 2 lookup value spelled `text` matches a key ([[LookupPattern]]). */
+  /** #774: how a lookup value spelled `text` matches a key ([[LookupPattern]]). */
   def lookupPattern(text: String): LookupPattern =
-    if hasUnescapedWildcard(text) then LookupPattern.Pattern(Wildcard(text))
-    else LookupPattern.Literal(unescapePattern(text))
+    // a run of tildes pairs off from its start, so an odd run at the end leaves one lone `~`
+    val trailingTildes = text.reverseIterator.takeWhile(_ == '~').size
+    val pattern = if trailingTildes % 2 == 1 then text.dropRight(1) else text
+    if hasUnescapedWildcard(pattern) then LookupPattern.Pattern(Wildcard(pattern))
+    else LookupPattern.Literal(unescapePattern(pattern))
 
   /**
    * Parse string as BigDecimal, handling Excel's flexible numeric syntax.

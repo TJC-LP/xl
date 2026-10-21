@@ -190,19 +190,31 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       for
         lookupValueEval <- evalValue(ctx, lookupValue)
         // GH-467: dereference cell-ref lookup values and coerce dates to serials up front —
-        // positions below are RANGE positions (idx + 1), blanks included, never compacted.
-        lookup = normalizeLookupValue(lookupValueEval)
+        // positions below are RANGE positions (idx + 1), blanks included, never compacted. A
+        // blank lookup value is the number 0 (#693)
+        lookup = blankLookupAsZero(normalizeLookupValue(lookupValueEval))
         _ <- lookupValueError("MATCH", lookup)
         matchType <- ctx.evalExpr(matchTypeExpr)
         resolved <- ctx.resolveRange(lookupArray)
         (targetSheet, lookupRange) = resolved
+        // #724: lookup_array is one row or one column; desktop Excel answers any other shape #N/A
+        // in every match_type (LibreOffice: #VALUE!), never a row-major position
+        _ <-
+          if lookupRange.width == 1 || lookupRange.height == 1 then Right(())
+          else
+            Left(
+              lookupNotFound(
+                s"MATCH: lookup_array ${lookupArray.toA1} is not a single row or column: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, …)"
+              )
+            )
         // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
         // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
         matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
         // the keys as references read them, lazily (GH-715: see LookupLine)
         line = lookupLine(lookupRange, targetSheet, ctx)
         found <- matchTypeInt match
-          case 0 => line.find(forward = true)(matchesLookupExact(_, lookup))
+          // #693: type 0 applies wildcards, as exact VLOOKUP/HLOOKUP do
+          case 0 => line.find(forward = true)(exactMatcher(lookup, wildcards = true))
           // #670(g): 1 is the largest key ≤ the value over ascending keys, -1 the smallest key ≥
           // it over descending keys — numbers or text (case-insensitive), the last of a run of
           // equal keys as Excel's binary search lands
@@ -281,7 +293,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
               lookupRange,
               targetSheet,
               ctx,
-              matchesLookupExact(_, lookup),
+              exactMatcher(lookup, wildcards = false),
               searchMode
             ).map(_.map(_ + 1))
           case 2 =>
@@ -289,7 +301,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
               lookupRange,
               targetSheet,
               ctx,
-              wildcardLookupMatcher(lookup),
+              exactMatcher(lookup, wildcards = true),
               searchMode
             ).map(_.map(_ + 1))
           case -1 | 1 =>

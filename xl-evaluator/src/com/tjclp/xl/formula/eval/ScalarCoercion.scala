@@ -304,9 +304,8 @@ private[formula] object ScalarCoercion:
       Option.when(truncated.isValidInt)(truncated.toInt)
 
   /**
-   * Numeric-text parse (the extractNumericForMatch convention): trimmed, total. Shared with
-   * TExprDecoders.decodeAsInt (GH-396) so the direct-cell and Coerced integer boundaries accept the
-   * same text domain.
+   * Numeric-text parse: trimmed, total. Shared with TExprDecoders.decodeAsInt (GH-396) so the
+   * direct-cell and Coerced integer boundaries accept the same text domain.
    */
   private[formula] def parseNumericText(s: String): Option[BigDecimal] =
     val t = s.trim
