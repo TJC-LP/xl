@@ -124,7 +124,7 @@ object DependencyGraph:
     val dependencies = formulaCells.map { case (ref, formulaStr) =>
       val deps = FormulaParser.parse(formulaStr) match
         case scala.util.Right(expr) =>
-          extractDependenciesBoundedCached(expr, bounds, rangeCache)
+          extractDependenciesBoundedCached(expr, bounds, rangeCache, Some(ref))
         case scala.util.Left(_) => Set.empty[ARef] // Parse error: no dependencies
       ref -> deps
     }.toMap
@@ -788,6 +788,9 @@ object DependencyGraph:
    *
    * @param expr
    *   The expression to analyze
+   * @param reader
+   *   #743: the cell holding the formula, when known: INDEX at a position written with ROW() or
+   *   COLUMN() then depends on the cells it selects, not on its whole array
    * @return
    *   Set of all cell references used in the expression
    *
@@ -802,7 +805,9 @@ object DependencyGraph:
    */
   // nowarn: Compiler incorrectly reports PolyRef as unreachable, but tests confirm it IS reached at runtime
   @nowarn("msg=Unreachable case")
-  def extractDependencies[A](expr: TExpr[A]): Set[ARef] =
+  def extractDependencies[A](expr: TExpr[A], reader: Option[ARef] = None): Set[ARef] =
+    def go(child: TExpr[?], inner: Option[ARef] = reader): Set[ARef] =
+      extractDependencies(child, inner)
     expr match
       // Single cell reference
       case TExpr.Ref(at, _, _) => Set(at)
@@ -825,13 +830,16 @@ object DependencyGraph:
       case call: TExpr.Call[?] =>
         // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
         // GH-669: an intersection of static locations depends only on the cells they share
+        // #743: INDEX at a position folded for the reader reads its selected cells alone
+        val inner = ReferenceOperators.operandReader(call, ReferenceOperators.staticShape, reader)
         depsFromArgValues(
-          ReferenceOperators.dependencyValues(
-            call.spec.name,
+          ReferenceOperators.callDependencyValues(
+            call,
             CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
-            ReferenceOperators.staticShape
+            ReferenceOperators.staticShape,
+            reader
           ),
-          expr => extractDependencies(expr),
+          go(_, inner),
           _.localCells,
           _.cells.toSet
         )
@@ -841,19 +849,19 @@ object DependencyGraph:
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
           _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
           _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
-        BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ extractDependencies(_))
+        BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ go(_))
       case TExpr.ToInt(expr) =>
-        extractDependencies(expr) // Type conversion - extract from wrapped expr
+        go(expr) // Type conversion - extract from wrapped expr
       // GH-374: unary plus is transparent — dependencies under it feed recalc edges
-      case TExpr.UnaryPlus(expr) => extractDependencies(expr)
+      case TExpr.UnaryPlus(expr) => go(expr)
       // GH-355: postfix percent — dependencies under it feed recalc edges
-      case TExpr.Percent(expr) => extractDependencies(expr)
+      case TExpr.Percent(expr) => go(expr)
       case TExpr.Aggregate(_, location) => location.localCells
 
       // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
       case TExpr.Let(bindings, body) =>
-        bindings.foldLeft(extractDependencies(body)) { case (acc, (_, value)) =>
-          acc ++ extractDependencies(value)
+        bindings.foldLeft(go(body)) { case (acc, (_, value)) =>
+          acc ++ go(value)
         }
       case TExpr.BindingRef(_) => Set.empty
       case TExpr.CoercedBindingRef(_, _) => Set.empty
@@ -866,15 +874,15 @@ object DependencyGraph:
       case TExpr.SheetNameRef(_, _) => Set.empty
 
       // GH-306: runtime coercion wrapper — transparent for analysis
-      case TExpr.Coerced(inner, _) => extractDependencies(inner)
+      case TExpr.Coerced(inner, _) => go(inner)
 
       // Literals and nullary functions (no dependencies)
       case TExpr.Lit(_) => Set.empty
 
       case TExpr.ErrorLit(_, _) => Set.empty
       case TExpr.Missing => Set.empty
-      case TExpr.DateToSerial(dateExpr) => extractDependencies(dateExpr)
-      case TExpr.DateTimeToSerial(dtExpr) => extractDependencies(dtExpr)
+      case TExpr.DateToSerial(dateExpr) => go(dateExpr)
+      case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
 
   /**
    * Extract all cell references from TExpr, bounded by the sheet's used range.
@@ -901,7 +909,8 @@ object DependencyGraph:
   private def extractDependenciesBoundedCached[A](
     expr: TExpr[A],
     bounds: Option[CellRange],
-    rangeCache: scala.collection.mutable.HashMap[(ARef, ARef), Set[ARef]]
+    rangeCache: scala.collection.mutable.HashMap[(ARef, ARef), Set[ARef]],
+    reader: Option[ARef] = None
   ): Set[ARef] =
     // Helper to bound a CellRange
     def boundRange(range: CellRange): Set[ARef] =
@@ -913,7 +922,7 @@ object DependencyGraph:
       )
 
     def recurse[B](child: TExpr[B]): Set[ARef] =
-      extractDependenciesBoundedCached(child, bounds, rangeCache)
+      extractDependenciesBoundedCached(child, bounds, rangeCache, reader)
 
     def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
       case TExpr.RangeLocation.Local(range, _) => boundRange(range)
@@ -949,13 +958,16 @@ object DependencyGraph:
       case call: TExpr.Call[?] =>
         // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
         // GH-669: an intersection of static locations depends only on the cells they share
+        // #743: INDEX at a position folded for the reader reads its selected cells alone
+        val inner = ReferenceOperators.operandReader(call, ReferenceOperators.staticShape, reader)
         depsFromArgValues(
-          ReferenceOperators.dependencyValues(
-            call.spec.name,
+          ReferenceOperators.callDependencyValues(
+            call,
             CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
-            ReferenceOperators.staticShape
+            ReferenceOperators.staticShape,
+            reader
           ),
-          recurse,
+          extractDependenciesBoundedCached(_, bounds, rangeCache, inner),
           localCells,
           boundRange
         )
@@ -1484,7 +1496,8 @@ object DependencyGraph:
                   sheet.name,
                   cellsFor,
                   Some(workbook),
-                  nameRanges = nameRanges
+                  nameRanges = nameRanges,
+                  reader = Some(cellRef)
                 )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
@@ -1531,7 +1544,8 @@ object DependencyGraph:
                   sheet.name,
                   cellsFor,
                   Some(workbook),
-                  nameRanges = nameRanges
+                  nameRanges = nameRanges,
+                  reader = Some(cellRef)
                 )
               case scala.util.Left(_) => Set.empty[QualifiedRef]
             Some(QualifiedRef(sheet.name, cellRef) -> deps)
@@ -1551,11 +1565,11 @@ object DependencyGraph:
    * `SUM($A$1:$A$5000)` over a constant driver column — the value-preserving graph has no range
    * edges at all, while [[fromWorkbookBounded]] retains and repeatedly traverses 49.5 million.
    *
-   * Range lookup scans only the target sheet's formula refs and is memoized by range. Single-cell
-   * references are filtered against the same formula-node set after name resolution. Consequently
-   * this graph is exactly `fromWorkbookBounded` with every non-formula successor removed, without
-   * first allocating those successors. Formula evaluation itself is unchanged and still reads the
-   * complete ranges from the workbook snapshot.
+   * Range lookup searches the target sheet's formula cells by column and row ([[FormulaColumns]])
+   * and is memoized by range. Single-cell references are filtered against the same formula-node set
+   * after name resolution. Consequently this graph is exactly `fromWorkbookBounded` with every
+   * non-formula successor removed, without first allocating those successors. Formula evaluation
+   * itself is unchanged and still reads the complete ranges from the workbook snapshot.
    *
    * This representation is intentionally internal: dirty-cone callers still need the public graph
    * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
@@ -1577,15 +1591,12 @@ object DependencyGraph:
       }
     }
     val formulaNodes = formulas.iterator.map(_._1).toSet
-    val refsBySheet: Map[SheetName, Vector[ARef]] =
-      formulas.groupMap(_._1.sheet)(_._1.ref)
+    val formulaColumns: Map[SheetName, FormulaColumns] =
+      formulas.groupMap(_._1.sheet)(_._1.ref).view.mapValues(FormulaColumns(_)).toMap
     val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
-      refsBySheet
-        .getOrElse(sheet, Vector.empty)
-        .iterator
-        .filter(range.contains)
-        .map(ref => QualifiedRef(sheet, ref))
-        .toSet
+      formulaColumns.get(sheet) match
+        case Some(columns) => columns.within(range).map(ref => QualifiedRef(sheet, ref)).toSet
+        case None => Set.empty
     }
 
     val canonicalSheet = sheetCanonicaliser(workbook)
@@ -1600,7 +1611,8 @@ object DependencyGraph:
             Some(workbook),
             preciseLookups = true,
             canonicalSheet = canonicalSheet,
-            nameRanges = nameRanges
+            nameRanges = nameRanges,
+            reader = Some(ref.ref)
           )
             .filter(formulaNodes.contains)
         case scala.util.Left(_) => Set.empty[QualifiedRef]
@@ -1702,7 +1714,8 @@ object DependencyGraph:
                   recordRange,
                   Some(workbook),
                   canonicalSheet = canonicalSheet,
-                  nameRanges = nameRanges
+                  nameRanges = nameRanges,
+                  reader = Some(cellRef)
                 )
                 points.foreach { point =>
                   pointBuilders.getOrElseUpdate(
@@ -1995,6 +2008,46 @@ object DependencyGraph:
    * mid-build). The captured mutable map is intentionally build-local and unsynchronized: callers
    * must invoke the returned closure only from the single graph-building thread.
    */
+  /**
+   * One sheet's formula cells by column, columns and each column's rows ascending, so the formula
+   * cells inside a range cost two binary searches per covered column plus the cells found. A scan
+   * of every formula per distinct range made a column of running totals, each reading its own
+   * `B1:B{r}`, quadratic in the rows (#743).
+   */
+  private final class FormulaColumns(
+    columns: scala.collection.immutable.ArraySeq[Int],
+    rowsOf: Map[Int, scala.collection.immutable.ArraySeq[Int]]
+  ):
+    def within(range: CellRange): Iterator[ARef] =
+      val firstCol = range.colStart.index0
+      val lastCol = range.colEnd.index0
+      val firstRow = range.rowStart.index0
+      val lastRow = range.rowEnd.index0
+      Iterator
+        .range(columns.search(firstCol).insertionPoint, columns.length)
+        .map(columns)
+        .takeWhile(_ <= lastCol)
+        .flatMap { col =>
+          val rows = rowsOf.getOrElse(col, scala.collection.immutable.ArraySeq.empty[Int])
+          Iterator
+            .range(rows.search(firstRow).insertionPoint, rows.length)
+            .map(rows)
+            .takeWhile(_ <= lastRow)
+            .map(row => ARef.from0(col, row))
+        }
+
+  private object FormulaColumns:
+    def apply(refs: Vector[ARef]): FormulaColumns =
+      val rowsOf = refs
+        .groupMap(_.col.index0)(_.row.index0)
+        .view
+        .mapValues(rows => scala.collection.immutable.ArraySeq.from(rows.distinct.sorted))
+        .toMap
+      new FormulaColumns(
+        scala.collection.immutable.ArraySeq.from(rowsOf.keys.toVector.sorted),
+        rowsOf
+      )
+
   private def memoizedCells(
     expand: (SheetName, CellRange) => Set[QualifiedRef]
   ): (SheetName, CellRange) => Set[QualifiedRef] =
@@ -2106,7 +2159,8 @@ object DependencyGraph:
     preciseLookups: Boolean = false,
     canonicalSheet: SheetName => SheetName = identity,
     nameRanges: NameRanges = NameRanges.empty,
-    parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption
+    parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption,
+    reader: Option[ARef] = None
   ): Set[QualifiedRef] =
     // #691: defined names expand from a queue, breadth-first, never by recursion: the formula is
     // scanned, then each resolved name it reaches — keyed on the node (the definition and the sheet
@@ -2115,6 +2169,7 @@ object DependencyGraph:
     // the stack holds one expression at a time however long the chain. A name deeper than
     // NameWalk.MaxDepth contributes no edges, like an unresolvable name (evaluation fails it too).
     val names = new NameQueue
+    // #743: `reader` positions the formula's own expression; a name body is read without one
     def extract(e: TExpr[?], sheet: SheetName, depth: Int): Set[QualifiedRef] =
       extractAt(
         e,
@@ -2125,7 +2180,8 @@ object DependencyGraph:
         workbook,
         preciseLookups,
         canonicalSheet,
-        nameRanges
+        nameRanges,
+        if depth == 0 then reader else None
       )
     @tailrec
     def drain(acc: Set[QualifiedRef]): Set[QualifiedRef] =
@@ -2202,7 +2258,8 @@ object DependencyGraph:
     workbook: Option[Workbook],
     preciseLookups: Boolean,
     canonicalSheet: SheetName => SheetName,
-    nameRanges: NameRanges
+    nameRanges: NameRanges,
+    reader: Option[ARef]
   ): Set[QualifiedRef] =
     // the formula's own sheet, looked up once per expression (SUMIF/AVERAGEIF name resolution)
     lazy val source: Option[Sheet] = workbook.flatMap(_(currentSheet).toOption)
@@ -2303,7 +2360,11 @@ object DependencyGraph:
         )
       Set.empty
 
-    def go(e: TExpr[?]): Set[QualifiedRef] =
+    def go(e: TExpr[?]): Set[QualifiedRef] = walk(reader)(e)
+
+    // #743: `at`, the cell the formula sits in, as the operands of `e` are read (operandReader)
+    def walk(at: Option[ARef])(e: TExpr[?]): Set[QualifiedRef] =
+      def go(child: TExpr[?]): Set[QualifiedRef] = walk(at)(child)
       e match
         // Same-sheet references - qualify with current sheet
         case TExpr.Ref(at, _, _) => Set(QualifiedRef(currentSheet, at))
@@ -2339,8 +2400,14 @@ object DependencyGraph:
           // #733: a defined name bound to a range resizes like the range itself — its target's
           // resized cells are static edges
           val raw = call.spec.argSpec.toValues(call.args)
-          val values = ReferenceOperators.dependencyValues(
-            call.spec.name,
+          // GH-713: a range of names resolved through the workbook gets its bounding edges
+          val shapeOf: ReferenceOperators.ShapeOf = location =>
+            ReferenceOperators
+              .staticShape(location)
+              .orElse(resolved(location).map((sheet, range) => (Some(sheet.name), range)))
+          // #743: INDEX at a position folded for the reader reads its selected cells alone
+          val values = ReferenceOperators.callDependencyValues(
+            call,
             CriteriaRangeResize.resizedArgs(
               call.spec.name,
               raw,
@@ -2353,12 +2420,10 @@ object DependencyGraph:
                 case other => other
               }
             ),
-            // GH-713: a range of names resolved through the workbook gets its bounding edges
-            location =>
-              ReferenceOperators
-                .staticShape(location)
-                .orElse(resolved(location).map((sheet, range) => (Some(sheet.name), range)))
+            shapeOf,
+            at
           )
+          val inner = ReferenceOperators.operandReader(call, shapeOf, at)
           // A name the resize replaced resolved statically to a range or a cell, through any chain
           // of names: its resized CrossSheet is everything the call reads, so the name's full
           // range adds no edge — it would make `C5 = SUMIF(A1:A3,">0",amt)` with amt = C1:C10 a
@@ -2367,7 +2432,7 @@ object DependencyGraph:
           val selected = lookupCells(call.spec.name, values)
           values.zipWithIndex.foldLeft(Set.empty[QualifiedRef]) { case (acc, (value, index)) =>
             value match
-              case ArgValue.Expr(expr) => union(acc, go(expr))
+              case ArgValue.Expr(expr) => union(acc, walk(inner)(expr))
               case ArgValue.Range(_) if index == 1 && selected.isDefined =>
                 union(acc, selected.getOrElse(Set.empty))
               case ArgValue.Range(range) => union(acc, locCells(range))
