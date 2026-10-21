@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
+  iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while
+  building the dependency graph and again when evaluating it. Evaluation, and the scan for dynamic
+  (`INDIRECT`/`OFFSET`) cells, now reuse the graph build's parse of a cell while the cell still holds
+  the text it was parsed from; a formula whose text differs is parsed again. On the 187,699-formula
+  synthetic book (`LoadsBookMain shape=Real`) a pass makes 187,699 formula parses, one per formula.
+  The pass holds those parses until it ends. Results are unchanged: a property test compares every
+  cell, exact `BigDecimal` scale included, and every error with the reuse on and off.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

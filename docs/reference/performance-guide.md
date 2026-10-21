@@ -410,10 +410,15 @@ With the compact graph, the per-pass caches and the criteria index together, `Lo
 The Real helper book also completes under `-Xmx1g` (8.7 s). Every earlier engine runs out of memory
 on it at `-Xmx4g`, and the compact graph without the index did not finish in 15 minutes. A full dump
 of its 187,699 formula values is identical with the index on and off, and between sequential and
-parallel recalculation. In a JFR profile of the Real `checked` run, formula parsing is the largest
-CPU cost (about 22% of samples): each formula is parsed once while the graph is built and again
-when it is evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and the
-criteria calls (about 15%, of which about 5% is building the column slices).
+parallel recalculation. In a JFR profile of the Real `checked` run on 0.25.0, formula parsing is the
+largest CPU cost (about 22% of samples): each formula was parsed once while the graph was built and
+again when it was evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and
+the criteria calls (about 15%, of which about 5% is building the column slices).
+
+Since #790 evaluation reuses the graph build's parse of each formula cell (looked up by the cell and
+checked against its current text), so the `FormulaParses` counter of a Real pass is 187,699, one
+per formula. Evaluation parses again only a formula the build could not parse or whose text has
+changed since; under the legacy engine, which keeps no parse, it parses every formula again.
 
 ---
 
