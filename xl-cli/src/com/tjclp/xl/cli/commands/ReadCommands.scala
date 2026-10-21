@@ -625,15 +625,12 @@ object ReadCommands:
       )
     else
       for
-        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
+        anchored <- arrayAnchor(wb, sheetOpt, targetRefOpt)
+        (sheet, originRef) = anchored
         // positionless: evala anchors its display, it does not place the formula in a cell
         precedents <- precedentsEvaluated(wb, sheet, formula, overrides, None)
         evalSheet = precedents.sheet
         evaluator = precedents.evaluator
-        // Parse target ref or use a virtual cell far from data
-        originRef = targetRefOpt
-          .flatMap(ARef.parse(_).toOption)
-          .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
             .evaluateArrayFormulaUsing(
@@ -648,6 +645,26 @@ object ReadCommands:
         )
         (updatedSheet, spillRange) = result
       yield (formula, updatedSheet, spillRange)
+
+  /**
+   * The sheet `evala` evaluates on and the cell its display is anchored at. `--at` follows THE
+   * sheet rule as `eval --at` does (#727): a qualifier names the sheet, else the default, else the
+   * only sheet, else `SHEET_REQUIRED`; a range or an unparseable ref is `INVALID_REFERENCE`.
+   * Without `--at` the anchor is a virtual cell far from data, Z1000.
+   */
+  private def arrayAnchor(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    targetRefOpt: Option[String]
+  ): IO[(Sheet, ARef)] =
+    targetRefOpt match
+      case Some(atStr) =>
+        SheetResolver.resolveRef(wb, sheetOpt, atStr, "evala").flatMap {
+          case (sheet, Left(cell)) => IO.pure((sheet, cell))
+          case (_, Right(_)) => IO.raiseError(notOneCell(atStr))
+        }
+      case None =>
+        SheetResolver.requireSheet(wb, sheetOpt, "evala").map((_, ARef.from0(25, 999)))
 
   // ==========================================================================
   // Private helpers
@@ -703,6 +720,11 @@ object ReadCommands:
    * a formula is checked only while still cached, at most once per cell of a block it registered
    * in: [[StaleBlockRows]] checks per registration at worst, bounded by the indexes' own size, not
    * by the square of the sheet. A wide reader is checked against each stale cell, as before.
+   *
+   * Every formula [[DependencyGraph.dynamicCells]] lists (#763) is stale from the start, whatever
+   * `changed` holds: its reads are known only to evaluation, so `SUM(OFFSET(Data!B1,0,0,2,1))`
+   * reads Data!B2 though no range it names contains it. Its readers are then found like any stale
+   * cell's.
    *
    * The maps, sets and bit set below are local to one call and never escape it: the result is a
    * new, immutable workbook.
@@ -802,7 +824,16 @@ object ReadCommands:
     sheets.indexWhere(_.name == home) match
       case -1 => book
       case homeIndex =>
-        walk(changed.toList.map(homeIndex -> _))
+        // #763: a reader whose references are computed at run time (OFFSET, INDIRECT, a name whose
+        // chain reaches one) reads what no static range shows, so it is stale under any override,
+        // as recalculation treats it, and its own readers are walked from it
+        val dynamic = DependencyGraph.dynamicCells(book).toList.flatMap { q =>
+          sheets.indexWhere(_.name == q.sheet) match
+            case -1 => Nil
+            case at => List(at -> q.ref)
+        }
+        stale ++= dynamic.map(idOf)
+        walk(changed.toList.map(homeIndex -> _) ::: dynamic)
         stale.toList.map(nodes(_)).groupMap(_._1)(_._2).foldLeft(book) { case (b, (at, refs)) =>
           b.put(refs.foldLeft(sheets(at)) { (s, ref) =>
             s(ref).value match
