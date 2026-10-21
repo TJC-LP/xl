@@ -18,6 +18,7 @@ import com.tjclp.xl.ooxml.{
   OoxmlWorkbook,
   Relationships,
   SharedStringIndex,
+  SheetKinds,
   XmlSecurity,
   XmlUtil
 }
@@ -678,10 +679,17 @@ object WorkbookLint:
     Vector(drawingSpec, legacyDrawingSpec, legacyDrawingHFSpec, pictureSpec)
   )
 
-  private val sheetKinds: Vector[SheetKind] =
-    Vector(worksheetKind, chartsheetKind, dialogsheetKind, macrosheetKind)
+  /**
+   * The international macro sheet (rel type `xlIntlMacrosheet`, [MS-XLSX]) has the same
+   * `<xm:macrosheet>` part as the plain one; only the relationship differs (GH-791).
+   */
+  private val intlMacrosheetKind =
+    macrosheetKind.copy(relType = SheetKinds.relTypeIntlMacrosheet)
 
-  /** A `<sheet>` may target a worksheet, chartsheet, dialogsheet or macrosheet part. */
+  private val sheetKinds: Vector[SheetKind] =
+    Vector(worksheetKind, chartsheetKind, dialogsheetKind, macrosheetKind, intlMacrosheetKind)
+
+  /** A `<sheet>` may target a worksheet, chartsheet, dialogsheet or (intl) macrosheet part. */
   private val sheetRelTypes: Set[String] = sheetKinds.map(_.relType).toSet
 
   /**

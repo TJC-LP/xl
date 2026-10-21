@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
+  recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
+  (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
+  cells, for example a `t="s"` index past the table's end written as `#REF!` (`t="e"`), the
+  `count` attribute (ECMA-376 Part 1, §18.4.9) kept the old total. Every sheet written from the
+  model is now recounted.
+  Behaviour change: in that case `xl/sharedStrings.xml` `count` was the source total (for example
+  `4`); it is now the number of `t="s"` cells in the written package (`3`).
+  Behaviour change: an inline string (`t="inlineStr"`) in a sheet the write regenerates without
+  modifying it (for example any sheet when a sheet is added) used to stay inline, and
+  `xl/sharedStrings.xml` was not given its text; it is now appended to the shared-string table and
+  the cell is written as a `t="s"` reference (a table of Alpha, Beta, Gamma with `count="3"` becomes
+  Alpha, Beta, Gamma, Zeta with `count="4"` `uniqueCount="4"`). The cell reads as the same text.
+- **`xl lint` accepts international macro sheets** (#791): a `<sheet>` whose relationship is
+  `xlIntlMacrosheet` was reported as `wrong-rel-type` ("expected worksheet"), its part was not
+  scanned, and a shared string referenced only from it was reported as `shared-string-orphan`. The
+  part is now checked like a plain macro sheet (CT_Macrosheet child order, relationships, bounds,
+  shared-string indices).
+  Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
+  and possibly a `shared-string-orphan` finding; it now gets neither.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
