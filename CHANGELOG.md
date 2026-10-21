@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
+  unchanged into every cell, so every row after the first computed the first row's result. It is now
+  dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
+  `putf … from` stream arm do, and a reference dragged off the grid raises the `OFF_GRID_REF`
+  warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
+  written.
+  Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
+  `=B3*C3`, `=B4*C4` and `=B5*C5`. Its summary line reads `Applied formula to N cells in <range>
+  (streaming, with anchor-aware dragging)` instead of `Filled <range> with formula (streaming, no
+  dragging)`.
+
+### Testing
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

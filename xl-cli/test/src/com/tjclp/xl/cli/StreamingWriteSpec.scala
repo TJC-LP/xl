@@ -375,6 +375,77 @@ class StreamingWriteSpec extends FunSuite:
       Files.deleteIfExists(outputPath)
   }
 
+  test("GH-789: --stream putf of one formula over a range drags it like the in-memory verb") {
+    val sourcePath = tempXlsx()
+    val streamedPath = tempXlsx()
+    val inMemoryPath = tempXlsx()
+    try
+      val source = (0 to 4).foldLeft(Sheet("Test")) { (s, row) =>
+        s.put(ARef.from0(1, row), CellValue.Number(BigDecimal(row + 1)))
+          .put(ARef.from0(2, row), CellValue.Number(BigDecimal(10)))
+      }
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+
+      // a relative, a column-absolute, a row-absolute and a fully absolute reference
+      val formula = "=B2*C2+$B2+B$2+$C$2"
+      StreamingWriteCommands
+        .putFormula(sourcePath, streamedPath, Some("Test"), "A2:D5", List(formula))
+        .unsafeRunSync()
+      val wb = Workbook(source)
+      WriteCommands
+        .putFormula(wb, wb.sheets.headOption, "A2:D5", List(formula), inMemoryPath, config)
+        .unsafeRunSync()
+
+      def formulas(path: Path): Map[String, String] =
+        ExcelIO
+          .instance[IO]
+          .read(path)
+          .unsafeRunSync()
+          .sheets
+          .head
+          .cells
+          .collect { case (ref, cell) =>
+            cell.value match
+              case CellValue.Formula(expr, _, _) => Some(ref.toA1 -> expr)
+              case _ => None
+          }
+          .flatten
+          .toMap
+
+      val streamed = formulas(streamedPath)
+      assertEquals(streamed.get("A2"), Some("B2*C2+$B2+B$2+$C$2"))
+      assertEquals(streamed.get("A5"), Some("B5*C5+$B5+B$2+$C$2"))
+      assertEquals(streamed.get("D3"), Some("E3*F3+$B3+E$2+$C$2"))
+      assertEquals(streamed, formulas(inMemoryPath))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(streamedPath)
+      Files.deleteIfExists(inMemoryPath)
+  }
+
+  test("GH-789: --stream putf drag reports a reference dragged off the grid") {
+    val sourcePath = tempXlsx()
+    val outputPath = tempXlsx()
+    try
+      val source = Sheet("Test").put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      ExcelIO.instance[IO].write(Workbook(source), sourcePath).unsafeRunSync()
+      val warnings = scala.collection.mutable.ListBuffer.empty[contract.Warning]
+      StreamingWriteCommands
+        .putFormula(
+          sourcePath,
+          outputPath,
+          Some("Test"),
+          "B1048575:B1048576",
+          List("=A1048576"),
+          w => IO(warnings += w).void
+        )
+        .unsafeRunSync()
+      assertEquals(warnings.map(_.code).toList, List(contract.WarningCode.OFF_GRID_REF))
+    finally
+      Files.deleteIfExists(sourcePath)
+      Files.deleteIfExists(outputPath)
+  }
+
   test("--stream putf of several formulas names the cell whose formula does not parse") {
     val sourcePath = tempXlsx()
     val outputPath = tempXlsx()
