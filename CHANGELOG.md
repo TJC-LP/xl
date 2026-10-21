@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
+  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
+  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
+  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
+  is now stale under any override, and its readers with it.
+  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
+  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
+- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
+  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
+  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
+  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

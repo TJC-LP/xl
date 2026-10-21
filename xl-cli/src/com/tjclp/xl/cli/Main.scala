@@ -1262,7 +1262,10 @@ USAGE:
 
   private val atOpt =
     Opts
-      .option[String]("at", "Cell the displayed result is anchored at (nothing is written)")
+      .option[String](
+        "at",
+        "Cell the displayed result is anchored at; Sheet!A1 names the sheet (nothing is written)"
+      )
       .orNone
 
   val evalArrayCmd: Opts[CliCommand] =
