@@ -18,7 +18,8 @@ import munit.FunSuite
  * formulas, each value's type read with TYPE) over the same synthetic data: Data!A1:A3 = 1, 2, 3,
  * A4 blank, A5 `=""`, A6 `=NA()`, A7 TRUE, A8 "txt", B1:B3 = 10, 20, 30, K1:K3 = 1.5, 2, 3; names
  * `konst = 5`, `ktext = "t"`, `dynRef` and `dynCol` (OFFSET off the top and left edges) and `dyn =
- * OFFSET(Data!$K$1,0,0,3,1)`.
+ * OFFSET(Data!$K$1,0,0,3,1)`. A second Excel run added `errCell = Data!$A$6`, `arrNA = {#N/A}`,
+ * `arrThree = {1,2,3}`, `arrComp = Data!$A$1:$A$3*2` and `seqName = SEQUENCE(3)`.
  */
 class ScalarIndexAndIfSpec extends FunSuite:
 
@@ -51,6 +52,11 @@ class ScalarIndexAndIfSpec extends FunSuite:
     .withDefinedName("dynRef", "OFFSET(Data!$A$1,-1,0,10,1)")
     .withDefinedName("dynCol", "OFFSET(Data!$A$1,0,-1,1,5)")
     .withDefinedName("dyn", "OFFSET(Data!$K$1,0,0,3,1)")
+    .withDefinedName("errCell", "Data!$A$6")
+    .withDefinedName("arrNA", "{#N/A}")
+    .withDefinedName("arrThree", "{1,2,3}")
+    .withDefinedName("arrComp", "Data!$A$1:$A$3*2")
+    .withDefinedName("seqName", "SEQUENCE(3)")
 
   /** `formula` as a plain formula cell at Calc!G1, evaluated at its own position. */
   private def plain(formula: String): Either[String, CellValue] =
@@ -83,8 +89,24 @@ class ScalarIndexAndIfSpec extends FunSuite:
     "ROWS(Data!A6)" -> N("1"),
     "ROWS(Data!A1:A9)" -> N("9"),
     "ROWS({1,#N/A;2,3})" -> N("2"),
-    // not in the Excel run: a 1x1 array constant keeps its shape as the 2x2 one does
+    // a 1x1 array holding an error keeps its shape, written, named or LET-bound
     "ROWS({#N/A})" -> N("1"),
+    "COLUMNS({#N/A})" -> N("1"),
+    "ROWS(arrNA)" -> N("1"),
+    "LET(x,{#N/A},ROWS(x))" -> N("1"),
+    "ROWS(LET(x,{#N/A},x))" -> N("1"),
+    // a LET whose body is a reference to an error cell is that reference
+    "ROWS(LET(x,Data!A6,x))" -> N("1"),
+    "COLUMNS(LET(x,Data!A6,x))" -> N("1"),
+    "SUM(ROWS(LET(x,Data!A6,x)))" -> N("1"),
+    "ROWS(LET(x,errCell,x))" -> N("1"),
+    "LET(x,Data!A6,ROWS(x))" -> N("1"),
+    "ROWS(IF(TRUE,Data!A6))" -> N("1"),
+    "ROWS(errCell)" -> N("1"),
+    "SUM(LET(x,Data!A1,x))" -> N("1"),
+    // an error value a selector or INDEX gives is the error
+    "ROWS(IF(TRUE,NA()))" -> E(CellError.NA),
+    "ROWS(INDEX({#N/A},1))" -> E(CellError.NA),
     "COLUMNS({1,#N/A;2,3})" -> N("2"),
     "ROWS(5)" -> N("1"),
     "COLUMNS(\"\")" -> N("1"),
@@ -127,6 +149,11 @@ class ScalarIndexAndIfSpec extends FunSuite:
     "INDEX(5,1,0)" -> N("5"),
     "INDEX(5,0,1)" -> N("5"),
     "INDEX(5,\"\")" -> E(CellError.Value),
+    // a defined name bound to an array, constant or computed
+    "INDEX(arrThree,2)" -> N("2"),
+    "INDEX(arrThree,1,2)" -> N("2"),
+    "INDEX(arrComp,2)" -> N("4"),
+    "INDEX(seqName,2)" -> N("2"),
     // ----- #723 (a): two-argument IF -----
     "IF(TRUE,5)" -> N("5"),
     "IF(FALSE,5)" -> B(false),

@@ -222,20 +222,17 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    *
    * #725: an argument that evaluates to an error value is that error, as in Excel: the `#REF!` an
    * OFFSET off the grid or an INDIRECT to a missing sheet computes instead of a reference
-   * (directly, through a name, a LET name or a selector), or `NA()`. Those arrive as a 1x1 array
-   * holding the error. A reference to a cell holding an error is still a reference (`ROWS(A6)` is
-   * 1), and an array constant holding errors keeps its shape (`ROWS({1,#N/A;2,3})` is 2).
+   * (directly, through a name, a LET name or a selector), or `NA()`. A reference to a cell holding
+   * an error is still a reference (`ROWS(A6)` is 1), and an array keeps its shape whatever it holds
+   * (`ROWS({1,#N/A;2,3})` is 2, `ROWS({#N/A})` 1, through a name or LET name too).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def dimensions(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, (Int, Int)] =
-    def errorOr(value: CellValue): Either[EvalError, (Int, Int)] =
-      ArrayArithmetic.carriedError(value).fold(Right((1, 1)))(e => Left(EvalError.ErrorValue(e)))
     ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
       case RangeOperand(_, range) => Right((range.height, range.width))
-      case ar: ArrayResult if ar.rows == 1 && ar.cols == 1 && !Evaluator.isArrayConstant(expr) =>
-        errorOr(ar(0, 0))
       case ar: ArrayResult => Right((ar.rows, ar.cols))
-      case cell: CellValue => errorOr(cell)
+      case cell: CellValue =>
+        ArrayArithmetic.carriedError(cell).fold(Right((1, 1)))(e => Left(EvalError.ErrorValue(e)))
       case _ => Right((1, 1))
     }
 
