@@ -1,7 +1,14 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{
+  ArrayArithmetic,
+  ArrayResult,
+  EvalError,
+  EvalResult,
+  Evaluator,
+  RangeOperand
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.{Clock, Arity}
@@ -495,8 +502,9 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * The array the cell at `anchor` spills. The file's `<f t="array" ref>` record is Excel's own
    * extent and is read through its cached cells when it has a cache — so a spill from a function xl
    * does not evaluate still reads; an uncached array record, or a plain formula, is evaluated as an
-   * array at the anchor's position (a scalar result means the cell is not a spill anchor); a
-   * constant, a blank and a spilled non-anchor cell are `#REF!`, as in Excel.
+   * array at the anchor's position. #803: a formula that does not spill is its own one cell — a
+   * scalar or an error value is the 1x1 array of the value the cell stores; a constant, a blank and
+   * a spilled non-anchor cell are `#REF!`, as in Excel.
    */
   private def spillOf(
     anchorSheet: Sheet,
@@ -510,12 +518,20 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           Some(s"${anchor.toA1}#: not the anchor of a spilled array")
         )
       )
-    // an array is the spill; a scalar result means the cell is not a spill anchor
+    // an array is the spill; any other result is the one cell, holding what the cell stores
+    // (SheetEvaluator.cellResult's rule: an empty reference reads 0, an error value in flight is
+    // the cell's error); a failure with no error value (a cycle, the depth guard) stays a Left
     def asSpill(raw: Either[EvalError, Any]): Either[EvalError, ArrayResult] =
-      raw.flatMap {
-        case ar: ArrayResult => Right(ar)
-        case _ => notAnchor
-      }
+      raw match
+        case Right(ar: ArrayResult) => Right(ar)
+        case Right(scalar) =>
+          unwrapCachedValue(EvalResult.toCellValue(scalar)) match
+            case CellValue.Empty => Right(ArrayResult.single(CellValue.Number(BigDecimal(0))))
+            case value => Right(ArrayResult.single(value))
+        case Left(err) =>
+          EvalError.toErrorValue(err) match
+            case Some(code) => Right(ArrayResult.single(CellValue.Error(code)))
+            case None => Left(err)
     def evaluated(text: String): Either[EvalError, ArrayResult] =
       asSpill(
         Evaluator.evalSpillFormula(
