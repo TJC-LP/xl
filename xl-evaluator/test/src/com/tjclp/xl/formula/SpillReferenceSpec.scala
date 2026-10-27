@@ -129,17 +129,45 @@ class SpillReferenceSpec extends FunSuite:
   private def single(formula: String): XLResult[CellValue] =
     singleCells.evaluateFormula(formula, Clock.system, Some(Workbook(singleCells)), Some(ref"H1"))
 
-  test("#803: x# on a formula that does not spill is that one cell, as in Excel") {
-    List(
-      "=ROWS(A2#)" -> n(1),
-      "=COUNTA(A2#)" -> n(1),
-      "=COUNTBLANK(C1#)" -> n(0),
-      "=COUNTBLANK(G1#)" -> n(0)
-    ).foreach((formula, excel) => assertEquals(single(formula), Right(excel), formula))
-    // Excel's 1 also needs COUNTBLANK to count empty text (#731); the spill half is that A2# is A2
-    assert(!isRef(single("=COUNTBLANK(A2#)")), single("=COUNTBLANK(A2#)").toString)
-    assert(isRef(single("=COUNTBLANK(B1#)")), single("=COUNTBLANK(B1#)").toString)
-    assert(isRef(single("=COUNTBLANK(E5#)")), single("=COUNTBLANK(E5#)").toString)
+  // The six formulas in #803. COUNTBLANK's empty-text fix is separate (#731 / #804):
+  // Excel returns 1 for COUNTBLANK(A2#). Compare with the direct reference so this test
+  // requires 1 automatically when #804 merges, without pinning the current undercount of 0.
+  private def singleCellCases = List(
+    "=ROWS(A2#)" -> n(1),
+    "=COUNTA(A2#)" -> n(1),
+    "=COUNTBLANK(A2#)" -> single("=COUNTBLANK(A2)").fold(err => fail(err.toString), identity),
+    "=COUNTBLANK(C1#)" -> n(0),
+    "=COUNTBLANK(G1#)" -> n(0),
+    "=COUNTBLANK(B1#)" -> CellValue.Error(CellError.Ref)
+  )
+
+  private val cachedSingleCells = singleCells
+    .put(ref"A2", CellValue.Formula("\"\"", Some(CellValue.Text(""))))
+    .put(ref"C1", CellValue.Formula("5", Some(n(5))))
+    .put(ref"G1", CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))))
+
+  test("#803: the issue's six formulas read cached and uncached single-cell anchors") {
+    List(singleCells, cachedSingleCells).foreach { source =>
+      val book = Workbook(source, Sheet("Reader")).withDefinedName("scalar", "Single!$C$1")
+      singleCellCases.foreach { (formula, expected) =>
+        assertEquals(
+          source.evaluateFormula(formula, Clock.system, Some(book), Some(ref"H1")),
+          Right(expected),
+          formula
+        )
+        val qualified = formula.replace("(", "(Single!")
+        assertEquals(
+          book.sheets(1).evaluateFormula(qualified, Clock.system, Some(book), Some(ref"H1")),
+          Right(expected),
+          qualified
+        )
+      }
+      assertEquals(
+        source.evaluateFormula("=SUM(scalar#)", Clock.system, Some(book), Some(ref"H1")),
+        Right(n(5))
+      )
+    }
+    assertEquals(single("=COUNTBLANK(E5#)"), Right(CellValue.Error(CellError.Ref)))
   }
 
   test("#803: the one cell reads as the formula's value: numbers sum, an error is one element") {
@@ -154,25 +182,35 @@ class SpillReferenceSpec extends FunSuite:
       blankRef.evaluateFormula("=COUNTBLANK(D1#)", Clock.system, None, Some(ref"H1")),
       Right(n(0))
     )
-    val (s, range) = singleCells.evaluateArrayFormula("=C1#", ref"H1").toOption.get
-    assertEquals(range, CellRange(ref"H1", ref"H1"))
-    assertEquals(s(ref"H1").value, n(5))
+    // Verify the spill's element, not just COUNTA's count (which also counts an error).
+    List(("=A2#", CellValue.Text("")), ("=C1#", n(5)), ("=G1#", CellValue.Error(CellError.Div0)))
+      .foreach { (formula, expected) =>
+        val (spilled, extent) = singleCells
+          .evaluateArrayFormula(formula, ref"H1")
+          .fold(err => fail(err.toString), identity)
+        assertEquals(extent, CellRange(ref"H1", ref"H1"))
+        assertEquals(spilled(ref"H1").value, expected)
+      }
+    val unsupported = singleCells.put(ref"D1", CellValue.Formula("UNKNOWN_FUNCTION()"))
+    assert(unsupported.evaluateFormula("=ROWS(D1#)", Clock.system).isLeft)
+
   }
 
   test("#803: recalculation folds read a non-spilling formula's x# as that cell") {
-    val book = Workbook(
-      singleCells
-        .put(ref"H1", CellValue.Formula("ROWS(A2#)"))
-        .put(ref"H2", CellValue.Formula("COUNTBLANK(C1#)"))
-        .put(ref"H3", CellValue.Formula("COUNTBLANK(G1#)"))
-        .put(ref"H4", CellValue.Formula("SUM(C1#)"))
-    )
-    val recalculated = book.recalculate(Clock.system).workbook
-    val cached = (at: ARef) => c1Of(recalculated, at)
-    assertEquals(cached(ref"H1"), CellValue.Formula("ROWS(A2#)", Some(n(1))))
-    assertEquals(cached(ref"H2"), CellValue.Formula("COUNTBLANK(C1#)", Some(n(0))))
-    assertEquals(cached(ref"H3"), CellValue.Formula("COUNTBLANK(G1#)", Some(n(0))))
-    assertEquals(cached(ref"H4"), CellValue.Formula("SUM(C1#)", Some(n(5))))
+    List(singleCells, cachedSingleCells).foreach { source =>
+      val withReaders = singleCellCases.zipWithIndex.foldLeft(source) {
+        case (current, ((formula, _), i)) =>
+          current.put(ARef.from0(7, i), CellValue.Formula(formula.stripPrefix("=")))
+      }
+      val recalculated = Workbook(withReaders).recalculate(Clock.system).workbook
+      singleCellCases.zipWithIndex.foreach { case ((formula, expected), i) =>
+        assertEquals(
+          c1Of(recalculated, ARef.from0(7, i)),
+          CellValue.Formula(formula.stripPrefix("="), Some(expected)),
+          formula
+        )
+      }
+    }
   }
 
   test("a sheet-qualified anchor and a defined name bound to the anchor spill the same array") {
