@@ -117,8 +117,9 @@ class SpillReferenceSpec extends FunSuite:
   }
 
   /**
-   * #803, Excel for Mac 16.114: A2 `=""`, C1 `=5`, G1 `=1/0` are formulas that do not spill; B1 is
-   * the constant "q" and E5 is blank. `x#` on a formula that does not spill is that one cell.
+   * Recreate the spreadsheet from #803, checked in Excel for Mac 16.114. A2 contains `=""`, C1
+   * contains `=5`, and G1 contains `=1/0`. Each formula returns one value, so its `#` reference
+   * should return a one-cell array. B1 contains the constant text "q", and E5 is left empty.
    */
   private val singleCells = Sheet("Single")
     .put(ref"A2", CellValue.Formula("\"\""))
@@ -129,9 +130,9 @@ class SpillReferenceSpec extends FunSuite:
   private def single(formula: String): XLResult[CellValue] =
     singleCells.evaluateFormula(formula, Clock.system, Some(Workbook(singleCells)), Some(ref"H1"))
 
-  // The six formulas in #803. COUNTBLANK's empty-text fix is separate (#731 / #804):
-  // Excel returns 1 for COUNTBLANK(A2#). Compare with the direct reference so this test
-  // requires 1 automatically when #804 merges, without pinning the current undercount of 0.
+  // Check the six formulas from #803. Excel returns 1 for COUNTBLANK(A2#), but counting
+  // empty text is a separate fix in #804. Here, require COUNTBLANK(A2#) to equal COUNTBLANK(A2).
+  // Both currently return 0 on this base. When #804 merges, this test will require both to be 1.
   private def singleCellCases = List(
     "=ROWS(A2#)" -> n(1),
     "=COUNTA(A2#)" -> n(1),
@@ -141,6 +142,7 @@ class SpillReferenceSpec extends FunSuite:
     "=COUNTBLANK(B1#)" -> CellValue.Error(CellError.Ref)
   )
 
+  // Use the same formulas with saved results, as an Excel file may contain.
   private val cachedSingleCells = singleCells
     .put(ref"A2", CellValue.Formula("\"\"", Some(CellValue.Text(""))))
     .put(ref"C1", CellValue.Formula("5", Some(n(5))))
@@ -176,13 +178,14 @@ class SpillReferenceSpec extends FunSuite:
     assertEquals(single("=COLUMNS(C1#)"), Right(n(1)))
     assertEquals(single("=ROWS(G1#)"), Right(n(1)))
     assertEquals(single("=SUM(G1#)"), Right(CellValue.Error(CellError.Div0)))
-    // a formula cell is never blank: a reference to an empty cell reads 0, as the cell shows
+    // E5 is empty, but the formula =E5 in D1 returns 0. D1# should therefore contain 0.
     val blankRef = singleCells.put(ref"D1", CellValue.Formula("E5"))
     assertEquals(
       blankRef.evaluateFormula("=COUNTBLANK(D1#)", Clock.system, None, Some(ref"H1")),
       Right(n(0))
     )
-    // Verify the spill's element, not just COUNTA's count (which also counts an error).
+    // Check the actual value inside each one-cell array. COUNTA alone cannot prove this:
+    // it returns 1 for both an empty-text cell and an error cell.
     List(("=A2#", CellValue.Text("")), ("=C1#", n(5)), ("=G1#", CellValue.Error(CellError.Div0)))
       .foreach { (formula, expected) =>
         val (spilled, extent) = singleCells
@@ -191,6 +194,7 @@ class SpillReferenceSpec extends FunSuite:
         assertEquals(extent, CellRange(ref"H1", ref"H1"))
         assertEquals(spilled(ref"H1").value, expected)
       }
+    // An unknown function must still report an evaluation failure.
     val unsupported = singleCells.put(ref"D1", CellValue.Formula("UNKNOWN_FUNCTION()"))
     assert(unsupported.evaluateFormula("=ROWS(D1#)", Clock.system).isLeft)
 
@@ -637,7 +641,8 @@ class SpillReferenceSpec extends FunSuite:
   }
 
   test("GH-695: a fold reads a scalar or erroring anchor as x# does when it evaluates it itself") {
-    // #803: a scalar or an error result is the anchor's one cell holding that value
+    // #803: both a single value and an Excel error become one-cell arrays.
+    // SUM reads the value or error inside the array. ROWS returns 1 in either case.
     List(
       ("1+1", "SUM(A1#)", n(2)),
       ("1+1", "ROWS(A1#)", n(1)),
