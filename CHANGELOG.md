@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Performance
+
+- Whole-column and whole-row lookups and returned references reuse the recalculation pass's
+  existing used-range memo (#747). MATCH, XMATCH, XLOOKUP, VLOOKUP, HLOOKUP, LOOKUP, INDEX,
+  INDIRECT, OFFSET, aggregates and logical range reads share one scan per sheet and structural
+  generation, including empty sheets. Bounded references skip the scan; formula results and
+  clipping geometry are unchanged.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

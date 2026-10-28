@@ -8,6 +8,7 @@ import com.tjclp.xl.formula.eval.{
   ArrayResult,
   CriteriaMatcher,
   RangeOperand,
+  RecalcCounters,
   ScalarCoercion
 }
 import com.tjclp.xl.formula.parser.ParseError
@@ -283,6 +284,17 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
+   * Sheet bounds shared by references, lookups and aggregates (#747). The pass scans once per sheet
+   * and structural generation; outside an active pass bounds are read from this snapshot.
+   */
+  protected def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
+    ctx.aggregateMemo.flatMap(_.passCache) match
+      case Some(passCache) => passCache.usedRange(sheet)
+      case None =>
+        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
+        sheet.usedRange
+
+  /**
    * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
    * reference's own shape — rows × columns equal ROWS × COLUMNS, blanks included, so array
    * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
@@ -304,7 +316,7 @@ trait FunctionSpecsBase:
     else
       // `usedRange` scans every populated cell: read it only for an axis that reaches the sheet's
       // edge, never for a bounded reference (as SUMPRODUCT's computeBounds keeps it off that path)
-      val used = if readsUsedRange(reference) then targetSheet.usedRange else None
+      val used = if readsUsedRange(reference) then usedRangeOf(ctx, targetSheet) else None
       def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: => Option[Int]): Int =
         if hi < sheetLast then hi
         else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
@@ -380,9 +392,10 @@ trait FunctionSpecsBase:
    */
   protected def boundedToUsed(
     range: CellRange,
-    target: com.tjclp.xl.sheets.Sheet
+    target: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
   ): Option[CellRange] =
-    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+    if range.isFullColumn || range.isFullRow then usedRangeOf(ctx, target).flatMap(range.intersect)
     else Some(range)
 
   /** A range reference, seen through the coercion a typed slot wraps it in. */
@@ -446,10 +459,11 @@ trait FunctionSpecsBase:
    */
   protected def lookupRangeExtent(
     range: CellRange,
-    targetSheet: com.tjclp.xl.sheets.Sheet
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
   ): Option[CellRange] =
     if range.isFullColumn || range.isFullRow then
-      targetSheet.usedRange.flatMap { used =>
+      usedRangeOf(ctx, targetSheet).flatMap { used =>
         val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
         val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
         if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then None
@@ -467,7 +481,7 @@ trait FunctionSpecsBase:
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    lookupRangeExtent(range, targetSheet) match
+    lookupRangeExtent(range, targetSheet, ctx) match
       case None => Right(Vector.empty)
       case Some(extent) =>
         // each key as a lookup reads it (LookupLine.key, GH-715): a failing key is its error value
@@ -637,7 +651,7 @@ trait FunctionSpecsBase:
     val stored =
       if !column && !row then all
       else
-        targetSheet.usedRange.fold(0) { used =>
+        usedRangeOf(ctx, targetSheet).fold(0) { used =>
           if column then
             if range.colStart.index0 < used.colStart.index0 ||
               range.colStart.index0 > used.colEnd.index0

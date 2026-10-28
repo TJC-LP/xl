@@ -290,6 +290,10 @@
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
+GH-747 adds 17 whole-axis bounds-cache regression cases: the current branch has 9,633 test cases,
+including 3,977 in xl-evaluator (from the 2026-10-28 full-suite JUnit reports). The table above
+records the 0.25.0 release.
+
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 
 ---

@@ -163,7 +163,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     target: Sheet,
     ctx: EvalContext
   ): Either[EvalError, ArrayResult] =
-    boundedToUsed(range, target) match
+    boundedToUsed(range, target, ctx) match
       case None => Right(ArrayResult.empty)
       case Some(r) => readRangeArray(r, target, ctx)
 
@@ -274,7 +274,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
     target: Sheet,
     ctx: EvalContext
   ): Either[EvalError, ArrayResult] =
-    boundedToUsed(range, target) match
+    boundedToUsed(range, target, ctx) match
       case None => Right(ArrayResult.empty)
       case Some(r) =>
         if r.width.toLong * r.height.toLong > MaxIndirectCells then
