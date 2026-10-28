@@ -56,7 +56,8 @@ val sheet = Sheet("Demo").put("A1" -> 100)
 Excel.write(Workbook(sheet), "output.xlsx")
 
 // Formula evaluation (when xl-evaluator is a dependency)
-sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method
+sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method (position-only if currentCell supplied)
+SheetEvaluator.evaluateAt(Workbook(sheet), sheet, ref"D5", "=A1*2") // Closure + placement/cycle checks
 FormulaParser.parse("=SUM(A1:A10)") // Parser at package level
 
 // Display formatting
@@ -100,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,616)
+./mill __.test             # Run all tests (9,647)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -416,12 +417,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,616 tests** by module: xl-evaluator (3960), xl-core (1872), xl-ooxml (1435), xl-cli (1924), xl-cats-effect (213), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**9,647 tests** by module: xl-evaluator (4019), xl-core (1872), xl-ooxml (1435), xl-cli (1895), xl-cats-effect (213), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,616 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 9,647 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

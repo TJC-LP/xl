@@ -237,18 +237,20 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of the 0.25.0 release (2026-10-19), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+Current source tree (2026-10-28), from the full-suite JUnit reports. GH-741 moves 29 CLI cases
+into the evaluator and adds 30 evaluator cases plus one external-consumer probe. Macros are part
+of xl-core. Counts include skipped cases; external-oracle availability varies by host.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3960 |
+| xl-evaluator | 4019 |
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
-| xl-cli | 1924 |
+| xl-cli | 1895 |
 | xl-cats-effect | 213 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,616** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
+| **Total** | **9,647** |
 
 ## Test Quality Metrics
 

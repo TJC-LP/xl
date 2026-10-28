@@ -661,8 +661,42 @@ row or column, so `=SUM(A1:A10*E1:E10)` stored in row 5 is A5*E5 (write `SUMPROD
 array math in one cell). `recalculate` evaluates every cell at its own position by its kind, and
 array formulas keep dynamic-array semantics. `sheet.evaluateFormula(f)` without a cell evaluates
 as a formula typed into a new Excel 365 cell (top-left of its array); pass
-`currentCell = Some(ref"D5")` for the plain cell at D5 — what `xl eval --at D5` prints
-([#715](https://github.com/TJC-LP/xl/issues/715)).
+`currentCell = Some(ref"D5")` to supply position for implicit intersection
+([#715](https://github.com/TJC-LP/xl/issues/715)). This low-level API does not place the formula
+or check its precedent closure for cycles.
+
+For the full `xl eval --at` behavior, use `SheetEvaluator.evaluateAt` (GH-741):
+
+```scala
+//> using scala 3.9.0
+//> using dep com.tjclp::xl:0.25.0
+import com.tjclp.xl.scripting.{*, given}
+
+val data = Sheet("Data").put(ref"A1", 10).put(ref"D5", 99)
+val book = Workbook(data)
+val answer = SheetEvaluator.evaluateAt(book, data, ref"D5", "=A1*2",
+  Map(ref"A1" -> CellValue.Number(BigDecimal(20)))) // Right(Number(40)); book is unchanged
+val circular = SheetEvaluator.evaluateAt(book, data, ref"D5", "=D5+1")
+val path = circular.left.toOption.flatMap(_.cycle) // Some(List(D5, D5))
+```
+
+`evaluateAt` places an uncached plain formula in a temporary workbook, evaluates only its
+value-read precedent closure in dependency order, and guards reads of the placement, including
+run-time reads through INDIRECT/OFFSET, names and uncached cross-sheet formulas. IFERROR cannot
+hide a guard read. `FormulaEvaluationError.error` retains the existing `XLError` diagnostic;
+`cycle` retains the full static path even when the diagnostic abbreviates it, or the placement
+alone for a run-time read. Typed overrides affect the selected sheet; overriding the placement
+itself is refused. Existing input values and caches remain unchanged.
+
+`SheetEvaluator.evaluateWithClosure(book, data, formula, overrides)` shares that closure in
+positionless array mode (top-left value). `evaluateArrayWithClosure(book, data, formula, origin,
+overrides)` returns `Either[FormulaEvaluationError, (Sheet, CellRange)]`, sharing spill tracking
+with the precedent fold. Its origin anchors the output and does not place a plain formula.
+
+These APIs preserve the CLI's existing conservative range analysis and limitations: cached
+cross-sheet cycles may still return their cache. Dynamic-reader invalidation retains the
+existing override behavior. The remaining cross-sheet and inspection-case work tracked in GH-729
+is unchanged by this extraction. The older evaluation APIs keep their signatures and behavior.
 
 `sheet.evaluateForRangePerCell(range)` (also `(range, clock, workbook)`, since 0.24.0) is the
 total, per-cell evaluation behind `xl view --eval`: a `RangeEvalResult(values, failures, blocked)`

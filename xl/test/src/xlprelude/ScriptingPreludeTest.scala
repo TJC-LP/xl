@@ -16,6 +16,18 @@ import com.tjclp.xl.scripting.{*, given}
  */
 class ScriptingPreludeTest extends FunSuite:
 
+  test("closure evaluation API and typed cycle path resolve through the prelude"):
+    val sheet = Sheet("Data").put(ref"D5", 99).put(ref"A1", 10)
+    val book = Workbook(sheet)
+    val circular: Either[FormulaEvaluationError, CellValue] =
+      SheetEvaluator.evaluateAt(book, sheet, ref"D5", "=D5+1")
+    assertEquals(circular.left.toOption.flatMap(_.cycle), Some(List(ref"D5", ref"D5")))
+    assertEquals(
+      SheetEvaluator.evaluateWithClosure(book, sheet, "=A1*2"),
+      Right(CellValue.Number(BigDecimal(20)))
+    )
+    assert(SheetEvaluator.evaluateArrayWithClosure(book, sheet, "=A1*2", ref"F1").isRight)
+
   test("compile-time ref macros resolve through the prelude"):
     val cell: ARef = ref"A1"
     val range: CellRange = ref"A1:B10"
