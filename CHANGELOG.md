@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Tight right-aligned SVG text keeps both ends** (#505): a number such as `1234567.9`
+  in a width-9.0 column could lose part of its leading `1` when rasterized by Batik. Fitting
+  unwrapped right-aligned text now declares its measured advance with
+  SVG `textLength` and `lengthAdjust="spacingAndGlyphs"`, so the backend uses the same width as
+  the anchor calculation. Behaviour change: these fitting strings can be scaled horizontally
+  to match the measurement; no safety margin, embedded font or backend dependency is added.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

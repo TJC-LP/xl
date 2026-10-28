@@ -1480,6 +1480,39 @@ class SvgRendererSpec extends FunSuite:
       s"""<clipPath id="clip-$a1"><rect x="(-?\\d+)" y="-?\\d+" width="(\\d+)"""".r
     re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2).toInt))
 
+  test("GH-505: fitting right-aligned text declares the measured SVG advance") {
+    val value = "1234567.9"
+    val measured = RenderUtils.measureTextWidth(value, None)
+    List(0, 1, 3, RenderUtils.CellPaddingX, 20).foreach { slack =>
+      val pixels = measured + slack
+      val sheet = Sheet("Test")
+        .put(ref"A1", CellValue.Number(BigDecimal(value)))
+        .setColumnProperties(Column.from0(0), ColumnProperties(width = Some((pixels - 5) / 8.0)))
+      val svg = sheet.toSvg(ref"A1:A1")
+      assert(svg.contains(s"""textLength="$measured" lengthAdjust="spacingAndGlyphs"""), svg)
+      val (x, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(fail(svg))
+      assertEquals(text, value)
+      assertEquals(anchor, "end")
+      assert(x - measured >= 0, svg)
+      assert(x <= pixels, svg)
+    }
+  }
+
+  test("GH-505: overflowing, left-aligned, wrapped and rich text retain natural advances") {
+    val right = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val long = "123456789012345678901234567890"
+    val base = Sheet("Test").put(ref"A1" -> long)
+    val sheets = List(
+      Sheet("Test").put(ref"A1" -> "short"),
+      base.unsafe.withCellStyle(ref"A1", right),
+      base,
+      base.unsafe
+        .withCellStyle(ref"A1", right.withAlign(Align(horizontal = HAlign.Right, wrapText = true))),
+      Sheet("Test").put(ref"A1", CellValue.RichText(RichText.plain("123")))
+    )
+    sheets.foreach { sheet => assert(!sheet.toSvg(ref"A1:A1").contains("textLength=")) }
+  }
+
   test("toSvg: right-anchored number never crosses the left edge of its clip (GH-459)") {
     // Fractional widths are the norm in real xlsx files (8.7109375, 9.140625). At 9.25 the
     // formatted number measures inside the (clipWidth - CellPaddingX, clipWidth] band: it
