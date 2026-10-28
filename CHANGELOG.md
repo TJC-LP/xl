@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Testing
+
+- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
+  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
+  unrelated SUMPRODUCT/array bindings (#748).
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

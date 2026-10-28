@@ -128,6 +128,24 @@ All domain types have `Arbitrary` instances:
 - `CellStyle` - Valid font/fill/border combinations
 - `Patch` - All Patch enum cases
 
+### Dynamic-name laws (xl-evaluator)
+
+`DynamicNameLawsSpec` guards two contracts from GH-748:
+
+- Parsed SUMIF/AVERAGEIF calls with computed defined-name or LET range slots must pass
+  `CriteriaRangeResize.mayResizeThroughName`, including Unicode spellings, quoted sheets,
+  escaped strings, errors and colon name corners. Every generated case must parse and contain
+  a dynamic resize; the law cannot pass by discarding its antecedent.
+- In array mode, a LET whose COUNTIF range slot or OFFSET base needs a reference must preserve
+  the values of unrelated bindings. Each generated grid runs both the reference-binding and
+  value-binding paths, checks that the parsed formulas select those paths, and pins SUMPRODUCT
+  scalars and elementwise spills to independently computed numbers.
+
+Run `./mill xl-evaluator.test.testOnly com.tjclp.xl.formula.DynamicNameLawsSpec`.
+To check sensitivity during development, temporarily disable the pre-filter or array-mode LET
+reference binding, run the relevant property, and restore the source before committing. Both
+mutations must fail; successful evaluation on the unchanged source is the control.
+
 ### Test Patterns
 
 #### Round-Trip Laws
@@ -237,18 +255,18 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of the 0.25.0 release (2026-10-19), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+The 0.25.0 full-suite inventory (2026-10-19), plus two GH-748 properties verified in the updated 3,962-case evaluator suite; macros are part of xl-core. The release verification skipped one existing style-performance comparison and ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3960 |
+| xl-evaluator | 3962 |
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
 | xl-cli | 1924 |
 | xl-cats-effect | 213 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,616** |
+| **Total** | **9,618** |
 
 ## Test Quality Metrics
 
