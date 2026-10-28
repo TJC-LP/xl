@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **IFERROR and IFNA preserve array fallbacks** (#754): in array contexts a scalar error selects
+  the whole fallback, and an array primary selects fallback elements with row/column broadcasting.
+  Fallbacks stay lazy, and a successful scalar stays scalar. SUMPRODUCT applies its shared
+  whole-column bounds to fallback arguments too.
+  **Behaviour change:** `SUMPRODUCT(IFERROR(1/0,{10,20}))` returns 30 instead of 10;
+  with A5:A7 = 1,2,3, `SUMPRODUCT((A:A>0)*IFERROR(1/0,ROW(A:A)))` returns 18 instead of 15
+  (the bounded A1:A10 form returns 18 instead of 3). IFNA follows the same Excel array rule;
+  the issue reports #N/A from LibreOffice 24.2 for the whole-column IFNA case. A fresh
+  LibreOfficeDev 26.8 alpha check with correctly prefixed `_xlfn.IFNA` storage matches Excel.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

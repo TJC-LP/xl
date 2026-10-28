@@ -42,7 +42,8 @@ final case class FunctionFlags(
    * Excel array lifting: whether (and where) the function evaluates once per element when a scalar
    * parameter receives an array — `ABS(C2:C4+D2:D4)` is `{2;2;3}` in an array context. The flag is
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
-   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
+   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302). Lazy
+   * control flow may supply [[FunctionSpec.evalArray]] instead of the generic lift.
    */
   lift: ArrayLift = ArrayLift.Off,
   /**
@@ -389,6 +390,13 @@ trait FunctionSpec[A]:
   def eval(args: Args, ctx: EvalContext): Either[EvalError, A]
   def flags: FunctionFlags = FunctionFlags()
 
+  /** GH-754: lazy array control flow may need the complete primary and fallback shapes. */
+  private[formula] def evalArray(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
+    None
+
+  /** Additional scalar slots whose arrays take SUMPRODUCT's shared whole-axis bounds. */
+  private[formula] def arrayBoundSlots: Set[Int] = Set.empty
+
   /**
    * The reference the call returns, for a function that returns one (OFFSET, INDIRECT, INDEX): a
    * [[com.tjclp.xl.formula.eval.RangeOperand]], unread, or the value the call computes when it
@@ -443,6 +451,28 @@ object FunctionSpec:
     spec: ArgSpec[A0]
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
+
+  /** Keep a typed scalar result while allowing explicit, lazy array control flow. */
+  private[formula] def arrayAware[A, A0](
+    fnName: String,
+    fnArity: Arity,
+    fnFlags: FunctionFlags,
+    boundSlots: Set[Int]
+  )(arrayFn: (A0, EvalContext) => Either[EvalError, Any])(
+    scalarFn: (A0, EvalContext) => Either[EvalError, A]
+  )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
+    new FunctionSpec[A]:
+      type Args = A0
+      val name = fnName
+      val arity = fnArity
+      val argSpec = spec
+      override val flags = fnFlags
+      override private[formula] val arrayBoundSlots = boundSlots
+      def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = scalarFn(args, ctx)
+      override private[formula] def evalArray(
+        args: A0,
+        ctx: EvalContext
+      ): Option[Either[EvalError, Any]] = Some(arrayFn(args, ctx))
 
   /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
   private[formula] final case class Referencing[A, A0](

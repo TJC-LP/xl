@@ -277,11 +277,11 @@
 
 ### Test Coverage
 
-**9,616 test cases** (from the JUnit reports of the 0.25.0 release branch's `./mill __.test`, 2026-10-19): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,647 test cases** (full-suite reports for GH-754, 2026-10-28), including 31 array-fallback regression tests. Optional external-tool checks skip where their tools are absent.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 3991 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |

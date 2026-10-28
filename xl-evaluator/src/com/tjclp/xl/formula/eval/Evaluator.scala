@@ -2178,12 +2178,15 @@ private class EvaluatorImpl(
     def unlifted(args: call.spec.Args): Either[EvalError, Any] =
       if selectsReference then call.spec.reference(args, ctx).getOrElse(call.spec.eval(args, ctx))
       else call.spec.eval(args, ctx)
-    call.spec.flags.lift match
-      case ArrayLift.Off => unlifted(call.args)
-      // in array mode the result may be an ArrayResult: its consumers handle one (the
-      // array-mode typing invariant)
-      case lift @ ArrayLift.On(_, _) =>
-        evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)(unlifted)
+    val arrayOverride = if allowArrayResults then call.spec.evalArray(call.args, ctx) else None
+    arrayOverride.getOrElse {
+      call.spec.flags.lift match
+        case ArrayLift.Off => unlifted(call.args)
+        // in array mode the result may be an ArrayResult: its consumers handle one (the
+        // array-mode typing invariant)
+        case lift @ ArrayLift.On(_, _) =>
+          evalLiftedCall(call, lift, ctx, sheet, clock, workbook, currentCell)(unlifted)
+    }
 
   /**
    * An argument in Excel's reference operand class ([[EvalContext.evalReferenceArg]]), and the

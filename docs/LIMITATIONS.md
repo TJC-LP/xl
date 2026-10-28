@@ -229,6 +229,16 @@ Where xl differs from legacy Excel (as Excel 365 recalculates the plain `<f>` xl
 - XLOOKUP's result is a value, not a reference.
 - An intersected error criterion is `#VALUE!` in COUNTIF, as in LibreOffice; Excel may count the matching error cells.
 
+**Array error fallbacks (GH-754):** IFERROR and IFNA retain the whole selected fallback array in
+array contexts. An array primary uses positional replacement with broadcasting; a successful scalar
+never expands to the fallback's shape, and an entirely unused fallback is not evaluated.
+SUMPRODUCT trims whole-column fallback references to its shared extent. For A5:A7 = 1,2,3,
+`SUMPRODUCT((A:A>0)*IFNA(NA(),ROW(A:A)))` is 18, matching the Excel observation recorded in
+#754. That issue reports LibreOffice 24.2 giving #N/A for the IFNA case. A fresh check with
+LibreOfficeDev 26.8.0.0.alpha0 matches all twelve IFERROR/IFNA table results when IFNA uses its
+required OOXML `_xlfn.IFNA` storage prefix; the reported 24.2 discrepancy is kept separate from
+these Excel expectations.
+
 Where xl differs from LibreOffice, following Excel's rule (not verified against Excel itself):
 - A named formula evaluates as an array formula: `=SUM(nm)` over `nm = IF(Sheet1!$A$1:$A$10>2,1,0)` counts every row (LibreOffice intersects the condition with the referencing cell).
 - A reference's logical and numeric-text cells are skipped by SUM (Microsoft: "only numbers in that array or reference are counted"): `=SUM(C1)` and `=SUM(IF(TRUE,C1,0))` over a TRUE C1 are 0 (LibreOffice counts 1).
