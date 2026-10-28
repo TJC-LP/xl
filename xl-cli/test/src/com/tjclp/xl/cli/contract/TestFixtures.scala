@@ -336,7 +336,7 @@ object TestFixtures:
     IO.blocking(Files.createTempDirectory("xl-golden-")).flatTap { dir =>
       files.toList.traverse_ { (name, build) =>
         ExcelIO.instance[IO].write(build(), dir.resolve(name))
-      }
+      } *> PreservedSheetsFixture.write(dir.resolve("preserved.xlsm"))
     }
 
   /** Remove the directory and everything the cases wrote into it. */

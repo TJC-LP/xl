@@ -2640,17 +2640,25 @@ class WorkbookLintSpec extends FunSuite:
 
   private val macrosheetParts: Map[String, String] = macrosheetPartsWith(macrosheetXml)
 
+  private val macroPresence = Finding(
+    "xl/workbook.xml",
+    LintCategory.MacroSheet,
+    """<sheet name="Macro1">""",
+    """Excel 4.0 macro sheet "Macro1" (state: visible)""",
+    LintSeverity.Info
+  )
+
   private val misorderedMacrosheetXml = macrosheetXml
     .replace("  <dimension ref=\"A1\"/>\n", "")
     .replace("</sheetData>\n", "</sheetData>\n  <dimension ref=\"A1\"/>\n")
 
   test(
-    "macrosheet: an xlMacrosheet <sheet> is a sheet kind — its t=\"s\" cells count, no finding"
+    "macrosheet: its t=\"s\" cells count; only the GH-788 presence info is reported"
   ) {
     // Before the kind existed the workbook-level check called the rel wrong-typed ("expected
     // worksheet") and the SST rule reported entry 1 as an orphan — on a book Excel writes itself.
-    assertEquals(lintOf(macrosheetParts), Vector.empty[Finding])
-    assertEquals(lintStreamOf(macrosheetParts), Vector.empty[Finding])
+    assertEquals(lintOf(macrosheetParts), Vector(macroPresence))
+    assertEquals(lintStreamOf(macrosheetParts), Vector(macroPresence))
   }
 
   test("macrosheet: child order is checked against CT_Macrosheet in both modes") {
@@ -2658,9 +2666,18 @@ class WorkbookLintSpec extends FunSuite:
     val findings = lintOf(parts)
     assertEquals(
       findings.map(f => (f.part, f.category)),
-      Vector(("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder))
+      Vector(
+        ("xl/workbook.xml", LintCategory.MacroSheet),
+        ("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder)
+      )
     )
-    assert(findings.head.message.contains("CT_Macrosheet"), findings.head.message)
+    assertEquals(findings.filter(_.category == LintCategory.MacroSheet), Vector(macroPresence))
+    assert(
+      findings.exists(f =>
+        f.category == LintCategory.ChildOrder && f.message.contains("CT_Macrosheet")
+      ),
+      findings.toString
+    )
     assertEquals(lintStreamOf(parts), findings)
   }
 

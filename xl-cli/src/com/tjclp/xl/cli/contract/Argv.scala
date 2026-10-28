@@ -253,7 +253,7 @@ object Argv:
       case (_, "--no-recalc" | "--preserve-caches") =>
         s"$long applies to the recalculation a cell write runs; $verb runs none"
       case (_, "--strict") =>
-        s"--strict gates a write's recalculation and lint's hygiene findings; $verb has neither"
+        s"--strict gates a write's recalculation and lint's info/hygiene findings; $verb has neither"
       case _ => s"$verb takes no $long"
 
   /**

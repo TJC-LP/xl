@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,
+  name and visibility in a separate read-only section (`preservedSheets` in JSON), in quick,
+  streaming and stats modes. Worksheet indices and `-s` resolution remain worksheet-only.
+  `Excel.readMetadata` exposes the same read-only metadata (#788). **Binary change:**
+  `LightMetadata` gains a defaulted `preservedSheets` field.
+- `xl lint` reports one `macro-sheet` finding (severity `info`) per Excel 4.0 macro sheet, including
+  hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
+  Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
+  `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

@@ -237,18 +237,19 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of the 0.25.0 release (2026-10-19), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of 2026-10-28, from the full-suite JUnit reports; macros are part of xl-core. Counts include
+skipped cases. GH-788 adds eight OOXML cases and three CLI cases to the 0.25.0 release's 9,616 cases.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 3960 |
 | xl-core | 1872 |
-| xl-ooxml | 1435 |
-| xl-cli | 1924 |
+| xl-ooxml | 1443 |
+| xl-cli | 1927 |
 | xl-cats-effect | 213 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,616** |
+| **Total** | **9,627** |
 
 ## Test Quality Metrics
 
