@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Library closure evaluation with placement protection** (#741):
+  `SheetEvaluator.evaluateAt(workbook, sheet, at, formula, overrides)` now owns the same
+  formula placement, value-read precedent closure, guarded evaluation and cycle checks as
+  `xl eval --at`. `evaluateWithClosure` and `evaluateArrayWithClosure` share the positionless
+  closure and spill-tracking evaluator. Typed overrides invalidate their cached readers;
+  `FormulaEvaluationError` retains the existing diagnostic and a full detected cycle path
+  (the placement alone for a run-time read). CLI output and errors, existing evaluation APIs,
+  and the cached cross-sheet limitations tracked in #729 remain unchanged.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

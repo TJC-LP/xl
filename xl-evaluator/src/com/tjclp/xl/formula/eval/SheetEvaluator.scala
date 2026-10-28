@@ -48,6 +48,54 @@ import java.time.{LocalDate, LocalDateTime}
  */
 object SheetEvaluator:
   /**
+   * Evaluate `formula` as the plain cell at `at`, without changing the input workbook. Places an
+   * uncached formula, evaluates its value-read precedent closure, and checks both static cycles and
+   * run-time reads of the placement (even under IFERROR). Overrides apply to this sheet and
+   * invalidate their cached readers across the workbook. Overriding `at` is refused. The supplied
+   * sheet is the ambient context and replaces its namesake in the evaluation copy.
+   *
+   * Unlike `evaluateFormula(..., currentCell = Some(at))`, this includes closure and cycle
+   * orchestration. Failures retain the existing XLError in `error` and any detected path in
+   * `cycle`. Static closure analysis is conservative over ranges. Cached cross-sheet cycles and
+   * indirect record-inspection cycles remain outside this API's guarantees (GH-729), matching CLI
+   * eval.
+   */
+  def evaluateAt(
+    workbook: Workbook,
+    sheet: Sheet,
+    at: ARef,
+    formula: String,
+    overrides: Map[ARef, CellValue] = Map.empty
+  ): Either[FormulaEvaluationError, CellValue] =
+    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, Some(at))
+
+  /**
+   * Positionless dynamic-array evaluation (top-left value) after the same value-read closure as
+   * [[evaluateAt]]. No cell is placed or guarded. Unrelated cycles are not visited.
+   */
+  def evaluateWithClosure(
+    workbook: Workbook,
+    sheet: Sheet,
+    formula: String,
+    overrides: Map[ARef, CellValue] = Map.empty
+  ): Either[FormulaEvaluationError, CellValue] =
+    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, None)
+
+  /**
+   * Evaluate the same positionless closure, returning the spilled sheet and range. `origin` anchors
+   * the output; it does not place a plain formula or enable implicit intersection. Spill tracking
+   * is shared between the precedent fold and the final array evaluation.
+   */
+  def evaluateArrayWithClosure(
+    workbook: Workbook,
+    sheet: Sheet,
+    formula: String,
+    origin: ARef,
+    overrides: Map[ARef, CellValue] = Map.empty
+  ): Either[FormulaEvaluationError, (Sheet, CellRange)] =
+    FormulaEvaluation.array(workbook, sheet, formula, origin, overrides)
+
+  /**
    * #692: a formula cell's computed value and, when that value is an Excel error the evaluator
    * raised with a diagnostic, the reason — what [[com.tjclp.xl.formula.eval.RecalcResult]] names
    * the cell with.
@@ -74,7 +122,8 @@ object SheetEvaluator:
      *   intersected with the cell (`=A1:A10*2` at row 5 reads A5). `None` (the default): evaluate
      *   as the dynamic-array formula typed into a new Excel 365 cell, returning its top-left value
      *   (`=SUM(A1:A10*B1:B10)` is the array sum). `sheet.evaluateCell(ref)` evaluates a stored cell
-     *   by its own position and kind.
+     *   by its own position and kind. This low-level method supplies position only; use
+     *   `SheetEvaluator.evaluateAt` for placement, precedent evaluation and cycle protection.
      * @return
      *   Either XLError or evaluated CellValue
      *

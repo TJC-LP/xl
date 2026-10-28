@@ -1,4 +1,4 @@
-package com.tjclp.xl.cli
+package com.tjclp.xl.formula.eval
 
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.Gen
@@ -7,12 +7,11 @@ import org.scalacheck.Prop.forAllNoShrink
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.ReadCommands
 
 /**
- * GH-715: `--with`'s stale-reader search (`ReadCommands.uncacheReaders`) indexes formulas by the
- * ranges they read, across sheets, and drops a reader from its candidate sets once it is stale. On
- * small random books it must find exactly what the naive search finds: expand every range, then
+ * GH-715: `--with`'s stale-reader search (`FormulaEvaluation.uncacheReaders`) indexes formulas by
+ * the ranges they read, across sheets, and drops a reader from its candidate sets once it is stale.
+ * On small random books it must find exactly what the naive search finds: expand every range, then
  * take the transitive closure from the overridden cells.
  */
 class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
@@ -125,7 +124,7 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
   property("the stale set equals the naive expand-everything closure, across sheets") {
     forAllNoShrink(genModel, genChanged) { (model, changed) =>
       val before = book(model, changed)
-      val after = ReadCommands.uncacheReaders(before, SheetName.unsafe("S0"), changed)
+      val after = FormulaEvaluation.uncacheReaders(before, SheetName.unsafe("S0"), changed)
       def named(cells: Set[(Int, ARef)]): List[String] =
         cells.toList.map((s, ref) => s"${names(s)}!${ref.toA1}").sorted
       val formulas = before.sheets.flatMap(sheet =>

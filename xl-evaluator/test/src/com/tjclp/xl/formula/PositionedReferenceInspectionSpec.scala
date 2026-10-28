@@ -1,13 +1,19 @@
-package com.tjclp.xl.cli
+package com.tjclp.xl.formula
 
-import cats.effect.IO
-import munit.CatsEffectSuite
+import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.ReadCommands
+import com.tjclp.xl.formula.eval.FormulaEvaluationError
 
-class PositionedReferenceInspectionSpec extends CatsEffectSuite:
+class PositionedReferenceInspectionSpec extends FunSuite:
+  private def evaluate(book: Workbook, sheet: Sheet, formula: String, at: String) =
+    ARef
+      .parse(at)
+      .left
+      .map(e => FormulaEvaluationError(com.tjclp.xl.error.XLError.Other(e.toString)))
+      .flatMap(cell => SheetEvaluator.evaluateAt(book, sheet, cell, formula))
+
   private val sheet = Sheet("S").put(ref"D5", CellValue.Number(BigDecimal(99)))
   private val wb = Workbook(sheet)
 
@@ -19,9 +25,10 @@ class PositionedReferenceInspectionSpec extends CatsEffectSuite:
     "CELL(\"col\",D5)" -> 4
   ).foreach { (formula, expected) =>
     test(s"positioned $formula can inspect its own address without reading its value") {
-      ReadCommands.evalData(wb, Some(sheet), formula, Some("D5"), Nil).map { text =>
-        assertEquals(ujson.read(text)("result")("value").num, expected.toDouble)
-      }
+      assertEquals(
+        evaluate(wb, sheet, formula, "D5"),
+        Right(CellValue.Number(BigDecimal(expected)))
+      )
     }
   }
 
@@ -48,49 +55,49 @@ class PositionedReferenceInspectionSpec extends CatsEffectSuite:
     ("AREAS((D5,A1))", "D5", 2)
   ).foreach { (formula, at, expected) =>
     test(s"positioned $formula at $at passes its reference through without reading it") {
-      ReadCommands.evalData(Workbook(lookup), Some(lookup), formula, Some(at), Nil).map { text =>
-        assertEquals(ujson.read(text)("result")("value").num, expected.toDouble)
-      }
+      assertEquals(
+        evaluate(Workbook(lookup), lookup, formula, at),
+        Right(CellValue.Number(BigDecimal(expected)))
+      )
     }
   }
 
   test("positioned ordinary scalar reference still refuses a real circular read") {
-    ReadCommands.evalData(wb, Some(sheet), "D5+1", Some("D5"), Nil).attempt.map { result =>
-      assert(result.isLeft, result.toString)
-    }
+    assert(evaluate(wb, sheet, "D5+1", "D5").left.exists(_.cycle.nonEmpty))
   }
 
   test("positioned ROW without a reference composes with array semantics changes") {
-    ReadCommands.evalData(wb, Some(sheet), "ROW()+COLUMN()", Some("D5"), Nil).map { text =>
-      assertEquals(ujson.read(text)("result")("value").num, 9.0)
-    }
+    assertEquals(
+      evaluate(wb, sheet, "ROW()+COLUMN()", "D5"),
+      Right(CellValue.Number(BigDecimal(9.0)))
+    )
   }
 
   test("inspection nested in arithmetic does not create a circular value dependency") {
-    ReadCommands.evalData(wb, Some(sheet), "ROW(D5)+ROWS(D5:D6)", Some("D5"), Nil).map { text =>
-      assertEquals(ujson.read(text)("result")("value").num, 7.0)
-    }
+    assertEquals(
+      evaluate(wb, sheet, "ROW(D5)+ROWS(D5:D6)", "D5"),
+      Right(CellValue.Number(BigDecimal(7.0)))
+    )
   }
 
   test("an INDEX selector that reads the placed cell is still circular") {
-    ReadCommands.evalData(wb, Some(sheet), "ROW(INDEX(A1:A10,D5))", Some("D5"), Nil).attempt.map {
-      result =>
-        assert(result.isLeft, result.toString)
-    }
+    assert(evaluate(wb, sheet, "ROW(INDEX(A1:A10,D5))", "D5").left.exists(_.cycle.nonEmpty))
   }
 
   test("a precedent may inspect the placement address without reading its old value") {
     val source = sheet.put(ref"A1", CellValue.Formula("ROW(D5)", None))
-    ReadCommands.evalData(Workbook(source), Some(source), "A1+1", Some("D5"), Nil).map { text =>
-      assertEquals(ujson.read(text)("result")("value").num, 6.0)
-    }
+    assertEquals(
+      evaluate(Workbook(source), source, "A1+1", "D5"),
+      Right(CellValue.Number(BigDecimal(6.0)))
+    )
   }
 
   test("an existing self-inspection formula does not poison the closure order") {
     val source = sheet.put(ref"A1", CellValue.Formula("ROW(A1)", None))
-    ReadCommands.evalData(Workbook(source), Some(source), "A1+1", Some("D5"), Nil).map { text =>
-      assertEquals(ujson.read(text)("result")("value").num, 2.0)
-    }
+    assertEquals(
+      evaluate(Workbook(source), source, "A1+1", "D5"),
+      Right(CellValue.Number(BigDecimal(2.0)))
+    )
   }
 
   List(
@@ -99,9 +106,10 @@ class PositionedReferenceInspectionSpec extends CatsEffectSuite:
     "LET(outer,D5,LET(inner,outer,COLUMNS(inner)))" -> 1
   ).foreach { (formula, expected) =>
     test(s"positioned $formula follows LET references without a circular value read") {
-      ReadCommands.evalData(wb, Some(sheet), formula, Some("D5"), Nil).map { text =>
-        assertEquals(ujson.read(text)("result")("value").num, expected.toDouble)
-      }
+      assertEquals(
+        evaluate(wb, sheet, formula, "D5"),
+        Right(CellValue.Number(BigDecimal(expected)))
+      )
     }
   }
 
@@ -111,8 +119,6 @@ class PositionedReferenceInspectionSpec extends CatsEffectSuite:
     "LET(unused,D5+1,ROW(A1))"
   ).foreach { formula =>
     test(s"positioned $formula retains actual LET value reads") {
-      ReadCommands.evalData(wb, Some(sheet), formula, Some("D5"), Nil).attempt.map { result =>
-        assert(result.left.exists(_.getMessage.contains("Circular")), result.toString)
-      }
+      assert(evaluate(wb, sheet, formula, "D5").left.exists(_.cycle.nonEmpty))
     }
   }
