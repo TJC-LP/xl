@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
+  including its anchor, instead of moving cells with an inconsistent array extent. An excluded
+  header and disjoint spills remain allowed (#738).
+- **Behaviour change:** streamed `put`, `putf` and batch content writes reject writes inside a
+  live dynamic spill and clear the old spill when overwriting its anchor, keeping styles.
+  Previously those paths left orphaned cached constants or wrote into live spills. Batch writes
+  apply the rule in operation order; style-only writes retain array and cell metadata (#738).
+- **Binary change:** `StreamingTransform.WorksheetMetadata` gains a defaulted `clearContents`
+  range field for spill cleanup. Recompile callers and update positional pattern matches (#738).
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used

@@ -558,9 +558,10 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
    * before worksheet resolution, which also reads workbook.xml.rels. Missing or malformed XML, and
    * an entry that cannot be inflated (a `ZipException` from a damaged entry, a truncated stream),
    * keep the existing empty-index fallback: the index is optional, and these reads never failed on
-   * it before. Exceeding a ZIP limit is a typed security failure.
+   * it before. Exceeding a ZIP limit is a typed security failure. Also shared by the CLI's
+   * streaming spill preflight so patch writers resolve exactly the same dynamic anchors.
    */
-  private[io] def loadCellMetadataIndexSync(
+  private[xl] def loadCellMetadataIndexSync(
     zipFile: ZipFile,
     config: XlsxReader.ReaderConfig = XlsxReader.ReaderConfig.default
   ): Either[Throwable, CellMetadataIndex] =
