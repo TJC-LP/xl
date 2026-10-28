@@ -2838,24 +2838,25 @@ private class EvaluatorImpl(
     def label: String =
       sheet.fold(at.toA1)(s => s"${SheetName.quoteForFormula(s.value)}!${at.toA1}")
     decode(cell).left.map { codecErr =>
-      if codecErr eq ScalarCoercion.DateSerialOutOfRange then
-        ScalarCoercion.dateSerialOutOfRange(label, ScalarCoercion.shownValue(cell.value))
-      else if codecErr eq ScalarCoercion.IntOutOfRange then
-        ScalarCoercion.intOutOfRange(label, ScalarCoercion.shownValue(cell.value))
-      else
-        ArrayArithmetic.carriedError(cell.value) match
-          case Some(err) => EvalError.ErrorValue(err)
-          case None =>
-            ScalarCoercion.cellText(cell.value) match
-              case Some(text) =>
-                val because = ScalarCoercion.decoderReason(codecErr).fold("")(r => s" ($r)")
-                EvalError.ErrorValue(
-                  CellError.Value,
-                  Some(
-                    s"$label: text '${ScalarCoercion.quotedText(text)}' in a typed argument$because"
+      codecErr match
+        case ScalarCoercion.RangeRefusal(ScalarCoercion.RangeKind.DateSerial) =>
+          ScalarCoercion.dateSerialOutOfRange(label, ScalarCoercion.shownValue(cell.value))
+        case ScalarCoercion.RangeRefusal(ScalarCoercion.RangeKind.Integer) =>
+          ScalarCoercion.intOutOfRange(label, ScalarCoercion.shownValue(cell.value))
+        case _ =>
+          ArrayArithmetic.carriedError(cell.value) match
+            case Some(err) => EvalError.ErrorValue(err)
+            case None =>
+              ScalarCoercion.cellText(cell.value) match
+                case Some(text) =>
+                  val because = ScalarCoercion.decoderReason(codecErr).fold("")(r => s" ($r)")
+                  EvalError.ErrorValue(
+                    CellError.Value,
+                    Some(
+                      s"$label: text '${ScalarCoercion.quotedText(text)}' in a typed argument$because"
+                    )
                   )
-                )
-              case None => EvalError.CodecFailed(at, codecErr)
+                case None => EvalError.CodecFailed(at, codecErr)
     }
 
   /**

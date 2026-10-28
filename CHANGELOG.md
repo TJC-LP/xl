@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Behaviour change: invalid date serials return `#NUM!`** (#726). YEAR/MONTH/DAY and
+  other date slots now return `#NUM!` for serials outside 0..2958465, through literals,
+  references, numeric text, computed values, LET and lifted arrays. Previously they returned
+  `#VALUE!`; ERROR.TYPE now reports 6 instead of 3. IFERROR still catches the error.
+- **Behaviour change: numeric text in scalar slots and arithmetic uses bounded ASCII syntax** (#726). Full-width
+  digits (such as `ABS("５")`) and overflow/underflow text (`ABS("1e400")`, `"1e-400"`)
+  now return `#VALUE!`, instead of unrestricted BigDecimal values. Nonzero text must fit
+  Excel's normal double range; signs, decimal points, scientific notation and surrounding
+  whitespace remain accepted. Extreme exponents are refused before BigDecimal construction
+  or scaling, including in ROUND. Zero text is canonicalised to avoid retaining extreme
+  scales. Currency, locale and date/time text coercions are unchanged.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
