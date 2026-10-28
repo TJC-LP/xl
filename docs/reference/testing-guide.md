@@ -224,6 +224,16 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
+`native-xml-security.yml` builds the Linux GraalVM CLI on PRs and main pushes touching OOXML,
+Cats Effect IO, CLI sources/resources, Mill configuration, or the smoke/release workflows.
+It also runs daily at 07:43 UTC on the main repository's default branch to cover changes outside
+that filter. Both this workflow and every release platform run
+`bash scripts/smoke-native-xml-security.sh <built-binary>`: the script injects 120,000 defined names
+into a temporary copy of `small-values.xlsx`, runs `sheets`, and fails on a nonzero exit or a
+`JAXP000` diagnostic. It removes the generated fixture on success and failure. This catches
+GraalVM's baked-in XML entity-size defaults before release without changing parser security
+settings. Test the harness itself with `python3 scripts/test-smoke-native-xml-security.py`.
+
 A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
 recalculation benchmark gates (`xl-evaluator/test-perf`, 26 tests). `__.test` does not select that
 module. On the `Tiny` loads book it checks every formula cell against the v0.24.1 values

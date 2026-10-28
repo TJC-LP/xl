@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
+  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
+  Parser security settings and finite entity-size limits are unchanged.
+
 ## [0.25.0] - 2026-10-19
 
 Recalculation is faster and uses far less memory (#767). Each pass keeps per-pass caches of used
