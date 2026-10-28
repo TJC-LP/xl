@@ -1,0 +1,105 @@
+{
+  "baseCommit": "a19dbb6f",
+  "backend": "Apache Batik 1.19",
+  "dpi": 96,
+  "comparison": "All pixels in clipped vs unclipped full-sheet PNGs",
+  "records": [
+    {
+      "stage": "before",
+      "width": "9.0",
+      "clipWidth": 77,
+      "differingPixels": 19,
+      "bounds": [
+        69,
+        5,
+        72,
+        16
+      ]
+    },
+    {
+      "stage": "after",
+      "width": "9.0",
+      "clipWidth": 77,
+      "differingPixels": 0,
+      "bounds": null
+    },
+    {
+      "stage": "before",
+      "width": "9.25",
+      "clipWidth": 79,
+      "differingPixels": 19,
+      "bounds": [
+        69,
+        5,
+        72,
+        16
+      ]
+    },
+    {
+      "stage": "after",
+      "width": "9.25",
+      "clipWidth": 79,
+      "differingPixels": 0,
+      "bounds": null
+    },
+    {
+      "stage": "before",
+      "width": "12.0",
+      "clipWidth": 101,
+      "differingPixels": 0,
+      "bounds": null
+    },
+    {
+      "stage": "after",
+      "width": "12.0",
+      "clipWidth": 101,
+      "differingPixels": 0,
+      "bounds": null
+    }
+  ],
+  "styledControl": {
+    "fontSizePx": 14,
+    "columnWidth": 9.0,
+    "differingPixels": {
+      "before": 0,
+      "after": 0
+    }
+  },
+  "independentRenderer": {
+    "name": "librsvg",
+    "version": "2.63.2",
+    "via": "prebundled sharp",
+    "records": [
+      {
+        "stage": "before",
+        "width": "9.0",
+        "clippedPixels": 0
+      },
+      {
+        "stage": "before",
+        "width": "9.25",
+        "clippedPixels": 0
+      },
+      {
+        "stage": "before",
+        "width": "12.0",
+        "clippedPixels": 0
+      },
+      {
+        "stage": "after",
+        "width": "9.0",
+        "clippedPixels": 0
+      },
+      {
+        "stage": "after",
+        "width": "9.25",
+        "clippedPixels": 0
+      },
+      {
+        "stage": "after",
+        "width": "12.0",
+        "clippedPixels": 0
+      }
+    ]
+  }
+}

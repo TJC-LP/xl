@@ -492,19 +492,22 @@ object SvgRenderer:
             // head and push the tail out of the cell (it would also contradict the RichText
             // branch, which left-shifts by the run width).
             //
-            // Precision note: the clamp lands the left edge exactly on the cell edge, so it
-            // relies on the rasterizer laying the string out no wider than AWT measured it.
-            // Batik can run ~2px wider than AWT's stringWidth, which can still shave the flag
-            // off a leading '1' when the slack is under ~2px (rsvg-convert and resvg do not).
-            // A blind safety margin is not the fix — it would only move the shave to the
-            // trailing digit. Tracked as GH-505.
+            // Declare the same advance the anchor uses for fitting right-aligned text.
+            // Otherwise a backend with wider glyph advances (notably Batik) can still
+            // shave the leading glyph at sub-2px slack (GH-505). SVG's spacingAndGlyphs
+            // adjusts the layout to this measured width instead of adding a blind margin
+            // that would push the trailing glyph through the other side of the clip.
             val textW = measureTextWidth(text, style.map(_.font))
             val anchorX =
               if anchor == "end" && textW <= box.width then math.max(textX, box.x + textW)
               else textX
+            val lengthAttr =
+              if anchor == "end" && textW > 0 && textW <= box.width then
+                s""" textLength="$textW" lengthAdjust="spacingAndGlyphs""""
+              else ""
             val escapedText = escapeXml(text)
             out.append(
-              s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$clipAttr>"""
+              s"""    <text x="$anchorX" y="$textY" text-anchor="$anchor" class="cell-text"$textStyle$lengthAttr$clipAttr>"""
             )
             out.append(s"""$escapedText</text>\n""")
     out.toString
