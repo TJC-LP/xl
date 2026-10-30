@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.functions.{ArgValue, ArrayLift, FunctionRegistry, FunctionSpec}
@@ -345,8 +346,10 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
       EvalError
         .toErrorValue(error)
         .map(CellValue.Error(_))
+        // A separate pre-existing gap: integer reference decoders refuse DateTime cells.
+        // Do not mask arbitrary TypeMismatch/CodecFailed errors (in particular date serials).
         .orElse(error match
-          case EvalError.TypeMismatch(_, _, _) | EvalError.CodecFailed(_, _) =>
+          case EvalError.CodecFailed(_, CodecError.TypeMismatch("Int", CellValue.DateTime(_))) =>
             Some(CellValue.Error(CellError.Value))
           case _ => None)
 

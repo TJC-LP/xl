@@ -36,6 +36,118 @@ class TextScalarSlotSpec extends FunSuite:
   private def B(b: Boolean): CellValue = CellValue.Bool(b)
   private val Value: CellValue = CellValue.Error(CellError.Value)
 
+  test("GH-726: numeric text refuses Unicode digits and overflow") {
+    List("５", "٥", "1e400", "-1e400").foreach { text =>
+      assertEquals(ScalarCoercion.parseNumericText(text), None, text)
+    }
+  }
+
+  test("GH-726: an invalid date serial is NUM, not VALUE") {
+    assertEquals(plain("B1", "YEAR(-5)"), Right(CellValue.Error(CellError.Num)))
+  }
+
+  test("GH-726: lifted date serial refusals keep NUM and IFERROR catches each element") {
+    val sheet = Sheet(SheetName.unsafe("Sheet1"))
+      .put(ref"A1", N("-5"))
+      .put(ref"A2", T("2958466"))
+    assertEquals(sheet.evaluateFormula("SUMPRODUCT(IFERROR(YEAR(A1:A2),7))"), Right(N("14")))
+    assertEquals(sheet.evaluateFormula("SUMPRODUCT(ERROR.TYPE(YEAR(A1:A2)))"), Right(N("12")))
+  }
+
+  test("GH-726: scalar decoder refusal labels belong to BuiltinTextSlots") {
+    val decoders: List[Cell => Either[CodecError, Any]] = List(
+      TExpr.decodeNumeric,
+      TExpr.decodeNumericScalar,
+      TExpr.decodeDate,
+      TExpr.decodeAsDate,
+      TExpr.decodeAsDateScalar,
+      TExpr.decodeBool,
+      TExpr.decodeAsString,
+      TExpr.decodeAsInt
+    )
+    decoders.foreach { decode =>
+      decode(Cell(ref"A1", CellValue.Error(CellError.NA))) match
+        case Left(CodecError.TypeMismatch(expected, _)) =>
+          assert(ScalarCoercion.BuiltinTextSlots.contains(expected), expected)
+        case other => fail(s"expected a labelled refusal, got $other")
+    }
+  }
+
+  test("GH-726: bounded ASCII grammar preserves ordinary decimals") {
+    List(
+      " +5 ",
+      ".5",
+      "5.",
+      "-1.25e+2",
+      "1e308",
+      "1.7976931348623157e308",
+      "-2.2250738585072014e-308",
+      "2.2250738585072014e-308"
+    ).foreach { s =>
+      assertEquals(ScalarCoercion.parseNumericText(s), Some(BigDecimal(s.trim)), s)
+    }
+    List(
+      "",
+      ".",
+      "+",
+      "1e",
+      "1e+",
+      "1 2",
+      "1,000",
+      "$5",
+      "50%",
+      "0x1p2",
+      "1d",
+      "NaN",
+      "Infinity",
+      "1e-309",
+      "1e-400",
+      "1.7976931348623159e308"
+    ).foreach { s =>
+      assertEquals(ScalarCoercion.parseNumericText(s), None, s)
+    }
+    assertEquals(ScalarCoercion.parseNumericText("0e-999999999"), Some(BigDecimal(0)))
+  }
+
+  test("GH-726: refused numeric text is VALUE in plain, rich and cached references") {
+    List("５", "1e400", "1e999999999", "1e-999999999").foreach { s =>
+      List(T(s), CellValue.RichText(RichText.plain(s)), CellValue.Formula("x", Some(T(s))))
+        .foreach { v =>
+          val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", v)
+          val decoders: List[Cell => Either[CodecError, Any]] = List(
+            TExpr.decodeNumericScalar,
+            TExpr.decodeAsInt,
+            TExpr.decodeAsDateScalar
+          )
+          decoders.foreach { decode =>
+            Evaluator.instance.eval(TExpr.ref(ref"A1", decode), sheet) match
+              case Left(EvalError.ErrorValue(CellError.Value, _)) => ()
+              case other => fail(s"$v: expected #VALUE!, got $other")
+          }
+        }
+    }
+  }
+
+  test("GH-726: extreme numeric text refuses before ROUND can scale it") {
+    Future {
+      List("1e999999999", "1e-999999999", "1e2147483647", "1e-2147483647", "５").foreach { s =>
+        val wb = Workbook(Vector(Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", T(s))))
+        List(
+          "ROUND(A1,0)",
+          "ROUND(A1+0,0)",
+          "SUMPRODUCT(ROUND(A1:A2+0,0))",
+          s"ROUND(\"$s\",0)",
+          "LET(x,A1,ROUND(x,0))",
+          "ABS(A1)",
+          "YEAR(A1)",
+          "LEFT(\"abc\",A1)"
+        ).foreach { formula =>
+          assertEquals(plainIn(wb, "B1", formula), Right(Value), formula)
+        }
+      }
+    }(using ExecutionContext.global)
+  }
+
   private val a = Vector("1", "-2", "3.5", "0", "10", "7", "-4.25", "100", "2", "5")
   private val c = Vector(
     "apple",
@@ -287,11 +399,7 @@ class TextScalarSlotSpec extends FunSuite:
     assert(diffs.isEmpty, diffs.mkString("\n"))
   }
 
-  test("#709: an out-of-range date serial is #VALUE! on every path until #726 makes it #NUM!") {
-    // Excel gives #NUM! for a serial outside 0..2958465 (#726). Until then every path agrees on
-    // #VALUE!, an error value the cell caches: numeric text or a number through a reference, a
-    // literal number or literal text, a computed value and a LET binding. The decoder names the
-    // reason with its own refusal, so the #NUM! fix changes one mapping.
+  test("GH-726: an out-of-range date serial is #NUM! on every path") {
     val sheet = Sheet(SheetName.unsafe("Sheet1"))
       .put(ref"A1", T("-5"))
       .put(ref"A2", T("3000000"))
@@ -300,19 +408,19 @@ class TextScalarSlotSpec extends FunSuite:
       .put(ref"A5", CellValue.Formula("A3*1", Some(N("-5"))))
     val wb = Workbook(Vector(sheet))
     val cases = List(
-      ("B1", "YEAR(A1)", Value),
-      ("B2", "YEAR(A2)", Value),
-      ("B3", "YEAR(A3)", Value),
-      ("B4", "MONTH(A4)", Value),
-      ("B5", "DAY(A5)", Value),
-      ("B6", "YEAR(-5)", Value),
-      ("B7", "YEAR(\"-5\")", Value),
-      ("B8", "YEAR(3000000)", Value),
-      ("B9", "YEAR(A3*1)", Value),
-      ("B10", "EDATE(-1,1)", Value),
-      ("B11", "LET(x,-5,YEAR(x))", Value),
+      ("B1", "YEAR(A1)", CellValue.Error(CellError.Num)),
+      ("B2", "YEAR(A2)", CellValue.Error(CellError.Num)),
+      ("B3", "YEAR(A3)", CellValue.Error(CellError.Num)),
+      ("B4", "MONTH(A4)", CellValue.Error(CellError.Num)),
+      ("B5", "DAY(A5)", CellValue.Error(CellError.Num)),
+      ("B6", "YEAR(-5)", CellValue.Error(CellError.Num)),
+      ("B7", "YEAR(\"-5\")", CellValue.Error(CellError.Num)),
+      ("B8", "YEAR(3000000)", CellValue.Error(CellError.Num)),
+      ("B9", "YEAR(A3*1)", CellValue.Error(CellError.Num)),
+      ("B10", "EDATE(-1,1)", CellValue.Error(CellError.Num)),
+      ("B11", "LET(x,-5,YEAR(x))", CellValue.Error(CellError.Num)),
       ("B12", "IFERROR(YEAR(-5),\"caught\")", T("caught")),
-      ("B13", "ERROR.TYPE(YEAR(A3))", N("3")),
+      ("B13", "ERROR.TYPE(YEAR(A3))", N("6")),
       // the edges stay dates
       ("B14", "YEAR(1)", N("1900")),
       ("B15", "YEAR(2958465)", N("9999"))
@@ -350,15 +458,17 @@ class TextScalarSlotSpec extends FunSuite:
     }
   }
 
-  test("#709: a sheet-qualified reference names its sheet in the #VALUE! diagnostic") {
+  test("#709/#726: sheet-qualified references name their sheet in typed-slot diagnostics") {
     val main = Sheet(SheetName.unsafe("Sheet1")).put(ref"C5", N("1")).put(ref"D5", T("x"))
     val other = Sheet(SheetName.unsafe("Other")).put(ref"C5", T("n/a"))
     val spaced = Sheet(SheetName.unsafe("My Data")).put(ref"C5", T("-5"))
     val wb = Workbook(Vector(main, other, spaced))
-    def message[A](expr: TExpr[A]): String =
+    def message[A](expr: TExpr[A], expected: CellError = CellError.Value): String =
       Evaluator.instance.eval(expr, main, workbook = Some(wb)) match
-        case Left(EvalError.ErrorValue(CellError.Value, Some(msg))) => msg
-        case other => fail(s"expected #VALUE! with a message, got $other")
+        case Left(EvalError.ErrorValue(code, Some(msg))) =>
+          assertEquals(code, expected)
+          msg
+        case other => fail(s"expected $expected with a message, got $other")
     val numeric = message(
       TExpr.SheetRef(SheetName.unsafe("Other"), ref"C5", Anchor.Relative, TExpr.decodeNumericScalar)
     )
@@ -369,7 +479,8 @@ class TextScalarSlotSpec extends FunSuite:
         ref"C5",
         Anchor.Relative,
         TExpr.decodeAsDateScalar
-      )
+      ),
+      CellError.Num
     )
     assert(date.startsWith("'My Data'!C5: "), date)
     // the unqualified reference keeps the bare address
@@ -381,7 +492,8 @@ class TextScalarSlotSpec extends FunSuite:
     // Before the guard, truncating "1e2147483647" threw ArithmeticException (BigInteger would
     // overflow) and "1e10000000" spent ~10 s building 10^10000000. Now the size is read from
     // precision and scale first: out of the Int range is the int-slot #VALUE!, on every path
-    // (LibreOffice 24.2 refuses these too, with Err:502); a magnitude below 1 truncates to 0.
+    // (LibreOffice 24.2 refuses these too, with Err:502). GH-726 also refuses text below the
+    // normal double range; ordinary fractional numbers still truncate to 0.
     Future {
       val rich = (s: String) => CellValue.RichText(RichText.plain(s))
       val sheet = Sheet(SheetName.unsafe("Sheet1"))
@@ -403,18 +515,18 @@ class TextScalarSlotSpec extends FunSuite:
         ("B2", "LEFT(\"abc\",A2)", Value),
         ("B3", "LEFT(\"abc\",A3)", Value),
         ("B4", "LEFT(\"abc\",A4)", Value),
-        ("B5", "LEFT(\"abc\",A5)", T("")),
+        ("B5", "LEFT(\"abc\",A5)", Value),
         ("B6", "LEFT(\"abc\",A6)", Value),
         ("B7", "LEFT(\"abc\",A7)", Value),
         ("B8", "LEFT(\"abc\",A8)", T("abc")),
         ("B9", "LEFT(\"abc\",A9)", Value),
         ("B10", "LEFT(\"abc\",A10)", T("")),
-        ("B11", "LEFT(\"abc\",A11)", T("")),
+        ("B11", "LEFT(\"abc\",A11)", Value),
         ("B12", "LEFT(\"abc\",A12)", Value),
         ("B13", "MID(\"abcdef\",2,A1)", Value),
         ("B14", "LEFT(\"abc\",1E10)", Value),
         ("B15", "LEFT(\"abc\",\"1e2147483647\")", Value),
-        ("B16", "LEFT(\"abc\",\"1e-2147483647\")", T("")),
+        ("B16", "LEFT(\"abc\",\"1e-2147483647\")", Value),
         ("B17", "IFERROR(LEFT(\"abc\",A1),\"caught\")", T("caught"))
       )
       val diffs = cases.flatMap { case (at, formula, expected) =>
