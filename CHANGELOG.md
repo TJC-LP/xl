@@ -96,6 +96,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
   Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
   `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
+### Changed
+
+- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
+  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
+  Parser security settings and finite entity-size limits are unchanged.
 
 ## [0.25.0] - 2026-10-19
 
