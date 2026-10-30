@@ -247,7 +247,7 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of the 0.25.0 release (2026-10-19), from the full-suite JUnit reports; macros are part of xl-core. One existing style-performance comparison is skipped; this verification ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests |
 |--------|-------|
@@ -255,10 +255,10 @@ As of the 0.25.0 release (2026-10-19), from the full-suite JUnit reports; macros
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
 | xl-cli | 1924 |
-| xl-cats-effect | 213 |
+| xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,616** |
+| **Total** | **9,620** |
 
 ## Test Quality Metrics
 
