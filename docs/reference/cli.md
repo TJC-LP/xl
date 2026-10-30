@@ -166,12 +166,15 @@ xl batch --schema                                  # JSON Schema of the batch do
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
 > work under `--stream` writes.
 
-> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
-> without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
-> cell) but leaves the old spill cells behind as orphaned constants, and one into a spill cell is
-> not refused, though Excel will not keep it as written. The in-memory writes apply Excel's rule
-> instead (see Dynamic arrays under `putf`); the streamed rule is
-> [#738](https://github.com/TJC-LP/xl/issues/738).
+> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch content write
+> refuses cells inside a live dynamic spill (`FORMULA_ERROR`; a batch reports `BATCH_OP_FAILED`
+> with the operation index). Overwriting the anchor releases its old spill: cached children are
+> cleared as they pass through the writer, with styles kept. Batch operations follow document
+> order, so overwriting an anchor first allows a later write into its former spill. Style-only
+> writes are allowed on both anchors and spill cells and preserve formula and cell metadata.
+> `sort` refuses any intersection between its data rows and a multi-cell dynamic spill, including
+> its anchor; an excluded header row does not count. Clear or overwrite the anchor first, or
+> sort outside its spill. Streamed edits still do not recalculate formulas.
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 

@@ -32,7 +32,7 @@ import com.tjclp.xl.cli.contract.{
   Warning
 }
 import com.tjclp.xl.cli.MemoryGuard
-import com.tjclp.xl.cli.helpers.{BatchParser, Resolve, StyleBuilder, ValueParser}
+import com.tjclp.xl.cli.helpers.{BatchParser, Resolve, StreamingSpills, StyleBuilder, ValueParser}
 import org.xml.sax.{Attributes, SAXException}
 import org.xml.sax.helpers.DefaultHandler
 import scala.collection.mutable
@@ -173,7 +173,12 @@ object StreamingWriteCommands:
         val format = Option.when(formatted.numFmt != NumFmt.General)(formatted.numFmt)
         ScopedOp(BatchParser.BatchOp.Put(ref.toA1, formatted.value, format), None, i + 1)
       }
-      patches <- buildStreamingBatchPatches(sourcePath, worksheetPath, batchOps)
+      patches <- buildStreamingBatchPatches(
+        sourcePath,
+        worksheetPath,
+        batchOps,
+        batchErrors = false
+      )
       (cellPatches, updatedStylesXml, worksheetMetadata, _, _) = patches
 
       // Execute streaming transform, including any detected number formats.
@@ -295,13 +300,28 @@ object StreamingWriteCommands:
           )
 
       (valueMap, offGrid) = built
+      // Validate the whole write before opening output; the range may overwrite its own anchor.
+      writeAreas = refOrRange.fold(r => Vector(CellRange(r, r)), r => Vector(r))
+      cleared <- IO.blocking {
+        StreamingSpills
+          .release(StreamingSpills.read(sourcePath, worksheetPath, writeAreas), writeAreas)
+          .fold(spill => throw CliException(CliError.fromSpillBlocked(spill)), identity)
+      }
       // GH-628: a drag that wrote #REF! for an off-grid reference is reported, not silent
       _ <- OffGridHit
         .warning(offGrid.map(OffGridHit(sheetName, _)), OffGridHit.streamingHint)
         .traverse_(warn)
-
-      // Execute streaming transform
-      result <- ZipTransformer.transformValues[IO](sourcePath, outputPath, worksheetPath, valueMap)
+      result <-
+        if cleared.isEmpty then
+          ZipTransformer.transformValues[IO](sourcePath, outputPath, worksheetPath, valueMap)
+        else
+          ZipTransformer.transformWithMetadata[IO](
+            sourcePath,
+            outputPath,
+            worksheetPath,
+            valueMap.map((ref, value) => ref -> StreamingTransform.CellPatch.SetValue(value)),
+            StreamingTransform.WorksheetMetadata(clearContents = cleared.map(_.extent))
+          )
     yield
       val desc = refOrRange match
         case Left(ref) => s"Put formula → ${ref.toA1} (streaming)"
@@ -652,7 +672,8 @@ object StreamingWriteCommands:
   private def buildStreamingBatchPatches(
     sourcePath: Path,
     worksheetPath: String,
-    ops: Vector[ScopedOp]
+    ops: Vector[ScopedOp],
+    batchErrors: Boolean = true
   ): IO[
     (
       Map[ARef, StreamingTransform.CellPatch],
@@ -696,6 +717,11 @@ object StreamingWriteCommands:
 
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
+      val contentAreas = plainOps.flatMap(contentTargets)
+      var liveSpills =
+        if contentAreas.nonEmpty then StreamingSpills.read(sourcePath, worksheetPath, contentAreas)
+        else Vector.empty
+      val clearedSpills = mutable.ListBuffer[CellRange]()
       val columns = mutable.Map[Column, ColumnProperties]() ++ existingMetadata.columns
       val addMerges = mutable.Set[CellRange]()
       val removeMerges = mutable.Set[CellRange]()
@@ -977,15 +1003,26 @@ object StreamingWriteCommands:
       // name, with the cause's text as the suffix and `location.opIndex` set — the same rewrap the
       // in-memory path applies (`BatchParser.opFailed`), so an agent reads one shape on both paths
       ops.foreach { scoped =>
-        try applyOp(scoped)
-        catch case scala.util.control.NonFatal(cause) => throw BatchParser.opFailed(scoped, cause)
+        try
+          val targets = contentTargets(scoped.op)
+          val released = StreamingSpills
+            .release(liveSpills, targets)
+            .fold(spill => throw CliException(CliError.fromSpillBlocked(spill)), identity)
+          clearedSpills ++= released.map(_.extent)
+          liveSpills = liveSpills.filterNot(released.contains)
+          applyOp(scoped)
+        catch
+          case scala.util.control.NonFatal(cause) =>
+            if batchErrors then throw BatchParser.opFailed(scoped, cause)
+            else throw cause
       }
 
       val worksheetMetadata = StreamingTransform.WorksheetMetadata(
         columns = columns.toMap,
         addMerges = addMerges.toSet,
         removeMerges = removeMerges.toSet,
-        rowProps = rowProps.toMap
+        rowProps = rowProps.toMap,
+        clearContents = clearedSpills.toVector
       )
 
       val updatedStylesXml = if stylesModified then Some(currentStylesXml) else None
@@ -998,6 +1035,17 @@ object StreamingWriteCommands:
         offGrid.toVector
       )
     }
+
+  private def contentTargets(op: BatchParser.BatchOp): Vector[CellRange] =
+    import BatchParser.BatchOp.*
+    op match
+      case Put(ref, _, _) => ARef.parse(ref).toOption.map(r => CellRange(r, r)).toList.toVector
+      case PutFormula(ref, _, _, _) =>
+        ARef.parse(ref).toOption.map(r => CellRange(r, r)).toList.toVector
+      case PutValues(range, _) => CellRange.parse(range).toOption.toList.toVector
+      case PutFormulas(range, _, _) => CellRange.parse(range).toOption.toList.toVector
+      case PutFormulaDragging(range, _, _, _) => CellRange.parse(range).toOption.toList.toVector
+      case _ => Vector.empty
 
   /**
    * The cells whose existing style an op consults: a `put`/`putf` with a format, a dragged or

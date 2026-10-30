@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/dynamic-spill.xlsx
+-o
+<DIR>/blocked.xlsx
+--stream
+put
+B3
+99
+## exit
+3
+## stdout
+## stderr
+Error: B3: it is in the spill range B1:B5 of the dynamic array =SORT(A1:A5) at B1; writing there would block that spill (Excel shows #SPILL!)
+  code: FORMULA_ERROR
+  hint: overwrite or clear B1 first (its spill goes with it), or write outside B1:B5
