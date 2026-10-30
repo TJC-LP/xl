@@ -244,6 +244,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whitespace remain accepted. Extreme exponents are refused before BigDecimal construction
   or scaling, including in ROUND. Zero text is canonicalised to avoid retaining extreme
   scales. Currency, locale and date/time text coercions are unchanged.
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+- **One exact lookup test for MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP; rich text is text**
+  (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
+  - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
+    **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
+    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
+    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
+    of the text `1`.
+  - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
+    `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
+    `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
+    `10` and the text `abc`. XMATCH and XLOOKUP still apply wildcards only in match_mode 2.
+  - A `~` with nothing after it drops from a lookup value that takes wildcards (MATCH type 0, exact
+    VLOOKUP/HLOOKUP, match_mode 2). **Behaviour change:** `MATCH("a~",r,0)` and
+    `XMATCH("a~",r,2)` found the text `a~` and now find the text `a`.
+  - **Behaviour change:** MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0.
+    `MATCH(A6,r,0)` over a blank A6 was `#N/A` and now finds the 0 key.
+  - **Behaviour change:** MATCH over a range with more than one row and more than one column is
+    `#N/A` in every match_type. `MATCH("fig",G1:I5,0)` returned the row-major position (4) and now
+    returns `#N/A`.
+  - A rich-text key matches its plain text in every exact lookup. **Behaviour change:**
+    `MATCH("kiwi",r,0)`, `XLOOKUP("kiwi",…)` and `VLOOKUP("kiwi",…,FALSE)` missed a rich-text
+    `kiwi` (`#N/A`) and now find it.
+  - **Behaviour change:** `ISTEXT` of a rich-text cell was FALSE and is now TRUE. UNIQUE reads rich
+    text as its plain text (rich `kiwi`, `kiwi` and `KIWI` were two rows and are now one), and SORT
+    places rich text among the text instead of after it.
+
+### Added
+
+- `ISNONTEXT` (#775): TRUE for a number, logical, error or blank cell, FALSE for text, empty text
+  and rich text.
 
 ## [0.25.0] - 2026-10-19
 

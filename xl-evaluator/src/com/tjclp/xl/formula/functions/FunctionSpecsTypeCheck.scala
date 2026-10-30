@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -152,20 +152,31 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
         case Right(_) => Right(false)
     }
 
+  /** ISTEXT(value): TRUE for text, rich text (#775) and a formula's cached text included. */
   val istext: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
     FunctionSpec.simple[Boolean, UnaryCellValue](
       "ISTEXT",
       Arity.one,
       flags = FunctionFlags(lift = ArrayLift.all)
-    ) { (expr, ctx) =>
-      evalValue(ctx, expr) match
-        case Left(_) => Right(false)
-        case Right(ExprValue.Cell(CellValue.Text(_))) => Right(true)
-        case Right(ExprValue.Cell(CellValue.Formula(_, Some(CellValue.Text(_)), _))) =>
-          Right(true)
-        case Right(ExprValue.Text(_)) => Right(true)
-        case Right(_) => Right(false)
-    }
+    )((expr, ctx) => Right(isTextValue(evalValue(ctx, expr))))
+
+  /**
+   * ISNONTEXT(value): the negation of [[istext]] — TRUE for a number, logical, error or blank cell,
+   * FALSE for text, empty text (`""`) and rich text (#775).
+   */
+  val isnontext: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
+    FunctionSpec.simple[Boolean, UnaryCellValue](
+      "ISNONTEXT",
+      Arity.one,
+      flags = FunctionFlags(lift = ArrayLift.all)
+    )((expr, ctx) => Right(!isTextValue(evalValue(ctx, expr))))
+
+  /** The one "is text" test of ISTEXT and ISNONTEXT ([[ScalarCoercion.cellText]] for a cell). */
+  private def isTextValue(value: Either[EvalError, ExprValue]): Boolean =
+    value match
+      case Right(ExprValue.Cell(cv)) => ScalarCoercion.cellText(cv).isDefined
+      case Right(ExprValue.Text(_)) => true
+      case _ => false
 
   val isblank: FunctionSpec[Boolean] { type Args = UnaryCellValue } =
     FunctionSpec.simple[Boolean, UnaryCellValue](
