@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
+  desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
+  `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
+  is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
+  is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
 - **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
   unchanged into every cell, so every row after the first computed the first row's result. It is now
   dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch

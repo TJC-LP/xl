@@ -15,9 +15,9 @@ import munit.FunSuite
 /**
  * GH-655: `x#` — Excel 365's spill reference, stored as `_xlfn.ANCHORARRAY(x)`. The value is the
  * whole array the anchor cell's formula spills: the file's `<f t="array" ref>` span read through
- * its cached cells when Excel wrote one, else the anchor's formula evaluated as an array. A cell
- * that is not a spill anchor — a constant, a scalar formula, a spilled non-anchor value — is
- * `#REF!`. The parser accepts `x#` and `ANCHORARRAY(x)`; the printer emits `x#`.
+ * its cached cells when Excel wrote one, else the anchor's formula evaluated as an array. A formula
+ * that does not spill is its own one cell (#803); a constant, a blank or a spilled non-anchor value
+ * is `#REF!`. The parser accepts `x#` and `ANCHORARRAY(x)`; the printer emits `x#`.
  */
 class SpillReferenceSpec extends FunSuite:
 
@@ -107,11 +107,114 @@ class SpillReferenceSpec extends FunSuite:
     assertEquals(number("=ROWS(D1#)"), BigDecimal(3))
   }
 
-  test("a constant, a scalar formula and a spilled non-anchor cell are #REF!") {
+  test(
+    "a constant, a blank and a spilled non-anchor cell are #REF!; a scalar formula is its cell"
+  ) {
     assert(isRef(value("=SUM(E1#)")), value("=SUM(E1#)").toString)
-    assert(isRef(value("=SUM(E2#)")), value("=SUM(E2#)").toString)
+    assertEquals(number("=SUM(E2#)"), BigDecimal(6), "#803: E2 does not spill, so E2# is E2")
     assert(isRef(value("=SUM(C2#)")), value("=SUM(C2#)").toString)
     assert(isRef(value("=SUM(Z9#)")), value("=SUM(Z9#)").toString)
+  }
+
+  /**
+   * Recreate the spreadsheet from #803, checked in Excel for Mac 16.114. A2 contains `=""`, C1
+   * contains `=5`, and G1 contains `=1/0`. Each formula returns one value, so its `#` reference
+   * should return a one-cell array. B1 contains the constant text "q", and E5 is left empty.
+   */
+  private val singleCells = Sheet("Single")
+    .put(ref"A2", CellValue.Formula("\"\""))
+    .put(ref"C1", CellValue.Formula("5"))
+    .put(ref"G1", CellValue.Formula("1/0"))
+    .put(ref"B1", CellValue.Text("q"))
+
+  private def single(formula: String): XLResult[CellValue] =
+    singleCells.evaluateFormula(formula, Clock.system, Some(Workbook(singleCells)), Some(ref"H1"))
+
+  // Check the six formulas from #803. Excel returns 1 for COUNTBLANK(A2#), but counting
+  // empty text is a separate fix in #804. Here, require COUNTBLANK(A2#) to equal COUNTBLANK(A2).
+  // Both currently return 0 on this base. When #804 merges, this test will require both to be 1.
+  private def singleCellCases = List(
+    "=ROWS(A2#)" -> n(1),
+    "=COUNTA(A2#)" -> n(1),
+    "=COUNTBLANK(A2#)" -> single("=COUNTBLANK(A2)").fold(err => fail(err.toString), identity),
+    "=COUNTBLANK(C1#)" -> n(0),
+    "=COUNTBLANK(G1#)" -> n(0),
+    "=COUNTBLANK(B1#)" -> CellValue.Error(CellError.Ref)
+  )
+
+  // Use the same formulas with saved results, as an Excel file may contain.
+  private val cachedSingleCells = singleCells
+    .put(ref"A2", CellValue.Formula("\"\"", Some(CellValue.Text(""))))
+    .put(ref"C1", CellValue.Formula("5", Some(n(5))))
+    .put(ref"G1", CellValue.Formula("1/0", Some(CellValue.Error(CellError.Div0))))
+
+  test("#803: the issue's six formulas read cached and uncached single-cell anchors") {
+    List(singleCells, cachedSingleCells).foreach { source =>
+      val book = Workbook(source, Sheet("Reader")).withDefinedName("scalar", "Single!$C$1")
+      singleCellCases.foreach { (formula, expected) =>
+        assertEquals(
+          source.evaluateFormula(formula, Clock.system, Some(book), Some(ref"H1")),
+          Right(expected),
+          formula
+        )
+        val qualified = formula.replace("(", "(Single!")
+        assertEquals(
+          book.sheets(1).evaluateFormula(qualified, Clock.system, Some(book), Some(ref"H1")),
+          Right(expected),
+          qualified
+        )
+      }
+      assertEquals(
+        source.evaluateFormula("=SUM(scalar#)", Clock.system, Some(book), Some(ref"H1")),
+        Right(n(5))
+      )
+    }
+    assertEquals(single("=COUNTBLANK(E5#)"), Right(CellValue.Error(CellError.Ref)))
+  }
+
+  test("#803: the one cell reads as the formula's value: numbers sum, an error is one element") {
+    assertEquals(single("=SUM(C1#)"), Right(n(5)))
+    assertEquals(single("=C1#*2"), Right(n(10)))
+    assertEquals(single("=COLUMNS(C1#)"), Right(n(1)))
+    assertEquals(single("=ROWS(G1#)"), Right(n(1)))
+    assertEquals(single("=SUM(G1#)"), Right(CellValue.Error(CellError.Div0)))
+    // E5 is empty, but the formula =E5 in D1 returns 0. D1# should therefore contain 0.
+    val blankRef = singleCells.put(ref"D1", CellValue.Formula("E5"))
+    assertEquals(
+      blankRef.evaluateFormula("=COUNTBLANK(D1#)", Clock.system, None, Some(ref"H1")),
+      Right(n(0))
+    )
+    // Check the actual value inside each one-cell array. COUNTA alone cannot prove this:
+    // it returns 1 for both an empty-text cell and an error cell.
+    List(("=A2#", CellValue.Text("")), ("=C1#", n(5)), ("=G1#", CellValue.Error(CellError.Div0)))
+      .foreach { (formula, expected) =>
+        val (spilled, extent) = singleCells
+          .evaluateArrayFormula(formula, ref"H1")
+          .fold(err => fail(err.toString), identity)
+        assertEquals(extent, CellRange(ref"H1", ref"H1"))
+        assertEquals(spilled(ref"H1").value, expected)
+      }
+    // An unknown function must still report an evaluation failure.
+    val unsupported = singleCells.put(ref"D1", CellValue.Formula("UNKNOWN_FUNCTION()"))
+    assert(unsupported.evaluateFormula("=ROWS(D1#)", Clock.system).isLeft)
+
+  }
+
+  test("#803: recalculation folds read a non-spilling formula's x# as that cell") {
+    List(singleCells, cachedSingleCells).foreach { source =>
+      val withReaders = singleCellCases.zipWithIndex.foldLeft(source) {
+        case (current, ((formula, _), i)) =>
+          current.put(ARef.from0(7, i), CellValue.Formula(formula.stripPrefix("=")))
+      }
+      val recalculated = Workbook(withReaders).recalculate(Clock.system).workbook
+      singleCellCases.zipWithIndex.foreach { case ((formula, expected), i) =>
+        assertEquals(
+          c1Of(recalculated, ARef.from0(7, i)),
+          CellValue.Formula(formula.stripPrefix("="), Some(expected)),
+          formula
+        )
+      }
+    }
   }
 
   test("a sheet-qualified anchor and a defined name bound to the anchor spill the same array") {
@@ -538,24 +641,25 @@ class SpillReferenceSpec extends FunSuite:
   }
 
   test("GH-695: a fold reads a scalar or erroring anchor as x# does when it evaluates it itself") {
-    // a scalar result is not a spill anchor (#REF!); an error result is that error
-    List("1+1" -> CellError.Ref, "1/0" -> CellError.Div0).foreach { (formula, expected) =>
-      List("SUM(A1#)", "ROWS(A1#)").foreach { reader =>
-        val sheet = Sheet("Sheet1")
-          .put(ref"A1", arrayRecord(ref"A1", formula))
-          .put(ref"C1", CellValue.Formula(reader))
-        val book = Workbook(sheet)
-        val direct = sheet.evaluateFormula(s"=$reader", Clock.system, Some(book), Some(ref"C1"))
-        assert(
-          direct.isLeft || direct == Right(CellValue.Error(expected)),
-          s"$formula $reader: $direct"
-        )
-        assertEquals(
-          c1(book.recalculate(Clock.system).workbook),
-          CellValue.Formula(reader, Some(CellValue.Error(expected))),
-          s"$formula $reader"
-        )
-      }
+    // #803: both a single value and an Excel error become one-cell arrays.
+    // SUM reads the value or error inside the array. ROWS returns 1 in either case.
+    List(
+      ("1+1", "SUM(A1#)", n(2)),
+      ("1+1", "ROWS(A1#)", n(1)),
+      ("1/0", "SUM(A1#)", CellValue.Error(CellError.Div0)),
+      ("1/0", "ROWS(A1#)", n(1))
+    ).foreach { (formula, reader, expected) =>
+      val sheet = Sheet("Sheet1")
+        .put(ref"A1", arrayRecord(ref"A1", formula))
+        .put(ref"C1", CellValue.Formula(reader))
+      val book = Workbook(sheet)
+      val direct = sheet.evaluateFormula(s"=$reader", Clock.system, Some(book), Some(ref"C1"))
+      assertEquals(direct, Right(expected), s"$formula $reader")
+      assertEquals(
+        c1(book.recalculate(Clock.system).workbook),
+        CellValue.Formula(reader, Some(expected)),
+        s"$formula $reader"
+      )
     }
   }
 
