@@ -878,6 +878,20 @@ class ScriptingPreludeTest extends FunSuite:
       Right(true)
     )
     val meta: LightMetadata = Excel.readMetadata(path.toString)
+    val info: LintSeverity = LintSeverity.Info
+    assertEquals(info.slug, "info")
+    assert(meta.preservedSheets.isEmpty)
+    val preserved = meta.copy(preservedSheets =
+      Vector(
+        com.tjclp.xl.ooxml.metadata.PreservedSheetInfo(
+          SheetName.unsafe("Macro"),
+          com.tjclp.xl.ooxml.PreservedSheetKind.Macro,
+          "hidden",
+          2
+        )
+      )
+    )
+    assertEquals(preserved.preservedSheets.map(_.kind.slug), Vector("macro"))
     val infos: Vector[SheetInfo] = meta.sheets
     assertEquals(infos.map(_.name.value), Vector("Data", "Summary"))
     Excel.modifyR(path.toString)(_.update("Data", _.put(ref"B1", "note")))

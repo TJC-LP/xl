@@ -1,7 +1,14 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{
+  ArrayResult,
+  CriteriaKeys,
+  EvalError,
+  Evaluator,
+  RangeOperand,
+  ScalarCoercion
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.Arity
 
@@ -450,14 +457,19 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
       yield result
     }
 
-  /** Sort key: numbers (by value) < text (case-insensitive) < booleans < everything else. */
+  /**
+   * Sort key: numbers (by value) < text (case-insensitive; rich text by its plain text, #775) <
+   * booleans < everything else.
+   */
   private def cellSortKey(cv: CellValue): (Int, BigDecimal, String) =
     cv match
       case CellValue.Number(n) => (0, n, "")
-      case CellValue.Text(s) => (1, BigDecimal(0), s.toLowerCase)
       case CellValue.Bool(b) => (2, if b then BigDecimal(1) else BigDecimal(0), "")
       case CellValue.Formula(_, Some(c), _) => cellSortKey(c)
-      case _ => (3, BigDecimal(0), "")
+      case other =>
+        ScalarCoercion
+          .cellText(other)
+          .fold((3, BigDecimal(0), ""))(s => (1, BigDecimal(0), s.toLowerCase))
 
   /** GH-596: a blank key is excluded from the ordering and appended, in both directions. */
   private def isBlankSortValue(cv: CellValue): Boolean =
@@ -482,15 +494,17 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
         val cmp = sortKeyOrdering.compare(cellSortKey(a), cellSortKey(b))
         if descending then -cmp else cmp
 
-  /** Canonical equality key for UNIQUE (case-insensitive text, normalized numbers). */
+  /**
+   * Canonical equality key for UNIQUE (case-insensitive text, rich text by its plain text (#775),
+   * normalized numbers).
+   */
   private def cellKey(cv: CellValue): String =
     cv match
-      case CellValue.Number(n) => "n:" + n.bigDecimal.stripTrailingZeros.toPlainString
-      case CellValue.Text(s) => "t:" + s.toLowerCase
+      case CellValue.Number(n) => "n:" + CriteriaKeys.numberText(n)
       case CellValue.Bool(b) => "b:" + b
       case CellValue.Empty => "e:"
       case CellValue.Formula(_, Some(c), _) => cellKey(c)
-      case other => "o:" + other.toString
+      case other => ScalarCoercion.cellText(other).fold("o:" + other.toString)("t:" + _.toLowerCase)
 
   /** Truthiness for FILTER include flags. */
   private def isTruthy(cv: CellValue): Boolean =

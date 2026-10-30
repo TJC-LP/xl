@@ -82,6 +82,107 @@ class NonWorksheetSheetSpec extends FunSuite:
   private val dataName = SheetName.unsafe("Data")
   private val data2Name = SheetName.unsafe("Data2")
 
+  test("GH-788: both macro kinds report Auto_Open in full and streaming lint") {
+    List(macroSheet, intlMacro).foreach { kind =>
+      val source = fixture(kind)
+      try
+        val full =
+          com.tjclp.xl.ooxml.lint.WorkbookLint.lint(source).fold(e => fail(e.message), identity)
+        val stream = com.tjclp.xl.ooxml.lint.WorkbookLint
+          .lintStream(source)
+          .fold(e => fail(e.message), identity)
+        val macros = full.filter(_.category.slug == "macro-sheet")
+        assertEquals(macros.size, 1)
+        assert(
+          macros.headOption.exists(f =>
+            f.message.contains("Other") &&
+              f.message.contains("visible") && f.message.contains("_xlnm.Auto_Open")
+          )
+        )
+        assertEquals(stream.filter(_.category.slug == "macro-sheet"), macros)
+      finally cleanup(source)
+    }
+  }
+
+  kinds.foreach { kind =>
+    test(s"GH-788: read-only metadata exposes ${kind.label} with source position and state") {
+      val source = fixture(kind, state = "veryHidden")
+      try
+        val meta = WorkbookMetadataReader.read(source).fold(e => fail(e.message), identity)
+        assertEquals(meta.sheets.map(_.name.value), Vector("Data", "Data2"))
+        val kept = meta.preservedSheets
+        assertEquals(kept.map(_.name.value), Vector("Other"))
+        assertEquals(kept.map(_.state), Vector("veryHidden"))
+        assertEquals(kept.map(_.sourceIndex), Vector(2))
+        assertEquals(
+          kept.map(_.kind.slug),
+          Vector(SheetKinds.preservedKind(kind.relType).fold("")(_.slug))
+        )
+        if kind != macroSheet && kind != intlMacro then
+          val findings =
+            com.tjclp.xl.ooxml.lint.WorkbookLint.lint(source).fold(e => fail(e.message), identity)
+          assert(!findings.exists(_.category.slug == "macro-sheet"))
+      finally cleanup(source)
+    }
+  }
+
+  test("GH-788: macro presence, state and Auto_Open scope/reference detection are independent") {
+    val cases = List(
+      ("visible", "", false),
+      ("hidden", "<definedName name=\"Auto_Open\" localSheetId=\"1\">$A$1</definedName>", true),
+      ("veryHidden", "<definedName name=\"_xlnm.auto_open\">'oThEr'!$A$1</definedName>", true),
+      ("hidden", "<definedName name=\"AUTO_OPEN\">SUM(Data!A1,Other!A1)</definedName>", true),
+      ("hidden", "<definedName name=\"Auto_Open\" localSheetId=\"0\">Data!A1</definedName>", false),
+      ("hidden", "<definedName name=\"Auto_Open\">&quot;Other!A1&quot;</definedName>", false),
+      ("hidden", "<definedName name=\"Auto_Open\">[1]Other!A1</definedName>", false),
+      ("hidden", "<definedName name=\"Auto_Open\">'[1]Other'!A1</definedName>", false),
+      ("hidden", "<definedName name=\"NotAuto_Open\">Other!A1</definedName>", false),
+      ("hidden", "<definedName name=\"Auto_Open\">Table1[Other!A1]</definedName>", false),
+      ("hidden", "<definedName name=\"Auto_Open\">SomeOther!A1</definedName>", false)
+    )
+    cases.foreach { (state, autoNames, hasEntry) =>
+      List(macroSheet, intlMacro).foreach { kind =>
+        val source = fixture(kind, state = state, autoNames = Some(autoNames))
+        try
+          val full =
+            com.tjclp.xl.ooxml.lint.WorkbookLint.lint(source).fold(e => fail(e.message), identity)
+          val stream = com.tjclp.xl.ooxml.lint.WorkbookLint
+            .lintStream(source)
+            .fold(e => fail(e.message), identity)
+          val macros = full.filter(_.category.slug == "macro-sheet")
+          assertEquals(macros.size, 1)
+          macros.foreach { f =>
+            assertEquals(f.severity.slug, "info")
+            assert(f.message.contains(s"state: $state"))
+            assertEquals(f.message.contains("open-time entry point"), hasEntry, autoNames)
+          }
+          assertEquals(stream.filter(_.category.slug == "macro-sheet"), macros)
+        finally cleanup(source)
+      }
+    }
+  }
+
+  test("GH-788: Auto_Open qualifiers decode spaces, escaped apostrophes and non-ASCII names") {
+    List(("O'Brien", "'O''Brien'!$A$1"), ("My Macro", "'My Macro'!$A$1"), ("巨集", "巨集!$A$1"))
+      .foreach { (name, formula) =>
+        val source = fixture(
+          macroSheet,
+          nonWorksheetName = name,
+          autoNames = Some(s"""<definedName name="Auto_Open">$formula</definedName>""")
+        )
+        try
+          val findings =
+            com.tjclp.xl.ooxml.lint.WorkbookLint.lint(source).fold(e => fail(e.message), identity)
+          assert(
+            findings.exists(f =>
+              f.category.slug == "macro-sheet" && f.message.contains("open-time entry point")
+            ),
+            findings.toString
+          )
+        finally cleanup(source)
+      }
+  }
+
   // ========== Read ==========
 
   kinds.foreach { kind =>
@@ -367,7 +468,10 @@ class NonWorksheetSheetSpec extends FunSuite:
   private def fixture(
     kind: Kind,
     activeTab: Option[Int] = None,
-    otherFirst: Boolean = false
+    otherFirst: Boolean = false,
+    state: String = "visible",
+    autoNames: Option[String] = None,
+    nonWorksheetName: String = "Other"
   ): Path =
     val path = Files.createTempFile("gh785-src", ".xlsm")
     val zip = new ZipOutputStream(Files.newOutputStream(path))
@@ -376,7 +480,10 @@ class NonWorksheetSheetSpec extends FunSuite:
       zip.write(content.getBytes(StandardCharsets.UTF_8))
       zip.closeEntry()
     val data = """<sheet name="Data" sheetId="1" r:id="rId1"/>"""
-    val other = """<sheet name="Other" sheetId="2" r:id="rId2"/>"""
+    val stateAttr = if state == "visible" then "" else s" state=\"$state\""
+    val other = s"""<sheet name="${scala.xml.Utility.escape(
+        nonWorksheetName
+      )}" sheetId="2" r:id="rId2"$stateAttr/>"""
     val sheetEntries =
       (if otherFirst then other + data else data + other) +
         """<sheet name="Data2" sheetId="3" r:id="rId3"/>"""
@@ -397,7 +504,10 @@ class NonWorksheetSheetSpec extends FunSuite:
       put(
         "xl/workbook.xml",
         s"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<workbook xmlns="$mainNs" xmlns:r="$relNs">$bookViews<sheets>$sheetEntries</sheets><definedNames><definedName name="_xlnm.Auto_Open">Other!$$A$$1</definedName><definedName name="_xlnm.Print_Titles" localSheetId="2">Data2!$$1:$$1</definedName><definedName name="Local" localSheetId="2">Data2!$$A$$1</definedName><definedName name="MacroLocal" localSheetId="$otherIdx">Other!$$A$$1</definedName></definedNames></workbook>"""
+<workbook xmlns="$mainNs" xmlns:r="$relNs">$bookViews<sheets>$sheetEntries</sheets><definedNames>${autoNames
+            .getOrElse(
+              "<definedName name=\"_xlnm.Auto_Open\">Other!$A$1</definedName>"
+            )}<definedName name="_xlnm.Print_Titles" localSheetId="2">Data2!$$1:$$1</definedName><definedName name="Local" localSheetId="2">Data2!$$A$$1</definedName><definedName name="MacroLocal" localSheetId="$otherIdx">Other!$$A$$1</definedName></definedNames></workbook>"""
       )
       put(
         "xl/_rels/workbook.xml.rels",

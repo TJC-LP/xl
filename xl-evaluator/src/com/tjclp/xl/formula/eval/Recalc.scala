@@ -5,7 +5,7 @@ import java.util.regex.Pattern
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
@@ -590,7 +590,8 @@ object RecalcResult:
   /**
    * [[cacheResults]] with the invalidation walk supplied: `dependentsOf(failed, pinned)` is every
    * formula reachable from `failed` through readers, the failed cells excluded, never passing
-   * through a pinned cell (#767: the compact graph answers it without a reverse map).
+   * through a pinned cell (#767: the compact graph answers it without a reverse map). The pin check
+   * reuses `parses`, the pass's graph build (#790).
    */
   private[eval] def cacheResultsWith(
     wb: Workbook,
@@ -598,7 +599,8 @@ object RecalcResult:
     failures: Vector[CellEvalError],
     dependentsOf: (Set[QualifiedRef], Set[QualifiedRef]) => Set[QualifiedRef],
     cycleReports: Vector[SccReport],
-    reasons: Map[QualifiedRef, String]
+    reasons: Map[QualifiedRef, String],
+    parses: FormulaParses = FormulaParses.none
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
       wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
@@ -613,7 +615,10 @@ object RecalcResult:
       else
         val pinned = wb.sheets.iterator.flatMap { sheet =>
           sheet.cells.iterator.collect {
-            case (ref, cell) if SheetEvaluator.pinnedCache(cell.value).isDefined =>
+            case (ref, cell)
+                if SheetEvaluator
+                  .pinnedCache(cell.value, parses.parse(sheet.name, ref, _))
+                  .isDefined =>
               QualifiedRef(sheet.name, ref)
           }
         }.toSet

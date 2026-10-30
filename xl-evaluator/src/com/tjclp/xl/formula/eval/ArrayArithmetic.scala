@@ -87,7 +87,7 @@ object ArrayArithmetic:
     case CellValue.DateTime(dt) => Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
     case CellValue.Formula(_, Some(cached), _) => cellValueToNumeric(cached)
     case CellValue.Text(s) =>
-      scala.util.Try(BigDecimal(s.trim)).toOption match
+      ScalarCoercion.parseNumericText(s) match
         case Some(n) => Right(n)
         case None => Left(EvalError.TypeMismatch("arithmetic", "number", s"text: $s"))
     case other =>
