@@ -237,18 +237,18 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-From the full-suite JUnit reports on 2026-10-28; macros are part of xl-core. Counts include passed, failed and skipped cases. Optional external-tool checks count as cases even when skipped.
+As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 3960 |
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
-| xl-cli | 1949 |
-| xl-cats-effect | 213 |
+| xl-cli | 1924 |
+| xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,641** |
+| **Total** | **9,620** |
 
 ## Test Quality Metrics
 

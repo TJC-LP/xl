@@ -10,7 +10,7 @@ import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter}
+import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, TExpr}
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
@@ -206,17 +206,22 @@ object StreamingWriteCommands:
    * in-memory verb's does: `Formula for B3: ` when several formulas go to a range.
    */
   private def parsedFormulaText(text: String, prefix: String = ""): IO[String] =
+    parsedFormula(text, prefix).map(_._1)
+
+  /** [[parsedFormulaText]] with the parsed expression a drag shifts. */
+  private def parsedFormula(text: String, prefix: String = ""): IO[(String, TExpr[?])] =
     val formula = CellValue.canonicalFormulaText(text)
     val fullFormula = s"=$formula"
     FormulaParser.parse(fullFormula) match
-      case Right(_) => IO.pure(formula)
+      case Right(expr) => IO.pure(formula -> expr)
       case Left(e) => IO.raiseError(WriteCommands.formulaError(e, fullFormula, prefix))
 
   /**
    * Streaming putf: write formulas to cells with O(1) memory.
    *
-   * Uses SAX→StAX transform pipeline to modify only target cells. Note: Formula dragging is NOT
-   * supported in streaming mode.
+   * Uses SAX→StAX transform pipeline to modify only target cells. One formula over a range is
+   * dragged from the range's top-left cell, as the in-memory verb does (GH-789); the formula is not
+   * evaluated, so no cached value and no automatic date format is written.
    *
    * @param sourcePath
    *   Input XLSX file
@@ -227,7 +232,9 @@ object StreamingWriteCommands:
    * @param refStr
    *   Cell reference or range
    * @param formulas
-   *   Formulas to write (single for fill, multiple for batch)
+   *   Formulas to write (single for drag, multiple for batch)
+   * @param warn
+   *   The run's warning sink, for a drag that pushed a reference off the grid (GH-628)
    * @return
    *   Result message
    */
@@ -236,7 +243,8 @@ object StreamingWriteCommands:
     outputPath: Path,
     sheetNameOpt: Option[String],
     refStr: String,
-    formulas: List[String]
+    formulas: List[String],
+    warn: Warning => IO[Unit] = Diagnostics.warn(_, CliIO.system)
   ): IO[String] =
     import com.tjclp.xl.addressing.ARef
     import com.tjclp.xl.cells.CellValue
@@ -246,7 +254,7 @@ object StreamingWriteCommands:
       (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      worksheetPath <- resolveSheetPath(
+      (sheetName, worksheetPath) <- resolveSheetTarget(
         sourcePath,
         sheetNameOpt,
         qualified,
@@ -255,17 +263,16 @@ object StreamingWriteCommands:
 
       // Build formula map — every formula through the verb's parser gate first (GH-663: the
       // in-memory verb and every batch shape refuse an unparseable formula; this arm did not)
-      valueMap <- (refOrRange, formulas) match
+      built <- (refOrRange, formulas) match
         case (Left(ref), List(singleFormula)) =>
           parsedFormulaText(singleFormula).map(formula =>
-            Map(ref -> CellValue.Formula(formula, None))
+            Map(ref -> CellValue.Formula(formula, None)) -> Vector.empty[OffGridRef]
           )
 
         case (Right(range), List(singleFormula)) =>
-          // Fill pattern: all cells get same formula (NO dragging in streaming mode)
-          parsedFormulaText(singleFormula).map { formula =>
-            range.cells.map(ref => ref -> CellValue.Formula(formula, None)).toMap
-          }
+          // GH-789: dragged from the range's top-left cell, as the in-memory verb and the batch
+          // `putf … from` stream arm do
+          parsedFormula(singleFormula).map((_, expr) => draggedFormulas(range, expr))
 
         case (Right(range), multipleFormulas) if multipleFormulas.length == range.cellCount.toInt =>
           // Batch formulas
@@ -276,7 +283,7 @@ object StreamingWriteCommands:
               parsedFormulaText(text, s"Formula for ${ref.toA1}: ")
                 .map(formula => ref -> CellValue.Formula(formula, None))
             }
-            .map(_.toMap)
+            .map(_.toMap -> Vector.empty[OffGridRef])
 
         case (Right(range), multipleFormulas) =>
           IO.raiseError(
@@ -292,6 +299,7 @@ object StreamingWriteCommands:
             )
           )
 
+      (valueMap, offGrid) = built
       // Validate the whole write before opening output; the range may overwrite its own anchor.
       writeAreas = refOrRange.fold(r => Vector(CellRange(r, r)), r => Vector(r))
       cleared <- IO.blocking {
@@ -299,6 +307,10 @@ object StreamingWriteCommands:
           .release(StreamingSpills.read(sourcePath, worksheetPath, writeAreas), writeAreas)
           .fold(spill => throw CliException(CliError.fromSpillBlocked(spill)), identity)
       }
+      // GH-628: a drag that wrote #REF! for an off-grid reference is reported, not silent
+      _ <- OffGridHit
+        .warning(offGrid.map(OffGridHit(sheetName, _)), OffGridHit.streamingHint)
+        .traverse_(warn)
       result <-
         if cleared.isEmpty then
           ZipTransformer.transformValues[IO](sourcePath, outputPath, worksheetPath, valueMap)
@@ -312,10 +324,34 @@ object StreamingWriteCommands:
           )
     yield
       val desc = refOrRange match
-        case Left(ref) => s"Put formula → ${ref.toA1}"
-        case Right(range) if formulas.length == 1 => s"Filled ${range.toA1} with formula"
-        case Right(range) => s"Put ${formulas.length} formulas to ${range.toA1}"
-      s"$desc (streaming, no dragging)\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
+        case Left(ref) => s"Put formula → ${ref.toA1} (streaming)"
+        case Right(range) if formulas.length == 1 =>
+          s"Applied formula to ${range.cellCount} cells in ${range.toA1} (streaming, with anchor-aware dragging)"
+        case Right(range) =>
+          s"Put ${formulas.length} formulas to ${range.toA1} (streaming, explicit, no dragging)"
+      s"$desc\nCells modified: ${result.cellCount}\nSaved (streaming): $outputPath"
+
+  /**
+   * One formula dragged over `range` from its top-left cell (the in-memory `putf` rule), with the
+   * cells whose shift pushed a reference off the grid (GH-628).
+   */
+  private def draggedFormulas(
+    range: CellRange,
+    expr: TExpr[?]
+  ): (Map[ARef, CellValue], Vector[OffGridRef]) =
+    val startCol = Column.index0(range.start.col)
+    val startRow = Row.index0(range.start.row)
+    range.cells.foldLeft((Map.empty[ARef, CellValue], Vector.empty[OffGridRef])) {
+      case ((cells, hits), ref) =>
+        val shifted = FormulaShifter.shiftReporting(
+          expr,
+          Column.index0(ref.col) - startCol,
+          Row.index0(ref.row) - startRow
+        )
+        val formula = CellValue.Formula(FormulaPrinter.printFileForm(shifted.expr), None)
+        val recorded = if shifted.anyVoided then hits :+ OffGridRef(ref, shifted.voided) else hits
+        (cells.updated(ref, formula), recorded)
+    }
 
   /**
    * Streaming style: apply styling with O(1) memory.

@@ -9,6 +9,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
+  desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
+  `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
+  is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
+  is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
+- **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
+  unchanged into every cell, so every row after the first computed the first row's result. It is now
+  dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
+  `putf … from` stream arm do, and a reference dragged off the grid raises the `OFF_GRID_REF`
+  warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
+  written.
+  Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
+  `=B3*C3`, `=B4*C4` and `=B5*C5`.
+  Behaviour change: the `--stream putf` summary lines changed. One formula over a range printed
+  `Filled <range> with formula (streaming, no dragging)` and now prints `Applied formula to N cells
+  in <range> (streaming, with anchor-aware dragging)`. One formula to one cell printed
+  `Put formula → <cell> (streaming, no dragging)` and now prints `Put formula → <cell> (streaming)`.
+  Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
+  `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
+
+### Testing
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
+- **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
+  recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
+  (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
+  cells, for example a `t="s"` index past the table's end written as `#REF!` (`t="e"`), the
+  `count` attribute (ECMA-376 Part 1, §18.4.9) kept the old total. Every sheet written from the
+  model is now recounted.
+  Behaviour change: in that case `xl/sharedStrings.xml` `count` was the source total (for example
+  `4`); it is now the number of `t="s"` cells in the written package (`3`).
+  Behaviour change: an inline string (`t="inlineStr"`) in a sheet the write regenerates without
+  modifying it (for example any sheet when a sheet is added) used to stay inline, and
+  `xl/sharedStrings.xml` was not given its text; it is now appended to the shared-string table and
+  the cell is written as a `t="s"` reference (a table of Alpha, Beta, Gamma with `count="3"` becomes
+  Alpha, Beta, Gamma, Zeta with `count="4"` `uniqueCount="4"`). The cell reads as the same text.
+- **`xl lint` accepts international macro sheets** (#791): a `<sheet>` whose relationship is
+  `xlIntlMacrosheet` was reported as `wrong-rel-type` ("expected worksheet"), its part was not
+  scanned, and a shared string referenced only from it was reported as `shared-string-orphan`. The
+  part is now checked like a plain macro sheet (CT_Macrosheet child order, relationships, bounds,
+  shared-string indices).
+  Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
+  and possibly a `shared-string-orphan` finding; it now gets neither.
+- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
+  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
+  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
+  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
+  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
+  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
+  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
+  and the destination is written after input consumption. Row memory remains bounded.
+- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
+  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
+  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
+  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
+  is now stale under any override, and its readers with it.
+  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
+  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
+- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
+  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
+  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
+  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
 - **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
   including its anchor, instead of moving cells with an inconsistent array extent. An excluded
   header and disjoint spills remain allowed (#738).
