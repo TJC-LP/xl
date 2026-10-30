@@ -381,7 +381,7 @@ object Evaluator:
    * or a chain too deep (#691), a name bound to an error literal, a missing sheet — is a `Left`, so
    * [[resolveRangeSlot]] evaluates a name only when its definition really computes something.
    */
-  private[formula] enum NameRangeTarget:
+  private[formula] enum NameRangeTarget derives CanEqual:
     case Range(target: Sheet, range: CellRange)
 
     /**
@@ -2530,8 +2530,9 @@ private class EvaluatorImpl(
     // deliberately: a reference-denoting binding read as a value reads the same whether it is bound
     // as the reference or as its array (an aggregate skips an array's text and logical elements as
     // it skips a reference's — RowColumnArraySpec pins SUM, COUNT and COUNTA), and Excel's LET
-    // always binds the reference, so binding one is never wrong.
-    lazy val bindsReferences = !allowArrayResults ||
+    // always binds the reference, so binding one is never wrong. A LET in a reference position
+    // (`ROWS(LET(x, A6, x))`) binds references too: its body is read as a reference.
+    lazy val bindsReferences = !allowArrayResults || referenceBody ||
       letBindings.exists((_, value) =>
         Evaluator.readsBindingAsRange(value) || Evaluator.inspectsReference(value)
       ) ||

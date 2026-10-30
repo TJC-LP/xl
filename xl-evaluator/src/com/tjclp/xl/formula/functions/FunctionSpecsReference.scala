@@ -226,13 +226,21 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * without reading it (`ROWS(OFFSET(A:A,0,1))` is 1048576), an array by its shape, a scalar as
    * 1x1. In a plain cell the argument's value positions intersect as everywhere else
    * (`ROWS(IF(A1:A10>2,A1:A10,A1:A3))` in a row where the condition fails is 3).
+   *
+   * #725: an argument that evaluates to an error value is that error, as in Excel: the `#REF!` an
+   * OFFSET off the grid or an INDIRECT to a missing sheet computes instead of a reference
+   * (directly, through a name, a LET name or a selector), or `NA()`. A reference to a cell holding
+   * an error is still a reference (`ROWS(A6)` is 1), and an array keeps its shape whatever it holds
+   * (`ROWS({1,#N/A;2,3})` is 2, `ROWS({#N/A})` 1, through a name or LET name too).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def dimensions(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, (Int, Int)] =
-    ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).map {
-      case RangeOperand(_, range) => (range.height, range.width)
-      case ar: ArrayResult => (ar.rows, ar.cols)
-      case _ => (1, 1)
+    ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+      case RangeOperand(_, range) => Right((range.height, range.width))
+      case ar: ArrayResult => Right((ar.rows, ar.cols))
+      case cell: CellValue =>
+        ArrayArithmetic.carriedError(cell).fold(Right((1, 1)))(e => Left(EvalError.ErrorValue(e)))
+      case _ => Right((1, 1))
     }
 
   /**

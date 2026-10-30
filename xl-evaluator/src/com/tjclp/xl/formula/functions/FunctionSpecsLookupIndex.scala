@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -78,44 +78,78 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         case Right(expr) => FormulaPrinter.printFileForm(expr)
       call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
         s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
-      // an array constant, or a LET name bound to an array (LET(x, SEQUENCE(3), INDEX(x, 2)))
-      constant = array match
-        case Right(TExpr.Lit(values: ArrayResult)) => Some(values)
+      // a value INDEX indexes: an array constant or any other expression that is no reference
+      // (#725: a scalar is a 1x1 array, `INDEX(5,1)` is 5), or a LET name bound to a value
+      // (LET(x, SEQUENCE(3), INDEX(x, 2)), LET(x, 5, INDEX(x, 1)))
+      constant <- array match
+        case Right(expr) if !ReferenceOperators.isReferenceShape(expr) =>
+          // outside SUMPRODUCT's shared extent: the extent aligns arrays, and would cut the
+          // positions INDEX counts (`INDEX(ROW(A:A),1000)`)
+          ctx.evalBoundedArrayExpr(expr, identity).map(valuesOf)
         case Left(TExpr.RangeLocation.Binding(name)) =>
-          ctx.bindings.get(name).collect { case values: ArrayResult => values }
-        case _ => None
+          Right(ctx.bindings.get(name).flatMap(valuesOf))
+        case _ => Right(None)
       target <- constant match
-        case Some(values) =>
-          pickArea(1, areaNum, call).flatMap(_ =>
-            selection(rowNum, colNum, values.rows, values.cols, call).flatMap { (rows, cols) =>
-              sliceOf(values, rows, cols).map(Left(_))
-            }
-          )
+        case Some(values) => indexValues(values, rowNum, colNum, areaNum, call)
         case None =>
-          for
-            areas <- ReferenceOperators.areas(array, ctx)
-            _ <- pickArea(areas.size, areaNum, call)
-            RangeOperand(targetSheet, arrayRange) = areas(areaNum - 1)
-            (rows, cols) <- selection(rowNum, colNum, arrayRange.height, arrayRange.width, call)
-          yield
-            val startCol = arrayRange.colStart.index0
-            val startRow = arrayRange.rowStart.index0
-            Right(
-              RangeOperand(
-                targetSheet,
-                CellRange(
-                  ARef.from0(
-                    startCol + cols.headOption.getOrElse(0),
-                    startRow + rows.headOption.getOrElse(0)
-                  ),
-                  ARef.from0(
-                    startCol + cols.lastOption.getOrElse(0),
-                    startRow + rows.lastOption.getOrElse(0)
+          ReferenceOperators.areas(array, ctx) match
+            case Right(areas) =>
+              for
+                _ <- pickArea(areas.size, areaNum, call)
+                RangeOperand(targetSheet, arrayRange) = areas(areaNum - 1)
+                (rows, cols) <- selection(rowNum, colNum, arrayRange.height, arrayRange.width, call)
+              yield
+                val startCol = arrayRange.colStart.index0
+                val startRow = arrayRange.rowStart.index0
+                Right(
+                  RangeOperand(
+                    targetSheet,
+                    CellRange(
+                      ARef.from0(
+                        startCol + cols.headOption.getOrElse(0),
+                        startRow + rows.headOption.getOrElse(0)
+                      ),
+                      ARef.from0(
+                        startCol + cols.lastOption.getOrElse(0),
+                        startRow + rows.lastOption.getOrElse(0)
+                      )
+                    )
                   )
                 )
-              )
-            )
+            // #725: a defined name bound to a value (`konst = 5`, `=SUM(A1:A3)`) is INDEX's
+            // array: its range slot is `#VALUE!` ("does not refer to a range"), and the name is
+            // evaluated for its value. Any other error (an OFFSET off the grid) stays the result.
+            case Left(notAReference @ EvalError.ErrorValue(CellError.Value, _)) =>
+              array match
+                case Left(TExpr.RangeLocation.Name(name, scope)) =>
+                  val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+                  ctx
+                    .evalReference(named.asInstanceOf[TExpr[Any]])
+                    .flatMap(valuesOf(_).toRight(notAReference))
+                    .flatMap(indexValues(_, rowNum, colNum, areaNum, call))
+                case _ => Left(notAReference)
+            case Left(err) => Left(err)
     yield target
+
+  /** The values of INDEX's first slot when it holds a value, never a reference. */
+  private def valuesOf(value: Any): Option[ArrayResult] = value match
+    case _: RangeOperand => None
+    case values: ArrayResult => Some(values)
+    case scalar => Some(ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar)))
+
+  /** INDEX over values, which form one area: the selected window of them. */
+  private def indexValues(
+    values: ArrayResult,
+    rowNum: BigDecimal,
+    colNum: Option[BigDecimal],
+    areaNum: Int,
+    call: String
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    pickArea(1, areaNum, call).flatMap(_ =>
+      selection(rowNum, colNum, values.rows, values.cols, call).flatMap { (rows, cols) =>
+        sliceOf(values, rows, cols).map(Left(_))
+      }
+    )
 
   /** GH-669: area_num against the number of areas — `#VALUE!` below 1, `#REF!` past the last. */
   private def pickArea(count: Int, areaNum: Int, call: String): Either[EvalError, Unit] =
