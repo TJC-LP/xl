@@ -166,12 +166,15 @@ xl batch --schema                                  # JSON Schema of the batch do
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
 > work under `--stream` writes.
 
-> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch op patches cells
-> without knowing the sheet's spills: one over a dynamic-array anchor drops its `cm` (a plain
-> cell) but leaves the old spill cells behind as orphaned constants, and one into a spill cell is
-> not refused, though Excel will not keep it as written. The in-memory writes apply Excel's rule
-> instead (see Dynamic arrays under `putf`); the streamed rule is
-> [#738](https://github.com/TJC-LP/xl/issues/738).
+> **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch content write
+> refuses cells inside a live dynamic spill (`FORMULA_ERROR`; a batch reports `BATCH_OP_FAILED`
+> with the operation index). Overwriting the anchor releases its old spill: cached children are
+> cleared as they pass through the writer, with styles kept. Batch operations follow document
+> order, so overwriting an anchor first allows a later write into its former spill. Style-only
+> writes are allowed on both anchors and spill cells and preserve formula and cell metadata.
+> `sort` refuses any intersection between its data rows and a multi-cell dynamic spill, including
+> its anchor; an excluded header row does not count. Clear or overwrite the anchor first, or
+> sort outside its spill. Streamed edits still do not recalculate formulas.
 
 ### Cache posture on writes (`--no-recalc` / `--preserve-caches`)
 
@@ -350,6 +353,13 @@ fails `DocsGenSpec`, the same discipline as the golden corpus.
 ### `xl sheets [list|hide|show]`
 
 Sheet operations. With no subcommand, defaults to `list`.
+
+Preserved macro, international macro, chart and dialog sheets appear in a separate read-only
+section with kind, name and state, including in `--stats` and `--stream` listings. They cannot be
+selected with `-s`. JSON adds `data.preservedSheets` when any exist: each entry has `name`, `kind`
+(`macro`, `international-macro`, `chart`, `dialog`), `state` (`visible`, `hidden`, `veryHidden`) and
+`sourceIndex` (1-based position among all source tabs). The `sheets` array and its indices continue
+to count worksheets only. Scripts can inspect `Excel.readMetadata(...).preservedSheets`.
 
 **Subcommands**:
 | Subcommand | Arguments | Description |
@@ -953,7 +963,7 @@ Evaluate a formula without modifying the file (what-if analysis). `-f` is option
 
 Without `--at` the formula has no cell of its own, so it evaluates as it would typed into a new Excel 365 cell: as a dynamic-array formula, showing its top-left value (`evala` shows the whole array). The same text in a plain cell, as `putf` writes it, is a legacy formula that Excel evaluates with implicit intersection, so its value can differ: `eval "=SUM(A1:A10*B1:B10)"` is the array sum, while the cell `putf D5 "=SUM(A1:A10*B1:B10)"` is `A5*B5` (see [plain cells and implicit intersection](#plain-cells-and-implicit-intersection)).
 
-`--at <ref>` answers the second question without writing the file: the formula evaluates as the plain cell at `<ref>` would. With A1:A10 and B1:B10 holding 1..10, `eval "=SUM(A1:A10*B1:B10)"` is 385, `--at D5` is 25 (`A5*B5`) and `--at D20` is `#VALUE!` (row 20 crosses neither range). The ref follows the one sheet rule: a qualified ref (`--at Data!D5`) names the sheet the formula evaluates on, else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` (exit 3). It must be one cell: a range or a malformed ref is `INVALID_REFERENCE` (exit 3). It needs no `-f` for a formula that reads no cell (`xl eval "=ROW()" --at D5` is 5), and, like `eval` itself, is refused under `--stream`. `evala --at` is different: it only anchors where the displayed spill starts.
+`--at <ref>` answers the second question without writing the file: the formula evaluates as the plain cell at `<ref>` would. With A1:A10 and B1:B10 holding 1..10, `eval "=SUM(A1:A10*B1:B10)"` is 385, `--at D5` is 25 (`A5*B5`) and `--at D20` is `#VALUE!` (row 20 crosses neither range). The ref follows the one sheet rule: a qualified ref (`--at Data!D5`) names the sheet the formula evaluates on, else `-s`, else the only sheet of a single-sheet book, else `SHEET_REQUIRED` (exit 3). It must be one cell, written without `$` anchors: a range, a malformed ref or `$D$5` is `INVALID_REFERENCE` (exit 3). It needs no `-f` for a formula that reads no cell (`xl eval "=ROW()" --at D5` is 5), and, like `eval` itself, is refused under `--stream`. `evala --at` is different: it only anchors where the displayed spill starts, though its ref follows the same sheet rule and is refused the same way when it is not one cell.
 
 **Cycles.** A formula that reads `<ref>`'s value would make the plain cell a circular reference, so `eval --at` fails with `FORMULA_ERROR` (exit 3) rather than answering with the cell's current content.
 - A read the formula or its precedents on that sheet make is named with its path, as a cycle among the precedents is: `eval "=SUM(A1:A10)" --at A5` is `A5 → A5`, and `--at D5` when C1 holds `=D5*2` and the formula reads C1 is `Circular reference detected: D5 → C1 → D5`. A path longer than ten cells keeps its ends and counts the cells between (`D5 → C1 → C2 → … (37 more) … → C40 → D5`).
@@ -970,7 +980,7 @@ Without `--at` the formula has no cell of its own, so it evaluates as it would t
 **With `--with`.** The overrides apply with or without `--at`, in `eval` and `evala` alike, to the sheet the formula evaluates on: the `--at` sheet, else `-s`. So `-s Data eval … --at Other!D5 --with B1=5` sets Other!B1, and an override qualified with another sheet's name is `INVALID_REFERENCE`.
 - On the `--at` cell itself an override is `USAGE` (exit 2): the formula is that cell, so `--at D5 --with D5=3` would set a cell nothing could read.
 - A sheet qualifier matches the evaluated sheet's name in any case (`--with data!D5=1` overrides Data!D5).
-- Every formula in the book that reads an overridden cell, directly, through a defined name or through other formulas on any sheet, drops its cached value, so every read sees the overrides: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that qualify a reference with a sheet holding an overridden or stale cell, or mention a defined name; without `--with`, `eval --at` touches only the formula's own precedents.
+- Every formula in the book that reads an overridden cell, directly, through a defined name or through other formulas on any sheet, drops its cached value, so every read sees the overrides. So does every formula whose references are computed at run time (OFFSET, INDIRECT, or a defined name that reaches one), whatever cell it reads, as recalculation treats it: `INDIRECT("B1")`, and a formula on another sheet that reads back into this one, cached or not (`Other!A1` holding `=Data!B1*2`). This costs one parse of the sheet's formulas, and of each other sheet's formulas that qualify a reference with a sheet holding an overridden or stale cell, or mention a defined name; without `--with`, `eval --at` touches only the formula's own precedents.
 
 **Output.** The text output adds an `At:` line, and the JSON payload's `at` carries the cell as evaluated (`"Data!D5"`; `null` without `--at`).
 
@@ -999,7 +1009,7 @@ Evaluate an **array formula** and display the result grid, optionally anchored a
 | Arg | Type | Required | Description |
 |-----|------|----------|-------------|
 | `formula` | string | Yes | Array formula to evaluate |
-| `--at` | string | No | Cell the displayed spill is anchored at (nothing is written) |
+| `--at` | string | No | Cell the displayed spill is anchored at (nothing is written). A qualified ref (`Other!C2`) names the sheet the formula evaluates on, else `-s`, else the only sheet; a range, a malformed ref (`ZZZZ9`) or an anchored one (`$C$2`; write `C2`) is `INVALID_REFERENCE` (exit 3). Without it the spill is anchored at Z1000 |
 | `--with`, `-w` | string | No | Temporary cell overrides (repeatable) |
 
 **Examples**:
@@ -2189,17 +2199,25 @@ xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1
 SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
 identical (pinned by the lint parity suite).
 
-**Severity**: every finding carries a tier, `repair` or `hygiene` (`--format json`:
-`.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
+**Severity**: every finding carries a tier, `repair`, `hygiene` or `info` (`--format json`:
+`.findings[].severity`; text tags non-repair lines and counts the tiers in the header).
 `repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
 a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
 dead weight, stale metadata or a privacy hazard: `unreferenced-part`, the orphan half of
 `shared-string-orphan`, and `autofilter-name-mismatch`. Hygiene findings are reported (with a
 `LINT_HYGIENE` warning) but exit `0` unless `--strict` (the global flag, accepted before or after
-the verb) promotes them to the gate.
+the verb) promotes them to the gate. `info` reports macro-sheet presence, including visibility and
+associated open-time names; it is also listed without failing unless `--strict` is set.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
+- **`macro-sheet`** — an Excel 4.0 macro or international macro sheet, including its name and
+  visibility state. An `Auto_Open` or `_xlnm.Auto_Open` defined name scoped to or directly
+  referencing that sheet is flagged in its message (case-insensitive; quoted qualifiers supported).
+  Severity `info`: presence is reported even without an entry point; this is not a malware verdict
+  or a proof that no other execution path exists. Indirect name chains and computed references are
+  not resolved. Ordinary lint exits 0 on info alone; `--strict` exits 1. This reporting rule is
+  independent of structural validation of macro sheet parts.
 - **`child-order`** — child elements of `xl/workbook.xml` (CT_Workbook) or a worksheet
   (CT_Worksheet) out of ECMA-376 schema sequence (e.g. `<externalReferences>` after
   `<extLst>`)
@@ -2317,7 +2335,7 @@ the verb) promotes them to the gate.
   untouched sheet must keep its positions, see the carve-out below). Under `--stream`
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
-  `xlMacrosheet`) count as references like any worksheet's
+  `xlMacrosheet` or `xlIntlMacrosheet`) count as references like any worksheet's
 - **`autofilter-name-mismatch`** — a sheet's hidden `_xlnm._FilterDatabase` name (scoped by
   `localSheetId` to the sheet's position in `<sheets>`) names a different range, another sheet or
   `#REF!` instead of the sheet's own `<autoFilter ref>`: the stale name a range edit leaves
@@ -2346,8 +2364,8 @@ the verb) promotes them to the gate.
   current) and any `--stream` write (untouched parts are copied verbatim, and the transformed sheet's
   other cells pass through as read)
 
-**Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
-warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
+**Exit codes**: `0` no repair findings (info findings are listed; hygiene findings also raise a
+`LINT_HYGIENE` warning counting them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
 `3` error (unreadable file, malformed core part) · `2` usage (no file, or a file given both ways)
 — errors go to stderr with a `code:` line (see
 [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). In `--format json`, `clean`

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, CriteriaMatcher, EvalError, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -64,11 +64,7 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
       _ <- searchModeError("XLOOKUP", searchMode, call)
       index <- matchMode match
         case 0 => line.find(forward)(matchesLookupExact(_, lookup))
-        case 2 =>
-          val wildcard = wildcardCriterion(lookup)
-          line.find(forward)(cv =>
-            matchesLookupExact(cv, lookup) || wildcard.exists(CriteriaMatcher.matches(cv, _))
-          )
+        case 2 => line.find(forward)(wildcardLookupMatcher(lookup))
         case -1 | 1 => approximate
         // unreachable: the mode was validated above; kept total so a mode that slipped through
         // would get the same #VALUE! rather than the approximate search
@@ -283,7 +279,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     FunctionSpec.referencing[ArrayResult, XLookupArgs](
       "XLOOKUP",
       Arity.Range(3, 6),
-      flags = FunctionFlags(lift = ArrayLift.slots(0))
+      flags = FunctionFlags(lift = ArrayLift.slots(0)),
+      envelope = Some(ReferenceOperators.xlookupEnvelope)
     )((args, ctx) => xlookupTarget(args, ctx).map(_.merge)) { (args, ctx) =>
       xlookupTarget(args, ctx).flatMap { target =>
         referencedValue(target.left.map(ArrayResult.single), ctx)(boundedReferenceValues(_, ctx))

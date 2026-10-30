@@ -1951,11 +1951,11 @@ class ExcelIOSpec extends CatsEffectSuite:
   // GH-414: the old form of these tests compared wall-clock times of the two
   // write paths ("single-pass is faster than auto-detect") — a scheduling race
   // that flaked under parallel load. The structural assertions below pin the
-  // properties the timing was a proxy for: the hinted path streams once,
-  // straight to the destination, with the dimension decided up-front — and
-  // produces output equivalent to the two-pass auto-detect path.
+  // properties the timing was a proxy for: each input is consumed once and explicit dimensions
+  // are kept verbatim. GH-749 now spools the hinted path too, so metadata declarations can be
+  // decided before assembling the destination.
 
-  tempDir.test("writeStream: single-pass with hint matches auto-detect output") { dir =>
+  tempDir.test("writeStream: explicit dimension hint matches auto-detect output") { dir =>
     val excel = ExcelIO.instance[IO]
 
     def rows = fs2.Stream.range(1, 201).map { i =>
@@ -1979,7 +1979,7 @@ class ExcelIOSpec extends CatsEffectSuite:
         hintedEntries("xl/worksheets/sheet1.xml").contains("""<dimension ref="A1:B200"/>"""),
         "hinted output should carry the dimension element"
       )
-      // Identical parts, entry for entry: the single pass produced exactly what
+      // Identical parts, entry for entry: the hinted path produced exactly what
       // the two-pass detection path produced — worksheet, shared strings, statics.
       assertEquals(hintedEntries, autoEntries)
       // And the data itself round-trips
@@ -1990,15 +1990,13 @@ class ExcelIOSpec extends CatsEffectSuite:
       assertEquals(readBack(199).cells(1), CellValue.Number(BigDecimal(200)))
   }
 
-  tempDir.test("writeStream: hinted single-pass streams to destination with dimension up-front") {
+  tempDir.test("GH-749: writeStream keeps dimension hints and assembles after consuming rows") {
     dir =>
       val excel = ExcelIO.instance[IO]
       val hinted = dir.resolve("hinted.xlsx")
       val autoDetected = dir.resolve("auto-detect.xlsx")
 
-      // A hint that covers MORE than the data (A1:C200 vs actual A1:A100): only a
-      // path that never scans the data can emit it verbatim — a detection pass
-      // would derive A1:A100, as the auto-detect output below proves.
+      // The explicit hint is kept verbatim even though the input is spooled for metadata planning.
       val dimHint = CellRange.parse("A1:C200").toOption
 
       def rows(onRow: Int => IO[Unit]) =
@@ -2027,12 +2025,11 @@ class ExcelIOSpec extends CatsEffectSuite:
         hintedSheet <- IO(zipEntryContents(hinted)("xl/worksheets/sheet1.xml"))
         autoSheet <- IO(zipEntryContents(autoDetected)("xl/worksheets/sheet1.xml"))
       yield
-        // Single-pass: static parts + worksheet header hit the destination before
-        // the source is exhausted — no buffer-then-assemble second pass.
+        // Metadata declarations are decided after consuming the rows, before ZIP assembly.
         assertEquals(
           observed,
-          Some(true),
-          "hinted writeStream should be writing the destination while rows still stream"
+          Some(false),
+          "writeStream assembles the destination after consuming the input"
         )
         // The hint is emitted verbatim, so the dimension was decided before any
         // row was seen.

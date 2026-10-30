@@ -16,10 +16,11 @@ import com.tjclp.xl.sheets.Sheet
  *   - An operand (after any `<>` or `=` prefix) with no `*` and no `?` is compared as written: `~`
  *     is an ordinary character, so `"a~~b"` matches only the text `a~~b`. Desktop Excel (Microsoft
  *     365) did not count a cell holding one `~` against the same key pre-escaped as `~~`.
- *   - An operand with a `*` or `?` keeps the escape grammar: `~*`, `~?` and `~~` are a literal `*`,
- *     `?` and `~`, and `~` before any other character, or at the end, is a literal tilde. Whether
- *     Excel instead drops that tilde is unverified, so this spec pins the current behaviour.
- *   - XLOOKUP/XMATCH match_mode 2 and SEARCH are unchanged.
+ *   - An operand with a `*` or `?` keeps the escape grammar: `~x` is a literal `x` for every
+ *     character `x` (`~*`, `~?`, `~~`, and `~b` too, as desktop Excel reads `"a~b*"`); a `~` at the
+ *     end is a literal tilde.
+ *   - XLOOKUP/XMATCH match_mode 2 read every lookup value with the escape grammar (#774); SEARCH is
+ *     unchanged.
  */
 class CriteriaTildeSpec extends ScalaCheckSuite:
 
@@ -69,10 +70,12 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     assertEquals(parse(ExprValue.Text("<>~~")), CompareText(CompareOp.Neq, "~~"))
   }
 
-  test("GH-765: = keeps its operand verbatim, ~ and wildcards included") {
+  test("#773: = reads its operand as a bare operand") {
     assertEquals(parse(ExprValue.Text("=a~~b")), Exact(ExprValue.Text("a~~b")))
-    // xl reads `*` after `=` as a literal (Excel applies the wildcard; docs/LIMITATIONS.md)
-    assertEquals(parse(ExprValue.Text("=a~~b*")), Exact(ExprValue.Text("a~~b*")))
+    assertEquals(parse(ExprValue.Text("=a~~b*")), Wildcard("a~~b*"))
+    assertEquals(parse(ExprValue.Text("=~*")), Exact(ExprValue.Text("*")))
+    assertEquals(parse(ExprValue.Text("=")), Blank)
+    check("=COUNTIF(A1:A6,\"=a~~b*\")", num(2)) // a~b and a~bc
     check("=COUNTIF(A1:A6,\"=a~~b\")", num(1))
     check("=SUMIFS(B1:B6,A1:A6,\"=a~b\")", num(1))
   }
@@ -89,9 +92,10 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
       val criterion = parse(ExprValue.Cell(text(s)))
       assert(matches(text(s), criterion), s)
       assertEquals(matches(text(other), criterion), other.equalsIgnoreCase(s), s"$s vs $other")
+      // a bare "<>" (s empty) matches every cell but a truly empty one, empty text included
       assertEquals(
         matches(text(other), parse(ExprValue.Text(s"<>$s"))),
-        !other.equalsIgnoreCase(s),
+        s.isEmpty || !other.equalsIgnoreCase(s),
         s"<>$s vs $other"
       )
     }
@@ -117,10 +121,10 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     assert(!matches(text("a~~bc"), Wildcard("a~~b*")))
   }
 
-  test("GH-765: escape mode keeps ~ before an ordinary character, or at the end, literal") {
-    // Unverified in Excel (a Microsoft Q&A thread suggests Excel drops this tilde); pinned as is.
-    assert(matches(text("a~bc"), Wildcard("a~b*")))
-    assert(!matches(text("abc"), Wildcard("a~b*")))
+  test("escape mode drops ~ before an ordinary character and keeps a final ~ literal") {
+    // desktop Excel: SUMIF(r,"a~b*",...) counts "abc" and "ab", not "a~b"
+    assert(matches(text("abc"), Wildcard("a~b*")))
+    assert(!matches(text("a~bc"), Wildcard("a~b*")))
     assert(matches(text("xy~"), Wildcard("x*~")))
   }
 
@@ -138,7 +142,7 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     check("=SUMIF(A1:A6,\"a~~b\",B1:B6)", num(10))
     check("=SUMIF(A1:A6,\"a~b\",B1:B6)", num(1))
     check("=SUMIF(A1:A6,\"a~~b*\",B1:B6)", num(1001))
-    check("=SUMIF(A1:A6,\"a~b*\",B1:B6)", num(1001)) // escape-mode `~b` unchanged (unverified)
+    check("=SUMIF(A1:A6,\"a~b*\",B1:B6)", num(100)) // escape-mode `~b` is `b`
     check("=SUMIF(A1:A6,\"x~\",B1:B6)", num(10000))
     check("=SUMIF(A1:A6,A2,B1:B6)", num(10))
   }
@@ -167,9 +171,9 @@ class CriteriaTildeSpec extends ScalaCheckSuite:
     check("=SUMIF(A1:A6,\"<>a~~b*\",B1:B6)", num(110110)) // NotWildcard on a~b*
   }
 
-  test("GH-765: XLOOKUP and XMATCH match_mode 2 are unchanged") {
-    check("=XMATCH(\"a~~b\",A1:A6,2)", num(2))
-    check("=XLOOKUP(\"a~~b\",A1:A6,B1:B6,,2)", num(10))
+  test("#774: XLOOKUP and XMATCH match_mode 2 always read ~ as an escape") {
+    check("=XMATCH(\"a~~b\",A1:A6,2)", num(1))
+    check("=XLOOKUP(\"a~~b\",A1:A6,B1:B6,,2)", num(1))
     check("=XMATCH(\"a~~b*\",A1:A6,2)", num(1))
     check("=XMATCH(\"x~\",A1:A6,2)", num(5))
   }

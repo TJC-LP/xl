@@ -16,16 +16,19 @@ import scala.util.matching.Regex
 /**
  * Excel-compatible criteria matching for SUMIF/COUNTIF functions.
  *
- * Supports 5 criteria patterns (Excel-compatible):
- *   - **Exact**: `"Apple"` or `42` → Cells equal to value
+ * Supports these criteria patterns (Excel-compatible):
+ *   - **Exact**: `"Apple"` or `42` → Cells equal to value. `"=op"` reads `op` as a bare operand
+ *     (#773), so `"=a*"` is the wildcard `a*`; a bare `"="` matches truly empty cells only.
  *   - **Wildcard**: `"A*"`, `"*pple"`, `"A?ple"` → Pattern matching (* = any chars, ? = single
- *     char). In an operand that contains `*` or `?`, `~*`, `~?` and `~~` stand for a literal `*`,
- *     `?` and `~`. In an operand with neither, `~` is an ordinary character (GH-765): `"a~~b"`
- *     matches only the text `a~~b`.
+ *     char) against text cells only (#780): numbers, booleans, errors and blanks never match. In an
+ *     operand that contains `*` or `?`, `~x` stands for a literal `x` (`~*`, `~?`, `~~`). In an
+ *     operand with neither, `~` is an ordinary character (GH-765): `"a~~b"` matches only the text
+ *     `a~~b`.
  *   - **Greater**: `">100"`, `">=50"` → Numeric comparison; `">m"` → Text comparison
  *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison; `"<m"` → Text comparison
- *   - **Not Equal**: `"<>0"` → Numeric inequality; `"<>x"` → Text inequality; bare `"<>"` →
- *     non-blank; `"<>A*"` → negated wildcard
+ *   - **Not Equal**: `"<>0"` → every cell but a number equal to 0 (#731); `"<>x"` → Text
+ *     inequality; bare `"<>"` → every cell but a truly empty one; `"<>A*"` → negated wildcard.
+ *     Every `<>` criterion matches error cells.
  *   - **Error literal** (GH-565): `"#N/A"`, `"#DIV/0!"`, ... → Cells holding that error VALUE (not
  *     the text); `"<>#N/A"` → cells not holding that error
  *
@@ -57,6 +60,12 @@ object CriteriaMatcher:
 
   /** Wildcard pattern (* = any chars, ? = single char) */
   case class Wildcard(pattern: String) extends Criterion
+
+  /**
+   * #773: a bare `"="`, which matches truly empty cells only. A formula's empty text (`=""`) is not
+   * empty here, unlike the criterion `""`, which matches both.
+   */
+  case object Blank extends Criterion
 
   /** Negated wildcard pattern, from `<>` followed by a pattern with unescaped wildcards */
   case class NotWildcard(pattern: String) extends Criterion
@@ -118,9 +127,6 @@ object CriteriaMatcher:
       // GH-565: a criteria string that spells an Excel error literal IS that error value — Excel
       // parses criteria like formula text, so "#N/A" matches #N/A error cells, never the text
       // "#N/A". Checked before the wildcard rule: "#NAME?" contains a '?' but is not a pattern.
-      // Shared consequence: XLOOKUP's wildcard detector (FunctionSpecsLookupSearch) reuses this
-      // parse, so a wildcard-mode lookup value spelled exactly "#NAME?" is an error literal there
-      // too, not a one-character pattern — the same reading Excel gives it.
       case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err)))
       // Not equal: <>
       // GH-466: non-numeric operands are text inequality (bare "<>" = non-blank);
@@ -130,7 +136,8 @@ object CriteriaMatcher:
         operand match
           case ErrorLiteral(err) => NotError(err) // GH-565
           case _ =>
-            parseNumeric(operand) match
+            // a number past Excel's range ("1E+999999999") is text here, as in desktop Excel
+            parseNumeric(operand).filter(_.abs <= MaxExcelNumber) match
               case Some(n) => Compare(CompareOp.Neq, n)
               case None if hasUnescapedWildcard(operand) => NotWildcard(operand)
               case None if hasWildcardChar(operand) =>
@@ -157,25 +164,31 @@ object CriteriaMatcher:
         parseNumeric(s.drop(1)) match
           case Some(n) => Compare(CompareOp.Lt, n)
           case None => CompareText(CompareOp.Lt, s.drop(1)) // GH-466: text ordering
-      // Equal: =
+      // Equal: = (#773: the operand reads as a bare operand, wildcards included; a bare "="
+      // matches truly empty cells only)
       case _ if s.startsWith("=") =>
         s.drop(1) match
+          case "" => Blank
           case ErrorLiteral(err) => Exact(ExprValue.Cell(CellValue.Error(err))) // GH-565
           case operand =>
             parseNumeric(operand) match
               case Some(n) => Exact(ExprValue.Number(n))
-              case None => Exact(ExprValue.Text(operand)) // Keep text after =
-      // Wildcard pattern
-      case _ if hasUnescapedWildcard(s) =>
-        Wildcard(s)
-      // Every `*` and `?` is escaped: an exact match on the unescaped text ("~*" is "*")
-      case _ if hasWildcardChar(s) =>
-        Exact(ExprValue.Text(unescapePattern(s)))
-      // GH-765: no `*` or `?` at all, so Excel compares the text as written and `~` is an
-      // ordinary character: "a~~b" matches only "a~~b", and a cell used as its own criterion
-      // matches itself.
-      case _ =>
-        Exact(ExprValue.Text(s))
+              case None => parseOperand(operand)
+      case _ => parseOperand(s)
+
+  /** A criterion operand with no comparison operator, bare or after `=` (#773). */
+  private def parseOperand(s: String): Criterion =
+    // Wildcard pattern
+    if hasUnescapedWildcard(s) then Wildcard(s)
+    // Every `*` and `?` is escaped: an exact match on the unescaped text ("~*" is "*")
+    else if hasWildcardChar(s) then Exact(ExprValue.Text(unescapePattern(s)))
+    // GH-765: no `*` or `?` at all, so Excel compares the text as written and `~` is an
+    // ordinary character: "a~~b" matches only "a~~b", and a cell used as its own criterion
+    // matches itself.
+    else Exact(ExprValue.Text(s))
+
+  /** The largest magnitude an Excel number has (an IEEE double's). */
+  private val MaxExcelNumber: BigDecimal = BigDecimal(Double.MaxValue)
 
   /**
    * GH-565: extractor for the seven Excel error literals (`#N/A`, `#DIV/0!`, ...). Letter case is
@@ -213,7 +226,9 @@ object CriteriaMatcher:
     s.exists(c => c == '*' || c == '?')
 
   /**
-   * Remove escape characters from pattern (unescape ~* ~? ~~).
+   * Remove escape characters from a pattern: `~x` is `x` for every character `x` (`~*`, `~?`, `~~`
+   * and `~b` alike); a `~` at the end stays a literal tilde. Desktop Excel reads `~` this way in a
+   * criterion operand with a `*` or `?` and in an XMATCH/XLOOKUP match_mode 2 lookup value.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def unescapePattern(s: String): String =
@@ -222,17 +237,29 @@ object CriteriaMatcher:
     while i < s.length do
       val c = s.charAt(i)
       if c == '~' && i + 1 < s.length then
-        val next = s.charAt(i + 1)
-        if next == '*' || next == '?' || next == '~' then
-          sb.append(next)
-          i += 2
-        else
-          sb.append(c)
-          i += 1
+        sb.append(s.charAt(i + 1))
+        i += 2
       else
         sb.append(c)
         i += 1
     sb.toString
+
+  /**
+   * #774: an XMATCH/XLOOKUP match_mode 2 lookup value, read with the escape grammar whether or not
+   * it holds a wildcard. Unlike a criterion operand (GH-765), a lookup value always drops each `~`
+   * before a character: `"a~~b"` finds `a~b` and `"~4"` finds the text `4`.
+   */
+  enum LookupPattern derives CanEqual:
+    /** No unescaped `*` or `?`: the key must equal this text, every `~x` read as `x`. */
+    case Literal(text: String)
+
+    /** An unescaped `*` or `?` remains: the key must be text that matches the pattern. */
+    case Pattern(wildcard: Wildcard)
+
+  /** #774: how a match_mode 2 lookup value spelled `text` matches a key ([[LookupPattern]]). */
+  def lookupPattern(text: String): LookupPattern =
+    if hasUnescapedWildcard(text) then LookupPattern.Pattern(Wildcard(text))
+    else LookupPattern.Literal(unescapePattern(text))
 
   /**
    * Parse string as BigDecimal, handling Excel's flexible numeric syntax.
@@ -282,6 +309,10 @@ object CriteriaMatcher:
       case Wildcard(pattern) => matchesWildcard(cellValue, pattern)
       case NotWildcard(pattern) => matchesNotWildcard(cellValue, pattern)
       case NotError(err) => matchesNotError(cellValue, err)
+      case Blank =>
+        cellValue match
+          case CellValue.Empty => true
+          case _ => false
 
   /**
    * GH-565: `<>#N/A` — everything but that error value. Blanks, values and other errors match
@@ -369,34 +400,52 @@ object CriteriaMatcher:
           case _ => false
 
   /**
-   * Numeric comparison matching.
+   * Numeric comparison matching. `"<>n"` (#731) matches every cell but a number (or date) equal to
+   * `n`: blanks, text (the text `"4"` included, although `"=4"` matches it too), booleans and
+   * errors all match, as in desktop Excel. Uncached formulas never match.
    */
   private def matchesCompare(
     cellValue: CellValue,
     op: CompareOp,
     threshold: BigDecimal
   ): Boolean =
-    extractNumeric(cellValue) match
-      case Some(value) =>
-        op match
-          case CompareOp.Gt => value > threshold
-          case CompareOp.Gte => value >= threshold
-          case CompareOp.Lt => value < threshold
-          case CompareOp.Lte => value <= threshold
-          case CompareOp.Neq => value != threshold
-      case None => false
+    op match
+      case CompareOp.Neq => !isNumberEqual(cellValue, threshold)
+      case _ =>
+        extractNumeric(cellValue) match
+          case Some(value) =>
+            op match
+              case CompareOp.Gt => value > threshold
+              case CompareOp.Gte => value >= threshold
+              case CompareOp.Lt => value < threshold
+              case CompareOp.Lte => value <= threshold
+              case CompareOp.Neq => value != threshold // Unreachable: Neq handled above
+          case None => false
+
+  /**
+   * #731: whether a cell is a number equal to `n`, the one kind of cell `"<>n"` leaves out. An
+   * uncached formula counts as equal, so it never matches `"<>n"`.
+   */
+  private def isNumberEqual(cellValue: CellValue, n: BigDecimal): Boolean =
+    cellValue match
+      case CellValue.Number(value) => value == n
+      case CellValue.DateTime(dt) => BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == n
+      case CellValue.Formula(_, Some(cached), _) => isNumberEqual(cached, n)
+      case CellValue.Formula(_, None, _) => true
+      case _ => false
 
   /**
    * Text comparison matching (GH-466), for criteria like "<>x" and ">m".
    *
    * Excel semantics:
    *   - `<>text` is a negated exact match with the same coercion rules as [[Exact]], so numbers,
-   *     booleans and blank cells all match `"<>x"` (they are not equal to "x"). Bare `"<>"`
-   *     (operand "") therefore matches exactly the non-blank cells.
+   *     booleans, blank cells and error cells all match `"<>x"` (they are not equal to "x"). Bare
+   *     `"<>"` (operand "") matches every cell but a truly empty one, a formula's empty text
+   *     (`=""`) and errors included (#731).
    *   - Ordering operators (`>`, `>=`, `<`, `<=`) compare text case-insensitively and only apply to
-   *     text values: numbers, booleans and blanks never satisfy a text ordering criterion (Excel
-   *     criteria comparisons are type-segregated).
-   *   - Error cells and uncached formulas never match.
+   *     text values: numbers, booleans, blanks and errors never satisfy a text ordering criterion
+   *     (Excel criteria comparisons are type-segregated).
+   *   - Uncached formulas never match.
    */
   private def matchesCompareText(
     cellValue: CellValue,
@@ -404,11 +453,15 @@ object CriteriaMatcher:
     operand: String
   ): Boolean =
     cellValue match
-      case CellValue.Error(_) => false
+      case CellValue.Error(_) => op == CompareOp.Neq
       case CellValue.Formula(_, Some(cached), _) => matchesCompareText(cached, op, operand)
       case CellValue.Formula(_, None, _) => false
       case other =>
         op match
+          case CompareOp.Neq if operand.isEmpty =>
+            other match
+              case CellValue.Empty => false
+              case _ => true
           case CompareOp.Neq => !matchesExact(other, ExprValue.Text(operand))
           case CompareOp.Gt | CompareOp.Gte | CompareOp.Lt | CompareOp.Lte =>
             extractOrderableText(other) match
@@ -438,12 +491,11 @@ object CriteriaMatcher:
   /**
    * Negated wildcard matching (GH-466), for criteria like "<>A*".
    *
-   * Matches cells that do NOT match the pattern (blanks included, consistent with `<>text`); error
-   * cells and uncached formulas never match.
+   * Matches cells that do NOT match the pattern: every cell that is not text (numbers, booleans,
+   * blanks and errors, #780) and text that does not match. Uncached formulas never match.
    */
   private def matchesNotWildcard(cellValue: CellValue, pattern: String): Boolean =
     cellValue match
-      case CellValue.Error(_) => false
       case CellValue.Formula(_, Some(cached), _) => matchesNotWildcard(cached, pattern)
       case CellValue.Formula(_, None, _) => false
       case other => !matchesWildcard(other, pattern)
@@ -471,9 +523,7 @@ object CriteriaMatcher:
    *   - `*` matches any sequence of characters (including empty)
    *   - `?` matches exactly one character
    *   - Matching is case-insensitive
-   *   - `~*` escapes literal asterisk
-   *   - `~?` escapes literal question mark
-   *   - `~~` escapes literal tilde
+   *   - `~x` is a literal `x`, for every character `x`
    */
   private def matchesWildcard(cellValue: CellValue, pattern: String): Boolean =
     extractText(cellValue) match
@@ -483,16 +533,13 @@ object CriteriaMatcher:
       case None => false
 
   /**
-   * Extract text value from cell for wildcard matching.
+   * Extract text value from cell for wildcard matching (#780): only text matches a wildcard, as in
+   * desktop Excel, where `"*"` counts no number, boolean, error or blank. A formula's empty text
+   * (`=""`) is text.
    */
   private def extractText(cellValue: CellValue): Option[String] =
     cellValue match
       case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) =>
-        // Format without trailing zeros for matching
-        val plain = n.bigDecimal.stripTrailingZeros().toPlainString
-        Some(plain)
-      case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
       case CellValue.RichText(rt) => Some(rt.toPlainText)
       case CellValue.Formula(_, Some(cached), _) => extractText(cached)
       // GH-197: Uncached formula - can't extract text without evaluation context
@@ -505,28 +552,34 @@ object CriteriaMatcher:
    * Handles:
    *   - `*` → `.*`
    *   - `?` → `.`
-   *   - `~*` → literal asterisk
-   *   - `~?` → literal question mark
-   *   - `~~` → literal tilde
+   *   - `~x` → literal `x`, for every character `x` ([[patternRegexBody]])
    *   - Other regex metacharacters are escaped
    *   - Matching is case-insensitive
    */
   private def wildcardToRegex(pattern: String): Regex =
-    s"(?i)^${wildcardRegexBody(pattern)}$$".r // (?i) for case-insensitive
+    s"(?i)^${patternRegexBody(pattern)}$$".r // (?i) for case-insensitive
 
   /**
-   * GH-476: the UNANCHORED regex body for an Excel wildcard pattern.
+   * GH-476: the UNANCHORED regex body for an Excel wildcard pattern, as SEARCH reads it.
    *
-   * Shared with SEARCH, which needs a substring search rather than the whole-value match criteria
-   * use — one wildcard grammar (`*`, `?`, `~`-escapes) for both.
-   *
-   * `~` escapes only `*`, `?` and `~`; before any other character, and at the end, it is a literal
-   * tilde. Excel documents only the three escapes. A Microsoft Q&A thread suggests Excel drops the
-   * tilde before an ordinary character too ("a~b*" matching "abc"); no desktop-Excel observation
-   * confirms that yet, so this grammar is unchanged (GH-765).
+   * SEARCH needs a substring search rather than the whole-value match criteria use. Here `~`
+   * escapes only `*`, `?` and `~`, the three escapes Microsoft documents; before any other
+   * character, and at the end, it is a literal tilde (not checked against Excel for SEARCH).
+   * Criteria and lookups drop the tilde before any character ([[patternRegexBody]]).
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def wildcardRegexBody(pattern: String): String =
+    regexBody(pattern, tildeEscapesAny = false)
+
+  /**
+   * The regex body of a criterion or match_mode 2 pattern: `~x` is a literal `x` for every
+   * character `x`, so desktop Excel's `"a~b*"` matches `abc` and `ab` and not `a~b`; a `~` at the
+   * end is a literal tilde.
+   */
+  private def patternRegexBody(pattern: String): String =
+    regexBody(pattern, tildeEscapesAny = true)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def regexBody(pattern: String, tildeEscapesAny: Boolean): String =
     val sb = new StringBuilder
     var i = 0
     while i < pattern.length do
@@ -534,7 +587,7 @@ object CriteriaMatcher:
       if c == '~' && i + 1 < pattern.length then
         // Escape sequence
         val next = pattern.charAt(i + 1)
-        if next == '*' || next == '?' || next == '~' then
+        if tildeEscapesAny || next == '*' || next == '?' || next == '~' then
           sb.append(escapeRegexChar(next))
           i += 2
         else
