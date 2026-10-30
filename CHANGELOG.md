@@ -101,6 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
   PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
   Parser security settings and finite entity-size limits are unchanged.
+### Testing
+
+- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
+  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
+  unrelated SUMPRODUCT/array bindings (#748).
 
 ## [0.25.0] - 2026-10-19
 

@@ -128,6 +128,24 @@ All domain types have `Arbitrary` instances:
 - `CellStyle` - Valid font/fill/border combinations
 - `Patch` - All Patch enum cases
 
+### Dynamic-name laws (xl-evaluator)
+
+`DynamicNameLawsSpec` guards two contracts from GH-748:
+
+- Parsed SUMIF/AVERAGEIF calls with computed defined-name or LET range slots must pass
+  `CriteriaRangeResize.mayResizeThroughName`, including Unicode spellings, quoted sheets,
+  escaped strings, errors and colon name corners. Every generated case must parse and contain
+  a dynamic resize; the law cannot pass by discarding its antecedent.
+- In array mode, a LET whose COUNTIF range slot or OFFSET base needs a reference must preserve
+  the values of unrelated bindings. Each generated grid runs both the reference-binding and
+  value-binding paths, checks that the parsed formulas select those paths, and pins SUMPRODUCT
+  scalars and elementwise spills to independently computed numbers.
+
+Run `./mill xl-evaluator.test.testOnly com.tjclp.xl.formula.DynamicNameLawsSpec`.
+To check sensitivity during development, temporarily disable the pre-filter or array-mode LET
+reference binding, run the relevant property, and restore the source before committing. Both
+mutations must fail; successful evaluation on the unchanged source is the control.
+
 ### Test Patterns
 
 #### Round-Trip Laws
@@ -251,7 +269,7 @@ As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros 
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3960 |
+| xl-evaluator | 3962 |
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
 | xl-cli | 1924 |
