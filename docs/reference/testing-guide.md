@@ -265,22 +265,20 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
+As of main at 9c746f18 (2026-10-30), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3962 |
+| xl-evaluator | 4202 |
 | xl-core | 1872 |
-| xl-ooxml | 1435 |
-| xl-cli | 1924 |
+| xl-ooxml | 1614 |
+| xl-cli | 1961 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,620** |
+| **Total** | **10,078** |
 
-GH-747 adds 17 whole-axis bounds-cache regression cases. The current branch has 9,633 cases,
-including 3,977 in xl-evaluator (2026-10-28 full-suite JUnit reports); the table above retains the
-0.25.0 release counts. `WholeAxisUsedRangeSpec` also has one opt-in large-sheet acceptance check,
+`WholeAxisUsedRangeSpec` also has one opt-in large-sheet acceptance check,
 run with `XL_WHOLE_AXIS_PERF=1`, which is excluded from these default-suite counts.
 
 ## Test Quality Metrics

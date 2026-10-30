@@ -282,22 +282,18 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,620 test cases** (from the JUnit reports of `./mill __.test` on 2026-10-28, including the four new GH-749 streaming regressions). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
+**10,078 test cases** (from the JUnit reports of `./mill __.test` on main at 9c746f18, 2026-10-30, after the 18-PR merge train; one xl-ooxml case skipped). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3962 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4202 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-ooxml | 1614 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1961 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
-
-GH-747 adds 17 whole-axis bounds-cache regression cases: the current branch has 9,633 test cases,
-including 3,977 in xl-evaluator (from the 2026-10-28 full-suite JUnit reports). The table above
-records the 0.25.0 release.
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 
