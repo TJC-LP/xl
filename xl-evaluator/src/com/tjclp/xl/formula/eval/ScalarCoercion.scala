@@ -266,7 +266,7 @@ private[formula] object ScalarCoercion:
     // so =YEAR(TRUE) is 1900 like Excel) — delegate so they match the numeric branch exactly
     case b: Boolean => coerceDate(label, if b then BigDecimal(1) else BigDecimal(0))
     // a serial outside 0..MaxExcelDateSerial (the in-range arms above took the rest) is an error
-    // value, as through a reference (#709); #726 makes it #NUM! in [[dateSerialOutOfRange]]
+    // value, as through a reference (#726): #NUM! via [[dateSerialOutOfRange]]
     case bd: BigDecimal => Left(dateSerialOutOfRange(label, bd.toString))
     case i: Int => Left(dateSerialOutOfRange(label, i.toString))
     // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023); other text is
@@ -303,21 +303,32 @@ private[formula] object ScalarCoercion:
       val truncated = bd.setScale(0, scala.math.BigDecimal.RoundingMode.DOWN)
       Option.when(truncated.isValidInt)(truncated.toInt)
 
+  // ASCII only: no Java floating-point suffixes, hex, locale or currency syntax.
+  private val NumericText = "[+-]?(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?".r
+  private val MaxNumericText = BigDecimal(java.lang.Double.toString(Double.MaxValue))
+  // Excel does not support IEEE subnormal numbers (see docs/LIMITATIONS.md).
+  private val MinNumericText = BigDecimal(java.lang.Double.toString(java.lang.Double.MIN_NORMAL))
+
   /**
-   * Numeric-text parse: trimmed, total. Shared with TExprDecoders.decodeAsInt (GH-396) so the
-   * direct-cell and Coerced integer boundaries accept the same text domain.
+   * GH-726: one trimmed ASCII grammar for scalar numeric, integer and date text. Check double range
+   * BEFORE BigDecimal construction or scaling: extreme exponents must never reach ROUND. Retain the
+   * decimal spelling's precision instead of rounding accepted text through Double. Zero is
+   * canonicalised before construction too, so even 0e-999999999 cannot retain a huge scale.
    */
   private[formula] def parseNumericText(s: String): Option[BigDecimal] =
     val t = s.trim
-    // A number's text starts with a digit (any Unicode digit, as the BigDecimal parser reads),
-    // a sign or a point; anything else is refused without building and catching the parser's
-    // NumberFormatException — a column of text placeholders read by `=ABS(C2)` filled down no
-    // longer throws once per cell. Same answers as the bare parse (TextScalarSlotLawsSpec).
-    if t.isEmpty then None
+    if !NumericText.matches(t) then None
     else
-      val c = t.charAt(0)
-      if c.isDigit || c == '+' || c == '-' || c == '.' then scala.util.Try(BigDecimal(t)).toOption
-      else None
+      val mantissa = t.takeWhile(c => c != 'e' && c != 'E')
+      if !mantissa.exists(c => c >= '1' && c <= '9') then Some(BigDecimal(0))
+      else
+        t.toDoubleOption
+          .filter(d => d.isFinite && math.abs(d) >= java.lang.Double.MIN_NORMAL)
+          .flatMap { _ =>
+            scala.util.Try(BigDecimal(t)).toOption.filter { n =>
+              n.abs >= MinNumericText && n.abs <= MaxNumericText
+            }
+          }
 
   /**
    * #709: the text a cell holds — plain, rich (its plain text), or a formula's cached text — if it
@@ -334,12 +345,11 @@ private[formula] object ScalarCoercion:
   /**
    * #709: a date slot's serial outside 0..[[MaxExcelDateSerial]] — `=YEAR(-5)`, `=YEAR("-5")`,
    * `=YEAR(A1)` over `-5` or `'-5` — as one error value on every path. Excel's answer is `#NUM!`
-   * (#726, which changes the code here alone); `#VALUE!` until then, so the cell caches an error
-   * value instead of failing the recalculation.
+   * (#726), so the cell caches an error value instead of failing the recalculation.
    */
   private[formula] def dateSerialOutOfRange(label: String, serial: String): EvalError =
     EvalError.ErrorValue(
-      CellError.Value,
+      CellError.Num,
       Some(s"$label: serial ${quotedText(serial)} is outside the 1900 date range")
     )
 
@@ -347,11 +357,11 @@ private[formula] object ScalarCoercion:
    * #709: the refusal TExpr.decodeAsDateScalar gives a serial outside 0..[[MaxExcelDateSerial]],
    * and the only one it gives for that reason. A sentinel INSTANCE held by this object (not by the
    * TExprDecoders trait, so it is one instance whatever mixes the trait in): the evaluator's
-   * reference boundary (decodeOrCarried) recognises it by identity (`eq`), never by its fields, so
-   * an equal `ParseError` built by any other decoder — a caller's, through `TExpr.ref(at, decode)`
-   * — is not mistaken for it. decodeOrCarried answers [[dateSerialOutOfRange]], the literal path's
-   * error value (`#VALUE!` until #726 makes it `#NUM!`). TextScalarSlotSpec pins both directions
-   * (the real refusal maps, a forged equal one does not).
+   * RangeRefusal extractor recognises it by identity (`eq`), never by its fields, so an equal
+   * `ParseError` built by any other decoder — a caller's, through `TExpr.ref(at, decode)` — is not
+   * mistaken for it. decodeOrCarried answers [[dateSerialOutOfRange]], the literal path's error
+   * value (`#NUM!`). TextScalarSlotSpec pins both directions (the real refusal maps, a forged equal
+   * one does not).
    */
   private[formula] val DateSerialOutOfRange: CodecError =
     CodecError.ParseError("serial", "Date", "serial outside the 1900 date range (0 to 2958465)")
@@ -364,8 +374,19 @@ private[formula] object ScalarCoercion:
   private[formula] val IntOutOfRange: CodecError =
     CodecError.ParseError("value", "Int", "value outside the integer range")
 
+  /** The private decoder protocol; equal errors from caller decoders are never range refusals. */
+  private[formula] enum RangeKind derives CanEqual:
+    case DateSerial, Integer
+
+  private[formula] object RangeRefusal:
+    def unapply(error: CodecError): Option[RangeKind] =
+      if error eq DateSerialOutOfRange then Some(RangeKind.DateSerial)
+      else if error eq IntOutOfRange then Some(RangeKind.Integer)
+      else None
+
   /** The slots whose built-in decoders refuse text with a plain `TypeMismatch` (TExprDecoders). */
-  private val BuiltinTextSlots: Set[String] = Set("Numeric", "Int", "Date", "Boolean", "String")
+  private[formula] val BuiltinTextSlots: Set[String] =
+    Set("Numeric", "Int", "Date", "Boolean", "String")
 
   /** Longest run of a caller decoder's refusal reason quoted in a `#VALUE!` diagnostic. */
   private[formula] val MaxQuotedReason: Int = 120
