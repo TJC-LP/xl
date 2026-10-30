@@ -279,7 +279,8 @@ trait FunctionSpecsLookupSearch extends FunctionSpecsBase:
     FunctionSpec.referencing[ArrayResult, XLookupArgs](
       "XLOOKUP",
       Arity.Range(3, 6),
-      flags = FunctionFlags(lift = ArrayLift.slots(0))
+      flags = FunctionFlags(lift = ArrayLift.slots(0)),
+      envelope = Some(ReferenceOperators.xlookupEnvelope)
     )((args, ctx) => xlookupTarget(args, ctx).map(_.merge)) { (args, ctx) =>
       xlookupTarget(args, ctx).flatMap { target =>
         referencedValue(target.left.map(ArrayResult.single), ctx)(boundedReferenceValues(_, ctx))

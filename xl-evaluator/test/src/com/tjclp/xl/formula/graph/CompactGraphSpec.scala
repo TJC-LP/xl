@@ -267,7 +267,8 @@ class CompactGraphSpec extends ScalaCheckSuite:
             ,
             Some(wb),
             preciseLookups = true,
-            canonicalSheet = canonical
+            canonicalSheet = canonical,
+            reader = Some(q.ref)
           )
         case Left(_) => Set.empty[QualifiedRef]
       q -> (points, ranges.result())
