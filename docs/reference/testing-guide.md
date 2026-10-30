@@ -128,6 +128,24 @@ All domain types have `Arbitrary` instances:
 - `CellStyle` - Valid font/fill/border combinations
 - `Patch` - All Patch enum cases
 
+### Dynamic-name laws (xl-evaluator)
+
+`DynamicNameLawsSpec` guards two contracts from GH-748:
+
+- Parsed SUMIF/AVERAGEIF calls with computed defined-name or LET range slots must pass
+  `CriteriaRangeResize.mayResizeThroughName`, including Unicode spellings, quoted sheets,
+  escaped strings, errors and colon name corners. Every generated case must parse and contain
+  a dynamic resize; the law cannot pass by discarding its antecedent.
+- In array mode, a LET whose COUNTIF range slot or OFFSET base needs a reference must preserve
+  the values of unrelated bindings. Each generated grid runs both the reference-binding and
+  value-binding paths, checks that the parsed formulas select those paths, and pins SUMPRODUCT
+  scalars and elementwise spills to independently computed numbers.
+
+Run `./mill xl-evaluator.test.testOnly com.tjclp.xl.formula.DynamicNameLawsSpec`.
+To check sensitivity during development, temporarily disable the pre-filter or array-mode LET
+reference binding, run the relevant property, and restore the source before committing. Both
+mutations must fail; successful evaluation on the unchanged source is the control.
+
 ### Test Patterns
 
 #### Round-Trip Laws
@@ -224,6 +242,16 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
+`native-xml-security.yml` builds the Linux GraalVM CLI on PRs and main pushes touching OOXML,
+Cats Effect IO, CLI sources/resources, Mill configuration, or the smoke/release workflows.
+It also runs daily at 07:43 UTC on the main repository's default branch to cover changes outside
+that filter. Both this workflow and every release platform run
+`bash scripts/smoke-native-xml-security.sh <built-binary>`: the script injects 120,000 defined names
+into a temporary copy of `small-values.xlsx`, runs `sheets`, and fails on a nonzero exit or a
+`JAXP000` diagnostic. It removes the generated fixture on success and failure. This catches
+GraalVM's baked-in XML entity-size defaults before release without changing parser security
+settings. Test the harness itself with `python3 scripts/test-smoke-native-xml-security.py`.
+
 A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
 recalculation benchmark gates (`xl-evaluator/test-perf`, 26 tests). `__.test` does not select that
 module. On the `Tiny` loads book it checks every formula cell against the v0.24.1 values
@@ -237,18 +265,18 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of GH-754 (2026-10-28), from the full-suite reports; macros are part of xl-core. Optional external-tool checks count as test cases even when skipped because their tools are absent.
+As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3991 |
+| xl-evaluator | 3962 |
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
 | xl-cli | 1924 |
-| xl-cats-effect | 213 |
+| xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,647** |
+| **Total** | **9,620** |
 
 ## Test Quality Metrics
 

@@ -272,20 +272,23 @@ class LookupErrorParitySpec extends FunSuite:
 
   // ===== renderLookupValue =====
 
-  test("#670: a blank lookup_value does not match the text \"Empty\" (nor 0)") {
-    // LibreOffice: #N/A for VLOOKUP and MATCH over H1:H3 = "Empty", "x", 0
-    check("=VLOOKUP(G1,H1:H3,1,FALSE)", err(CellError.NA))
+  test(
+    "#693: a blank lookup_value is the number 0 in MATCH, VLOOKUP and HLOOKUP, never \"Empty\""
+  ) {
+    // desktop Excel finds the 0 key over H1:H3 = "Empty", "x", 0 (LibreOffice: #N/A)
+    check("=VLOOKUP(G1,H1:H3,1,FALSE)", num(0))
     check("=HLOOKUP(G1,H1:H3,1,FALSE)", err(CellError.NA))
-    check("=MATCH(G1,H1:H3,0)", err(CellError.NA))
+    check("=MATCH(G1,H1:H3,0)", num(3))
   }
 
-  test("#670: a blank lookup_value matches nothing in every lookup, lifted too") {
-    // LibreOffice: #N/A for each, and SUMPRODUCT(--ISNA(MATCH(G1:G2,H1:H3,0))) is 2
+  test("#670: a blank lookup_value matches nothing in XLOOKUP, XMATCH and LOOKUP, lifted too") {
+    // LibreOffice: #N/A for each, and SUMPRODUCT(--ISNA(XMATCH(G1:G2,H1:H3))) is 2; MATCH reads
+    // the blank as 0 (#693), so both lifted elements find the 0 key
     check("=XLOOKUP(G1,H1:H4,B1:B4)", err(CellError.NA))
     check("=XMATCH(G1,H1:H4)", err(CellError.NA))
-    check("=MATCH(G1,H1:H4,0)", err(CellError.NA))
+    check("=MATCH(G1,H1:H4,0)", num(3))
     check("=LOOKUP(G1,H1:H3)", err(CellError.NA))
-    check("=SUMPRODUCT(--ISNA(MATCH(G1:G2,H1:H3,0)))", num(2))
+    check("=SUMPRODUCT(--ISNA(MATCH(G1:G2,H1:H3,0)))", num(0))
     check("=SUMPRODUCT(--ISNA(XMATCH(G1:G2,H1:H3)))", num(2))
     // an explicit 0 still finds the 0 key
     check("=MATCH(0,H1:H4,0)", num(3))

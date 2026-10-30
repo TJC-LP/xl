@@ -10,11 +10,12 @@ import org.scalacheck.Gen
 /**
  * #767: random workbooks for the compact-graph laws. Small grids (rows 1..Rows, columns A..D on
  * three sheets whose names sort differently from their workbook order) whose formulas read single
- * cells, windowed, whole-column, whole-row, wide, overlapping and running-total ranges, defined
- * names, VLOOKUP strips, INDIRECT and OFFSET, and their own cells; with constants, DataTable
- * records and unparseable formulas mixed in. Qualifiers are spelled in any letter case, and some
- * name a sheet the book lacks. Cycles arise from the random references. [[genWorkbookOf]] sizes the
- * grid: tall books give the parallel path waves wider than its sequential cutoff.
+ * cells, windowed, whole-column, whole-row, wide, overlapping and running-total ranges (written,
+ * and through INDEX at a ROW()-relative position), defined names, VLOOKUP strips, INDIRECT and
+ * OFFSET, and their own cells; with constants, DataTable records and unparseable formulas mixed in.
+ * Qualifiers are spelled in any letter case, and some name a sheet the book lacks. Cycles arise
+ * from the random references. [[genWorkbookOf]] sizes the grid: tall books give the parallel path
+ * waves wider than its sequential cutoff.
  */
 object CompactGraphGens:
 
@@ -85,6 +86,15 @@ object CompactGraphGens:
         // dynamic readers: the recalculation defers them and their dependents to the end
         1 -> Gen.zip(genCol, genRow, genPoint).map((c, r, p) => s"INDIRECT(\"${col(c)}$r\")+$p"),
         1 -> Gen.zip(genPoint, genRow).map((p, r) => s"SUM(OFFSET($p,0,0,$r,1))"),
+        // #743: INDEX at a position folded from ROW() reads one cell: running totals over the
+        // cells above (acyclic), and over the formula's own row (circular). Row 1 keeps its
+        // ROW()-1 out: INDEX's 0 there selects a whole column, slow to iterate over
+        2 -> Gen.frequency(1 -> Gen.const(column), 1 -> genCol).map { c =>
+          if row > 1 then s"SUM($$${col(c)}$$1:INDEX(${col(c)}:${col(c)},ROW()-1))"
+          else s"SUM($$${col(c)}$$1:INDEX(${col(c)}:${col(c)},ROW()))"
+        },
+        1 -> Gen.const(s"INDEX(${col(column)}:${col(column)},ROW()-${math.min(row - 1, 1)})+1"),
+        1 -> Gen.const(s"SUM(${col(column)}1:INDEX(${col(column)}:${col(column)},ROW()))"),
         1 -> genCol.map(c => s"VLOOKUP(1,A1:${col(Cols - 1)}$rows,${c + 1},FALSE)"),
         1 -> Gen.const("SUM("),
         1 -> Gen.const("1+2")

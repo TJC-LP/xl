@@ -1,7 +1,14 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{
+  ArrayArithmetic,
+  ArrayResult,
+  EvalError,
+  EvalResult,
+  Evaluator,
+  RangeOperand
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.{Clock, Arity}
@@ -219,13 +226,21 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * without reading it (`ROWS(OFFSET(A:A,0,1))` is 1048576), an array by its shape, a scalar as
    * 1x1. In a plain cell the argument's value positions intersect as everywhere else
    * (`ROWS(IF(A1:A10>2,A1:A10,A1:A3))` in a row where the condition fails is 3).
+   *
+   * #725: an argument that evaluates to an error value is that error, as in Excel: the `#REF!` an
+   * OFFSET off the grid or an INDIRECT to a missing sheet computes instead of a reference
+   * (directly, through a name, a LET name or a selector), or `NA()`. A reference to a cell holding
+   * an error is still a reference (`ROWS(A6)` is 1), and an array keeps its shape whatever it holds
+   * (`ROWS({1,#N/A;2,3})` is 2, `ROWS({#N/A})` 1, through a name or LET name too).
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private def dimensions(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, (Int, Int)] =
-    ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).map {
-      case RangeOperand(_, range) => (range.height, range.width)
-      case ar: ArrayResult => (ar.rows, ar.cols)
-      case _ => (1, 1)
+    ctx.evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+      case RangeOperand(_, range) => Right((range.height, range.width))
+      case ar: ArrayResult => Right((ar.rows, ar.cols))
+      case cell: CellValue =>
+        ArrayArithmetic.carriedError(cell).fold(Right((1, 1)))(e => Left(EvalError.ErrorValue(e)))
+      case _ => Right((1, 1))
     }
 
   /**
@@ -492,11 +507,13 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
       case other => nameLocation(other)
 
   /**
-   * The array the cell at `anchor` spills. The file's `<f t="array" ref>` record is Excel's own
-   * extent and is read through its cached cells when it has a cache — so a spill from a function xl
-   * does not evaluate still reads; an uncached array record, or a plain formula, is evaluated as an
-   * array at the anchor's position (a scalar result means the cell is not a spill anchor); a
-   * constant, a blank and a spilled non-anchor cell are `#REF!`, as in Excel.
+   * Return the array referenced by `anchor#`. If the file includes an array range and a saved
+   * result at the anchor, read the saved cells in that range. This also lets xl read a saved spill
+   * from a function it cannot calculate. Otherwise, evaluate the formula at the anchor cell.
+   *
+   * #803: a formula returning one value produces a one-cell array. A formula returning an Excel
+   * error produces a one-cell array containing that error. Constants, blank cells and cells inside
+   * another formula's spill still return `#REF!`.
    */
   private def spillOf(
     anchorSheet: Sheet,
@@ -510,12 +527,23 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           Some(s"${anchor.toA1}#: not the anchor of a spilled array")
         )
       )
-    // an array is the spill; a scalar result means the cell is not a spill anchor
+    // An existing array stays an array. A single value becomes a one-cell array.
+    // For single values and errors, follow the same rules as the existing cellResult helper
+    // in eval/SheetEvaluator.scala. We apply those rules here without calling that helper:
+    // a formula that refers to an empty cell returns 0, so its array contains 0.
+    // An Excel error becomes a one-cell array containing that error.
+    // Other failures, such as cycles or exceeding the depth limit, remain Left.
     def asSpill(raw: Either[EvalError, Any]): Either[EvalError, ArrayResult] =
-      raw.flatMap {
-        case ar: ArrayResult => Right(ar)
-        case _ => notAnchor
-      }
+      raw match
+        case Right(ar: ArrayResult) => Right(ar)
+        case Right(scalar) =>
+          unwrapCachedValue(EvalResult.toCellValue(scalar)) match
+            case CellValue.Empty => Right(ArrayResult.single(CellValue.Number(BigDecimal(0))))
+            case value => Right(ArrayResult.single(value))
+        case Left(err) =>
+          EvalError.toErrorValue(err) match
+            case Some(code) => Right(ArrayResult.single(CellValue.Error(code)))
+            case None => Left(err)
     def evaluated(text: String): Either[EvalError, ArrayResult] =
       asSpill(
         Evaluator.evalSpillFormula(

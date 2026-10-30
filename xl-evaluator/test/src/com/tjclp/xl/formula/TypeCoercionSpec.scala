@@ -396,15 +396,15 @@ class TypeCoercionSpec extends FunSuite:
   }
 
   // #709: an out-of-range serial is an error value the cell caches, not a recalculation failure
-  // (Excel's #NUM!, #726; #VALUE! until then, on every date path alike)
+  // (#726: Excel's #NUM! on every date path alike)
   test("GH-385: negative serial in a date position is an error value") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(-1)))
-    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Error(CellError.Num)))
   }
 
   test("GH-385: oversized serial (> 9999-12-31) in a date position is an error value") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(2958466)))
-    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(sheet.evaluateFormula("=YEAR(A1)"), Right(CellValue.Error(CellError.Num)))
   }
 
   // ============================================================================
