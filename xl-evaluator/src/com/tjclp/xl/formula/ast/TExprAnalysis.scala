@@ -266,6 +266,10 @@ trait TExprAnalysis:
         case ArrayLift.Off => true
       val replacements =
         call.spec.argSpec.scalarSlots(call.args).zipWithIndex.map { case ((slot, _), position) =>
-          if enters(position) then transformRanges(slot, f) else slot
+          // GH-754: a selected fallback is an element source too, even though it must not
+          // participate in eager scalar-slot lifting.
+          if enters(position) || call.spec.arrayBoundSlots.contains(position) then
+            transformRanges(slot, f)
+          else slot
         }
       Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)

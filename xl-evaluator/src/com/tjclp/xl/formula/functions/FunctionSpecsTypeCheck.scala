@@ -1,7 +1,16 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayArithmetic, EvalError, Evaluator, ScalarCoercion}
+import com.tjclp.xl.formula.eval.{
+  ArrayArithmetic,
+  ArrayLifting,
+  ArrayResult,
+  EvalError,
+  Evaluator,
+  NameWalk,
+  ScalarCoercion,
+  WorkbookAudit
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -9,11 +18,12 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 
 trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
   val iferror: FunctionSpec[CellValue] { type Args = IfErrorArgs } =
-    FunctionSpec.simple[CellValue, IfErrorArgs](
+    FunctionSpec.arrayAware[CellValue, IfErrorArgs](
       "IFERROR",
       Arity.two,
-      flags = FunctionFlags(lift = ArrayLift.slots(0))
-    ) { (args, ctx) =>
+      FunctionFlags(lift = ArrayLift.slots(0)),
+      Set(1)
+    )(evalArrayFallback(catchOnlyNa = false)) { (args, ctx) =>
       val (valueExpr, valueIfErrorExpr) = args
       val result = evalValue(ctx, valueExpr) match
         case Left(_) =>
@@ -42,11 +52,12 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
    * below) — so both are matched.
    */
   val ifna: FunctionSpec[CellValue] { type Args = IfErrorArgs } =
-    FunctionSpec.simple[CellValue, IfErrorArgs](
+    FunctionSpec.arrayAware[CellValue, IfErrorArgs](
       "IFNA",
       Arity.two,
-      flags = FunctionFlags(lift = ArrayLift.slots(0))
-    ) { (args, ctx) =>
+      FunctionFlags(lift = ArrayLift.slots(0)),
+      Set(1)
+    )(evalArrayFallback(catchOnlyNa = true)) { (args, ctx) =>
       val (valueExpr, valueIfNaExpr) = args
       val result = evalValue(ctx, valueExpr) match
         case Left(EvalError.ErrorValue(CellError.NA, _)) =>
@@ -58,6 +69,83 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
         case Right(other) => Right(toCellValue(other))
       result.map(unwrapCachedValue)
     }
+
+  /**
+   * GH-754: retain a selected fallback whole; only an array primary broadcasts against it. Evaluate
+   * a fallback only when at least one primary element needs it. Scalar random fallbacks retain
+   * their per-element draws; array fallbacks evaluate whole and broadcast. IFNA catches only #N/A
+   * on either error channel; IFERROR retains its scalar catch-all policy.
+   */
+  private def evalArrayFallback(catchOnlyNa: Boolean)(
+    args: IfErrorArgs,
+    ctx: EvalContext
+  ): Either[EvalError, Any] =
+    val (primary, fallback) = args
+    def catches(value: CellValue): Boolean =
+      ArrayArithmetic.carriedError(value).exists(err => !catchOnlyNa || err == CellError.NA)
+    def selectedFallback: Either[EvalError, Any] =
+      evalMaybeArrayArg(ctx, fallback).map {
+        case array: ArrayResult => array.mapPure(unwrapCachedValue)
+        case scalar => toCellValue(ExprValue.from(scalar))
+      }
+    evalMaybeArrayArg(ctx, primary) match
+      case Left(error) if !catchOnlyNa || EvalError.toCellError(error).contains(CellError.NA) =>
+        selectedFallback
+      case Left(error) => Left(error)
+      case Right(array: ArrayResult) =>
+        if !array.tally.exists((value, _) => catches(value)) then
+          Right(array.mapPure(unwrapCachedValue))
+        else
+          // A failing fallback carries its Excel error only at selected positions. Structural
+          // failures without an Excel value remain loud, as in the other array conditionals.
+          def replacement: Either[EvalError, Any] = selectedFallback match
+            case Left(error) =>
+              ArrayLifting.elementResult(Left(error))
+            case right => right
+          def scalarDraw(value: Any): Boolean = value match
+            case _: ArrayResult => false
+            case _ => fallbackDraws(fallback, ctx)
+          replacement.flatMap {
+            case value if scalarDraw(value) =>
+              // Keep the first draw, then evaluate only for each further selected element.
+              // perCell refuses oversized dense work, as generic lifting does (#750).
+              val replacements = Iterator.single(Right(value): Either[EvalError, Any]) ++
+                Iterator.continually(replacement)
+              ArrayArithmetic.broadcastN(Vector(array), perCell = true) { elements =>
+                val original = elements.headOption.getOrElse(CellValue.Empty)
+                if catches(original) then
+                  replacements.nextOption().getOrElse(Right(CellValue.Empty)).map { next =>
+                    unwrapCachedValue(toCellArray(next)(0, 0))
+                  }
+                else Right(unwrapCachedValue(original))
+              }
+            case value =>
+              ArrayArithmetic.broadcastN(Vector(array, toCellArray(value))) { elements =>
+                val original = elements.headOption.getOrElse(CellValue.Empty)
+                Right(
+                  unwrapCachedValue(
+                    if catches(original) then elements.lift(1).getOrElse(CellValue.Empty)
+                    else original
+                  )
+                )
+              }
+          }
+      case Right(scalar) =>
+        val value = toCellValue(ExprValue.from(scalar))
+        if catches(value) then selectedFallback else Right(value)
+
+  /** Share the generation's existing name-to-random-call analysis with generic lifting. */
+  private def fallbackDraws(expr: TExpr[?], ctx: EvalContext): Boolean =
+    def build(wb: com.tjclp.xl.workbooks.Workbook) =
+      WorkbookAudit.namesReaching(wb, WorkbookAudit.callsWhere(_, _, SumProductTail.draws))
+    lazy val reach =
+      ctx.workbook.map(wb => ctx.aggregateMemo.fold(build(wb))(_.namesReachingDraw(wb, build)))
+    WorkbookAudit.callsWhere(
+      expr,
+      (qualifier, name) =>
+        reach.exists(r => r(ctx.sheet.name, qualifier, name) != NameWalk.Reach.Absent),
+      SumProductTail.draws
+    )
 
   /**
    * GH-511: NA() — the `#N/A` literal. Excel's idiom for marking a deliberate gap, and the only way
