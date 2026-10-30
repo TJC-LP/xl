@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
+  desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
+  `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
+  is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
+  is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
+- **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
+  unchanged into every cell, so every row after the first computed the first row's result. It is now
+  dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
+  `putf … from` stream arm do, and a reference dragged off the grid raises the `OFF_GRID_REF`
+  warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
+  written.
+  Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
+  `=B3*C3`, `=B4*C4` and `=B5*C5`.
+  Behaviour change: the `--stream putf` summary lines changed. One formula over a range printed
+  `Filled <range> with formula (streaming, no dragging)` and now prints `Applied formula to N cells
+  in <range> (streaming, with anchor-aware dragging)`. One formula to one cell printed
+  `Put formula → <cell> (streaming, no dragging)` and now prints `Put formula → <cell> (streaming)`.
+  Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
+  `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
+
+### Testing
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
 - **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
   recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
   (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
