@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared-string indices).
   Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
   and possibly a `shared-string-orphan` finding; it now gets neither.
+- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
+  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
+  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
+  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
+  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
+  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
+  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
+  and the destination is written after input consumption. Row memory remains bounded.
 
 ## [0.25.0] - 2026-10-19
 
