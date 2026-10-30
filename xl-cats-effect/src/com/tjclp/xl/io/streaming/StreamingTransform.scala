@@ -84,10 +84,12 @@ object StreamingTransform:
     columns: Map[Column, ColumnProperties] = Map.empty,
     addMerges: Set[CellRange] = Set.empty,
     removeMerges: Set[CellRange] = Set.empty,
-    rowProps: Map[Row, RowProperties] = Map.empty
+    rowProps: Map[Row, RowProperties] = Map.empty,
+    // GH-738: released dynamic spills; clear only existing cells, with explicit value patches winning.
+    clearContents: Vector[CellRange] = Vector.empty
   ):
     def isEmpty: Boolean =
-      columns.isEmpty && addMerges.isEmpty && removeMerges.isEmpty && rowProps.isEmpty
+      columns.isEmpty && addMerges.isEmpty && removeMerges.isEmpty && rowProps.isEmpty && clearContents.isEmpty
 
   /**
    * Analysis of patches to enable early-abort optimization.
@@ -588,7 +590,16 @@ object StreamingTransform:
           currentCellRef = cellRef
 
           // Parse cell reference and check for patch
-          val patch = parsedRef.flatMap(patches.get)
+          val patch = parsedRef.flatMap { ref =>
+            val explicit = patches.get(ref)
+            if worksheetMetadata.clearContents.exists(_.contains(ref)) then
+              explicit match
+                case Some(CellPatch.SetStyle(id)) =>
+                  Some(CellPatch.SetStyleAndValue(id, CellValue.Empty))
+                case None => Some(CellPatch.SetValue(CellValue.Empty))
+                case valuePatch => valuePatch
+            else explicit
+          }
           currentPatch = patch
           cellDepth = depth
           contentWritten = false

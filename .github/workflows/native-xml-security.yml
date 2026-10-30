@@ -1,0 +1,80 @@
+name: Native XML Security
+
+# GH-485: catch baked-in GraalVM JAXP defaults before a release. The nightly also
+# covers changes outside the focused PR/push filter (e.g. transitive dependencies).
+on:
+  pull_request:
+    paths:
+      - 'xl-ooxml/**'
+      - 'xl-cats-effect/**'
+      - 'xl-cli/**'
+      - '**/*.mill'
+      - '.mill*'
+      - 'mill'
+      - 'scripts/smoke-native-xml-security.sh'
+      - 'scripts/test-smoke-native-xml-security.py'
+      - '.github/workflows/native-xml-security.yml'
+      - '.github/workflows/release.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'xl-ooxml/**'
+      - 'xl-cats-effect/**'
+      - 'xl-cli/**'
+      - '**/*.mill'
+      - '.mill*'
+      - 'mill'
+      - 'scripts/smoke-native-xml-security.sh'
+      - 'scripts/test-smoke-native-xml-security.py'
+      - '.github/workflows/native-xml-security.yml'
+      - '.github/workflows/release.yml'
+  schedule:
+    - cron: '43 7 * * *' # Daily 07:43 UTC, default branch only
+
+permissions:
+  contents: read
+
+concurrency:
+  group: native-xml-security-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-xml-security:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    # Scheduled runs on forks should not consume native-build minutes.
+    if: github.event_name != 'schedule' || github.repository == 'TJC-LP/xl'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test smoke harness
+        run: python3 scripts/test-smoke-native-xml-security.py
+
+      - name: Set up GraalVM
+        uses: coursier/setup-action@v1
+        with:
+          jvm: graalvm-community:25.0.1
+
+      - name: Cache Coursier
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coursier
+            ~/.ivy2/cache
+          key: ${{ runner.os }}-${{ runner.arch }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-coursier-native-
+
+      - name: Cache Mill
+        uses: actions/cache@v4
+        with:
+          path: ~/.mill
+          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('**/build.mill') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-mill-
+
+      - name: Build native image
+        run: ./mill -i xl-cli.nativeImage
+
+      - name: Smoke test name-bloated workbook (GH-457 / GH-485)
+        run: bash scripts/smoke-native-xml-security.sh out/xl-cli/nativeImage.dest/native-executable
