@@ -176,6 +176,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
   #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
   needs the new arm, and fails to compile under `-Werror` until it has one.
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+- **COUNTBLANK counts empty text and takes a reference only** (#731). Checked against desktop
+  Excel for Mac on one synthetic workbook.
+  - COUNTBLANK counts a cell holding text of length 0: the constant `""`, a formula whose value is
+    `""` (cached or not) and rich text with no characters. **Behaviour change:** with A2 and A13
+    blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
+    now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
+    returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
+    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
+    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
+  - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
+    a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
+    `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
+    `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
+  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
+    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
+    `#REF!`.
+  - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
+    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
+    without a workbook) is not blank and the rest of the range is still counted; an uncached data
+    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
+    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
 
 ## [0.25.0] - 2026-10-19
 

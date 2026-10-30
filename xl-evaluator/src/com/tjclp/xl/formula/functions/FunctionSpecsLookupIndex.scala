@@ -312,15 +312,19 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         // the whole (used) range for the approximate plane
         positionOpt <- matchMode match
           case 0 =>
-            exactLookupPosition(lookupRange, targetSheet, ctx, lookup, None, searchMode)
-              .map(_.map(_ + 1))
+            exactLookupPosition(
+              lookupRange,
+              targetSheet,
+              ctx,
+              matchesLookupExact(_, lookup),
+              searchMode
+            ).map(_.map(_ + 1))
           case 2 =>
             exactLookupPosition(
               lookupRange,
               targetSheet,
               ctx,
-              lookup,
-              wildcardCriterion(lookup),
+              wildcardLookupMatcher(lookup),
               searchMode
             ).map(_.map(_ + 1))
           case -1 | 1 =>

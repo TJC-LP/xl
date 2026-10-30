@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.TExpr
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayResult, CriteriaKeys, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.Arity
 
@@ -485,7 +485,7 @@ trait FunctionSpecsArray extends FunctionSpecsBase:
   /** Canonical equality key for UNIQUE (case-insensitive text, normalized numbers). */
   private def cellKey(cv: CellValue): String =
     cv match
-      case CellValue.Number(n) => "n:" + n.bigDecimal.stripTrailingZeros.toPlainString
+      case CellValue.Number(n) => "n:" + CriteriaKeys.numberText(n)
       case CellValue.Text(s) => "t:" + s.toLowerCase
       case CellValue.Bool(b) => "b:" + b
       case CellValue.Empty => "e:"
