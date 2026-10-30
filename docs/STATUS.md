@@ -282,18 +282,15 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,627 test cases** in the current suite (2026-10-28), from the full-suite JUnit reports, including
-skipped cases. GH-788 adds eight OOXML cases and three CLI cases for preserved-sheet reporting.
-The 0.25.0 release's 9,616-case verification (2026-10-19) had zero failures; that run had soffice and
-rsvg-convert, so its LibreOffice-oracle tests and rsvg-convert smoke ran (they skip where absent).
+**9,620 test cases** (from the JUnit reports of `./mill __.test` on 2026-10-28, including the four new GH-749 streaming regressions). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1443 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1927 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
