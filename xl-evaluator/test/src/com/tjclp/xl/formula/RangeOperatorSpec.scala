@@ -569,12 +569,11 @@ class RangeOperatorSpec extends FunSuite:
     assertEquals(cached(edit(grown, ref"A3", N("30"))), Some(N("33")))
   }
 
-  test("GH-713: B5 =SUM(B1:INDEX(B:B,ROW()-1)) is a false cycle today (expected to change: #743)") {
-    // the running total above B5 reads B1:B4 only, but INDEX's edges cover its whole array B:B,
-    // which holds B5 itself, so the graph reports a cycle Excel does not. When #743 narrows
-    // INDEX's edges, flip this to `isRight`.
+  test("#743: B5 =SUM(B1:INDEX(B:B,ROW()-1)) is no cycle: INDEX folds ROW() for B5") {
+    // the running total above B5 reads B1:B4 only: INDEX's position folds to 4 for its reader,
+    // so its edges are B4 and the range's B1:B4, not the whole array B:B (IndexReaderEnvelopeSpec)
     val placed = sheet1.put(ref"B5", CellValue.Formula("SUM(B1:INDEX(B:B,ROW()-1))", None))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(placed)).isLeft)
+    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(placed)).isRight)
   }
 
   test("GH-713: a cross-sheet computed range through the workbook graph, covered and not") {

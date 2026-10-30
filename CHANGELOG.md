@@ -9,6 +9,230 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
+  desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
+  `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
+  is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
+  is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
+- **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
+  unchanged into every cell, so every row after the first computed the first row's result. It is now
+  dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
+  `putf … from` stream arm do, and a reference dragged off the grid raises the `OFF_GRID_REF`
+  warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
+  written.
+  Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
+  `=B3*C3`, `=B4*C4` and `=B5*C5`.
+  Behaviour change: the `--stream putf` summary lines changed. One formula over a range printed
+  `Filled <range> with formula (streaming, no dragging)` and now prints `Applied formula to N cells
+  in <range> (streaming, with anchor-aware dragging)`. One formula to one cell printed
+  `Put formula → <cell> (streaming, no dragging)` and now prints `Put formula → <cell> (streaming)`.
+  Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
+  `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
+
+### Testing
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
+- **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
+  recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
+  (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
+  cells, for example a `t="s"` index past the table's end written as `#REF!` (`t="e"`), the
+  `count` attribute (ECMA-376 Part 1, §18.4.9) kept the old total. Every sheet written from the
+  model is now recounted.
+  Behaviour change: in that case `xl/sharedStrings.xml` `count` was the source total (for example
+  `4`); it is now the number of `t="s"` cells in the written package (`3`).
+  Behaviour change: an inline string (`t="inlineStr"`) in a sheet the write regenerates without
+  modifying it (for example any sheet when a sheet is added) used to stay inline, and
+  `xl/sharedStrings.xml` was not given its text; it is now appended to the shared-string table and
+  the cell is written as a `t="s"` reference (a table of Alpha, Beta, Gamma with `count="3"` becomes
+  Alpha, Beta, Gamma, Zeta with `count="4"` `uniqueCount="4"`). The cell reads as the same text.
+- **`xl lint` accepts international macro sheets** (#791): a `<sheet>` whose relationship is
+  `xlIntlMacrosheet` was reported as `wrong-rel-type` ("expected worksheet"), its part was not
+  scanned, and a shared string referenced only from it was reported as `shared-string-orphan`. The
+  part is now checked like a plain macro sheet (CT_Macrosheet child order, relationships, bounds,
+  shared-string indices).
+  Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
+  and possibly a `shared-string-orphan` finding; it now gets neither.
+- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
+  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
+  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
+  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
+  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
+  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
+  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
+  and the destination is written after input consumption. Row memory remains bounded.
+- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
+  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
+  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
+  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
+  is now stale under any override, and its readers with it.
+  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
+  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
+- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
+  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
+  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
+  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
+- **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
+  including its anchor, instead of moving cells with an inconsistent array extent. An excluded
+  header and disjoint spills remain allowed (#738).
+- **Behaviour change:** streamed `put`, `putf` and batch content writes reject writes inside a
+  live dynamic spill and clear the old spill when overwriting its anchor, keeping styles.
+  Previously those paths left orphaned cached constants or wrote into live spills. Batch writes
+  apply the rule in operation order; style-only writes retain array and cell metadata (#738).
+- **Binary change:** `StreamingTransform.WorksheetMetadata` gains a defaulted `clearContents`
+  range field for spill cleanup. Recompile callers and update positional pattern matches (#738).
+### Added
+
+- `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,
+  name and visibility in a separate read-only section (`preservedSheets` in JSON), in quick,
+  streaming and stats modes. Worksheet indices and `-s` resolution remain worksheet-only.
+  `Excel.readMetadata` exposes the same read-only metadata (#788). **Binary change:**
+  `LightMetadata` gains a defaulted `preservedSheets` field.
+- `xl lint` reports one `macro-sheet` finding (severity `info`) per Excel 4.0 macro sheet, including
+  hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
+  Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
+  `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
+### Changed
+
+- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
+  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
+  Parser security settings and finite entity-size limits are unchanged.
+### Testing
+
+- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
+  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
+  unrelated SUMPRODUCT/array bindings (#748).
+### Performance
+
+- **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
+  iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while
+  building the dependency graph and again when evaluating it. A cached formula whose text contains
+  `[` (a closed-workbook reference such as `[1]Sheet!A1`, or a `[` in a string) was parsed a third
+  time to decide whether its cache is pinned, and each member of a cycle under iterative calculation
+  was parsed again by the fixpoint. Cell evaluation, that pin check, iterative fixpoints, the scan
+  for dynamic (`INDIRECT`/`OFFSET`) cells and the pin check of a pass with failures now reuse the
+  graph build's parse of a cell while the cell still holds the text it was parsed from; a formula
+  whose text differs, or that the build could not parse, is parsed again. On the 187,699-formula
+  synthetic book (`LoadsBookMain shape=Real`) a pass makes 187,699 formula parses, one per formula.
+  The pass holds those parses until it ends. Results are unchanged: a property test compares every
+  cell, exact `BigDecimal` scale included, and every error with the reuse on and off, in sequential,
+  parallel and iterative passes. The data-table seeder's what-if fixpoints still parse their cycle
+  members themselves.
+- **A running total through `INDEX(…, ROW()-1)` is no longer a circular reference** (#743, #745).
+  INDEX at a position written with literals, `ROW()` and `COLUMN()` (combined with `+`, `-` and
+  `*`) now depends only on the cells it selects for the formula that holds it, in every dependency
+  graph: the sheet and workbook graphs, the compact recalculation graph, the edit cone and the
+  `eval --with`/`--at` checks. A position that does not fold this way (one that reads a cell, a
+  fraction, a row outside the array) keeps the whole array as before, and so does INDEX inside a
+  defined name (`prev` = `INDEX($B:$B,ROW()-1)`, read through `SUM(B1:prev)`) or under a `:`
+  operand that is not a fixed reference (`B1:CHOOSE(1,INDEX(B:B,ROW()-1))`): both are still
+  reported as circular references, where Excel computes them. The formula-only graph that
+  whole-book recalculation and every CLI write build now finds the formula cells in a range by
+  column and row instead of scanning every formula once per distinct range, so a column of
+  running totals that each read their own `B1:B{r}` builds in linear time. Internally, each
+  reference-computing function now declares where its result lies (an envelope hook on its spec)
+  rather than the graph matching INDEX and XLOOKUP by identity.
+  - **Behaviour change:** `=SUM(B1:INDEX(B:B,ROW()-1))` in B5 was reported as a circular
+    reference; it now evaluates to `SUM(B1:B4)`. `=SUM(B1:INDEX(B:B,ROW()))`,
+    which reads its own cell, is still circular.
+  - **Behaviour change:** an edit to a cell inside INDEX's array but outside its folded selection
+    (B6 for `=INDEX(B:B,ROW()-1)` in B5) used to mark the formula dirty; it no longer does.
+- **ROWS and COLUMNS of an error are that error** (#725): an argument that evaluates to an error
+  value is the result, as in Excel: an OFFSET off the top, left or bottom edge, a name or LET name
+  computing one, an INDIRECT to a missing sheet, `NA()`. A reference to a cell holding an error is
+  still a reference (`ROWS(A6)` is 1), also through a LET (`ROWS(LET(x,A6,x))` is 1), and an
+  array keeps its shape whatever it holds, written, named or LET-bound (`ROWS({1,#N/A;2,3})` is 2,
+  `ROWS({#N/A})` and `ROWS(arrNA)` with `arrNA = {#N/A}` are 1). A LET in a reference position
+  binds references in an array context as it does in a plain cell. **Behaviour change:**
+  `ROWS(OFFSET(A1,-1,0,10,1))` and `ROWS(dynRef)` with `dynRef = OFFSET(Sheet1!$A$1,-1,0,10,1)`
+  were 1 and are now `#REF!`;
+  `ROWS(NA())` and `ROWS(INDEX({#N/A},1))` were 1 and are now `#N/A`.
+- **INDEX over a scalar or any other value** (#725, #753): INDEX's first argument may be a value,
+  indexed as an array, a scalar as a 1x1 one. Index 1, 0 or omitted gives the value with its type
+  (`INDEX("",1)` is text, `INDEX(TRUE,1,1)` TRUE); out of bounds or area_num 2 is `#REF!`; a
+  negative or text index, or area_num 0, is `#VALUE!`; an array row_num spreads
+  (`SUM(INDEX(5,{1,1}))` is 10). The value is evaluated as an array, outside SUMPRODUCT's shared
+  extent (`INDEX(A1:A3*2,2)`). A call returning a reference there (OFFSET, INDIRECT, IF, CHOOSE,
+  XLOOKUP) is still a parse error (#723). **Behaviour change:** `INDEX(5,1)`, `INDEX(1+2,1)` and
+  `INDEX(SUM(A1:A3),1)` were parse errors and are now the value; `INDEX(konst,1)` with a name
+  `konst = 5`, and `LET(x,5,INDEX(x,1))`, were `#VALUE!` and are now 5. A name bound to an array,
+  constant or computed, is indexed too: `INDEX(arrThree,2)` with `arrThree = {1,2,3}` was
+  `#VALUE!` and is now 2.
+- **Two-argument IF** (#723, part a): `IF(test, value_if_true)` parses, and a false test gives the
+  logical FALSE; the test is coerced as in the three-argument form. Over an array test the
+  unmatched elements are FALSE, which SUM, COUNT and MAX skip and COUNTA counts. An empty third
+  argument is unchanged: `IF(FALSE,5,)` is 0. **Behaviour change:** `IF(FALSE,5)` was a parse
+  error ("expected 3 arguments") and is now FALSE; a workbook cell holding one now recalculates.
+
+### Changed
+
+- **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
+  Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
+  call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
+- **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
+  #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
+  needs the new arm, and fails to compile under `-Werror` until it has one.
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+- **COUNTBLANK counts empty text and takes a reference only** (#731). Checked against desktop
+  Excel for Mac on one synthetic workbook.
+  - COUNTBLANK counts a cell holding text of length 0: the constant `""`, a formula whose value is
+    `""` (cached or not) and rich text with no characters. **Behaviour change:** with A2 and A13
+    blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
+    now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
+    returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
+    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
+    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
+  - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
+    a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
+    `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
+    `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
+  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
+    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
+    `#REF!`.
+  - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
+    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
+    without a workbook) is not blank and the rest of the range is still counted; an uncached data
+    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
+    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
 - **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
   against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
   COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.

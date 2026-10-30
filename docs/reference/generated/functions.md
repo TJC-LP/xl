@@ -48,7 +48,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `FV` | 3–5 | number, number, number, optional number, optional number | — |
 | `HLOOKUP` | 3–4 | cell, range, integer, optional boolean | — |
 | `HYPERLINK` | 1–2 | text, optional text | — |
-| `IF` | 3 | boolean, value, value | — |
+| `IF` | 2–3 | boolean, value, optional value | — |
 | `IFERROR` | 2 | cell, cell | — |
 | `IFNA` | 2 | cell, cell | — |
 | `IFS` | 2+ | value... | — |

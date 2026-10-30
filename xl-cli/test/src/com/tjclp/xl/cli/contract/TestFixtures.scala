@@ -334,9 +334,18 @@ object TestFixtures:
   /** Write every fixture into a fresh temp directory and return it. */
   def materialize: IO[Path] =
     IO.blocking(Files.createTempDirectory("xl-golden-")).flatTap { dir =>
-      files.toList.traverse_ { (name, build) =>
-        ExcelIO.instance[IO].write(build(), dir.resolve(name))
-      }
+      files.toList
+        .traverse_ { (name, build) =>
+          ExcelIO.instance[IO].write(build(), dir.resolve(name))
+        }
+        .flatMap { _ =>
+          IO.blocking(
+            Files.write(
+              dir.resolve("dynamic-spill.xlsx"),
+              com.tjclp.xl.ooxml.DynamicArrayFixtures.xlsx()
+            )
+          ).void
+        } *> PreservedSheetsFixture.write(dir.resolve("preserved.xlsm"))
     }
 
   /** Remove the directory and everything the cases wrote into it. */

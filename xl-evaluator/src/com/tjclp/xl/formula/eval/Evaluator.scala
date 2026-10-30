@@ -381,7 +381,7 @@ object Evaluator:
    * or a chain too deep (#691), a name bound to an error literal, a missing sheet — is a `Left`, so
    * [[resolveRangeSlot]] evaluates a name only when its definition really computes something.
    */
-  private[formula] enum NameRangeTarget:
+  private[formula] enum NameRangeTarget derives CanEqual:
     case Range(target: Sheet, range: CellRange)
 
     /**
@@ -1133,8 +1133,7 @@ object Evaluator:
       // GH-715: a positioned evaluation's placement is never evaluated as a precedent of itself
       currentCell.flatMap(memo.guard(targetSheet, _)).foreach(error => break(Left(error)))
 
-      val counters = aggregateMemo.fold(RecalcCounters.disabled)(_.counters)
-      counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(formulaStr)) match
+      parseFormulaCell(formulaStr, targetSheet.name, currentCell, aggregateMemo) match
         case Left(parseErr) =>
           Left(
             EvalError.EvalFailed(
@@ -1167,6 +1166,25 @@ object Evaluator:
                 case None => Left(evalError)
 
   /**
+   * The parse of `formula`, the text of the formula cell `cell` on `sheet` (None: no cell). #790:
+   * the parse the pass's graph build made of that cell's text when `memo` holds one; otherwise a
+   * fresh parse, counted as a `FormulaParses` and timed as the `Parse` phase.
+   */
+  private[formula] def parseFormulaCell(
+    formula: String,
+    sheet: SheetName,
+    cell: Option[ARef],
+    memo: Option[AggregateMemo]
+  ): Either[ParseError, TExpr[?]] =
+    val passCache = memo.flatMap(_.passCache)
+    cell.flatMap(at => passCache.flatMap(_.parses.get(sheet, at, formula))) match
+      case Some(expr) => Right(expr)
+      case None =>
+        val counters = memo.fold(RecalcCounters.disabled)(_.counters)
+        counters.increment(RecalcCounters.Counter.FormulaParses)
+        counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(formula))
+
+  /**
    * GH-655: evaluate a spill anchor's formula text as an ARRAY at the anchor's own position on its
    * sheet — the value of the spill reference `anchor#` when the file carries no cached spill. The
    * result is the raw evaluation (an ArrayResult for an array-valued formula, a scalar otherwise);
@@ -1197,7 +1215,7 @@ object Evaluator:
       // GH-715: the placement's own spill, `D5#` placed at D5, reads the placement
       Left(EvalError.CircularRef(List(anchor)))
     else
-      FormulaParser.parse(formulaStr) match
+      parseFormulaCell(formulaStr, targetSheet.name, Some(anchor), aggregateMemo) match
         case Left(parseErr) =>
           Left(
             EvalError.EvalFailed(
@@ -1375,20 +1393,25 @@ object Evaluator:
    * holds the pass's used ranges, static name resolutions and column slices ([[PassCache]]); it
    * exists when the memo caches aggregates and `columnCache` is on (the default; parity tests turn
    * it off), with `limits` bounding what it holds. `criteriaIndex` (on by default; parity tests
-   * turn it off) lets criteria calls answer from the slices' equality indexes.
+   * turn it off) lets criteria calls answer from the slices' equality indexes. `parseCache` (on by
+   * default; parity tests turn it off) lets evaluation reuse the graph build's formula parses
+   * (#790).
    */
   private[formula] final class AggregateMemo(
     cachesAggregates: Boolean = true,
     val counters: RecalcCounters = RecalcCounters.disabled,
     columnCache: Boolean = true,
     limits: PassCache.Limits = PassCache.DefaultLimits,
-    criteriaIndex: Boolean = true
+    criteriaIndex: Boolean = true,
+    parseCache: Boolean = true
   ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
     /** #767: the pass's caches; None for a memo that caches nothing or has them switched off. */
     val passCache: Option[PassCache] =
-      Option.when(cachesAggregates && columnCache)(new PassCache(limits, counters, criteriaIndex))
+      Option.when(cachesAggregates && columnCache)(
+        new PassCache(limits, counters, criteriaIndex, parseCache)
+      )
 
     /**
      * GH-711: SUMPRODUCT's blank tail asks whether a defined name reaches a random draw. Building
@@ -2507,8 +2530,9 @@ private class EvaluatorImpl(
     // deliberately: a reference-denoting binding read as a value reads the same whether it is bound
     // as the reference or as its array (an aggregate skips an array's text and logical elements as
     // it skips a reference's — RowColumnArraySpec pins SUM, COUNT and COUNTA), and Excel's LET
-    // always binds the reference, so binding one is never wrong.
-    lazy val bindsReferences = !allowArrayResults ||
+    // always binds the reference, so binding one is never wrong. A LET in a reference position
+    // (`ROWS(LET(x, A6, x))`) binds references too: its body is read as a reference.
+    lazy val bindsReferences = !allowArrayResults || referenceBody ||
       letBindings.exists((_, value) =>
         Evaluator.readsBindingAsRange(value) || Evaluator.inspectsReference(value)
       ) ||
@@ -2784,10 +2808,9 @@ private class EvaluatorImpl(
               case CellValue.Empty => Right(acc)
               case _ => Right(agg.combine(acc, BigDecimal(1)))
           else if agg.countsEmpty then
-            // COUNTBLANK mode: count only empty cells
-            cell.value match
-              case CellValue.Empty => Right(agg.combine(acc, BigDecimal(1)))
-              case _ => Right(acc)
+            // COUNTBLANK mode: count empty cells and empty text (#731); a formula reads as its value
+            if Aggregator.isBlankForCount(cell.value) then Right(agg.combine(acc, BigDecimal(1)))
+            else Right(acc)
           else
             ArrayArithmetic.carriedError(cell.value) match
               case Some(err) if agg.propagatesErrors =>

@@ -6,6 +6,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaKeys,
   CriteriaMatcher,
   RangeOperand,
   ScalarCoercion
@@ -116,7 +117,8 @@ trait FunctionSpecsBase:
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr.RangeLocation])
   type DateIntOptRange = (TExpr[LocalDate], TExpr[Int], Option[TExpr.RangeLocation])
   type DatePairOptBasis = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr[Int]])
-  type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
+  // #723: value_if_false is optional; IF(FALSE, x) is the logical FALSE
+  type IfArgs = (TExpr[Boolean], TExpr[Any], Option[TExpr[Any]])
   // GH-120 statistical functions over a range
   type RangeIntArgs = (TExpr.RangeLocation, TExpr[Int])
   type RankArgs = (TExpr[BigDecimal], TExpr.RangeLocation, Option[TExpr[Int]])
