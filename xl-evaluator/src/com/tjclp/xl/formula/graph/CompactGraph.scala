@@ -4,7 +4,7 @@ import scala.collection.immutable.{BitSet, LongMap}
 import scala.collection.mutable
 
 import com.tjclp.xl.CellRange
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.RecalcCounters
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -617,7 +617,8 @@ private[formula] object CompactGraph:
             preciseLookups = true,
             canonicalSheet = canonicalSheet,
             nameRanges = nameRanges,
-            parseName = parseName
+            parseName = parseName,
+            reader = Some(ARef.from0(nodes.col(i), nodes.row(i)))
           )
           val reader = i
           points.foreach { p =>

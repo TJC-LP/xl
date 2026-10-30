@@ -409,7 +409,7 @@ object ReadCommands:
       // Positioned or not, only the formula's value-read closure is analysed: never the whole
       // sheet, which a running total (B{n} = SUM($A$1:A{n})) makes quadratic to expand
       reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
-      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
+      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
       _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
@@ -515,7 +515,7 @@ object ReadCommands:
               case CellValue.Formula(text, _, _) =>
                 FormulaParser.parse(text) match
                   case Right(expr) =>
-                    val deps = reads.reads(expr)
+                    val deps = reads.reads(expr, Some(ref))
                     (e.updated(ref, deps), f.updated(ref, expr), n ++ deps)
                   case Left(_) => (e.updated(ref, Set.empty), f, n)
               case _ => (e, f, n)
@@ -543,8 +543,8 @@ object ReadCommands:
     at: ARef
   ): Option[List[ARef]] =
     val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
-    def reads(e: TExpr[?]): Boolean = only.reads(e).contains(at)
-    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads)
+    def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
+    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))
     // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
     // from any reached cell ends at `at`
     @scala.annotation.tailrec
@@ -565,7 +565,7 @@ object ReadCommands:
               }
           }
           if next.isEmpty then None else search(next, reached)
-    if reads(expr) then Some(List(at, at))
+    if reads(expr, at) then Some(List(at, at))
     else
       val roots = (targetDeps - at).toVector
       search(roots, roots.map(_ -> at).toMap)
@@ -817,7 +817,7 @@ object ReadCommands:
         )
       def index(at: Int, ref: ARef, text: String): Unit =
         parse((at, ref), text).foreach { expr =>
-          val read = readerOn(at).readRanges(expr).toVector
+          val read = readerOn(at).readRanges(expr, Some(ref)).toVector
           if read.nonEmpty then readers.register(idOf((at, ref)), read)
         }
       sheets(target).cells.foreach { (ref, cell) =>
