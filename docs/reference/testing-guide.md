@@ -278,6 +278,11 @@ As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros 
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
 | **Total** | **9,620** |
 
+GH-747 adds 17 whole-axis bounds-cache regression cases. The current branch has 9,633 cases,
+including 3,977 in xl-evaluator (2026-10-28 full-suite JUnit reports); the table above retains the
+0.25.0 release counts. `WholeAxisUsedRangeSpec` also has one opt-in large-sheet acceptance check,
+run with `XL_WHOLE_AXIS_PERF=1`, which is excluded from these default-suite counts.
+
 ## Test Quality Metrics
 
 - **All tests pass**: enforced by `./mill __.test` in CI ✅

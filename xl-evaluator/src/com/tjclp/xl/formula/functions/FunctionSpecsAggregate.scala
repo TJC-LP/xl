@@ -90,14 +90,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         else None
       (rowBounds, colBounds)
 
-  /** `sheet.usedRange`, through the pass's cache when the call has one (#767). */
-  private def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
-    ctx.aggregateMemo.flatMap(_.passCache) match
-      case Some(passCache) => passCache.usedRange(sheet)
-      case None =>
-        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
-        sheet.usedRange
-
   /**
    * GH-192: Constrain full-column/row ranges to shared bounds.
    *
@@ -308,8 +300,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * outside the used range, so it is blank: only COUNTBLANK observes them, and [[blanksTrimmed]]
    * counts them back.
    */
-  private def usedArea(range: CellRange, targetSheet: com.tjclp.xl.sheets.Sheet): CellRange =
-    boundedToUsed(range, targetSheet).getOrElse(CellRange.empty)
+  private def usedArea(
+    range: CellRange,
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
+  ): CellRange =
+    boundedToUsed(range, targetSheet, ctx).getOrElse(CellRange.empty)
 
   /**
    * GH-711: the cells of a whole-column or whole-row `range` that the used-area constraint dropped
@@ -363,7 +359,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, (A, Long)] =
-    val constrained = usedArea(range, targetSheet)
+    val constrained = usedArea(range, targetSheet, ctx)
     foldRawRange(agg, targetSheet, constrained, ctx, acc)
       .map((_, blanksTrimmed(agg, range, constrained)))
 
@@ -640,7 +636,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // bounds may shrink when an earlier formula evaluates to Empty even though the formula
             // lies outside the referenced row/column, so resolve them before keying. Ordinary
             // bounded ranges skip usedRange entirely and use their declared geometry directly.
-            val effectiveRange = usedArea(rawRange, targetSheet)
+            val effectiveRange = usedArea(rawRange, targetSheet, ctx)
 
             def compute: Either[EvalError, BigDecimal] =
               foldRawRange(agg, targetSheet, effectiveRange, ctx, agg.empty)

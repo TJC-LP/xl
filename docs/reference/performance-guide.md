@@ -369,6 +369,26 @@ scan fallback, one used-range scan and 14 name parses (116,875 before). Matcher 
 unchanged (161,824,716): every row is still tested; the criteria index removes them. H10 stays
 bound by its legacy graph until the compact graph lands.
 
+Whole-axis references (#747): lookups and returned references use the same `PassCache.usedRange`
+as aggregates, including INDEX, INDIRECT, OFFSET and logical range reads. Bounds are scanned once
+per sheet and structural generation during a recalculation, shared by sequential and parallel
+readers. A structural write invalidates the bounds; a formula-cache update does not. Empty-sheet
+bounds are cached too. Bounded references never request bounds, and evaluation outside an active
+pass reads each sheet snapshot afresh. This removes O(formulas × populated cells) bounds work;
+lookup key searching and result materialization keep their existing costs and semantics.
+
+To run the opt-in 10,000-lookup / 200,000-cell acceptance harness (an early match isolates bounds
+scanning from linear key-search cost):
+
+```bash
+XL_WHOLE_AXIS_PERF=1 ./mill -i xl-evaluator.test.testOnly com.tjclp.xl.formula.eval.WholeAxisUsedRangeSpec
+```
+
+The harness prints elapsed recalculation time, checks all 10,000 results, and requires exactly one
+used-range scan; wall time is diagnostic, not a flaky pass/fail threshold. A local run on
+2026-10-28 recalculated all 10,000 formulas in 0.712 s with one scan and all results correct;
+workbook construction and file I/O are outside that measurement.
+
 Criteria index (#767 PR 2): each slice gets an equality index on first use (`EqIndex`, posting lists
 of the rows holding each folded text, stripped number, boolean or error), and a criteria call whose
 ranges all read through slices tests only the rows every equality criterion selects, still with
