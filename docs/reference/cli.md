@@ -2317,7 +2317,7 @@ the verb) promotes them to the gate.
   untouched sheet must keep its positions, see the carve-out below). Under `--stream`
   the table is SAX-counted and the references are a bit set of its size: O(1) in the row count,
   O(uniqueCount) bits in the table. Cells on Excel 4.0 macro sheets (`xl/macrosheets/`, rel type
-  `xlMacrosheet`) count as references like any worksheet's
+  `xlMacrosheet` or `xlIntlMacrosheet`) count as references like any worksheet's
 - **`autofilter-name-mismatch`** — a sheet's hidden `_xlnm._FilterDatabase` name (scoped by
   `localSheetId` to the sheet's position in `<sheets>`) names a different range, another sheet or
   `#REF!` instead of the sheet's own `<autoFilter ref>`: the stale name a range edit leaves

@@ -3312,7 +3312,14 @@ EXAMPLES:
           case None =>
             IO.raiseError(outputRequired("--output is required for putf command"))
           case Some(outputPath) =>
-            StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
+            StreamingWriteCommands.putFormula(
+              filePath,
+              outputPath,
+              sheetNameOpt,
+              refStr,
+              formulas,
+              warn
+            )
 
     // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
