@@ -399,6 +399,21 @@ trait FunctionSpec[A]:
   private[formula] def reference(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
     None
 
+  /**
+   * #745: the area the reference this call returns lies in, for the dependency graph (see
+   * [[ReferenceOperators.Envelope]]). `of` is the envelope of an operand; `at` is the cell whose
+   * formula holds the call, when the graph knows it (#743: INDEX folds a position written with
+   * ROW() or COLUMN() relative to it). An `Exact` answer also states that finding the reference
+   * reads no cell, so the call's dependency edges become its areas alone. `Unknown` for every
+   * function that declares none: a range it ends is a dynamic reference.
+   */
+  private[formula] def envelope(
+    args: Args,
+    of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+    at: Option[ARef]
+  ): ReferenceOperators.Envelope =
+    ReferenceOperators.Envelope.Unknown
+
   def render(args: Args, printer: ArgPrinter): String =
     s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
 
@@ -444,7 +459,18 @@ object FunctionSpec:
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
 
-  /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
+  /** #745: a [[FunctionSpec.envelope]] hook. */
+  private[formula] type EnvelopeFn[A0] =
+    (
+      A0,
+      ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      Option[ARef]
+    ) => ReferenceOperators.Envelope
+
+  /**
+   * A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`, and
+   * [[FunctionSpec.envelope]] is `envelopeFn` when it declares one.
+   */
   private[formula] final case class Referencing[A, A0](
     name: String,
     arity: Arity,
@@ -452,7 +478,8 @@ object FunctionSpec:
     referenceFn: (A0, EvalContext) => Either[EvalError, Any],
     evalFn: (A0, EvalContext) => Either[EvalError, A],
     override val flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelopeFn: Option[EnvelopeFn[A0]] = None
   ) extends FunctionSpec[A]:
     type Args = A0
     def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
@@ -470,6 +497,12 @@ object FunctionSpec:
             case _ => ar
         case other => other
       })
+    override private[formula] def envelope(
+      args: A0,
+      of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      at: Option[ARef]
+    ): ReferenceOperators.Envelope =
+      envelopeFn.fold(ReferenceOperators.Envelope.Unknown)(_(args, of, at))
     override def render(args: A0, printer: ArgPrinter): String =
       renderFn.map(_(args, printer)).getOrElse(super.render(args, printer))
 
@@ -477,11 +510,12 @@ object FunctionSpec:
     name: String,
     arity: Arity,
     flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelope: Option[EnvelopeFn[A0]] = None
   )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
     evalFn: (A0, EvalContext) => Either[EvalError, A]
   )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
-    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn)
+    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn, envelope)
 
 trait ExprCoercer[A]:
   def label: String

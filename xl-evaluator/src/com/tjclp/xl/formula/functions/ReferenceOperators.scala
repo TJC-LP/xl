@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.ast.{RangeForm, TExpr}
 import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, Evaluator, RangeOperand}
 import com.tjclp.xl.formula.parser.{ParseError, ReferenceChars}
 
-import com.tjclp.xl.addressing.{CellRange, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 
 /**
@@ -610,9 +610,10 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   def dependencyValues(
     specName: String,
     values: List[ArgValue],
-    shapeOf: ShapeOf = staticShape
+    shapeOf: ShapeOf = staticShape,
+    at: Option[ARef] = None
   ): List[ArgValue] =
-    if specName == RangeName then values ++ boundingEdges(values, shapeOf)
+    if specName == RangeName then values ++ boundingEdges(values, shapeOf, at)
     else if specName != IntersectionName then values
     else
       values match
@@ -628,16 +629,56 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             case _ => values
         case _ => values
 
+  /**
+   * #743/#745: the dependency edges of `call` (its argument `values`, as every graph extractor
+   * reads them) for the formula at `at`. A call whose [[FunctionSpec.envelope]] is `Exact` reads
+   * its areas and nothing else — INDEX at a position folded from literals, ROW() and COLUMN() — so
+   * those areas replace its arguments' edges (INDEX's array B:B is not read, only its B4). Anything
+   * else is [[dependencyValues]].
+   */
+  def callDependencyValues(
+    call: TExpr.Call[?],
+    values: List[ArgValue],
+    shapeOf: ShapeOf = staticShape,
+    at: Option[ARef] = None
+  ): List[ArgValue] =
+    call.spec.envelope(call.args, envelope(_, shapeOf, at), at) match
+      case Envelope.Exact(leaves, _) => leaves.toList.map(leafValue)
+      case _ => dependencyValues(call.spec.name, values, shapeOf, at)
+
+  /**
+   * #743: the reader the graph extracts `call`'s arguments for. A range whose operands are not both
+   * fixed for `at` is classified without a reader (the dynamic-cell scan has none): it is static
+   * only when an operand's own edges cover it, so its operands keep the edges that cover it, read
+   * as for no reader. Every other call passes `at` on.
+   */
+  def operandReader(call: TExpr.Call[?], shapeOf: ShapeOf, at: Option[ARef]): Option[ARef] =
+    at.filter { _ =>
+      call.spec.name != RangeName || {
+        val (l, r) = binaryOperands(call)
+        fixed(envelope(l, shapeOf, at)) && fixed(envelope(r, shapeOf, at))
+      }
+    }
+
+  private def leafValue(leaf: (Option[SheetName], CellRange)): ArgValue =
+    ArgValue.Range(leaf match
+      case (Some(sheet), range) => TExpr.RangeLocation.CrossSheet(sheet, range)
+      case (None, range) => TExpr.RangeLocation.Local(range))
+
   private def operandOf(value: ArgValue): Option[Operand] = value match
     case ArgValue.Range(location) => Some(Left(location))
     case ArgValue.Expr(expr) => Some(Right(expr.asInstanceOf[TExpr[Any]]))
     case ArgValue.Cells(_) => None
 
   /** The bounding range of a range whose operands denote fixed cells, on each sheet it may be. */
-  private def boundingEdges(values: List[ArgValue], shapeOf: ShapeOf): List[ArgValue] =
+  private def boundingEdges(
+    values: List[ArgValue],
+    shapeOf: ShapeOf,
+    at: Option[ARef]
+  ): List[ArgValue] =
     values.flatMap(operandOf) match
       case List(l, r) =>
-        (envelope(l, shapeOf), envelope(r, shapeOf)) match
+        (envelope(l, shapeOf, at), envelope(r, shapeOf, at)) match
           case (el, er) if fixed(el) && fixed(er) =>
             val leaves = fixedLeaves(el) ++ fixedLeaves(er)
             val qualified = distinctSheets(leaves.flatMap(_._1).toList)
@@ -656,7 +697,8 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * GH-713: the cells an operand of `:` may denote, for the dependency graph.
    *
    *   - `Exact(leaves, covered)`: the operand denotes exactly these locations (a static location, a
-   *     name the graph resolves, a union, a range of such); the range reads their bounding range.
+   *     name the graph resolves, a union, a range of such, #743: INDEX at a position folded for its
+   *     reader); the range reads their bounding range.
    *   - `Within(sheet, range, covered)`: the operand denotes some reference inside `range` (INDEX's
    *     array, XLOOKUP's return array, the branches IF, IFS, CHOOSE and SWITCH select from).
    *   - `NoCells`: it denotes none (an error literal, an INDEX into an array constant).
@@ -735,8 +777,12 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         Envelope.Within(sheet, range, covered && own)
       }
 
-  /** The envelope of one operand of `:` (see [[Envelope]]). */
-  private[formula] def envelope(op: Operand, shapeOf: ShapeOf): Envelope = op match
+  /** The envelope of one operand of `:` (see [[Envelope]]), for the formula at `at` (#743). */
+  private[formula] def envelope(
+    op: Operand,
+    shapeOf: ShapeOf,
+    at: Option[ARef] = None
+  ): Envelope = op match
     case Left(TExpr.RangeLocation.Error(_, _)) => Envelope.NoCells
     case Left(location @ (_: TExpr.RangeLocation.Local | _: TExpr.RangeLocation.CrossSheet)) =>
       shapeOf(location).fold[Envelope](Envelope.Unknown)(leaf => Envelope.Exact(Vector(leaf), true))
@@ -744,25 +790,29 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       shapeOf(location).fold[Envelope](Envelope.Unknown)(leaf =>
         Envelope.Exact(Vector(leaf), false)
       )
-    case Right(expr) => expressionEnvelope(expr, shapeOf)
+    case Right(expr) => expressionEnvelope(expr, shapeOf, at)
 
-  private def expressionEnvelope(expr: TExpr[?], shapeOf: ShapeOf): Envelope = expr match
-    case TExpr.Coerced(inner, _) => expressionEnvelope(inner, shapeOf)
+  private def expressionEnvelope(
+    expr: TExpr[?],
+    shapeOf: ShapeOf,
+    at: Option[ARef]
+  ): Envelope = expr match
+    case TExpr.Coerced(inner, _) => expressionEnvelope(inner, shapeOf, at)
     case TExpr.ErrorLit(_, _) => Envelope.NoCells
     case RangeOperatorCall(call) =>
       val (l, r) = binaryOperands(call)
       // an all-fixed range carries its bounding edges (dependencyValues); otherwise only a
       // covering operand's edges cover it
-      val (el, er) = (envelope(l, shapeOf), envelope(r, shapeOf))
+      val (el, er) = (envelope(l, shapeOf, at), envelope(r, shapeOf, at))
       join(el, er, covered = (fixed(el) && fixed(er)) || coveredBy(el, er))
     case OperatorCall(call) if call.spec.name == UnionName =>
       call.args
         .asInstanceOf[List[Operand]]
-        .map(envelope(_, shapeOf))
+        .map(envelope(_, shapeOf, at))
         .foldLeft[Envelope](Envelope.NoCells)((acc, e) => join(acc, e, covered = false))
     case OperatorCall(call) =>
       val (l, r) = binaryOperands(call)
-      (envelope(l, shapeOf), envelope(r, shapeOf)) match
+      (envelope(l, shapeOf, at), envelope(r, shapeOf, at)) match
         case (Envelope.Unknown, _) | (_, Envelope.Unknown) => Envelope.Unknown
         case (Envelope.NoCells, _) | (_, Envelope.NoCells) => Envelope.NoCells
         case (el, er) =>
@@ -770,18 +820,6 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
             case (Some((sa, ra, ca)), Some((sb, rb, cb))) if sameSheet(sa, sb) =>
               ra.intersect(rb).fold[Envelope](Envelope.NoCells)(Envelope.Within(sa, _, ca || cb))
             case _ => Envelope.Unknown
-    // Matched by spec identity, never by name, so a renamed or homonymous spec cannot reach the
-    // casts: `Call.args` is typed by the path `call.spec.Args`, which an `eq` test does not narrow,
-    // so the cast stays, on the identified spec only. Follow-up: an envelope hook on
-    // `FunctionSpec.Referencing` would let each reference-computing spec bound its own result and
-    // drop this match (a new one falls to `Unknown` today: sound, but always dynamic).
-    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.index =>
-      call.args.asInstanceOf[IndexArgs]._1 match
-        // a value (an array constant, a scalar, arithmetic): INDEX indexes it, naming no cells
-        case Right(value) if !isReferenceShape(value) => Envelope.NoCells
-        case array => within(envelope(array, shapeOf), covered = true)
-    case call: TExpr.Call[?] if call.spec eq FunctionSpecs.xlookup =>
-      within(envelope(Left(call.args.asInstanceOf[XLookupArgs]._3), shapeOf), covered = true)
     case call: TExpr.Call[?] if selectingFunctions.contains(call.spec.name) =>
       val branches: List[Operand] = call.spec.argSpec.toValues(call.args).collect {
         case ArgValue.Range(location) => Left(location)
@@ -789,11 +827,92 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       }
       within(
         branches
-          .map(envelope(_, shapeOf))
+          .map(envelope(_, shapeOf, at))
           .foldLeft[Envelope](Envelope.NoCells)((acc, e) => join(acc, e, covered = false)),
         covered = false
       )
+    // #745: a reference-computing spec bounds its own result (INDEX, XLOOKUP); one that declares
+    // no hook is `Unknown` (OFFSET, INDIRECT), as is every other call
+    case call: TExpr.Call[?] => call.spec.envelope(call.args, envelope(_, shapeOf, at), at)
     case _ => Envelope.Unknown
+
+  /**
+   * #745: INDEX's envelope, inside its array (none for an array constant). #743: for the formula at
+   * `at`, a position folded from literals, ROW() and COLUMN() into a one-area array selects exactly
+   * the cells evaluation selects (the same row_num/column_num rules, Excel's 0 the whole axis); a
+   * position that does not fold, or that evaluation refuses, keeps the array's bound.
+   */
+  private[formula] def indexEnvelope(
+    args: IndexArgs,
+    of: Operand => Envelope,
+    at: Option[ARef]
+  ): Envelope =
+    val (array, rowNum, colNum, areaNum) = args
+    array match
+      // a value (an array constant, a scalar, arithmetic): INDEX indexes it, naming no cells
+      case Right(value) if !isReferenceShape(value) => Envelope.NoCells
+      case _ =>
+        val bound = of(array)
+        val selected =
+          for
+            reader <- at
+            (sheet, range) <- bound match
+              case Envelope.Exact(Vector(leaf), _) => Some(leaf)
+              case _ => None
+            _ <- areaNum match
+              case None | Some(TExpr.Missing) | Some(TExpr.Coerced(TExpr.Missing, _)) => Some(())
+              case Some(expr) => foldPosition(expr, reader).filter(_ == 1).map(_ => ())
+            row <- foldPosition(rowNum, reader)
+            col <- colNum match
+              case None => Some(None)
+              case Some(expr) => foldPosition(expr, reader).map(Some(_))
+            // INDEX's own two-argument rule (FunctionSpecsLookupIndex.selection)
+            (rowPos, colPos) = col match
+              case Some(c) => (row, c)
+              case None if range.height == 1 => (1, row)
+              case None => (row, 0)
+            rows <- axis(rowPos, range.rowStart.index0, range.height)
+            cols <- axis(colPos, range.colStart.index0, range.width)
+          yield Envelope.Exact(
+            Vector((sheet, CellRange(ARef.from0(cols._1, rows._1), ARef.from0(cols._2, rows._2)))),
+            covered = true
+          )
+        selected.getOrElse(within(bound, covered = true))
+
+  /** The 0-based lines one INDEX position selects on an axis of `size` from `start`. */
+  private def axis(pos: Int, start: Int, size: Int): Option[(Int, Int)] =
+    if pos == 0 then Some((start, start + size - 1))
+    else Option.when(pos >= 1 && pos <= size)((start + pos - 1, start + pos - 1))
+
+  /**
+   * #743: a position INDEX reads, folded for the formula at `at`: integer literals, ROW() and
+   * COLUMN() (the reader's own row and column), and `+`, `-` and `*` of them. None for anything
+   * else (a reference, a function, a fraction), which only evaluation knows.
+   */
+  private def foldPosition(expr: TExpr[?], at: ARef): Option[Int] =
+    def fold(e: TExpr[?]): Option[BigDecimal] = e match
+      case TExpr.Lit(n: BigDecimal) => Some(n)
+      case TExpr.Lit(n: Int) => Some(BigDecimal(n))
+      case TExpr.Coerced(inner, _) => fold(inner)
+      case TExpr.ToInt(inner) => fold(inner)
+      case TExpr.UnaryPlus(inner) => fold(inner)
+      case TExpr.Add(x, y) => fold(x).zip(fold(y)).map(_ + _)
+      case TExpr.Sub(x, y) => fold(x).zip(fold(y)).map(_ - _)
+      case TExpr.Mul(x, y) => fold(x).zip(fold(y)).map(_ * _)
+      case call: TExpr.Call[?] if call.spec.argSpec.toValues(call.args).isEmpty =>
+        if call.spec eq FunctionSpecs.row then Some(BigDecimal(at.row.index0 + 1))
+        else if call.spec eq FunctionSpecs.column then Some(BigDecimal(at.col.index0 + 1))
+        else None
+      case _ => None
+    fold(expr).filter(n => n.isWhole && n.isValidInt).map(_.toInt)
+
+  /** #745: XLOOKUP's envelope, inside its return array. */
+  private[formula] def xlookupEnvelope(
+    args: XLookupArgs,
+    of: Operand => Envelope,
+    at: Option[ARef]
+  ): Envelope =
+    within(of(Left(args._3)), covered = true)
 
   /** Whether one operand's own covered edges hold the whole bounding range of both. */
   private def coveredBy(el: Envelope, er: Envelope): Boolean =
