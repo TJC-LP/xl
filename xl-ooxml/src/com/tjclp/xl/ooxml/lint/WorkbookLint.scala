@@ -161,8 +161,12 @@ enum LintCategory derives CanEqual:
    */
   case AnchorArrayQualifierCorrupt
 
+  /** Presence of an Excel 4.0 macro sheet, with any associated open-time entry point (GH-788). */
+  case MacroSheet
+
   /** Stable kebab-case identifier used in CLI text and JSON output. */
   def slug: String = this match
+    case LintCategory.MacroSheet => "macro-sheet"
     case LintCategory.ChildOrder => "child-order"
     case LintCategory.UnresolvedRelId => "unresolved-rel-id"
     case LintCategory.WrongRelType => "wrong-rel-type"
@@ -188,6 +192,8 @@ enum LintCategory derives CanEqual:
 /**
  * How much a finding matters to the recipient of the file (PR #659 review).
  *
+ *   - [[Info]]: presence worth inspecting, such as an Excel 4.0 macro sheet. Reported, but the gate
+ *     passes unless the caller asks for strictness.
  *   - [[Repair]]: Excel repairs or refuses the file, or a reader misreads a value — the class `xl
  *     lint` exists for. Fails the lint gate (exit 1).
  *   - [[Hygiene]]: the file is valid and opens intact everywhere; the finding is dead weight or a
@@ -198,10 +204,14 @@ enum LintSeverity derives CanEqual:
   case Repair
   case Hygiene
 
+  /** Informational presence signal; never claims the package needs repair. */
+  case Info
+
   /** Stable lower-case identifier used in CLI text and JSON output. */
   def slug: String = this match
     case LintSeverity.Repair => "repair"
     case LintSeverity.Hygiene => "hygiene"
+    case LintSeverity.Info => "info"
 
 /**
  * A single structural lint finding.
@@ -501,6 +511,7 @@ object WorkbookLint:
       ignorableFindingsOf(workbookPart, wbElem) ++
       definedNameExternalRefFindings(wbElem) ++
       definedNameValidityFindings(wbElem) ++
+      macroSheetFindings(wbElem, wbRels) ++
       definedNameXlfnFindings(wbElem) ++
       definedNameCorruptSpillFindings(wbElem) ++
       sheetResult.findings ++ externalResult._1 ++
@@ -821,6 +832,51 @@ object WorkbookLint:
         found._1 ++ scan.boundsFindings ++ scan.ignorableFindings ++ scan.dxfFindings,
         found._2 + target
       )
+    }
+
+  /** Inspect workbook declarations even if a macro part is absent or cannot be scanned. */
+  private def macroSheetFindings(wb: Elem, rels: Relationships): Vector[Finding] =
+    val autoNames = nestedElems(wb, "definedNames", "definedName").filter { dn =>
+      val name = (dn \ "@name").text
+      name.equalsIgnoreCase("Auto_Open") || name.equalsIgnoreCase("_xlnm.Auto_Open")
+    }
+    nestedElems(wb, "sheets", "sheet").zipWithIndex.flatMap { (sheet, idx) =>
+      val kind = relIdOf(sheet)
+        .flatMap(rels.findById)
+        .flatMap(rel => com.tjclp.xl.ooxml.SheetKinds.preservedKind(rel.`type`))
+      kind.filter(_.isMacro).map { k =>
+        val name = (sheet \ "@name").text
+        val state = sheet.attribute("state").map(_.text).getOrElse("visible")
+        val entryPoints = autoNames
+          .filter { dn =>
+            dn.attribute("localSheetId").flatMap(_.text.toIntOption).contains(idx) ||
+            referencesSheet(dn.text, name)
+          }
+          .map(dn => (dn \ "@name").text)
+          .distinct
+        val entry =
+          if entryPoints.isEmpty then ""
+          else
+            s"; open-time entry point(s): ${entryPoints.mkString(", ")} (scoped to or referencing this sheet)"
+        Finding(
+          workbookPart,
+          LintCategory.MacroSheet,
+          s"<sheet name=\"$name\">",
+          s"""Excel 4.0 ${k.slug} sheet "$name" (state: $state)$entry""",
+          LintSeverity.Info
+        )
+      }
+    }
+
+  /** Match local qualifiers, ignoring Excel string literals and external workbook qualifiers. */
+  private def referencesSheet(formula: String, name: String): Boolean =
+    val tokens =
+      """"(?:[^"]|"")*"|\[[^\]]*\]|'((?:[^']|'')+)'!|(?<![\p{L}\p{N}_.\]'])((?:[\p{L}_\\][\p{L}\p{N}_.\\]*))!""".r
+    tokens.findAllMatchIn(formula).exists { m =>
+      Option(m.group(1))
+        .map(_.replace("''", "'"))
+        .orElse(Option(m.group(2)))
+        .exists(_.equalsIgnoreCase(name))
     }
 
   // ===== externalLink parts (GH-413 item 2) =====

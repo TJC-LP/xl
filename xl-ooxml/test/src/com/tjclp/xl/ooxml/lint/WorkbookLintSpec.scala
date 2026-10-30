@@ -2647,27 +2647,43 @@ class WorkbookLintSpec extends FunSuite:
 
   private val macrosheetParts: Map[String, String] = macrosheetPartsWith(macrosheetXml)
 
+  private val macroPresence = Finding(
+    "xl/workbook.xml",
+    LintCategory.MacroSheet,
+    """<sheet name="Macro1">""",
+    """Excel 4.0 macro sheet "Macro1" (state: visible)""",
+    LintSeverity.Info
+  )
+
+  private val intlMacroPresence = Finding(
+    "xl/workbook.xml",
+    LintCategory.MacroSheet,
+    """<sheet name="Macro1">""",
+    """Excel 4.0 international-macro sheet "Macro1" (state: visible)""",
+    LintSeverity.Info
+  )
+
   private val misorderedMacrosheetXml = macrosheetXml
     .replace("  <dimension ref=\"A1\"/>\n", "")
     .replace("</sheetData>\n", "</sheetData>\n  <dimension ref=\"A1\"/>\n")
 
   test(
-    "macrosheet: an xlMacrosheet <sheet> is a sheet kind — its t=\"s\" cells count, no finding"
+    "macrosheet: its t=\"s\" cells count; only the GH-788 presence info is reported"
   ) {
     // Before the kind existed the workbook-level check called the rel wrong-typed ("expected
     // worksheet") and the SST rule reported entry 1 as an orphan — on a book Excel writes itself.
-    assertEquals(lintOf(macrosheetParts), Vector.empty[Finding])
-    assertEquals(lintStreamOf(macrosheetParts), Vector.empty[Finding])
+    assertEquals(lintOf(macrosheetParts), Vector(macroPresence))
+    assertEquals(lintStreamOf(macrosheetParts), Vector(macroPresence))
   }
 
   test(
-    "GH-791: an xlIntlMacrosheet <sheet> is a sheet kind — its t=\"s\" cells count, no finding"
+    "GH-791: an xlIntlMacrosheet <sheet> is a sheet kind — its t=\"s\" cells count; only the GH-788 presence info is reported"
   ) {
     // Without the kind the rel read as wrong-typed and the part was never scanned, so entry 1,
     // referenced only from it, read as a shared-string orphan.
     val parts = macrosheetPartsWith(macrosheetXml, relTypeIntlMacrosheet, intlMacrosheetCt)
-    assertEquals(lintOf(parts), Vector.empty[Finding])
-    assertEquals(lintStreamOf(parts), Vector.empty[Finding])
+    assertEquals(lintOf(parts), Vector(intlMacroPresence))
+    assertEquals(lintStreamOf(parts), Vector(intlMacroPresence))
   }
 
   test("GH-791: an xlIntlMacrosheet part's child order is checked against CT_Macrosheet") {
@@ -2676,7 +2692,10 @@ class WorkbookLintSpec extends FunSuite:
     val findings = lintOf(parts)
     assertEquals(
       findings.map(f => (f.part, f.category)),
-      Vector(("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder))
+      Vector(
+        ("xl/workbook.xml", LintCategory.MacroSheet),
+        ("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder)
+      )
     )
     assertEquals(lintStreamOf(parts), findings)
   }
@@ -2686,9 +2705,18 @@ class WorkbookLintSpec extends FunSuite:
     val findings = lintOf(parts)
     assertEquals(
       findings.map(f => (f.part, f.category)),
-      Vector(("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder))
+      Vector(
+        ("xl/workbook.xml", LintCategory.MacroSheet),
+        ("xl/macrosheets/sheet1.xml", LintCategory.ChildOrder)
+      )
     )
-    assert(findings.head.message.contains("CT_Macrosheet"), findings.head.message)
+    assertEquals(findings.filter(_.category == LintCategory.MacroSheet), Vector(macroPresence))
+    assert(
+      findings.exists(f =>
+        f.category == LintCategory.ChildOrder && f.message.contains("CT_Macrosheet")
+      ),
+      findings.toString
+    )
     assertEquals(lintStreamOf(parts), findings)
   }
 

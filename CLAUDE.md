@@ -311,6 +311,11 @@ xl -f data.xlsx --sheet "Sheet1" view A1:B4
 xl -f data.xlsx view "Sheet1"!A1:B4
 ```
 
+`xl sheets` reports preserved macro, international macro, chart and dialog tabs separately
+(kind/name/state; JSON `preservedSheets`). They remain unavailable to `-s`; worksheet indices are
+unchanged. `Excel.readMetadata(...).preservedSheets` exposes read-only tab metadata. `xl lint`
+reports macro presence and associated `Auto_Open` names as `info` (gated only with `--strict`).
+
 See `docs/reference/cli.md` for full command reference.
 
 **Directory Structure**:

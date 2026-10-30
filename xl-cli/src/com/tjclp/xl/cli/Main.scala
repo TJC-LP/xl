@@ -258,7 +258,7 @@ object Main extends IOApp:
     Opts
       .flag(
         "strict",
-        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only)."
+        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on info/hygiene findings too (default: repair findings only)."
       )
       .orFalse
 
@@ -733,7 +733,9 @@ EXAMPLES:
 
 Lints the RAW ZIP PARTS (never the parsed model — a full load would repair
 the very structure being checked). Flags what Excel repairs loudly but every
-lenient reader accepts silently:
+lenient reader accepts silently, plus preserved macro-sheet presence:
+  - Excel 4.0 macro / international macro sheets, with name, visibility and
+    Auto_Open / _xlnm.Auto_Open names scoped to or referencing them [info]
   - Child-element order in xl/workbook.xml (CT_Workbook) and each worksheet
     (CT_Worksheet) vs the ECMA-376 schema sequence
   - r:id references (sheet, externalReference, pivotCache, drawing,
@@ -791,7 +793,7 @@ USAGE:
   xl lint report.xlsx
   xl -f report.xlsx lint                     # Equivalent flag form
   xl lint report.xlsx --format json          # Stable machine-readable schema
-  xl lint report.xlsx --strict               # Hygiene findings fail the gate too
+  xl lint report.xlsx --strict               # Info/hygiene findings fail the gate too
 
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
@@ -799,17 +801,18 @@ FINDING CATEGORIES:
   data-table-unseeded | formula-leading-equals | formula-unparseable |
   external-ref-dangling | defined-name-invalid | calc-chain-stale |
   xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
-  dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
+  macro-sheet | dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
   autofilter-name-mismatch | anchorarray-qualifier-corrupt
 
 SEVERITY (every finding carries one; --format json: "severity"):
   repair  = Excel repairs or refuses the file, or a reader misreads a value
+  info    = preserved macro-sheet presence; not a repair or a malware verdict
   hygiene = the file is valid and opens intact; dead weight or a privacy
             hazard the package still carries (unreferenced-part, the orphan
             half of shared-string-orphan, autofilter-name-mismatch)
 
 EXIT CODES:
-  0 = no repair findings (hygiene findings, if any, are still listed)
+  0 = no repair findings (info/hygiene findings, if any, are still listed)
   1 = repair findings reported — or, with --strict, any finding at all
   2 = usage (no file, or a file given both ways)
   3 = error (unreadable file, missing/malformed core part, ...)
@@ -2800,8 +2803,8 @@ EXAMPLES:
         Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
 
   /**
-   * Run the lint command with its exit codes: 0 = no repair findings (hygiene findings are listed,
-   * and a `LINT_HYGIENE` warning says how many), 1 = repair findings — or, under `--strict`, any
+   * Run the lint command with its exit codes: 0 = no repair findings (info/hygiene are listed;
+   * `LINT_HYGIENE` counts hygiene findings), 1 = repair findings — or, under `--strict`, any
    * finding (a result, not a failure), 3 = error reported on stderr — an unreadable input (missing
    * file, not a zip, missing/malformed core part) as `IO_READ`, the same code every other verb
    * gives that condition. Opens the zip directly — NOT ExcelIO.read — because a full parse would
@@ -2836,6 +2839,7 @@ EXAMPLES:
           case _ => Payload.text(output)
         val gating = LintCommands.gating(findings, strict)
         val hygiene = findings.count(_.severity == LintSeverity.Hygiene)
+        val info = findings.count(_.severity == LintSeverity.Info)
         val outcome =
           if gating.isEmpty then
             val warnings =
@@ -2851,7 +2855,9 @@ EXAMPLES:
             Outcome.ok("lint", payload, warnings)
           else
             val tiers =
-              if hygiene == 0 then ""
+              if info > 0 then
+                s" (${findings.size - hygiene - info} repair, $hygiene hygiene, $info info)"
+              else if hygiene == 0 then ""
               else s" (${findings.size - hygiene} repair, $hygiene hygiene)"
             Outcome.signal(
               "lint",
@@ -2939,10 +2945,13 @@ EXAMPLES:
           case (true, OutputMode.Text) =>
             readWorkbook(excel, filePath, readerConfig)
               .flatMap(WorkbookCommands.sheets)
+              .flatMap(WorkbookCommands.withPreservedSheets(filePath, _))
               .map(Payload.text)
           case (true, OutputMode.Json) =>
             readWorkbook(excel, filePath, readerConfig)
-              .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
+              .map(WorkbookCommands.sheetsData)
+              .flatMap(WorkbookCommands.withPreservedSheetsData(filePath, _))
+              .map(Payload.Json(_))
           case (false, OutputMode.Text) =>
             classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
           case (false, OutputMode.Json) =>

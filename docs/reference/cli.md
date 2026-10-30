@@ -354,6 +354,13 @@ fails `DocsGenSpec`, the same discipline as the golden corpus.
 
 Sheet operations. With no subcommand, defaults to `list`.
 
+Preserved macro, international macro, chart and dialog sheets appear in a separate read-only
+section with kind, name and state, including in `--stats` and `--stream` listings. They cannot be
+selected with `-s`. JSON adds `data.preservedSheets` when any exist: each entry has `name`, `kind`
+(`macro`, `international-macro`, `chart`, `dialog`), `state` (`visible`, `hidden`, `veryHidden`) and
+`sourceIndex` (1-based position among all source tabs). The `sheets` array and its indices continue
+to count worksheets only. Scripts can inspect `Excel.readMetadata(...).preservedSheets`.
+
 **Subcommands**:
 | Subcommand | Arguments | Description |
 |------------|-----------|-------------|
@@ -2192,17 +2199,25 @@ xl -f huge.xlsx --stream lint                    # SAX-scan the sheet parts: O(1
 SAX-scanned instead of parsed, so a million-row book lints in constant memory; the findings are
 identical (pinned by the lint parity suite).
 
-**Severity**: every finding carries a tier, `repair` or `hygiene` (`--format json`:
-`.findings[].severity`; text: hygiene lines are tagged `(hygiene)` and the header counts both).
+**Severity**: every finding carries a tier, `repair`, `hygiene` or `info` (`--format json`:
+`.findings[].severity`; text tags non-repair lines and counts the tiers in the header).
 `repair` is the class the lint exists for — Excel repairs or refuses the file, or a reader misreads
 a value — and fails the gate. `hygiene` is a valid file that opens intact everywhere but carries
 dead weight, stale metadata or a privacy hazard: `unreferenced-part`, the orphan half of
 `shared-string-orphan`, and `autofilter-name-mismatch`. Hygiene findings are reported (with a
 `LINT_HYGIENE` warning) but exit `0` unless `--strict` (the global flag, accepted before or after
-the verb) promotes them to the gate.
+the verb) promotes them to the gate. `info` reports macro-sheet presence, including visibility and
+associated open-time names; it is also listed without failing unless `--strict` is set.
 
 **What it flags** (the complete `LintCategory` roster — a test pins this list against
 `LintCategory.slug`, so it cannot drift):
+- **`macro-sheet`** — an Excel 4.0 macro or international macro sheet, including its name and
+  visibility state. An `Auto_Open` or `_xlnm.Auto_Open` defined name scoped to or directly
+  referencing that sheet is flagged in its message (case-insensitive; quoted qualifiers supported).
+  Severity `info`: presence is reported even without an entry point; this is not a malware verdict
+  or a proof that no other execution path exists. Indirect name chains and computed references are
+  not resolved. Ordinary lint exits 0 on info alone; `--strict` exits 1. This reporting rule is
+  independent of structural validation of macro sheet parts.
 - **`child-order`** — child elements of `xl/workbook.xml` (CT_Workbook) or a worksheet
   (CT_Worksheet) out of ECMA-376 schema sequence (e.g. `<externalReferences>` after
   `<extLst>`)
@@ -2349,8 +2364,8 @@ the verb) promotes them to the gate.
   current) and any `--stream` write (untouched parts are copied verbatim, and the transformed sheet's
   other cells pass through as read)
 
-**Exit codes**: `0` no repair findings (hygiene findings, if any, are listed and a `LINT_HYGIENE`
-warning counts them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
+**Exit codes**: `0` no repair findings (info findings are listed; hygiene findings also raise a
+`LINT_HYGIENE` warning counting them) · `1` repair findings reported — or, under `--strict`, any finding at all ·
 `3` error (unreadable file, malformed core part) · `2` usage (no file, or a file given both ways)
 — errors go to stderr with a `code:` line (see
 [Errors, warnings and exit codes](#errors-warnings-and-exit-codes)). In `--format json`, `clean`

@@ -345,7 +345,7 @@ object TestFixtures:
               com.tjclp.xl.ooxml.DynamicArrayFixtures.xlsx()
             )
           ).void
-        }
+        } *> PreservedSheetsFixture.write(dir.resolve("preserved.xlsm"))
     }
 
   /** Remove the directory and everything the cases wrote into it. */
