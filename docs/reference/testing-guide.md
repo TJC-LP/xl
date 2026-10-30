@@ -242,6 +242,16 @@ GitHub Actions runs:
 2. `./mill __.compile` (Compilation check)
 3. `./mill __.test` (All test modules)
 
+`native-xml-security.yml` builds the Linux GraalVM CLI on PRs and main pushes touching OOXML,
+Cats Effect IO, CLI sources/resources, Mill configuration, or the smoke/release workflows.
+It also runs daily at 07:43 UTC on the main repository's default branch to cover changes outside
+that filter. Both this workflow and every release platform run
+`bash scripts/smoke-native-xml-security.sh <built-binary>`: the script injects 120,000 defined names
+into a temporary copy of `small-values.xlsx`, runs `sheets`, and fails on a nonzero exit or a
+`JAXP000` diagnostic. It removes the generated fixture on success and failure. This catches
+GraalVM's baked-in XML entity-size defaults before release without changing parser security
+settings. Test the harness itself with `python3 scripts/test-smoke-native-xml-security.py`.
+
 A separate, non-blocking `perf` job runs `./mill -i xl-evaluator.perf.testForked`: the #767
 recalculation benchmark gates (`xl-evaluator/test-perf`, 26 tests). `__.test` does not select that
 module. On the `Tiny` loads book it checks every formula cell against the v0.24.1 values
@@ -255,7 +265,7 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-The 0.25.0 full-suite inventory (2026-10-19), plus two GH-748 properties verified in the updated 3,962-case evaluator suite; macros are part of xl-core. The release verification skipped one existing style-performance comparison and ran with soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (each counts as a test case either way).
+As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests |
 |--------|-------|
@@ -263,10 +273,10 @@ The 0.25.0 full-suite inventory (2026-10-19), plus two GH-748 properties verifie
 | xl-core | 1872 |
 | xl-ooxml | 1435 |
 | xl-cli | 1924 |
-| xl-cats-effect | 213 |
+| xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,618** |
+| **Total** | **9,620** |
 
 ## Test Quality Metrics
 

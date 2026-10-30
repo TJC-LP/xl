@@ -1,12 +1,17 @@
 # XL Project Status
 
-**Last Updated**: 2026-10-19 (0.25.0)
+**Last Updated**: 2026-10-28 (Unreleased)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**Unreleased** (#788) — `xl sheets` reports preserved macro, international macro, chart and dialog
+sheets separately with kind/name/state; they remain unavailable to `-s`. `xl lint` reports macro
+presence and directly associated `Auto_Open` names at severity `info`; `--strict` gates info too.
+`Excel.readMetadata(...).preservedSheets` exposes the same read-only tab metadata.
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
@@ -277,7 +282,7 @@
 
 ### Test Coverage
 
-**9,618 test cases** (the 0.25.0 full-suite inventory from 2026-10-19, plus two GH-748 properties; the updated evaluator suite passes all 3,962 cases). The release run had zero failures and skipped the existing style-performance comparison; that run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**9,620 test cases** (from the JUnit reports of `./mill __.test` on 2026-10-28, including the four new GH-749 streaming regressions). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -285,7 +290,7 @@
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
