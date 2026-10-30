@@ -156,7 +156,7 @@ object Schema:
       "--strict",
       None,
       "Write verbs: exit 1 and write nothing when the recalculation reports formula errors, " +
-        "non-convergence or data-table seed warnings; lint: exit 1 on hygiene findings too, not " +
+        "non-convergence or data-table seed warnings; lint: exit 1 on info/hygiene findings too, not " +
         "only repairs (after `view` it is view's own --eval gate)"
     )
   )

@@ -487,6 +487,13 @@ object DependencyGraph:
   def dynamicCells(workbook: Workbook): Set[QualifiedRef] = dynamicCellsTraced(workbook).cells
 
   /**
+   * [[dynamicCells]] reusing `parses` (the pass's graph build, #790) for the candidate cells it
+   * holds; the result is the same.
+   */
+  def dynamicCells(workbook: Workbook, parses: FormulaParses): Set[QualifiedRef] =
+    dynamicCellsTraced(workbook, parses).cells
+
+  /**
    * GH-537: [[dynamicCells]] with the work it performed — the structural pin RecalcPerfSpec asserts
    * (parses and classifications linear in the NAMES, not sheets × names), since no wall-clock
    * budget can distinguish the two algorithms on a fixture that runs in under a second either way.
@@ -505,7 +512,10 @@ object DependencyGraph:
   )
 
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private[formula] def dynamicCellsTraced(workbook: Workbook): DynamicCellsTrace =
+  private[formula] def dynamicCellsTraced(
+    workbook: Workbook,
+    buildParses: FormulaParses = FormulaParses.none
+  ): DynamicCellsTrace =
     var parses = 0
     var classifications = 0
 
@@ -654,7 +664,7 @@ object DependencyGraph:
         sheet.cells.iterator.flatMap { case (ref, cell) =>
           cell.value match
             case CellValue.Formula(expression, _, _) if candidate(expression) =>
-              parse(expression) match
+              buildParses.get(sheet.name, ref, expression).orElse(parse(expression)) match
                 case Some(expr) if expressionIsDynamic(expr, sheet.name) =>
                   Some(QualifiedRef(sheet.name, ref))
                 case _ => None
@@ -1602,6 +1612,7 @@ object DependencyGraph:
     val canonicalSheet = sheetCanonicaliser(workbook)
     val nameRanges = NameRanges.empty
     val dependencies = formulas.iterator.map { case (ref, expression) =>
+      counters.increment(RecalcCounters.Counter.FormulaParses)
       val deps = counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(expression)) match
         case scala.util.Right(expr) =>
           extractQualifiedDependencies(
