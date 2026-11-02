@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add the SLN and SYD depreciation functions (part of #684).
+
 ### Fixed
 
 - **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against

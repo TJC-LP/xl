@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.io.ExcelIO
@@ -217,4 +217,47 @@ class LibreOfficeOracleSpec extends FunSuite:
       )
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
+  }
+
+  test("GH-684: SLN and SYD depreciation results agree with LibreOffice") {
+    assume(soffice.isDefined, "soffice not on PATH - skipping LibreOffice oracle test")
+    val formulas = Vector(
+      "SLN(30000,7500,10)",
+      "SYD(30000,7500,10,1)",
+      "SYD(30000,7500,10,10)",
+      "SLN(100,10,0)",
+      "SYD(100,10,0,1)",
+      "SYD(100,10,2.5,1.5)",
+      "SLN(-100,10,2)",
+      "SYD(10,100,2,1)"
+    )
+    val sheet = formulas.zipWithIndex.foldLeft(Sheet("Oracle")) { case (s, (formula, i)) =>
+      // No cached values: the external application must calculate every oracle result.
+      s.put(ARef.from0(0, i), CellValue.Formula(formula, None))
+    }
+    val dir = Files.createTempDirectory("xl-depreciation-oracle-")
+    val book = dir.resolve("depreciation.xlsx")
+    try
+      ExcelIO.instance[IO].write(Workbook(sheet), book).unsafeRunSync()
+      val observed = libreOfficeCsv(dir, book)("depreciation").split("\n").toVector.map(_.trim)
+      assertEquals(observed.length, formulas.length)
+      formulas.zip(observed).foreach { (formula, value) =>
+        sheet.evaluateFormula(formula) match
+          case Right(CellValue.Number(n)) =>
+            assertEqualsDouble(n.toDouble, value.toDouble, 1e-9, formula)
+          case Right(CellValue.Error(CellError.Div0)) => assertEquals(value, "#DIV/0!", formula)
+          case Right(CellValue.Error(CellError.Num)) => assertEquals(value, "#NUM!", formula)
+          case other => fail(s"$formula: unexpected XL result $other")
+      }
+    finally
+      val walk = Files.walk(dir)
+      try
+        walk
+          .iterator()
+          .asScala
+          .toVector
+          .sortBy(_.getNameCount)
+          .reverse
+          .foreach(Files.deleteIfExists)
+      finally walk.close()
   }

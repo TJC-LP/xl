@@ -238,3 +238,55 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
               }
       yield result
     }
+
+  /** GH-684: straight-line depreciation; zero life is a spreadsheet division error. */
+  val sln: FunctionSpec[BigDecimal] {
+    type Args = (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  } = FunctionSpec.simple[BigDecimal, (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])](
+    "SLN",
+    Arity.three,
+    flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
+  ) { (args, ctx) =>
+    val (costExpr, salvageExpr, lifeExpr) = args
+    for
+      cost <- ctx.evalExpr(costExpr)
+      salvage <- ctx.evalExpr(salvageExpr)
+      life <- ctx.evalExpr(lifeExpr)
+      result <-
+        if life == 0 then Left(EvalError.ErrorValue(CellError.Div0))
+        else
+          NumericGuard.contained("SLN", "SLN(cost, salvage, life)") {
+            Right(BigDecimal(((cost - salvage) / life).toDouble))
+          }
+    yield result
+  }
+
+  /** GH-684: sum-of-years' digits depreciation, retaining fractional life and period. */
+  val syd: FunctionSpec[BigDecimal] {
+    type Args = (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  } = FunctionSpec.simple[
+    BigDecimal,
+    (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  ](
+    "SYD",
+    Arity.Exact(4),
+    flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
+  ) { (args, ctx) =>
+    val (costExpr, salvageExpr, lifeExpr, periodExpr) = args
+    for
+      cost <- ctx.evalExpr(costExpr)
+      salvage <- ctx.evalExpr(salvageExpr)
+      life <- ctx.evalExpr(lifeExpr)
+      period <- ctx.evalExpr(periodExpr)
+      result <-
+        if life == 0 || life == -1 then Left(EvalError.ErrorValue(CellError.Num))
+        else
+          NumericGuard.contained("SYD", "SYD(cost, salvage, life, per)") {
+            Right(
+              BigDecimal(
+                ((cost - salvage) * (life - period + 1) * 2 / (life * (life + 1))).toDouble
+              )
+            )
+          }
+    yield result
+  }
