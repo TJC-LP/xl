@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.io.ExcelIO
@@ -89,7 +89,8 @@ class LibreOfficeOracleSpec extends FunSuite:
    * cached 20, C1=B1+INDEX(B1:B2,2) cached 35. Deleting row 2 contracts both ranges, so B1 is 5 and
    * INDEX(B1:B1,2) makes C1 #REF!. Use INDEX rather than an inline #REF!: LibreOfficeDev 26.8 reads
    * even a standalone OOXML #REF! literal as #NAME?, independently of cache invalidation.
-   * Deleted-reference spelling and cached errors are pinned separately by StructuralCommandSpec.
+   * StructuralCommandSpec pins recalculated deleted references; BatchRecalcSpec pins withdrawal and
+   * the INDEX fixture without requiring LibreOffice.
    */
   private def reviewWorkbook(): Workbook =
     Workbook(
@@ -123,18 +124,6 @@ class LibreOfficeOracleSpec extends FunSuite:
         .unsafeRunSync()
       WriteCommands.deleteRows(wb, wb.sheets.headOption, 2, 1, recalculated, config).unsafeRunSync()
       assert(summary.contains("fullCalcOnLoad"), s"premise: the marker is set: $summary")
-
-      val expectedFormula = "B1+INDEX(B1:B1,2)"
-      val recalculatedBook = ExcelIO.instance[IO].read(recalculated).unsafeRunSync()
-      val noRecalcBook = ExcelIO.instance[IO].read(noRecalc).unsafeRunSync()
-      assertEquals(
-        recalculatedBook.sheets.headOption.map(_(ref"C1").value),
-        Some(CellValue.Formula(expectedFormula, Some(CellValue.Error(CellError.Ref))))
-      )
-      assertEquals(
-        noRecalcBook.sheets.headOption.map(_(ref"C1").value),
-        Some(CellValue.Formula(expectedFormula, None))
-      )
 
       val csv = libreOfficeCsv(workDir, noRecalc, recalculated)
       val truth = csv("recalculated")
