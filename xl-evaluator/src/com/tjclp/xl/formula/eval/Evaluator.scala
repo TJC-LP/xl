@@ -1284,10 +1284,11 @@ object Evaluator:
    * Cells currently being computed are tracked by the same sheet identity and ref as completed
    * results. Revisiting one fails immediately, before recursion can exhaust the JVM stack. Active
    * entries are removed in finally, including when evaluation exits through a throwable or
-   * boundary. Errors memoize too. A depth-guard error consequently records by first-visit order;
-   * that is observable only on chains deeper than the guard, where results were already
-   * path-dependent (and where whole-workbook `recalculate()`, which orders iteratively, is the
-   * supported path).
+   * boundary; each sheet keeps its (then empty) set for the rest of the pass, so the hot path does
+   * not reallocate it whenever the stack unwinds. Errors memoize too. A depth-guard error
+   * consequently records by first-visit order; that is observable only on chains deeper than the
+   * guard, where results were already path-dependent (and where whole-workbook `recalculate()`,
+   * which orders iteratively, is the supported path).
    *
    * GH-715: `placement` guards one cell, the cell a positioned evaluation places its formula in
    * ([[placedInstance]]). That cell holds an uncached formula, so every read of it, whatever
@@ -1360,9 +1361,7 @@ object Evaluator:
               val computed = compute
               forSheet.update(at, computed)
               computed
-            finally
-              running.remove(at)
-              if running.isEmpty then active.remove(sheet)
+            finally running.remove(at)
 
   /** Observable counters for focused aggregate-memo tests and profiling. */
   private[formula] final case class AggregateMemoStats(

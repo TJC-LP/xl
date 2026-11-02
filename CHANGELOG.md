@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Dynamic formula cycles are detected when an uncached cell is revisited during evaluation,
   producing a consistent circular-reference diagnostic instead of depending on whether the
-  recursion-depth limit or JVM stack exhaustion happens first (#274).
+  recursion-depth limit or JVM stack exhaustion happens first (found while moving positioned
+  evaluation into the library, #741; covers the dynamic `INDIRECT` cycles of `RecalcSpec`).
 
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
   right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
@@ -101,7 +102,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xl eval --at`. `evaluateWithClosure` and `evaluateArrayWithClosure` share the positionless
   closure and spill-tracking evaluator. Typed overrides invalidate their cached readers;
   `FormulaEvaluationError` retains the existing diagnostic and a full detected cycle path
-  (the placement alone for a run-time read). CLI output and errors, existing evaluation APIs,
+  (the placement alone for a run-time read). Spill detection and the placement guard read the
+  evaluation copy (supplied sheet and overrides applied), so `x#` readers that only the supplied
+  sheet or an override carries are tracked. CLI output and errors, existing evaluation APIs,
   and the cached cross-sheet limitations tracked in #729 remain unchanged.
 
 - `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,

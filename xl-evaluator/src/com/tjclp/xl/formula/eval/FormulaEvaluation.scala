@@ -153,17 +153,17 @@ private[formula] object FormulaEvaluation:
     at: Option[ARef]
   ): Result[Evaluated] =
     for
-      _ <-
-        if at.exists(overrides.contains) then
+      _ <- at.filter(overrides.contains) match
+        case Some(cell) =>
           Left(
             FormulaEvaluationError(
               XLError.FormulaError(
                 formula,
-                s"An override sets the placement cell ${at.fold("")(_.toA1)}, which the formula replaces"
+                s"An override sets the placement cell ${cell.toA1}, which the formula replaces"
               )
             )
           )
-        else Right(())
+        case None => Right(())
       applied = overrides.foldLeft(sheet) { case (s, (ref, value)) => s.put(ref, value) }
       tempBook =
         if overrides.isEmpty then wb.put(applied)
