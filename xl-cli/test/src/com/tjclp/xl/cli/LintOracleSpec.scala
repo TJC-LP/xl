@@ -35,30 +35,16 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
     thread.join()
     out.get()
 
-  // Keep recursive frames live until the oracle returns; this is deliberately not tail-recursive.
+  // Exhaust the prefix, then try the real oracle while unwinding one live frame at a time.
+  // Without its guard, parsing keeps escaping until it can return the ordinary parse finding;
+  // the assertion below rejects that finding. No JVM-dependent depth estimate is needed.
   @scala.noinline
-  private def withFrames(depth: Int, check: () => Option[String]): Option[String] =
-    if depth == 0 then check()
-    else
-      val result = withFrames(depth - 1, check)
-      java.lang.ref.Reference.reachabilityFence(result)
-      result
-
-  /** Find the first stack-induced change in the real oracle, not merely its guard helper. */
-  private def firstStackDeviation(check: () => Option[String]) =
-    val baseline = check()
-    onSmallStack(256L * 1024) {
-      var depth = 0
-      var first: Option[(Int, Either[Throwable, Option[String]])] = None
-      // A single thread and bounded linear search avoid skipping the guard's catchable boundary.
-      while depth <= 32768 && first.isEmpty do
-        val observed =
-          try Right(withFrames(depth, check))
-          catch case error: Throwable => Left(error)
-        if observed != Right(baseline) then first = Some(depth -> observed)
-        depth += 1
-      first
-    }
+  private def atStackBoundary(check: () => Option[String]): Option[String] =
+    val result =
+      try atStackBoundary(check)
+      catch case _: StackOverflowError => check()
+    java.lang.ref.Reference.reachabilityFence(result)
+    result
 
   test("#681: a StackOverflowError inside the oracle is a finding, never an escape") {
     val overflowing: String => Option[String] = _ => throw new StackOverflowError()
@@ -93,16 +79,24 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
     val escaped = results.collect { case (t, Left(err)) => s"$t…: $err" }
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
 
-    // Warm the real path, then consume frames until parsing changes its verdict. A disconnected
-    // guard must escape as StackOverflowError; safe completion at a fixed stack hint is allowed.
+    // A disconnected guard must return the ordinary parse finding instead of a stack finding.
     val truncated = "SUM(" * 127 + "1"
     assert(UnparseableFormula.needsParse(truncated), "the probe must reach the parser")
-    (1 to 20000).foreach(_ => LintCommands.formulaCheck(truncated))
-    val boundary = firstStackDeviation(() => LintCommands.formulaCheck(truncated))
-    boundary match
-      case Right(Some((_, Right(Some(finding))))) =>
-        assert(finding.contains("stack"), s"first changed verdict: $boundary")
-      case other => fail(s"the real lint path must contain its first stack exhaustion: $other")
+    val check = () => LintCommands.formulaCheck(truncated)
+    (1 to 20000).foreach(_ => check())
+    val baseline = check()
+    assert(
+      !baseline.exists(_.contains("stack")),
+      s"baseline must be an ordinary finding: $baseline"
+    )
+    Vector(256L * 1024, 1024L * 1024).foreach { stackBytes =>
+      val boundary = onSmallStack(stackBytes)(atStackBoundary(check))
+      boundary match
+        case Right(Some(finding)) =>
+          assert(finding.contains("stack"), s"verdict at $stackBytes bytes: $boundary")
+        case other =>
+          fail(s"the real lint path must contain exhaustion at $stackBytes bytes: $other")
+    }
   }
 
   // ===== the prefilter: structured and external references skip the parse =====
