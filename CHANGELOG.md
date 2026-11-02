@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add the SLN and SYD depreciation functions (part of #684).
+- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
+  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
+  while retaining fractional periods, verified against desktop Excel 16.114.3.
 
 ### Fixed
 

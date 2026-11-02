@@ -11,7 +11,7 @@ class DepreciationSpec extends FunSuite:
   private val sheet = Sheet("Test")
   private def number(formula: String, expected: Double): Unit =
     sheet.evaluateFormula(formula) match
-      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, expected, 1e-9)
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, expected, 1e-9, formula)
       case other => fail(s"$formula: $other")
 
   test("GH-684: Microsoft's SLN and SYD examples") {
@@ -20,7 +20,7 @@ class DepreciationSpec extends FunSuite:
     number("SYD(30000,7500,10,10)", 409.090909090909)
   }
 
-  test("GH-684: fractions, signed inputs and out-of-life periods match the LO oracle") {
+  test("GH-684: fractions and signed inputs retain the documented oracle results") {
     List(
       "SLN(100,10,-2)" -> -45.0,
       "SLN(-100,10,2)" -> -55.0,
@@ -28,9 +28,6 @@ class DepreciationSpec extends FunSuite:
       "SLN(10,100,2)" -> -45.0,
       "SYD(100,10,2,0.5)" -> 75.0,
       "SYD(100,10,2.5,1.5)" -> 41.1428571428571,
-      "SYD(100,10,-2,1)" -> -180.0,
-      "SYD(100,10,2,0)" -> 90.0,
-      "SYD(100,10,2,3)" -> 0.0,
       "SYD(10,100,2,1)" -> -60.0,
       "SYD(-100,10,2,1)" -> -73.3333333333333
     ).foreach((f, n) => number(f, n))
@@ -39,6 +36,14 @@ class DepreciationSpec extends FunSuite:
   test("GH-684: zero denominators, overflow and propagated errors stay cell errors") {
     List(
       "SLN(100,10,0)" -> CellError.Div0,
+      // Like the existing financial functions, numeric arguments enter Double arithmetic first.
+      "SLN(100,10,1E-400)" -> CellError.Div0,
+      "SYD(100,10,-1.0000000000000000001,1)" -> CellError.Num,
+      // Observed in Excel 16.114.3; LibreOffice accepts these out-of-domain inputs.
+      "SYD(100,10,2,0)" -> CellError.Num,
+      "SYD(100,10,2,3)" -> CellError.Num,
+      "SYD(100,10,2,-5)" -> CellError.Num,
+      "SYD(100,10,-2,1)" -> CellError.Num,
       "SYD(100,10,0,1)" -> CellError.Num,
       "SYD(100,10,-1,1)" -> CellError.Num,
       "SLN(1E308,-1E308,1)" -> CellError.Num,

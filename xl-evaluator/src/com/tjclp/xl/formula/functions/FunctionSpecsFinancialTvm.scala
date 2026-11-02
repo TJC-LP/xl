@@ -249,14 +249,15 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
   ) { (args, ctx) =>
     val (costExpr, salvageExpr, lifeExpr) = args
     for
-      cost <- ctx.evalExpr(costExpr)
-      salvage <- ctx.evalExpr(salvageExpr)
-      life <- ctx.evalExpr(lifeExpr)
+      // Match the existing financial functions: round numeric inputs before arithmetic/guards.
+      cost <- ctx.evalExpr(costExpr).map(_.toDouble)
+      salvage <- ctx.evalExpr(salvageExpr).map(_.toDouble)
+      life <- ctx.evalExpr(lifeExpr).map(_.toDouble)
       result <-
-        if life == 0 then Left(EvalError.ErrorValue(CellError.Div0))
+        if life == 0.0 then Left(EvalError.ErrorValue(CellError.Div0))
         else
           NumericGuard.contained("SLN", "SLN(cost, salvage, life)") {
-            Right(BigDecimal(((cost - salvage) / life).toDouble))
+            Right(BigDecimal((cost - salvage) / life))
           }
     yield result
   }
@@ -274,17 +275,19 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
   ) { (args, ctx) =>
     val (costExpr, salvageExpr, lifeExpr, periodExpr) = args
     for
-      cost <- ctx.evalExpr(costExpr)
-      salvage <- ctx.evalExpr(salvageExpr)
-      life <- ctx.evalExpr(lifeExpr)
-      period <- ctx.evalExpr(periodExpr)
+      // Match the existing financial functions: round numeric inputs before arithmetic/guards.
+      cost <- ctx.evalExpr(costExpr).map(_.toDouble)
+      salvage <- ctx.evalExpr(salvageExpr).map(_.toDouble)
+      life <- ctx.evalExpr(lifeExpr).map(_.toDouble)
+      period <- ctx.evalExpr(periodExpr).map(_.toDouble)
       result <-
-        if life == 0 || life == -1 then Left(EvalError.ErrorValue(CellError.Num))
+        if life <= 0.0 || period <= 0.0 || period > life then
+          Left(EvalError.ErrorValue(CellError.Num))
         else
           NumericGuard.contained("SYD", "SYD(cost, salvage, life, per)") {
             Right(
               BigDecimal(
-                ((cost - salvage) * (life - period + 1) * 2 / (life * (life + 1))).toDouble
+                (cost - salvage) * (life - period + 1) * 2 / (life * (life + 1))
               )
             )
           }
