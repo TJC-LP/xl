@@ -164,7 +164,7 @@ class LookupChannelSpec extends FunSuite:
     check(keys, "=XLOOKUP(99,A1:A5,B1:B5)", err(CellError.NA))
     check(keys, "=MATCH(25,A1:A5,1)", num(2))
     check(keys, "=XLOOKUP(25,A1:A5,B1:B5,,-1)", text("b"))
-    // the walk is row-major over a 2-D lookup_array, positions the range's own
+    // a 2-D lookup_array is #N/A for MATCH (#724), never a row-major position
     val grid = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(1))
       .put(ref"B1", num(2))
@@ -172,7 +172,8 @@ class LookupChannelSpec extends FunSuite:
       .put(ref"B2", num(4))
       .put(ref"A3", CellValue.Formula("1+", None))
       .put(ref"D2", text("dd"))
-    check(grid, "=MATCH(4,A1:B3,0)", num(4))
+    check(grid, "=MATCH(4,A1:B3,0)", err(CellError.NA))
+    check(grid, "=MATCH(3,A1:A3,0)", num(2))
     // XLOOKUP's keys are one row or column; preserve each orientation's own position.
     check(grid, "=XLOOKUP(4,A2:B2,C2:D2)", text("dd"))
     check(grid, "=XLOOKUP(4,B1:B2,D1:D2)", text("dd"))
@@ -364,14 +365,14 @@ class LookupChannelSpec extends FunSuite:
   }
 
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {
-    // A1:B2 is the used range; C1 is blank, so 3 (A2) sits at row-major position 4 of A1:C2
+    // A1:B2 is the used range; C1 is blank, so 2 (B1) sits at position 2 of A1:D1
     val grid = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(1))
       .put(ref"B1", num(2))
       .put(ref"A2", num(3))
       .put(ref"B2", num(4))
-    check(grid, "=MATCH(3,A1:C2,0)", num(4))
-    check(grid, "=MATCH(4,A1:C2,0)", num(5))
+    check(grid, "=MATCH(2,A1:D1,0)", num(2))
+    check(grid, "=MATCH(4,A2:D2,0)", num(2))
     check(grid, "=MATCH(3,A1:A9,0)", num(2))
     check(grid, "=XLOOKUP(3,A1:A9,B1:B9)", num(4))
     check(grid, "=XLOOKUP(9,A1:A9,B1:B9)", err(CellError.NA))

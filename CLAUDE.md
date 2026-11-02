@@ -101,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,647)
+./mill __.test             # Run all tests (9,966)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -312,6 +312,11 @@ xl -f data.xlsx --sheet "Sheet1" view A1:B4
 xl -f data.xlsx view "Sheet1"!A1:B4
 ```
 
+`xl sheets` reports preserved macro, international macro, chart and dialog tabs separately
+(kind/name/state; JSON `preservedSheets`). They remain unavailable to `-s`; worksheet indices are
+unchanged. `Excel.readMetadata(...).preservedSheets` exposes read-only tab metadata. `xl lint`
+reports macro presence and associated `Auto_Open` names as `info` (gated only with `--strict`).
+
 See `docs/reference/cli.md` for full command reference.
 
 **Directory Structure**:
@@ -417,12 +422,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,647 tests** by module: xl-evaluator (4019), xl-core (1872), xl-ooxml (1435), xl-cli (1895), xl-cats-effect (213), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**9,966 tests** by module: xl-evaluator (4258), xl-core (1872), xl-ooxml (1447), xl-cli (1959), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,647 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 9,966 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

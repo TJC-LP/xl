@@ -105,10 +105,11 @@ Stream.range(1, 1_000_001)
 - ✅ Shared strings by default (`SstPolicy.Never` keeps inline strings).
 - ✅ Per-cell styles from a table declared up front (`writeStreamStyled`, `writeStreamStyledWithAutoDetect`).
 
-**Where the scratch file goes**: the auto-detect variants (`writeStreamWithAutoDetect`,
-`writeStreamStyledWithAutoDetect`, `writeStreamsSeqWithAutoDetect`) buy their up-front `<dimension>` with a two-pass write, spilling
-the worksheet body to a scratch file — one per sheet — and deleting it when the write ends, success
-or failure. It lands in `java.io.tmpdir` by default. Redirect it when that directory is small,
+**Where the scratch file goes**: all row writers (`writeStream`, `writeStreamStyled`,
+`writeStreamsSeq` and their auto-detect variants) consume each input once into a temporary worksheet
+body, then assemble the ZIP with the metadata its dynamic-array anchors need (#749). Auto-detect
+also tracks bounds to emit `<dimension>`; explicit hints are kept verbatim. Temporary disk use is
+O(worksheet XML), one file per sheet, deleted when the write ends, success or failure. It lands in `java.io.tmpdir` by default. Redirect it when that directory is small,
 read-only, or slower than the output volume:
 
 ```scala
@@ -122,8 +123,8 @@ environment.
 
 Constant-memory holds either way — the spill is disk, not heap — but a 1M-row write moves real
 bytes through it, so on a container with a tiny `/tmp` this is the difference between working and
-`No space left on device`. Single-pass `writeStream`/`writeStreamsSeq` never spill; give them an
-explicit `dimension` when you know the bounds.
+`No space left on device`. The destination ZIP is written after the input has been consumed.
+The metadata accumulator itself holds at most two dynamic-array variants.
 
 Two things you inherit by redirecting it. The scratch file holds the worksheet body in cleartext
 until the write ends; it is created `rw-------` on POSIX either way, but the *directory's*
@@ -368,6 +369,26 @@ scan fallback, one used-range scan and 14 name parses (116,875 before). Matcher 
 unchanged (161,824,716): every row is still tested; the criteria index removes them. H10 stays
 bound by its legacy graph until the compact graph lands.
 
+Whole-axis references (#747): lookups and returned references use the same `PassCache.usedRange`
+as aggregates, including INDEX, INDIRECT, OFFSET and logical range reads. Bounds are scanned once
+per sheet and structural generation during a recalculation, shared by sequential and parallel
+readers. A structural write invalidates the bounds; a formula-cache update does not. Empty-sheet
+bounds are cached too. Bounded references never request bounds, and evaluation outside an active
+pass reads each sheet snapshot afresh. This removes O(formulas × populated cells) bounds work;
+lookup key searching and result materialization keep their existing costs and semantics.
+
+To run the opt-in 10,000-lookup / 200,000-cell acceptance harness (an early match isolates bounds
+scanning from linear key-search cost):
+
+```bash
+XL_WHOLE_AXIS_PERF=1 ./mill -i xl-evaluator.test.testOnly com.tjclp.xl.formula.eval.WholeAxisUsedRangeSpec
+```
+
+The harness prints elapsed recalculation time, checks all 10,000 results, and requires exactly one
+used-range scan; wall time is diagnostic, not a flaky pass/fail threshold. A local run on
+2026-10-28 recalculated all 10,000 formulas in 0.712 s with one scan and all results correct;
+workbook construction and file I/O are outside that measurement.
+
 Criteria index (#767 PR 2): each slice gets an equality index on first use (`EqIndex`, posting lists
 of the rows holding each folded text, stripped number, boolean or error), and a criteria call whose
 ranges all read through slices tests only the rows every equality criterion selects, still with
@@ -410,10 +431,18 @@ With the compact graph, the per-pass caches and the criteria index together, `Lo
 The Real helper book also completes under `-Xmx1g` (8.7 s). Every earlier engine runs out of memory
 on it at `-Xmx4g`, and the compact graph without the index did not finish in 15 minutes. A full dump
 of its 187,699 formula values is identical with the index on and off, and between sequential and
-parallel recalculation. In a JFR profile of the Real `checked` run, formula parsing is the largest
-CPU cost (about 22% of samples): each formula is parsed once while the graph is built and again
-when it is evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and the
-criteria calls (about 15%, of which about 5% is building the column slices).
+parallel recalculation. In a JFR profile of the Real `checked` run on 0.25.0, formula parsing is the
+largest CPU cost (about 22% of samples): each formula was parsed once while the graph was built and
+again when it was evaluated. Next come the XLSX write (about 24%, partly on a separate thread) and
+the criteria calls (about 15%, of which about 5% is building the column slices).
+
+Since #790 a pass reuses the graph build's parse of each formula cell (looked up by the cell and
+checked against its current text) for cell evaluation, the external-reference pin check of a cached
+formula containing `[`, iterative fixpoints over cycle members, the dynamic-cell scan and the pin
+check of a pass with failures. The `FormulaParses` counter of a Real pass is 187,699, one per
+formula. A pass parses again only a formula the build could not parse or whose text has changed
+since; under the legacy engine, which keeps no parse, evaluation parses every formula again. The
+data-table seeder's what-if fixpoints parse their cycle members themselves.
 
 ---
 

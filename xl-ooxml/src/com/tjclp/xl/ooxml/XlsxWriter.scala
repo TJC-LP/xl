@@ -2026,18 +2026,12 @@ object XlsxWriter:
         // Parse preserved SST (sourceContext guaranteed to exist if sourceHasSharedStrings is true)
         val parsedSST = parsedSourceSST
 
-        // GH-323: a NEW sheet (no source counterpart by identity, GH-315) never enters
-        // tracker.modifiedSheets — Workbook.put of an unseen name marks only metadata — yet its
-        // regenerated part encodes text through whatever SST ships. It joins the modified-sheet
-        // set for SST accounting: its strings enter the combined SST and the per-reference count
-        // (its pre-edit contribution is naturally 0 — there is no source part to subtract).
-        val sstAccountedSheets: Vector[Int] = sourceContext match
-          case Some(ctx) =>
-            (tracker.modifiedSheets ++
-              workbook.sheets.indices.filter(idx =>
-                sourceSheetPath(ctx, idx).isEmpty
-              )).toVector.sorted
-          case None => tracker.modifiedSheets.toVector.sorted
+        // The sheets this write emits from the model are accounted, not only the modified ones:
+        // a regenerated part encodes all its text through whatever SST ships, and a sheet can be
+        // regenerated without being modified (a metadata change regenerates every sheet), so its
+        // t="s" cells can change in number (GH-784). A NEW sheet (no source counterpart by
+        // identity, GH-315, GH-323) is among them; its pre-edit contribution is naturally 0.
+        val sstAccountedSheets: Vector[Int] = writtenFromModel(regen)
 
         // Check if modified sheets contain NEW strings not in the preserved SST.
         // Entries are collected PER REFERENCE (one per text cell, GH-277: the SST count attribute

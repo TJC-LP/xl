@@ -1234,3 +1234,116 @@ class EvalCommandSpec extends CatsEffectSuite:
         case Left(e) => assert(e.getMessage.contains("2,097,152 cells"), e.getMessage)
         case Right(out) => fail(s"expected a too-large refusal, got: $out")
   }
+
+  // ===== #763: --with reaches readers whose references are computed at run time =====
+
+  /**
+   * #763: Data: B1 = 10, B2 = 1. Name: dyn = OFFSET(Data!$B$1,0,0,2,1). Other, each cached 11 (12
+   * for A6): A1 = SUM(dyn), A2 = SUMIF(dyn,">0"), A3 = SUM(OFFSET(Data!B1,0,0,2,1)), A4 =
+   * SUM(INDIRECT("Data!B1:B2")), A5 = SUM(Data!B1:B2) (the static control), A6 = A3+1.
+   */
+  private val dynamicReadBacks: Workbook =
+    val book = Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"B1", CellValue.Number(BigDecimal(10)))
+          .put(ref"B2", CellValue.Number(BigDecimal(1))),
+        Sheet("Other")
+          .put(ref"A1", cachedFormula("=SUM(dyn)", 11))
+          .put(ref"A2", cachedFormula("=SUMIF(dyn,\">0\")", 11))
+          .put(ref"A3", cachedFormula("=SUM(OFFSET(Data!B1,0,0,2,1))", 11))
+          .put(ref"A4", cachedFormula("=SUM(INDIRECT(\"Data!B1:B2\"))", 11))
+          .put(ref"A5", cachedFormula("=SUM(Data!B1:B2)", 11))
+          .put(ref"A6", cachedFormula("=A3+1", 12))
+      )
+    )
+    book.copy(metadata =
+      book.metadata.copy(definedNames = Vector(DefinedName("dyn", "OFFSET(Data!$B$1,0,0,2,1)")))
+    )
+
+  test("#763: --with reaches a cached reader through OFFSET or INDIRECT, direct or by a name") {
+    // B2 = 0: each reader sums B1:B2 to 10, and A6 = A3+1 is 11. Before, only the static control
+    // dropped its cache; the computed references read B1 alone to the static search
+    val data = dynamicReadBacks.sheets.headOption
+    val cases = List(
+      "=Other!A1" -> 10,
+      "=Other!A2" -> 10,
+      "=Other!A3" -> 10,
+      "=Other!A4" -> 10,
+      "=Other!A5" -> 10,
+      "=Other!A6" -> 11
+    )
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(dynamicReadBacks, data, formula, at, List("B2=0")).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _) >>
+      ReadCommands
+        .evalArray(dynamicReadBacks, data, "=Other!A1+Other!A4", None, List("B2=0"))
+        .map(array => assert(array.contains("20"), array))
+  }
+
+  test("#763 CLI: eval --with sees past a dynamic reader's cache in a saved file") {
+    for
+      book <- written(dynamicReadBacks)
+      named <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A1", "--with", "B2=0")
+      indirect <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A4", "--with", "B2=0")
+    yield
+      assertEquals(named.exit, 0, named.stderr)
+      assert(named.stdout.contains("Result: 10 (number)"), named.stdout)
+      assertEquals(indirect.exit, 0, indirect.stderr)
+      assert(indirect.stdout.contains("Result: 10 (number)"), indirect.stdout)
+  }
+
+  // ===== #727: evala --at validates its anchor =====
+
+  test("#727: evala --at a bad anchor is INVALID_REFERENCE, not the Z1000 fallback") {
+    def refused(at: String): IO[Unit] =
+      ReadCommands
+        .evalArray(pairedBook, pairedBook.sheets.headOption, "=A1:A3*2", Some(at), Nil)
+        .attempt
+        .map {
+          case Left(e: CliException) => assertEquals(e.error.code, "INVALID_REFERENCE", at)
+          case other => fail(s"evala --at $at: expected INVALID_REFERENCE, got $other")
+        }
+    // `$C$2`: a ref argument is written without `$` anchors, for --at as for every verb
+    refused("ZZZZ9") >> refused("not a ref") >> refused("D5:D6") >> refused("$C$2") >>
+      refused("'My Sheet'!$C$2")
+  }
+
+  test("#727: a qualified evala --at anchors on, and evaluates against, the sheet it names") {
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Number(BigDecimal(7)))
+      .put(ref"A2", CellValue.Number(BigDecimal(8)))
+    val wb = Workbook(Vector(pairedColumns(Sheet("Test")), other))
+    for
+      qualified <- ReadCommands.evalArrayData(
+        wb,
+        wb.sheets.headOption,
+        "=A1:A2*2",
+        Some("Other!C2"),
+        Nil
+      )
+      plain <- ReadCommands.evalArrayData(wb, wb.sheets.headOption, "=A1:A2*2", Some("C2"), Nil)
+    yield
+      val q = ujson.read(qualified)
+      assertEquals(q("spillRange"), ujson.Str("C2:C3"), qualified)
+      assertEquals(q("result")("sheet"), ujson.Str("Other"), qualified)
+      assert(qualified.contains("14") && qualified.contains("16"), qualified)
+      val p = ujson.read(plain)
+      assertEquals(p("result")("sheet"), ujson.Str("Test"), plain)
+  }
+
+  test("#727 CLI: evala --at ZZZZ9 exits 3; a qualified anchor is honoured") {
+    for
+      book <- written(pairedBook)
+      bad <- CliHarness.run("-f", book, "--json", "evala", "=A1:A3*2", "--at", "ZZZZ9")
+      good <- CliHarness.run("-f", book, "evala", "=A1:A3*2", "--at", "Test!C2")
+    yield
+      assertEquals(bad.exit, 3, bad.stdout)
+      assertEquals(ujson.read(bad.stdout)("error")("code"), ujson.Str("INVALID_REFERENCE"))
+      assertEquals(good.exit, 0, good.stderr)
+      assert(good.stdout.contains("C2:C4"), good.stdout)
+  }

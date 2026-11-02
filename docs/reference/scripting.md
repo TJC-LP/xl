@@ -651,7 +651,7 @@ explicit `recalculate().toEither` pattern above when a dirty result must abort *
 lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (125 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (126 functions supported —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 

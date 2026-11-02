@@ -10,8 +10,8 @@ import munit.FunSuite
 /**
  * Comprehensive tests for COUNTBLANK function.
  *
- * COUNTBLANK counts empty cells in a range. Cells with formulas that return "" are NOT counted as
- * blank (Excel behavior).
+ * COUNTBLANK counts the blank cells in a range: empty cells and cells holding text of length 0,
+ * including a formula's "" (Excel behavior, #731).
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial"))
 class CountFunctionsSpec extends FunSuite:
@@ -58,7 +58,7 @@ class CountFunctionsSpec extends FunSuite:
     assertEquals(result, Right(BigDecimal(2))) // A2 and A4 are empty
   }
 
-  test("COUNTBLANK: text cells are not blank") {
+  test("#731: COUNTBLANK counts empty text; other text is not blank") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Text(""),
       ref"A2" -> CellValue.Text("Hello"),
@@ -67,9 +67,7 @@ class CountFunctionsSpec extends FunSuite:
     val range = CellRange.parse("A1:A4").toOption.get
     val expr = TExpr.Aggregate("COUNTBLANK", TExpr.RangeLocation.Local(range))
     val result = evaluator.eval(expr, sheet)
-    // Note: Excel considers Text("") as blank, but we count only truly empty cells (no CellValue)
-    // A4 is truly empty (no cell)
-    assertEquals(result, Right(BigDecimal(1))) // Only A4 is truly empty
+    assertEquals(result, Right(BigDecimal(2))) // A1 ("") and A4 (no cell)
   }
 
   test("COUNTBLANK: formula cells are not blank") {
@@ -194,10 +192,10 @@ class CountFunctionsSpec extends FunSuite:
     )
   }
 
-  test("GH-395: =COUNTBLANK(5) is 0 — a literal is never blank") {
+  test("#731: =COUNTBLANK(5) is #VALUE!: COUNTBLANK takes a reference") {
     assertEquals(
       emptySheet.evaluateFormula("=COUNTBLANK(5)"),
-      Right(CellValue.Number(BigDecimal(0)))
+      Right(CellValue.Error(com.tjclp.xl.cells.CellError.Value))
     )
   }
 

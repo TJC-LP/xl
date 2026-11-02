@@ -56,7 +56,10 @@ object WorkbookCommands:
    * (from worksheet metadata or streaming scan if missing), visibility state.
    */
   def sheetsQuick(filePath: Path): IO[String] =
-    sheetInfos(filePath).map(Markdown.renderSheetListQuick)
+    excel.readMetadata(filePath).flatMap { meta =>
+      sheetInfos(filePath, meta)
+        .map(infos => Markdown.renderSheetListQuick(infos) + preservedText(meta))
+    }
 
   /**
    * The quick listing as data (`sheets --json`, with or without `--stream`):
@@ -64,46 +67,73 @@ object WorkbookCommands:
    * so it equals `describe --json`'s `data.sheets` for the same file (GH-618).
    */
   def sheetsQuickData(filePath: Path): IO[ujson.Value] =
-    sheetInfos(filePath).map { infos =>
-      ujson.Obj("sheets" -> ujson.Arr.from(infos.zipWithIndex.map { (info, idx) =>
-        InspectCommands.sheetHeader(info.name.value, idx + 1, info.state, info.dimension)
-      }))
+    excel.readMetadata(filePath).flatMap { meta =>
+      sheetInfos(filePath, meta).map { infos =>
+        val data = ujson.Obj("sheets" -> ujson.Arr.from(infos.zipWithIndex.map { (info, idx) =>
+          InspectCommands.sheetHeader(info.name.value, idx + 1, info.state, info.dimension)
+        }))
+        addPreservedData(meta, data)
+      }
     }
+
+  /** Preserved entries are reported separately: worksheet indices and resolution stay unchanged. */
+  private def preservedText(meta: LightMetadata): String =
+    if meta.preservedSheets.isEmpty then ""
+    else
+      val rows = meta.preservedSheets.map(s => Vector(s.kind.slug, s.name.value, s.state))
+      "\n\nPreserved sheets (read-only; unavailable to -s):\n" +
+        Markdown.renderTable(Vector("Kind", "Name", "State"), rows)
+
+  private def addPreservedData(meta: LightMetadata, data: ujson.Value): ujson.Value =
+    if meta.preservedSheets.nonEmpty then
+      data("preservedSheets") = ujson.Arr.from(meta.preservedSheets.map { s =>
+        ujson.Obj(
+          "name" -> s.name.value,
+          "kind" -> s.kind.slug,
+          "state" -> s.state,
+          "sourceIndex" -> s.sourceIndex
+        )
+      })
+    data
+
+  def withPreservedSheets(file: Path, text: String): IO[String] =
+    excel.readMetadata(file).map(meta => text + preservedText(meta))
+
+  def withPreservedSheetsData(file: Path, data: ujson.Value): IO[ujson.Value] =
+    excel.readMetadata(file).map(meta => addPreservedData(meta, data))
 
   /**
    * Sheet metadata with every dimension filled in. When dimension metadata is missing from the
    * worksheet XML, falls back to a streaming scan to compute accurate bounds (O(rows) time, O(1)
    * memory per sheet); a sheet the scan finds empty keeps `dimension = None`.
    */
-  private def sheetInfos(filePath: Path): IO[Vector[SheetInfo]] =
-    excel.readMetadata(filePath).flatMap { meta =>
-      // Find sheets with missing dimensions
-      val missingIndices = meta.sheets.zipWithIndex.collect {
-        case (info, idx) if info.dimension.isEmpty => idx
-      }
-
-      if missingIndices.isEmpty then
-        // All sheets have dimensions from metadata - fast path
-        IO.pure(meta.sheets)
-      else
-        // Scan missing dimensions sequentially (to avoid multiple zip file handles)
-        missingIndices
-          .traverse { idx =>
-            scanSheetBounds(filePath, idx + 1).map(bounds => (idx, bounds)) // 1-based index
-          }
-          .map { scannedBounds =>
-            // Build map of index -> scanned dimension
-            val boundsMap = scannedBounds.toMap
-            // Update sheets with scanned dimensions
-            meta.sheets.zipWithIndex.map { case (info, idx) =>
-              if info.dimension.isEmpty then
-                boundsMap.get(idx).flatten match
-                  case Some(range) => info.copy(dimension = Some(range))
-                  case None => info // Empty sheet, keep as unknown
-              else info
-            }
-          }
+  private def sheetInfos(filePath: Path, meta: LightMetadata): IO[Vector[SheetInfo]] =
+    // Find sheets with missing dimensions
+    val missingIndices = meta.sheets.zipWithIndex.collect {
+      case (info, idx) if info.dimension.isEmpty => idx
     }
+
+    if missingIndices.isEmpty then
+      // All sheets have dimensions from metadata - fast path
+      IO.pure(meta.sheets)
+    else
+      // Scan missing dimensions sequentially (to avoid multiple zip file handles)
+      missingIndices
+        .traverse { idx =>
+          scanSheetBounds(filePath, idx + 1).map(bounds => (idx, bounds)) // 1-based index
+        }
+        .map { scannedBounds =>
+          // Build map of index -> scanned dimension
+          val boundsMap = scannedBounds.toMap
+          // Update sheets with scanned dimensions
+          meta.sheets.zipWithIndex.map { case (info, idx) =>
+            if info.dimension.isEmpty then
+              boundsMap.get(idx).flatten match
+                case Some(range) => info.copy(dimension = Some(range))
+                case None => info // Empty sheet, keep as unknown
+            else info
+          }
+        }
 
   /**
    * Scan a sheet to compute its bounds using streaming.

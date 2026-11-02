@@ -1,19 +1,19 @@
 # XL Project Status
 
-**Last Updated**: 2026-10-28 (unreleased)
+**Last Updated**: 2026-11-02 (PR validation)
 
 ## Current State
+
+Library closure evaluation with positioned cycle protection is available through `SheetEvaluator.evaluateAt` (#741).
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
 
-**Unreleased**
-
-- ✅ **Library positioned evaluation** (#741) — `SheetEvaluator.evaluateAt` owns `eval --at`'s
-  placement, value-read closure and run-time guard, with typed overrides and full detected cycle
-  paths. Positionless and array closure APIs share the same orchestration. Existing evaluation
-  APIs and CLI behavior remain unchanged; remaining #729 cycle/inspection work is separate.
+**Unreleased** (#788) — `xl sheets` reports preserved macro, international macro, chart and dialog
+sheets separately with kind/name/state; they remain unavailable to `-s`. `xl lint` reports macro
+presence and directly associated `Auto_Open` names at severity `info`; `--strict` gates info too.
+`Excel.readMetadata(...).preservedSheets` exposes the same read-only tab metadata.
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
@@ -284,23 +284,19 @@
 
 ### Test Coverage
 
-**9,647 test cases** in the current source tree (JUnit reports, 2026-10-28). GH-741 moves
-29 cases from the CLI to the evaluator and adds 30 evaluator cases plus one prelude probe.
-Counts include skipped cases; external-oracle availability varies by host.
-
-The 0.25.0 release baseline (2026-10-19) contained 9,616 cases with zero failures; its existing
-style-performance comparison was skipped, while soffice and rsvg-convert oracles ran.
+**9,966 test cases** (clean standalone PR #825 validation against main 9c746f18, 2026-11-02): 9,959 passed, 2 pre-existing oracle/test failures (see PR validation), 5 skipped. Counts include skipped cases; per-run results are recorded in the PR review package.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4019 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4258 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1895 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-ooxml | 1447 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1959 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 66 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
+
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 

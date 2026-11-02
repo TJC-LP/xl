@@ -17,10 +17,10 @@ import com.tjclp.xl.syntax.*
  * #709: one law for text in a typed scalar slot. A text cell read through a single reference (the
  * slot's decoder at the evaluator boundary: [[TExpr.decodeNumericScalar]],
  * [[TExpr.decodeAsDateScalar]], [[TExpr.decodeBool]]) and the same text as a runtime value
- * (`ScalarCoercion.coerce`, the literal, call-result and LET path) read the same value, or are both
- * `#VALUE!`. Plain text, rich text and a formula's cached text alike. No class of text is excluded:
- * both sides read text through `ScalarCoercion.cellText` / `parseNumericText` / `boolTextValue`,
- * and an out-of-range date serial is the same error value on both.
+ * (`ScalarCoercion.coerce`, the literal, call-result and LET path) read the same value, or give the
+ * same Excel error code. Plain text, rich text and a formula's cached text alike. No class of text
+ * is excluded: both sides read text through `ScalarCoercion.cellText` / `parseNumericText` /
+ * `boolTextValue`, and an out-of-range date serial is the same error value on both.
  */
 class TextScalarSlotLawsSpec extends ScalaCheckSuite:
 
@@ -48,6 +48,10 @@ class TextScalarSlotLawsSpec extends ScalaCheckSuite:
         "TRUE",
         "false",
         "1e400",
+        "1e999999999",
+        "1e-999999999",
+        "0e-999999999",
+        "1e-309",
         "1E-400",
         "1e2147483648",
         "NaN",
@@ -113,15 +117,12 @@ class TextScalarSlotLawsSpec extends ScalaCheckSuite:
     val sheet = Sheet(SheetName.unsafe("Sheet1")).put(ref"A1", cell)
     evaluator.eval(TExpr.ref(ref"A1", decode), sheet)
 
-  private def isValueError(r: Either[EvalError, Any]): Boolean = r match
-    case Left(EvalError.ErrorValue(CellError.Value, _)) => true
-    case _ => false
-
-  /** The law: the same value, or `#VALUE!` on both sides. */
+  /** The same value or the same Excel error code, including #NUM! for invalid date serials. */
   private def agree(byRef: Either[EvalError, Any], byValue: Either[EvalError, Any]): Boolean =
     (byRef, byValue) match
       case (Right(a), Right(b)) => b == a
-      case (l, r) => isValueError(l) && isValueError(r)
+      case (Left(EvalError.ErrorValue(a, _)), Left(EvalError.ErrorValue(b, _))) => a == b
+      case _ => false
 
   private def shown(s: String, cell: CellValue): String =
     s"text ${s.toList.map(_.toInt)} as $cell"
@@ -135,7 +136,7 @@ class TextScalarSlotLawsSpec extends ScalaCheckSuite:
   }
 
   property("#709: a text cell in a date slot reads as the same text as a runtime value") {
-    // out-of-range serials included: both paths give the same error value (#726 makes it #NUM!)
+    // out-of-range serials included: both paths give the same error value (#726: #NUM!)
     forAll(genTextCell(genDateText)) { (s, cell) =>
       val byRef = throughReference(cell, TExpr.decodeAsDateScalar)
       val byValue = ScalarCoercion.coerce("x", cell, BindingCoercion.Date)
@@ -151,9 +152,23 @@ class TextScalarSlotLawsSpec extends ScalaCheckSuite:
     }
   }
 
-  property("#709: the numeric-text pre-check answers exactly as the bare BigDecimal parse") {
+  property("GH-726: every accepted numeric text is ASCII and in Excel's normal double range") {
     forAll(genText) { s =>
-      val bare = scala.util.Try(BigDecimal(s.trim)).toOption
-      assertEquals(ScalarCoercion.parseNumericText(s), bare, s"text ${s.toList.map(_.toInt)}")
+      ScalarCoercion.parseNumericText(s).foreach { n =>
+        assert(s.trim.forall(c => c <= 127), s)
+        assertEquals(n, BigDecimal(s.trim))
+        assert(
+          n == 0 || (n.abs >= BigDecimal("2.2250738585072014e-308") &&
+            n.abs <= BigDecimal("1.7976931348623157e308")),
+          s
+        )
+      }
+    }
+  }
+
+  property("GH-726: ordinary signed decimal text round-trips") {
+    forAll(Gen.choose(-1000000000L, 1000000000L), Gen.choose(0, 12)) { (n, scale) =>
+      val decimal = BigDecimal(n, scale)
+      assertEquals(ScalarCoercion.parseNumericText(decimal.toString), Some(decimal))
     }
   }

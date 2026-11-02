@@ -355,12 +355,9 @@ object ReadCommands:
       )
     else
       for
-        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
+        anchored <- arrayAnchor(wb, sheetOpt, targetRefOpt)
+        (sheet, originRef) = anchored
         values <- overrideValues(sheet, overrides)
-        // Parse target ref or use a virtual cell far from data
-        originRef = targetRefOpt
-          .flatMap(ARef.parse(_).toOption)
-          .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
             .evaluateArrayWithClosure(wb, sheet, formula, originRef, values)
@@ -369,6 +366,26 @@ object ReadCommands:
         )
         (updatedSheet, spillRange) = result
       yield (formula, updatedSheet, spillRange)
+
+  /**
+   * The sheet `evala` evaluates on and the cell its display is anchored at. `--at` follows THE
+   * sheet rule as `eval --at` does (#727): a qualifier names the sheet, else the default, else the
+   * only sheet, else `SHEET_REQUIRED`; a range or an unparseable ref is `INVALID_REFERENCE`.
+   * Without `--at` the anchor is a virtual cell far from data, Z1000.
+   */
+  private def arrayAnchor(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    targetRefOpt: Option[String]
+  ): IO[(Sheet, ARef)] =
+    targetRefOpt match
+      case Some(atStr) =>
+        SheetResolver.resolveRef(wb, sheetOpt, atStr, "evala").flatMap {
+          case (sheet, Left(cell)) => IO.pure((sheet, cell))
+          case (_, Right(_)) => IO.raiseError(notOneCell(atStr))
+        }
+      case None =>
+        SheetResolver.requireSheet(wb, sheetOpt, "evala").map((_, ARef.from0(25, 999)))
 
   // ==========================================================================
   // Private helpers

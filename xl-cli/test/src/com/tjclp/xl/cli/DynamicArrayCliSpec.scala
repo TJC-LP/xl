@@ -1164,3 +1164,286 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       ok(noArray)
       assertEquals(overlapping(noArray), Vector.empty, noArray.stdout)
   }
+
+  for verb <- List("put", "putf") do
+    test(s"GH-738: --stream $verb refuses a live spill before writing output") {
+      for
+        src <- source(DynamicArrayFixtures.relocatedMetadataParts())
+        out <- outPath()
+        run <- CliHarness.run(
+          "-f",
+          src.toString,
+          "-o",
+          out.toString,
+          "--stream",
+          verb,
+          "B3",
+          if verb == "put" then "99" else "=99"
+        )
+      yield
+        assertEquals(run.exit, 3, run.toString)
+        assert(run.stderr.contains("FORMULA_ERROR"), run.toString)
+        assert(!Files.exists(out))
+    }
+    test(s"GH-738: --stream $verb releases an overwritten anchor's spill") {
+      for
+        src <- source()
+        out <- outPath()
+        run <- CliHarness.run(
+          "-f",
+          src.toString,
+          "-o",
+          out.toString,
+          "--stream",
+          verb,
+          "B1",
+          if verb == "put" then "99" else "=99"
+        )
+        last <- valueAt(out, ref"B5")
+        kind <- kindAt(out, ref"B1")
+      yield
+        ok(run)
+        assertEquals(last, CellValue.Empty)
+        assert(!kind.exists(_.isDynamicArray))
+    }
+
+  test("GH-738: streamed style on anchor and spill keeps formula metadata and values") {
+    for
+      src <- source(
+        DynamicArrayFixtures
+          .relocatedMetadataParts(metadata = DynamicArrayFixtures.multiRecordMetadataXml)
+          .map { (path, xml) => path -> xml.replace("""cm="1">""", """cm="1" vm="9">""") }
+      )
+      out <- outPath()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-o",
+        out.toString,
+        "--stream",
+        "style",
+        "B1:B5",
+        "--bold"
+      )
+      kind <- kindAt(out, ref"B1")
+      last <- valueAt(out, ref"B5")
+      xml <- sheetXml(out)
+      data <- bytes(out)
+    yield
+      ok(run)
+      assert(kind.exists(_.isDynamicArray))
+      assertEquals(last, CellValue.Number(5))
+      assert(xml.contains("""vm="9""""), xml)
+      assertEquals(
+        DynamicArrayFixtures.entryText(data, "xl/custom/state.xml"),
+        Some(DynamicArrayFixtures.multiRecordMetadataXml)
+      )
+  }
+
+  test("GH-738: streamed batch releases in operation order and keeps later spill writes") {
+    for
+      src <- source()
+      out <- outPath()
+      run <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "--stream", "batch", "-"),
+        """[{"op":"put","ref":"B1","value":99},{"op":"put","ref":"B3","value":7},{"op":"style","range":"B1:B5","bold":true}]"""
+      )
+      third <- valueAt(out, ref"B3")
+      last <- valueAt(out, ref"B5")
+    yield
+      ok(run)
+      assertEquals(third, CellValue.Number(7))
+      assertEquals(last, CellValue.Empty)
+  }
+
+  for range <- List("B1:B5", "B2:B5", "B1:C2") do
+    test(s"GH-738: sort refuses dynamic spill intersection $range") {
+      for
+        src <- source()
+        out <- outPath()
+        run <- CliHarness.run("-f", src.toString, "-o", out.toString, "sort", range, "--by", "B")
+      yield
+        assertEquals(run.exit, 3, run.toString)
+        assert(!Files.exists(out))
+    }
+
+  for (label, json) <- List(
+      "put values" -> """[{"op":"put","ref":"B2:B3","values":[8,9]}]""",
+      "explicit putf" -> """[{"op":"putf","ref":"B2:B3","values":["=8","=9"]}]""",
+      "dragged putf" -> """[{"op":"putf","ref":"B2:B3","value":"=A2","from":"B2"}]""",
+      "formatted putf" -> """[{"op":"putf","ref":"B2","value":"=8","format":"percent"}]""",
+      "style then put" -> """[{"op":"style","range":"B2","bold":true},{"op":"put","ref":"B2","value":8}]"""
+    )
+  do
+    test(s"GH-738: streamed batch $label refuses a live spill with its op index") {
+      for
+        src <- source()
+        out <- outPath()
+        run <- CliHarness.run(
+          List("-f", src.toString, "-o", out.toString, "--stream", "batch", "-"),
+          json
+        )
+      yield
+        assertEquals(run.exit, 3, run.toString)
+        assert(run.stderr.contains("BATCH_OP_FAILED"), run.toString)
+        assert(
+          run.stderr.contains(if label == "style then put" then "Object 2" else "Object 1"),
+          run.toString
+        )
+        assert(!Files.exists(out))
+    }
+
+  test("GH-738: streamed explicit formulas can replace anchor and children in one op") {
+    for
+      src <- source()
+      out <- outPath()
+      run <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "--stream", "batch", "-"),
+        """[{"op":"putf","ref":"B1:B2","values":["=8","=9"]}]"""
+      )
+      second <- kindAt(out, ref"B2")
+      last <- valueAt(out, ref"B5")
+    yield
+      ok(run)
+      assertEquals(second, Some(FormulaKind.Normal()))
+      assertEquals(last, CellValue.Empty)
+  }
+
+  test("GH-738: legacy array ranges are not treated as dynamic spills") {
+    for
+      src <- source(DynamicArrayFixtures.parts(metadata = None))
+      out <- outPath()
+      run <- CliHarness.run("-f", src.toString, "-o", out.toString, "--stream", "put", "B3", "99")
+      third <- valueAt(out, ref"B3")
+    yield
+      ok(run)
+      assertEquals(third, CellValue.Number(99))
+  }
+
+  test("GH-738: a released spill keeps styles on its cleared children") {
+    for
+      src <- source()
+      styled <- outPath()
+      out <- outPath()
+      styleRun <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-o",
+        styled.toString,
+        "style",
+        "B1:B5",
+        "--bold"
+      )
+      putRun <- CliHarness.run(
+        "-f",
+        styled.toString,
+        "-o",
+        out.toString,
+        "--stream",
+        "put",
+        "B1",
+        "99"
+      )
+      wb <- ExcelIO.instance[IO].read(out)
+    yield
+      ok(styleRun)
+      ok(putRun)
+      val sheet = wb.sheets.headOption.getOrElse(fail("missing sheet"))
+      assertEquals(sheet(ref"B5").value, CellValue.Empty)
+      assert(sheet.getCellStyle(ref"B5").exists(_.font.bold))
+  }
+
+  test("GH-738: sort allows a spill confined to its excluded header") {
+    val xml = DynamicArrayFixtures.sortSheetXml
+      .replace("ref=\"B1:B5\"", "ref=\"B1:C1\"")
+      .replace("_xlfn._xlws.SORT(A1:A5)", "_xlfn.SEQUENCE(1,2)")
+      .replace("<f>SUM(_xlfn.ANCHORARRAY(B1))</f><v>15</v>", "<v>2</v>")
+    for
+      src <- source(DynamicArrayFixtures.parts(sheetXml = xml))
+      out <- outPath()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-o",
+        out.toString,
+        "sort",
+        "B1:B5",
+        "--by",
+        "B",
+        "--header"
+      )
+      kind <- kindAt(out, ref"B1")
+    yield
+      ok(run)
+      assert(kind.exists(_.isDynamicArray))
+  }
+
+  test("GH-738: a batch write before overwriting its anchor is still refused") {
+    for
+      src <- source()
+      out <- outPath()
+      run <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "--stream", "batch", "-"),
+        """[{"op":"put","ref":"B3","value":8},{"op":"put","ref":"B1","value":99}]"""
+      )
+    yield
+      assertEquals(run.exit, 3, run.toString)
+      assert(!Files.exists(out))
+  }
+
+  for stream <- List(false, true) do
+    test(s"GH-738: sort outside a dynamic spill preserves metadata (stream=$stream)") {
+      for
+        src <- source()
+        out <- outPath()
+        run <- CliHarness.run(
+          List("-f", src.toString, "-o", out.toString) ++
+            (if stream then List("--stream") else Nil) ++ List("sort", "A1:A5", "--by", "A"),
+          ""
+        )
+        kind <- kindAt(out, ref"B1")
+        last <- valueAt(out, ref"B5")
+      yield
+        ok(run)
+        assert(kind.exists(_.isDynamicArray))
+        assertEquals(last, CellValue.Number(5))
+    }
+
+  test("GH-738: releasing one anchor leaves another targeted spill protected") {
+    val second =
+      """<row r="6"><c r="D6" cm="1"><f t="array" ref="D6:D10">_xlfn.SEQUENCE(5)</f><v>1</v></c></row>""" +
+        (7 to 10).map(r => s"""<row r="$r"><c r="D$r"><v>${r - 5}</v></c></row>""").mkString
+    val xml = DynamicArrayFixtures.sortSheetXml.replace("</sheetData>", s"$second</sheetData>")
+    for
+      src <- source(DynamicArrayFixtures.parts(sheetXml = xml))
+      out <- outPath()
+      run <- CliHarness.run(
+        List("-f", src.toString, "-o", out.toString, "--stream", "batch", "-"),
+        """[{"op":"put","ref":"B1","value":99},{"op":"put","ref":"D8","value":7}]"""
+      )
+    yield
+      assertEquals(run.exit, 3, run.toString)
+      assert(run.stderr.contains("Object 2"), run.toString)
+      assert(run.stderr.contains("D6:D10"), run.toString)
+      assert(!Files.exists(out))
+  }
+
+  test("GH-738: sort's streaming backend refuses a live spill before serialization") {
+    for
+      src <- source()
+      out <- outPath()
+      run <- CliHarness.run(
+        "-f",
+        src.toString,
+        "-o",
+        out.toString,
+        "--stream",
+        "sort",
+        "B1:B5",
+        "--by",
+        "B"
+      )
+    yield
+      assertEquals(run.exit, 3, run.toString)
+      assert(!Files.exists(out))
+  }

@@ -77,9 +77,12 @@ class AggregateErrorPolicySpec extends FunSuite:
     assertEquals(twoWithError.evaluateFormula("=COUNT((A1:A2)*1)"), Right(num(1)))
   }
 
-  test("GH-337: COUNTA counts error elements, COUNTBLANK does not") {
+  test("GH-337: COUNTA counts error elements; COUNTBLANK of an array is #VALUE! (#731)") {
     assertEquals(twoWithError.evaluateFormula("=COUNTA((A1:A2)*1)"), Right(num(2)))
-    assertEquals(twoWithError.evaluateFormula("=COUNTBLANK((A1:A2)*1)"), Right(num(0)))
+    assertEquals(
+      twoWithError.evaluateFormula("=COUNTBLANK((A1:A2)*1)"),
+      Right(CellValue.Error(CellError.Value))
+    )
   }
 
   // ===== The propagated errors stay IFERROR-catchable (unchanged pins) =====

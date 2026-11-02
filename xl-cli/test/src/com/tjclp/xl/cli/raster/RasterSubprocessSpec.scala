@@ -118,6 +118,10 @@ class RasterSubprocessSpec extends FunSuite:
           List("-cp", classpath, mainClass) ++ args).asJava
       )
       builder.environment().put("PATH", s"$shimDir${File.pathSeparator}/usr/bin:/bin")
+      // a JVM that picks one of these up announces it on stderr ("Picked up …"); the child never
+      // needs them, and the cases assert on stderr's first line
+      Vector("JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "JDK_JAVA_OPTIONS")
+        .foreach(builder.environment().remove)
       builder.redirectOutput(out.toFile).redirectError(err.toFile)
       val process = builder.start()
       assert(process.waitFor(180, TimeUnit.SECONDS), "the forked JVM did not finish in 180 s")

@@ -50,7 +50,7 @@ final case class StaleDataTable(
 object StaleDataTable:
   /** A cell value as the audit prints it: a number plainly, an error as Excel spells it. */
   def show(value: CellValue): String = value match
-    case CellValue.Number(n) => n.bigDecimal.stripTrailingZeros.toPlainString
+    case CellValue.Number(n) => CriteriaKeys.numberText(n)
     case CellValue.Text(t) => s"\"$t\""
     case CellValue.Bool(b) => if b then "TRUE" else "FALSE"
     case CellValue.Error(e) => e.toExcel

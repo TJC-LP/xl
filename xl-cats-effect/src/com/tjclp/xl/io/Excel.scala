@@ -163,6 +163,10 @@ trait Excel[F[_]]:
    * Uses XML event streaming - never materializes full dataset. Can write unlimited rows with ~50MB
    * memory overhead.
    *
+   * Dynamic-array anchors retain their kind through generated XLDAPR metadata. Input is consumed
+   * once into temporary worksheet XML before ZIP assembly; temporary disk use grows with worksheet
+   * size (configurable via `ExcelIO.withSpillDir`). No source-package metadata travels in RowData.
+   *
    * Good for: Very large files (100k+ rows), memory-constrained environments Memory: O(1) constant
    * (~50MB regardless of file size)
    *

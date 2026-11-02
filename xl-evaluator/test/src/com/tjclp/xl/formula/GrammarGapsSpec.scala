@@ -183,7 +183,9 @@ class GrammarGapsSpec extends FunSuite:
   }
 
   test("GH-669 review: INDEX's refused first argument reports the call's own argument count") {
-    FormulaParser.parse("=INDEX(A1:A3+1+1,3)") match
+    // #725: a value (`INDEX(A1:A3+1+1,3)`) is indexed now; a selector returning a reference is
+    // still refused (#723)
+    FormulaParser.parse("=INDEX(CHOOSE(1,A1:A3),3)") match
       case Left(ParseError.InvalidArguments("INDEX", _, _, got)) => assertEquals(got, "2 arguments")
       case other => fail(s"expected InvalidArguments for INDEX, got $other")
   }

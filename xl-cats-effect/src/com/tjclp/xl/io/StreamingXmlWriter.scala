@@ -4,13 +4,14 @@ import fs2.Stream
 import fs2.data.xml.*
 import fs2.data.xml.XmlEvent.*
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, CellValue, FormulaKind}
 import com.tjclp.xl.ooxml.{
   FormulaInjectionPolicy,
   FormulaKindCodec,
   FormulaStorage,
   SSTEntry,
   SharedStrings,
+  SheetMetadataPart,
   XmlUtil
 }
 import com.tjclp.xl.ooxml.style.{OoxmlStyles, StyleIndex}
@@ -111,6 +112,29 @@ final class SstAccumulator:
     SharedStrings(entries, indexByString.toMap, references)
 
 /**
+ * Bounded, single-fiber metadata planner for a row write (GH-749). At most two variants are
+ * retained. Extending the previous plan appends blocks, so an already emitted cm never moves.
+ */
+private[io] final class StreamingCellMetadata:
+  private val plans = scala.collection.mutable.ArrayBuffer.empty[SheetMetadataPart.CellMetadataPlan]
+
+  private def current: SheetMetadataPart.CellMetadataPlan =
+    plans.lastOption.getOrElse(SheetMetadataPart.CellMetadataPlan.none)
+
+  def indexFor(mode: ArrayMode.Dynamic): Option[Int] =
+    current.lookup(mode) match
+      case existing @ Some(_) => existing
+      case None =>
+        val plan = SheetMetadataPart.plan(part, current.cmOf.keySet + mode)
+        plans += plan
+        plan.lookup(mode)
+
+  def part: Option[String] = current.output match
+    case SheetMetadataPart.MetadataOutput.Generated(xml) => Some(xml)
+    case SheetMetadataPart.MetadataOutput.Appended(xml) => Some(xml)
+    case SheetMetadataPart.MetadataOutput.Untouched => None
+
+/**
  * True streaming XML writer using fs2-data-xml for constant-memory writes.
  *
  * Emits XML events incrementally as rows arrive, never materializing the full document tree in
@@ -188,6 +212,25 @@ object StreamingXmlWriter:
     styleId: Option[Int] = None,
     sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
+    cellToEvents(
+      colIndex,
+      rowIndex,
+      value,
+      injectionPolicy,
+      styleId,
+      sst,
+      FormulaKindCodec.noCellMetadata
+    )
+
+  private[io] def cellToEvents(
+    colIndex: Int,
+    rowIndex: Int,
+    value: CellValue,
+    injectionPolicy: FormulaInjectionPolicy,
+    styleId: Option[Int],
+    sst: Option[SstAccumulator],
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
+  ): List[XmlEvent] =
     val ref = s"${columnToLetter(colIndex)}$rowIndex"
 
     val (cellType, valueEvents) = value match
@@ -261,8 +304,6 @@ object StreamingXmlWriter:
       case CellValue.Formula(expr, cachedValue, kind) =>
         // <c r="A1"><f>SUM(A1:A10)</f><v>100</v></c>
         // GH-430: record attrs via the shared codec; dataTable records carry no formula text.
-        // GH-714: the row stream ships no metadata part, so a dynamic-array record comes out in
-        // its legacy (CSE) shape — no `cm` to point at nothing. Streaming authoring is a follow-up.
         val recordAttrs = FormulaKindCodec.toAttrs(kind).map { case (name, value) =>
           Attr(QName(name), List(XmlString(value, false)))
         }
@@ -427,9 +468,17 @@ object StreamingXmlWriter:
       case Some(sid) => baseAttrs :+ attr("s", sid.toString)
       case None => baseAttrs
 
+    val metadataAttrs = value match
+      case CellValue.Formula(_, _, kind) =>
+        FormulaKindCodec
+          .cellMetadataOf(kind, cellMetadata)
+          .toList
+          .map(cm => attr("cm", cm.toString))
+      case _ => Nil
+
     if valueEvents.isEmpty && value == CellValue.Empty then Nil // Don't emit empty cells
     else
-      XmlEvent.StartTag(QName("c"), attrs, valueEvents.isEmpty) ::
+      XmlEvent.StartTag(QName("c"), attrs ++ metadataAttrs, valueEvents.isEmpty) ::
         valueEvents :::
         (if valueEvents.nonEmpty then List(XmlEvent.EndTag(QName("c"))) else Nil)
 
@@ -439,13 +488,21 @@ object StreamingXmlWriter:
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
     sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
+    rowToEvents(rowData, injectionPolicy, sst, FormulaKindCodec.noCellMetadata)
+
+  private[io] def rowToEvents(
+    rowData: RowData,
+    injectionPolicy: FormulaInjectionPolicy,
+    sst: Option[SstAccumulator],
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
+  ): List[XmlEvent] =
     val rowAttrs = List(attr("r", rowData.rowIndex.toString))
 
     // Sort cells by column for deterministic output
     val cellEvents = rowData.cells.toList
       .sortBy(_._1)
       .flatMap { case (colIdx, value) =>
-        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, None, sst)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, None, sst, cellMetadata)
       }
 
     if cellEvents.isEmpty then Nil // Skip empty rows
@@ -460,6 +517,14 @@ object StreamingXmlWriter:
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
     sst: Option[SstAccumulator] = None
   ): List[XmlEvent] =
+    styledRowToEvents(rowData, injectionPolicy, sst, FormulaKindCodec.noCellMetadata)
+
+  private[io] def styledRowToEvents(
+    rowData: StyledRowData,
+    injectionPolicy: FormulaInjectionPolicy,
+    sst: Option[SstAccumulator],
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
+  ): List[XmlEvent] =
     val rowAttrs = List(attr("r", rowData.rowIndex.toString))
 
     // Sort cells by column for deterministic output
@@ -467,7 +532,7 @@ object StreamingXmlWriter:
       .sortBy(_._1)
       .flatMap { case (colIdx, value) =>
         val styleId = rowData.cellStyles.get(colIdx)
-        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, styleId, sst)
+        cellToEvents(colIdx, rowData.rowIndex, value, injectionPolicy, styleId, sst, cellMetadata)
       }
 
     if cellEvents.isEmpty then Nil // Skip empty rows
@@ -533,7 +598,15 @@ object StreamingXmlWriter:
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
     sst: Option[SstAccumulator] = None
   ): Stream[F, XmlEvent] =
-    rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy, sst)))
+    worksheetBody(rows, injectionPolicy, sst, FormulaKindCodec.noCellMetadata)
+
+  private[io] def worksheetBody[F[_]](
+    rows: Stream[F, RowData],
+    injectionPolicy: FormulaInjectionPolicy,
+    sst: Option[SstAccumulator],
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
+  ): Stream[F, XmlEvent] =
+    rows.flatMap(row => Stream.emits(rowToEvents(row, injectionPolicy, sst, cellMetadata)))
 
   /**
    * Generate row events for styled worksheet body.
@@ -555,7 +628,15 @@ object StreamingXmlWriter:
     injectionPolicy: FormulaInjectionPolicy = FormulaInjectionPolicy.None,
     sst: Option[SstAccumulator] = None
   ): Stream[F, XmlEvent] =
-    rows.flatMap(row => Stream.emits(styledRowToEvents(row, injectionPolicy, sst)))
+    worksheetBodyStyled(rows, injectionPolicy, sst, FormulaKindCodec.noCellMetadata)
+
+  private[io] def worksheetBodyStyled[F[_]](
+    rows: Stream[F, StyledRowData],
+    injectionPolicy: FormulaInjectionPolicy,
+    sst: Option[SstAccumulator],
+    cellMetadata: ArrayMode.Dynamic => Option[Int]
+  ): Stream[F, XmlEvent] =
+    rows.flatMap(row => Stream.emits(styledRowToEvents(row, injectionPolicy, sst, cellMetadata)))
 
   /**
    * Generate worksheet footer events.

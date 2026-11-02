@@ -296,9 +296,11 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(CellValue.Text("banana"), crit))
   }
 
-  test("matches: errors and uncached formulas never match text comparison (GH-466)") {
+  test("matches: errors match <>x, uncached formulas never match it (GH-466, #731)") {
     val crit = parseValue("<>x")
-    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    // desktop Excel counts error cells under every <> criterion
+    assert(matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), parseValue(">x")))
     assert(!matches(CellValue.Formula("=A1", None), crit))
     assert(matches(CellValue.Formula("=A1", Some(CellValue.Text("y"))), crit))
     assert(!matches(CellValue.Formula("=A1", Some(CellValue.Text("x"))), crit))
@@ -347,17 +349,14 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(cell, Wildcard("test~~value")))
   }
 
-  test("matches: wildcard on number cell") {
-    val cell = CellValue.Number(BigDecimal(12345))
-    assert(matches(cell, Wildcard("123*")))
-    assert(matches(cell, Wildcard("*45")))
-    assert(matches(cell, Wildcard("1234?")))
-  }
-
-  test("matches: wildcard on boolean cell") {
-    val cell = CellValue.Bool(true)
-    assert(matches(cell, Wildcard("TR*")))
-    assert(matches(cell, Wildcard("*UE")))
+  test("#780: a wildcard never matches a number or boolean cell") {
+    // desktop Excel: COUNTIF(r,"*") counts text cells only
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("123*")))
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("*")))
+    assert(!matches(CellValue.Bool(true), Wildcard("TR*")))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.NA), Wildcard("*")))
+    assert(matches(CellValue.Text("12345"), Wildcard("123*")))
+    assert(matches(CellValue.Formula("\"\"", Some(CellValue.Text(""))), Wildcard("*")))
   }
 
   test("matches: wildcard on empty cell fails") {

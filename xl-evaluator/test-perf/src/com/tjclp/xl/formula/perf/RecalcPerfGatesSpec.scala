@@ -61,7 +61,9 @@ class RecalcPerfGatesSpec extends FunSuite:
     Counter.SlicesBuilt -> 8L,
     Counter.ScanFallbacks -> 0L,
     Counter.UsedRangeScans -> 1L,
-    Counter.NameParses -> 15L
+    Counter.NameParses -> 15L,
+    // #790: one parse per formula, made by the graph build and reused by evaluation
+    Counter.FormulaParses -> 1600L
   )
 
   private def assertOracle(run: LoadsBookHarness.Run): Unit =

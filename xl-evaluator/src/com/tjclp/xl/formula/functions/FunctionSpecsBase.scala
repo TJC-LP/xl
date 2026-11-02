@@ -6,8 +6,10 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   ArrayArithmetic,
   ArrayResult,
+  CriteriaKeys,
   CriteriaMatcher,
   RangeOperand,
+  RecalcCounters,
   ScalarCoercion
 }
 import com.tjclp.xl.formula.parser.ParseError
@@ -116,7 +118,8 @@ trait FunctionSpecsBase:
   type DatePairOptRange = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr.RangeLocation])
   type DateIntOptRange = (TExpr[LocalDate], TExpr[Int], Option[TExpr.RangeLocation])
   type DatePairOptBasis = (TExpr[LocalDate], TExpr[LocalDate], Option[TExpr[Int]])
-  type IfArgs = (TExpr[Boolean], TExpr[Any], TExpr[Any])
+  // #723: value_if_false is optional; IF(FALSE, x) is the logical FALSE
+  type IfArgs = (TExpr[Boolean], TExpr[Any], Option[TExpr[Any]])
   // GH-120 statistical functions over a range
   type RangeIntArgs = (TExpr.RangeLocation, TExpr[Int])
   type RankArgs = (TExpr[BigDecimal], TExpr.RangeLocation, Option[TExpr[Int]])
@@ -283,6 +286,17 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
+   * Sheet bounds shared by references, lookups and aggregates (#747). The pass scans once per sheet
+   * and structural generation; outside an active pass bounds are read from this snapshot.
+   */
+  protected def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
+    ctx.aggregateMemo.flatMap(_.passCache) match
+      case Some(passCache) => passCache.usedRange(sheet)
+      case None =>
+        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
+        sheet.usedRange
+
+  /**
    * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
    * reference's own shape — rows × columns equal ROWS × COLUMNS, blanks included, so array
    * arithmetic against a constant of that width lines up. The one exception is an axis that runs to
@@ -304,7 +318,7 @@ trait FunctionSpecsBase:
     else
       // `usedRange` scans every populated cell: read it only for an axis that reaches the sheet's
       // edge, never for a bounded reference (as SUMPRODUCT's computeBounds keeps it off that path)
-      val used = if readsUsedRange(reference) then targetSheet.usedRange else None
+      val used = if readsUsedRange(reference) then usedRangeOf(ctx, targetSheet) else None
       def end(lo: Int, hi: Int, sheetLast: Int, usedEnd: => Option[Int]): Int =
         if hi < sheetLast then hi
         else math.max(lo, math.min(hi, usedEnd.getOrElse(lo)))
@@ -380,9 +394,10 @@ trait FunctionSpecsBase:
    */
   protected def boundedToUsed(
     range: CellRange,
-    target: com.tjclp.xl.sheets.Sheet
+    target: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
   ): Option[CellRange] =
-    if range.isFullColumn || range.isFullRow then target.usedRange.flatMap(range.intersect)
+    if range.isFullColumn || range.isFullRow then usedRangeOf(ctx, target).flatMap(range.intersect)
     else Some(range)
 
   /** A range reference, seen through the coercion a typed slot wraps it in. */
@@ -446,10 +461,11 @@ trait FunctionSpecsBase:
    */
   protected def lookupRangeExtent(
     range: CellRange,
-    targetSheet: com.tjclp.xl.sheets.Sheet
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    ctx: EvalContext
   ): Option[CellRange] =
     if range.isFullColumn || range.isFullRow then
-      targetSheet.usedRange.flatMap { used =>
+      usedRangeOf(ctx, targetSheet).flatMap { used =>
         val rowEnd = math.min(range.rowEnd.index0, used.rowEnd.index0)
         val colEnd = math.min(range.colEnd.index0, used.colEnd.index0)
         if rowEnd < range.rowStart.index0 || colEnd < range.colStart.index0 then None
@@ -467,7 +483,7 @@ trait FunctionSpecsBase:
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext
   ): Either[EvalError, Vector[Vector[CellValue]]] =
-    lookupRangeExtent(range, targetSheet) match
+    lookupRangeExtent(range, targetSheet, ctx) match
       case None => Right(Vector.empty)
       case Some(extent) =>
         // each key as a lookup reads it (LookupLine.key, GH-715): a failing key is its error value
@@ -493,34 +509,49 @@ trait FunctionSpecsBase:
     lookupLine(range, targetSheet, ctx).find(forward = !descending)(matches)
 
   /**
-   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2 with `wildcard` set) in search_mode's
-   * direction, through [[findLookupPosition]]: the first key in search order that equals the lookup
-   * value in the lookup plane, or matches the wildcard criterion. search_mode 2 / -2 (the binary
-   * searches) are answered by the same walk in their direction, which agrees on the sorted data
-   * they require (GH-55).
+   * #692: XLOOKUP/XMATCH's exact search (match_mode 0, or 2, through [[exactMatcher]]) in
+   * search_mode's direction, through [[findLookupPosition]]: the first key in search order that
+   * `keyMatches`. search_mode 2 / -2 (the binary searches) are answered by the same walk in their
+   * direction, which agrees on the sorted data they require (GH-55).
    */
   protected def exactLookupPosition(
     range: CellRange,
     targetSheet: com.tjclp.xl.sheets.Sheet,
     ctx: EvalContext,
-    lookup: ExprValue,
-    wildcard: Option[CriteriaMatcher.Wildcard],
+    keyMatches: CellValue => Boolean,
     searchMode: Int
   ): Either[EvalError, Option[Int]] =
-    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0) { cv =>
-      matchesLookupExact(cv, lookup) || wildcard.exists(CriteriaMatcher.matches(cv, _))
-    }
+    findLookupPosition(range, targetSheet, ctx, descending = searchMode < 0)(keyMatches)
 
   /**
-   * The wildcard criterion a text lookup value spells (`*`, `?`, `~` escapes), for match_mode 2.
+   * The exact lookup plane's test of a key, one for MATCH type 0, XMATCH and XLOOKUP (match_mode 0
+   * or 2), and exact VLOOKUP and HLOOKUP (#693): numbers, text and logicals never cross
+   * ([[matchesLookupExact]]). With `wildcards` — MATCH type 0, exact VLOOKUP/HLOOKUP and match_mode
+   * 2, as desktop Excel applies them — a text lookup value is read with the lookup escape grammar
+   * ([[CriteriaMatcher.lookupPattern]], #774): with no unescaped wildcard left it is compared
+   * exactly after every `~x` becomes `x`, otherwise only a text key (empty text included, never a
+   * blank) can match the pattern. Without them (XMATCH/XLOOKUP match_mode 0) the value is compared
+   * as written.
    */
-  protected def wildcardCriterion(lookup: ExprValue): Option[CriteriaMatcher.Wildcard] =
+  protected def exactMatcher(lookup: ExprValue, wildcards: Boolean): CellValue => Boolean =
     lookup match
-      case ExprValue.Text(text) =>
-        CriteriaMatcher.parse(ExprValue.Text(text)) match
-          case c: CriteriaMatcher.Wildcard => Some(c)
-          case _ => None
-      case _ => None
+      case ExprValue.Text(text) if wildcards =>
+        CriteriaMatcher.lookupPattern(text) match
+          case CriteriaMatcher.LookupPattern.Literal(literal) =>
+            val value = ExprValue.Text(literal)
+            cv => matchesLookupExact(cv, value)
+          case CriteriaMatcher.LookupPattern.Pattern(wildcard) =>
+            cv => CriteriaMatcher.matches(cv, wildcard)
+      case other => cv => matchesLookupExact(cv, other)
+
+  /**
+   * #693: MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0, as desktop Excel
+   * does (`MATCH(blank,r,0)` finds the 0 key, never a blank one).
+   */
+  protected def blankLookupAsZero(lookup: ExprValue): ExprValue =
+    lookup match
+      case ExprValue.Cell(CellValue.Empty) => ExprValue.Number(BigDecimal(0))
+      case other => other
 
   /**
    * A lookup's read of a key cell: a failure to evaluate it is the Excel error it carries, or
@@ -637,7 +668,7 @@ trait FunctionSpecsBase:
     val stored =
       if !column && !row then all
       else
-        targetSheet.usedRange.fold(0) { used =>
+        usedRangeOf(ctx, targetSheet).fold(0) { used =>
           if column then
             if range.colStart.index0 < used.colStart.index0 ||
               range.colStart.index0 > used.colEnd.index0
@@ -896,46 +927,22 @@ trait FunctionSpecsBase:
       case other => other
 
   /**
-   * GH-467: exact equality for the MATCH/XLOOKUP lookup plane, over a lookup value already passed
-   * through [[normalizeLookupValue]]. Total and blank-safe: a blank cell matches nothing (a
-   * default-equal fallback here made blanks "match" every lookup value, shifting MATCH positions
-   * over ranges with holes), mismatched types match nothing, and DateTime cells compare by their
-   * Excel serial so date lookups find date columns.
+   * GH-467: exact equality for the lookup plane, over a lookup value already passed through
+   * [[normalizeLookupValue]]. Total and blank-safe: a blank cell matches nothing (a default-equal
+   * fallback here made blanks "match" every lookup value, shifting MATCH positions over ranges with
+   * holes), mismatched types match nothing (`"10"` never finds 10, nor 1 TRUE), DateTime cells
+   * compare by their Excel serial so date lookups find date columns, and rich text is text
+   * ([[ScalarCoercion.cellText]], #775).
    */
   protected def matchesLookupExact(cv: CellValue, lookup: ExprValue): Boolean =
     (cv, lookup) match
       case (CellValue.Number(n), ExprValue.Number(v)) => n == v
       case (CellValue.DateTime(dt), ExprValue.Number(v)) =>
         BigDecimal(CellValue.dateTimeToExcelSerial(dt)) == v
-      case (CellValue.Text(s), ExprValue.Text(v)) => s.equalsIgnoreCase(v)
       case (CellValue.Bool(b), ExprValue.Bool(v)) => b == v
       case (CellValue.Formula(_, Some(cached), _), v) => matchesLookupExact(cached, v)
+      case (key, ExprValue.Text(v)) => ScalarCoercion.cellText(key).exists(_.equalsIgnoreCase(v))
       case _ => false
-
-  /** Extract text for matching, coercing numbers and booleans to strings. */
-  protected def extractTextForMatch(cv: CellValue): Option[String] =
-    cv match
-      case CellValue.Text(s) => Some(s)
-      case CellValue.Number(n) => Some(n.bigDecimal.stripTrailingZeros().toPlainString)
-      case CellValue.Bool(b) => Some(if b then "TRUE" else "FALSE")
-      case CellValue.Formula(_, Some(cached), _) => extractTextForMatch(cached)
-      case _ => None
-
-  /**
-   * Extract numeric for matching, parsing text as numbers.
-   *
-   * GH-488: a DateTime cell yields its Excel serial, so a date-typed VLOOKUP/HLOOKUP key finds a
-   * date key column (dates ARE numbers in Excel's comparison plane — same judgment as
-   * [[normalizeLookupValue]] and GH-449's numeric-boundary coercion).
-   */
-  protected def extractNumericForMatch(cv: CellValue): Option[BigDecimal] =
-    cv match
-      case CellValue.Number(n) => Some(n)
-      case CellValue.Text(s) => scala.util.Try(BigDecimal(s.trim)).toOption
-      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
-      case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
-      case CellValue.Formula(_, Some(cached), _) => extractNumericForMatch(cached)
-      case _ => None
 
   /** Validate that two ranges have the same dimensions. */
   protected def validateDimensions(

@@ -373,7 +373,7 @@ final case class OpSpec(
   cellMutating: Boolean,           // mirrors WriteCommands.isCellMutating
   structural: Boolean,
   needsFormula: Boolean,
-  streamable: Boolean,             // mirrors buildStreamingBatchPatches' supported set (dragging putf included; the streaming putf VERB is the one that does not drag)
+  streamable: Boolean,             // mirrors buildStreamingBatchPatches' supported set (dragging putf included; the streaming putf verb drags too since GH-789)
   cliVerb: Option[String],
   since: String,
   doc: String,
