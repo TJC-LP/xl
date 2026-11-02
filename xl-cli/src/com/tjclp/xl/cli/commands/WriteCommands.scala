@@ -133,7 +133,15 @@ object WriteCommands:
     fullFormula: String,
     prefix: String
   ): String =
-    s"${prefix}the formula does not parse\n${FormulaEcho.diagnostic(error, fullFormula)}"
+    val heading = error match
+      case ParseError.FormulaTooLong(length, max) =>
+        val inputLength = CellValue.canonicalFormulaText(fullFormula).length
+        if inputLength > max then "the formula does not parse"
+        else
+          s"stored formula exceeds the $max-character limit " +
+            s"(input: $inputLength characters; stored: $length characters after storage-prefix expansion)"
+      case _ => "the formula does not parse"
+    s"$prefix$heading\n${FormulaEcho.diagnostic(error, fullFormula)}"
 
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.
@@ -539,12 +547,6 @@ object WriteCommands:
             )
           )
         case Nil => IO.unit
-      // GH-693: include _xlfn./_xlpm. expansion before any authoring or output write.
-      _ <- formulas.traverse_ { formula =>
-        ValueParser.storedFormulaLengthError(formula) match
-          case Some(error) => IO.raiseError(formulaError(error, formula))
-          case None => IO.unit
-      }
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
 
@@ -642,7 +644,7 @@ object WriteCommands:
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
+        ValueParser.parseAuthoredFormula(fullFormula).left.map(formulaError(_, fullFormula))
       )
       released <- releaseSpills(wb, sheet, Set(ref))
       (releasedWb, releasedSheet, cleared) = released
@@ -709,6 +711,13 @@ object WriteCommands:
     val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
+      _ <- IO.fromEither(
+        ValueParser
+          .storedFormulaLengthError(fullFormula)
+          .toLeft(())
+          .left
+          .map(formulaError(_, fullFormula))
+      )
       // one reading: the spill and the dependent refresh see the same NOW()
       clock <- commandClock
       authored <- IO.fromEither(
@@ -849,7 +858,7 @@ object WriteCommands:
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
+        ValueParser.parseAuthoredFormula(fullFormula).left.map(formulaError(_, fullFormula))
       )
       modifiedRefs = range.cells.toSet
       released <- releaseSpills(wb, sheet, modifiedRefs)
@@ -920,8 +929,8 @@ object WriteCommands:
               val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
               IO.fromEither(
-                FormulaParser
-                  .parse(fullFormula)
+                ValueParser
+                  .parseAuthoredFormula(fullFormula)
                   .left
                   .map(formulaError(_, fullFormula, s"Formula for ${ref.toA1}: "))
               ).as((ref, formula))

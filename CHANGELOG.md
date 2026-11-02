@@ -9,7 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Reject CLI-authored formulas whose Excel storage prefixes expand their saved text beyond 8,192 characters (part of #693).
+- **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
+  8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
+  retain per-cell context, and validate after resolving the target and selecting the write mode.
 
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
   right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted

@@ -36,6 +36,10 @@ class StoredFormulaLengthSpec extends FunSuite:
         .unsafeRunSync()
       assert(result.isLeft, "oversized formula was unexpectedly accepted")
       assert(result.swap.toOption.exists(_.getMessage.contains("8192")))
+      val message = result.swap.toOption.fold("")(_.getMessage)
+      assert(message.contains("stored formula"), message)
+      assert(message.contains(oversized.length.toString), message)
+      assert(!message.contains("does not parse"), message)
       assert(!Files.exists(output))
     finally
       Files.deleteIfExists(output)
@@ -52,7 +56,21 @@ class StoredFormulaLengthSpec extends FunSuite:
     shapes.foreach { op =>
       val result = BatchParser.parseBatchJson(ujson.Arr(op).render())
       assert(result.isLeft, "oversized formula was unexpectedly accepted")
+      val error = result.swap.toOption.getOrElse(fail("missing batch error"))
+      assert(error.getMessage.contains("stored formula"), error.getMessage)
+      assert(error.getMessage.contains("8429"), error.getMessage)
+      error match
+        case cli: com.tjclp.xl.cli.contract.CliException =>
+          assertEquals(cli.error.code, "BATCH_OP_INVALID")
+        case other => fail(s"unexpected error type: $other")
     }
+    val dry = com.tjclp.xl.cli.contract.CliHarness
+      .run(List("--json", "batch", "--dry-run", "-"), ujson.Arr(shapes.head).render())
+      .unsafeRunSync()
+    assertEquals(dry.exit, 2, dry.stdout)
+    val error = ujson.read(dry.stdout)("error")
+    assertEquals(error("code").str, "BATCH_OP_INVALID")
+    assert(error("message").str.contains("stored formula"), dry.stdout)
   }
 
   test("GH-693: storage length boundary and already-prefixed input are exact") {
@@ -65,6 +83,28 @@ class StoredFormulaLengthSpec extends FunSuite:
     assert(ValueParser.storedFormulaLengthError(boundary.replace("SUM(", "SUM( ")).isDefined)
     assertEquals(ValueParser.storedFormulaLengthError("=SUM(1,2)"), None)
     assertEquals(ValueParser.storedFormulaLengthError(FormulaStorage.toStored(base)), None)
+    assertEquals(ValueParser.storedFormulaLengthError(FormulaStorage.toStored(boundary)), None)
+    val dir = Files.createTempDirectory("stored-formula-context-")
+    val output = dir.resolve("out.xlsx")
+    try
+      val wb = Workbook(Sheet("Test"))
+      val result = WriteCommands
+        .putFormula(
+          wb,
+          wb.sheets.headOption,
+          "B2:B3",
+          List("1", oversized),
+          output,
+          WriterConfig.default
+        )
+        .attempt
+        .unsafeRunSync()
+      val message = result.swap.toOption.fold("")(_.getMessage)
+      assert(message.startsWith("Formula for B3: "), message)
+      assert(!Files.exists(output))
+    finally
+      Files.deleteIfExists(output)
+      Files.deleteIfExists(dir)
   }
 
   test("GH-693: streaming putf refuses storage expansion without touching input or output") {
@@ -81,6 +121,10 @@ class StoredFormulaLengthSpec extends FunSuite:
         .unsafeRunSync()
       assert(result.isLeft)
       assert(result.swap.toOption.exists(_.getMessage.contains("8192")))
+      val message = result.swap.toOption.fold("")(_.getMessage)
+      assert(message.contains("stored formula"), message)
+      assert(message.contains(oversized.length.toString), message)
+      assert(!message.contains("does not parse"), message)
       assert(!Files.exists(output))
       assertEquals(Files.readAllBytes(source).toVector, before)
     finally
