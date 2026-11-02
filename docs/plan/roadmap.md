@@ -153,7 +153,8 @@ with the `[N]` scanner promoted to xl-core; `Merge` later), the ADR-017 Wave 2b 
 [#583](https://github.com/TJC-LP/xl/issues/583)/[#584](https://github.com/TJC-LP/xl/issues/584)/[#586](https://github.com/TJC-LP/xl/issues/586)/[#587](https://github.com/TJC-LP/xl/issues/587)/[#591](https://github.com/TJC-LP/xl/issues/591)
 (a dependency chain, not a cluster: #587's evaluator half ∥ #583's codec → #583's CLI wiring →
 #587's CLI wiring → {#586, #591} → #584 last), [#505](https://github.com/TJC-LP/xl/issues/505)
-(Batik lays text out wider than AWT measures — needs another measurement engine),
+(Batik lays text out wider than AWT measures — fixed in Unreleased by declaring the measured
+SVG text advance; [pixel evidence](../images/issue-505/README.md)),
 [#485](https://github.com/TJC-LP/xl/issues/485) (native smoke in CI),
 [#540](https://github.com/TJC-LP/xl/issues/540) (EvalPort interop — a maintainer decision),
 [#653](https://github.com/TJC-LP/xl/issues/653) items 1–3 (foreign corpus, per-part byte laws,

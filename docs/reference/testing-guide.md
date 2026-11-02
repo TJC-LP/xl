@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: CI runs the full Mill test graph across the library, evaluator, CLI, and support modules — **4,085 tests** as of 0.12.6. Use `./mill __.test` as the authoritative count.
+**Current Status**: standalone PR #817 validation on 2026-11-02 recorded **9,909 cases**, including skips. See per-run PR validation for pass/failure results.
 
 ## Test Infrastructure
 
@@ -265,23 +265,19 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of GH-749 validation (2026-10-28), from the full-suite JUnit reports; macros are part of xl-core. Counts include skipped cases; optional external-tool tests skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
+As of standalone PR #817 validation on 2026-11-02, from full-suite JUnit reports. Counts include skipped cases; per-run pass/failure results are recorded in the PR.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 3962 |
-| xl-core | 1872 |
-| xl-ooxml | 1435 |
-| xl-cli | 1924 |
+| xl-evaluator | 4193 |
+| xl-core | 1875 |
+| xl-ooxml | 1447 |
+| xl-cli | 1965 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,620** |
+| **Total** | **9,909** |
 
-GH-747 adds 17 whole-axis bounds-cache regression cases. The current branch has 9,633 cases,
-including 3,977 in xl-evaluator (2026-10-28 full-suite JUnit reports); the table above retains the
-0.25.0 release counts. `WholeAxisUsedRangeSpec` also has one opt-in large-sheet acceptance check,
-run with `XL_WHOLE_AXIS_PERF=1`, which is excluded from these default-suite counts.
 
 ## Test Quality Metrics
 

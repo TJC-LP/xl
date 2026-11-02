@@ -554,6 +554,14 @@ with no explicit height takes the height its content needs (Excel's autofit: Cal
 18pt → 23.25pt, 24pt → 31.5pt; wrapped text its line count), never less than the sheet's default
 row height, and a row with an explicit height (`xl row --height`, `rowheight`) keeps it exactly.
 
+For near-clipped, fitting, unwrapped right-aligned strings, SVG declares the measured advance
+using `textLength` with `lengthAdjust="spacingAndGlyphs"` (#505). This keeps both ends of tight
+numbers such as `1234567.9` at column width 9.0 in Batik. The adjustment applies only when the
+remaining space is less than the cell padding plus two pixels. Roomy cells retain natural glyph
+advances. Overflowing text, wrapped text and rich-text runs keep their existing layout paths.
+Backends must support these SVG text attributes to honor the tight-cell adjustment.
+See the [historical raster evidence and current reproduction instructions](../images/issue-505/README.md).
+
 **Conditional formatting** ([#497](https://github.com/TJC-LP/xl/issues/497)): the pictures
 (`html`, `svg` and the raster formats built from the SVG) paint the sheet's conditional formatting
 as Excel shows it, with no flag. Painted: cell-value rules (all eight operators), formula
