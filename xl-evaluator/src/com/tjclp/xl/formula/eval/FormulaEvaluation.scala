@@ -159,7 +159,7 @@ private[formula] object FormulaEvaluation:
             FormulaEvaluationError(
               XLError.FormulaError(
                 formula,
-                "An override sets the placement cell, which the formula replaces"
+                s"An override sets the placement cell ${at.fold("")(_.toA1)}, which the formula replaces"
               )
             )
           )
@@ -197,9 +197,13 @@ private[formula] object FormulaEvaluation:
       placedSheet = at.fold(tempSheet)(SheetEvaluator.placed(tempSheet, _, formula))
       book = tempBook.put(placedSheet)
       placement = at.map(cell =>
-        (cell, SheetEvaluator.placement(formula, wb, tempSheet.name, cell))
+        (cell, SheetEvaluator.placement(formula, book, tempSheet.name, cell))
       )
-      evaluator = placement.fold(SheetEvaluator.spillTrackingEvaluator(formula, wb))(_._2.evaluator)
+      // Spill detection reads the evaluation copy: the supplied sheet and any formula overrides
+      // may carry `x#` readers the caller's workbook does not.
+      evaluator = placement.fold(SheetEvaluator.spillTrackingEvaluator(formula, book))(
+        _._2.evaluator
+      )
       start = Evaluated(placedSheet, evaluator, book, placement)
       evaluated <- evalOrder.foldLeft[Result[Evaluated]](Right(start)) { (acc, ref) =>
         acc.flatMap { e =>

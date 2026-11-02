@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: standalone PR #825 validation on 2026-11-02 recorded **9,966 cases**, including skips. See per-run PR validation for pass/failure results.
+**Current Status**: standalone PR #817 validation on 2026-11-02 recorded **9,909 cases**, including skips. See per-run PR validation for pass/failure results.
 
 ## Test Infrastructure
 
@@ -265,18 +265,18 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of standalone PR #825 validation on 2026-11-02, from full-suite JUnit reports. Counts include skipped cases; per-run pass/failure results are recorded in the PR.
+As of standalone PR #817 validation on 2026-11-02, from full-suite JUnit reports. Counts include skipped cases; per-run pass/failure results are recorded in the PR.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4258 |
-| xl-core | 1872 |
+| xl-evaluator | 4193 |
+| xl-core | 1875 |
 | xl-ooxml | 1447 |
-| xl-cli | 1959 |
+| xl-cli | 1965 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **9,966** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
+| **Total** | **9,909** |
 
 
 ## Test Quality Metrics

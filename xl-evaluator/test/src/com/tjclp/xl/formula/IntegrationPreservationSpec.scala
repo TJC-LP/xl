@@ -51,7 +51,7 @@ class IntegrationPreservationSpec extends FunSuite:
       SheetEvaluator.evaluateAt(Workbook(source), source, ref"D5", "A1", Map(ref"D5" -> n(2)))
     assert(
       result.left.exists(e =>
-        e.cycle.isEmpty && e.error.toString.contains("override sets the placement")
+        e.cycle.isEmpty && e.error.toString.contains("override sets the placement cell D5")
       ),
       result.toString
     )
