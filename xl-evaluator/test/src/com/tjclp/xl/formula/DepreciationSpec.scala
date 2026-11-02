@@ -38,7 +38,6 @@ class DepreciationSpec extends FunSuite:
       "SLN(100,10,0)" -> CellError.Div0,
       // Like the existing financial functions, numeric arguments enter Double arithmetic first.
       "SLN(100,10,1E-400)" -> CellError.Div0,
-      "SYD(100,10,-1.0000000000000000001,1)" -> CellError.Num,
       // Observed in Excel 16.114.3; LibreOffice accepts these out-of-domain inputs.
       "SYD(100,10,2,0)" -> CellError.Num,
       "SYD(100,10,2,3)" -> CellError.Num,
@@ -47,12 +46,15 @@ class DepreciationSpec extends FunSuite:
       "SYD(100,10,0,1)" -> CellError.Num,
       "SYD(100,10,-1,1)" -> CellError.Num,
       "SLN(1E308,-1E308,1)" -> CellError.Num,
-      "SYD(1E308,-1E308,2,0)" -> CellError.Num,
+      // Valid bounds ensure this reaches numeric overflow rather than the domain guard.
+      "SYD(1E308,-1E308,1,1)" -> CellError.Num,
       "SLN(#N/A,10,2)" -> CellError.NA,
       "SLN(\"abc\",10,2)" -> CellError.Value
     ).foreach { (f, error) =>
       assertEquals(sheet.evaluateFormula(f), Right(CellValue.Error(error)), f)
     }
+    // Double-first conversion rounds the period to life; an exact-decimal guard rejects it.
+    number("SYD(100,10,2,2.0000000000000001)", 30)
     number("IFERROR(SLN(100,10,0),42)", 42)
   }
 
