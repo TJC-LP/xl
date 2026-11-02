@@ -451,6 +451,9 @@ object BatchParser:
             // `--dry-run` refuses the same text the write would
             def parseable(formula: String, slot: Option[String]): String =
               val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
+              ValueParser.storedFormulaLengthError(formula).foreach { error =>
+                throw unparseableFormula(idx, slot, error, fullFormula)
+              }
               FormulaParser.parse(fullFormula) match
                 case Right(_) => formula
                 case Left(e) => throw unparseableFormula(idx, slot, e, fullFormula)

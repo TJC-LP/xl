@@ -539,6 +539,12 @@ object WriteCommands:
             )
           )
         case Nil => IO.unit
+      // GH-693: include _xlfn./_xlpm. expansion before any authoring or output write.
+      _ <- formulas.traverse_ { formula =>
+        ValueParser.storedFormulaLengthError(formula) match
+          case Some(error) => IO.raiseError(formulaError(error, formula))
+          case None => IO.unit
+      }
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, refStr, "putf")
       (targetSheet, refOrRange) = resolved
 

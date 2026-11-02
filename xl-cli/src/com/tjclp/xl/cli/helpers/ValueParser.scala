@@ -64,6 +64,16 @@ object ValueParser:
         "sheet.dataTable(interior, rowInput, colInput) in a script (GH-419)."
     )
 
+  /** GH-693: the writer expands storage prefixes; its actual `<f>` text must fit Excel's limit. */
+  def storedFormulaLengthError(formula: String): Option[com.tjclp.xl.formula.ParseError] =
+    val canonical = CellValue.canonicalFormulaText(formula)
+    val length =
+      if canonical.length > 8192 then canonical.length
+      else com.tjclp.xl.ooxml.FormulaStorage.toStored(canonical).length
+    Option.when(length > 8192)(
+      com.tjclp.xl.formula.ParseError.FormulaTooLong(length, 8192)
+    )
+
   /**
    * Format a CellValue for display.
    *

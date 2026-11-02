@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject CLI-authored formulas whose Excel storage prefixes expand their saved text beyond 8,192 characters (part of #693).
+
 - **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
   desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
   `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
