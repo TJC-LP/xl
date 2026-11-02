@@ -47,8 +47,9 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
 
   test("#681: pathological <f> text on a small stack never escapes the oracle") {
     // the parser's 128-level budget bounds its depth, but not its frame size: on a small thread
-    // stack (a fiber, a native image) the deepest legal nests still overflow. Every text must come
-    // back as a verdict — the overflow as a finding — on a stack small enough to overflow.
+    // stack (a fiber, a native image) the deepest legal nests can overflow. Every text must come
+    // back as a verdict; whether it overflows depends on JVM compilation and the stack-size hint.
+    // The injected-overflow test above deterministically pins conversion to a finding.
     val texts = Vector(
       "(" * 127 + "1" + ")" * 127,
       "SUM(" * 127 + "1" + ")" * 127,
@@ -66,11 +67,6 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
       texts.map(t => t.take(20) -> onSmallStack(64L * 1024)(LintCommands.formulaCheck(t)))
     val escaped = results.collect { case (t, Left(err)) => s"$t…: $err" }
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
-    // and at least one of them really overflowed — the guard, not luck, answered
-    assert(
-      results.exists { case (_, verdict) => verdict.exists(_.exists(_.contains("stack"))) },
-      results.mkString("\n")
-    )
   }
 
   // ===== the prefilter: structured and external references skip the parse =====

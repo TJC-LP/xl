@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.io.ExcelIO
@@ -85,8 +85,11 @@ class LibreOfficeOracleSpec extends FunSuite:
   private def num(n: Int): Option[CellValue] = Some(CellValue.Number(BigDecimal(n)))
 
   /**
-   * The review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10 cached 20,
-   * C1=B1+B2 cached 35. Deleting row 2 makes B1 `SUM(A1:A1)` = 5 and C1 `B1+#REF!` = #REF!.
+   * A variant of the review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10
+   * cached 20, C1=B1+INDEX(B1:B2,2) cached 35. Deleting row 2 contracts both ranges, so B1 is 5 and
+   * INDEX(B1:B1,2) makes C1 #REF!. Use INDEX rather than an inline #REF!: LibreOfficeDev 26.8 reads
+   * even a standalone OOXML #REF! literal as #NAME?, independently of cache invalidation.
+   * Deleted-reference spelling and cached errors are pinned separately by StructuralCommandSpec.
    */
   private def reviewWorkbook(): Workbook =
     Workbook(
@@ -94,7 +97,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         .put(ref"A1" -> 5, ref"A2" -> 10)
         .put(ref"B1", CellValue.Formula("SUM(A1:A2)", num(15)))
         .put(ref"B2", CellValue.Formula("ROW()*10", num(20)))
-        .put(ref"C1", CellValue.Formula("B1+B2", num(35)))
+        .put(ref"C1", CellValue.Formula("B1+INDEX(B1:B2,2)", num(35)))
     )
 
   test(
@@ -121,6 +124,18 @@ class LibreOfficeOracleSpec extends FunSuite:
       WriteCommands.deleteRows(wb, wb.sheets.headOption, 2, 1, recalculated, config).unsafeRunSync()
       assert(summary.contains("fullCalcOnLoad"), s"premise: the marker is set: $summary")
 
+      val expectedFormula = "B1+INDEX(B1:B1,2)"
+      val recalculatedBook = ExcelIO.instance[IO].read(recalculated).unsafeRunSync()
+      val noRecalcBook = ExcelIO.instance[IO].read(noRecalc).unsafeRunSync()
+      assertEquals(
+        recalculatedBook.sheets.headOption.map(_(ref"C1").value),
+        Some(CellValue.Formula(expectedFormula, Some(CellValue.Error(CellError.Ref))))
+      )
+      assertEquals(
+        noRecalcBook.sheets.headOption.map(_(ref"C1").value),
+        Some(CellValue.Formula(expectedFormula, None))
+      )
+
       val csv = libreOfficeCsv(workDir, noRecalc, recalculated)
       val truth = csv("recalculated")
       assertEquals(truth, "5,5,#REF!", "premise: LibreOffice shows the recalculated write's values")
@@ -134,7 +149,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         !csv("no-recalc").contains("15"),
         s"stale SUM(A1:A2) cache displayed: ${csv("no-recalc")}"
       )
-      assert(!csv("no-recalc").contains("35"), s"stale B1+B2 cache displayed: ${csv("no-recalc")}")
+      assert(!csv("no-recalc").contains("35"), s"stale C1 cache displayed: ${csv("no-recalc")}")
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
   }
