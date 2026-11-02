@@ -375,18 +375,40 @@ private[xl] object SheetEdits:
       val colStart = range.colStart.index0
       val colEnd = range.colEnd.index0
       val dataRowStart = if hasHeader then rowStart + 1 else rowStart
+      val dataRange = Option.when(dataRowStart <= rowEnd)(
+        CellRange(ARef.from0(colStart, dataRowStart), ARef.from0(colEnd, rowEnd))
+      )
+      val blocked = sheet.cells.valuesIterator
+        .collect {
+          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _, _)
+              if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 &&
+                dataRange.exists(_.intersects(arr.ref)) =>
+            cell.ref -> arr.ref
+        }
+        .toVector
+        .sortBy((anchor, _) => (anchor.row.index0, anchor.col.index0))
+        .headOption
       if dataRowStart > rowEnd then Right(sheet)
       else
-        val rowsToSort: Vector[(Int, Map[Int, Cell])] =
-          (dataRowStart to rowEnd).toVector.map { rowIdx =>
-            val cellMap = (colStart to colEnd).flatMap { colIdx =>
-              sheet.cells.get(ARef.from0(colIdx, rowIdx)).map(colIdx -> _)
-            }.toMap
-            (rowIdx, cellMap)
-          }
-        val comparator = rowComparator(keys)
-        val sortedRows = rowsToSort.sortWith((a, b) => comparator(a._2, b._2) < 0)
-        reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
+        blocked match
+          case Some((anchor, extent)) =>
+            Left(
+              XLError.InvalidReference(
+                s"cannot sort through the dynamic array at ${anchor.toA1} (${extent.toA1}); " +
+                  "clear or overwrite its anchor first, or sort outside its spill range"
+              )
+            )
+          case None =>
+            val rowsToSort: Vector[(Int, Map[Int, Cell])] =
+              (dataRowStart to rowEnd).toVector.map { rowIdx =>
+                val cellMap = (colStart to colEnd).flatMap { colIdx =>
+                  sheet.cells.get(ARef.from0(colIdx, rowIdx)).map(colIdx -> _)
+                }.toMap
+                (rowIdx, cellMap)
+              }
+            val comparator = rowComparator(keys)
+            val sortedRows = rowsToSort.sortWith((a, b) => comparator(a._2, b._2) < 0)
+            reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
     }
 
   private def reconstructWithSortedRows(

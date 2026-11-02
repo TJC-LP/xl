@@ -11,8 +11,8 @@ import com.tjclp.xl.cli.contract.CliHarness
 
 /**
  * GH-785: a workbook whose `<sheets>` lists an Excel 4.0 macro sheet (relationship type
- * `xlMacrosheet`) is readable from every CLI entry point; the macro sheet is not listed and its
- * part is copied unchanged by a write.
+ * `xlMacrosheet`) is readable from every CLI entry point; GH-788 lists the macro sheet separately
+ * as read-only, and its part is copied unchanged by a write.
  */
 class NonWorksheetSheetCliSpec extends CatsEffectSuite:
 
@@ -78,7 +78,8 @@ class NonWorksheetSheetCliSpec extends CatsEffectSuite:
       List(sheets, streamed, full, view, put, after).foreach(r => assertEquals(r.exit, 0, r.stderr))
       List(sheets, streamed, full).foreach { r =>
         assert(r.stdout.contains("Data"), r.stdout)
-        assert(!r.stdout.contains("Macro1"), r.stdout)
+        assert(r.stdout.contains("Macro1"), r.stdout)
+        assert(r.stdout.contains("Preserved sheets (read-only; unavailable to -s)"), r.stdout)
       }
       assert(view.stdout.contains("Alpha"), view.stdout)
       assert(after.stdout.contains("NewText"), after.stdout)

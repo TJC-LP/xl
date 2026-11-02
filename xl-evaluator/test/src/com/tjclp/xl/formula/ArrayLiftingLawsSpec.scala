@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.functions.{ArgValue, ArrayLift, FunctionRegistry, FunctionSpec}
@@ -85,6 +86,7 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     // information
     "ISNUMBER",
     "ISTEXT",
+    "ISNONTEXT",
     "ISBLANK",
     "ISERROR",
     "ISERR",
@@ -179,12 +181,12 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     "PI"
   )
 
-  test("the lifted roster is pinned: 77 functions with their slot policies") {
+  test("the lifted roster is pinned: 78 functions with their slot policies") {
     val byPolicy = lifted.groupMap(_.flags.lift)(_.name.toUpperCase).view.mapValues(_.toSet).toMap
     assertEquals(byPolicy.getOrElse(ArrayLift.all, Set.empty), liftedAll)
     assertEquals(byPolicy.getOrElse(ArrayLift.arraysOnly, Set.empty), liftedArraysOnly)
     assertEquals(byPolicy.getOrElse(ArrayLift.slots(0), Set.empty), liftedFirstSlot)
-    assertEquals(lifted.size, 77)
+    assertEquals(lifted.size, 78)
   }
 
   test("the excluded functions do not lift") {
@@ -345,8 +347,10 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
       EvalError
         .toErrorValue(error)
         .map(CellValue.Error(_))
+        // A separate pre-existing gap: integer reference decoders refuse DateTime cells.
+        // Do not mask arbitrary TypeMismatch/CodecFailed errors (in particular date serials).
         .orElse(error match
-          case EvalError.TypeMismatch(_, _, _) | EvalError.CodecFailed(_, _) =>
+          case EvalError.CodecFailed(_, CodecError.TypeMismatch("Int", CellValue.DateTime(_))) =>
             Some(CellValue.Error(CellError.Value))
           case _ => None)
 

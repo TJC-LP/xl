@@ -409,7 +409,7 @@ object ReadCommands:
       // Positioned or not, only the formula's value-read closure is analysed: never the whole
       // sheet, which a running total (B{n} = SUM($A$1:A{n})) makes quadratic to expand
       reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
-      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
+      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
       _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
@@ -515,7 +515,7 @@ object ReadCommands:
               case CellValue.Formula(text, _, _) =>
                 FormulaParser.parse(text) match
                   case Right(expr) =>
-                    val deps = reads.reads(expr)
+                    val deps = reads.reads(expr, Some(ref))
                     (e.updated(ref, deps), f.updated(ref, expr), n ++ deps)
                   case Left(_) => (e.updated(ref, Set.empty), f, n)
               case _ => (e, f, n)
@@ -543,8 +543,8 @@ object ReadCommands:
     at: ARef
   ): Option[List[ARef]] =
     val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
-    def reads(e: TExpr[?]): Boolean = only.reads(e).contains(at)
-    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads)
+    def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
+    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))
     // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
     // from any reached cell ends at `at`
     @scala.annotation.tailrec
@@ -565,7 +565,7 @@ object ReadCommands:
               }
           }
           if next.isEmpty then None else search(next, reached)
-    if reads(expr) then Some(List(at, at))
+    if reads(expr, at) then Some(List(at, at))
     else
       val roots = (targetDeps - at).toVector
       search(roots, roots.map(_ -> at).toMap)
@@ -625,15 +625,12 @@ object ReadCommands:
       )
     else
       for
-        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
+        anchored <- arrayAnchor(wb, sheetOpt, targetRefOpt)
+        (sheet, originRef) = anchored
         // positionless: evala anchors its display, it does not place the formula in a cell
         precedents <- precedentsEvaluated(wb, sheet, formula, overrides, None)
         evalSheet = precedents.sheet
         evaluator = precedents.evaluator
-        // Parse target ref or use a virtual cell far from data
-        originRef = targetRefOpt
-          .flatMap(ARef.parse(_).toOption)
-          .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
             .evaluateArrayFormulaUsing(
@@ -648,6 +645,26 @@ object ReadCommands:
         )
         (updatedSheet, spillRange) = result
       yield (formula, updatedSheet, spillRange)
+
+  /**
+   * The sheet `evala` evaluates on and the cell its display is anchored at. `--at` follows THE
+   * sheet rule as `eval --at` does (#727): a qualifier names the sheet, else the default, else the
+   * only sheet, else `SHEET_REQUIRED`; a range or an unparseable ref is `INVALID_REFERENCE`.
+   * Without `--at` the anchor is a virtual cell far from data, Z1000.
+   */
+  private def arrayAnchor(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    targetRefOpt: Option[String]
+  ): IO[(Sheet, ARef)] =
+    targetRefOpt match
+      case Some(atStr) =>
+        SheetResolver.resolveRef(wb, sheetOpt, atStr, "evala").flatMap {
+          case (sheet, Left(cell)) => IO.pure((sheet, cell))
+          case (_, Right(_)) => IO.raiseError(notOneCell(atStr))
+        }
+      case None =>
+        SheetResolver.requireSheet(wb, sheetOpt, "evala").map((_, ARef.from0(25, 999)))
 
   // ==========================================================================
   // Private helpers
@@ -704,6 +721,16 @@ object ReadCommands:
    * in: [[StaleBlockRows]] checks per registration at worst, bounded by the indexes' own size, not
    * by the square of the sheet. A wide reader is checked against each stale cell, as before.
    *
+   * Every formula [[DependencyGraph.dynamicCells]] lists (#763) is stale from the start, whatever
+   * `changed` holds: its reads are known only to evaluation, so `SUM(OFFSET(Data!B1,0,0,2,1))`
+   * reads Data!B2 though no range it names contains it. Its readers are then found like any stale
+   * cell's. A sheet holding one then gets an index even when no override touches it, so the
+   * formulas that could read another sheet are gathered once, in one pass over the book, by the
+   * sheet names their text qualifies ([[qualifiedSheets]]): an index visits its own sheet's
+   * formulas and those candidates. Indexing every sheet then costs one pass over the book's cells,
+   * plus, per sheet, the formulas that mention a defined name (a name may hide any sheet), not a
+   * pass over the book per sheet.
+   *
    * The maps, sets and bit set below are local to one call and never escape it: the result is a
    * new, immutable workbook.
    */
@@ -749,37 +776,62 @@ object ReadCommands:
           .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
       )
 
-    def readersOf(target: Int): Readers =
-      val readers = Readers()
-      val name = sheets(target).name
-      val bounds = sheets(target).usedRange
-      // a reference qualified with the target spells its name, perhaps quoted, then `!`, in any
-      // case; a name may hide one, so a formula mentioning a name is read too
-      val qualified = java.util.regex.Pattern.compile(
-        "'?" + java.util.regex.Pattern.quote(name.value.replace("'", "''")) + "'?!",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-      )
+    // every formula that could read a sheet other than its own, gathered in one pass over the
+    // book: by each sheet name its text qualifies a reference with (folded, [[qualifiedSheets]]),
+    // and every formula mentioning a defined name, which may hide one. An index for one target
+    // then visits that sheet's formulas and these candidates, never every cell of the book, so
+    // indexing every sheet a dynamic cell sits on costs O(cells), not O(sheets x cells)
+    lazy val crossReaders: (Map[String, Vector[(Int, ARef, String)]], Vector[(Int, ARef, String)]) =
+      val qualifying = mutable.HashMap.empty[String, mutable.ArrayBuffer[(Int, ARef, String)]]
+      val naming = mutable.ArrayBuffer.empty[(Int, ARef, String)]
       sheets.indices.foreach { at =>
-        val reader = ValueDependencies.Reader(
-          bounds,
-          Some(name),
-          localReads = at == target,
-          names = Some(names),
-          current = Some(sheets(at).name)
-        )
         sheets(at).cells.foreach { (ref, cell) =>
           cell.value match
             // GH-430: a data table's cells are pinned value sources
             case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
-            case CellValue.Formula(text, _, _)
-                if at == target || qualified.matcher(text).find() ||
-                  mentionsName((at, ref), text) =>
-              parse((at, ref), text).foreach { expr =>
-                val read = reader.readRanges(expr).toVector
-                if read.nonEmpty then readers.register(idOf((at, ref)), read)
+            case CellValue.Formula(text, _, _) =>
+              qualifiedSheets(text).foreach { sheet =>
+                qualifying.getOrElseUpdate(sheet, mutable.ArrayBuffer.empty) += ((at, ref, text))
               }
+              if mentionsName((at, ref), text) then naming += ((at, ref, text))
             case _ => ()
         }
+      }
+      (qualifying.view.mapValues(_.toVector).toMap, naming.toVector)
+
+    def readersOf(target: Int): Readers =
+      val readers = Readers()
+      val name = sheets(target).name
+      val bounds = sheets(target).usedRange
+      val reader = mutable.HashMap.empty[Int, ValueDependencies.Reader]
+      def readerOn(at: Int): ValueDependencies.Reader =
+        reader.getOrElseUpdate(
+          at,
+          ValueDependencies.Reader(
+            bounds,
+            Some(name),
+            localReads = at == target,
+            names = Some(names),
+            current = Some(sheets(at).name)
+          )
+        )
+      def index(at: Int, ref: ARef, text: String): Unit =
+        parse((at, ref), text).foreach { expr =>
+          val read = readerOn(at).readRanges(expr, Some(ref)).toVector
+          if read.nonEmpty then readers.register(idOf((at, ref)), read)
+        }
+      sheets(target).cells.foreach { (ref, cell) =>
+        cell.value match
+          // GH-430: a data table's cells are pinned value sources
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case CellValue.Formula(text, _, _) => index(target, ref, text)
+          case _ => ()
+      }
+      // another sheet's formula reads the target only through a reference qualified with its
+      // name, perhaps behind a defined name
+      val (qualifying, naming) = crossReaders
+      (qualifying.getOrElse(foldSheet(name.value), Vector.empty) ++ naming).distinct.foreach {
+        (at, ref, text) => if at != target then index(at, ref, text)
       }
       readers
 
@@ -802,7 +854,16 @@ object ReadCommands:
     sheets.indexWhere(_.name == home) match
       case -1 => book
       case homeIndex =>
-        walk(changed.toList.map(homeIndex -> _))
+        // #763: a reader whose references are computed at run time (OFFSET, INDIRECT, a name whose
+        // chain reaches one) reads what no static range shows, so it is stale under any override,
+        // as recalculation treats it, and its own readers are walked from it
+        val dynamic = DependencyGraph.dynamicCells(book).toList.flatMap { q =>
+          sheets.indexWhere(_.name == q.sheet) match
+            case -1 => Nil
+            case at => List(at -> q.ref)
+        }
+        stale ++= dynamic.map(idOf)
+        walk(changed.toList.map(homeIndex -> _) ::: dynamic)
         stale.toList.map(nodes(_)).groupMap(_._1)(_._2).foldLeft(book) { case (b, (at, refs)) =>
           b.put(refs.foldLeft(sheets(at)) { (s, ref) =>
             s(ref).value match
@@ -810,6 +871,34 @@ object ReadCommands:
               case _ => s
           })
         }
+
+  /**
+   * The sheet names `text` qualifies a reference with, each folded by [[foldSheet]]: `Data` for
+   * `Data!B1`, `my sheet's` for `'My Sheet''s'!B1`. A prefilter for [[uncacheReaders]]: it may list
+   * a name that qualifies nothing (text inside a string literal, `[1]Data!` of an external book),
+   * never miss one the parser reads. An unquoted name runs back from its `!` to a character no
+   * unquoted sheet name holds; a quoted one is matched whole, `''` an escaped quote.
+   */
+  private[cli] def qualifiedSheets(text: String): Set[String] =
+    if text.indexOf('!') < 0 then Set.empty
+    else
+      // two scans, so a quoted match that spans a string literal (`"'"&Data!A1&"'!"`) never hides
+      // an unquoted qualifier inside it
+      (QuotedSheet.findAllMatchIn(text).map(_.group(1).replace("''", "'")) ++
+        UnquotedSheet.findAllMatchIn(text).map(_.group(1))).map(foldSheet).toSet
+
+  /**
+   * A sheet name folded as `String.equalsIgnoreCase` compares (each character upper-cased, then
+   * lower-cased), the comparison [[ValueDependencies.Reader]] makes.
+   */
+  private def foldSheet(name: String): String =
+    name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
+
+  /** A quoted qualifier up to its `!`, group 1 its name still escaped. */
+  private val QuotedSheet = """'((?:[^']|'')+)'!""".r
+
+  /** An unquoted qualifier up to its `!`: no character an unquoted sheet name cannot hold. */
+  private val UnquotedSheet = """([^\s'!(),+\-*/^&=<>%:;{}"\[\]]+)!""".r
 
   /** A token of formula text that could be a defined name, for [[uncacheReaders]]'s prefilter. */
   private val NameToken = """[\p{L}_\\][\p{L}\p{N}_.\\?]*""".r

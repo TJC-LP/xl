@@ -37,9 +37,14 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
   private def evalBranchCarrying(ctx: EvalContext, expr: TExpr[?]): Either[EvalError, Any] =
     carryLeft(evalMaybeArrayArg(ctx, expr))
 
+  /**
+   * IF(logical_test, value_if_true, [value_if_false]). #723: without value_if_false a false test is
+   * the logical FALSE (`IF(FALSE,5)` is FALSE, `IF({TRUE,FALSE},{1,2})` is {1,FALSE}); an empty one
+   * is a blank argument (`IF(FALSE,5,)` is 0).
+   */
   val ifFn: FunctionSpec[Any] { type Args = IfArgs } =
-    FunctionSpec.simple[Any, IfArgs]("IF", Arity.three, Selects) { (args, ctx) =>
-      val (condExpr, ifTrueExpr, ifFalseExpr) = args
+    FunctionSpec.simple[Any, IfArgs]("IF", Arity.Range(2, 3), Selects) { (args, ctx) =>
+      val (condExpr, ifTrueExpr, ifFalseOpt) = args
       // GH-333: evaluate the condition array-aware. A range-shaped condition (the classic
       // MIN(IF(A1:A10>0,…)) CSE idiom) yields an ArrayResult that must broadcast elementwise —
       // collapsing it to a scalar (the old ctx.evalExpr path) delivered a CellValue.Bool into a
@@ -53,7 +58,9 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
           // branch that fails wholesale carries as a 1x1 error element instead of aborting.
           for
             ifTrueVal <- evalBranchCarrying(ctx, ifTrueExpr)
-            ifFalseVal <- evalBranchCarrying(ctx, ifFalseExpr)
+            ifFalseVal <- ifFalseOpt.fold[Either[EvalError, Any]](Right(false))(
+              evalBranchCarrying(ctx, _)
+            )
             result <- ArrayArithmetic.broadcastIf(
               condArr,
               toCellArray(ifTrueVal),
@@ -64,7 +71,8 @@ trait FunctionSpecsConditional extends FunctionSpecsBase:
           // Scalar condition: coerce totally (Excel truthiness) and keep lazy branch selection.
           ScalarCoercion.coerce("IF condition", scalarCond, BindingCoercion.Bool).flatMap {
             case cond: Boolean =>
-              if cond then evalSelected(ctx, ifTrueExpr) else evalSelected(ctx, ifFalseExpr)
+              if cond then evalSelected(ctx, ifTrueExpr)
+              else ifFalseOpt.fold[Either[EvalError, Any]](Right(false))(evalSelected(ctx, _))
             case other =>
               Left(EvalError.TypeMismatch("IF condition", "boolean", other.toString))
           }

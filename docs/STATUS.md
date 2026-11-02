@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-10-28 (Unreleased)
+**Last Updated**: 2026-11-02 (PR validation)
 
 ## Current State
 
@@ -8,8 +8,10 @@
 
 ### What Works (Production-Ready)
 
-**Unreleased** — fitting right-aligned SVG text declares its measured advance (#505), preserving
-both ends of tight numbers in Batik; [before/after pixel evidence](images/issue-505/README.md).
+**Unreleased** (#788) — `xl sheets` reports preserved macro, international macro, chart and dialog
+sheets separately with kind/name/state; they remain unavailable to `-s`. `xl lint` reports macro
+presence and directly associated `Auto_Open` names at severity `info`; `--strict` gates info too.
+`Excel.readMetadata(...).preservedSheets` exposes the same read-only tab metadata.
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
@@ -280,20 +282,19 @@ both ends of tight numbers in Batik; [before/after pixel evidence](images/issue-
 
 ### Test Coverage
 
-**9,622 test cases** (from the Unreleased branch's full-suite JUnit reports, 2026-10-28).
-GH-505 adds six cases to the 0.25.0 baseline: two core SVG checks and four CLI raster checks.
-Optional external-tool suites skip when their tool is unavailable; counts include those cases.
+**9,909 test cases** (clean standalone PR #817 validation against main 9c746f18, 2026-11-02): 9,902 passed, 2 pre-existing oracle/test failures (see PR validation), 5 skipped. Counts include skipped cases; per-run results are recorded in the PR review package.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1874 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1928 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-evaluator | 4193 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1447 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 1965 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
+
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 

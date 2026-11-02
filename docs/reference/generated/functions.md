@@ -3,7 +3,7 @@
 
 # Formula functions
 
-125 functions in the evaluator's registry, plus `LET` — a parser-level special form
+126 functions in the evaluator's registry, plus `LET` — a parser-level special form
 (lexical bindings) that the registry does not hold. `args` is the accepted argument count
 (`n+` = at least n, no upper bound); `arguments` names each slot as the parser describes it
 (`optional …` may be omitted, `…...` repeats). `flags`: `date`/`time` — the result is a date
@@ -48,7 +48,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `FV` | 3–5 | number, number, number, optional number, optional number | — |
 | `HLOOKUP` | 3–4 | cell, range, integer, optional boolean | — |
 | `HYPERLINK` | 1–2 | text, optional text | — |
-| `IF` | 3 | boolean, value, value | — |
+| `IF` | 2–3 | boolean, value, optional value | — |
 | `IFERROR` | 2 | cell, cell | — |
 | `IFNA` | 2 | cell, cell | — |
 | `IFS` | 2+ | value... | — |
@@ -60,6 +60,7 @@ RANDBETWEEN), which `xl audit` reports. Run `xl functions --json` for this table
 | `ISERR` | 1 | cell | — |
 | `ISERROR` | 1 | cell | — |
 | `ISNA` | 1 | cell | — |
+| `ISNONTEXT` | 1 | cell | — |
 | `ISNUMBER` | 1 | cell | — |
 | `ISTEXT` | 1 | cell | — |
 | `LARGE` | 2 | range, integer | — |

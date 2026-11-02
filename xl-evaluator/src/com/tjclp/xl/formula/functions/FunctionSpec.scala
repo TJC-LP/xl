@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{EvalError, EvalPosition, Evaluator, RecalcCounters}
+import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, EvalPosition, Evaluator, RecalcCounters}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
@@ -42,7 +42,8 @@ final case class FunctionFlags(
    * Excel array lifting: whether (and where) the function evaluates once per element when a scalar
    * parameter receives an array — `ABS(C2:C4+D2:D4)` is `{2;2;3}` in an array context. The flag is
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
-   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
+   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302). Lazy
+   * control flow may supply [[FunctionSpec.evalArray]] instead of the generic lift.
    */
   lift: ArrayLift = ArrayLift.Off,
   /**
@@ -389,6 +390,13 @@ trait FunctionSpec[A]:
   def eval(args: Args, ctx: EvalContext): Either[EvalError, A]
   def flags: FunctionFlags = FunctionFlags()
 
+  /** GH-754: lazy array control flow may need the complete primary and fallback shapes. */
+  private[formula] def evalArray(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
+    None
+
+  /** Additional scalar slots whose arrays take SUMPRODUCT's shared whole-axis bounds. */
+  private[formula] def arrayBoundSlots: Set[Int] = Set.empty
+
   /**
    * The reference the call returns, for a function that returns one (OFFSET, INDIRECT, INDEX): a
    * [[com.tjclp.xl.formula.eval.RangeOperand]], unread, or the value the call computes when it
@@ -398,6 +406,21 @@ trait FunctionSpec[A]:
    */
   private[formula] def reference(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
     None
+
+  /**
+   * #745: the area the reference this call returns lies in, for the dependency graph (see
+   * [[ReferenceOperators.Envelope]]). `of` is the envelope of an operand; `at` is the cell whose
+   * formula holds the call, when the graph knows it (#743: INDEX folds a position written with
+   * ROW() or COLUMN() relative to it). An `Exact` answer also states that finding the reference
+   * reads no cell, so the call's dependency edges become its areas alone. `Unknown` for every
+   * function that declares none: a range it ends is a dynamic reference.
+   */
+  private[formula] def envelope(
+    args: Args,
+    of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+    at: Option[ARef]
+  ): ReferenceOperators.Envelope =
+    ReferenceOperators.Envelope.Unknown
 
   def render(args: Args, printer: ArgPrinter): String =
     s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
@@ -444,7 +467,40 @@ object FunctionSpec:
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
 
-  /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
+  /** Keep a typed scalar result while allowing explicit, lazy array control flow. */
+  private[formula] def arrayAware[A, A0](
+    fnName: String,
+    fnArity: Arity,
+    fnFlags: FunctionFlags,
+    boundSlots: Set[Int]
+  )(arrayFn: (A0, EvalContext) => Either[EvalError, Any])(
+    scalarFn: (A0, EvalContext) => Either[EvalError, A]
+  )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
+    new FunctionSpec[A]:
+      type Args = A0
+      val name = fnName
+      val arity = fnArity
+      val argSpec = spec
+      override val flags = fnFlags
+      override private[formula] val arrayBoundSlots = boundSlots
+      def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = scalarFn(args, ctx)
+      override private[formula] def evalArray(
+        args: A0,
+        ctx: EvalContext
+      ): Option[Either[EvalError, Any]] = Some(arrayFn(args, ctx))
+
+  /** #745: a [[FunctionSpec.envelope]] hook. */
+  private[formula] type EnvelopeFn[A0] =
+    (
+      A0,
+      ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      Option[ARef]
+    ) => ReferenceOperators.Envelope
+
+  /**
+   * A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`, and
+   * [[FunctionSpec.envelope]] is `envelopeFn` when it declares one.
+   */
   private[formula] final case class Referencing[A, A0](
     name: String,
     arity: Arity,
@@ -452,7 +508,8 @@ object FunctionSpec:
     referenceFn: (A0, EvalContext) => Either[EvalError, Any],
     evalFn: (A0, EvalContext) => Either[EvalError, A],
     override val flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelopeFn: Option[EnvelopeFn[A0]] = None
   ) extends FunctionSpec[A]:
     type Args = A0
     def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
@@ -460,7 +517,22 @@ object FunctionSpec:
       args: A0,
       ctx: EvalContext
     ): Option[Either[EvalError, Any]] =
-      Some(referenceFn(args, ctx))
+      // #725: an error the call computes instead of a reference (OFFSET off the grid, INDIRECT to
+      // a missing sheet, INDEX picking an error element) is the error value, not a 1x1 array of
+      // it: ROWS of it is the error, while ROWS of an array holding one keeps the array's shape
+      Some(referenceFn(args, ctx).map {
+        case ar: ArrayResult if ar.rows == 1 && ar.cols == 1 =>
+          ar(0, 0) match
+            case error: CellValue.Error => error
+            case _ => ar
+        case other => other
+      })
+    override private[formula] def envelope(
+      args: A0,
+      of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      at: Option[ARef]
+    ): ReferenceOperators.Envelope =
+      envelopeFn.fold(ReferenceOperators.Envelope.Unknown)(_(args, of, at))
     override def render(args: A0, printer: ArgPrinter): String =
       renderFn.map(_(args, printer)).getOrElse(super.render(args, printer))
 
@@ -468,11 +540,12 @@ object FunctionSpec:
     name: String,
     arity: Arity,
     flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelope: Option[EnvelopeFn[A0]] = None
   )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
     evalFn: (A0, EvalContext) => Either[EvalError, A]
   )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
-    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn)
+    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn, envelope)
 
 trait ExprCoercer[A]:
   def label: String

@@ -142,7 +142,7 @@ class FixpointEngineSpec extends FunSuite:
         Rng.system,
         rng => Evaluator.instance(rng),
         Map.empty,
-        parse = text =>
+        parse = (_, text) =>
           parses = parses :+ text
           SheetEvaluator.parseFormula(text)
       )
@@ -163,7 +163,7 @@ class FixpointEngineSpec extends FunSuite:
       Rng.system,
       rng => Evaluator.instance(rng),
       Map.empty,
-      parse = text => Left(com.tjclp.xl.error.XLError.FormulaError(text, "injected"))
+      parse = (_, text) => Left(com.tjclp.xl.error.XLError.FormulaError(text, "injected"))
     )
     assert(rejected.stalled, "every member fails every round")
     assert(rejected.results(q(a1)).swap.exists(_.message.contains("injected")))

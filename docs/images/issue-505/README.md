@@ -1,5 +1,9 @@
 # GH-505 raster evidence
 
+> Historical evidence: the image and pixel JSON below describe the original PR revision.
+> The current implementation restricts textLength to less than padding plus two pixels of slack;
+> roomy cells retain natural advances. Regenerate evidence with the command below for the current code.
+
 ![Before/after Batik comparison](batik-comparison.png)
 
 These are synthetic raw numeric cells containing `1234567.9`, rendered at 96 DPI with Apache
@@ -33,5 +37,4 @@ To regenerate the current Batik raster evidence, run:
 XL_505_EVIDENCE_DIR=/tmp/xl-505 ./mill -i xl-cli.test.testOnly com.tjclp.xl.cli.raster.TightTextRasterSpec
 ```
 
-Without the environment variable, the suite cleans up its temporary SVGs and PNGs. All builds, test suites and
-resource-heavy validation for this change ran through the batch's shared `run-check.py` lock.
+Without the environment variable, the suite cleans up its temporary SVGs and PNGs.

@@ -16,17 +16,29 @@ import com.tjclp.xl.workbooks.DefinedName
  * Lightweight metadata for instant workbook info without loading cell data.
  *
  * @param sheets
- *   Sheet info including name, ID, visibility, and dimension
+ *   Worksheet info including name, ID, visibility, and dimension
  * @param definedNames
  *   Named ranges/formulas defined in the workbook
  * @param date1904
  *   True when workbookPr declares the 1904 date system (GH-243); date serials then count days since
  *   1904-01-01 instead of the default 1900 system
+ * @param preservedSheets
+ *   Read-only macro, international macro, chart and dialog entries, in source tab order. They are
+ *   separate from `sheets` so worksheet selection and defined-name indices remain unchanged.
  */
 final case class LightMetadata(
   sheets: Vector[SheetInfo],
   definedNames: Vector[DefinedName],
-  date1904: Boolean = false
+  date1904: Boolean = false,
+  preservedSheets: Vector[PreservedSheetInfo] = Vector.empty
+)
+
+/** Read-only non-worksheet entry; `sourceIndex` is its 1-based position in workbook.xml. */
+final case class PreservedSheetInfo(
+  name: SheetName,
+  kind: com.tjclp.xl.ooxml.PreservedSheetKind,
+  state: String,
+  sourceIndex: Int
 )
 
 /**
@@ -104,8 +116,8 @@ object WorkbookMetadataReader:
           rIdMap = parseRelationships(wbRels)
 
           // Parse sheets from workbook.xml. GH-785: worksheets only, like the full reader —
-          // chartsheet, dialog sheet and macro sheet entries are not listed, and sheet-scoped
-          // names are renumbered to worksheet positions.
+          // preserved entries are reported separately, and sheet-scoped names are renumbered
+          // to worksheet positions.
           allRefs <- parseSheetRefs(wbElem)
           sourceIndex = SourceSheetIndex(
             allRefs.map(ref => SheetKinds.isWorksheet(rIdMap.get(ref.rId).map(_.relType)))
@@ -141,7 +153,12 @@ object WorkbookMetadataReader:
           val date1904 = com.tjclp.xl.ooxml.OoxmlWorkbook.parseDate1904(
             (wbElem \ "workbookPr").headOption.collect { case e: Elem => e }
           )
-          LightMetadata(sheetsWithDimensions, definedNames, date1904)
+          val preserved = allRefs.zipWithIndex.flatMap { (ref, idx) =>
+            rIdMap.get(ref.rId).flatMap(rel => SheetKinds.preservedKind(rel.relType)).map { kind =>
+              PreservedSheetInfo(ref.name, kind, ref.state.getOrElse("visible"), idx + 1)
+            }
+          }
+          LightMetadata(sheetsWithDimensions, definedNames, date1904, preserved)
       finally zipFile.close()
     }
 

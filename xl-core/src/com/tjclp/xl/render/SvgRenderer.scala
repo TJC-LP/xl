@@ -492,7 +492,9 @@ object SvgRenderer:
             // head and push the tail out of the cell (it would also contradict the RichText
             // branch, which left-shifts by the run width).
             //
-            // Declare the same advance the anchor uses for fitting right-aligned text.
+            // In the clipping band only, declare the advance used by the anchor.
+            // Two extra pixels cover the backend advance mismatch seen in GH-505;
+            // roomy cells keep their natural backend/font layout.
             // Otherwise a backend with wider glyph advances (notably Batik) can still
             // shave the leading glyph at sub-2px slack (GH-505). SVG's spacingAndGlyphs
             // adjusts the layout to this measured width instead of adding a blind margin
@@ -502,8 +504,9 @@ object SvgRenderer:
               if anchor == "end" && textW <= box.width then math.max(textX, box.x + textW)
               else textX
             val lengthAttr =
-              if anchor == "end" && textW > 0 && textW <= box.width then
-                s""" textLength="$textW" lengthAdjust="spacingAndGlyphs""""
+              if anchor == "end" && textW > 0 && textW <= box.width &&
+                textW > box.width - CellPaddingX - 2
+              then s""" textLength="$textW" lengthAdjust="spacingAndGlyphs""""
               else ""
             val escapedText = escapeXml(text)
             out.append(

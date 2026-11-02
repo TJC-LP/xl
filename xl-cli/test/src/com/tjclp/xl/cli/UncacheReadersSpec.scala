@@ -13,19 +13,21 @@ import com.tjclp.xl.cli.commands.ReadCommands
  * GH-715: `--with`'s stale-reader search (`ReadCommands.uncacheReaders`) indexes formulas by the
  * ranges they read, across sheets, and drops a reader from its candidate sets once it is stale. On
  * small random books it must find exactly what the naive search finds: expand every range, then
- * take the transitive closure from the overridden cells.
+ * take the transitive closure from the overridden cells. One sheet's name needs quoting and holds
+ * an escaped quote, and a qualifier may be spelled in another case, so the one-pass index of the
+ * sheet names a formula qualifies ([[ReadCommands.qualifiedSheets]]) is checked against them too.
  */
 class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
 
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(300)
 
-  private val names = Vector("S0", "S1", "S2")
+  private val names = Vector("S0", "S1", "Q 1's")
   private val cols = 4
   private val rows = 6
 
   /** One read of a generated formula: on `sheet` (None: the formula's own, unqualified). */
-  private final case class Read(sheet: Option[Int], range: CellRange)
+  private final case class Read(sheet: Option[Int], range: CellRange, upper: Boolean = false)
 
   private val genRange: Gen[CellRange] =
     for
@@ -39,7 +41,8 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
     for
       sheet <- Gen.frequency(3 -> Gen.const(None), 2 -> Gen.choose(0, names.size - 1).map(Some(_)))
       range <- genRange
-    yield Read(sheet, range)
+      upper <- Gen.oneOf(false, true)
+    yield Read(sheet, range, upper)
 
   /** A cell: a cached SUM over one to three reads, a number, or nothing. */
   private val genCell: Gen[Option[Either[Int, List[Read]]]] =
@@ -70,7 +73,10 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
       .map(_.map((c, r) => ARef.from0(c, r)).toSet)
 
   private def render(read: Read): String =
-    read.sheet.fold("")(s => s"${names(s)}!") + read.range.toA1
+    def qualifier(s: Int): String =
+      val name = if read.upper then names(s).toUpperCase(java.util.Locale.ROOT) else names(s)
+      if name.forall(_.isLetterOrDigit) then s"$name!" else s"'${name.replace("'", "''")}'!"
+    read.sheet.fold("")(qualifier) + read.range.toA1
 
   /** The book the model describes, every formula cached, with the overridden cells set on S0. */
   private def book(model: Model, changed: Set[ARef]): Workbook =
@@ -141,4 +147,18 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
         s"overridden on S0: ${changed.map(_.toA1)}\n${formulas.mkString("\n")}"
       )
     }
+  }
+
+  test("qualifiedSheets: every qualifier the parser reads, folded, quoted or not") {
+    def sheets(text: String): Set[String] = ReadCommands.qualifiedSheets(text)
+    assertEquals(sheets("=A1*2"), Set.empty[String])
+    assertEquals(sheets("=Data!B1+data!B2"), Set("data"))
+    assertEquals(sheets("=SUM('My Sheet''s'!A1:A3)"), Set("my sheet's"))
+    assertEquals(sheets("=Data!A1:Other!B2"), Set("data", "other"))
+    // a quoted match spanning string literals must not hide the unquoted qualifier inside it
+    assert(sheets("=\"'\"&Data!A1&\"'!\"").contains("data"))
+    assert(sheets("=\"it's\"&'Q 1'!A1").contains("q 1"))
+    // an external book's prefix leaves the sheet name a superset entry, never a miss
+    assert(sheets("=[1]Data!A1").contains("data"))
+    assert(sheets("=SUM(Ünïcode!A1)").contains("ünïcode"))
   }

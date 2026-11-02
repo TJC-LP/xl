@@ -1,0 +1,16 @@
+## args
+-f
+<DIR>/dynamic-spill.xlsx
+-o
+<DIR>/sort-blocked.xlsx
+sort
+B1:B5
+--by
+B
+## exit
+3
+## stdout
+## stderr
+Error: Invalid reference: cannot sort through the dynamic array at B1 (B1:B5); clear or overwrite its anchor first, or sort outside its spill range
+  code: INVALID_REFERENCE
+Warning[READER_WARNING]: MissingStylesXml

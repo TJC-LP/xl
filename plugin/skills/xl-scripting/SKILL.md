@@ -382,7 +382,7 @@ wb.recalculateUncached(opts)                            // only cache-less formu
 
 **Renaming a sheet rewrites its references** (since 0.20.0, [#559](https://github.com/TJC-LP/xl/issues/559)): `SheetRenamer.rename(wb, SheetName.unsafe("Sheet1"), SheetName.unsafe("Q1 Data"))` renames the tab AND rewrites `Sheet1!A1` → `'Q1 Data'!A1` in cell formulas on every sheet, defined names, CF and DV formulas, caches preserved; it refuses (`Left`) when a dependent that mentions the sheet cannot be parsed. `Workbook.rename` alone stays tab-only. `SheetRenamer.references(wb, sheet)` lists the cells a rename would touch; `FormulaOps.renameSheet/shift/mentionsSheet` are the string-level pieces.
 
-125 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
+126 functions supported (SUM/SUMIFS/VLOOKUP/XLOOKUP/INDEX/MATCH/INDIRECT/MROUND/RAND/NPV/IRR/SEARCH/N/HYPERLINK/CELL/... plus LET) — full list in `reference/API.md`.
 
 ### Data tables (what-if sensitivity)
 

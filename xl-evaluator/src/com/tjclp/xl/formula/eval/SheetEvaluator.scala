@@ -592,7 +592,10 @@ object SheetEvaluator:
   ): XLResult[CellOutcome] =
     sheet(ref).value match
       case value @ CellValue.Formula(expr, _, kind) =>
-        pinnedCache(value) match
+        // #790: one parse of the cell serves both the pin check and the evaluation
+        lazy val cellEvaluator = evaluator
+        lazy val parsedCell = parseCounted(expr, cellEvaluator, sheet.name, Some(ref))
+        pinnedCache(value, _ => parsedCell) match
           // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
           case Some(cached) => scala.util.Right(CellOutcome(cached, None))
           case None =>
@@ -600,8 +603,8 @@ object SheetEvaluator:
             // anchor holds element (0,0); a plain formula evaluates as a scalar cell
             kind match
               case _: FormulaKind.ArrayFormula =>
-                val arrayEvaluator = evaluator.withArrayResults
-                parseCounted(expr, arrayEvaluator).flatMap { parsed =>
+                val arrayEvaluator = cellEvaluator.withArrayResults
+                parsedCell.flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
                   val result = cellOutcome(expr, raw)
                   // GH-695: the raw result goes to the generation memo for this generation's `x#`
@@ -612,7 +615,10 @@ object SheetEvaluator:
                   result
                 }
               // Pass the current cell ref for ROW()/COLUMN() without arguments
-              case _ => evaluateFormulaOutcome(sheet, expr, evaluator, clock, workbook, Some(ref))
+              case _ =>
+                parsedCell.flatMap(parsed =>
+                  cellOutcome(expr, cellEvaluator.eval(parsed, sheet, clock, workbook, Some(ref)))
+                )
       case other => scala.util.Right(CellOutcome(other, None))
 
   private def evaluateArrayFormulaImpl(
@@ -789,26 +795,40 @@ object SheetEvaluator:
     // intersect with, so it evaluates as the same formula typed into a new Excel 365 cell would:
     // as an array, showing its top-left value. `@range` still needs the position.
     val positioned = if currentCell.isDefined then evaluator else evaluator.withArrayResults
-    parseCounted(formula, evaluator).flatMap(expr =>
+    parseCounted(formula, evaluator, sheet.name, currentCell).flatMap(expr =>
       cellOutcome(formula, positioned.eval(expr, sheet, clock, workbook, currentCell))
     )
 
-  /** #767: [[parseFormula]] timed as the `Parse` phase of the evaluator's pass. */
-  private def parseCounted(formula: String, evaluator: Evaluator): XLResult[TExpr[?]] =
-    val counters = evaluator.generationMemo.fold(RecalcCounters.disabled)(_.counters)
-    counters.time(RecalcCounters.Phase.Parse)(parseFormula(formula))
+  /**
+   * #767: [[parseFormula]] timed as the `Parse` phase of the evaluator's pass. #790: the formula of
+   * `cell` on `sheet` reuses the parse the pass's graph build made of it.
+   */
+  private def parseCounted(
+    formula: String,
+    evaluator: Evaluator,
+    sheet: SheetName,
+    cell: Option[ARef]
+  ): XLResult[TExpr[?]] =
+    parseFormulaCell(formula, sheet, cell, evaluator.generationMemo)
+
+  /**
+   * #790: [[parseFormula]] of the formula of `cell` on `sheet`, reusing the parse the graph build
+   * of `memo`'s pass made of it; a fresh parse is counted and timed in `memo`'s counters.
+   */
+  private[eval] def parseFormulaCell(
+    formula: String,
+    sheet: SheetName,
+    cell: Option[ARef],
+    memo: Option[Evaluator.AggregateMemo]
+  ): XLResult[TExpr[?]] =
+    Evaluator.parseFormulaCell(formula, sheet, cell, memo).left.map(parseFailure(formula, _))
 
   /** The parse half of [[evaluateFormulaWith]]: a parse failure is the `Parse error:` XLError. */
   private[eval] def parseFormula(formula: String): XLResult[TExpr[?]] =
-    FormulaParser
-      .parse(formula)
-      .left
-      .map(parseError =>
-        XLError.FormulaError(
-          formula,
-          s"Parse error: ${ParseError.describe(parseError)}"
-        )
-      )
+    FormulaParser.parse(formula).left.map(parseFailure(formula, _))
+
+  private def parseFailure(formula: String, parseError: ParseError): XLError =
+    XLError.FormulaError(formula, s"Parse error: ${ParseError.describe(parseError)}")
 
   /**
    * The evaluate half of [[evaluateFormulaWith]] for an ALREADY PARSED formula — GH-537: an
@@ -933,9 +953,20 @@ object SheetEvaluator:
    * version reported for it.
    */
   private[formula] def pinnedExternalCache(value: CellValue): Option[CellValue] =
+    pinnedExternalCache(value, FormulaParser.parse)
+
+  /**
+   * [[pinnedExternalCache]] with the formula text parsed by `parse` (#790: a recalculation passes
+   * the parse it evaluates the cell with, so the cell is parsed once). `parse` runs only for a
+   * cached formula whose text contains `[`.
+   */
+  private[formula] def pinnedExternalCache[E](
+    value: CellValue,
+    parse: String => Either[E, TExpr[?]]
+  ): Option[CellValue] =
     value match
       case CellValue.Formula(expr, Some(cached), _) if expr.contains('[') =>
-        FormulaParser.parse(expr) match
+        parse(expr) match
           case scala.util.Right(ast) if TExpr.containsExternalRef(ast) => Some(cached)
           case scala.util.Right(_) => None
           case scala.util.Left(_) if externalPrefixPattern.matcher(expr).find() => Some(cached)
@@ -950,10 +981,17 @@ object SheetEvaluator:
    * array and the anchor takes element (0,0) (evaluateCellWithEvaluator).
    */
   private[eval] def pinnedCache(value: CellValue): Option[CellValue] =
+    pinnedCache(value, FormulaParser.parse)
+
+  /** [[pinnedCache]] with the external check's parse supplied ([[pinnedExternalCache]]). */
+  private[eval] def pinnedCache[E](
+    value: CellValue,
+    parse: String => Either[E, TExpr[?]]
+  ): Option[CellValue] =
     value match
       case CellValue.Formula(_, cached, _: FormulaKind.DataTable) =>
         Some(cached.getOrElse(CellValue.Empty))
-      case _ => pinnedExternalCache(value)
+      case _ => pinnedExternalCache(value, parse)
 
   /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
   private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")

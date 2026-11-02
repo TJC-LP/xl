@@ -22,6 +22,8 @@ import org.scalacheck.{Gen, Prop}
  * criteria columns with case variants, numeric text, booleans, errors, date-times, rich text and
  * blanks, carry a helper formula column with wrong caches, and read them through windows with
  * different first rows, whole columns (blank tails), criteria arrays and empty-text criteria.
+ * Criteria columns also hold numbers with extreme exponents (#780), and a law checks that no
+ * criteria call fails on them.
  */
 class CriteriaIndexLawSpec extends ScalaCheckSuite:
 
@@ -86,6 +88,21 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     1 -> Gen.const(Some(CellValue.Text("")))
   )
 
+  /**
+   * #780: numbers with extreme exponents. `1E+999999999` parses as a `BigDecimal`; on
+   * `100E+2147483647` `BigDecimal.stripTrailingZeros` throws (its stripped scale has no `Int`).
+   */
+  private val extremeNumbers: Vector[BigDecimal] = Vector(
+    BigDecimal("1E+999999999"),
+    BigDecimal(new java.math.BigDecimal(java.math.BigInteger.valueOf(100), Int.MinValue + 1))
+  )
+
+  /** A criteria-column key: [[genKey]], or a number with an extreme exponent. */
+  private val genCriteriaKey: Gen[Option[CellValue]] = Gen.frequency(
+    12 -> genKey,
+    1 -> Gen.oneOf(extremeNumbers).map(n => Some(CellValue.Number(n)))
+  )
+
   private val genCriterion: Gen[String] = Gen.oneOf(
     "\"a\"",
     "\"A\"",
@@ -102,6 +119,14 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     "\"<>a\"",
     "\">0\"",
     "\"a*\"",
+    "\"=a*\"",
+    "\"=\"",
+    "\"<>\"",
+    "\"<>1\"",
+    "\"<>*\"",
+    "\"1E+999999999\"",
+    "\"<>1E+999999999\"",
+    "\"1E*\"",
     "DATE(1900,1,1)",
     "1+0*0",
     "Out!$Z$1",
@@ -164,17 +189,17 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
 
   private val genBook: Gen[Workbook] =
     for
-      as <- Gen.listOfN(Rows, genKey)
-      bs <- Gen.listOfN(Rows, genKey)
+      as <- Gen.listOfN(Rows, genCriteriaKey)
+      bs <- Gen.listOfN(Rows, genCriteriaKey)
       cs <- Gen.listOfN(
         Rows,
         Gen.frequency(4 -> genKey, 3 -> Gen.choose(-3, 9).map(n => Some(num(n))))
       )
       helpers <- Gen.sequence[List[CellValue], CellValue]((2 to Last).map(genHelper))
-      os <- Gen.listOfN(Rows + 10, genKey)
+      os <- Gen.listOfN(Rows + 10, genCriteriaKey)
       readers <- Gen.listOfN(24, genReader)
-      z1 <- genKey
-      z2 <- genKey
+      z1 <- genCriteriaKey
+      z2 <- genCriteriaKey
       readerCache <- Gen.oneOf(None, Some(num(-7)))
     yield
       def column(sheet: Sheet, col: Int, first: Int, values: List[Option[CellValue]]): Sheet =
@@ -221,6 +246,19 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
           "parallel on/off"
         )
       )
+    }
+  }
+
+  property("#780: no criteria call fails on a number with an extreme exponent") {
+    Prop.forAll(genBook) { book =>
+      val results = Vector(
+        recalculateWithMemo(book, sequential(), indexOn()),
+        recalculateWithMemo(book, sequential(), indexOff())
+      )
+      val defects = results
+        .flatMap(r => r.errors.map(_.toString) ++ r.errorReasons.values)
+        .filter(_.contains("internal evaluator defect"))
+      Prop(defects.isEmpty) :| s"defects: ${defects.take(2)}"
     }
   }
 

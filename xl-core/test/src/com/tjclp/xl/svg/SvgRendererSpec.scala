@@ -1480,7 +1480,7 @@ class SvgRendererSpec extends FunSuite:
       s"""<clipPath id="clip-$a1"><rect x="(-?\\d+)" y="-?\\d+" width="(\\d+)"""".r
     re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2).toInt))
 
-  test("GH-505: fitting right-aligned text declares the measured SVG advance") {
+  test("GH-505: only near-clipped right-aligned text declares the measured SVG advance") {
     val value = "1234567.9"
     val measured = RenderUtils.measureTextWidth(value, None)
     List(0, 1, 3, RenderUtils.CellPaddingX, 20).foreach { slack =>
@@ -1489,7 +1489,11 @@ class SvgRendererSpec extends FunSuite:
         .put(ref"A1", CellValue.Number(BigDecimal(value)))
         .setColumnProperties(Column.from0(0), ColumnProperties(width = Some((pixels - 5) / 8.0)))
       val svg = sheet.toSvg(ref"A1:A1")
-      assert(svg.contains(s"""textLength="$measured" lengthAdjust="spacingAndGlyphs"""), svg)
+      assertEquals(
+        svg.contains(s"""textLength="$measured" lengthAdjust="spacingAndGlyphs"""),
+        slack < RenderUtils.CellPaddingX + 2,
+        svg
+      )
       val (x, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(fail(svg))
       assertEquals(text, value)
       assertEquals(anchor, "end")
