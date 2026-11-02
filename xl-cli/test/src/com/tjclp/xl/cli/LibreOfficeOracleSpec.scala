@@ -85,8 +85,12 @@ class LibreOfficeOracleSpec extends FunSuite:
   private def num(n: Int): Option[CellValue] = Some(CellValue.Number(BigDecimal(n)))
 
   /**
-   * The review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10 cached 20,
-   * C1=B1+B2 cached 35. Deleting row 2 makes B1 `SUM(A1:A1)` = 5 and C1 `B1+#REF!` = #REF!.
+   * A variant of the review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10
+   * cached 20, C1=B1+INDEX(B1:B2,2) cached 35. Deleting row 2 contracts both ranges, so B1 is 5 and
+   * INDEX(B1:B1,2) makes C1 #REF!. Use INDEX rather than an inline #REF!: LibreOfficeDev 26.8 reads
+   * even a standalone OOXML #REF! literal as #NAME?, independently of cache invalidation.
+   * StructuralCommandSpec pins recalculated deleted references; BatchRecalcSpec pins withdrawal and
+   * the INDEX fixture without requiring LibreOffice.
    */
   private def reviewWorkbook(): Workbook =
     Workbook(
@@ -94,7 +98,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         .put(ref"A1" -> 5, ref"A2" -> 10)
         .put(ref"B1", CellValue.Formula("SUM(A1:A2)", num(15)))
         .put(ref"B2", CellValue.Formula("ROW()*10", num(20)))
-        .put(ref"C1", CellValue.Formula("B1+B2", num(35)))
+        .put(ref"C1", CellValue.Formula("B1+INDEX(B1:B2,2)", num(35)))
     )
 
   test(
@@ -134,7 +138,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         !csv("no-recalc").contains("15"),
         s"stale SUM(A1:A2) cache displayed: ${csv("no-recalc")}"
       )
-      assert(!csv("no-recalc").contains("35"), s"stale B1+B2 cache displayed: ${csv("no-recalc")}")
+      assert(!csv("no-recalc").contains("35"), s"stale C1 cache displayed: ${csv("no-recalc")}")
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
   }

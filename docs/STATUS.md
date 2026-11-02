@@ -282,7 +282,7 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,917 test cases** (clean scoped issue #684 validation against main c993ac8b, 2026-11-02): 9,911 passed, 1 known baseline failures, 5 skipped. Counts include skips; see the PR validation details.
+**9,917 test cases** (scoped issue #684 with the #832 oracle repairs, against main c993ac8b). Counts include skipped cases; see the final-revision PR validation for pass/failure results.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
