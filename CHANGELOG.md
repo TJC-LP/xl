@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
+  right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
+  to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
+
 - **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
   desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
   `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
