@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: local scoped issue #693 validation on 2026-11-02 recorded **9,907 cases**, including skips. See per-run local validation for pass/failure results.
+**Current Status**: local scoped issue #693 validation on 2026-11-02 recorded **9,914 cases**, including skips. See per-run local validation for pass/failure results.
 
 ## Test Infrastructure
 
@@ -265,18 +265,18 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 
 ## Test Counts by Module
 
-As of local scoped issue #693 validation on 2026-11-02, from full-suite JUnit reports. Counts include skipped cases; per-run pass/failure results are recorded in the local review package.
+As of scoped issue #693 validation against main c993ac8b on 2026-11-02, from full-suite JUnit reports. Counts include skips; see the PR for pass/failure results.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 4193 |
-| xl-core | 1872 |
+| xl-core | 1875 |
 | xl-ooxml | 1447 |
-| xl-cli | 1966 |
+| xl-cli | 1970 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,907** |
+| **Total** | **9,914** |
 
 
 ## Test Quality Metrics
