@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: local scoped issue #684 validation on 2026-11-02 recorded **9,913 cases**, including skips. See per-run local validation for pass/failure results.
+**Current Status**: local scoped issue #684 validation on 2026-11-02 recorded **9,917 cases**, including skips. See per-run local validation for pass/failure results.
 
 ## Test Infrastructure
 
@@ -272,11 +272,11 @@ As of scoped issue #684 validation against main c993ac8b on 2026-11-02, from ful
 | xl-evaluator | 4200 |
 | xl-core | 1875 |
 | xl-ooxml | 1447 |
-| xl-cli | 1962 |
+| xl-cli | 1966 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,913** |
+| **Total** | **9,917** |
 
 
 ## Test Quality Metrics
