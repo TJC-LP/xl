@@ -282,13 +282,13 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**10,078 test cases** (from the JUnit reports of `./mill __.test` on main at 9c746f18, 2026-10-30, after the 18-PR merge train; one xl-ooxml case skipped). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
+**9,902 test cases** (from the JUnit reports of `./mill __.test` on main at 9c746f18, 2026-10-30, after the 17-PR merge train; five cases skipped: one each in xl-ooxml and xl-cats-effect, three in xl-cli). Counts include skipped cases; external-tool checks can skip when their tools are absent. Per-run pass/failure results are recorded in pull request validation.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4202 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4193 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1614 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-ooxml | 1447 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1961 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |

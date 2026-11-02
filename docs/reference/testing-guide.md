@@ -269,14 +269,14 @@ As of main at 9c746f18 (2026-10-30), from the full-suite JUnit reports; macros a
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4202 |
+| xl-evaluator | 4193 |
 | xl-core | 1872 |
-| xl-ooxml | 1614 |
+| xl-ooxml | 1447 |
 | xl-cli | 1961 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **10,078** |
+| **Total** | **9,902** |
 
 `WholeAxisUsedRangeSpec` also has one opt-in large-sheet acceptance check,
 run with `XL_WHOLE_AXIS_PERF=1`, which is excluded from these default-suite counts.
