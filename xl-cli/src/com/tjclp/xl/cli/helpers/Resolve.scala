@@ -206,6 +206,7 @@ object Resolve:
         )
       }
       _ <- opSheetAgreement(index, op, "the qualified ref", qualified, declared)
+      _ <- sameTab(wb, index, op, qualified, declared)
       name <- qualified.orElse(declared).orElse(defaultSheet) match
         case Some(chosen) => Right(chosen)
         case None =>
@@ -215,6 +216,35 @@ object Resolve:
               sheetRequired(s"batch $op", wb.sheets.map(_.name.value)).copy(location = at(index))
             )
     yield name
+
+  /**
+   * [[opSheetAgreement]] once the workbook is in hand: two spellings that agree ignoring case must
+   * also land on the same tab. On a book carrying case-only twins (`Data` and `DATA`), `"sheet":
+   * "Data"` with `DATA!A1` folds equal but names two sheets, so it is the same contradiction. A
+   * name that resolves to no tab is left for the later lookup to report.
+   */
+  private def sameTab(
+    wb: Workbook,
+    index: Int,
+    op: String,
+    qualified: Option[SheetName],
+    declared: Option[SheetName]
+  ): Either[CliError, Unit] =
+    (qualified, declared) match
+      case (Some(named), Some(sheet)) =>
+        val names = wb.sheets.map(_.name)
+        (SheetName.indexIn(names, named), SheetName.indexIn(names, sheet)) match
+          case (Right(a), Right(b)) if a != b =>
+            Left(
+              invalidOp(
+                index,
+                op,
+                s"the qualified ref names sheet '${names(a).value}' but \"sheet\" is " +
+                  s"'${names(b).value}'"
+              )
+            )
+          case _ => Right(())
+      case _ => Right(())
 
   /**
    * A target ref qualified with a sheet other than the op's `sheet` key is a contradiction —

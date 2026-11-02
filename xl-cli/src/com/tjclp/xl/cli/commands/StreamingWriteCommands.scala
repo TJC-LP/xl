@@ -440,8 +440,8 @@ object StreamingWriteCommands:
 
       // Resolve the one worksheet this batch streams (workbook.xml only), then refuse by index
       // every op that would land anywhere else
-      (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, sheetNameOpt, scoped)
       meta <- readMeta(sourcePath)
+      (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, meta, sheetNameOpt, scoped)
       _ <- refuseOtherSheets(scoped, meta.sheets.map(_.name), sheetName)
 
       // A ref qualified with the streamed sheet is honoured as its bare form
@@ -570,14 +570,14 @@ object StreamingWriteCommands:
    */
   private def resolveBatchSheet(
     sourcePath: Path,
+    meta: LightMetadata,
     sheetNameOpt: Option[String],
     scoped: Vector[ScopedOp]
   ): IO[(String, String)] =
     sheetNameOpt match
-      case Some(_) => resolveSheetTarget(sourcePath, sheetNameOpt, None, "batch")
+      case Some(_) => resolveSheetTargetIn(sourcePath, meta, sheetNameOpt, None, "batch")
       case None =>
         for
-          meta <- readMeta(sourcePath)
           resolved <- scoped.traverse(opSheetInMemory(meta, _))
           name <- resolved.distinct match
             case Vector(single) => IO.pure(single)
@@ -1308,8 +1308,17 @@ object StreamingWriteCommands:
     qualified: Option[SheetName],
     verb: String
   ): IO[(String, String)] =
+    readMeta(sourcePath).flatMap(resolveSheetTargetIn(sourcePath, _, sheetNameOpt, qualified, verb))
+
+  /** [[resolveSheetTarget]] over metadata the caller already read. */
+  private def resolveSheetTargetIn(
+    sourcePath: Path,
+    meta: LightMetadata,
+    sheetNameOpt: Option[String],
+    qualified: Option[SheetName],
+    verb: String
+  ): IO[(String, String)] =
     for
-      meta <- readMeta(sourcePath)
       name <- IO.fromEither(
         Resolve.sheetName(meta, sheetNameOpt, qualified, verb).left.map(CliException(_))
       )

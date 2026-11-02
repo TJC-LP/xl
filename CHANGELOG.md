@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and such a cell is no longer treated as an always-dirty reader;
   - the library: `wb.update`, `upsert`, `remove`, `delete`, `rename`, `setSheetState`, the scope of
     `withDefinedName` / `removeDefinedName`, the Edit algebra's sheet targets (`wb.edit`,
-    `wb.editIn`), `recalculateDependents`, `seedDataTables(sheetName)` and `Excel.readSheet`;
+    `wb.editIn`), `recalculateDependents`, `seedDataTables(sheetName)`, `Excel.readSheet`, and the
+    streaming readers `ExcelIO.readSheetStream`, `readSheetStreamRange` and `streamCellDetails`;
   - the CLI: `-s`, a verb's qualified ref, the sheet verbs' arguments (`remove-sheet`,
     `rename-sheet`, `move-sheet`, `copy-sheet`, `add-sheet --after/--before`, `sheets hide|show`),
     and in batch JSON an op's `sheet` and `scope` keys and a target ref's qualifier, in memory and
@@ -34,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recalculateDependents(SheetName("data"), refs)` refreshed nothing); they now resolve to the
   `Data` sheet. **Behaviour change:** a batch op whose `sheet` key and ref qualifier differ only by
   case (`"sheet": "Data"`, `"ref": "data!A1"`) was `BATCH_OP_INVALID`; it is now one sheet.
+  On a book with case-only twin tabs, a `sheet` key and qualifier that land on different tabs
+  (`"sheet": "Data"`, `"ref": "DATA!A1"`) remain `BATCH_OP_INVALID`.
   `seedDataTables` with an unknown sheet now lists the workbook's sheets in
   `SheetNotFound.available`, as `Workbook.apply` does. `Excel.readSheet` with a string no tab could
   carry is `SheetNotFound`, as before. `wb.put(sheet)` still adds or replaces by exact name.

@@ -151,6 +151,16 @@ class ResolveSpec extends CatsEffectSuite with ScalaCheckSuite:
     assertEquals(streamed.code, "INVALID_REFERENCE")
   }
 
+  test("#752: a sheet key and qualifier folding equal but naming case-only twins contradict") {
+    val upper = SheetName.unsafe("DATA")
+    val twins = two.put(Sheet(upper))
+    val flag = error(Resolve.forOp(twins, None, Some("Data"), Some(upper), 0, "put"))
+    assertEquals(flag.code, "BATCH_OP_INVALID")
+    assert(flag.message.contains("names sheet 'DATA'"), flag.message)
+    // on a book without twins the same spellings are one tab
+    assert(Resolve.forOp(two, None, Some("Data"), Some(upper), 0, "put").isRight)
+  }
+
   test("#752: `-s data` reads and writes the Data tab, in memory and streaming") {
     val out = file("case-put.xlsx")
     for

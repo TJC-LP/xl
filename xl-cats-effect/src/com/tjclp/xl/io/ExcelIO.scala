@@ -735,11 +735,14 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     sheetName: String
   ): Either[String, String] =
     loadWorksheetRefsSync(zipFile).flatMap { refs =>
-      refs.find(_.name == sheetName) match
-        case Some(ref) => Right(ref.path)
-        case None =>
+      // The same rule as every other sheet-name lookup (#752): exact spelling first, else the one
+      // tab equal ignoring case; a name folding onto case-only twins is refused, not guessed.
+      SheetName.indexIn(refs.map(r => SheetName.unsafe(r.name)), SheetName.unsafe(sheetName)) match
+        case Right(i) => Right(refs(i).path)
+        case Left(_: XLError.SheetNotFound) =>
           val available = refs.map(_.name).mkString(", ")
           Left(s"Sheet not found: $sheetName. Available: $available")
+        case Left(err) => Left(err.message)
     }
 
   private def loadWorksheetRefsSync(zipFile: ZipFile): Either[String, Vector[WorksheetRef]] =
