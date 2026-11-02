@@ -220,11 +220,11 @@ class LookupUncachedKeysSpec extends FunSuite:
   }
 
   test("each way a cycle fails without a placement is recognised as a cycle failure") {
-    // Evaluator.isCycleFailure matches the messages of three raise sites; a rewording that loses
+    // Evaluator.isCycleFailure matches the messages of the cycle raise sites; a rewording that loses
     // the match would turn a cyclic result cell's #VALUE! into a hard failure, so pin each site
     def failure(result: Either[EvalError, Any], site: String): EvalError =
       result.fold(identity, value => fail(s"$site: expected a failure, got $value"))
-    // cells reading each other: the cross-sheet recursion depth guard
+    // cells reading each other: the active-cell guard
     val cells = failure(evalRaw(cyclic, "=A1"), "cells")
     // spill anchors reading each other's spill: the spill recursion depth guard
     val spills = Sheet("T")

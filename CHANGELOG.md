@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Dynamic formula cycles are detected when an uncached cell is revisited during evaluation,
+  producing a consistent circular-reference diagnostic instead of depending on whether the
+  recursion-depth limit or JVM stack exhaustion happens first (PR #825).
+
 - **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
   desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
   `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error

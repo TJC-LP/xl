@@ -1027,14 +1027,15 @@ object Evaluator:
   private val CrossSheetDepthExceeded = "Cross-sheet formula recursion depth exceeded"
   private val SpillDepthExceeded = "Spill reference recursion depth exceeded"
   private val NameCycleDetected = "Defined name cycle detected"
+  private val CellCycleDetected = "Cell formula cycle detected"
 
   /**
-   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: a recursion
-   * depth guard (cells, or a spill reference, reading each other) or a defined-name cycle. Each is
-   * an `EvalFailed` the cycle's readers see; it is not an internal failure.
+   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: an active cell
+   * revisit, a recursion depth guard, or a defined-name cycle. Each is an `EvalFailed` the cycle's
+   * readers see; it is not an internal failure.
    *
-   * Matched by message prefix, the three raise sites sharing the constants above: a dedicated
-   * marker would be a new case or field on the published `EvalError`, a binary break.
+   * Matched by message prefix, the raise sites sharing the constants above: a dedicated marker
+   * would be a new case or field on the published `EvalError`, a binary break.
    * LookupUncachedKeysSpec pins each raise site, so a rewording that loses the match fails there.
    * TODO(#751): a structured cycle marker on `EvalError` replaces the prefixes at the next
    * binary-breaking release.
@@ -1042,7 +1043,7 @@ object Evaluator:
   private[formula] def isCycleFailure(error: EvalError): Boolean = error match
     case EvalError.EvalFailed(message, _) =>
       message.startsWith(CrossSheetDepthExceeded) || message.startsWith(SpillDepthExceeded) ||
-      message.startsWith(NameCycleDetected)
+      message.startsWith(NameCycleDetected) || message.startsWith(CellCycleDetected)
     case _ => false
 
   /** Resolve range cells with the same cache, recursion and context rules as scalar references. */
@@ -1280,8 +1281,10 @@ object Evaluator:
    * Not thread-safe: an evaluation pass is single-threaded and the memo never escapes it — revisit
    * if evaluation is ever parallelized internally.
    *
-   * Errors memoize too — a cycle otherwise re-burns the full recursion-depth guard once per path,
-   * which is itself exponential. A depth-guard error consequently records by first-visit order;
+   * Cells currently being computed are tracked by the same sheet identity and ref as completed
+   * results. Revisiting one fails immediately, before recursion can exhaust the JVM stack. Active
+   * entries are removed in finally, including when evaluation exits through a throwable or
+   * boundary. Errors memoize too. A depth-guard error consequently records by first-visit order;
    * that is observable only on chains deeper than the guard, where results were already
    * path-dependent (and where whole-workbook `recalculate()`, which orders iteratively, is the
    * supported path).
@@ -1332,6 +1335,9 @@ object Evaluator:
     def guard(sheet: Sheet, at: ARef): Option[EvalError] =
       placement.flatMap(_.check(sheet, at))
 
+    private val active =
+      new java.util.IdentityHashMap[Sheet, scala.collection.mutable.HashSet[ARef]]()
+
     private def memoized(
       sheet: Sheet,
       at: ARef,
@@ -1342,11 +1348,21 @@ object Evaluator:
       forSheet.get(at) match
         case Some(hit) => hit
         case None =>
-          // Compute BEFORE storing (never inside a map callback): the computation itself may
-          // recurse into this memo for other cells of the same sheet.
-          val computed = compute
-          forSheet.update(at, computed)
-          computed
+          val running = active.computeIfAbsent(sheet, _ => scala.collection.mutable.HashSet.empty)
+          if running.contains(at) then
+            // Keep run-time cell cycles on the existing EvalFailed channel: lookup functions
+            // distinguish these from a positioned evaluation's CircularRef placement guard.
+            Left(EvalError.EvalFailed(s"$CellCycleDetected at ${at.toA1}: circular reference."))
+          else
+            running.add(at)
+            try
+              // Compute outside a map callback: recursion can memoize other cells on this sheet.
+              val computed = compute
+              forSheet.update(at, computed)
+              computed
+            finally
+              running.remove(at)
+              if running.isEmpty then active.remove(sheet)
 
   /** Observable counters for focused aggregate-memo tests and profiling. */
   private[formula] final case class AggregateMemoStats(

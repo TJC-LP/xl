@@ -266,12 +266,27 @@ class RecalcSpec extends FunSuite:
     assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"B1"))
 
   test("GH-274 dynamic self-reference is total and deterministic"):
-    val sheet = Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))
-    val r1 = Workbook(sheet).recalculate()
-    val r2 = Workbook(sheet).recalculate()
-    assertEquals(cached(r1.workbook, "S", ref"A1"), None)
-    assertEquals(r1.errors.map(_.ref), Vector(ref"A1"))
-    assertEquals(r1, r2)
+    val books = List(
+      Workbook(Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))),
+      Workbook(
+        Sheet(SheetName.unsafe("S"))
+          .put(ref"A1", formula("=INDIRECT(\"B1\")"))
+          .put(ref"B1", formula("=INDIRECT(\"A1\")"))
+      ),
+      Workbook(
+        Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"Other!A1\")")),
+        Sheet(SheetName.unsafe("Other")).put(ref"A1", formula("=INDIRECT(\"S!A1\")"))
+      )
+    )
+    books.foreach { book =>
+      val first = book.recalculate()
+      assertEquals(cached(first.workbook, "S", ref"A1"), None)
+      val expectedCells = book.sheets.flatMap(s => s.cells.keysIterator.map(s.name -> _)).toSet
+      assertEquals(first.errors.map(e => e.sheet -> e.ref).toSet, expectedCells)
+      assert(first.errors.forall(_.render.contains("Cell formula cycle detected")))
+      // Pin the actual diagnostic as well as equality: two stack-exhaustion failures must not pass.
+      (1 to 20).foreach(_ => assertEquals(book.recalculate(), first))
+    }
 
   test("GH-274 determinism: recalculate() twice yields identical RecalcResult"):
     val sheet = Sheet(SheetName.unsafe("S"))
