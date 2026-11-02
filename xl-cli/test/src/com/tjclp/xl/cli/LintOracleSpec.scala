@@ -35,6 +35,31 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
     thread.join()
     out.get()
 
+  // Keep recursive frames live until the oracle returns; this is deliberately not tail-recursive.
+  @scala.noinline
+  private def withFrames(depth: Int, check: () => Option[String]): Option[String] =
+    if depth == 0 then check()
+    else
+      val result = withFrames(depth - 1, check)
+      java.lang.ref.Reference.reachabilityFence(result)
+      result
+
+  /** Find the first stack-induced change in the real oracle, not merely its guard helper. */
+  private def firstStackDeviation(check: () => Option[String]) =
+    val baseline = check()
+    onSmallStack(256L * 1024) {
+      var depth = 0
+      var first: Option[(Int, Either[Throwable, Option[String]])] = None
+      // A single thread and bounded linear search avoid skipping the guard's catchable boundary.
+      while depth <= 32768 && first.isEmpty do
+        val observed =
+          try Right(withFrames(depth, check))
+          catch case error: Throwable => Left(error)
+        if observed != Right(baseline) then first = Some(depth -> observed)
+        depth += 1
+      first
+    }
+
   test("#681: a StackOverflowError inside the oracle is a finding, never an escape") {
     val overflowing: String => Option[String] = _ => throw new StackOverflowError()
     val verdict = UnparseableFormula.stackGuarded(overflowing)("SUM(((1)))")
@@ -47,8 +72,9 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
 
   test("#681: pathological <f> text on a small stack never escapes the oracle") {
     // the parser's 128-level budget bounds its depth, but not its frame size: on a small thread
-    // stack (a fiber, a native image) the deepest legal nests still overflow. Every text must come
-    // back as a verdict — the overflow as a finding — on a stack small enough to overflow.
+    // stack (a fiber, a native image) the deepest legal nests can overflow. Every text must come
+    // back as a verdict; whether it overflows depends on JVM compilation and the stack-size hint.
+    // The injected-overflow test above deterministically pins conversion to a finding.
     val texts = Vector(
       "(" * 127 + "1" + ")" * 127,
       "SUM(" * 127 + "1" + ")" * 127,
@@ -66,11 +92,17 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
       texts.map(t => t.take(20) -> onSmallStack(64L * 1024)(LintCommands.formulaCheck(t)))
     val escaped = results.collect { case (t, Left(err)) => s"$t…: $err" }
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
-    // and at least one of them really overflowed — the guard, not luck, answered
-    assert(
-      results.exists { case (_, verdict) => verdict.exists(_.exists(_.contains("stack"))) },
-      results.mkString("\n")
-    )
+
+    // Warm the real path, then consume frames until parsing changes its verdict. A disconnected
+    // guard must escape as StackOverflowError; safe completion at a fixed stack hint is allowed.
+    val truncated = "SUM(" * 127 + "1"
+    assert(UnparseableFormula.needsParse(truncated), "the probe must reach the parser")
+    (1 to 20000).foreach(_ => LintCommands.formulaCheck(truncated))
+    val boundary = firstStackDeviation(() => LintCommands.formulaCheck(truncated))
+    boundary match
+      case Right(Some((_, Right(Some(finding))))) =>
+        assert(finding.contains("stack"), s"first changed verdict: $boundary")
+      case other => fail(s"the real lint path must contain its first stack exhaustion: $other")
   }
 
   // ===== the prefilter: structured and external references skip the parse =====

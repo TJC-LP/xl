@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
   retain per-cell context, and validate after resolving the target and selecting the write mode.
 
+- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
+  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
+  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
+  small-stack lint test permits safe completion after JVM warm-up and calibrates stack exhaustion
+  on the real lint path; injected overflow coverage still requires a lint finding. Internal
+  formula/cache assertions run even when LibreOffice is unavailable.
+
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
   right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
   to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
