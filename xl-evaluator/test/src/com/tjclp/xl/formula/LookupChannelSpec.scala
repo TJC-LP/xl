@@ -5,7 +5,15 @@ import munit.FunSuite
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  IterativeMode,
+  RecalcCounters,
+  RecalcOptions,
+  WorkbookEvaluator
+}
+import com.tjclp.xl.formula.eval.RecalcCounters.Counter
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -332,13 +340,11 @@ class LookupChannelSpec extends FunSuite:
     "#692: a bounded lookup costs its range, not the sheet, however many cells the sheet holds"
   ) {
     // Sheet.usedRange scans every populated cell. A full-column lookup pays that once to clip its
-    // walk; a bounded range must not pay it at all — on this sheet (200k unrelated cells in Z) the
-    // 20,000 lifted lookups below would otherwise visit 4×10⁹ cells where their keys number ten.
-    // The budget is generous for the ten-cell walks (a few seconds at most) and far below what a
-    // per-call sheet scan takes (over four minutes when measured).
-    val Noise = 200000
+    // walk; a bounded range must not pay it at all — on this sheet (20k unrelated cells in Z) the
+    // 20,000 lifted lookups below would otherwise visit 4×10⁸ cells where their keys number ten.
+    // The lifted results pin the semantics; the scan count is pinned by the test below (#843).
+    val Noise = 20000
     val Lookups = 20000
-    val BudgetMs = 30000L
     val keys = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
       s.put(ref"A1".shift(0, i), num(i + 1))
     }
@@ -346,11 +352,8 @@ class LookupChannelSpec extends FunSuite:
       s.put(ref"B1".shift(0, i), num(i % 10 + 1))
     }
     val sheet = (0 until Noise).foldLeft(lookups) { (s, i) => s.put(ref"Z1".shift(0, i), num(i)) }
-    val t0 = System.nanoTime()
     val matched = sheet.evaluateArrayFormula(s"=MATCH(B1:B$Lookups,A1:A10,0)", ref"C1")
     val looked = sheet.evaluateArrayFormula(s"=XLOOKUP(B1:B$Lookups,A1:A10,A1:A10)", ref"D1")
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
-    assert(elapsedMs < BudgetMs, s"20k bounded lookups took ${elapsedMs}ms (budget ${BudgetMs}ms)")
     val (matchedSheet, matchedRange) = matched.fold(e => fail(e.toString), identity)
     val (lookedSheet, lookedRange) = looked.fold(e => fail(e.toString), identity)
     assertEquals(matchedRange.height, Lookups)
@@ -362,6 +365,33 @@ class LookupChannelSpec extends FunSuite:
     check(sheet, "=MATCH(7,A:A,0)", num(7))
     check(sheet, "=XLOOKUP(7,A:A,B:B)", num(7))
     check(sheet, "=XMATCH(7,A:A)", num(7))
+  }
+
+  test("#692: a bounded lookup never scans the sheet's used range; a whole-column one scans once") {
+    // `usedRangeOf` (FunctionSpecsBase) is the one seam that pays for Sheet.usedRange, and only a
+    // whole-column or whole-row range reaches it; `UsedRangeScans` counts those visits, so the
+    // twenty lookups below are a count, not a clock (#843). A regression that read Sheet.usedRange
+    // around that seam would be invisible here; evaluation is routed through it on purpose.
+    def scans(formula: Int => String): Long =
+      val keys = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
+        s.put(ref"A1".shift(0, i), num(i + 1))
+      }
+      val lookups = (0 until 20).foldLeft(keys) { (s, i) =>
+        s.put(ref"B1".shift(0, i), num(i % 10 + 1))
+          .put(ref"C1".shift(0, i), CellValue.Formula(formula(i + 1), None))
+      }
+      val counters = RecalcCounters.create()
+      val result = WorkbookEvaluator.recalculateCounted(
+        Workbook(lookups),
+        RecalcOptions(iterative = IterativeMode.Off),
+        counters
+      )
+      assertEquals(result.errors, Vector.empty)
+      counters.snapshot(Counter.UsedRangeScans)
+    assertEquals(scans(i => s"MATCH(B$i,$$A$$1:$$A$$10,0)"), 0L)
+    assertEquals(scans(i => s"XLOOKUP(B$i,$$A$$1:$$A$$10,$$A$$1:$$A$$10)"), 0L)
+    // a pass scans each sheet once per structural generation (#747), however many readers
+    assertEquals(scans(i => s"MATCH(B$i,$$A:$$A,0)"), 1L)
   }
 
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {

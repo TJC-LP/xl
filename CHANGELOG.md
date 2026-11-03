@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- **Performance gates are counters, not clocks** (#843): `FormulaGraphPerfSpec`'s #743 gate missed
+  its 5 s budget in about a third of CI runs, where `./mill -i __.test` shares a 4-core runner among
+  several test JVMs, and nine more tests carried wall-clock budgets with the same failure mode (five
+  of them equal to MUnit's 30 s default timeout, so they never decided anything). The formula-graph
+  build now counts its range lookups and index work (`RecalcCounters.RangeLookups`,
+  `RangeLookupWork`); the #743 and GH-522 gates pin those counts at 2,000 and 8,000 rows; the #692
+  lookup gate pins `UsedRangeScans`; the GH-714 drag pins `ImplicitIntersection.Report`; the GH-715
+  stale-reader walk pins its containment checks (`ReadCommands.UncacheTrace`); every other
+  wall-clock assert in `__.test` is a diagnostic clue (`RecalcPerfSpec`, `StylePerformanceSpec`,
+  `EvaluationTotalitySpec`, ...), with `munitTimeout` overrides where a fixture is large.
+  `LintOracleSpec` proves a real overflow at the stack boundary (recursing to the overflow, then
+  calling the oracle while unwinding) instead of hoping a 64 KB stack hint, below the JVM's minimum,
+  overflows on the JIT tier at hand; it warms the oracle on the normal stack first, and its
+  small-stack threads are daemons joined with a bound.
 - `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
   the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
   cases assert on (#728).

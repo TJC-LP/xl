@@ -24,7 +24,8 @@ import com.tjclp.xl.macros.ref
  */
 class ImplicitIntersectionCliSpec extends CatsEffectSuite:
 
-  // the 5,000-row drags below take seconds each; the budget is asserted, not this timeout
+  // the 5,000-row drags below take seconds each; this timeout is the backstop against a drag that
+  // evaluates its cells more than once, never a performance gate (#843)
   override def munitIOTimeout: Duration = 5.minutes
 
   /** A1:A10 = 1..10 and B1:B10 = 1..10. */
@@ -143,10 +144,9 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       _ <- ExcelIO.instance[IO].write(Workbook(sheet), p)
     yield p
 
-  private def timedDrag(src: Path, formula: String): IO[(CliRun, Long)] =
+  private def drag(src: Path, formula: String): IO[(CliRun, Path)] =
     for
       out <- outPath()
-      start <- IO.monotonic
       run <- CliHarness.run(
         "-f",
         src.toString,
@@ -158,47 +158,28 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
         "--no-recalc",
         "--json"
       )
-      end <- IO.monotonic
-    yield (run, (end - start).toMillis)
-
-  /**
-   * One evaluation of each running total, as `--no-recalc` caches it: the drag's own cost by design
-   * (GH-714 adds none for a formula with no array source in a value position).
-   */
-  private def evaluationPass(src: Path): IO[Long] =
-    for
-      wb <- ExcelIO.instance[IO].read(src)
-      sheet <- IO.fromOption(wb.sheets.headOption)(new IllegalStateException("no sheet"))
-      start <- IO.monotonic
-      _ <- IO.blocking((1 to 5000).foreach { i =>
-        sheet.evaluateFormula(
-          s"=SUM($$A$$1:A$i)",
-          workbook = Some(wb),
-          currentCell = Some(ARef.from0(1, i - 1))
-        )
-      })
-      end <- IO.monotonic
-    yield (end - start).toMillis
+    yield (run, out)
 
   test(
     "a 5,000-row running-total drag under --no-recalc evaluates each cell once, not three times"
   ) {
+    // The drag's cache pass is each running total's one evaluation. GH-714's advisory adds none:
+    // a formula with no array source in a value position is never a candidate, so the check
+    // evaluates no cell both ways. That report is the fact a ratio of two timings once stood for
+    // (the flakiest shape a suite can assert on a shared runner: #843).
     for
       src <- column(5000)
-      _ <- timedDrag(src, "=A1+1") // warm-up
-      passMs <- evaluationPass(src)
-      (plain, plainMs) <- timedDrag(src, "=A1+1")
-      (total, totalMs) <- timedDrag(src, "=SUM($A$1:A1)")
+      (total, out) <- drag(src, "=SUM($A$1:A1)")
+      wb <- ExcelIO.instance[IO].read(out)
+      sheet <- IO.fromOption(wb.sheets.headOption)(new IllegalStateException("no sheet"))
     yield
-      assertEquals(plain.exit, 0, plain.toString)
       assertEquals(total.exit, 0, total.toString)
       assert(!warned(total), total.stdout)
-      // measured alone, the drag takes about 1.6 passes (the cache pass, then the write); with
-      // two more evaluations per cell for the advisory it took 4.4
-      val bound = plainMs + passMs * 5 / 2 + 2000
-      assert(
-        totalMs <= bound,
-        s"running total ${totalMs}ms, bound ${bound}ms (plain ${plainMs}ms, pass ${passMs}ms)"
+      val targets = (1 to 5000).map(i => sheet.name -> ARef.from0(1, i - 1))
+      val report = ImplicitIntersection.check(wb, targets, clock)
+      assertEquals(
+        (report.candidates, report.checked, report.hits),
+        (0, 0, Vector.empty[ImplicitIntersection.Divergence])
       )
   }
 
@@ -305,10 +286,8 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
     val wb = Workbook(sheet)
     for
       result <- BatchParser.parseBatchOperations(ops)
-      start <- IO.monotonic
       areas = BatchParser.putfTargets(wb, Some(sheet), result.scoped)
       isKnown = BatchParser.putfKnownCandidates(wb, Some(sheet), result.scoped)
-      built <- IO.monotonic
       pulled = new java.util.concurrent.atomic.AtomicInteger(0)
       targets = areas.view.flatMap((n, r) =>
         r.cellsRowMajor.map { c =>
@@ -323,9 +302,9 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       assert(!isKnown(sheet.name -> ARef.from0(1, 0)), "B1 is written by a later put")
       assert(isKnown(sheet.name -> ARef.from0(1, 5000)), "B5001: a later drag, no later write")
       assertEquals((report.checked, report.candidates, report.exact), (1000, 1001, false))
-      // one past the budget, out of ten million target cells
+      // one past the budget, out of ten million target cells (building them all would trip the
+      // suite timeout, the backstop here: #843)
       assertEquals(pulled.get(), 1001)
-      assert((built - start).toSeconds < 20, s"building took ${(built - start).toMillis}ms")
   }
 
   test("#739: a sampled check with no hit in its sample says it sampled, not all clear") {

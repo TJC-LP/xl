@@ -51,6 +51,12 @@ class ColumnSpec extends ScalaCheckSuite:
   not just structure.
 - **Behavior pins**: when a fix changes observable behavior, add a test that names the issue
   (`GH-361`) so the pin is discoverable.
+- **Performance pins are counters, not clocks**: `RecalcCounters.create()` with
+  `WorkbookEvaluator.recalculateCounted` or `DependencyGraph.fromWorkbookFormulaGraph(wb, counters)`,
+  or a structural report (`ImplicitIntersection.Report`, `ReadCommands.UncacheTrace`); assert the
+  count at two sizes or pin it exactly. A wall time belongs in the assertion clue. A big fixture
+  overrides `munitTimeout` with a comment; the timeout is the only backstop for hang-class
+  regressions. No wall-clock pass/fail threshold in `__.test` (#843).
 - **External tools are optional**: rasterizer backends (cairosvg, rsvg-convert, resvg, ImageMagick)
   are probed, never required; `RasterizerListSpec` mocks availability. Do not add tests that need
   LibreOffice or a system binary.

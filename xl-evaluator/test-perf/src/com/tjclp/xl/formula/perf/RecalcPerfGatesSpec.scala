@@ -53,6 +53,9 @@ class RecalcPerfGatesSpec extends FunSuite:
     Counter.VirtualNodes -> 1197L,
     Counter.RangeNodes -> 11L,
     Counter.GraphWork -> 15003L,
+    // the per-cell graph's range lookups: none, the compact graph builds no such index
+    Counter.RangeLookups -> 0L,
+    Counter.RangeLookupWork -> 0L,
     Counter.CriteriaIndexed -> 400L,
     Counter.CriteriaWindowOnly -> 0L,
     Counter.CriteriaNotIndexable -> 0L,

@@ -19,12 +19,17 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(3000)
 
-  /** Run `f` on a thread with a deliberately small stack; its result, or what it threw. */
+  /**
+   * Run `f` on a thread with a deliberately small stack; its result, or what it threw. Bounded: a
+   * walk still running after `JoinMs` fails by name instead of hanging the suite.
+   */
+  private val JoinMs = 60000L
   private def onSmallStack[A](stackBytes: Long)(f: => A): Either[Throwable, A] =
     val out = new AtomicReference[Either[Throwable, A]](Left(new IllegalStateException("not run")))
     val thread = Thread
       .ofPlatform()
       .name("lint-oracle-small-stack")
+      .daemon(true)
       .stackSize(stackBytes)
       .start(() =>
         out.set(
@@ -32,8 +37,23 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
           catch case t: Throwable => Left(t)
         )
       )
-    thread.join()
+    if !thread.join(java.time.Duration.ofMillis(JoinMs)) then
+      thread.interrupt()
+      fail(s"the small-stack run did not finish within ${JoinMs}ms")
     out.get()
+
+  /**
+   * Exhaust the stack, then call `check` while unwinding one live frame at a time: the first frame
+   * with room for the guard's `try` but not for the parse's descent answers, whatever the JIT tier
+   * or the stack size, so the overflow the guard converts is real by construction, never luck.
+   */
+  @scala.noinline
+  private def atStackBoundary(check: () => Option[String]): Option[String] =
+    val result =
+      try atStackBoundary(check)
+      catch case _: StackOverflowError => check()
+    java.lang.ref.Reference.reachabilityFence(result)
+    result
 
   test("#681: a StackOverflowError inside the oracle is a finding, never an escape") {
     val overflowing: String => Option[String] = _ => throw new StackOverflowError()
@@ -47,8 +67,10 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
 
   test("#681: pathological <f> text on a small stack never escapes the oracle") {
     // the parser's 128-level budget bounds its depth, but not its frame size: on a small thread
-    // stack (a fiber, a native image) the deepest legal nests still overflow. Every text must come
-    // back as a verdict — the overflow as a finding — on a stack small enough to overflow.
+    // stack (a fiber, a native image) the deepest legal nests can overflow. Every text must come
+    // back as a verdict, the overflow as a finding, whether or not it overflows on the stack at
+    // hand: the frame size of an interpreted parser is several times its compiled size, so which
+    // texts overflow depends on which suites warmed the JVM first (#843).
     val texts = Vector(
       "(" * 127 + "1" + ")" * 127,
       "SUM(" * 127 + "1" + ")" * 127,
@@ -62,15 +84,32 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
       "(" * 8192,
       "SUM(Table1[Amount])" * 400
     )
+    // a nest the prefilter admits (an unterminated call is a certain truncation) that descends to
+    // the parser's depth limit
+    val deep = "SUM(" * 127 + "1"
+    assert(UnparseableFormula.needsParse(deep), "the probe must reach the parser")
+    // 1. warm the oracle and every class it touches on the normal stack: a class whose initialiser
+    //    overflowed on a small thread is poisoned for the JVM (NoClassDefFoundError afterwards,
+    //    which no guard converts), and the first touch must not happen there
+    (texts :+ deep).foreach(LintCommands.formulaCheck)
+    val baseline = LintCommands.formulaCheck(deep)
+    assert(
+      baseline.exists(f => !f.contains("stack")),
+      s"the normal stack must hold the parse: $baseline"
+    )
+    // 2. the contract: every text is a verdict on a 256 KB stack, a size HotSpot and GraalVM honour
+    //    (64 KB is below the JVM's minimum and silently rounded up), whether the parse fits (an
+    //    ordinary verdict) or not (the guard's finding)
     val results =
-      texts.map(t => t.take(20) -> onSmallStack(64L * 1024)(LintCommands.formulaCheck(t)))
+      texts.map(t => t.take(20) -> onSmallStack(256L * 1024)(LintCommands.formulaCheck(t)))
     val escaped = results.collect { case (t, Left(err)) => s"$t…: $err" }
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
-    // and at least one of them really overflowed — the guard, not luck, answered
-    assert(
-      results.exists { case (_, verdict) => verdict.exists(_.exists(_.contains("stack"))) },
-      results.mkString("\n")
-    )
+    // 3. and a real overflow is the guard's finding: at the stack boundary the guard's `try` fits
+    //    where the 127-level descent cannot, so the first verdict to return names the stack; a
+    //    guard that had come loose would unwind until the parse fits and return the ordinary verdict
+    val boundary =
+      onSmallStack(1024L * 1024)(atStackBoundary(() => LintCommands.formulaCheck(deep)))
+    assertEquals(boundary.map(_.exists(_.contains("stack"))), Right(true), boundary.toString)
   }
 
   // ===== the prefilter: structured and external references skip the parse =====

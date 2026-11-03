@@ -263,6 +263,22 @@ every call indexed, matcher calls per call flat from 5k to 20k rows, at most a t
 index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation benchmark section of
 `docs/reference/performance-guide.md`.
 
+### Performance gates are counters, not clocks
+
+A performance regression is pinned by a work counter or a structural count, never by wall time:
+`__.test` runs on a shared 4-core CI runner beside several other test JVMs, where a 2 s build can
+take 6 s, so a wall-clock threshold can only flake (#843). The counters are `RecalcCounters`
+(`RangeLookups` and `RangeLookupWork` for the formula graph's range index, `UsedRangeScans`,
+`GraphEdges`, `MatcherCalls`, ...), read through `RecalcCounters.create()` with
+`WorkbookEvaluator.recalculateCounted` or `DependencyGraph.fromWorkbookFormulaGraph(wb, counters)`;
+structural counts are reports such as `ImplicitIntersection.Report` and `ReadCommands.UncacheTrace`.
+A gate asserts the count at two sizes (linear work grows four-fold with four-fold rows) or pins it
+exactly. A wall time belongs in the assertion clue, as a diagnostic. A suite whose fixture is large
+enough that a loaded runner could cross MUnit's 30 s default overrides `munitTimeout` (or
+`munitIOTimeout`) with a comment; that timeout is the only backstop for hang-class regressions
+(exponential or allocation-quadratic work) that no counter can observe. Note that MUnit 1.0.3
+applies the timeout to synchronous tests too; the body keeps running, but the suite fails by name.
+
 ## Test Counts by Module
 
 As of standalone PR #817 validation on 2026-11-02, from full-suite JUnit reports. Counts include skipped cases; per-run pass/failure results are recorded in the PR.
@@ -282,7 +298,7 @@ As of standalone PR #817 validation on 2026-11-02, from full-suite JUnit reports
 ## Test Quality Metrics
 
 - **All tests pass**: enforced by `./mill __.test` in CI ✅
-- **Zero flaky tests**: Deterministic, reproducible
+- **Zero flaky tests**: Deterministic, reproducible; no wall-clock pass/fail thresholds in `__.test`
 - **Fast execution**: focused suites run quickly; full-suite time is tracked by CI
 - **Property-based**: 60%+ of tests use ScalaCheck
 - **Law coverage**: All algebras (Monoid, Lens, Optional) verified
