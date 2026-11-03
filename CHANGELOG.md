@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
+  CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
+  sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
+  published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
+
 ### Fixed
 
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
