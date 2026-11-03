@@ -7,7 +7,7 @@ description: How xl is tested - MUnit + ScalaCheck suite layout, the shared Gene
 
 Frameworks: MUnit 1.0.3 (`FunSuite`, `ScalaCheckSuite`), munit-scalacheck 1.2.0, ScalaCheck
 1.18.1, munit-cats-effect 2.x and scalacheck-effect for `IO` suites in `xl-cats-effect`. Reference:
-`docs/reference/testing-guide.md`. Count as of this writing: 5,455 tests, all deterministic, none
+`docs/reference/testing-guide.md`. Count as of this writing: 9,929 tests, all deterministic, none
 flaky.
 
 ## Where a test goes

@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
+  through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), a range reaching an
+  uncached cell, `x#`) is invisible to the dependency graph, and its evaluation ran until either
+  the recursion-depth guard or the thread's stack gave out, whichever came first on the JIT tier
+  at hand, so recalculating the same workbook twice could report different errors and, through
+  lookups, different values. It is now caught at the first re-entry into a cell whose evaluation
+  is in progress (an in-progress marker in the per-pass memo, and a guard on the cell a pass is
+  evaluating), before any recursion, so the result is the same on every run and stack; the depth
+  and stack guards remain as backstops for acyclic chains deeper than their limit.
+  Behaviour change: such a cell failed with
+  `Evaluation failed: Cross-sheet formula recursion depth exceeded (max: 100). Possible circular reference.`
+  or, depending on JIT warmth, `Evaluation failed: Evaluation exhausted the stack at A1: …`; it
+  now fails with `Circular reference through S!A1: the cell is read again while its own evaluation
+  is in progress`, beside the static cycle's `Circular reference`. A spill reaching its own anchor
+  names the spill (`through S!A1#`). Lookups treat it as they treated the depth guard: a cyclic key
+  is a non-match, a cyclic result cell is `#VALUE!`. `xl eval --at` keeps its
+  `Circular reference detected` for a read of the placement. `xl recalc` summaries, `--strict`
+  failures and `view --eval` advisories show the new text.
+
 - **A defined name that begins like a cell reference is read whole after a range's `:`** (#841,
   GH-713): the lexical-range reader took only letters, digits, `$` and `!` after the `:`, so a name
   such as `B2_x`, `C3.Total`, `D5\y` or `UK9\f` was cut at its cell-shaped prefix, the prefix

@@ -769,9 +769,10 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assert(result.isLeft, s"Expected error for circular reference but got: $result")
     result match
       case Left(err) =>
+        // #829: the circular reference at the first re-entry, never the depth guard
         assert(
-          err.message.contains("recursion") || err.message.contains("circular"),
-          s"Error should mention recursion or circular reference: ${err.message}"
+          err.message.toLowerCase.contains("circular"),
+          s"Error should mention the circular reference: ${err.message}"
         )
       case _ => fail("Expected Left with circular reference error")
   }

@@ -159,35 +159,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     }
 
   // GH-187: Helper to evaluate cell value for criteria matching.
-  // Evaluates uncached formulas before matching, returning the resolved CellValue.
+  // Evaluates uncached formulas before matching, returning the resolved CellValue, exactly as a
+  // direct reference to the cell evaluates it: through the pass's memo (GH-346: once per pass;
+  // #829: a cell whose evaluation is in progress is the circular reference at this read, never a
+  // stack's worth of recursion — this fold reached it around the memo before), at its own position
+  // and in its own mode, an uncached data-table interior reading as blank (GH-430).
   private def evalCellValueForMatch(
     targetSheet: com.tjclp.xl.sheets.Sheet,
     at: ARef,
     ctx: EvalContext
   ): Either[EvalError, CellValue] =
-    targetSheet(at).value match
-      case CellValue.Formula(formulaStr, None, kind) =>
-        // Recursively evaluate uncached formula (GH-346: memoized once per pass), at its own
-        // position and in its own mode, exactly as a direct reference to the cell evaluates it
-        Evaluator
-          .evalCrossSheetFormula(
-            formulaStr,
-            targetSheet,
-            ctx.clock,
-            ctx.workbook,
-            ctx.depth + 1,
-            ctx.rng,
-            ctx.passMemo,
-            ctx.workbookPath,
-            ctx.aggregateMemo,
-            currentCell = Some(at),
-            arrayRecord = Evaluator.isArrayRecord(kind)
-          )
-      case CellValue.Formula(_, Some(cached), _) =>
-        // Use cached value
-        Right(cached)
-      case other =>
-        Right(other)
+    rangeCellReader(targetSheet, ctx)(at)
 
   /**
    * Create a variadic aggregate function spec.
@@ -226,8 +208,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     acc: A
   ): Either[EvalError, A] =
     // GH-715: COUNTA reads the cell's record without evaluating it, and COUNTBLANK evaluates only an
-    // uncached formula; a positioned evaluation's placement is still read, so its guard decides
-    ctx.placementGuard match
+    // uncached formula; a positioned evaluation's placement is still read, so its guard decides.
+    // The pass's re-entry guard (#829) is not positioned: a record read is no re-entry
+    ctx.placementGuard.filter(_.positioned) match
       case Some(guard) =>
         guard.check(targetSheet, at) match
           case Some(error) => Left(error)
@@ -785,7 +768,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * #767: the reader for the walked criteria range `range` on `sheet`, and whether the call wanted
    * a slice and was refused one (a `ScanFallbacks`). A slice serves a single-column range that its
    * slot resolved statically (`static`), read by a formula evaluated at its own pass slot outside a
-   * positioned evaluation, when the pass's [[PassCache]] has or can build one.
+   * positioned evaluation (the pass's own re-entry guard, #829, is not one), when the pass's
+   * [[PassCache]] has or can build one.
    */
   private def criteriaColumn(
     ctx: EvalContext,
@@ -793,8 +777,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     range: CellRange,
     static: Boolean
   ): (CriteriaColumn, Boolean) =
+    val positioned = ctx.placementGuard.exists(_.positioned)
     val answer =
-      if !static || range.width != 1 || range.height <= 0 || ctx.placementGuard.isDefined then
+      if !static || range.width != 1 || range.height <= 0 || positioned then
         PassCache.SliceAnswer.Ineligible
       else
         ctx.aggregateMemo
