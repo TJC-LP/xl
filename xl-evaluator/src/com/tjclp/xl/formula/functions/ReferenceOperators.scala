@@ -356,7 +356,11 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
           case _ => false
       case _ => false)
 
-  /** `T:r` with `T` an unqualified token: what `parseRange` and its fallback read. */
+  /**
+   * `T:r` with `T` an unqualified token: what `parseRange` and its fallback read. `end` is the
+   * whole token after the `:` (every token character, as the parser reads it: #841), so a name that
+   * begins like a cell (`B2_x`) prints bare, `A1:B2_x`, and reads back as that name.
+   */
   private def tokenReadsBack(l: Operand, left: String, r: Operand, right: String): Boolean =
     val end = right.takeWhile(ReferenceChars.isRangeEnd)
     val lexical = CellRange.parse(s"$left:$end").isRight && !right.lift(end.length).contains('(')
