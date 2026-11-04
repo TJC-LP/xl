@@ -2,7 +2,7 @@
 
 How this repo supports Claude Code when it is not running on a maintainer's laptop: cloud sessions
 on [claude.ai/code](https://claude.ai/code) (also `claude --cloud`, the mobile and desktop apps),
-scheduled routines, and the `@claude` GitHub Action. All three start from a fresh clone, so only
+scheduled routines, and `@claude` mentions on GitHub. All three start from a fresh clone, so only
 committed files shape the session.
 
 ## What a remote session gets from the repo
@@ -79,19 +79,14 @@ Keep this block and the environment's script in sync when either changes. Withou
 everything still works; the first build of a session just downloads dependencies first, which is why
 `CLAUDE.md` tells sessions to give `./mill` a 600000 ms timeout.
 
-## GitHub Actions
+## GitHub
 
-`.github/workflows/claude.yml` answers `@claude` mentions on issues, PRs, and reviews. It installs
-the same toolchain as `ci.yml` (Temurin 25 + `scala-cli` via `coursier/setup-action`, Coursier and
-Mill caches) and grants `contents`, `pull-requests`, and `issues` write permission, so Claude can
-compile, run tests, push commits, and open PRs from the workflow. Build, test, and gate commands
-are pre-approved through `--allowedTools`; the repo's `.claude/settings.json`, `CLAUDE.md`, rules,
-and skills are read from the checkout.
-
-`.github/workflows/claude-code-review.yml` reviews every non-draft PR on open and on each push,
-skipping PRs that only touch `docs/**` or `CHANGELOG.md`. It is read-only (`gh` commands only).
-
-Both use the `ANTHROPIC_API_KEY` repository secret.
+`@claude` mentions on issues, PRs and reviews (`@claude review` on a PR) are answered by the
+claude.ai-managed GitHub app, which runs its own cloud session from a fresh clone, so everything
+in this document applies to it. The two Actions workflows that used to do this from
+`ANTHROPIC_API_KEY` (`claude.yml` for mentions, `claude-code-review.yml` for an automatic review
+of every PR) were removed on 2026-11-03 when that key was retired: the review one had been failing
+on every PR and painting it red.
 
 ## Rehearsing the sandbox locally
 
