@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the flaky-test fix branch's full run on 2026-11-03 recorded **9,934 cases**, including skips, all passing.
+**Current Status**: PR #830 integration against main 0294eee0 on 2026-11-04 contains **9,939 cases**, including skips; see archived final-source validation for pass/failure results.
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the flaky-test fix branch's full `./mill -i __.test` on 2026-11-03, from the JUnit reports. Counts include skipped cases.
+PR #830 integration against main 0294eee0, 2026-11-04; see archived final-source JUnit reports. Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
 | xl-evaluator | 4218 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
-| xl-cli | 1966 |
+| xl-cli | 1971 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,934** |
+| **Total** | **9,939** |
 
 
 ## Test Quality Metrics
