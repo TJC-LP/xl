@@ -633,10 +633,8 @@ class DataTableSeederSpec extends FunSuite:
       .put(ref"C4", CellValue.Formula("Y1+$A$2")) // corner: cycle fixpoint Y1 = (2/3)*A1
       .put(ref"D5", CellValue.dataTable(twoVar, None))
     val wb = Workbook(sheet).withCalcPr(CalcPr(iterativeCalculation = true, Some(100), None))
-    val startNanos = System.nanoTime()
+    // the suite's 30 s munitTimeout is the backstop against a fixpoint per combination (#843)
     val report = wb.seedDataTablesReport().fold(err => fail(s"report failed: $err"), identity)
-    val elapsedSeconds = (System.nanoTime() - startNanos) / 1e9
-    assert(elapsedSeconds < 30.0, s"seeding took ${elapsedSeconds}s, budget is 30s")
     assertEquals(report.warnings, Vector.empty)
     val out = sheetNamed(report.workbook, "S")
     // Spot-check E6 (row axis 2 -> A1, col axis 2 -> A2): (2/3)*2 + 2 = 10/3

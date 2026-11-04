@@ -6,13 +6,15 @@ import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.styles.*
 
 /**
- * Performance tests for style serialization
- *
- * Verifies that O(n²) → O(1) optimization in Styles.toXml scales linearly
+ * Style serialization over many unique styles: `OoxmlStyles.toXml` resolves each style's font, fill
+ * and border through the index's `firstIndex` maps (O(1) per style), and this spec pins the output
+ * of 1,000 unique styles. It pins no clock: at this size an `indexOf` regression costs about a
+ * million `equals` calls, single-digit milliseconds, below what a 200 ms wall-clock gate on a
+ * loaded CI runner could resolve, so the gate only ever flaked (#843).
  */
 class StylePerformanceSpec extends FunSuite:
 
-  test("style serialization scales linearly with 1000+ unique styles") {
+  test("serialises 1,000 unique styles with every part present and counted") {
     // Generate 1000 unique cell styles
     val styles = (0 until 1000).map { i =>
       val hue = (i * 360.0 / 1000.0).toInt
@@ -46,21 +48,7 @@ class StylePerformanceSpec extends FunSuite:
     )
 
     val ooxmlStyles = OoxmlStyles(styleIndex)
-
-    // Warm up JVM
-    (1 to 3).foreach(_ => ooxmlStyles.toXml)
-
-    // Measure serialization time
-    val start = System.nanoTime()
     val xml = ooxmlStyles.toXml
-    val elapsed = (System.nanoTime() - start) / 1_000_000 // Convert to milliseconds
-
-    // Should complete in under 200ms (O(n) performance, generous threshold for CI)
-    // With O(n²), 1000 styles could take 1000ms+
-    assert(
-      elapsed < 200,
-      s"Style serialization took ${elapsed}ms, expected <200ms for O(n) performance"
-    )
 
     // Verify XML was generated correctly
     val xmlString = xml.toString
@@ -72,54 +60,5 @@ class StylePerformanceSpec extends FunSuite:
     assert(
       xmlString.contains(s"count=\"${styles.size}\""),
       s"Should have ${styles.size} cell styles"
-    )
-  }
-
-  test("performance comparison: 100 vs 1000 styles scales sub-quadratically".ignore) {
-    def measureSerialization(styleCount: Int): Long =
-      val styles = (0 until styleCount).map { i =>
-        CellStyle(
-          font = Font.default.copy(sizePt = 10.0 + (i % 20)),
-          fill = Fill.Solid(Color.Rgb((0xff000000 | (i * 1000)) & 0xffffffff)),
-          border = Border.none,
-          numFmt = NumFmt.General,
-          align = Align.default
-        )
-      }
-
-      val styleMappings: Vector[(String, StyleId)] = styles.zipWithIndex.map { case (s, i) =>
-        CellStyle.canonicalKey(s) -> (StyleId(i): StyleId)
-      }.toVector
-
-      val styleIndex = StyleIndex(
-        fonts = styles.map(_.font).distinct.toVector,
-        fills = styles.map(_.fill).distinct.toVector,
-        borders = Vector(Border.none),
-        numFmts = Vector.empty,
-        cellStyles = styles.toVector,
-        styleToIndex = styleMappings.toMap
-      )
-
-      val start = System.nanoTime()
-      OoxmlStyles(styleIndex).toXml
-      System.nanoTime() - start
-
-    // Warm up JVM
-    measureSerialization(10)
-    measureSerialization(10)
-
-    // Measure
-    val time100 = measureSerialization(100)
-    val time1000 = measureSerialization(1000)
-
-    val ratio = time1000.toDouble / time100.toDouble
-
-    // With O(n²), ratio would be ~100 (10x styles → 100x time)
-    // With O(n), ratio should be ~10 (10x styles → 10x time)
-    // Allow up to 40x for variance (increased from 30x after unification refactor added dispatch overhead)
-    // TODO: Investigate if dispatch overhead can be optimized (inline hint, etc.)
-    assert(
-      ratio < 40.0,
-      s"Performance ratio ${ratio} suggests O(n²) behavior (expected <40 for O(n))"
     )
   }

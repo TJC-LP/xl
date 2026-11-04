@@ -119,7 +119,8 @@ object DependentRecalculation:
             Evaluator.recalculationInstance(
               Rng.system,
               memo,
-              WorkbookEvaluator.callerPosition(slots, dynamicClosure, q)
+              WorkbookEvaluator.callerPosition(slots, dynamicClosure, q),
+              Some((q.sheet, q.ref))
             )
           val initial = WorkbookEvaluator.PassState(initialSheets, Map.empty, cycleErrors)
           val WorkbookEvaluator.PassState(_, values, errors, reasons) =

@@ -1,13 +1,12 @@
 package com.tjclp.xl.cli
 
-import java.util.concurrent.atomic.AtomicReference
-
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.{Gen, Prop}
 import org.scalacheck.Prop.forAll
 
 import com.tjclp.xl.cli.commands.LintCommands
 import com.tjclp.xl.formula.parser.UnparseableFormula
+import com.tjclp.xl.testing.SmallStack
 
 /**
  * #681 item 5: the `formula-unparseable` oracle behind `xl lint`, pointed at untrusted `<f>` text —
@@ -21,23 +20,18 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
 
   /** Run `f` on a thread with a deliberately small stack; its result, or what it threw. */
   private def onSmallStack[A](stackBytes: Long)(f: => A): Either[Throwable, A] =
-    val out = new AtomicReference[Either[Throwable, A]](Left(new IllegalStateException("not run")))
-    val thread = Thread
-      .ofPlatform()
-      .name("lint-oracle-small-stack")
-      .stackSize(stackBytes)
-      .start(() =>
-        out.set(
-          try Right(f)
-          catch case t: Throwable => Left(t)
-        )
-      )
-    thread.join()
-    out.get()
+    SmallStack.attempt(stackBytes, "lint-oracle-small-stack")(f)
 
-  // Exhaust the prefix, then try the real oracle while unwinding one live frame at a time.
-  // Without its guard, parsing keeps escaping until it can return the ordinary parse finding;
-  // the assertion below rejects that finding. No JVM-dependent depth estimate is needed.
+  /**
+   * Exhaust the stack, then call `check` while unwinding one live frame at a time: the first frame
+   * with room for the guard's `try` but not for the parse's descent answers, whatever the JIT tier
+   * or the stack size, so the overflow the guard converts is real by construction, never luck.
+   *
+   * The handler runs at the overflow point on purpose. HotSpot and GraalVM re-arm the stack's guard
+   * zone as the overflow unwinds and skip a handler whose frame still lies inside it, so the frame
+   * that runs `check` has a re-armed zone below it and the parse's second overflow is thrown, not
+   * fatal; green under the interpreter, C1 and C2 on both JVMs.
+   */
   @scala.noinline
   private def atStackBoundary(check: () => Option[String]): Option[String] =
     val result =
@@ -59,8 +53,10 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
   test("#681: pathological <f> text on a small stack never escapes the oracle") {
     // the parser's 128-level budget bounds its depth, but not its frame size: on a small thread
     // stack (a fiber, a native image) the deepest legal nests can overflow. Every text must come
-    // back as a verdict; whether it overflows depends on JVM compilation and the stack-size hint.
-    // The injected-overflow test above deterministically pins conversion to a finding.
+    // back as a verdict, the overflow as a finding, whether or not it overflows on the stack at
+    // hand: the frame size of an interpreted parser is several times its compiled size, so which
+    // texts overflow depends on which suites warmed the JVM first (#843). The injected-overflow
+    // test above pins the conversion itself; this one pins the real lint path.
     val texts = Vector(
       "(" * 127 + "1" + ")" * 127,
       "SUM(" * 127 + "1" + ")" * 127,
@@ -74,28 +70,38 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
       "(" * 8192,
       "SUM(Table1[Amount])" * 400
     )
+    // a nest the prefilter admits (an unterminated call is a certain truncation) that descends to
+    // the parser's depth limit
+    val deep = "SUM(" * 127 + "1"
+    assert(UnparseableFormula.needsParse(deep), "the probe must reach the parser")
+    // 1. warm the oracle and every class it touches on the normal stack: a class whose initialiser
+    //    overflowed on a small thread is poisoned for the JVM (NoClassDefFoundError afterwards,
+    //    which no guard converts), and the first touch must not happen there
+    (texts :+ deep).foreach(LintCommands.formulaCheck)
+    val baseline = LintCommands.formulaCheck(deep)
+    assert(
+      baseline.exists(f => !f.contains("stack")),
+      s"the normal stack must hold the parse: $baseline"
+    )
+    // 2. the contract: every text is a verdict on a 256 KB stack, a size HotSpot and GraalVM honour
+    //    (64 KB is below the JVM's minimum and silently rounded up), whether the parse fits (an
+    //    ordinary verdict) or not (the guard's finding)
     val results =
-      texts.map(t => t.take(20) -> onSmallStack(64L * 1024)(LintCommands.formulaCheck(t)))
+      texts.map(t => t.take(20) -> onSmallStack(256L * 1024)(LintCommands.formulaCheck(t)))
     val escaped = results.collect { case (t, Left(err)) => s"$t…: $err" }
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
-
-    // A disconnected guard must return the ordinary parse finding instead of a stack finding.
-    val truncated = "SUM(" * 127 + "1"
-    assert(UnparseableFormula.needsParse(truncated), "the probe must reach the parser")
-    val check = () => LintCommands.formulaCheck(truncated)
-    (1 to 20000).foreach(_ => check())
-    val baseline = check()
-    assert(
-      !baseline.exists(_.contains("stack")),
-      s"baseline must be an ordinary finding: $baseline"
-    )
+    // 3. and a real overflow is the guard's finding: at the stack boundary the guard's `try` fits
+    //    where the 127-level descent cannot, so the first verdict to return names the stack; a
+    //    guard that had come loose would unwind until the parse fits and return the ordinary
+    //    verdict. Probed on the 256 KB stack and on a 1 MB one.
     Vector(256L * 1024, 1024L * 1024).foreach { stackBytes =>
-      val boundary = onSmallStack(stackBytes)(atStackBoundary(check))
-      boundary match
-        case Right(Some(finding)) =>
-          assert(finding.contains("stack"), s"verdict at $stackBytes bytes: $boundary")
-        case other =>
-          fail(s"the real lint path must contain exhaustion at $stackBytes bytes: $other")
+      val boundary =
+        onSmallStack(stackBytes)(atStackBoundary(() => LintCommands.formulaCheck(deep)))
+      assertEquals(
+        boundary.map(_.exists(_.contains("stack"))),
+        Right(true),
+        s"at $stackBytes bytes: $boundary"
+      )
     }
   }
 

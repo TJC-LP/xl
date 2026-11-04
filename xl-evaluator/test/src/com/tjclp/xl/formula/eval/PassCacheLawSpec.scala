@@ -25,8 +25,27 @@ import org.scalacheck.{Gen, Prop}
  */
 class PassCacheLawSpec extends ScalaCheckSuite:
 
-  override def scalaCheckTestParameters =
-    super.scalaCheckTestParameters.withMinSuccessfulTests(40)
+  // seeds follow the law-fuzz convention (GH-308): fixed by default, random under
+  // XL_ROUNDTRIP_RANDOM_SEED=true, replayable with -Dxl.roundtrip.seed=<printed seed> (passed
+  // through JAVA_TOOL_OPTIONS: the build forwards no -D to the forked test JVM)
+  private val explicitSeed: Option[org.scalacheck.rng.Seed] =
+    sys.props.get("xl.roundtrip.seed").flatMap { raw =>
+      raw.toLongOption
+        .map(org.scalacheck.rng.Seed.apply)
+        .orElse(org.scalacheck.rng.Seed.fromBase64(raw).toOption)
+    }
+
+  private val randomSeed: Boolean =
+    explicitSeed.isEmpty &&
+      sys.env.get("XL_ROUNDTRIP_RANDOM_SEED").exists(_.equalsIgnoreCase("true"))
+
+  override def scalaCheckTestParameters: org.scalacheck.Test.Parameters =
+    val base = super.scalaCheckTestParameters.withMinSuccessfulTests(40)
+    if randomSeed then
+      val seed = org.scalacheck.rng.Seed.random()
+      println(s"[law-fuzz] random seed for this run: ${seed.toBase64} (#767 pass cache)")
+      base.withInitialSeed(seed)
+    else base.withInitialSeed(explicitSeed.getOrElse(org.scalacheck.rng.Seed(20261103L)))
 
   private val data = SheetName.unsafe("Data")
   private val other = SheetName.unsafe("Other")
@@ -176,9 +195,20 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       val dataSheet = sameSheet.zipWithIndex.foldLeft(withDynamic) { case (s, (f, i)) =>
         s.put(ARef.from0(7, i + 1), CellValue.Formula(f, readerCache))
       }
-      val readerSheet = readers.zipWithIndex.foldLeft(Sheet(out)) { case (s, (f, i)) =>
-        s.put(ARef.from0(1, i), CellValue.Formula(f, readerCache))
-      }
+      // one reader whose window excludes the dynamic row: a reader covering it is a member of the
+      // deferred bucket, which the pass never slices, and each generated window avoids the row
+      // with probability about 0.24, so about one book in 2,500 had no slice to build and the
+      // non-vacuity property below failed about once in a hundred runs (#828)
+      val clearWindow =
+        if dynamicRow > 2 then s"Data!F2:F${dynamicRow - 1}" else s"Data!F3:F$Last"
+      val readerSheet = readers.zipWithIndex
+        .foldLeft(Sheet(out)) { case (s, (f, i)) =>
+          s.put(ARef.from0(1, i), CellValue.Formula(f, readerCache))
+        }
+        .put(
+          ARef.from0(1, readers.size),
+          CellValue.Formula(s"""COUNTIF($clearWindow,">2")""", readerCache)
+        )
       // a second-order reader over the readers' column, and, optionally, a cycle through F
       val outSheet =
         val chained =
