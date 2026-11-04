@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
   functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
   while retaining fractional periods, verified against desktop Excel 16.114.3.
+
 ### Security
 
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
