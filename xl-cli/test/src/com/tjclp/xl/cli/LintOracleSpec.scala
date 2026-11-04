@@ -55,7 +55,8 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
     // stack (a fiber, a native image) the deepest legal nests can overflow. Every text must come
     // back as a verdict, the overflow as a finding, whether or not it overflows on the stack at
     // hand: the frame size of an interpreted parser is several times its compiled size, so which
-    // texts overflow depends on which suites warmed the JVM first (#843).
+    // texts overflow depends on which suites warmed the JVM first (#843). The injected-overflow
+    // test above pins the conversion itself; this one pins the real lint path.
     val texts = Vector(
       "(" * 127 + "1" + ")" * 127,
       "SUM(" * 127 + "1" + ")" * 127,
@@ -91,10 +92,17 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
     assertEquals(escaped, Vector.empty[String], escaped.mkString("\n"))
     // 3. and a real overflow is the guard's finding: at the stack boundary the guard's `try` fits
     //    where the 127-level descent cannot, so the first verdict to return names the stack; a
-    //    guard that had come loose would unwind until the parse fits and return the ordinary verdict
-    val boundary =
-      onSmallStack(1024L * 1024)(atStackBoundary(() => LintCommands.formulaCheck(deep)))
-    assertEquals(boundary.map(_.exists(_.contains("stack"))), Right(true), boundary.toString)
+    //    guard that had come loose would unwind until the parse fits and return the ordinary
+    //    verdict. Probed on the 256 KB stack and on a 1 MB one.
+    Vector(256L * 1024, 1024L * 1024).foreach { stackBytes =>
+      val boundary =
+        onSmallStack(stackBytes)(atStackBoundary(() => LintCommands.formulaCheck(deep)))
+      assertEquals(
+        boundary.map(_.exists(_.contains("stack"))),
+        Right(true),
+        s"at $stackBytes bytes: $boundary"
+      )
+    }
   }
 
   // ===== the prefilter: structured and external references skip the parse =====

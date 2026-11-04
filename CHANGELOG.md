@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
+  CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
+  sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
+  published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
+
 ### Fixed
 
 - **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
@@ -42,6 +49,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `=A1:My_Sheet!B2` was `Invalid cell reference 'A1:My'` and is now
   `Invalid cell reference 'A1:My_Sheet!B2'`. `A1:B2`, `A:A`, `1:$3`, `$A$1:$B$2`, `A1:INDEX(…)`,
   `A1:B2!`, `Sheet1!A1:B2` and `A1:Sheet2!B2` are unchanged.
+
+- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
+  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
+  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
+  small-stack lint test permits safe completion after JVM warm-up and checks the real lint path
+  while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
+  stacks are covered; injected overflow coverage still requires a lint finding. Internal
+  formula/cache assertions run even when LibreOffice is unavailable.
 
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
   right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted

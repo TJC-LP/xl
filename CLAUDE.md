@@ -116,7 +116,7 @@ make install-jar           # Portable: assembly JAR + wrapper → ~/.local/bin/x
 
 `.mill-jvm-version` pins Temurin 25 and `.mill-version` pins Mill 1.1.5; the `./mill` launcher downloads both through Coursier. The only prerequisites are `bash`, `curl`, and network access to GitHub and Maven Central. Never install a JDK by hand to satisfy the build, and never edit `javacOptions` to fit the local JDK. A fresh checkout downloads dependencies on its first build: give `./mill` a 600000 ms timeout.
 
-### Remote sessions (Claude Code on the web, routines, `@claude` in GitHub Actions)
+### Remote sessions (Claude Code on the web, routines, `@claude` mentions on GitHub)
 
 The sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli or GraalVM. `.claude/settings.json` runs `scripts/remote-setup.sh` on SessionStart; when `CLAUDE_CODE_REMOTE=true` it provisions JDK 25 and scala-cli through Coursier, exports `JAVA_HOME`/`PATH` for the session, and prints a summary into context. There, `make install-jar` replaces `make install`, worktrees and `gtr` are unnecessary (the sandbox clone is isolated), and personal memory is absent: everything a session must know lives in this file, `.claude/rules/`, and `.claude/skills/`. Details, the environment setup script, and a Docker rehearsal: `docs/reference/remote-sessions.md`.
 
