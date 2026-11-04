@@ -107,6 +107,8 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     "NPER",
     "RATE",
     "RRI",
+    "SLN",
+    "SYD",
     // lookup, criteria, statistics k-slots, NPV's rate
     "VLOOKUP",
     "HLOOKUP",
@@ -181,12 +183,12 @@ class ArrayLiftingLawsSpec extends ScalaCheckSuite:
     "PI"
   )
 
-  test("the lifted roster is pinned: 78 functions with their slot policies") {
+  test("the lifted roster is pinned: 80 functions with their slot policies") {
     val byPolicy = lifted.groupMap(_.flags.lift)(_.name.toUpperCase).view.mapValues(_.toSet).toMap
     assertEquals(byPolicy.getOrElse(ArrayLift.all, Set.empty), liftedAll)
     assertEquals(byPolicy.getOrElse(ArrayLift.arraysOnly, Set.empty), liftedArraysOnly)
     assertEquals(byPolicy.getOrElse(ArrayLift.slots(0), Set.empty), liftedFirstSlot)
-    assertEquals(lifted.size, 78)
+    assertEquals(lifted.size, 80)
   }
 
   test("the excluded functions do not lift") {

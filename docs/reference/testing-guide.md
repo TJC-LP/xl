@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: PR #830 integration against main 0294eee0 on 2026-11-04 contains **9,939 cases**, including skips; see archived final-source validation for pass/failure results.
+**Current Status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-PR #830 integration against main 0294eee0, 2026-11-04; see archived final-source JUnit reports. Counts include skipped cases.
+As of the combined validation of #830 and #831 against main 0294eee0, 2026-11-04 (9,943 passed, 0 failed, 4 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4218 |
+| xl-evaluator | 4225 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
-| xl-cli | 1971 |
+| xl-cli | 1972 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,939** |
+| **Total** | **9,947** |
 
 
 ## Test Quality Metrics

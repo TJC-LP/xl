@@ -1709,7 +1709,7 @@ class FormulaParserSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Known functions include all 112 functions") {
+  test("Known functions include all 128 functions") {
     val functions = FunctionRegistry.allNames
     assert(functions.contains("SUM"))
     assert(functions.contains("MIN"))
@@ -1850,7 +1850,9 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(functions.contains("T"))
     // #775 ISNONTEXT
     assert(functions.contains("ISNONTEXT"))
-    assertEquals(functions.length, 126)
+    assert(functions.contains("SLN"))
+    assert(functions.contains("SYD"))
+    assertEquals(functions.length, 128)
   }
 
   // ==================== INDIRECT Parsing Tests (GH-274) ====================

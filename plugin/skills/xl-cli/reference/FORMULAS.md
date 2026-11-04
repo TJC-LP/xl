@@ -112,6 +112,7 @@ it are hand-written semantics worth knowing.
 | `SEQUENCE` | 1–4 | integer, optional integer, optional number, optional number | — |
 | `SIGN` | 1 | number | — |
 | `SINGLE` | 1 | array or range | — |
+| `SLN` | 3 | number, number, number | — |
 | `SMALL` | 2 | range, integer | — |
 | `SORT` | 1–3 | range, optional integer, optional integer | — |
 | `SQRT` | 1 | number | — |
@@ -123,6 +124,7 @@ it are hand-written semantics worth knowing.
 | `SUMIFS` | 3+ | range, range, value... | — |
 | `SUMPRODUCT` | 1+ | array or range... | — |
 | `SWITCH` | 3+ | value... | — |
+| `SYD` | 4 | number, number, number, number | — |
 | `T` | 1 | cell | — |
 | `TEXT` | 2 | value, text | — |
 | `TODAY` | 0 | — | date, volatile |
