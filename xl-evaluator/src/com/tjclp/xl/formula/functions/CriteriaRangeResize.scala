@@ -158,7 +158,8 @@ object CriteriaRangeResize:
         case ':' =>
           val end = skipWhile(text, from + 1, isIdentPart)
           val token = text.substring(from + 1, end)
-          val corner = token.contains('$') || CellRange.parse(s"$token:$token").isRight
+          val corner =
+            token.isEmpty || token.contains('$') || CellRange.parse(s"$token:$token").isRight
           (!corner && isName(token, text, end)) || hasNameShapedToken(text, end)
         // a number (1, 2.5, 1E5): never a name
         case c if c.isDigit || c == '.' =>

@@ -1,13 +1,12 @@
 package com.tjclp.xl.cli
 
-import java.util.concurrent.atomic.AtomicReference
-
 import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.{Gen, Prop}
 import org.scalacheck.Prop.forAll
 
 import com.tjclp.xl.cli.commands.LintCommands
 import com.tjclp.xl.formula.parser.UnparseableFormula
+import com.tjclp.xl.testing.SmallStack
 
 /**
  * #681 item 5: the `formula-unparseable` oracle behind `xl lint`, pointed at untrusted `<f>` text —
@@ -19,33 +18,19 @@ class LintOracleSpec extends FunSuite with ScalaCheckSuite:
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(3000)
 
-  /**
-   * Run `f` on a thread with a deliberately small stack; its result, or what it threw. Bounded: a
-   * walk still running after `JoinMs` fails by name instead of hanging the suite.
-   */
-  private val JoinMs = 60000L
+  /** Run `f` on a thread with a deliberately small stack; its result, or what it threw. */
   private def onSmallStack[A](stackBytes: Long)(f: => A): Either[Throwable, A] =
-    val out = new AtomicReference[Either[Throwable, A]](Left(new IllegalStateException("not run")))
-    val thread = Thread
-      .ofPlatform()
-      .name("lint-oracle-small-stack")
-      .daemon(true)
-      .stackSize(stackBytes)
-      .start(() =>
-        out.set(
-          try Right(f)
-          catch case t: Throwable => Left(t)
-        )
-      )
-    if !thread.join(java.time.Duration.ofMillis(JoinMs)) then
-      thread.interrupt()
-      fail(s"the small-stack run did not finish within ${JoinMs}ms")
-    out.get()
+    SmallStack.attempt(stackBytes, "lint-oracle-small-stack")(f)
 
   /**
    * Exhaust the stack, then call `check` while unwinding one live frame at a time: the first frame
    * with room for the guard's `try` but not for the parse's descent answers, whatever the JIT tier
    * or the stack size, so the overflow the guard converts is real by construction, never luck.
+   *
+   * The handler runs at the overflow point on purpose. HotSpot and GraalVM re-arm the stack's guard
+   * zone as the overflow unwinds and skip a handler whose frame still lies inside it, so the frame
+   * that runs `check` has a re-armed zone below it and the parse's second overflow is thrown, not
+   * fatal; green under the interpreter, C1 and C2 on both JVMs.
    */
   @scala.noinline
   private def atStackBoundary(check: () => Option[String]): Option[String] =

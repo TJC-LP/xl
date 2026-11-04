@@ -160,13 +160,12 @@ class ImplicitIntersectionCliSpec extends CatsEffectSuite:
       )
     yield (run, out)
 
-  test(
-    "a 5,000-row running-total drag under --no-recalc evaluates each cell once, not three times"
-  ) {
+  test("GH-714: a 5,000-row running-total drag is never a candidate for the advisory") {
     // The drag's cache pass is each running total's one evaluation. GH-714's advisory adds none:
     // a formula with no array source in a value position is never a candidate, so the check
     // evaluates no cell both ways. That report is the fact a ratio of two timings once stood for
-    // (the flakiest shape a suite can assert on a shared runner: #843).
+    // (the flakiest shape a suite can assert on a shared runner: #843); the cache pass's own
+    // cost is not pinned here, only bounded by the suite timeout.
     for
       src <- column(5000)
       (total, out) <- drag(src, "=SUM($A$1:A1)")

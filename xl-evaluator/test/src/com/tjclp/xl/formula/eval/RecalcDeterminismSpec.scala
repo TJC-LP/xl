@@ -1,8 +1,9 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.formula.{Clock, Rng, SmallStack}
+import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.formula.graph.CompactGraphGens
+import com.tjclp.xl.testing.SmallStack
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop
 

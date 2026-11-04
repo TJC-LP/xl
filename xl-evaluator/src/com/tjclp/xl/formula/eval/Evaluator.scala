@@ -1407,13 +1407,16 @@ object Evaluator:
         case Some(hit) => hit
         case None =>
           forSheet.update(at, EvalMemo.InProgress)
-          // Compute BEFORE storing (never inside a map callback): the computation itself may
-          // recurse into this memo for other cells of the same sheet. A throwable unwinding
-          // through here (an overflow, caught at the evaluation boundary) must leave no marker in
-          // a memo that serves another cell.
+          // Compute BEFORE storing the result (never inside a map callback): the computation
+          // itself may recurse into this memo for other cells of the same sheet. The result
+          // overwrites the marker; a throwable unwinding through here (an overflow, caught at the
+          // evaluation boundary) removes it, so a memo serving another cell keeps no marker.
           val computed =
             try compute
-            finally forSheet.remove(at)
+            catch
+              case t: Throwable =>
+                forSheet.remove(at)
+                throw t
           forSheet.update(at, computed)
           computed
 

@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.{IterativeCalc, IterativeMode, RecalcOptions, RecalcResult}
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.testing.SmallStack
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
@@ -168,6 +169,15 @@ class DynamicCycleSpec extends FunSuite:
     val result = assertStackIndependent(sheet, iterative)
     assertEquals(messages(result).keySet, Set(ref"A1", ref"B1"))
     messages(result).values.foreach(m => assert(m.contains(Prefix), m))
+  }
+
+  test("#829: COUNTBLANK over a range holding its own cell reads it as the cycle's value") {
+    // a cyclic cell is not blank to COUNTBLANK (as a cyclic key is a non-match to a lookup): the
+    // re-entry failure is read as the cycle's value, the count completes, and no error is reported
+    val sheet = Sheet(S).put(ref"A1", formula("=COUNTBLANK(INDIRECT(\"A1:A2\"))"))
+    val result = assertStackIndependent(sheet)
+    assertEquals(result.errors, Vector.empty)
+    assertEquals(valueAt(result, ref"A1"), Some(num(1)))
   }
 
   test("#829: a direct evaluation meets the same circular reference") {

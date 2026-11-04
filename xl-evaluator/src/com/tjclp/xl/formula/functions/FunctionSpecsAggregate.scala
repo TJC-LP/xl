@@ -234,8 +234,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       // COUNTBLANK mode: count empty cells and empty text (#731). An uncached formula is evaluated
       // to see whether its value is "". A formula xl cannot evaluate (an unknown function, a
       // cross-sheet reference without a workbook) is not blank, as Excel shows an error value in
-      // such a cell; an uncached data table holds a number, so it is not evaluated. Only a circular
-      // reference fails the whole count
+      // such a cell; an uncached data table holds a number, so it is not evaluated. Only a
+      // positioned evaluation's read of its placement (`CircularRef`) fails the whole count: a cell
+      // in a cycle (the re-entry failure, #829, or a depth guard) reads as the cycle's value, not
+      // blank, as a lookup reads a cyclic key (Excel computes over the cycle's value, 0)
       cellValue match
         case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(acc)
         case CellValue.Formula(_, None, _) =>

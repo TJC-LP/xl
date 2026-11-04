@@ -383,30 +383,36 @@ private[formula] object CriteriaCandidates:
     lists match
       case Nil => 0
       case List(p) => p.countIn(offset, last)
-      // every row of one list is distinct: past the limit, no merge is needed
-      case _ if lists.exists(_.countIn(offset, last) > limit) => limit + 1
       case _ =>
-        val rows = lists.map(_.rows).toArray
-        val cursors = lists.map(p => p.lowerBound(offset, p.from)).toArray
-        val untils = lists.zip(cursors).map((p, c) => p.lowerBound(last + 1, c)).toArray
-        // the smallest row at any cursor, Int.MaxValue when every list is spent
-        def smallest: Int =
-          var min = Int.MaxValue
-          var i = 0
-          while i < rows.length do
-            if cursors(i) < untils(i) then min = math.min(min, rows(i)(cursors(i)))
-            i += 1
-          min
-        var count = 0
-        var row = smallest
-        while count <= limit && row != Int.MaxValue do
-          count += 1
-          var i = 0
-          while i < rows.length do
-            if cursors(i) < untils(i) && rows(i)(cursors(i)) == row then cursors(i) += 1
-            i += 1
-          row = smallest
-        count
+        // each list's window, found once: its bounds give its count and start the merge
+        val parts = lists.map { p =>
+          val from = p.lowerBound(offset, p.from)
+          (p.rows, from, p.lowerBound(last + 1, from))
+        }
+        // every row of one list is distinct: past the limit, no merge is needed
+        if parts.exists((_, from, until) => until - from > limit) then limit + 1
+        else
+          val rows = parts.map(_._1).toArray
+          val cursors = parts.map(_._2).toArray
+          val untils = parts.map(_._3).toArray
+          // the smallest row at any cursor, Int.MaxValue when every list is spent
+          def smallest: Int =
+            var min = Int.MaxValue
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) then min = math.min(min, rows(i)(cursors(i)))
+              i += 1
+            min
+          var count = 0
+          var row = smallest
+          while count <= limit && row != Int.MaxValue do
+            count += 1
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) && rows(i)(cursors(i)) == row then cursors(i) += 1
+              i += 1
+            row = smallest
+          count
 
   /** The ascending, distinct offsets `row - offset` of the rows of `lists` in the window. */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

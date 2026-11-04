@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the flaky-test fix branch's full run on 2026-11-03 recorded **9,929 cases**, including skips, all passing.
+**Current Status**: the flaky-test fix branch's full run on 2026-11-03 recorded **9,934 cases**, including skips, all passing.
 
 ## Test Infrastructure
 
@@ -285,14 +285,14 @@ As of the flaky-test fix branch's full `./mill -i __.test` on 2026-11-03, from t
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4213 |
+| xl-evaluator | 4218 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1966 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,929** |
+| **Total** | **9,934** |
 
 
 ## Test Quality Metrics
