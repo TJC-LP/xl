@@ -102,12 +102,10 @@ class ArrayResultSpec extends FunSuite:
       Vector(Vector(n(corner), n(0)), Vector(n(1), n(2))),
       ArrayResult.Fill.ByCol(Vector.tabulate(16384)(c => n(entry(c))))
     )
-    val start = System.nanoTime()
+    // a run walk would trip the suite's 30 s munitTimeout, the backstop here (#843)
     assertEquals(wide(_ % 7, 9), wide(_ % 7, 9))
     assertNotEquals(wide(_ % 7, 9), wide(c => if c == 16000 then 99 else c % 7, 9))
     assertNotEquals(wide(_ % 7, 9), wide(_ % 7, 8))
-    val elapsedMs = (System.nanoTime() - start) / 1000000L
-    assert(elapsedMs < 5000L, s"== took $elapsedMs ms")
     // other geometry, same cells: the run walk decides (a box cell equal to the fill it replaces)
     val boxed = ArrayResult.sparse(3, 2, 0, 0, Vector(Vector(n(5))), ArrayResult.Fill.Const(n(5)))
     assertEquals(boxed, ArrayResult.constant(3, 2, n(5)))

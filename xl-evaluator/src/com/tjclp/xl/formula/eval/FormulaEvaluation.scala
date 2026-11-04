@@ -365,8 +365,30 @@ private[formula] object FormulaEvaluation:
    * The maps, sets and bit set below are local to one call and never escape it: the result is a
    * new, immutable workbook.
    */
-  private[xl] def uncacheReaders(book: Workbook, home: SheetName, changed: Set[ARef]): Workbook =
+  private[formula] def uncacheReaders(
+    book: Workbook,
+    home: SheetName,
+    changed: Set[ARef]
+  ): Workbook =
+    uncacheReadersTraced(book, home, changed)._1
+
+  /**
+   * What one [[uncacheReaders]] walk did: `checks`, the candidate readers it tested for containing
+   * a stale cell (a reader leaves its index once stale, so the walk is linear in the readers and
+   * the cells they read, never quadratic: GH-715), and `parses`, the formulas it parsed. A count,
+   * not a clock, is what a test can pin (#843).
+   */
+  private[formula] final case class UncacheTrace(checks: Long, parses: Int)
+
+  /** [[uncacheReaders]] with the walk's [[UncacheTrace]]. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var")) // one local counter of a one-call walk
+  private[formula] def uncacheReadersTraced(
+    book: Workbook,
+    home: SheetName,
+    changed: Set[ARef]
+  ): (Workbook, UncacheTrace) =
     import scala.collection.mutable
+    var checks = 0L
     val sheets = book.sheets
     // every formula the walk meets, numbered on first sight: (sheet index, cell)
     val nodes = mutable.ArrayBuffer.empty[(Int, ARef)]
@@ -471,7 +493,10 @@ private[formula] object FormulaEvaluation:
     // the candidates in `among` whose range contains `cell`; a formula already stale leaves it
     def hitsIn(readers: Readers, among: mutable.Set[Int], cell: ARef): List[Int] =
       among.filterInPlace(i => !stale.contains(i))
-      among.iterator.filter(i => readers.ranges.get(i).exists(_.exists(_.contains(cell)))).toList
+      among.iterator.filter { i =>
+        checks += 1L
+        readers.ranges.get(i).exists(_.exists(_.contains(cell)))
+      }.toList
     @scala.annotation.tailrec
     def walk(frontier: List[(Int, ARef)]): Unit = frontier match
       case Nil => ()
@@ -482,7 +507,7 @@ private[formula] object FormulaEvaluation:
           hitsIn(readers, readers.wide, cell)).distinct
         stale ++= hits
         walk(hits.map(nodes(_)) ::: rest)
-    sheets.indexWhere(_.name == home) match
+    val uncached = sheets.indexWhere(_.name == home) match
       case -1 => book
       case homeIndex =>
         // #763: a reader whose references are computed at run time (OFFSET, INDIRECT, a name whose
@@ -502,6 +527,7 @@ private[formula] object FormulaEvaluation:
               case _ => s
           })
         }
+    (uncached, UncacheTrace(checks, parsed.size))
 
   /**
    * The sheet names `text` qualifies a reference with, each folded by [[foldSheet]]: `Data` for
@@ -510,7 +536,7 @@ private[formula] object FormulaEvaluation:
    * never miss one the parser reads. An unquoted name runs back from its `!` to a character no
    * unquoted sheet name holds; a quoted one is matched whole, `''` an escaped quote.
    */
-  private[xl] def qualifiedSheets(text: String): Set[String] =
+  private[formula] def qualifiedSheets(text: String): Set[String] =
     if text.indexOf('!') < 0 then Set.empty
     else
       // two scans, so a quoted match that spans a string literal (`"'"&Data!A1&"'!"`) never hides

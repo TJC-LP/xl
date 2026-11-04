@@ -210,19 +210,17 @@ class ExtremeExponentFormatSpec extends ScalaCheckSuite:
 
   // No shrinking over extreme scales: halving a value never moves its scale, and a failing case
   // re-run through ScalaCheck's Fractional shrinker for minutes instead of failing
-  property("#689: every code renders every stored exponent, bounded in length and time") {
+  property("#689: every code renders every stored exponent, bounded in length") {
+    // the length bound is the contract; a hang trips the suite's 30 s munitTimeout, the backstop
+    // here, where a per-case wall-clock budget was only a flake on a loaded runner (#843)
     forAllNoShrink(genExtreme) { (n: BigDecimal) =>
       for code <- codes; rule <- bothRules do
-        val start = System.nanoTime
         val text = fmt(code, n, rule)
-        val millis = (System.nanoTime - start) / 1000000
         // the digit block plus what the code itself spells (literals, decimals, padding)
         assert(
           text.length <= FormatCodeParser.MaxDigitBlockLength + 64,
-          s"$code on $n: ${text.length} chars"
+          s"$code on $n under $rule: ${text.length} chars"
         )
-        // generous on purpose: only a genuine hang trips it (a loaded CI runner must not)
-        assert(millis < 10000, s"$code on $n under $rule took ${millis}ms")
     }
   }
 

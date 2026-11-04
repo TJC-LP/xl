@@ -451,8 +451,8 @@ class DynamicArrayAuthoringSpec extends FunSuite:
   }
 
   test("#750: a whole-axis spill is refused as TooLarge from its shape, never built") {
-    // =B:C is 1,048,576 x 2 positions, held as its populated box until the shape is checked
-    val started = System.nanoTime()
+    // =B:C is 1,048,576 x 2 positions, held as its populated box until the shape is checked; a
+    // spill that was built would trip the suite's 30 s munitTimeout, the backstop here (#843)
     author(base, ref"E1", "=B:C") match
       case Left(Refusal.Blocked(b)) =>
         assertEquals(b.blocker, SpillBlocker.TooLarge(1048576, 2, ArrayResult.MaxCells))
@@ -461,5 +461,4 @@ class DynamicArrayAuthoringSpec extends FunSuite:
       case Left(Refusal.Blocked(b)) =>
         assertEquals(b.blocker, SpillBlocker.TooLarge(1048576, 7636, ArrayResult.MaxCells))
       case other => fail(s"expected TooLarge, got $other")
-    assert((System.nanoTime() - started) / 1e9 < 30.0)
   }

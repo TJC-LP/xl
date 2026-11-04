@@ -277,10 +277,11 @@ class SpillReferenceSpec extends FunSuite:
     assert(FunctionSpecs.anchorArray.flags.dynamicDeps)
   }
 
-  test("a spill reference that reaches its own anchor stops at the depth guard, never overflows") {
+  test("a spill reference that reaches its own anchor is circular at the first re-entry (#829)") {
     val circular = Sheet("Loop").put(ref"A1", CellValue.Formula("ROWS(A1#)"))
     circular.evaluateFormula("=SUM(A1#)", Clock.system, None, Some(ref"B1")) match
-      case Left(_) => ()
+      case Left(err) =>
+        assert(err.message.contains("Circular reference through Loop!A1#"), err.message)
       case Right(v) => fail(s"a circular spill reference should not evaluate, got $v")
   }
 

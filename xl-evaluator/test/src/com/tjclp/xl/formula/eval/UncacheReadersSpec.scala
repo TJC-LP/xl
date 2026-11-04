@@ -149,6 +149,34 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
     }
   }
 
+  /** B{n} = SUM($A$1:A{n}) and C{n} = SUM($B$1:B{n}) over A{n} = n, every formula cached. */
+  private def runningTotals(rows: Int): Sheet =
+    (1 to rows).foldLeft(Sheet("Test")) { (s, n) =>
+      val b = CellValue.Number(BigDecimal(n.toLong * (n + 1) / 2))
+      val c = CellValue.Number(BigDecimal(n.toLong * (n + 1) * (n + 2) / 6))
+      s.put(ARef.from0(0, n - 1), CellValue.Number(BigDecimal(n)))
+        .put(ARef.from0(1, n - 1), CellValue.Formula(s"=SUM($$A$$1:A$n)", Some(b)))
+        .put(ARef.from0(2, n - 1), CellValue.Formula(s"=SUM($$B$$1:B$n)", Some(c)))
+    }
+
+  test(
+    "GH-715: stale-reader checks over a running total of running totals are linear in the rows"
+  ) {
+    // Asking each stale B for its candidate readers afresh cost about rows²/2 containment checks
+    // (26 s at 20,000 rows). A reader leaves its index once stale, so the walk checks every B once
+    // for A1 and every C once for the first stale B: about two checks per row. The count is the
+    // gate; the clock on a shared runner is not (#843).
+    def checks(rows: Int): Long =
+      val sheet = runningTotals(rows)
+      FormulaEvaluation
+        .uncacheReadersTraced(Workbook(sheet), sheet.name, Set(ARef.from0(0, 0)))
+        ._2
+        .checks
+    val (small, large) = (checks(5000), checks(20000))
+    assert(large <= 4.5 * small, s"checks $small -> $large: not linear")
+    assert(large < 20000L * 20000L / 8, s"$large checks at 20,000 rows: quadratic")
+  }
+
   test("qualifiedSheets: every qualifier the parser reads, folded, quoted or not") {
     def sheets(text: String): Set[String] = FormulaEvaluation.qualifiedSheets(text)
     assertEquals(sheets("=A1*2"), Set.empty[String])

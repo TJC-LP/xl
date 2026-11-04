@@ -212,7 +212,10 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "LET(t,C1,SUMIF(A1:A3,\">0\",t))",
     "_xlfn.LET(_xlpm.t,C1,SUMIF(A1:A3,\">0\",_xlpm.t))",
     "SUMIF(A1:A3,\"x\",C1)+LET(t,C1,SUMIF(A1:A3,\">0\",t))",
-    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)"
+    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)",
+    // #841: a range's second corner read whole is a name when it is no cell, column or row
+    "SUMIF(A1:B2_x,\">0\",C1)",
+    "SUMIF(A1:XFE1,\">0\",C1)"
   ).foreach { formula =>
     test(s"pre-filter keeps =$formula, which may resize through a name") {
       assert(CriteriaRangeResize.mayResizeThroughName(formula))
@@ -236,7 +239,10 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "ROUND(SUMIF(A1:A3,\">0\",C1),2)",
     "SUMIF(A1:A3,#N/A,C1)+SUMIF(A1:A3,1.5E3,C1)",
     "SUMIF(A1:A3,\">0\",C1#)",
-    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)"
+    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)",
+    // an empty token after the colon (a space, a typo) is no name
+    "SUMIF(A1: B10,\">0\",C1)",
+    "SUMIF(A1:$B$2,\">0\",C1)"
   ).foreach { formula =>
     test(s"pre-filter skips =$formula, which cannot resize through a name") {
       assert(!CriteriaRangeResize.mayResizeThroughName(formula))

@@ -250,10 +250,11 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(42)))
     assertEquals(cached(result.workbook, "S", ref"B1"), Some(num(42)))
 
-  test("GH-274 dynamic cycle: per-cell depth-guard errors, siblings survive (not Tarjan)"):
+  test("GH-274 dynamic cycle: per-cell circular errors, siblings survive (not Tarjan)"):
     // A1=INDIRECT("B1") -> B1=A1+1 is a cycle only through the dynamic edge, invisible to
-    // the static graph. Pin the graceful path: both cells error, both stay uncached, the
-    // unrelated sibling still evaluates (mirrors the cross-sheet-cycle contract above).
+    // the static graph. Pin the graceful path: both cells error (#829: as the circular reference
+    // at the first re-entry), both stay uncached, the unrelated sibling still evaluates (mirrors
+    // the cross-sheet-cycle contract above).
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", formula("=INDIRECT(\"B1\")"))
       .put(ref"B1", formula("=A1+1"))
@@ -264,10 +265,14 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"A1"), None)
     assertEquals(cached(result.workbook, "S", ref"B1"), None)
     assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"B1"))
+    result.errors.foreach(e =>
+      assert(e.error.message.contains("Circular reference through S!"), e.render)
+    )
 
   test("GH-274 dynamic self-reference is total and deterministic"):
+    val self = Workbook(Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")")))
     val books = List(
-      Workbook(Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))),
+      self,
       Workbook(
         Sheet(SheetName.unsafe("S"))
           .put(ref"A1", formula("=INDIRECT(\"B1\")"))
@@ -281,12 +286,24 @@ class RecalcSpec extends FunSuite:
     books.foreach { book =>
       val first = book.recalculate()
       assertEquals(cached(first.workbook, "S", ref"A1"), None)
+      // every member of the cycle fails: each is rediscovered from its own root in the bucket
       val expectedCells = book.sheets.flatMap(s => s.cells.keysIterator.map(s.name -> _)).toSet
       assertEquals(first.errors.map(e => e.sheet -> e.ref).toSet, expectedCells)
-      assert(first.errors.forall(_.render.contains("Cell formula cycle detected")))
-      // Pin the actual diagnostic as well as equality: two stack-exhaustion failures must not pass.
+      // #829: the circular reference at the first re-entry, the same wording on every run and
+      // stack — it used to be the depth guard's or the stack's message, whichever came first
+      assert(
+        first.errors.forall(_.render.contains("Circular reference through")),
+        first.errors.map(_.render).mkString("\n")
+      )
       (1 to 20).foreach(_ => assertEquals(book.recalculate(), first))
     }
+    assertEquals(
+      self.recalculate().errors.map(_.render),
+      Vector(
+        "S!A1: Formula error in '=INDIRECT(\"A1\")': Circular reference through S!A1: " +
+          "the cell is read again while its own evaluation is in progress"
+      )
+    )
 
   test("GH-274 determinism: recalculate() twice yields identical RecalcResult"):
     val sheet = Sheet(SheetName.unsafe("S"))

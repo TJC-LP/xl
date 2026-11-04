@@ -135,10 +135,21 @@ object Evaluator:
   private[formula] def recalculationInstance(
     rng: Rng,
     aggregateMemo: AggregateMemo,
-    position: EvalPosition = EvalPosition.None
+    position: EvalPosition = EvalPosition.None,
+    evaluating: Option[(SheetName, ARef)] = None
   ): Evaluator =
+    // #829: the cell the pass is evaluating is above every memo of its evaluation, so only a guard
+    // can see a read of it; seeded here, a dynamic reference closing on the cell (INDIRECT("A1")
+    // at A1) is the circular reference at the first re-entry, as a deeper re-entry is in the memo
     TotalEvaluator(
-      new EvaluatorImpl(rng = rng, aggregateMemo = Some(aggregateMemo), passPosition = position)
+      new EvaluatorWithDepth(
+        0,
+        rng = rng,
+        memo = None,
+        aggregateMemo = Some(aggregateMemo),
+        guard = evaluating.map((sheet, at) => PlacementGuard.evaluating(sheet, at)),
+        passPosition = position
+      )
     )
 
   /**
@@ -168,7 +179,7 @@ object Evaluator:
     sheet: SheetName,
     at: ARef
   ): (Evaluator, PlacementGuard) =
-    val guard = new PlacementGuard(sheet, at)
+    val guard = PlacementGuard.placed(sheet, at)
     // No depth-0 memo: one would outlive every evaluation it serves (the CLI's fold makes a new
     // Sheet per step, and the memo keys by Sheet identity). Each read starts its own memo, which
     // inherits the guard, and the guard's one record of a read outlives them all. The trade-off: an
@@ -1027,14 +1038,36 @@ object Evaluator:
   private val CrossSheetDepthExceeded = "Cross-sheet formula recursion depth exceeded"
   private val SpillDepthExceeded = "Spill reference recursion depth exceeded"
   private val NameCycleDetected = "Defined name cycle detected"
-  private val CellCycleDetected = "Cell formula cycle detected"
+  private val DynamicCycle = "Circular reference through "
 
   /**
-   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: an active cell
-   * revisit, a recursion depth guard, or a defined-name cycle. Each is an `EvalFailed` the cycle's
+   * #829: the failure a re-entry raises — `at` on `sheet` (its spill when `spill`) is read again
+   * while its own evaluation is in progress. A cycle the dependency graph cannot see (a reference
+   * computed at run time: INDIRECT, OFFSET, INDEX at ROW(), a range reaching an uncached cell,
+   * `x#`) is caught at its first re-entry ([[EvalMemo]], [[PlacementGuard.evaluating]]), before any
+   * recursion, so its result depends on neither the JIT's frame sizes nor the thread's stack: the
+   * depth guards below are backstops for acyclic chains deeper than their limit. Prefix-matched by
+   * [[isCycleFailure]] (TODO #751).
+   */
+  private[formula] def dynamicCycle(sheet: SheetName, at: ARef, spill: Boolean = false): EvalError =
+    val cell = s"${SheetName.quoteForFormula(sheet.value)}!${at.toA1}${if spill then "#" else ""}"
+    EvalError.EvalFailed(
+      s"$DynamicCycle$cell: the cell is read again while its own evaluation is in progress",
+      None
+    )
+
+  /** Whether `error` is the re-entry failure of [[dynamicCycle]]. */
+  private[formula] def isDynamicCycle(error: EvalError): Boolean = error match
+    case EvalError.EvalFailed(message, _) => message.startsWith(DynamicCycle)
+    case _ => false
+
+  /**
+   * GH-715: whether `error` is how a cycle surfaces outside a positioned evaluation: a re-entry
+   * into a cell being evaluated ([[dynamicCycle]]), a recursion depth guard (cells, or a spill
+   * reference, reading each other) or a defined-name cycle. Each is an `EvalFailed` the cycle's
    * readers see; it is not an internal failure.
    *
-   * Matched by message prefix, the raise sites sharing the constants above: a dedicated marker
+   * Matched by message prefix, the four raise sites sharing the constants above: a dedicated marker
    * would be a new case or field on the published `EvalError`, a binary break.
    * LookupUncachedKeysSpec pins each raise site, so a rewording that loses the match fails there.
    * TODO(#751): a structured cycle marker on `EvalError` replaces the prefixes at the next
@@ -1042,8 +1075,8 @@ object Evaluator:
    */
   private[formula] def isCycleFailure(error: EvalError): Boolean = error match
     case EvalError.EvalFailed(message, _) =>
-      message.startsWith(CrossSheetDepthExceeded) || message.startsWith(SpillDepthExceeded) ||
-      message.startsWith(NameCycleDetected) || message.startsWith(CellCycleDetected)
+      message.startsWith(DynamicCycle) || message.startsWith(CrossSheetDepthExceeded) ||
+      message.startsWith(SpillDepthExceeded) || message.startsWith(NameCycleDetected)
     case _ => false
 
   /** Resolve range cells with the same cache, recursion and context rules as scalar references. */
@@ -1212,29 +1245,35 @@ object Evaluator:
           None
         )
       )
-    else if memo.guard(targetSheet, anchor).isDefined then
-      // GH-715: the placement's own spill, `D5#` placed at D5, reads the placement
-      Left(EvalError.CircularRef(List(anchor)))
     else
-      parseFormulaCell(formulaStr, targetSheet.name, Some(anchor), aggregateMemo) match
-        case Left(parseErr) =>
-          Left(
-            EvalError.EvalFailed(
-              s"${anchor.toA1}#: the anchor's formula does not parse: " +
-                ParseError.toXLError(parseErr, formulaStr).message,
-              None
-            )
-          )
-        case Right(expr) =>
-          new EvaluatorWithDepth(
-            depth + 1,
-            allowArrayResults = true,
-            rng = rng,
-            memo = Some(memo),
-            workbookPath = workbookPath,
-            aggregateMemo = aggregateMemo,
-            guard = memo.placement
-          ).eval(expr, targetSheet, clock, workbook, Some(anchor))
+      memo.guard(targetSheet, anchor) match
+        // GH-715: the placement's own spill, `D5#` placed at D5, reads the placement; #829: the
+        // spill of the cell a pass is evaluating reads that cell
+        case Some(error) => Left(error)
+        case None =>
+          // #829: a spill reaching its own anchor again (`A1 = ROWS(A1#)`, `A1 = B1#` with
+          // `B1 = A1#`) is the circular reference at the first re-entry, never a stack's worth
+          memo.spill(targetSheet, anchor) {
+            parseFormulaCell(formulaStr, targetSheet.name, Some(anchor), aggregateMemo) match
+              case Left(parseErr) =>
+                Left(
+                  EvalError.EvalFailed(
+                    s"${anchor.toA1}#: the anchor's formula does not parse: " +
+                      ParseError.toXLError(parseErr, formulaStr).message,
+                    None
+                  )
+                )
+              case Right(expr) =>
+                new EvaluatorWithDepth(
+                  depth + 1,
+                  allowArrayResults = true,
+                  rng = rng,
+                  memo = Some(memo),
+                  workbookPath = workbookPath,
+                  aggregateMemo = aggregateMemo,
+                  guard = memo.placement
+                ).eval(expr, targetSheet, clock, workbook, Some(anchor))
+          }
 
   /**
    * GH-715: the cell a positioned evaluation places its formula in (`at` on the sheet named
@@ -1243,7 +1282,18 @@ object Evaluator:
    * that has to start a fresh memo still guards the placement, and every memo of the evaluation
    * shares the one record of the read. Single-threaded, like the memo.
    */
-  private[formula] final class PlacementGuard(sheet: SheetName, at: ARef):
+  private[formula] final class PlacementGuard(
+    sheet: SheetName,
+    at: ARef,
+    /**
+     * Whether the guarded cell is a positioned evaluation's placement (`xl eval --at`), whose
+     * formula is not the cell's: such an evaluation reads no pass slice and triages the placement's
+     * record through the guard. The cell a recalculation pass is evaluating (#829) is not
+     * positioned: the guard there only catches a read of the cell from inside its own evaluation.
+     */
+    val positioned: Boolean,
+    failure: ARef => EvalError
+  ):
     // Local mutation like EvalMemo's map: one evaluation pass, one thread
     @SuppressWarnings(Array("org.wartremover.warts.Var"))
     private var wasRead = false
@@ -1256,7 +1306,16 @@ object Evaluator:
       // case-insensitive, as Excel compares sheet names and as the rest of GH-715 does
       val guarded = ref == at && onSheet.name.value.equalsIgnoreCase(sheet.value)
       if guarded then wasRead = true
-      Option.when(guarded)(EvalError.CircularRef(List(ref)))
+      Option.when(guarded)(failure(ref))
+
+  private[formula] object PlacementGuard:
+    /** GH-715: the CLI's placement — a read of it is the one-cell cycle `CircularRef(List(at))`. */
+    def placed(sheet: SheetName, at: ARef): PlacementGuard =
+      new PlacementGuard(sheet, at, positioned = true, ref => EvalError.CircularRef(List(ref)))
+
+    /** #829: the cell a recalculation pass is evaluating — a read of it is the dynamic cycle. */
+    def evaluating(sheet: SheetName, at: ARef): PlacementGuard =
+      new PlacementGuard(sheet, at, positioned = false, dynamicCycle(sheet, _))
 
   /**
    * GH-346: per-pass memo for recursively evaluated uncached formula cells.
@@ -1281,14 +1340,13 @@ object Evaluator:
    * Not thread-safe: an evaluation pass is single-threaded and the memo never escapes it — revisit
    * if evaluation is ever parallelized internally.
    *
-   * Cells currently being computed are tracked by the same sheet identity and ref as completed
-   * results. Revisiting one fails immediately, before recursion can exhaust the JVM stack. Active
-   * entries are removed in finally, including when evaluation exits through a throwable or
-   * boundary; each sheet keeps its (then empty) set for the rest of the pass, so the hot path does
-   * not reallocate it whenever the stack unwinds. Errors memoize too. A depth-guard error
-   * consequently records by first-visit order; that is observable only on chains deeper than the
-   * guard, where results were already path-dependent (and where whole-workbook `recalculate()`,
-   * which orders iteratively, is the supported path).
+   * Errors memoize too — a cycle otherwise re-burns its detection once per path, which is itself
+   * exponential. #829: a cell is marked in progress while it computes, so a read of it from inside
+   * its own evaluation (a reference computed at run time that closes on the path) is the circular
+   * reference ([[dynamicCycle]]) at the first re-entry, before any recursion; the re-entry failure
+   * then memoizes as the failure of the cell that re-entered. The depth guard is the backstop for
+   * acyclic chains deeper than its limit, and only there is a result path-dependent (where
+   * whole-workbook `recalculate()`, which orders iteratively, is the supported path).
    *
    * GH-715: `placement` guards one cell, the cell a positioned evaluation places its formula in
    * ([[placedInstance]]). That cell holds an uncached formula, so every read of it, whatever
@@ -1336,9 +1394,6 @@ object Evaluator:
     def guard(sheet: Sheet, at: ARef): Option[EvalError] =
       placement.flatMap(_.check(sheet, at))
 
-    private val active =
-      new java.util.IdentityHashMap[Sheet, scala.collection.mutable.HashSet[ARef]]()
-
     private def memoized(
       sheet: Sheet,
       at: ARef,
@@ -1347,21 +1402,48 @@ object Evaluator:
       val forSheet =
         bySheet.computeIfAbsent(sheet, _ => scala.collection.mutable.HashMap.empty)
       forSheet.get(at) match
+        // #829: the cell is on the path being evaluated: a re-entry, failed before recursing
+        case Some(hit) if hit eq EvalMemo.InProgress => Left(dynamicCycle(sheet.name, at))
         case Some(hit) => hit
         case None =>
-          val running = active.computeIfAbsent(sheet, _ => scala.collection.mutable.HashSet.empty)
-          if running.contains(at) then
-            // Keep run-time cell cycles on the existing EvalFailed channel: lookup functions
-            // distinguish these from a positioned evaluation's CircularRef placement guard.
-            Left(EvalError.EvalFailed(s"$CellCycleDetected at ${at.toA1}: circular reference."))
-          else
-            running.add(at)
-            try
-              // Compute outside a map callback: recursion can memoize other cells on this sheet.
-              val computed = compute
-              forSheet.update(at, computed)
-              computed
-            finally running.remove(at)
+          forSheet.update(at, EvalMemo.InProgress)
+          // Compute BEFORE storing the result (never inside a map callback): the computation
+          // itself may recurse into this memo for other cells of the same sheet. The result
+          // overwrites the marker; a throwable unwinding through here (an overflow, caught at the
+          // evaluation boundary) removes it, so a memo serving another cell keeps no marker.
+          val computed =
+            try compute
+            catch
+              case t: Throwable =>
+                forSheet.remove(at)
+                throw t
+          forSheet.update(at, computed)
+          computed
+
+    private val activeSpills =
+      new java.util.IdentityHashMap[Sheet, scala.collection.mutable.HashSet[ARef]]()
+
+    /**
+     * #829: `compute` the spill of `anchor` on `sheet`, unless that spill is already being computed
+     * in this pass — a spill reference that reaches its own anchor (`A1 = ROWS(A1#)`; `A1 = B1#`
+     * with `B1 = A1#`) — which is the circular reference at the first re-entry.
+     */
+    def spill[A](sheet: Sheet, anchor: ARef)(
+      compute: => Either[EvalError, A]
+    ): Either[EvalError, A] =
+      val active =
+        activeSpills.computeIfAbsent(sheet, _ => scala.collection.mutable.HashSet.empty)
+      if !active.add(anchor) then Left(dynamicCycle(sheet.name, anchor, spill = true))
+      else
+        try compute
+        finally active.remove(anchor)
+
+  private[formula] object EvalMemo:
+    /**
+     * The marker of a cell whose computation is in progress; compared by identity, never served.
+     */
+    private[formula] val InProgress: Either[EvalError, CellValue] =
+      Left(EvalError.EvalFailed("evaluation in progress", None))
 
   /** Observable counters for focused aggregate-memo tests and profiling. */
   private[formula] final case class AggregateMemoStats(

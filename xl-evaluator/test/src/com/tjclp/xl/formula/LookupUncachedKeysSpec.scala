@@ -157,7 +157,7 @@ class LookupUncachedKeysSpec extends FunSuite:
 
   test("a lookup over a key range holding a cycle reads past the cyclic keys, as Excel does") {
     // Excel flags the cycle and computes the lookup over the cycle's value (0); here each cyclic
-    // key trips the recursion guard, a non-match, and the lookup finds A3 the same
+    // key trips the re-entry guard (#829), a non-match, and the lookup finds A3 the same
     assertEquals(eval(cyclic, "=MATCH(7,A1:A3,0)"), num(3))
     assertEquals(eval(cyclic, "=VLOOKUP(7,A1:B3,2,FALSE)"), num(70))
     assertEquals(eval(cyclic, "=XLOOKUP(7,A1:A3,B1:B3)"), num(70))
@@ -220,13 +220,13 @@ class LookupUncachedKeysSpec extends FunSuite:
   }
 
   test("each way a cycle fails without a placement is recognised as a cycle failure") {
-    // Evaluator.isCycleFailure matches the messages of the cycle raise sites; a rewording that loses
+    // Evaluator.isCycleFailure matches the messages of four raise sites; a rewording that loses
     // the match would turn a cyclic result cell's #VALUE! into a hard failure, so pin each site
     def failure(result: Either[EvalError, Any], site: String): EvalError =
       result.fold(identity, value => fail(s"$site: expected a failure, got $value"))
-    // cells reading each other: the active-cell guard
+    // cells reading each other: the re-entry guard (#829), the depth guard behind it
     val cells = failure(evalRaw(cyclic, "=A1"), "cells")
-    // spill anchors reading each other's spill: the spill recursion depth guard
+    // spill anchors reading each other's spill: the re-entry guard, the spill depth guard behind it
     val spills = Sheet("T")
       .put(ref"A1", CellValue.Formula("=B1#"))
       .put(ref"B1", CellValue.Formula("=A1#"))

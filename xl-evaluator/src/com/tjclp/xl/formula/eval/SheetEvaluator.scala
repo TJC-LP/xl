@@ -1247,6 +1247,10 @@ object SheetEvaluator:
           formulaContext.getOrElse(""),
           s"Circular reference detected: $cyclePath"
         )
+      // #829: a dynamic cycle reads at the cell boundary as Tarjan's static cycle does — the
+      // reason alone, beside `Circular reference` — never as a generic evaluation failure
+      case EvalError.EvalFailed(reason, _) if Evaluator.isDynamicCycle(error) =>
+        XLError.FormulaError(formulaContext.getOrElse(""), reason)
       case EvalError.EvalFailed(reason, ctx) =>
         val fullContext = (ctx.toList ++ formulaContext.toList).mkString(", ")
         XLError.FormulaError(
