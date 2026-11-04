@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
+  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
+  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
+  small-stack lint test permits safe completion after JVM warm-up and checks the real lint path
+  while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
+  stacks are covered; injected overflow coverage still requires a lint finding. Internal
+  formula/cache assertions run even when LibreOffice is unavailable.
+
 - **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
   right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
   to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
