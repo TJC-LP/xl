@@ -324,8 +324,11 @@ private[formula] object EqIndex:
  * Each indexed pair `k` selects the offsets whose row holds one of its lookup keys or is residual.
  * The candidates are the offsets every indexed pair selects: the pair selecting the fewest rows is
  * listed, and each further pair keeps the listed offsets it selects, found by galloping search
- * forward through its posting lists. When even the smallest selection is more than half the rows,
- * listing it costs about as much as testing every row, so the call tests every row (`None`).
+ * forward through its posting lists. A pair's selection is the DISTINCT rows its posting lists hold
+ * in the window: a row holding both keys of a two-key lookup (text `"1"` has the Text and Num keys
+ * a lookup for `"1"` reads) sits in two lists and counts once (#842). When even the smallest
+ * selection is more than half the rows, listing it costs about as much as testing every row, so the
+ * call tests every row (`None`); the count stops as soon as it passes that bound.
  */
 private[formula] object CriteriaCandidates:
 
@@ -344,16 +347,15 @@ private[formula] object CriteriaCandidates:
   def compute(pairs: List[Pair], n: Int): Option[ArraySeq.ofInt] =
     if pairs.isEmpty || n <= 0 then None
     else
+      val limit = n / 2
       val selections = pairs.map { p =>
         val lists = p.index.postings(p.keys)
-        // an upper bound of the pair's selection: its lists may share rows
-        val size = lists.map(_.countIn(p.offset, p.offset + n - 1)).sum
-        (lists, p.offset, size)
+        (lists, p.offset, selectionSize(lists, p.offset, n, limit))
       }
       val sorted = selections.sortBy(_._3)
       sorted match
         case (lists, offset, size) :: rest =>
-          if size > n / 2 then None
+          if size > limit then None
           else
             val listed = union(lists, offset, n)
             Some(
@@ -362,6 +364,55 @@ private[formula] object CriteriaCandidates:
               })
             )
         case Nil => None
+
+  /**
+   * The distinct rows of `lists` in `offset .. offset + n - 1`, exact up to `limit`: a larger count
+   * is reported as some count past `limit`. One list is counted whole by binary search (`countIn`);
+   * several are merged in row order, a row in more than one list counting once, and the merge stops
+   * one past `limit`, so a refusal costs at most about `limit` steps per list (#842). A summed
+   * count overstated a window of two-key rows by up to twice and refused it.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While")) // hot path
+  private[eval] def selectionSize(
+    lists: List[EqIndex.Postings],
+    offset: Int,
+    n: Int,
+    limit: Int
+  ): Int =
+    val last = offset + n - 1
+    lists match
+      case Nil => 0
+      case List(p) => p.countIn(offset, last)
+      case _ =>
+        // each list's window, found once: its bounds give its count and start the merge
+        val parts = lists.map { p =>
+          val from = p.lowerBound(offset, p.from)
+          (p.rows, from, p.lowerBound(last + 1, from))
+        }
+        // every row of one list is distinct: past the limit, no merge is needed
+        if parts.exists((_, from, until) => until - from > limit) then limit + 1
+        else
+          val rows = parts.map(_._1).toArray
+          val cursors = parts.map(_._2).toArray
+          val untils = parts.map(_._3).toArray
+          // the smallest row at any cursor, Int.MaxValue when every list is spent
+          def smallest: Int =
+            var min = Int.MaxValue
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) then min = math.min(min, rows(i)(cursors(i)))
+              i += 1
+            min
+          var count = 0
+          var row = smallest
+          while count <= limit && row != Int.MaxValue do
+            count += 1
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) && rows(i)(cursors(i)) == row then cursors(i) += 1
+              i += 1
+            row = smallest
+          count
 
   /** The ascending, distinct offsets `row - offset` of the rows of `lists` in the window. */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

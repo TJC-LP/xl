@@ -1533,7 +1533,9 @@ object FormulaParser:
   /**
    * Parse range: A1:B10. GH-713: when the text after the `:` is not a lexical range end — or is one
    * followed by `(`, a call such as `A1:LOG10(…)` — the start token alone (`leftAlone`, read at the
-   * `:`) may be the left operand of the range operator ([[rangeFallback]]).
+   * `:`) may be the left operand of the range operator ([[rangeFallback]]). The end token is read
+   * whole with the token alphabet (`ReferenceChars.isRangeEnd`, #841): `B2_x` is a name, never the
+   * cell `B2` followed by text, so `A1:B2_x` is the operator over A1 and that name.
    */
   private def parseRange(
     startRef: String,

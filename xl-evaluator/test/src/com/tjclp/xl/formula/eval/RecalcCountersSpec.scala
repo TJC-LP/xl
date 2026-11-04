@@ -97,6 +97,8 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.NameParses), 1L)
     Vector(
       Counter.VirtualNodes,
+      Counter.RangeLookups,
+      Counter.RangeLookupWork,
       Counter.CriteriaIndexed,
       Counter.CriteriaNotIndexable,
       Counter.SlicesBuilt,
@@ -111,6 +113,11 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.GraphNodes), 5L)
     // Out!A5 reads Out!A1 and Out!A2; the criteria calls read constants only
     assertEquals(snap(Counter.GraphEdges), 2L)
+    // the per-cell graph looked up three distinct ranges (Data!A1:A5, which `rng` and SUMIF's
+    // defaulted sum range share, Data!B1:B5, Data!A:A), each once; Data holds no formula, so no
+    // index entry was examined
+    assertEquals(snap(Counter.RangeLookups), 3L)
+    assertEquals(snap(Counter.RangeLookupWork), 0L)
     Vector(Counter.VirtualNodes, Counter.RangeNodes, Counter.GraphWork)
       .foreach(c => assertEquals(snap(c), 0L, c.toString))
   }

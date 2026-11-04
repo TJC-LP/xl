@@ -27,8 +27,9 @@ import scala.concurrent.duration.*
  */
 class TextScalarSlotSpec extends FunSuite:
 
-  // the magnitude tests run as Futures so a regression that builds a huge BigInteger fails here
-  // instead of hanging the suite (munit applies the timeout to Future-valued tests only)
+  // munit 1.0.3 applies `munitTimeout` to every test, Future-valued or not: a synchronous body
+  // keeps running after the TimeoutException, but the suite reports the failure instead of hanging,
+  // so a regression that builds a huge BigInteger in a magnitude test fails here by name
   override val munitTimeout: Duration = 20.seconds
 
   private def N(n: String): CellValue = CellValue.Number(BigDecimal(n))

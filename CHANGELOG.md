@@ -16,6 +16,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
+  through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), a range reaching an
+  uncached cell, `x#`) is invisible to the dependency graph, and its evaluation ran until either
+  the recursion-depth guard or the thread's stack gave out, whichever came first on the JIT tier
+  at hand, so recalculating the same workbook twice could report different errors and, through
+  lookups, different values. It is now caught at the first re-entry into a cell whose evaluation
+  is in progress (an in-progress marker in the per-pass memo, and a guard on the cell a pass is
+  evaluating), before any recursion, so the result is the same on every run and stack; the depth
+  and stack guards remain as backstops for acyclic chains deeper than their limit.
+  Behaviour change: such a cell failed with
+  `Evaluation failed: Cross-sheet formula recursion depth exceeded (max: 100). Possible circular reference.`
+  or, depending on JIT warmth, `Evaluation failed: Evaluation exhausted the stack at A1: …`; it
+  now fails with `Circular reference through S!A1: the cell is read again while its own evaluation
+  is in progress`, beside the static cycle's `Circular reference`. A spill reaching its own anchor
+  names the spill (`through S!A1#`). Lookups treat it as they treated the depth guard: a cyclic key
+  is a non-match, a cyclic result cell is `#VALUE!`. `xl eval --at` keeps its
+  `Circular reference detected` for a read of the placement. `xl recalc` summaries, `--strict`
+  failures and `view --eval` advisories show the new text.
+
+- **A defined name that begins like a cell reference is read whole after a range's `:`** (#841,
+  GH-713): the lexical-range reader took only letters, digits, `$` and `!` after the `:`, so a name
+  such as `B2_x`, `C3.Total`, `D5\y` or `UK9\f` was cut at its cell-shaped prefix, the prefix
+  accepted as the range's end, and the rest refused as text after the expression. The reader now
+  takes every name character (ECMA-376 §18.17.2: letters, digits, `_`, `.`, `\`), as the first
+  token and a sheet-qualified end already did; a token that is not a cell, column or row is the
+  range operator's right operand, as `A1:Start` was. Found by the weekly Law Fuzz run.
+  Behaviour change: `=A1:B2_x` was `Unexpected character '_' at position 5: unexpected characters
+  after expression` and is now the range operator over A1 and the name `B2_x` (`=SUM(A1:b6\8_.T)`
+  likewise). The `:` printer writes such a tree as `A1:B2_x` where it grouped the name
+  (`A1:(B2_x)`); both spellings re-parse to the same tree. A refused end is named whole:
+  `=A1:My_Sheet!B2` was `Invalid cell reference 'A1:My'` and is now
+  `Invalid cell reference 'A1:My_Sheet!B2'`. `A1:B2`, `A:A`, `1:$3`, `$A$1:$B$2`, `A1:INDEX(…)`,
+  `A1:B2!`, `Sheet1!A1:B2` and `A1:Sheet2!B2` are unchanged.
+
 - **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
   LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
   incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
@@ -50,6 +84,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
+  `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
+  generator wrote an unparsable formula (law-fuzz seed `ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=`).
+  `CriteriaIndexSpec`'s candidate property is total for a window of no rows (a shrunk `n`) and
+  checks the listing decision both ways.
+- `PassCacheLawSpec`'s generated books always hold a criteria reader whose window excludes the
+  dynamic row (#828): a reader covering that row is a member of the deferred bucket, which the pass
+  never slices, and each generated window avoided it with probability about 0.24, so about one
+  book in 2,500 could build no slice and the "not vacuous" property failed about once in a hundred
+  runs. The suite now takes the law-fuzz seed plumbing (`XL_ROUNDTRIP_RANDOM_SEED`,
+  `-Dxl.roundtrip.seed`), so a printed seed replays.
+- **Performance gates are counters, not clocks** (#843): `FormulaGraphPerfSpec`'s #743 gate missed
+  its 5 s budget in about a third of CI runs, where `./mill -i __.test` shares a 4-core runner among
+  several test JVMs, and nine more tests carried wall-clock budgets with the same failure mode (five
+  of them equal to MUnit's 30 s default timeout, so they never decided anything). The formula-graph
+  build now counts its range lookups and index work (`RecalcCounters.RangeLookups`,
+  `RangeLookupWork`); the #743 and GH-522 gates pin those counts at 2,000 and 8,000 rows; the #692
+  lookup gate pins `UsedRangeScans`; the GH-714 drag pins `ImplicitIntersection.Report`; the GH-715
+  stale-reader walk pins its containment checks (`ReadCommands.UncacheTrace`); every other
+  wall-clock assert in `__.test` is a diagnostic clue (`RecalcPerfSpec`, `StylePerformanceSpec`,
+  `EvaluationTotalitySpec`, ...), with `munitTimeout` overrides where a fixture is large.
+  `LintOracleSpec` proves a real overflow at the stack boundary (recursing to the overflow, then
+  calling the oracle while unwinding) instead of hoping a 64 KB stack hint, below the JVM's minimum,
+  overflows on the JIT tier at hand; it warms the oracle on the normal stack first, and its
+  small-stack threads are daemons joined with a bound.
 - `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
   the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
   cases assert on (#728).
@@ -126,6 +185,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
   unrelated SUMPRODUCT/array bindings (#748).
 ### Performance
+
+- **A criteria window whose matching rows are numeric text is sized exactly** (#842):
+  `CriteriaCandidates.compute` counted a row once per posting list it sits in — text `"1"` holds
+  the keys Text("1") and Num(1), and a lookup for `"1"` reads both — so a window with few such rows
+  could be counted past half its size, refused candidates, and scanned. The selection is now
+  counted distinctly by a bounded merge over the posting lists that stops once it passes n/2; a
+  one-list lookup is still counted by binary search. Results are unchanged: the index is a filter,
+  and a refused call tested every row with the same matcher.
 
 - **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
   iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while

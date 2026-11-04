@@ -282,6 +282,15 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
       r <- genLeaf(scope)
     yield s"$l$op$r"
 
+  /**
+   * `NOT e` in the paren-less keyword form — unless `e` opens with `(`: `NOT (` is the function
+   * CALL to the parser (GH-653, `isNotKeywordAt`), so a union operand `(A1,B2):C3` would read as
+   * two arguments. Spelled as the call, the group is one argument (law-fuzz seed
+   * ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=).
+   */
+  private def notPrefix(e: String): String =
+    if e.startsWith("(") then s"NOT($e)" else s"NOT $e"
+
   /** The recursive mixer: every leaf, every operator, calls, `@`, LET, grouping parens. */
   private def genExpr(depth: Int, scope: Scope): Gen[String] =
     if depth <= 0 then genLeaf(scope)
@@ -297,7 +306,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
         yield s"$l$s1$op$s2$r"),
         1 -> Gen.lzy(genExpr(depth - 1, scope).map(e => s"-$e")),
         1 -> Gen.lzy(genExpr(depth - 1, scope).map(e => s"+$e")),
-        1 -> Gen.lzy(genExpr(depth - 1, scope).map(e => s"NOT $e")),
+        1 -> Gen.lzy(genExpr(depth - 1, scope).map(notPrefix)),
         1 -> Gen.lzy(genPrimary(depth - 1, scope).map(p => s"$p%")),
         1 -> Gen.lzy(genExpr(depth - 1, scope).map(e => s"($e)")),
         4 -> Gen.lzy(genCall(depth - 1, scope)),
@@ -1006,6 +1015,59 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     assertPrintsAs("=-NOT TRUE", "=-NOT(TRUE)")
     List("=NOT(A1)^2", "=NOT(A1)%", "=NOT (A1)^2", "=NOT A1^2", "=not(TRUE)*2")
       .foreach(assertRoundTrips)
+  }
+
+  test("law-fuzz: keyword NOT over a `(`-led operand is written as the call") {
+    // `NOT (A1,B2):C3` is a two-argument call to the parser: the generator must not write it
+    assertRejected("NOT (A1,B2):C3") match
+      case ParseError.InvalidArguments("NOT", _, _, _) => ()
+      case other => fail(s"expected NOT's arity error, got $other")
+    assertEquals(notPrefix("(A1,B2):C3"), "NOT((A1,B2):C3)")
+    assertEquals(notPrefix("A1"), "NOT A1")
+    assertRoundTrips("=NOT((A1,B2):C3)")
+    // seed ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=, as the generator now spells it
+    assertRoundTrips("""=VARP(191% , NOT(($DVD611677,B2):$X$23:$Q22:#REF!) , 1)""")
+  }
+
+  test("#841: a defined name that begins like a cell reference is read whole after `:`") {
+    // the lexical-range reader took only letters, digits, `$` and `!` after the `:`, so `B2_x`
+    // was cut at `B2`, the cell accepted as the range's end and `_x` refused; now the whole token
+    // is read, is no cell, and is the range operator's right operand (law-fuzz seeds
+    // FkAMun38whM8QLVTAVBdY341YKE5UJSpLeWXqlM5RMK=, jBt-rUGa43S0JdcyNl2VMMc1yXfu4wAXBdCmFUsQ5rO=,
+    // MO81kjJlKERD7t2AWdFWBzyob-bOsxQX0Kawa2WMXDN=, y1VlJM0a9DY6MzSMX2J8_bZpJIpVblZ62t_xWV6e1kN=)
+    List(
+      """=-INDEX(1:$3, 1):$E$21:b6\8_.TeBJ:XLOOKUP(1, A1:A3, B1:C3)""",
+      """=SUM($C$11:D5_\SWn_\Anrj:OFFSET(MDR33, 1, 1):K34)""",
+      """=_UDV\__\n..2p:(Q90265,B2):$Q40:kuf6.SiB""",
+      """=LET(NAOJoL9, LET(Lname, ABS(1), Gf9_Gl5qlCS, NOT Lname, LET(LfuL8RtNBl,Lname,Gf9_Gl5qlCS)), a.b, +NOT XLOOKUP(1, A1:A3, B1:C3):__9...dmQ_:U2:UK9\f_._\\\y, q\w0.\0., -[6]A1!$Y$27# -fv(792, "ufPkY", 473), -#UNKNOWN!<> \_\kPy2)""",
+      "=B2_x",
+      "=A1:B2_x",
+      "=A1:C3.Total",
+      """=A1:D5\y""",
+      """=SUM(A1:b6\8_.T)""",
+      "=$A$1:B2_x",
+      "=A1:B2.",
+      "=@A1:B2_x",
+      // unchanged: lexical ranges, calls and qualified ends read as before
+      "=A1:B2",
+      "=A:A",
+      "=1:$3",
+      "=$A$1:$B$2",
+      "=Sheet1!A1:B2",
+      "=Sheet1!A1:B2_x",
+      "=A1:INDEX(A:A,3)"
+    ).foreach(assertRoundTrips)
+    assertPrintsAs("=A1:B2_x", "=A1:B2_x")
+    assertPrintsAs("=A1:(B2_x)", "=A1:B2_x")
+    assertEquals(parsed("=A1:B2_x"), parsed("=A1:(B2_x)"))
+    // a qualified end after a local token is still a 3-D shape xl refuses, named whole
+    assertEquals(assertRejected("A1:B2!").productPrefix, "InvalidCellRef")
+    assertEquals(assertRejected("A1:Sheet2!B2").productPrefix, "InvalidCellRef")
+    assertRejected("A1:My_Sheet!B2") match
+      case ParseError.InvalidCellRef("A1:My_Sheet!B2", _, _) => ()
+      case other => fail(s"A1:My_Sheet!B2: $other")
+    // a bare column after `:` is a typo, as before (RangeOperatorSpec pins its diagnostic)
+    assertEquals(assertRejected("A1:B").productPrefix, "InvalidCellRef")
   }
 
   test("GH-653: the rejected grammar's canonical examples name their failure") {

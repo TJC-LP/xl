@@ -476,7 +476,12 @@ object WorkbookEvaluator:
           val slots = ordered.iterator.zipWithIndex.toMap
           memo.passCache.foreach(_.begin(Readiness.build(slots, Set.empty)))
           def evaluatorFor(q: QualifiedRef): Evaluator =
-            Evaluator.recalculationInstance(options.rng, memo, callerPosition(slots, bucket, q))
+            Evaluator.recalculationInstance(
+              options.rng,
+              memo,
+              callerPosition(slots, bucket, q),
+              Some((q.sheet, q.ref))
+            )
           val initial = PassState(wb.sheets, Map.empty, skippedErrors)
           val PassState(_, values, errors, reasons) = counters.time(RecalcCounters.Phase.Eval) {
             ordered.foldLeft(initial) { (state, q) =>
@@ -638,7 +643,8 @@ object WorkbookEvaluator:
         // GH-274/GH-301: dynamic-reference cells (INDIRECT/OFFSET) and their transitive static
         // dependents evaluate last (stable partition — preserves topological validity per the
         // deferDynamic lemma), with stale caches stripped so a dynamic read of a
-        // not-yet-evaluated bucket cell recursively evaluates fresh (depth-guarded) instead of
+        // not-yet-evaluated bucket cell recursively evaluates fresh (re-entry-guarded, #829: a
+        // read that closes on a cell being evaluated is its circular reference) instead of
         // trusting a previous generation's cache. The closure is workbook-level (GH-346): a
         // cross-sheet static dependent of a dynamic cell defers with it. Dynamic-free workbooks
         // take the identity path.
@@ -740,7 +746,8 @@ object WorkbookEvaluator:
           Evaluator.recalculationInstance(
             generationRng,
             generationMemo,
-            callerPosition(slots, deferred, q)
+            callerPosition(slots, deferred, q),
+            Some((q.sheet, q.ref))
           )
 
         // Evaluate in the single global order, threading the partially evaluated workbook:

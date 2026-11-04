@@ -17,13 +17,14 @@ import munit.FunSuite
  * memoization), and whole-workbook recalculation ordered cells per sheet (not globally), so
  * cross-sheet precedents were always uncached when hit. On this shape — each period's beginning
  * balance read by three formulas, chained backwards period over period — evaluation cost grew ~3^n:
- * at n=24 that is ~10^11 evaluations, hours of CPU. Post-fix both paths complete in milliseconds;
- * the generous wall-clock budgets here only catch a regression to exponential.
+ * at n=24 that is ~10^11 evaluations, hours of CPU. Post-fix both paths complete in milliseconds.
+ * The structural pins below are the gates; the suite's 30 s `munitTimeout` is the only backstop for
+ * a return to exponential or quadratic work, which no counter can express and which a wall-clock
+ * budget equal to that timeout never decided (#843).
  */
 class RecalcPerfSpec extends FunSuite:
 
   private val Periods = 24
-  private val BudgetMs = 30000L
 
   private def num(bd: BigDecimal): CellValue = CellValue.Number(bd)
   private def formula(expr: String): CellValue = CellValue.Formula(expr, None)
@@ -90,22 +91,16 @@ class RecalcPerfSpec extends FunSuite:
 
   test("GH-346: whole-workbook recalculate() on a recursive schedule is linear and correct"):
     val wb = buildWorkbook(Periods)
-    val t0 = System.nanoTime()
     val result = wb.recalculate()
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
     assert(result.isClean, s"expected clean, got: ${result.errors.take(5).map(_.render)}")
     val Terminals(ebitda, ending) = expectedTerminals(Periods)
     assertEquals(cached(result.workbook, "Debt", at(ColJ, Periods)), Some(num(ending)))
     assertEquals(cached(result.workbook, "Returns", ARef.from0(1, 0)), Some(num(ending + ebitda)))
-    assert(elapsedMs < BudgetMs, s"recalculate took ${elapsedMs}ms (budget ${BudgetMs}ms)")
 
   test("GH-346: single-shot eval of a deep uncached cross-sheet cell is memoized, not per-path"):
     val wb = buildWorkbook(Periods)
-    val t0 = System.nanoTime()
     val evaluated = wb.evaluateFormula(s"=Debt!J$Periods+0", "Returns")
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
     assertEquals(evaluated, Right(num(expectedTerminals(Periods).ending)))
-    assert(elapsedMs < BudgetMs, s"eval took ${elapsedMs}ms (budget ${BudgetMs}ms)")
 
   test("GH-346: cross-sheet aggregate over uncached formula cells computes their values"):
     // SUM over ANOTHER sheet's formula cells: with per-sheet ordering the aggregate read the
@@ -154,9 +149,7 @@ class RecalcPerfSpec extends FunSuite:
 
   test("GH-492: a 20-component SCC chain with a long acyclic tail stays inside the budget"):
     val wb = chainedCycles
-    val t0 = System.nanoTime()
     val result = wb.recalculate(IterativeCalc(100, BigDecimal("1E-9")))
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
     assert(result.isClean, s"expected clean, got: ${result.errors.take(5).map(_.render)}")
     assert(result.converged, s"expected convergence, got ${result.unconverged.map(_.render)}")
     assertEquals(result.cycles.size, Years)
@@ -164,10 +157,6 @@ class RecalcPerfSpec extends FunSuite:
     assert(
       result.cycles.forall(_.rounds < 30),
       s"a component burned its budget: ${result.cycles.map(_.rounds)}"
-    )
-    assert(
-      elapsedMs < BudgetMs,
-      s"iterative recalculate took ${elapsedMs}ms (budget ${BudgetMs}ms)"
     )
 
   /**
@@ -190,16 +179,13 @@ class RecalcPerfSpec extends FunSuite:
     val dependents: Map[ARef, Set[ARef]] =
       (1 until ChainCells).map(i => refs(i - 1) -> Set(refs(i))).toMap
     val graph = DependencyGraph(dependencies, dependents)
-    val t0 = System.nanoTime()
     val sorted = DependencyGraph.topologicalSort(graph)
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
     sorted match
       case Right(order) =>
         assertEquals(order.size, ChainCells)
         assertEquals(order.headOption, Some(refs(0)))
         assertEquals(order.lastOption, Some(refs(ChainCells - 1)))
       case Left(circular) => fail(s"expected acyclic order, got: $circular")
-    assert(elapsedMs < BudgetMs, s"topologicalSort took ${elapsedMs}ms (budget ${BudgetMs}ms)")
 
   test("transitive dependent discovery is linear on a 100k-cell chain"):
     val refs = (0 until ChainCells).map(i => ARef.from0(0, i)).toVector
@@ -209,17 +195,11 @@ class RecalcPerfSpec extends FunSuite:
       (1 until ChainCells).map(i => refs(i - 1) -> Set(refs(i))).toMap
     val graph = DependencyGraph(Map.empty, dependents)
 
-    val started = System.nanoTime()
     val reached = DependencyGraph.transitiveDependents(graph, Set(first))
-    val elapsedMs = (System.nanoTime() - started) / 1000000L
 
     assertEquals(reached.size, ChainCells - 1)
     assert(!reached.contains(first))
     assert(reached.contains(last))
-    assert(
-      elapsedMs < BudgetMs,
-      s"transitiveDependents took ${elapsedMs}ms (budget ${BudgetMs}ms)"
-    )
 
   /**
    * GH-537 tripwire: a cycle member that fails every round (a host failure, not an error value)
@@ -234,15 +214,12 @@ class RecalcPerfSpec extends FunSuite:
         .put(ARef.from0(0, 0), formula("=B1*0.5+10"))
         .put(ARef.from0(1, 0), formula("=A1*0.5+Nowhere!A1"))
     )
-    val t0 = System.nanoTime()
     val result = wb.recalculate(IterativeCalc(100000, BigDecimal("1E-9")))
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
     assert(!result.converged, "a failing member never converges")
     assert(
       result.cycles.forall(c => c.stalled && c.rounds <= 3),
       s"expected an early stall, got ${result.cycles.map(_.render)}"
     )
-    assert(elapsedMs < BudgetMs, s"stalled fixpoint took ${elapsedMs}ms (budget ${BudgetMs}ms)")
 
   /**
    * GH-537 tripwire: `dynamicCells(workbook)` classified every defined name once PER SHEET and
