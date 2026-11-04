@@ -11,7 +11,7 @@ class PositionedReferenceInspectionSpec extends FunSuite:
     ARef
       .parse(at)
       .left
-      .map(e => FormulaEvaluationError(com.tjclp.xl.error.XLError.Other(e.toString)))
+      .map(e => FormulaEvaluationError.Failed(com.tjclp.xl.error.XLError.Other(e.toString)))
       .flatMap(cell => SheetEvaluator.evaluateAt(book, sheet, cell, formula))
 
   private val sheet = Sheet("S").put(ref"D5", CellValue.Number(BigDecimal(99)))

@@ -55,19 +55,24 @@ object SheetEvaluator:
    * sheet is the ambient context and replaces its namesake in the evaluation copy.
    *
    * Unlike `evaluateFormula(..., currentCell = Some(at))`, this includes closure and cycle
-   * orchestration. Failures retain the existing XLError in `error` and any detected path in
-   * `cycle`. Static closure analysis is conservative over ranges. Cached cross-sheet cycles and
-   * indirect record-inspection cycles remain outside this API's guarantees (GH-729), matching CLI
-   * eval.
+   * orchestration. A failure is [[FormulaEvaluationError.Cycle]], the existing XLError with the
+   * complete path, or [[FormulaEvaluationError.Failed]] with the XLError alone. `clock` and `rng`
+   * are what TODAY/NOW and RAND/RANDBETWEEN draw from, in the closure and in the formula, as for
+   * `evaluateFormula(formula, clock, rng)`; one `rng` serves the whole evaluation, so a seeded one
+   * makes it reproducible. Static closure analysis is conservative over ranges. Cached cross-sheet
+   * cycles and indirect record-inspection cycles remain outside this API's guarantees (GH-729),
+   * matching CLI eval.
    */
   def evaluateAt(
     workbook: Workbook,
     sheet: Sheet,
     at: ARef,
     formula: String,
-    overrides: Map[ARef, CellValue] = Map.empty
+    overrides: Map[ARef, CellValue] = Map.empty,
+    clock: Clock = Clock.system,
+    rng: Rng = Rng.system
   ): Either[FormulaEvaluationError, CellValue] =
-    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, Some(at))
+    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, Some(at), clock, rng)
 
   /**
    * Positionless dynamic-array evaluation (top-left value) after the same value-read closure as
@@ -77,9 +82,11 @@ object SheetEvaluator:
     workbook: Workbook,
     sheet: Sheet,
     formula: String,
-    overrides: Map[ARef, CellValue] = Map.empty
+    overrides: Map[ARef, CellValue] = Map.empty,
+    clock: Clock = Clock.system,
+    rng: Rng = Rng.system
   ): Either[FormulaEvaluationError, CellValue] =
-    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, None)
+    FormulaEvaluation.scalar(workbook, sheet, formula, overrides, None, clock, rng)
 
   /**
    * Evaluate the same positionless closure, returning the spilled sheet and range. `origin` anchors
@@ -91,9 +98,11 @@ object SheetEvaluator:
     sheet: Sheet,
     formula: String,
     origin: ARef,
-    overrides: Map[ARef, CellValue] = Map.empty
+    overrides: Map[ARef, CellValue] = Map.empty,
+    clock: Clock = Clock.system,
+    rng: Rng = Rng.system
   ): Either[FormulaEvaluationError, (Sheet, CellRange)] =
-    FormulaEvaluation.array(workbook, sheet, formula, origin, overrides)
+    FormulaEvaluation.array(workbook, sheet, formula, origin, overrides, clock, rng)
 
   /**
    * #692: a formula cell's computed value and, when that value is an Excel error the evaluator
@@ -1051,9 +1060,13 @@ object SheetEvaluator:
    * computed. Use it with [[evaluateCellUsing]], [[evaluateFormulaUsing]] and
    * [[evaluateArrayFormulaUsing]], which match the public entry points.
    */
-  private[xl] def spillTrackingEvaluator(formula: String, workbook: Workbook): Evaluator =
+  private[xl] def spillTrackingEvaluator(
+    formula: String,
+    workbook: Workbook,
+    rng: Rng = Rng.system
+  ): Evaluator =
     Evaluator.spillTrackingInstance(
-      Rng.system,
+      rng,
       Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook)
     )
 
@@ -1078,10 +1091,11 @@ object SheetEvaluator:
     formula: String,
     workbook: Workbook,
     sheet: SheetName,
-    at: ARef
+    at: ARef,
+    rng: Rng = Rng.system
   ): Placement =
     val (evaluator, guard) = Evaluator.placedInstance(
-      Rng.system,
+      rng,
       Evaluator.mayReadSpills(formula) || Evaluator.mayReadSpills(workbook),
       sheet,
       at

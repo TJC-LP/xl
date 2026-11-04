@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #741 branch's full run after merging main on 2026-11-04 recorded **9,998 cases**, including skips, all passing.
+**Current Status**: the #741 branch's full run after merging main on 2026-11-04 recorded **10,002 cases**, including skips, all passing.
 
 ## Test Infrastructure
 
@@ -285,14 +285,14 @@ As of the #741 branch's full `./mill -i __.test` after merging main on 2026-11-0
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4284 |
+| xl-evaluator | 4288 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1963 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **9,998** |
+| **Total** | **10,002** |
 
 
 ## Test Quality Metrics

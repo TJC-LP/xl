@@ -22,8 +22,12 @@ class ScriptingPreludeTest extends FunSuite:
     val circular: Either[FormulaEvaluationError, CellValue] =
       SheetEvaluator.evaluateAt(book, sheet, ref"D5", "=D5+1")
     assertEquals(circular.left.toOption.flatMap(_.cycle), Some(List(ref"D5", ref"D5")))
+    circular match
+      case Left(FormulaEvaluationError.Cycle(_, path)) => assertEquals(path, List(ref"D5", ref"D5"))
+      case other => fail(s"Expected a cycle through the prelude, got $other")
     assertEquals(
-      SheetEvaluator.evaluateWithClosure(book, sheet, "=A1*2"),
+      SheetEvaluator
+        .evaluateWithClosure(book, sheet, "=A1*2", clock = Clock.system, rng = Rng.seeded(1L)),
       Right(CellValue.Number(BigDecimal(20)))
     )
     assert(SheetEvaluator.evaluateArrayWithClosure(book, sheet, "=A1*2", ref"F1").isRight)

@@ -685,10 +685,12 @@ val path = circular.left.toOption.flatMap(_.cycle) // Some(List(D5, D5))
 `evaluateAt` places an uncached plain formula in a temporary workbook, evaluates only its
 value-read precedent closure in dependency order, and guards reads of the placement, including
 run-time reads through INDIRECT/OFFSET, names and uncached cross-sheet formulas. IFERROR cannot
-hide a guard read. `FormulaEvaluationError.error` retains the existing `XLError` diagnostic;
-`cycle` retains the full static path even when the diagnostic abbreviates it, or the placement
-alone for a run-time read. Typed overrides affect the selected sheet; overriding the placement
-itself is refused. Existing input values and caches remain unchanged.
+hide a guard read. The failure is `FormulaEvaluationError.Cycle(error, path)` or `Failed(error)`:
+`error` is the existing `XLError` diagnostic; `path` (also `cycle`, an `Option`) is the full static
+path even when the diagnostic abbreviates it, or the placement alone for a run-time read. Typed
+overrides affect the selected sheet; overriding the placement itself is refused. `clock` and `rng`
+(`Clock.fixedDate(…)`, `Rng.seeded(…)`) pin TODAY/NOW and RAND across the closure. Existing input
+values and caches remain unchanged.
 
 `SheetEvaluator.evaluateWithClosure(book, data, formula, overrides)` shares that closure in
 positionless array mode (top-left value). `evaluateArrayWithClosure(book, data, formula, origin,

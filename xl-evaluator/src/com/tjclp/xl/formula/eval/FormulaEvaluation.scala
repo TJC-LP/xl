@@ -3,6 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.{DependencyGraph, ValueDependencies}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -10,11 +11,24 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
 /**
- * A closure evaluation failure, with the existing library diagnostic and, for a detected cycle, its
- * full path. A run-time guard knows only the placement, so its path has that cell alone.
- * Diagnostics may abbreviate long paths; `cycle` never does.
+ * A closure evaluation failure: the diagnostic the existing evaluation APIs report and, for a
+ * cycle, its complete path. [[Cycle]]: the formula placed at `at` closes a cycle (`path` starts and
+ * ends at the placement; a read of the placement computed at run time knows no path, so it holds
+ * the placement alone), or the positionless closure holds one. [[Failed]]: any other failure (a
+ * parse error, an evaluation failure, an override on the placement). A diagnostic may abbreviate a
+ * long path; `path` never does.
  */
-final case class FormulaEvaluationError(error: XLError, cycle: Option[List[ARef]] = None)
+enum FormulaEvaluationError derives CanEqual:
+  case Failed(error: XLError)
+  case Cycle(error: XLError, path: List[ARef])
+
+  /** The diagnostic, as the existing evaluation APIs report it. */
+  def error: XLError
+
+  /** The detected cycle's complete path; `None` for any other failure. */
+  def cycle: Option[List[ARef]] = this match
+    case Cycle(_, path) => Some(path)
+    case Failed(_) => None
 
 /** Single-use evaluation state stays behind the public SheetEvaluator closure APIs. */
 private[formula] object FormulaEvaluation:
@@ -25,13 +39,21 @@ private[formula] object FormulaEvaluation:
     sheet: Sheet,
     formula: String,
     overrides: Map[ARef, CellValue],
-    at: Option[ARef]
+    at: Option[ARef],
+    clock: Clock,
+    rng: Rng
   ): Result[CellValue] =
     val normalized = normalize(formula)
-    precedentsEvaluated(wb, sheet, normalized, overrides, at).flatMap { e =>
+    precedentsEvaluated(wb, sheet, normalized, overrides, at, clock, rng).flatMap { e =>
       e.checked(
-        SheetEvaluator
-          .evaluateFormulaUsing(e.sheet, normalized, e.evaluator, Some(e.book), currentCell = at),
+        SheetEvaluator.evaluateFormulaUsing(
+          e.sheet,
+          normalized,
+          e.evaluator,
+          Some(e.book),
+          clock,
+          currentCell = at
+        ),
         normalized
       )
     }
@@ -41,47 +63,53 @@ private[formula] object FormulaEvaluation:
     sheet: Sheet,
     formula: String,
     origin: ARef,
-    overrides: Map[ARef, CellValue]
+    overrides: Map[ARef, CellValue],
+    clock: Clock,
+    rng: Rng
   ): Result[(Sheet, CellRange)] =
     val normalized = normalize(formula)
-    precedentsEvaluated(wb, sheet, normalized, overrides, None).flatMap { e =>
+    precedentsEvaluated(wb, sheet, normalized, overrides, None, clock, rng).flatMap { e =>
       e.checked(
-        SheetEvaluator
-          .evaluateArrayFormulaUsing(e.sheet, normalized, origin, e.evaluator, Some(e.book)),
+        SheetEvaluator.evaluateArrayFormulaUsing(
+          e.sheet,
+          normalized,
+          origin,
+          e.evaluator,
+          Some(e.book),
+          clock
+        ),
         normalized
       )
     }
 
+  /** `formula` as every entry point reads it: GH-479's canonical text behind one `=`. */
   private def normalize(formula: String): String =
-    if formula.startsWith("=") then formula else s"=$formula"
+    s"=${CellValue.canonicalFormulaText(formula)}"
 
   /**
-   * A cycle found while ordering the closure: the evaluator's own error, with its code. A path
-   * longer than [[MaxCyclePath]] keeps its first [[CycleHead]] cells and its last [[CycleTail]] and
-   * counts the cells between. A 20,000-cell chain would otherwise make a 169 KB message.
+   * A cycle found while ordering the closure, or any other failure the ordering raised: the
+   * evaluator's own error, with its code. A path longer than [[MaxCyclePath]] keeps its first
+   * [[CycleHead]] cells and its last [[CycleTail]] in the diagnostic and counts the cells between;
+   * the typed path is complete. A 20,000-cell chain would otherwise make a 169 KB message.
    */
   private def cyclic(error: EvalError, formula: String): FormulaEvaluationError =
+    val reported = EvalError.toXLError(error, Some(formula))
     error match
-      case EvalError.CircularRef(cycle) if cycle.size > MaxCyclePath =>
-        withReason(error, formula, s"Circular reference detected: ${elided(cycle)}")
-      case _ => FormulaEvaluationError(EvalError.toXLError(error, Some(formula)), cycleOf(error))
+      case EvalError.CircularRef(path) if path.size > MaxCyclePath =>
+        FormulaEvaluationError.Cycle(
+          withReason(reported, s"Circular reference detected: ${elided(path)}"),
+          path
+        )
+      case EvalError.CircularRef(path) => FormulaEvaluationError.Cycle(reported, path)
+      case _ => FormulaEvaluationError.Failed(reported)
 
   /**
-   * `error` as the evaluator reports it, with only the formula error's reason replaced, so any
-   * structured field `toXLError` carries survives.
+   * `reported` with only a formula error's reason replaced, so any structured field `toXLError`
+   * carries survives.
    */
-  private def withReason(
-    error: EvalError,
-    formula: String,
-    reason: String
-  ): FormulaEvaluationError =
-    FormulaEvaluationError(
-      (EvalError.toXLError(error, Some(formula)) match
-        case reported @ XLError.FormulaError(_, _) => reported.copy(reason = reason)
-        case other => other
-      ),
-      cycleOf(error)
-    )
+  private def withReason(reported: XLError, reason: String): XLError = reported match
+    case formulaError @ XLError.FormulaError(_, _) => formulaError.copy(reason = reason)
+    case other => other
 
   /** A cycle path longer than [[MaxCyclePath]], its middle counted. */
   private def elided(cycle: List[ARef]): String =
@@ -100,10 +128,6 @@ private[formula] object FormulaEvaluation:
    * The cells an elided cycle path keeps from its end: the cell that reads the start, the start.
    */
   private val CycleTail = 2
-
-  private def cycleOf(error: EvalError): Option[List[ARef]] = error match
-    case EvalError.CircularRef(path) => Some(path)
-    case _ => None
 
   /**
    * The closure [[precedentsEvaluated]] evaluated: `sheet` with it threaded, the `evaluator` and
@@ -129,34 +153,41 @@ private[formula] object FormulaEvaluation:
       placement.filter(_._2.wasRead) match
         case Some((cell, _)) =>
           Left(
-            withReason(
-              EvalError.CircularRef(List(cell)),
-              formula,
-              s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
-                "at run time (e.g. through INDIRECT, OFFSET, a defined name or another sheet's " +
-                "formula)"
+            FormulaEvaluationError.Cycle(
+              withReason(
+                EvalError.toXLError(EvalError.CircularRef(List(cell)), Some(formula)),
+                s"Circular reference detected: the formula reads its own placement ${cell.toA1} " +
+                  "at run time (e.g. through INDIRECT, OFFSET, a defined name or another sheet's " +
+                  "formula)"
+              ),
+              List(cell)
             )
           )
-        case None => result.left.map(FormulaEvaluationError(_))
+        case None => result.left.map(FormulaEvaluationError.Failed(_))
 
   /**
    * Apply typed overrides and invalidate their cached readers, then visit only the formula's
    * value-read closure. One evaluator carries spill results and the placement guard through the
-   * entire fold and final evaluation. Thread each result into both the sheet and workbook so
-   * own-sheet qualifiers and cross-sheet read-backs see the same temporary values.
+   * entire fold and final evaluation, drawing TODAY/NOW from `clock` and RAND from `rng`. Thread
+   * each result into both the sheet and workbook so own-sheet qualifiers and cross-sheet read-backs
+   * see the same temporary values.
    */
   private def precedentsEvaluated(
     wb: Workbook,
     sheet: Sheet,
     formula: String,
     overrides: Map[ARef, CellValue],
-    at: Option[ARef]
+    at: Option[ARef],
+    clock: Clock,
+    rng: Rng
   ): Result[Evaluated] =
     for
+      // refused before the parse: the CLI refuses the same case first with its own USAGE message,
+      // which names the offending `--with` token, so a CLI user never sees this one
       _ <- at.filter(overrides.contains) match
         case Some(cell) =>
           Left(
-            FormulaEvaluationError(
+            FormulaEvaluationError.Failed(
               XLError.FormulaError(
                 formula,
                 s"An override sets the placement cell ${cell.toA1}, which the formula replaces"
@@ -172,7 +203,7 @@ private[formula] object FormulaEvaluation:
       expr <- FormulaParser
         .parse(formula)
         .left
-        .map(e => FormulaEvaluationError(ParseError.toXLError(e, formula)))
+        .map(e => FormulaEvaluationError.Failed(ParseError.toXLError(e, formula)))
       bounds = tempSheet.usedRange
       reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
       targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
@@ -197,18 +228,18 @@ private[formula] object FormulaEvaluation:
       placedSheet = at.fold(tempSheet)(SheetEvaluator.placed(tempSheet, _, formula))
       book = tempBook.put(placedSheet)
       placement = at.map(cell =>
-        (cell, SheetEvaluator.placement(formula, book, tempSheet.name, cell))
+        (cell, SheetEvaluator.placement(formula, book, tempSheet.name, cell, rng))
       )
       // Spill detection reads the evaluation copy: the supplied sheet and any formula overrides
       // may carry `x#` readers the caller's workbook does not.
-      evaluator = placement.fold(SheetEvaluator.spillTrackingEvaluator(formula, book))(
+      evaluator = placement.fold(SheetEvaluator.spillTrackingEvaluator(formula, book, rng))(
         _._2.evaluator
       )
       start = Evaluated(placedSheet, evaluator, book, placement)
       evaluated <- evalOrder.foldLeft[Result[Evaluated]](Right(start)) { (acc, ref) =>
         acc.flatMap { e =>
           e.checked(
-            SheetEvaluator.evaluateCellUsing(e.sheet, ref, evaluator, Some(e.book)),
+            SheetEvaluator.evaluateCellUsing(e.sheet, ref, evaluator, Some(e.book), clock),
             formula
           ).map { value =>
             val threaded = SheetEvaluator.threadComputed(e.sheet, ref, value)

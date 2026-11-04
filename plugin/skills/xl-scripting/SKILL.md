@@ -110,7 +110,7 @@ sheet.readTypedStrict[BigDecimal](ref"C1")         // 0.20.0: any formula cell â
 
 // Formulas
 // GH-741 (Unreleased): eval --at's closure and cycle protection, with typed overrides
-SheetEvaluator.evaluateAt(wb, sheet, ref"D5", "=SUM(A1:A9)") // Either[FormulaEvaluationError, CellValue]; .left.toOption.flatMap(_.cycle) keeps the path
+SheetEvaluator.evaluateAt(wb, sheet, ref"D5", "=SUM(A1:A9)") // Either[FormulaEvaluationError, CellValue]: Cycle(error, path) | Failed(error); clock/rng params pin TODAY, RAND
 SheetEvaluator.evaluateWithClosure(wb, sheet, "=SUM(A1:A9)") // positionless, same value-read closure
 sheet.put(ref"D2", fx"=B2*C2")                     // compile-time validated literal
 wb.evaluateFormula("=SUM(Sales!A1:A9)", "Summary") // XLResult[CellValue], cross-sheet aware

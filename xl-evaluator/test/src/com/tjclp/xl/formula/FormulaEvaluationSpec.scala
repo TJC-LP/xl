@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula
 
+import java.time.LocalDate
+
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.formula.eval.FormulaEvaluationError
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -205,5 +207,70 @@ class FormulaEvaluationSpec extends FunSuite:
     cycle(
       SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, "ISBLANK(INDIRECT(\"D5\"))"),
       List(at)
+    )
+  }
+
+  test("GH-741: a failure is a Cycle with its complete path or a Failed with the diagnostic") {
+    val book = Workbook(sheet)
+    SheetEvaluator.evaluateAt(book, sheet, at, "D5+1") match
+      case Left(FormulaEvaluationError.Cycle(error, path)) =>
+        assertEquals(path, List(at, at))
+        assert(error.toString.contains("Circular reference detected"), error.toString)
+      case other => fail(s"Expected a cycle, got $other")
+    SheetEvaluator.evaluateAt(book, sheet, at, "=1+") match
+      case Left(failure @ FormulaEvaluationError.Failed(_)) => assertEquals(failure.cycle, None)
+      case other => fail(s"Expected a failure, got $other")
+  }
+
+  test("GH-741: a padded formula is read by the canonical rule every entry point applies") {
+    List("  A1+1", " = A1 + 1 ", "=A1+1").foreach { formula =>
+      assertEquals(
+        SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, formula),
+        Right(number(11)),
+        formula
+      )
+    }
+  }
+
+  test("GH-741: array evaluation applies overrides and invalidates their cached readers") {
+    val source = sheet.put(ref"B1", CellValue.Formula("A1*2", Some(number(20))))
+    val overrides = Map(ref"A1" -> number(100))
+    SheetEvaluator.evaluateArrayWithClosure(
+      Workbook(source),
+      source,
+      "B1*{1;2}",
+      ref"F1",
+      overrides
+    ) match
+      case Right((computed, range)) =>
+        assertEquals(range, ref"F1:F2")
+        assertEquals(
+          List(ref"F1", ref"F2").map(computed(_).value),
+          List(number(200), number(400))
+        )
+      case Left(error) => fail(error.toString)
+  }
+
+  test("GH-741: a fixed clock and a seeded Rng pin TODAY and RAND across the closure") {
+    val source = sheet
+      .put(ref"B1", CellValue.Formula("TODAY()"))
+      .put(ref"C1", CellValue.Formula("RAND()"))
+    val book = Workbook(source)
+    val clock = Clock.fixedDate(LocalDate.of(2026, 11, 4))
+    // the precedent B1 is evaluated under the clock, then read
+    assertEquals(
+      SheetEvaluator.evaluateAt(book, source, at, "B1", clock = clock),
+      source.evaluateFormula("=TODAY()", clock).left.map(FormulaEvaluationError.Failed(_))
+    )
+    // one seeded Rng serves the closure: the first draw, as a direct evaluation draws it
+    def draw(): Either[FormulaEvaluationError, CellValue] =
+      SheetEvaluator.evaluateWithClosure(book, source, "C1", rng = Rng.seeded(7L))
+    assertEquals(draw(), draw())
+    assertEquals(
+      draw(),
+      source
+        .evaluateFormula("=RAND()", Clock.system, Rng.seeded(7L))
+        .left
+        .map(FormulaEvaluationError.Failed(_))
     )
   }

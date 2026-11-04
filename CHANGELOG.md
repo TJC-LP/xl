@@ -169,9 +169,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `SheetEvaluator.evaluateAt(workbook, sheet, at, formula, overrides)` now owns the same
   formula placement, value-read precedent closure, guarded evaluation and cycle checks as
   `xl eval --at`. `evaluateWithClosure` and `evaluateArrayWithClosure` share the positionless
-  closure and spill-tracking evaluator. Typed overrides invalidate their cached readers;
-  `FormulaEvaluationError` retains the existing diagnostic and a full detected cycle path
-  (the placement alone for a run-time read). Spill detection and the placement guard read the
+  closure and spill-tracking evaluator. Typed overrides invalidate their cached readers. A
+  failure is `FormulaEvaluationError.Cycle(error, path)` (the complete path, the placement alone
+  for a read of it computed at run time) or `Failed(error)`, `error` the diagnostic the existing
+  APIs report; `clock` and `rng` parameters, defaulting to the system, pin TODAY/NOW and RAND as
+  `evaluateFormula(formula, clock, rng)` does. Spill detection and the placement guard read the
   evaluation copy (supplied sheet and overrides applied), so `x#` readers that only the supplied
   sheet or an override carries are tracked. CLI output and errors, existing evaluation APIs,
   and the cached cross-sheet limitations tracked in #729 remain unchanged.

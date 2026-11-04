@@ -4,8 +4,6 @@
 
 ## Current State
 
-Library closure evaluation with positioned cycle protection is available through `SheetEvaluator.evaluateAt` (#741).
-
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
@@ -14,6 +12,7 @@ Library closure evaluation with positioned cycle protection is available through
 sheets separately with kind/name/state; they remain unavailable to `-s`. `xl lint` reports macro
 presence and directly associated `Auto_Open` names at severity `info`; `--strict` gates info too.
 `Excel.readMetadata(...).preservedSheets` exposes the same read-only tab metadata.
+- ✅ **Library closure evaluation** (#741) — `SheetEvaluator.evaluateAt`, `evaluateWithClosure` and `evaluateArrayWithClosure` give a script what `xl eval --at` has: the placement, the value-read precedent closure, override invalidation across the book, and a cycle as `FormulaEvaluationError.Cycle` with its complete path; `clock` and `rng` pin TODAY/NOW and RAND. The CLI delegates to them.
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
@@ -284,11 +283,11 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,998 test cases** (full `./mill -i __.test` on the #741 branch merged with main, 2026-11-04, from the JUnit reports): all passed. Counts include skipped cases.
+**10,002 test cases** (full `./mill -i __.test` on the #741 branch merged with main, 2026-11-04, from the JUnit reports): all passed. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4284 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4288 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1963 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
