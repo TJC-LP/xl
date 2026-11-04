@@ -12,11 +12,16 @@ import com.tjclp.xl.workbooks.Workbook
 
 /**
  * A closure evaluation failure: the diagnostic the existing evaluation APIs report and, for a
- * cycle, its complete path. [[Cycle]]: the formula placed at `at` closes a cycle (`path` starts and
- * ends at the placement; a read of the placement computed at run time knows no path, so it holds
- * the placement alone), or the positionless closure holds one. [[Failed]]: any other failure (a
- * parse error, an evaluation failure, an override on the placement). A diagnostic may abbreviate a
- * long path; `path` never does.
+ * cycle, its complete path. [[Cycle]]: the formula placed at `at` closes a cycle through the
+ * closure's static reads (`path` starts and ends at the placement), the static reads of a
+ * positionless closure hold one, or the placement is read at run time (a read computed by INDIRECT,
+ * OFFSET, a name or another sheet's formula knows no path, so `path` holds the placement alone).
+ * [[Failed]]: any other failure: a parse error, an evaluation failure, an override on the
+ * placement. A cycle the static reads cannot see, closing through INDIRECT or OFFSET inside a
+ * precedent, is caught by the evaluator's re-entry guard (#829) while that precedent evaluates and
+ * is a [[Failed]] carrying its `Circular reference through …` diagnostic, which names the cell: no
+ * path is known statically (TODO #751: a structured marker on `EvalError` lets it be a [[Cycle]]).
+ * A diagnostic may abbreviate a long path; `path` never does.
  */
 enum FormulaEvaluationError derives CanEqual:
   case Failed(error: XLError)
@@ -199,6 +204,7 @@ private[formula] object FormulaEvaluation:
       tempBook =
         if overrides.isEmpty then wb.put(applied)
         else uncacheReaders(wb.put(applied), applied.name, overrides.keySet)
+      // always found, `put` placed it; the fallback only keeps the lookup total
       tempSheet = tempBook.sheets.find(_.name == applied.name).getOrElse(applied)
       expr <- FormulaParser
         .parse(formula)

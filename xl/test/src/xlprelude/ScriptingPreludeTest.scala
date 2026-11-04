@@ -20,7 +20,7 @@ class ScriptingPreludeTest extends FunSuite:
     val sheet = Sheet("Data").put(ref"D5", 99).put(ref"A1", 10)
     val book = Workbook(sheet)
     val circular: Either[FormulaEvaluationError, CellValue] =
-      SheetEvaluator.evaluateAt(book, sheet, ref"D5", "=D5+1")
+      SheetEvaluator.evaluateAt(book, sheet, "=D5+1", ref"D5")
     assertEquals(circular.left.toOption.flatMap(_.cycle), Some(List(ref"D5", ref"D5")))
     circular match
       case Left(FormulaEvaluationError.Cycle(_, path)) => assertEquals(path, List(ref"D5", ref"D5"))

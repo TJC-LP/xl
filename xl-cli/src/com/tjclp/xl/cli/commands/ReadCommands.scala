@@ -293,7 +293,7 @@ object ReadCommands:
       result <- IO.fromEither(
         position
           .fold(SheetEvaluator.evaluateWithClosure(wb, sheet, formula, values))(
-            SheetEvaluator.evaluateAt(wb, sheet, _, formula, values)
+            SheetEvaluator.evaluateAt(wb, sheet, formula, _, values)
           )
           .left
           .map(e => XLException(e.error))

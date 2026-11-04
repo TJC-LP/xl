@@ -61,7 +61,7 @@ val total = sheet.evaluateFormula("=SUM(D2:D4)")
 println(s"  ✓ Total revenue: $total")
 
 // One-off formula as a plain cell, with the CLI's closure and cycle checks (GH-741)
-val positioned = SheetEvaluator.evaluateAt(wb, sheet, ref"G5", "=SUM(D2:D4)")
+val positioned = SheetEvaluator.evaluateAt(wb, sheet, "=SUM(D2:D4)", ref"G5")
 println(s"  ✓ Positioned total: $positioned")
 
 // ========== 5. Typed extraction: readTyped returns Either[CodecError, Option[A]] ==========

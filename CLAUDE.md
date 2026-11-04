@@ -57,7 +57,7 @@ Excel.write(Workbook(sheet), "output.xlsx")
 
 // Formula evaluation (when xl-evaluator is a dependency)
 sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method (position-only if currentCell supplied)
-SheetEvaluator.evaluateAt(Workbook(sheet), sheet, ref"D5", "=A1*2") // Closure + placement/cycle checks
+SheetEvaluator.evaluateAt(Workbook(sheet), sheet, "=A1*2", ref"D5") // Closure + placement/cycle checks
 FormulaParser.parse("=SUM(A1:A10)") // Parser at package level
 
 // Display formatting
@@ -101,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,002)
+./mill __.test             # Run all tests (10,003)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -335,7 +335,7 @@ All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtM
 - ❌ Error: `null`, `.get` on Try/Either
 - ⚠️ Warning: `.head/.tail` on collections, `.get` on Option, `var`/`while`/`return` (acceptable in tests/macros)
 
-**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`
+**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`. The one exception is the closure evaluation API (`SheetEvaluator.evaluateAt` and its positionless forms), whose Left is `FormulaEvaluationError`: the `XLError` plus the typed cycle path; `.left.map(_.error)` recovers the `XLResult`.
 
 ## Architecture Patterns
 
@@ -422,12 +422,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,002 tests** by module: xl-evaluator (4288), xl-core (1875), xl-ooxml (1446), xl-cli (1963), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,003 tests** by module: xl-evaluator (4289), xl-core (1875), xl-ooxml (1446), xl-cli (1963), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,002 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,003 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

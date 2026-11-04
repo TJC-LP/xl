@@ -22,7 +22,7 @@ class FormulaEvaluationSpec extends FunSuite:
 
   test("GH-741: placement refuses its old value, including own-sheet qualified reads") {
     List("=D5+1", "=Data!D5+1").foreach { formula =>
-      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, formula), List(at, at))
+      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at), List(at, at))
     }
     assertEquals(sheet(at).value, number(99))
   }
@@ -32,7 +32,7 @@ class FormulaEvaluationSpec extends FunSuite:
       .put(ref"B1", CellValue.Formula("C1*2"))
       .put(ref"C1", CellValue.Formula("D5"))
     cycle(
-      SheetEvaluator.evaluateAt(Workbook(source), source, at, "B1+1"),
+      SheetEvaluator.evaluateAt(Workbook(source), source, "B1+1", at),
       List(at, ref"B1", ref"C1", at)
     )
   }
@@ -42,12 +42,12 @@ class FormulaEvaluationSpec extends FunSuite:
       .put(ref"A1", CellValue.Formula("B1+1"))
       .put(ref"B1", CellValue.Formula("SUM(D:D)"))
     cycle(
-      SheetEvaluator.evaluateAt(Workbook(source), source, at, "A1"),
+      SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at),
       List(at, ref"A1", ref"B1", at)
     )
     val empty = Sheet("Empty")
     cycle(
-      SheetEvaluator.evaluateAt(Workbook(empty), empty, ref"XFD1048576", "SUM(XFD:XFD)"),
+      SheetEvaluator.evaluateAt(Workbook(empty), empty, "SUM(XFD:XFD)", ref"XFD1048576"),
       List(ref"XFD1048576", ref"XFD1048576")
     )
   }
@@ -59,15 +59,15 @@ class FormulaEvaluationSpec extends FunSuite:
     "SUM(OFFSET(A1,0,3,9,1))"
   ).foreach { formula =>
     test(s"GH-741: runtime guard survives swallowed failures: $formula") {
-      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, formula), List(at))
+      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at), List(at))
     }
   }
 
   test("GH-741: runtime guard also checks precedent evaluations and uncached cross-sheet reads") {
     val source = sheet.put(ref"C1", CellValue.Formula("IFERROR(INDIRECT(\"D5\"),0)"))
-    cycle(SheetEvaluator.evaluateAt(Workbook(source), source, at, "C1+1"), List(at))
+    cycle(SheetEvaluator.evaluateAt(Workbook(source), source, "C1+1", at), List(at))
     val other = Sheet("Other").put(ref"A1", CellValue.Formula("Data!D5*2"))
-    cycle(SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, at, "Other!A1"), List(at))
+    cycle(SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, "Other!A1", at), List(at))
   }
 
   List(
@@ -92,7 +92,7 @@ class FormulaEvaluationSpec extends FunSuite:
           )
         )
       )
-      cycle(SheetEvaluator.evaluateAt(book, sheet, at, formula), List(at))
+      cycle(SheetEvaluator.evaluateAt(book, sheet, formula, at), List(at))
     }
   }
 
@@ -103,7 +103,7 @@ class FormulaEvaluationSpec extends FunSuite:
       .put(ref"F1", CellValue.Formula("F1")) // unrelated cycle is never visited
     val book = Workbook(source)
     val overrides = Map(ref"A1" -> number(200))
-    assertEquals(SheetEvaluator.evaluateAt(book, source, at, "C1", overrides), Right(number(450)))
+    assertEquals(SheetEvaluator.evaluateAt(book, source, "C1", at, overrides), Right(number(450)))
     assertEquals(
       SheetEvaluator.evaluateWithClosure(book, source, "C1", overrides),
       Right(number(450))
@@ -119,7 +119,7 @@ class FormulaEvaluationSpec extends FunSuite:
     val book = Workbook(sheet, other)
     val overrides = Map(ref"A1" -> number(200))
     assertEquals(
-      SheetEvaluator.evaluateAt(book, sheet, at, "Other!A2", overrides),
+      SheetEvaluator.evaluateAt(book, sheet, "Other!A2", at, overrides),
       Right(number(401))
     )
     assertEquals(
@@ -131,7 +131,7 @@ class FormulaEvaluationSpec extends FunSuite:
   test("GH-741: positioned implicit intersection differs from positionless array evaluation") {
     val source = sheet.put(ref"A5", 3).put(ref"B5", 4).put(ref"B1", 2)
     assertEquals(
-      SheetEvaluator.evaluateAt(Workbook(source), source, at, "SUM(A1:A5*B1:B5)"),
+      SheetEvaluator.evaluateAt(Workbook(source), source, "SUM(A1:A5*B1:B5)", at),
       Right(number(12))
     )
     assertEquals(
@@ -157,9 +157,9 @@ class FormulaEvaluationSpec extends FunSuite:
 
   test("GH-741: existing placement content is replaced, even a broken formula") {
     val source = sheet.put(at, CellValue.Formula("NOT_A_FUNCTION(1)"))
-    assertEquals(SheetEvaluator.evaluateAt(Workbook(source), source, at, "A1+1"), Right(number(11)))
+    assertEquals(SheetEvaluator.evaluateAt(Workbook(source), source, "A1+1", at), Right(number(11)))
     assert(
-      SheetEvaluator.evaluateAt(Workbook(source), source, at, "1", Map(at -> number(2))).isLeft
+      SheetEvaluator.evaluateAt(Workbook(source), source, "1", at, Map(at -> number(2))).isLeft
     )
   }
 
@@ -174,7 +174,7 @@ class FormulaEvaluationSpec extends FunSuite:
       s.put(ARef.from0(0, row - 1), CellValue.Formula(if row == 20 then "D5" else s"A${row + 1}"))
     }
     val expected = at :: (1 to 20).map(row => ARef.from0(0, row - 1)).toList ::: List(at)
-    val result = SheetEvaluator.evaluateAt(Workbook(source), source, at, "A1")
+    val result = SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at)
     cycle(result, expected)
     assert(result.left.exists(_.error.toString.contains("more")), result.toString)
   }
@@ -182,7 +182,7 @@ class FormulaEvaluationSpec extends FunSuite:
   test("GH-741: parser errors retain their diagnostic and have no cycle") {
     val formula = "=1+"
     val expected = FormulaParser.parse(formula).left.toOption.map(ParseError.toXLError(_, formula))
-    val result = SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, formula)
+    val result = SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at)
     assertEquals(result.left.toOption.map(_.error), expected)
     assertEquals(result.left.toOption.flatMap(_.cycle), None)
   }
@@ -190,7 +190,7 @@ class FormulaEvaluationSpec extends FunSuite:
   test("GH-741: cached cross-sheet cycle gap remains scoped to GH-729") {
     val other = Sheet("Other").put(ref"A1", CellValue.Formula("Data!D5*2", Some(number(14))))
     assertEquals(
-      SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, at, "Other!A1"),
+      SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, "Other!A1", at),
       Right(number(14))
     )
   }
@@ -205,27 +205,42 @@ class FormulaEvaluationSpec extends FunSuite:
 
   test("GH-741: ISBLANK preserves the existing guard on an indirect placement read") {
     cycle(
-      SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, "ISBLANK(INDIRECT(\"D5\"))"),
+      SheetEvaluator.evaluateAt(Workbook(sheet), sheet, "ISBLANK(INDIRECT(\"D5\"))", at),
       List(at)
     )
   }
 
   test("GH-741: a failure is a Cycle with its complete path or a Failed with the diagnostic") {
     val book = Workbook(sheet)
-    SheetEvaluator.evaluateAt(book, sheet, at, "D5+1") match
+    SheetEvaluator.evaluateAt(book, sheet, "D5+1", at) match
       case Left(FormulaEvaluationError.Cycle(error, path)) =>
         assertEquals(path, List(at, at))
         assert(error.toString.contains("Circular reference detected"), error.toString)
       case other => fail(s"Expected a cycle, got $other")
-    SheetEvaluator.evaluateAt(book, sheet, at, "=1+") match
+    SheetEvaluator.evaluateAt(book, sheet, "=1+", at) match
       case Left(failure @ FormulaEvaluationError.Failed(_)) => assertEquals(failure.cycle, None)
       case other => fail(s"Expected a failure, got $other")
+  }
+
+  test("GH-741: a cycle the static reads cannot see is Failed with the evaluator's diagnostic") {
+    // A1 closes on itself through INDIRECT: no static read, so ordering the closure finds no
+    // cycle; the evaluator's re-entry guard (#829) catches it while A1 evaluates as a precedent,
+    // and the diagnostic names the cell. TODO #751: a structured marker makes it a Cycle.
+    val source = sheet.put(ref"A1", CellValue.Formula("INDIRECT(\"A1\")"))
+    List(
+      SheetEvaluator.evaluateWithClosure(Workbook(source), source, "A1"),
+      SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at)
+    ).foreach {
+      case Left(FormulaEvaluationError.Failed(error)) =>
+        assert(error.toString.contains("Circular reference through Data!A1"), error.toString)
+      case other => fail(s"Expected the re-entry diagnostic, got $other")
+    }
   }
 
   test("GH-741: a padded formula is read by the canonical rule every entry point applies") {
     List("  A1+1", " = A1 + 1 ", "=A1+1").foreach { formula =>
       assertEquals(
-        SheetEvaluator.evaluateAt(Workbook(sheet), sheet, at, formula),
+        SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at),
         Right(number(11)),
         formula
       )
@@ -259,7 +274,7 @@ class FormulaEvaluationSpec extends FunSuite:
     val clock = Clock.fixedDate(LocalDate.of(2026, 11, 4))
     // the precedent B1 is evaluated under the clock, then read
     assertEquals(
-      SheetEvaluator.evaluateAt(book, source, at, "B1", clock = clock),
+      SheetEvaluator.evaluateAt(book, source, "B1", at, clock = clock),
       source.evaluateFormula("=TODAY()", clock).left.map(FormulaEvaluationError.Failed(_))
     )
     // one seeded Rng serves the closure: the first draw, as a direct evaluation draws it

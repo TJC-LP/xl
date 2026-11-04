@@ -1,10 +1,9 @@
 package com.tjclp.xl.formula
 
-import munit.FunSuite
-
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.FormulaEvaluationError
+import munit.FunSuite
 
 class PositionedReferenceInspectionSpec extends FunSuite:
   private def evaluate(book: Workbook, sheet: Sheet, formula: String, at: String) =
@@ -12,7 +11,7 @@ class PositionedReferenceInspectionSpec extends FunSuite:
       .parse(at)
       .left
       .map(e => FormulaEvaluationError.Failed(com.tjclp.xl.error.XLError.Other(e.toString)))
-      .flatMap(cell => SheetEvaluator.evaluateAt(book, sheet, cell, formula))
+      .flatMap(cell => SheetEvaluator.evaluateAt(book, sheet, formula, cell))
 
   private val sheet = Sheet("S").put(ref"D5", CellValue.Number(BigDecimal(99)))
   private val wb = Workbook(sheet)

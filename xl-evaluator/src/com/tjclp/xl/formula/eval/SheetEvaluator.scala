@@ -56,8 +56,11 @@ object SheetEvaluator:
    *
    * Unlike `evaluateFormula(..., currentCell = Some(at))`, this includes closure and cycle
    * orchestration. A failure is [[FormulaEvaluationError.Cycle]], the existing XLError with the
-   * complete path, or [[FormulaEvaluationError.Failed]] with the XLError alone. `clock` and `rng`
-   * are what TODAY/NOW and RAND/RANDBETWEEN draw from, in the closure and in the formula, as for
+   * complete path, or [[FormulaEvaluationError.Failed]] with the XLError alone: the Left is not an
+   * `XLError` so a cycle keeps its typed path, and `.left.map(_.error)` is the `XLResult`. The
+   * formula comes first and the cell after, as `xl eval <formula> --at <ref>` reads them and as
+   * `evaluateArrayWithClosure(…, formula, origin, …)` does. `clock` and `rng` are what TODAY/NOW
+   * and RAND/RANDBETWEEN draw from, in the closure and in the formula, as for
    * `evaluateFormula(formula, clock, rng)`; one `rng` serves the whole evaluation, so a seeded one
    * makes it reproducible. Static closure analysis is conservative over ranges. Cached cross-sheet
    * cycles and indirect record-inspection cycles remain outside this API's guarantees (GH-729),
@@ -66,8 +69,8 @@ object SheetEvaluator:
   def evaluateAt(
     workbook: Workbook,
     sheet: Sheet,
-    at: ARef,
     formula: String,
+    at: ARef,
     overrides: Map[ARef, CellValue] = Map.empty,
     clock: Clock = Clock.system,
     rng: Rng = Rng.system

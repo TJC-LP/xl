@@ -1,12 +1,11 @@
 package com.tjclp.xl.formula.eval
 
-import munit.{FunSuite, ScalaCheckSuite}
-import org.scalacheck.Gen
-import org.scalacheck.Prop.forAllNoShrink
-
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
+import munit.{FunSuite, ScalaCheckSuite}
+import org.scalacheck.Gen
+import org.scalacheck.Prop.forAllNoShrink
 
 /**
  * GH-715: `--with`'s stale-reader search (`FormulaEvaluation.uncacheReaders`) indexes formulas by

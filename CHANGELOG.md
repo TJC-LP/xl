@@ -166,7 +166,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **Library closure evaluation with placement protection** (#741):
-  `SheetEvaluator.evaluateAt(workbook, sheet, at, formula, overrides)` now owns the same
+  `SheetEvaluator.evaluateAt(workbook, sheet, formula, at, overrides)` (the formula first, the cell
+  after, as `xl eval <formula> --at <ref>` reads them) now owns the same
   formula placement, value-read precedent closure, guarded evaluation and cycle checks as
   `xl eval --at`. `evaluateWithClosure` and `evaluateArrayWithClosure` share the positionless
   closure and spill-tracking evaluator. Typed overrides invalidate their cached readers. A

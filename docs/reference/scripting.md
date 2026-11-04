@@ -667,7 +667,9 @@ as a formula typed into a new Excel 365 cell (top-left of its array); pass
 ([#715](https://github.com/TJC-LP/xl/issues/715)). This low-level API does not place the formula
 or check its precedent closure for cycles.
 
-For the full `xl eval --at` behavior, use `SheetEvaluator.evaluateAt` (GH-741):
+For the full `xl eval --at` behavior, use `SheetEvaluator.evaluateAt` (GH-741; unreleased, in the
+release after 0.25.0, which the snippet's pin follows). The formula comes first, the cell after, as
+`xl eval <formula> --at <ref>` reads them:
 
 ```scala
 //> using scala 3.9.0
@@ -676,9 +678,9 @@ import com.tjclp.xl.scripting.{*, given}
 
 val data = Sheet("Data").put(ref"A1", 10).put(ref"D5", 99)
 val book = Workbook(data)
-val answer = SheetEvaluator.evaluateAt(book, data, ref"D5", "=A1*2",
+val answer = SheetEvaluator.evaluateAt(book, data, "=A1*2", ref"D5",
   Map(ref"A1" -> CellValue.Number(BigDecimal(20)))) // Right(Number(40)); book is unchanged
-val circular = SheetEvaluator.evaluateAt(book, data, ref"D5", "=D5+1")
+val circular = SheetEvaluator.evaluateAt(book, data, "=D5+1", ref"D5")
 val path = circular.left.toOption.flatMap(_.cycle) // Some(List(D5, D5))
 ```
 

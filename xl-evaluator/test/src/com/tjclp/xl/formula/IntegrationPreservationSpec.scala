@@ -23,14 +23,14 @@ class IntegrationPreservationSpec extends FunSuite:
 
   test("GH-802/GH-741: position-dependent INDEX cannot hide a placement cycle") {
     val data = Sheet("Data").put(ref"A1", n(1)).put(ref"A2", n(2)).put(ref"A3", n(3))
-    val result = SheetEvaluator.evaluateAt(Workbook(data), data, ref"A3", "INDEX(A1:A3,ROW())")
+    val result = SheetEvaluator.evaluateAt(Workbook(data), data, "INDEX(A1:A3,ROW())", ref"A3")
     assert(result.left.exists(_.cycle.nonEmpty), result.toString)
   }
 
   test("GH-802/GH-741: a positioned INDEX reading the previous row is not circular") {
     val data = Sheet("Data").put(ref"A1", n(1)).put(ref"A2", n(2)).put(ref"A3", n(3))
     assertEquals(
-      SheetEvaluator.evaluateAt(Workbook(data), data, ref"A3", "INDEX(A1:A3,ROW()-1)"),
+      SheetEvaluator.evaluateAt(Workbook(data), data, "INDEX(A1:A3,ROW()-1)", ref"A3"),
       Right(n(2))
     )
   }
@@ -48,7 +48,7 @@ class IntegrationPreservationSpec extends FunSuite:
   test("GH-741: a typed override cannot replace the placement cell") {
     val source = Sheet("Data").put(ref"A1", n(1))
     val result =
-      SheetEvaluator.evaluateAt(Workbook(source), source, ref"D5", "A1", Map(ref"D5" -> n(2)))
+      SheetEvaluator.evaluateAt(Workbook(source), source, "A1", ref"D5", Map(ref"D5" -> n(2)))
     assert(
       result.left.exists(e =>
         e.cycle.isEmpty && e.error.toString.contains("override sets the placement cell D5")
