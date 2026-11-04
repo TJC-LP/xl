@@ -517,14 +517,72 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
       val matching = (0 until n).filter(i =>
         built.forall((s, c, q, _) => CriteriaMatcher.matches(s.valueAt(c.offset + i), q))
       )
+      // `smallest` counts rows, as the index must (#842): a row holding both keys of a two-key
+      // lookup sits in two posting lists and counts once
       val smallest = built.map((s, c, _, keys) => (0 until n).count(selected(s, keys, c.offset, _)))
-      result match
-        case Some(offsets) =>
-          Prop(offsets.toVector == model.toVector) :| s"$offsets != $model" &&
-          Prop(matching.forall(offsets.contains)) :| "a matching offset is missing"
-        // the call tests every offset: allowed only when listing would not pay
-        case None =>
-          Prop(smallest.forall(_ > n / 2)) :| s"no candidates although $smallest <= ${n / 2}"
+      // ScalaCheck shrinks `n` toward 0, below `Gen.choose(1, 70)`: an empty window lists nothing
+      if n <= 0 then Prop(result.isEmpty) :| s"candidates for an empty window: $result"
+      else
+        result match
+          case Some(offsets) =>
+            Prop(offsets.toVector == model.toVector) :| s"$offsets != $model" &&
+            Prop(matching.forall(offsets.contains)) :| "a matching offset is missing" &&
+            Prop(
+              smallest.exists(_ <= n / 2)
+            ) :| s"listed although every selection $smallest > ${n / 2}"
+          // the call tests every offset: allowed only when listing would not pay
+          case None =>
+            Prop(smallest.forall(_ > n / 2)) :| s"no candidates although $smallest <= ${n / 2}"
+    }
+  }
+
+  test("#842: a row holding both keys of a two-key lookup counts once when a window is sized") {
+    // law-fuzz seeds oxMfMJdaLCenWXMfVJO0ur4nU8VyTSKgFZWQKehj0KN= and
+    // LeBF8XLI3xA3Zx7f3ppFJN2XR8dx8EdAwAkJRoanbbB=: a lookup for the text "1" reads the Text("1")
+    // and Num(1) lists, and a cell holding "1" sits in both; summing the lists counted it twice
+    val keys = CriteriaKeys.lookup(CriteriaMatcher.parse(ExprValue.Text("1"))).getOrElse(Nil)
+    assertEquals(keys.length, 2)
+    val s = slice(
+      4,
+      4,
+      Vector(CellValue.Text("1"), CellValue.Bool(false), CellValue.Empty, CellValue.Text("1"))
+    )
+    // the window is rows 6..7 (Empty, "1"): one distinct row, half of two; it was refused
+    assertEquals(
+      CriteriaCandidates
+        .compute(List(CriteriaCandidates.Pair(EqIndex.build(s), keys, 6)), 2)
+        .map(_.toVector),
+      Some(Vector(1))
+    )
+    // two such rows in a two-row window are more than half: still a scan
+    val dense = slice(0, 0, Vector(CellValue.Text("1"), CellValue.Text("1")))
+    assertEquals(
+      CriteriaCandidates.compute(List(CriteriaCandidates.Pair(EqIndex.build(dense), keys, 0)), 2),
+      None
+    )
+    // an empty window lists nothing
+    assertEquals(
+      CriteriaCandidates.compute(List(CriteriaCandidates.Pair(EqIndex.build(dense), keys, 0)), 0),
+      None
+    )
+  }
+
+  property("#842: a selection is sized distinctly, exact up to the bound it is compared with") {
+    // posting lists built from the slice, sized against every window and bound: below the bound
+    // the count is the distinct rows in the window; above it, any count past the bound (one list
+    // is counted whole by binary search, several stop one past the bound)
+    Prop.forAll(genColumn, Gen.choose(1, 70), Gen.choose(0, 40)) { (c, n, limit) =>
+      val index = EqIndex.build(slice(0, c.r0, c.values))
+      val keys = CriteriaKeys.lookup(CriteriaMatcher.parse(ExprValue.Text("1"))).getOrElse(Nil)
+      val lists = index.postings(keys)
+      val distinct = (0 until n).count { i =>
+        CriteriaKeys.cellKeys(slice(0, c.r0, c.values).valueAt(c.offset + i)) match
+          case CriteriaKeys.CellKeys.Residual => true
+          case other => keysOf(other).exists(_.exists(keys.contains))
+      }
+      val size = CriteriaCandidates.selectionSize(lists, c.offset, n, limit)
+      Prop(math.min(size, limit + 1) == math.min(distinct, limit + 1)) :|
+        s"size $size, distinct $distinct, limit $limit"
     }
   }
 

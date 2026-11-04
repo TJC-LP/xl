@@ -625,7 +625,9 @@ budget, and `cycles` names the offender); one pass reaches the workbook's **glob
 `recalculate(IterativeCalc)` is idempotent on a converged book and re-solving a cached circular
 book is safe (it was not before 0.20.0); and one iterative recalculation is one volatile
 generation — `TODAY()`/`NOW()` agree inside the fixpoints and in the acyclic cells between them.
-Dynamic (INDIRECT/OFFSET) cycles are still invisible to Tarjan and are not covered by `converged`.
+Dynamic (INDIRECT/OFFSET) cycles are still invisible to Tarjan and are not covered by `converged`;
+they fail at evaluation as `Circular reference through <cell>: …`, caught at the first re-entry into
+a cell whose evaluation is in progress, the same on every run and stack (#829).
 
 Also since 0.20.0, cycle members **warm-start from their loaded cached number** (0 for every other
 shape, and as the fallback), matching Excel — a book already at its fixpoint re-solves to itself in

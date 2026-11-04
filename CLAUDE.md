@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,914)
+./mill __.test             # Run all tests (9,939)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -116,7 +116,7 @@ make install-jar           # Portable: assembly JAR + wrapper → ~/.local/bin/x
 
 `.mill-jvm-version` pins Temurin 25 and `.mill-version` pins Mill 1.1.5; the `./mill` launcher downloads both through Coursier. The only prerequisites are `bash`, `curl`, and network access to GitHub and Maven Central. Never install a JDK by hand to satisfy the build, and never edit `javacOptions` to fit the local JDK. A fresh checkout downloads dependencies on its first build: give `./mill` a 600000 ms timeout.
 
-### Remote sessions (Claude Code on the web, routines, `@claude` in GitHub Actions)
+### Remote sessions (Claude Code on the web, routines, `@claude` mentions on GitHub)
 
 The sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli or GraalVM. `.claude/settings.json` runs `scripts/remote-setup.sh` on SessionStart; when `CLAUDE_CODE_REMOTE=true` it provisions JDK 25 and scala-cli through Coursier, exports `JAVA_HOME`/`PATH` for the session, and prints a summary into context. There, `make install-jar` replaces `make install`, worktrees and `gtr` are unnecessary (the sandbox clone is isolated), and personal memory is absent: everything a session must know lives in this file, `.claude/rules/`, and `.claude/skills/`. Details, the environment setup script, and a Docker rehearsal: `docs/reference/remote-sessions.md`.
 
@@ -421,12 +421,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,914 tests** by module: xl-evaluator (4193), xl-core (1875), xl-ooxml (1447), xl-cli (1970), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**9,939 tests** by module: xl-evaluator (4218), xl-core (1875), xl-ooxml (1446), xl-cli (1971), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,914 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 9,939 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

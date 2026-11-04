@@ -63,9 +63,9 @@ private[formula] object RecalcCounters:
 
   /**
    * What a pass counts. The legacy graph (`RecalcEngine.Legacy`) has no virtual or range nodes and
-   * does not count `GraphWork`. Every criteria call counts once as `CriteriaIndexed` or
-   * `CriteriaScan`; a call with no indexed criterion also counts once as `CriteriaWindowOnly` or
-   * `CriteriaNotIndexable`.
+   * does not count `GraphWork`; only it counts `RangeLookups` and `RangeLookupWork`. Every criteria
+   * call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed criterion also
+   * counts once as `CriteriaWindowOnly` or `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -85,6 +85,20 @@ private[formula] object RecalcCounters:
      * reachability walks (blocked cells, the dynamic bucket, invalidation). 0 for the legacy graph.
      */
     case GraphWork
+
+    /**
+     * Distinct (sheet, range) lookups the per-cell formula graph (`RecalcEngine.Legacy`, targeted
+     * recalculation) resolved against its formula-cell index: one per memo miss, so every formula
+     * sharing a driver range costs one (GH-522). 0 for the compact graph.
+     */
+    case RangeLookups
+
+    /**
+     * Index entries those lookups examined: every column and row position the binary-searched walk
+     * read, the first one past the range included. Linear in the lookups plus the formula cells
+     * found, never in the sheet's formulas (#743). 0 for the compact graph.
+     */
+    case RangeLookupWork
 
     /** Criteria calls that tested only the candidate rows of the equality index. */
     case CriteriaIndexed

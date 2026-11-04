@@ -193,6 +193,10 @@ class RangeOperatorSpec extends FunSuite:
     refused("=A1:\"x\"") match
       case ParseError.InvalidCellRef("A1:", 0, _) => ()
       case other => fail(s"A1:\"x\": $other")
+    // #841: the end token is read whole, so a refused end is named whole (it was `A1:3`)
+    refused("=A1:3_x") match
+      case ParseError.InvalidCellRef("A1:3_x", 0, _) => ()
+      case other => fail(s"A1:3_x: $other")
     for formula <- List(
         "=1:A1",
         "=\"x\":A1",
