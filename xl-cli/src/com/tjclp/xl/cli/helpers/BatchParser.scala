@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.SheetCommands
+import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -451,6 +451,9 @@ object BatchParser:
             // `--dry-run` refuses the same text the write would
             def parseable(formula: String, slot: Option[String]): String =
               val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
+              ValueParser.storedFormulaLengthError(formula).foreach { error =>
+                throw unparseableFormula(idx, slot, error, fullFormula)
+              }
               FormulaParser.parse(fullFormula) match
                 case Right(_) => formula
                 case Left(e) => throw unparseableFormula(idx, slot, e, fullFormula)
@@ -748,15 +751,15 @@ object BatchParser:
     error: ParseError,
     fullFormula: String
   ): CliException =
-    val heading = s"Object ${idx + 1} (putf)${slot.fold("")(" " + _)}: the formula does not parse"
-    val diagnostic = FormulaEcho.diagnostic(error, fullFormula)
+    val prefix = s"Object ${idx + 1} (putf)${slot.fold("")(" " + _)}: "
+    val diagnostic = WriteCommands.unparseableFormula(error, fullFormula, prefix)
     val candidates = error match
       case ParseError.UnknownFunction(_, _, suggestions) => suggestions.toVector
       case _ => Vector.empty
     CliException(
       CliError(
         ErrorCode.BATCH_OP_INVALID,
-        s"$heading\n$diagnostic",
+        diagnostic,
         candidates = candidates,
         location = at(idx)
       )

@@ -212,6 +212,15 @@ object StreamingWriteCommands:
   private def parsedFormula(text: String, prefix: String = ""): IO[(String, TExpr[?])] =
     val formula = CellValue.canonicalFormulaText(text)
     val fullFormula = s"=$formula"
+    ValueParser.storedFormulaLengthError(formula) match
+      case Some(error) => IO.raiseError(WriteCommands.formulaError(error, fullFormula, prefix))
+      case None => parsedFormulaWithinLimit(formula, fullFormula, prefix)
+
+  private def parsedFormulaWithinLimit(
+    formula: String,
+    fullFormula: String,
+    prefix: String
+  ): IO[(String, TExpr[?])] =
     FormulaParser.parse(fullFormula) match
       case Right(expr) => IO.pure(formula -> expr)
       case Left(e) => IO.raiseError(WriteCommands.formulaError(e, fullFormula, prefix))
