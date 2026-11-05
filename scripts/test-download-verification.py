@@ -43,8 +43,14 @@ class DownloadVerificationTest(unittest.TestCase):
         self.assertIn('No committed checksum', result.stderr)
 
     def test_installer_preserves_existing_binary_on_bad_or_missing_manifest(self):
+        platforms = [('Linux', 'linux-amd64'), ('MINGW64_NT-10.0', 'windows-amd64.exe'),
+                     ('MSYS_NT-10.0', 'windows-amd64.exe'), ('CYGWIN_NT-10.0', 'windows-amd64.exe')]
+        for system, asset in platforms:
+            self.check_installer_platform(system, asset)
+
+    def check_installer_platform(self, system, asset):
         for mode in ('valid', 'bad', 'missing', 'duplicate'):
-            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+            with self.subTest(system=system, mode=mode), tempfile.TemporaryDirectory() as td:
                 temp = Path(td)
                 mocks = temp / 'bin'; mocks.mkdir()
                 target = temp / 'install'; target.mkdir()
@@ -52,12 +58,12 @@ class DownloadVerificationTest(unittest.TestCase):
                 payload = b'synthetic new binary'
                 (temp / 'payload').write_bytes(payload)
                 digest = hashlib.sha256(payload).hexdigest()
-                manifest = digest + '  xl-0.0.0-linux-amd64\n'
-                if mode == 'bad': manifest = '0' * 64 + '  xl-0.0.0-linux-amd64\n'
+                manifest = digest + f'  xl-0.0.0-{asset}\n'
+                if mode == 'bad': manifest = '0' * 64 + f'  xl-0.0.0-{asset}\n'
                 if mode == 'missing': manifest = ''
                 if mode == 'duplicate': manifest += manifest
                 (temp / 'manifest').write_text(manifest)
-                (mocks / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo Linux;; -m) echo x86_64;; esac\n')
+                (mocks / 'uname').write_text('#!/bin/sh\ncase "$1" in -s) echo ' + system + ';; -m) echo x86_64;; esac\n')
                 (mocks / 'curl').write_text('#!/bin/sh\ncase "$2" in */SHA256SUMS) cp "$XL_TEST_FIXTURES/manifest" "$4";; *) cp "$XL_TEST_FIXTURES/payload" "$4";; esac\n')
                 for file in mocks.iterdir(): file.chmod(0o755)
                 script = temp / 'installer.sh'

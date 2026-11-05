@@ -7,6 +7,7 @@ case "$(uname -s)-$(uname -m)" in
   Linux-aarch64) PLATFORM=linux-arm64 ;;
   Darwin-x86_64) PLATFORM=darwin-amd64 ;;
   Darwin-arm64) PLATFORM=darwin-arm64 ;;
+  MINGW*-*|MSYS*-*|CYGWIN*-*) PLATFORM=windows-amd64.exe ;;
   *) echo "Unsupported platform; use the verified JAR distribution" >&2; exit 1 ;;
 esac
 BINARY="xl-${VERSION}-${PLATFORM}"
