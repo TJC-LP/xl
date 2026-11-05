@@ -32,6 +32,27 @@ class OoxmlRoundTripSpec extends FunSuite:
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
+  test("GH-526: adopted source-free sheet retains cell style through source-backed write") {
+    val destinationPath = tempDir.resolve("adoption-source.xlsx")
+    XlsxWriter.write(Workbook("Destination"), destinationPath).fold(e => fail(e.message), identity)
+    val destination = XlsxReader.read(destinationPath).fold(e => fail(e.message), identity)
+    val portable = com.tjclp.xl.sheets
+      .Sheet("Portable")
+      .put(ref"A1", 42)
+      .style(ref"A1", CellStyle.default.bold)
+    val source = Workbook(portable)
+    val adopted = destination.adopt(portable, from = source).fold(e => fail(e.message), identity)
+    val output = tempDir.resolve("adoption-result.xlsx")
+    XlsxWriter.write(adopted, output).fold(e => fail(e.message), identity)
+    val read = XlsxReader.read(output).fold(e => fail(e.message), identity)
+    val sheet = read.sheets.find(_.name == portable.name).getOrElse(fail("Missing adopted sheet"))
+    assertEquals(sheet(ref"A1").value, portable(ref"A1").value)
+    assertEquals(
+      sheet(ref"A1").styleId.flatMap(sheet.styleRegistry.get),
+      portable(ref"A1").styleId.flatMap(portable.styleRegistry.get)
+    )
+  }
+
   test("Minimal workbook: write and read back") {
     // Create minimal workbook
     val wb = Workbook("Test")

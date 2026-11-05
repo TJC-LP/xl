@@ -63,6 +63,23 @@ final case class Workbook(
         apply(sheetName).map(sheet => sheet.getRange(range))
 
   /**
+   * Adopt an unchanged sheet from `from` without silently rebinding external-workbook ordinals
+   * (GH-526). Unlike [[put]], this is an add-only, fallible preservation guard. The sheet must be a
+   * member of the supplied source workbook, compared by value including styles and properties.
+   *
+   * This first slice accepts source-free, fully modeled sheets with no external ordinal formulas,
+   * tables, drawings, conditional formats or validations. Foreign source-backed sheets are refused:
+   * their opaque parts and workbook-scoped style context cannot yet be migrated safely. Names are
+   * compared case-insensitively and collisions are refused. An identical source/destination
+   * workbook is a no-op only after membership validation; edited sheets are never discarded.
+   *
+   * No formula/name rewriting, link-table merging or cached-value materialization is performed.
+   * Ordinary formula dependencies remain the caller's responsibility. Raw put/update are unchanged.
+   */
+  def adopt(sheet: Sheet, from: Workbook): XLResult[Workbook] =
+    SheetAdoption.adopt(this, sheet, from)
+
+  /**
    * Put sheet (add-or-replace by name).
    *
    * If a sheet with the same name exists, replaces it in-place and marks as modified for surgical

@@ -40,6 +40,90 @@ import java.util.Locale
  */
 object FormulaStorage:
 
+  /**
+   * External-workbook ordinals (>= 1) referenced by a formula's stored text (GH-525): the `[N]` of
+   * `'[3]Sheet Name'!A1`, `[5]Data!B2`, `'[5]Q1:Q4'!C3` and `[2]!ExtName`. Ordinal 0 is the
+   * self-workbook and is never returned; ordinals past Int range clamp to Int.MaxValue (still
+   * dangling). Precision rules, false-positive-averse by construction:
+   *
+   *   - double-quoted string literals are skipped (`""` escape), so `"see [3]"` never counts
+   *   - a quoted sheet name only yields an ordinal immediately after the opening apostrophe (`''`
+   *     escape) — Excel forbids `[`/`]` in sheet names, so no other bracket occurs inside
+   *   - a bracket preceded directly by an identifier character or `]` is a structured reference
+   *     (`Table1[Col]`, `Table1[[#This Row],[Col]]`, R1C1-style `R[1]C[2]`) and is skipped to its
+   *     matching close, nesting-aware — a table column literally named "3" never counts
+   *   - a non-numeric bracket in reference position (`[Book1.xlsx]Sheet1!A1` file-name form) is
+   *     skipped: lint is not a syntax validator
+   */
+  private[xl] def externalOrdinals(formula: String): Set[Int] =
+    val n = formula.length
+
+    def isIdentChar(c: Char): Boolean =
+      c.isLetterOrDigit || c == '_' || c == '.' || c == ']'
+
+    @annotation.tailrec
+    def skipString(i: Int): Int = // i is the first index after the opening '"'
+      if i >= n then n
+      else if formula(i) == '"' then
+        if i + 1 < n && formula(i + 1) == '"' then skipString(i + 2) else i + 1
+      else skipString(i + 1)
+
+    @annotation.tailrec
+    def skipQuotedName(i: Int): Int = // i is the first index after the opening '\''
+      if i >= n then n
+      else if formula(i) == '\'' then
+        if i + 1 < n && formula(i + 1) == '\'' then skipQuotedName(i + 2) else i + 1
+      else skipQuotedName(i + 1)
+
+    @annotation.tailrec
+    def skipStructured(i: Int, open: Int): Int = // i is the first index after an opening '['
+      if i >= n then n
+      else
+        formula(i) match
+          case '[' => skipStructured(i + 1, open + 1)
+          case ']' => if open == 1 then i + 1 else skipStructured(i + 1, open - 1)
+          case _ => skipStructured(i + 1, open)
+
+    // i points at '['; Some((ordinal, index after ']')) when the bracket holds only digits
+    def ordinalAt(i: Int): Option[(Int, Int)] =
+      val close = formula.indexOf(']', i + 1)
+      if close <= i + 1 then None
+      else
+        val digits = formula.substring(i + 1, close)
+        if digits.forall(c => c >= '0' && c <= '9') then
+          val ordinal =
+            digits.toLongOption.fold(Int.MaxValue)(l => math.min(l, Int.MaxValue.toLong).toInt)
+          Some((ordinal, close + 1))
+        else None
+
+    @annotation.tailrec
+    def loop(i: Int, prev: Option[Char], acc: Set[Int]): Set[Int] =
+      if i >= n then acc
+      else
+        formula(i) match
+          case '"' => loop(skipString(i + 1), Some('"'), acc)
+          case '\'' =>
+            if i + 1 < n && formula(i + 1) == '[' then
+              ordinalAt(i + 1) match
+                case Some((ordinal, after)) =>
+                  loop(
+                    skipQuotedName(after),
+                    Some('\''),
+                    if ordinal >= 1 then acc + ordinal else acc
+                  )
+                case None => loop(skipQuotedName(i + 1), Some('\''), acc)
+            else loop(skipQuotedName(i + 1), Some('\''), acc)
+          case '[' =>
+            if prev.exists(isIdentChar) then loop(skipStructured(i + 1, 1), Some(']'), acc)
+            else
+              ordinalAt(i) match
+                case Some((ordinal, after)) =>
+                  loop(after, Some(']'), if ordinal >= 1 then acc + ordinal else acc)
+                case None => loop(skipStructured(i + 1, 1), Some(']'), acc)
+          case c => loop(i + 1, Some(c), acc)
+
+    loop(0, None, Set.empty)
+
   /** The prefix Excel stores in front of post-2007 functions. */
   val XlfnPrefix: String = "_xlfn."
 

@@ -53,6 +53,12 @@ println(s"wrote ${sheet.cells.size} cells")
 
 ## Quick Reference
 
+`Workbook.adopt` is deliberately conservative: only source-free simple sheets can cross books.
+External ordinal formulas, foreign source-backed sheets, tables, drawings, conditional formats,
+validations and name collisions are refused. It never remaps ordinary references or names; raw
+`put` stays low-level and can silently rebind copied external ordinals. The full package-migration
+portion of #526 remains open.
+
 ```scala
 // Create / read / write (sync facade; throws only at this IO edge)
 val wb  = Excel.read("in.xlsx")                    // Workbook
@@ -66,6 +72,7 @@ Excel.readMetadata("in.xlsx").sheets.map(_.name)   // the sheet names: SheetInfo
 // Sheets in a workbook
 wb.sheets                                          // Vector[Sheet]
 wb("Sales")                                        // XLResult[Sheet] (literal name compile-checked)
+wb.adopt(sheet, from = sourceWb)                    // XLResult[Workbook]; add-only preservation guard (#526)
 wb.upsert("Summary", _.put(ref"A1", "Total"))      // total: update-or-create, returns Workbook
 wb.update("Sales", f)                              // XLResult[Workbook] (errors if absent)
 
