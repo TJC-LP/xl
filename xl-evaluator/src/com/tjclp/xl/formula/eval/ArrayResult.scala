@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula.eval
 
+import scala.collection.immutable.IndexedSeq
+
 import com.tjclp.xl.cells.CellValue
 
 /**
@@ -129,7 +131,7 @@ final class ArrayResult private (
       val hasBox = boxHeight > 0 && boxWidth > 0
       val boxEnd = if hasBox then top + boxHeight else 0
       val colsL = cols.toLong
-      def columnPieces(from: Int, until: Int, vs: Vector[CellValue], n: Long) =
+      def columnPieces(from: Int, until: Int, vs: IndexedSeq[CellValue], n: Long) =
         (from until until).iterator.map(c => (Fill.entry(vs, c), n, c))
       // rows [from, until), every cell outside the box
       def outsideRows(from: Int, until: Int): Iterator[(CellValue, Long, Int)] =
@@ -204,15 +206,15 @@ final class ArrayResult private (
           case Left((fillErr, _)) => Left(fillErr)
           case Right(newFill) => Right(ArrayResult.sparse(rows, cols, top, left, mapped, newFill))
 
-  /** Apply a total `f` to every cell (to each fill entry once). */
+  /** Apply a total, pure `f` to every cell; lazy axis fills may recompute it on access. */
   def mapPure(f: CellValue => CellValue): ArrayResult =
     val g = geometry
     val newFill = outside match
       case Fill.Const(v) => Fill.Const(if outsideCount > 0L then f(v) else CellValue.Empty)
       case Fill.ByRow(vs) =>
-        Fill.ByRow(vs.zipWithIndex.map((v, r) => if g.rowHasOutside(r) then f(v) else v))
+        Fill.ByRow(ArrayResult.mapAxis(vs, r => if g.rowHasOutside(r) then f(vs(r)) else vs(r)))
       case Fill.ByCol(vs) =>
-        Fill.ByCol(vs.zipWithIndex.map((v, c) => if g.colHasOutside(c) then f(v) else v))
+        Fill.ByCol(ArrayResult.mapAxis(vs, c => if g.colHasOutside(c) then f(vs(c)) else vs(c)))
     ArrayResult.sparse(rows, cols, top, left, box.map(_.map(f)), newFill)
 
   /**
@@ -343,11 +345,11 @@ object ArrayResult:
     /** One value for every cell outside the box. */
     case Const(value: CellValue)
 
-    /** The value of row `r`'s cells outside the box is `values(r)`: one entry per row. */
-    case ByRow(values: Vector[CellValue])
+    /** Row values as an immutable indexed sequence; Vector construction remains supported. */
+    case ByRow(values: IndexedSeq[CellValue])
 
-    /** The value of column `c`'s cells outside the box is `values(c)`: one entry per column. */
-    case ByCol(values: Vector[CellValue])
+    /** Column values as an immutable indexed sequence; values may be computed on demand. */
+    case ByCol(values: IndexedSeq[CellValue])
 
     /** The fill's value at (`row`, `col`), a cell outside the box. */
     def at(row: Int, col: Int): CellValue = this match
@@ -357,7 +359,7 @@ object ArrayResult:
 
   object Fill:
     /** `values(i)`, Empty past the end. */
-    private[eval] def entry(values: Vector[CellValue], i: Int): CellValue =
+    private[eval] def entry(values: IndexedSeq[CellValue], i: Int): CellValue =
       if i >= 0 && i < values.size then values(i) else CellValue.Empty
 
   /**
@@ -475,9 +477,11 @@ object ArrayResult:
    * Compute a fill entry by entry: `entry(i)` for every entry that has a cell outside the box of
    * `g` (Empty for one that has none, never computed). The `Left` whose first outside cell comes
    * first in row-major order wins, and comes back with that cell's position. A constant fill is one
-   * entry.
+   * entry. `retainLazy` is only for deterministic pure readers: validation still visits every entry
+   * now, but a successful result recomputes values on demand rather than retaining them. Generic
+   * lifted calls keep eager storage (in particular, random draws are never replayed).
    */
-  private[formula] def computeFill(g: Geometry, axis: Option[Boolean])(
+  private[formula] def computeFill(g: Geometry, axis: Option[Boolean], retainLazy: Boolean = false)(
     entry: Int => Either[EvalError, CellValue]
   ): Either[(EvalError, Long), Fill] =
     axis match
@@ -490,15 +494,15 @@ object ArrayResult:
         val failure = (0 until n).foldLeft(Option.empty[(EvalError, Long)]) { (worst, i) =>
           val at = if byRow then g.firstOutsideInRow(i) else g.firstOutsideInCol(i)
           if at == Long.MaxValue then
-            out += CellValue.Empty
+            if !retainLazy then out += CellValue.Empty
             worst
           else
             entry(i) match
               case Right(v) =>
-                out += v
+                if !retainLazy then out += v
                 worst
               case Left(e) =>
-                out += CellValue.Empty
+                if !retainLazy then out += CellValue.Empty
                 worst match
                   case Some((_, earlier)) if earlier <= at => worst
                   case _ => Some((e, at))
@@ -506,7 +510,15 @@ object ArrayResult:
         failure match
           case Some(f) => Left(f)
           case None =>
-            val values = out.result()
+            val values =
+              if retainLazy then
+                new AxisValues(
+                  n,
+                  i =>
+                    val has = if byRow then g.rowHasOutside(i) else g.colHasOutside(i)
+                    if has then entry(i).fold(_ => CellValue.Empty, identity) else CellValue.Empty
+                )
+              else out.result()
             Right(if byRow then Fill.ByRow(values) else Fill.ByCol(values))
 
   /** `f` over a fill's entries ([[computeFill]]: the first failure in row-major order wins). */
@@ -598,16 +610,20 @@ object ArrayResult:
     sparse(rows, cols, 0, 0, Vector.empty, Fill.Const(value))
 
   /** Whether `fill` is already in [[canonical]] form for `g`. */
-  private def isCanonical(g: Geometry, fill: Fill): Boolean = canonical(g, fill) == fill
+  private def isCanonical(g: Geometry, fill: Fill): Boolean = fill match
+    case Fill.ByRow(_: AxisValues) | Fill.ByCol(_: AxisValues) => false
+    case _ => canonical(g, fill) == fill
 
   /** See [[sparse]]: irrelevant entries Empty, a uniform fill one value. */
   private def canonical(g: Geometry, fill: Fill): Fill =
     if g.outsideCount == 0L then Fill.Const(CellValue.Empty)
     else
-      def axis(n: Int, vs: Vector[CellValue], has: Int => Boolean)(
-        make: Vector[CellValue] => Fill
+      def axis(n: Int, vs: IndexedSeq[CellValue], has: Int => Boolean)(
+        make: IndexedSeq[CellValue] => Fill
       ): Fill =
-        val entries = Vector.tabulate(n)(i => if has(i) then Fill.entry(vs, i) else CellValue.Empty)
+        val entries = vs match
+          case _: AxisValues => returnLazyAxis(n, vs, has)
+          case _ => Vector.tabulate(n)(i => if has(i) then Fill.entry(vs, i) else CellValue.Empty)
         val used = (0 until n).iterator.filter(has).map(entries(_))
         if !used.hasNext then Fill.Const(CellValue.Empty)
         else
@@ -617,6 +633,45 @@ object ArrayResult:
         case c: Fill.Const => c
         case Fill.ByRow(vs) => axis(g.rows, vs, g.rowHasOutside)(Fill.ByRow(_))
         case Fill.ByCol(vs) => axis(g.cols, vs, g.colHasOutside)(Fill.ByCol(_))
+
+  /** Constant-storage, non-memoizing axis. Only deterministic pure readers belong here. */
+  private final class AxisValues(val length: Int, read: Int => CellValue)
+      extends IndexedSeq[CellValue]:
+    def apply(i: Int): CellValue =
+      if i >= 0 && i < length then read(i) else CellValue.Empty
+    override def slice(from: Int, until: Int): IndexedSeq[CellValue] =
+      val start = math.max(0, math.min(from, length))
+      val end = math.max(start, math.min(until, length))
+      new AxisValues(end - start, i => read(start + i))
+
+  private def mapAxis(
+    values: IndexedSeq[CellValue],
+    read: Int => CellValue
+  ): IndexedSeq[CellValue] =
+    values match
+      case _: AxisValues => new AxisValues(values.length, read)
+      case _ => Vector.tabulate(values.length)(read)
+
+  private def returnLazyAxis(
+    n: Int,
+    values: IndexedSeq[CellValue],
+    has: Int => Boolean
+  ): IndexedSeq[CellValue] =
+    new AxisValues(n, i => if has(i) then Fill.entry(values, i) else CellValue.Empty)
+
+  /** #735: one position per axis entry, without retaining numbers or per-row vectors. */
+  private[formula] def positions(start: Int, length: Int, alongRows: Boolean): ArrayResult =
+    if length <= 0 then empty
+    else
+      val values = new AxisValues(length, i => CellValue.Number(BigDecimal(start.toLong + i)))
+      new ArrayResult(
+        if alongRows then length else 1,
+        if alongRows then 1 else length,
+        0,
+        0,
+        Vector.empty,
+        if alongRows then Fill.ByRow(values) else Fill.ByCol(values)
+      )
 
   /** Empty array result. */
   val empty: ArrayResult = ArrayResult(Vector.empty)

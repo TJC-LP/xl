@@ -1813,16 +1813,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     colBands: List[(Int, Int)]
   ): (Int, Int) => BigDecimal =
     // the product of the fills along one axis, entry by entry; None when no fill varies along it
-    def axisProducts(n: Int, of: PartialFunction[ArrayResult.Fill, Vector[CellValue]]) =
+    def axisProducts(
+      of: PartialFunction[ArrayResult.Fill, scala.collection.immutable.IndexedSeq[CellValue]]
+    ) =
       val varying = fills.collect(of)
       if varying.isEmpty then None
       else
-        Some(Vector.tabulate(n) { i =>
+        Some((i: Int) =>
           varying.foldLeft(BigDecimal(1))((acc, vs) =>
             acc * coerceToNumeric(vs.lift(i).getOrElse(CellValue.Empty))
           )
-        })
-    def bandSums(products: Option[Vector[BigDecimal]], bands: List[(Int, Int)]) =
+        )
+    def bandSums(products: Option[Int => BigDecimal], bands: List[(Int, Int)]) =
       bands.map { (from, until) =>
         products match
           case None => BigDecimal(math.max(until - from, 0))
@@ -1832,8 +1834,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case (acc, ArrayResult.Fill.Const(v)) => acc * coerceToNumeric(v)
       case (acc, _) => acc
     }
-    val rowSums = bandSums(axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
-    val colSums = bandSums(axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
+    val rowSums = bandSums(axisProducts({ case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
+    val colSums = bandSums(axisProducts({ case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
     (ri, ci) => constant * rowSums(ri) * colSums(ci)
 
   /**

@@ -361,7 +361,7 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    broadcastN(Vector(left, right), pureFill = true) { elements =>
       val l = elements.headOption.getOrElse(CellValue.Empty)
       val r = elements.lift(1).getOrElse(CellValue.Empty)
       carriedError(l).orElse(carriedError(r)) match
@@ -394,7 +394,7 @@ object ArrayArithmetic:
         Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
-        broadcastN(Vector(left, rightArr)) { elements =>
+        broadcastN(Vector(left, rightArr), pureFill = true) { elements =>
           Right(
             equalityElement(
               elements.headOption.getOrElse(CellValue.Empty),
@@ -616,7 +616,7 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: BinaryOp
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    broadcastN(Vector(left, right), pureFill = true) { elements =>
       applyOpCarrying(
         elements.headOption.getOrElse(CellValue.Empty),
         elements.lift(1).getOrElse(CellValue.Empty),
@@ -738,9 +738,14 @@ object ArrayArithmetic:
    * whole row, both padded) is computed cell by cell when the result is at most
    * [[ArrayResult.MaxCells]] cells, and otherwise over the smallest rectangle that leaves a fill by
    * one axis outside it, refused when that rectangle is past [[ArrayResult.MaxBoxCells]] (and past
-   * the operands' boxes together).
+   * the operands' boxes together). `pureFill` permits non-memoizing axis storage only for
+   * deterministic arithmetic/comparison operators; generic lifted calls retain eager execution.
    */
-  private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
+  private[formula] def broadcastN(
+    operands: Vector[ArrayResult],
+    perCell: Boolean = false,
+    pureFill: Boolean = false
+  )(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
     val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
@@ -835,7 +840,8 @@ object ArrayArithmetic:
           p.axis match
             case FillAxis.Const => None
             case FillAxis.ByRow => Some(true)
-            case FillAxis.ByCol => Some(false)
+            case FillAxis.ByCol => Some(false),
+          retainLazy = pureFill
         )(i => elem(p.outsides.map(_.entry(i))))
         computeBox(p.top, height, p.left, width, outCols)(r =>
           c => elem(operands.map(op => getWithBroadcastCV(op, r, c)))
