@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-11-02 (PR validation)
+**Last Updated**: 2026-11-05 (#838 test-count validation)
 
 ## Current State
 
@@ -282,7 +282,7 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
+**9,953 test cases** (#838 validation against main db2b91d5, 2026-11-05): 9,949 passed, 0 failed, 4 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
@@ -291,7 +291,7 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
-| xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
