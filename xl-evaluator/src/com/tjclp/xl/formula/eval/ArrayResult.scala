@@ -69,6 +69,11 @@ final class ArrayResult private (
   /** Number of cells outside the box: each holds its [[fill]] entry. */
   private[formula] def outsideCount: Long = cellCount - boxArea
 
+  /** Whether an axis is recomputed on demand rather than stored cell by cell (#735). */
+  private[formula] def hasLazyAxis: Boolean = outside match
+    case Fill.ByRow(_: ArrayResult.AxisValues) | Fill.ByCol(_: ArrayResult.AxisValues) => true
+    case _ => false
+
   /** Whether every cell is stored (the box is the whole array). */
   private[formula] def isDense: Boolean = outsideCount == 0L
 

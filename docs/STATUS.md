@@ -282,7 +282,14 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
+
+#735 test inventory (2026-11-05): this change adds seven evaluator regressions (two in
+`ArrayResultSpec`, two in `RowColumnArraySpec`, three in `Review735RegressionSpec`) and
+one external-consumer `ArrayFillPreludeProbe`. The 9,947-case totals below are the dated
+2026-11-04 historical observation; final all-module counts belong in this contribution's
+validation receipt and must not be inferred by adding to an older base's total.
+
+**Historical: 9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|

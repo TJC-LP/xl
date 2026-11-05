@@ -1786,7 +1786,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     arrays: List[ResolvedArray],
     ctx: EvalContext
   ): Either[EvalError, List[ResolvedArray]] =
-    if !arrays.exists { case _: SparseArray => true; case _ => false } then Right(arrays)
+    // #735: a formerly dense ROW/COLUMN axis must not newly trigger argument-order error
+    // scans of raw ranges. Only the preexisting stored sparse operands trigger this conversion.
+    if !arrays.exists { case s: SparseArray => !s.array.hasLazyAxis; case _ => false }
+    then Right(arrays)
     else
       arrays.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
         case (Left(err), _) => Left(err)

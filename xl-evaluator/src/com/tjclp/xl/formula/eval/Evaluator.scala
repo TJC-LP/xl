@@ -3334,7 +3334,7 @@ private class EvaluatorImpl(
       yVal <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
       xOp <- toOperand(xVal, sheet)
       yOp <- toOperand(yVal, sheet)
-      result <- ArrayArithmetic.broadcast(xOp, yOp, op)
+      result <- ArrayArithmetic.broadcastPure(xOp, yOp, op)
       output <- result match
         case ArrayArithmetic.ArrayOperand.Scalar(v) => Right(v)
         case ArrayArithmetic.ArrayOperand.Array(arr) =>
@@ -3365,7 +3365,7 @@ private class EvaluatorImpl(
   ): Either[EvalError, Any] =
     def broadcastToBool(left: ArrayResult, right: ArrayResult): Either[EvalError, Any] =
       ArrayArithmetic
-        .broadcastOrderedCompare(left, right, op)
+        .broadcastOrderedComparePure(left, right, op)
         .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
     def single(scalar: Any): ArrayResult =
       ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))

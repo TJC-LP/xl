@@ -263,6 +263,22 @@ object ArrayArithmetic:
     right: ArrayOperand,
     op: BinaryOp
   ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = false)
+
+  /** Built-in evaluator operators are deterministic; public callbacks remain eagerly stored. */
+  private[formula] def broadcastPure(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = true)
+
+  private def broadcastWithFill(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
     (left, right) match
       // scalar * scalar -> scalar (fast path)
       case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
@@ -270,15 +286,17 @@ object ArrayArithmetic:
 
       // scalar * array -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
-        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op).map(ArrayOperand.Array(_))
+        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * scalar -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
-        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op).map(ArrayOperand.Array(_))
+        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * array -> broadcast with dimension matching
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
-        broadcastArrays(l, r, op).map(ArrayOperand.Array(_))
+        broadcastArrays(l, r, op, pureFill).map(ArrayOperand.Array(_))
 
   /**
    * GH-335: Excel's total order for the comparison operators, shared by the scalar and
@@ -361,7 +379,22 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right), pureFill = true) { elements =>
+    orderedCompareWithFill(left, right, op, pureFill = false)
+
+  private[formula] def broadcastOrderedComparePure(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean
+  ): Either[EvalError, ArrayResult] =
+    orderedCompareWithFill(left, right, op, pureFill = true)
+
+  private def orderedCompareWithFill(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayResult] =
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       val l = elements.headOption.getOrElse(CellValue.Empty)
       val r = elements.lift(1).getOrElse(CellValue.Empty)
       carriedError(l).orElse(carriedError(r)) match
@@ -614,9 +647,10 @@ object ArrayArithmetic:
   private def broadcastArrays(
     left: ArrayResult,
     right: ArrayResult,
-    op: BinaryOp
+    op: BinaryOp,
+    pureFill: Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right), pureFill = true) { elements =>
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       applyOpCarrying(
         elements.headOption.getOrElse(CellValue.Empty),
         elements.lift(1).getOrElse(CellValue.Empty),
@@ -841,7 +875,7 @@ object ArrayArithmetic:
             case FillAxis.Const => None
             case FillAxis.ByRow => Some(true)
             case FillAxis.ByCol => Some(false),
-          retainLazy = pureFill
+          retainLazy = pureFill && operands.exists(_.hasLazyAxis)
         )(i => elem(p.outsides.map(_.entry(i))))
         computeBox(p.top, height, p.left, width, outCols)(r =>
           c => elem(operands.map(op => getWithBroadcastCV(op, r, c)))
