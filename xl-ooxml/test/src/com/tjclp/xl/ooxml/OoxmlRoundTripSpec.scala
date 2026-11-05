@@ -48,9 +48,13 @@ class OoxmlRoundTripSpec extends FunSuite:
     val read = XlsxReader.read(output).fold(e => fail(e.message), identity)
     val sheet = read.sheets.find(_.name == portable.name).getOrElse(fail("Missing adopted sheet"))
     assertEquals(sheet(ref"A1").value, portable(ref"A1").value)
+    // A read records numFmtId=0 for General; compare effective styling, as the existing
+    // full-feature round-trip control does, rather than the source-format provenance.
+    val actualStyle = sheet(ref"A1").styleId.flatMap(sheet.styleRegistry.get)
+    val expectedStyle = portable(ref"A1").styleId.flatMap(portable.styleRegistry.get)
     assertEquals(
-      sheet(ref"A1").styleId.flatMap(sheet.styleRegistry.get),
-      portable(ref"A1").styleId.flatMap(portable.styleRegistry.get)
+      actualStyle.map(_.copy(numFmtId = None)),
+      expectedStyle.map(_.copy(numFmtId = None))
     )
   }
 
