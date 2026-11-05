@@ -282,11 +282,11 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
+**9,964 test cases** (#723 validation of code head 6e99bb0c against main db2b91d5, 2026-11-05): 9,960 passed, 0 failed, 4 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4225 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4242 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
