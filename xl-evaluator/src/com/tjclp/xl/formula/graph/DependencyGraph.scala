@@ -451,7 +451,8 @@ object DependencyGraph:
           (names.exists(text.contains) ||
             CriteriaRangeResize.mayResizeThroughName(expression, text) ||
             ReferenceOperators.mayContainComputedRange(expression) ||
-            com.tjclp.xl.formula.functions.ReferenceFunctionNames.mayContainComputingCall(expression, text)) &&
+            com.tjclp.xl.formula.functions.ReferenceFunctionNames
+              .mayContainComputingCall(expression, text)) &&
           FormulaParser.parse(expression).exists(containsDynamicReference)
         }
       )

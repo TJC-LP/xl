@@ -648,11 +648,10 @@ object ArgSpec:
 
   /**
    * GH-723: the calls admitted as computed references in range argument slots — every registered
-   * reference-computing function
-   * ([[ReferenceFunctionNames.computing]], tied to the registry by the drift law) and the `:`
-   * operator. It differs from `Evaluator.referenceFunctions` on purpose: selectors and
-   * intersections remain outside computed range-slot admission in this bounded contribution. The
-   * drift law ties the two sets together.
+   * reference-computing function ([[ReferenceFunctionNames.computing]], tied to the registry by the
+   * drift law) and the `:` operator. It differs from `Evaluator.referenceFunctions` on purpose:
+   * selectors and intersections remain outside computed range-slot admission in this bounded
+   * contribution. The drift law ties the two sets together.
    */
   private[formula] val computedReferenceCalls: Set[String] =
     ReferenceFunctionNames.computing + ReferenceOperators.RangeName
