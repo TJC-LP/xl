@@ -70,3 +70,23 @@ class Review735RegressionSpec extends FunSuite:
         assertEquals(calls, afterFirst)
       case Left(err) => fail(s"expected comparison: $err")
   }
+
+  test("#735: public mapPure stores each callback result once") {
+    var calls = 0
+    val expr = FormulaParser.parse("=ROW(A1:A3)").fold(e => fail(e.toString), identity)
+    val input =
+      Evaluator.arrayInstance.eval(expr, Sheet(SheetName.unsafe("Map")), Clock.system, None, None)
+    input match
+      case Right(axis: ArrayResult) =>
+        val out = axis.mapPure { _ => calls += 1; CellValue.Number(BigDecimal(calls)) }
+        val callsAfterMap = calls
+        val first = out(0, 0)
+        val second = out(0, 0)
+        println(
+          s"mapPure reproduction: first=$first second=$second afterMap=$callsAfterMap calls=$calls"
+        )
+        assertEquals(callsAfterMap, 3)
+        assertEquals(first, second)
+        assertEquals(calls, callsAfterMap)
+      case other => fail(s"expected position axis: $other")
+  }

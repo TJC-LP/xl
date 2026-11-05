@@ -424,7 +424,7 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
+        Right(left.mapPureLazy(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
         broadcastN(Vector(left, rightArr), pureFill = true) { elements =>
@@ -888,7 +888,17 @@ object ArrayArithmetic:
             fillResult match
               case Left((fillErr, _)) => Left(fillErr)
               case Right(fill) =>
-                Right(ArrayResult.sparse(outRows, outCols, p.top, p.left, box, fill))
+                Right(
+                  ArrayResult.sparse(
+                    outRows,
+                    outCols,
+                    p.top,
+                    p.left,
+                    box,
+                    fill,
+                    positionOrigin = operands.exists(_.preservesRawRangeOrder)
+                  )
+                )
       }
 
   /**

@@ -163,3 +163,19 @@ class ArrayResultSpec extends FunSuite:
     val horizontal = positions.transpose
     assertEquals(horizontal.slice(0, 1, 1, 2), Right(ArrayResult(Vector(Vector(n(2), n(3))))))
   }
+
+  test("#735: constant canonicalization keeps position provenance outside value equality") {
+    val positions = ArrayResult.positions(1, 3, true)
+    val constant = positions.mapPure(_ => n(1))
+    val stored = ArrayResult.constant(3, 1, n(1))
+    assertEquals(constant.fill, ArrayResult.Fill.Const(n(1)))
+    assert(constant.preservesRawRangeOrder)
+    assert(constant.transpose.preservesRawRangeOrder)
+    assert(constant.slice(0, 2, 0, 1).exists(_.preservesRawRangeOrder))
+    assert(constant.slice(-1, 2, 0, 1).exists(_.preservesRawRangeOrder))
+    assert(constant.map(Right(_)).exists(_.preservesRawRangeOrder))
+    assertEquals(constant, stored)
+    assertEquals(stored, constant)
+    assertEquals(constant.hashCode, stored.hashCode)
+    assert(!stored.preservesRawRangeOrder)
+  }

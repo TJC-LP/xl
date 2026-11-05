@@ -419,8 +419,9 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
-#735 test inventory (2026-11-05): this change adds seven evaluator regressions (two in
-`ArrayResultSpec`, two in `RowColumnArraySpec`, three in `Review735RegressionSpec`) and
+#735 test inventory (2026-11-05): this change adds ten evaluator regressions (three in
+`ArrayResultSpec`, two in `RowColumnArraySpec`, four in `Review735RegressionSpec`, one in
+`PositionCanonicalErrorSpec`) and
 one external-consumer `ArrayFillPreludeProbe`. The 9,947-case totals below are the dated
 2026-11-04 historical observation; final all-module counts belong in this contribution's
 validation receipt and must not be inferred by adding to an older base's total.
