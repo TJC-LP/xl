@@ -101,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (see dated Testing inventory)
+./mill __.test             # Run all tests (10,016)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -420,18 +420,18 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
-#741 reconciliation (2026-11-05): the published extraction is integrated with main `db2b91d5`.
-Combined-revision counts are pending the final full-suite receipt; the 9,947-case numbers below
-are the dated November 4 observation against main `0294eee0`, not this merged tree.
+#741 reconciliation (2026-11-05): the full suite at `3365d726`, integrating the published
+extraction with main `db2b91d5`, recorded 10,016 cases: 10,012 passed, 0 failures/errors and
+4 optional-tool skips. Counts below are observed from that run, not inferred from earlier totals.
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**Historical 9,947 tests** by module: xl-evaluator (4225), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,016 test cases** by module: xl-evaluator (4296), xl-core (1875), xl-ooxml (1446), xl-cli (1969), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities; dated test inventory)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,016 test cases)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
