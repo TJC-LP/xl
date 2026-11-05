@@ -350,6 +350,13 @@ object Evaluator:
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames, memo)
       // GH-710: a LET name's reference lives in the LET environment, which only a function's
       // EvalContext carries (EvalContext.resolveRange)
+      case TExpr.RangeLocation.Computed(_) =>
+        Left(
+          EvalError.ErrorValue(
+            CellError.Value,
+            Some("Computed ranges require an evaluation context")
+          )
+        )
       case TExpr.RangeLocation.Binding(name) =>
         Left(
           EvalError.ErrorValue(
@@ -979,6 +986,7 @@ object Evaluator:
         ReferenceBaseFunctions.contains(call.spec.name) ||
         call.spec.argSpec.toValues(call.args).exists {
           case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
+          case ArgValue.Range(TExpr.RangeLocation.Computed(inner)) => readsBindingAsRange(inner)
           case ArgValue.Expr(arg) => readsBindingAsRange(arg)
           case ArgValue.Range(_) | ArgValue.Cells(_) => false
         }

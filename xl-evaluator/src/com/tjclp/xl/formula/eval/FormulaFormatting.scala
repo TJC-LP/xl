@@ -117,6 +117,7 @@ object FormulaFormatting:
         case TExpr.RangeLocation.Name(_, _) => Vector.empty
         // GH-710: a LET name's reference is known only at evaluation
         case TExpr.RangeLocation.Binding(_) => Vector.empty
+        case TExpr.RangeLocation.Computed(expr) => loop(expr)
         case TExpr.RangeLocation.Error(_, _) => Vector.empty
 
     def loop(e: TExpr[?]): Vector[(Sheet, ARef)] =

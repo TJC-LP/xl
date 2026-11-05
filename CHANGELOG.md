@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
+  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
+  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
+  recalculation. Adds `TExpr.RangeLocation.Computed` at the end of the public enum; downstream
+  exhaustive matches must handle the new case. Array-taking argument expansion remains separate.
+
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
   functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
   while retaining fractional periods, verified against desktop Excel 16.114.3.

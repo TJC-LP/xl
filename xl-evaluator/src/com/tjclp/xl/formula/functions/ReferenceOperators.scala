@@ -118,6 +118,10 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         case head :: tail =>
           // the whole list, so a refusal reports the call's own argument count
           ArgSpec.rangeLocation.parse(args, pos, fnName) match
+            // Preserve the existing operator/INDEX expression trees: their richer reference
+            // envelope and selection logic already understands these calls as expressions.
+            case Right((_: TExpr.RangeLocation.Computed, _)) if acceptRight(head) =>
+              Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
             case Right((location, rest)) => Right((Left(location), rest))
             case Left(_) if acceptRight(head) => Right((Right(head.asInstanceOf[TExpr[Any]]), tail))
             case Left(err) => Left(err)
@@ -274,6 +278,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
     case Left(TExpr.RangeLocation.Name(_, Some(_))) => Shape.QualifiedToken
     // GH-710: a LET name in a range slot prints as the bare name, like a BindingRef
     case Left(_: TExpr.RangeLocation.Binding) => Shape.Token
+    case Left(TExpr.RangeLocation.Computed(expr)) => expressionKind(expr)
     case Left(_: TExpr.RangeLocation.Error) => Shape.Closed
     case Right(expr) => expressionKind(expr)
 

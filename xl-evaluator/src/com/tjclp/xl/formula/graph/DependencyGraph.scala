@@ -67,6 +67,7 @@ object DependencyGraph:
     values.foldLeft(Set.empty[ARef]) { (acc, value) =>
       val next = value match
         case ArgValue.Expr(expr) => exprDeps(expr)
+        case ArgValue.Range(TExpr.RangeLocation.Computed(expr)) => exprDeps(expr)
         case ArgValue.Range(range) => rangeDeps(range)
         case ArgValue.Cells(range) => cellRangeDeps(range)
       // Preserve a memoized range Set when it is the first argument. Besides avoiding a needless
@@ -252,6 +253,8 @@ object DependencyGraph:
             named => nameIsComputed(named.name, named.scope)
           ))) || values.exists {
           case ArgValue.Expr(e) => recurse(e)
+          case ArgValue.Range(TExpr.RangeLocation.Computed(e)) =>
+            includeDynamicCalls || recurse(e)
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
             resolveName(name, scope)
           case ArgValue.Range(_) => false
@@ -447,7 +450,9 @@ object DependencyGraph:
           // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
           (names.exists(text.contains) ||
             CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-            ReferenceOperators.mayContainComputedRange(expression)) &&
+            ReferenceOperators.mayContainComputedRange(expression) ||
+            com.tjclp.xl.formula.functions.ReferenceFunctionNames.computing
+              .exists(text.contains)) &&
           FormulaParser.parse(expression).exists(containsDynamicReference)
         }
       )
@@ -656,7 +661,8 @@ object DependencyGraph:
           val text = upper(expression)
           candidateTokens.exists(text.contains) ||
           CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-          ReferenceOperators.mayContainComputedRange(expression)
+          ReferenceOperators.mayContainComputedRange(expression) ||
+          com.tjclp.xl.formula.functions.ReferenceFunctionNames.computing.exists(text.contains)
         }
       )
     val cells =
@@ -733,6 +739,8 @@ object DependencyGraph:
       case TExpr.Aggregate(_, TExpr.RangeLocation.Error(_, _)) => false
       // GH-710: a LET name's binding value carries its own references (the Let case)
       case TExpr.Aggregate(_, TExpr.RangeLocation.Binding(_)) => false
+      case TExpr.Aggregate(_, TExpr.RangeLocation.Computed(e)) =>
+        containsUnqualifiedCellReferences(e)
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -749,6 +757,7 @@ object DependencyGraph:
                 // GH-394: unqualified name lookup depends on the ambient sheet
                 case TExpr.RangeLocation.Name(_, scope) => scope.isEmpty
                 case TExpr.RangeLocation.Binding(_) => false
+                case TExpr.RangeLocation.Computed(e) => containsUnqualifiedCellReferences(e)
                 case TExpr.RangeLocation.Error(_, _) => false
             case ArgValue.Cells(_) => true
           }
@@ -935,6 +944,7 @@ object DependencyGraph:
       extractDependenciesBoundedCached(child, bounds, rangeCache, reader)
 
     def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
+      case TExpr.RangeLocation.Computed(expr) => recurse(expr)
       case TExpr.RangeLocation.Local(range, _) => boundRange(range)
       case _ => Set.empty
 
@@ -2325,6 +2335,7 @@ object DependencyGraph:
         case TExpr.RangeLocation.Error(_, _) => Set.empty
         // GH-710: a LET name — its binding's value expression contributes the edges
         case TExpr.RangeLocation.Binding(_) => Set.empty
+        case TExpr.RangeLocation.Computed(expr) => go(expr)
 
     def fixedIndex(expr: TExpr[?]): Option[Int] =
       def number(value: Any): Option[Int] = value match

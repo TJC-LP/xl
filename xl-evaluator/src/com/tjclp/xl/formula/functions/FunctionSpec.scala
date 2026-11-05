@@ -1,13 +1,20 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, EvalPosition, Evaluator, RecalcCounters}
+import com.tjclp.xl.formula.eval.{
+  ArrayResult,
+  EvalError,
+  EvalPosition,
+  Evaluator,
+  RangeOperand,
+  RecalcCounters
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
 import com.tjclp.xl.{Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -256,19 +263,32 @@ final case class EvalContext(
   private[formula] def resolveRangeTraced(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange, Boolean)] =
-    Evaluator.resolveRangeSlotTraced(
-      location,
-      sheet,
-      workbook,
-      operands.nameTrail,
-      bindings,
-      operands.nameReference.getOrElse { (name, scope) =>
-        // a context built outside the evaluator: the generic reference path
-        val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
-        evalReference(named.asInstanceOf[TExpr[Any]])
-      },
-      aggregateMemo
-    )
+    location match
+      case TExpr.RangeLocation.Computed(expr) =>
+        // TExpr's result type is erased at this heterogeneous reference boundary.
+        evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+          case RangeOperand(target, range) => Right((target, range, false))
+          case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+          case array: ArrayResult if array.rows == 1 && array.cols == 1 =>
+            array(0, 0) match
+              case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+              case _ => Left(EvalError.ErrorValue(CellError.Value))
+          case _ => Left(EvalError.ErrorValue(CellError.Value))
+        }
+      case _ =>
+        Evaluator.resolveRangeSlotTraced(
+          location,
+          sheet,
+          workbook,
+          operands.nameTrail,
+          bindings,
+          operands.nameReference.getOrElse { (name, scope) =>
+            // a context built outside the evaluator: the generic reference path
+            val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+            evalReference(named.asInstanceOf[TExpr[Any]])
+          },
+          aggregateMemo
+        )
 
   /**
    * #767: the slot of the pass this call's formula evaluates at, defined only for a top-level
@@ -700,21 +720,9 @@ object ArgSpec:
               tail
             )
           )
-        // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
-        // is named, never reported as a wrong argument count — accepting it here is #723's
-        case ComputedReferenceCall(call) :: _ =>
-          // named after the call itself, so the message follows the derived set
-          val computed =
-            if call.spec.name == ReferenceOperators.RangeName then "the range operator `:`"
-            else s"${call.spec.name}(…)"
-          Left(
-            ParseError.InvalidArguments(
-              fnName,
-              pos,
-              describe,
-              s"a computed reference ($computed), which this range argument does not accept yet"
-            )
-          )
+        // GH-723: preserve the reference expression, not its materialized array values.
+        case ComputedReferenceCall(call) :: tail =>
+          Right((TExpr.RangeLocation.Computed(call), tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 
