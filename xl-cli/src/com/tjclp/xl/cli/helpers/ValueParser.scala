@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.helpers
 
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.read.CellRecord
+import com.tjclp.xl.formula.{FormulaParser, ParseError, TExpr}
 import com.tjclp.xl.formatted.{Formatted, FormattedParsers}
 import com.tjclp.xl.styles.numfmt.NumFmt
 
@@ -63,6 +64,23 @@ object ValueParser:
         "(Excel would show #NAME?). Author the table with " +
         "sheet.dataTable(interior, rowInput, colInput) in a script (GH-419)."
     )
+
+  /** GH-693: the writer expands storage prefixes; its actual `<f>` text must fit Excel's limit. */
+  def storedFormulaLengthError(formula: String): Option[com.tjclp.xl.formula.ParseError] =
+    val canonical = CellValue.canonicalFormulaText(formula)
+    val length =
+      // An already-oversized input is sufficient to reject; no stored-length claim is needed.
+      if canonical.length > 8192 then canonical.length
+      else com.tjclp.xl.ooxml.FormulaStorage.toStored(canonical).length
+    Option.when(length > 8192)(
+      com.tjclp.xl.formula.ParseError.FormulaTooLong(length, 8192)
+    )
+
+  /** Validate authored text at the existing per-mode parse gate, preserving error precedence. */
+  def parseAuthoredFormula(formula: String): Either[ParseError, TExpr[?]] =
+    storedFormulaLengthError(formula) match
+      case Some(error) => Left(error)
+      case None => FormulaParser.parse(formula)
 
   /**
    * Format a CellValue for display.

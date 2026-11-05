@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
+  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
+  while retaining fractional periods, verified against desktop Excel 16.114.3.
+
 ### Security
 
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
@@ -16,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
+  8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
+  retain per-cell context, and validate after resolving the target and selecting the write mode.
 - **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
   through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), a range reaching an
   uncached cell, `x#`) is invisible to the dependency graph, and its evaluation ran until either

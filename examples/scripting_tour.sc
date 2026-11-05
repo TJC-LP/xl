@@ -59,6 +59,8 @@ val sheet = wb.sheets.headOption.getOrElse(sys.exit(1))
 // Single-formula evaluation returns XLResult — compose with for-comprehensions
 val total = sheet.evaluateFormula("=SUM(D2:D4)")
 println(s"  ✓ Total revenue: $total")
+assert(sheet.evaluateFormula("=SLN(30000,7500,10)") == Right(CellValue.Number(BigDecimal(2250))))
+println(s"  ✓ First-year depreciation: ${sheet.evaluateFormula("=SYD(30000,7500,10,1)")}")
 
 // One-off formula as a plain cell, with the CLI's closure and cycle checks (GH-741)
 val positioned = SheetEvaluator.evaluateAt(wb, sheet, "=SUM(D2:D4)", ref"G5")

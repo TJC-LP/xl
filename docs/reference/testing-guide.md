@@ -1,6 +1,10 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #741 branch's full run after merging main on 2026-11-04 recorded **10,003 cases**, including skips, all passing.
+#741 reconciliation (2026-11-05): the published extraction is integrated with main `db2b91d5`.
+Combined-revision counts are pending the final full-suite receipt; the 9,947-case numbers below
+are the dated November 4 observation against main `0294eee0`, not this merged tree.
+
+**Historical status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
 
 ## Test Infrastructure
 
@@ -281,18 +285,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #741 branch's full `./mill -i __.test` after merging main on 2026-11-04, from the JUnit reports. Counts include skipped cases.
+As of the combined validation of #830 and #831 against main 0294eee0, 2026-11-04 (9,943 passed, 0 failed, 4 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4289 |
+| xl-evaluator | 4225 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
-| xl-cli | 1963 |
+| xl-cli | 1972 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **10,003** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
+| **Total** | **9,947** |
 
 
 ## Test Quality Metrics
