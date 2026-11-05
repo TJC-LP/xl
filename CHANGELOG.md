@@ -101,6 +101,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Testing
 
+- **Finite computed-reference regression budgets** (#736): pin 200 reader calls and retained
+  cells for 10k/100k declared templates using the existing sparse reader; preserve INDEX/XLOOKUP/colon
+  shapes, blank padding, arithmetic alignment, spill output, first errors and formula precedents.
+  This adds coverage without changing evaluator behavior.
+
 - `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
   `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
   generator wrote an unparsable formula (law-fuzz seed `ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=`).
