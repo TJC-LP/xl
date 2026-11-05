@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Check direct Maven dependency age in CI, record justified pins, refresh compatible dependencies, and prepare Renovate updates while retaining Scala 3.9 LTS.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
