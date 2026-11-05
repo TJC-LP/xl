@@ -146,8 +146,9 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
    * INDEX's first slot: a location exactly as before, an operator call (area_num picks among its
    * areas), a range-operator call (GH-713: `INDEX(A1:INDEX(A:A,5),2)`), or a value: an array
    * constant, a scalar (#725: `INDEX(5,1)`, a 1x1 array) or any expression that is no reference
-   * shape (`INDEX(1+2,1)`, `INDEX(SUM(A1:A3),1)`), whose value INDEX indexes. A call that returns a
-   * reference (OFFSET, INDIRECT, IF, …) keeps the range slot's parse error (#723).
+   * shape (`INDEX(1+2,1)`, `INDEX(SUM(A1:A3),1)`), whose value INDEX indexes. Direct computing
+   * calls (OFFSET, INDIRECT, INDEX, XLOOKUP) resolve through GH-723; reference selectors such as
+   * IF remain outside this bounded admission.
    */
   val indexOperand: ArgSpec[Operand] = operandSpec(e =>
     isOperatorCall(e) || RangeOperatorCall.unapply(e).isDefined || !isReferenceShape(e)

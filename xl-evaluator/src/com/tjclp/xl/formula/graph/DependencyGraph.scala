@@ -451,8 +451,7 @@ object DependencyGraph:
           (names.exists(text.contains) ||
             CriteriaRangeResize.mayResizeThroughName(expression, text) ||
             ReferenceOperators.mayContainComputedRange(expression) ||
-            com.tjclp.xl.formula.functions.ReferenceFunctionNames.computing
-              .exists(text.contains)) &&
+            com.tjclp.xl.formula.functions.ReferenceFunctionNames.mayContainComputingCall(expression, text)) &&
           FormulaParser.parse(expression).exists(containsDynamicReference)
         }
       )
@@ -662,7 +661,8 @@ object DependencyGraph:
           candidateTokens.exists(text.contains) ||
           CriteriaRangeResize.mayResizeThroughName(expression, text) ||
           ReferenceOperators.mayContainComputedRange(expression) ||
-          com.tjclp.xl.formula.functions.ReferenceFunctionNames.computing.exists(text.contains)
+          com.tjclp.xl.formula.functions.ReferenceFunctionNames
+            .mayContainComputingCall(expression, text)
         }
       )
     val cells =

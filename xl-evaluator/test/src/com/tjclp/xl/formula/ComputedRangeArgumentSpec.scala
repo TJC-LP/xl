@@ -114,3 +114,39 @@ class ComputedRangeArgumentSpec extends FunSuite:
     val shifted = FormulaShifter.shiftStructural(parsed, true, "Data", true, 0, 1)
     assertEquals(FormulaPrinter.printFileForm(shifted), "COUNTIF(OFFSET(A2,0,0,3,1),1)")
   }
+
+  test("GH-723: INDEX value results remain invalid in reference-only slots") {
+    assertEquals(
+      data.evaluateFormula("COUNTIF(INDEX({1},1,1),1)"),
+      Right(CellValue.Error(CellError.Value))
+    )
+    assertEquals(
+      data.evaluateFormula("COUNTIF(INDEX({1},1,2),1)"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+  }
+
+  test("GH-723: the computed-call pre-filter ignores literals and quoted payloads") {
+    import com.tjclp.xl.formula.functions.ReferenceFunctionNames
+    val rejected =
+      List("\"a:b\"&\"INDEX(\"", "SUM('INDEX('!A1)", "SUM(Table1[INDEX(])", "MY_INDEX(A1)")
+    rejected.foreach(text =>
+      assert(
+        !ReferenceFunctionNames
+          .mayContainComputingCall(text, text.toUpperCase(java.util.Locale.ROOT)),
+        text
+      )
+    )
+    val accepted = List(
+      "COUNTIF(INDEX(A:A,0),1)",
+      "COUNTIF(_xlfn.XLOOKUP (1,A:A,B:B),1)",
+      "\"ß\"&COUNTIF(INDEX(A:A,0),1)"
+    )
+    accepted.foreach(text =>
+      assert(
+        ReferenceFunctionNames
+          .mayContainComputingCall(text, text.toUpperCase(java.util.Locale.ROOT)),
+        text
+      )
+    )
+  }

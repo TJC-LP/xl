@@ -647,12 +647,12 @@ object ArgSpec:
         mapExpr(args).asInstanceOf[TExpr[A]]
 
   /**
-   * GH-713: the calls a range slot names as "a computed reference" rather than reporting an
-   * argument count — every registered reference-computing function
+   * GH-723: the calls admitted as computed references in range argument slots — every registered
+   * reference-computing function
    * ([[ReferenceFunctionNames.computing]], tied to the registry by the drift law) and the `:`
-   * operator. It differs from `Evaluator.referenceFunctions` on purpose: a selector
-   * (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an intersection is not a
-   * computed reference. The drift law ties the two sets together.
+   * operator. It differs from `Evaluator.referenceFunctions` on purpose: selectors and
+   * intersections remain outside computed range-slot admission in this bounded contribution. The
+   * drift law ties the two sets together.
    */
   private[formula] val computedReferenceCalls: Set[String] =
     ReferenceFunctionNames.computing + ReferenceOperators.RangeName

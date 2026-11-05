@@ -219,6 +219,10 @@ class ScalarIndexAndIfSpec extends FunSuite:
     }
   }
 
-  test("INDEX's first slot still refuses a reference-returning call (#723 part b)") {
-    assert(FormulaParser.parse("=INDEX(OFFSET(A1,0,0,3,1),2)").isLeft)
+  test("GH-723: INDEX accepts a directly computed reference") {
+    // XL equivalence control; this is not a new desktop Excel observation.
+    assertEquals(
+      data.evaluateFormula("=INDEX(OFFSET(A1,0,0,3,1),2)"),
+      data.evaluateFormula("=INDEX(A1:A3,2)")
+    )
   }
