@@ -4,6 +4,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ooxml.FormulaStorage
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.styles.font.Font
 
 /** Conservative add-only sheet adoption until workbook-scoped package migration exists (GH-526). */
 private[workbooks] object SheetAdoption:
@@ -36,6 +37,10 @@ private[workbooks] object SheetAdoption:
           sheet,
           "source-backed sheet preservation requires package migration, not yet supported"
         )
+      else if from.metadata.defaultFont.getOrElse(Font.default) !=
+          destination.metadata.defaultFont.getOrElse(Font.default) ||
+          from.metadata.theme != destination.metadata.theme
+      then refuse(sheet, "source and destination workbook default font or theme differ")
       else if sheet.tables.nonEmpty || sheet.drawings.nonEmpty ||
         sheet.conditionalFormats.nonEmpty || sheet.dataValidations.nonEmpty
       then

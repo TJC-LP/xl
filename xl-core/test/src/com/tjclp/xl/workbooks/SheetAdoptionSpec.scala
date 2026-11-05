@@ -108,3 +108,22 @@ class SheetAdoptionSpec extends FunSuite:
     val destination = Workbook("Data")
     assertEquals(destination.put(sheet).sheets, Vector(sheet))
   }
+
+  test("GH-526: escaped brackets in structured headers cannot hide a later external ordinal") {
+    val sheet = Sheet("Imported").put(ref"A1", CellValue.Formula("SUM(Table1['[Col])+[1]Data!A1"))
+    assert(failure(Workbook("Destination").adopt(sheet, Workbook(sheet))).contains("A1:"))
+  }
+
+  test("GH-526: default font and theme mismatches are refused; equivalent defaults are allowed") {
+    val sheet = Sheet("Portable").put(ref"A1", 1)
+    val source = Workbook(sheet)
+    val destination = Workbook("Destination")
+    assert(
+      failure(destination.adopt(sheet, source.withDefaultFont(Font("Times New Roman", 10.0))))
+        .contains("default font or theme")
+    )
+    val themed =
+      source.copy(metadata = source.metadata.copy(theme = source.metadata.theme.copy(accent1 = 1)))
+    assert(failure(destination.adopt(sheet, themed)).contains("default font or theme"))
+    assert(destination.adopt(sheet, source.withDefaultFont(Font.default)).isRight)
+  }

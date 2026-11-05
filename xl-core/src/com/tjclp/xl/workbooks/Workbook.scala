@@ -68,10 +68,12 @@ final case class Workbook(
    * member of the supplied source workbook, compared by value including styles and properties.
    *
    * This first slice accepts source-free, fully modeled sheets with no external ordinal formulas,
-   * tables, drawings, conditional formats or validations. Foreign source-backed sheets are refused:
-   * their opaque parts and workbook-scoped style context cannot yet be migrated safely. Names are
-   * compared case-insensitively and collisions are refused. An identical source/destination
-   * workbook is a no-op only after membership validation; edited sheets are never discarded.
+   * tables, drawings, conditional formats or validations. Source and destination must share the
+   * same effective default font and theme palette; mismatches are refused. Foreign source-backed
+   * sheets are refused: their opaque parts and workbook-scoped style context cannot yet be migrated
+   * safely. Names are compared case-insensitively and collisions are refused. An identical
+   * source/destination workbook is a no-op only after membership validation; edited sheets are
+   * never discarded.
    *
    * No formula/name rewriting, link-table merging or cached-value materialization is performed.
    * Ordinary formula dependencies remain the caller's responsibility. Raw put/update are unchanged.

@@ -80,6 +80,7 @@ object FormulaStorage:
       if i >= n then n
       else
         formula(i) match
+          case '\'' => skipStructured(i + 2, open) // structured-header escape, including '[' / ']'
           case '[' => skipStructured(i + 1, open + 1)
           case ']' => if open == 1 then i + 1 else skipStructured(i + 1, open - 1)
           case _ => skipStructured(i + 1, open)

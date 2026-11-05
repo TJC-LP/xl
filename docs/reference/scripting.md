@@ -65,7 +65,7 @@ Excel.write(updated, "output.xlsx")
 - `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
   source-free modeled sheets. It refuses external-workbook ordinal formulas (including ordinals
   already valid in the destination), foreign source-backed sheets, tables/drawings/conditional
-  formats/validations, and case-insensitive name collisions. The unchanged sheet must belong to
+  formats/validations, case-insensitive name collisions, and differing workbook default fonts or theme palettes. The unchanged sheet must belong to
   the supplied source workbook. It preserves that sheet's model/style registry and tracks the
   destination change. It does not merge source ZIP parts, remap names or ordinary formula
   dependencies, or materialize cached values. Raw `put`/`update` remain low-level operations;
