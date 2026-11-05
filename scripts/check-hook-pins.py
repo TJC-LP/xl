@@ -24,6 +24,8 @@ def violations(text):
                 errors.append(f"line {number}: hook rev must be a full lowercase commit SHA")
             else:
                 pinned = True
+        elif re.search(r"(?:^|[\s{,])[\"']?(?:repo|rev)[\"']?\s*:", stripped):
+            errors.append(f"line {number}: use repo-first block entries and a plain rev key")
     if remote and not pinned:
         errors.append(f"remote hook {remote} has no full commit rev")
     return errors
