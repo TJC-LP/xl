@@ -1681,6 +1681,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
       Right(coerceToNumeric(array(row, col)))
 
+  /** #735: dense geometry and original error scans, without retaining a numeric matrix. */
+  private final case class LazyDenseArray(array: ArrayResult) extends ResolvedArray:
+    def rows: Int = array.rows
+    def cols: Int = array.cols
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      Right(coerceToNumeric(array(row, col)))
+
   /**
    * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
    * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
@@ -1691,6 +1698,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case ar: ArrayResult =>
         ar.tally.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None if ar.hasLazyDenseBox => Right(LazyDenseArray(ar))
           case None if !ar.isDense => Right(SparseArray(ar))
           case None =>
             Right(
@@ -1786,11 +1794,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     arrays: List[ResolvedArray],
     ctx: EvalContext
   ): Either[EvalError, List[ResolvedArray]] =
-    // #735: a formerly dense ROW/COLUMN axis must not newly trigger argument-order error
-    // scans of raw ranges, even after its values canonicalize to a constant. Only the preexisting
-    // sparse operands trigger this conversion.
-    if !arrays.exists { case s: SparseArray => !s.array.preservesRawRangeOrder; case _ => false }
-    then Right(arrays)
+    if !arrays.exists { case _: SparseArray => true; case _ => false } then Right(arrays)
     else
       arrays.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
         case (Left(err), _) => Left(err)

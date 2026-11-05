@@ -340,7 +340,10 @@ class RowColumnArraySpec extends FunSuite:
   test("#735: whole-column positions have no retained numeric box") {
     evala("=ROW(A:A)") match
       case Right(ar: ArrayResult) =>
-        assertEquals(ar.boxArea, 0L)
+        assertEquals(ar.retainedBoxCells, 0L)
+        assertEquals(ar.boxArea, 1048576L)
+        assert(ar.isDense)
+        assert(ar.hasLazyDenseBox)
         assertEquals((ar.rows, ar.cols), (1048576, 1))
         assertEquals(ar(1048575, 0), number(1048576))
       case other => fail(s"expected array: $other")
@@ -350,11 +353,9 @@ class RowColumnArraySpec extends FunSuite:
     List("=ROW(A:A)>1000000", "=ROW(A:A)*2", "=COLUMN(1:1)=100").foreach { formula =>
       evala(formula) match
         case Right(ar: ArrayResult) =>
-          assertEquals(ar.boxArea, 0L)
-          ar.fill match
-            case ArrayResult.Fill.ByRow(values) => assert(!values.isInstanceOf[Vector[?]])
-            case ArrayResult.Fill.ByCol(values) => assert(!values.isInstanceOf[Vector[?]])
-            case other => fail(s"expected lazy axis fill: $other")
+          assertEquals(ar.retainedBoxCells, 0L)
+          assert(ar.isDense)
+          assert(ar.hasLazyDenseBox)
         case other => fail(s"expected array: $other")
     }
     assertEquals(evala("=SUM(ROW(A:A))"), Right(BigDecimal("549756338176")))

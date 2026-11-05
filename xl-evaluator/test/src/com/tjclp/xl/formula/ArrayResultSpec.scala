@@ -164,18 +164,26 @@ class ArrayResultSpec extends FunSuite:
     assertEquals(horizontal.slice(0, 1, 1, 2), Right(ArrayResult(Vector(Vector(n(2), n(3))))))
   }
 
-  test("#735: constant canonicalization keeps position provenance outside value equality") {
+  test("#735: lazy box geometry survives pure transforms, slices and transpose") {
     val positions = ArrayResult.positions(1, 3, true)
-    val constant = positions.mapPure(_ => n(1))
-    val stored = ArrayResult.constant(3, 1, n(1))
-    assertEquals(constant.fill, ArrayResult.Fill.Const(n(1)))
-    assert(constant.preservesRawRangeOrder)
-    assert(constant.transpose.preservesRawRangeOrder)
-    assert(constant.slice(0, 2, 0, 1).exists(_.preservesRawRangeOrder))
-    assert(constant.slice(-1, 2, 0, 1).exists(_.preservesRawRangeOrder))
-    assert(constant.map(Right(_)).exists(_.preservesRawRangeOrder))
+    val constant = positions.mapPureLazy(_ => n(1))
+    val stored = ArrayResult(Vector.fill(3)(Vector(n(1))))
+    assert(constant.isDense)
+    assertEquals(constant.boxArea, 3L)
+    assertEquals(constant.retainedBoxCells, 0L)
+    assert(constant.transpose.hasLazyDenseBox)
+    assert(constant.slice(0, 2, 0, 1).exists(_.hasLazyDenseBox))
+    val padded = constant.slice(-1, 2, 0, 1)
+    assertEquals(padded, stored.slice(-1, 2, 0, 1))
+    assert(padded.exists(ar => !ar.isDense && ar.retainedBoxCells == 0L))
+    assertEquals(constant.map(Right(_)), Right(stored))
+    assertEquals(constant.mapPure(identity), stored)
     assertEquals(constant, stored)
     assertEquals(stored, constant)
     assertEquals(constant.hashCode, stored.hashCode)
-    assert(!stored.preservesRawRangeOrder)
+    assertEquals(
+      positions.toString,
+      ArrayResult(Vector(Vector(n(1)), Vector(n(2)), Vector(n(3)))).toString
+    )
+    assert(positions.slice(4, 2, 0, 1).exists(_.cells.forall(_ == CellValue.Empty)))
   }

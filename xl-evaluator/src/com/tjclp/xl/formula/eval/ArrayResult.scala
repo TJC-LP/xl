@@ -1,7 +1,5 @@
 package com.tjclp.xl.formula.eval
 
-import scala.collection.immutable.IndexedSeq
-
 import com.tjclp.xl.cells.CellValue
 
 /**
@@ -52,36 +50,32 @@ final class ArrayResult private (
   private val left: Int,
   private val box: Vector[Vector[CellValue]],
   private val outside: ArrayResult.Fill,
-  private val positionOrigin: Boolean = false
+  private val lazyBox: Option[ArrayResult.LazyBox] = None
 ):
   import ArrayResult.Fill
 
-  private val boxHeight: Int = box.size
-  private val boxWidth: Int = box.headOption.map(_.size).getOrElse(0)
+  private val boxHeight: Int = lazyBox.fold(box.size)(_.rows)
+  private val boxWidth: Int = lazyBox.fold(box.headOption.map(_.size).getOrElse(0))(_.cols)
+
+  /** #735: retained physical box cells, separate from the logical box geometry. */
+  private[formula] def retainedBoxCells: Long =
+    box.size.toLong * box.headOption.fold(0)(_.size).toLong
+
+  /** A logically dense array whose numbers are computed instead of retained. */
+  private[formula] def hasLazyDenseBox: Boolean = lazyBox.nonEmpty && isDense
 
   /**
    * Number of cells in the array (`rows * cols`), as a Long so a whole-sheet shape cannot overflow.
    */
   def cellCount: Long = rows.toLong * cols.toLong
 
-  /** Number of cells the populated box holds (every cell of a dense array). */
+  /** Logical box area; lazy boxes compute these cells without retaining them. */
   private[formula] def boxArea: Long = boxHeight.toLong * boxWidth.toLong
 
   /** Number of cells outside the box: each holds its [[fill]] entry. */
   private[formula] def outsideCount: Long = cellCount - boxArea
 
-  /**
-   * #735: position expressions used to be dense even when their values were constant. Keep this
-   * evaluation-order provenance through canonicalization; it is not part of value equality/hash.
-   */
-  private[formula] def preservesRawRangeOrder: Boolean = positionOrigin
-
-  /** Whether an axis is recomputed on demand rather than stored cell by cell (#735). */
-  private[formula] def hasLazyAxis: Boolean = outside match
-    case Fill.ByRow(_: ArrayResult.AxisValues) | Fill.ByCol(_: ArrayResult.AxisValues) => true
-    case _ => false
-
-  /** Whether every cell is stored (the box is the whole array). */
+  /** Whether the box covers the whole logical array, regardless of storage. */
   private[formula] def isDense: Boolean = outsideCount == 0L
 
   /** The box's first row and column, and its height and width. */
@@ -91,7 +85,8 @@ final class ArrayResult private (
   private[formula] def boxCols: Int = boxWidth
 
   /** One cell of the box, by its position within the box. */
-  private[formula] def boxCell(row: Int, col: Int): CellValue = box(row)(col)
+  private[formula] def boxCell(row: Int, col: Int): CellValue =
+    lazyBox.fold(box(row)(col))(_.read(row, col))
 
   /**
    * The cells outside the populated box: one value, or one value per row or per column. A dense
@@ -105,7 +100,8 @@ final class ArrayResult private (
     if row >= 0 && row < rows && col >= 0 && col < cols then
       val r = row - top
       val c = col - left
-      if r >= 0 && r < boxHeight && c >= 0 && c < boxWidth then box(r)(c) else outside.at(row, col)
+      if r >= 0 && r < boxHeight && c >= 0 && c < boxWidth then boxCell(r, c)
+      else outside.at(row, col)
     else CellValue.Empty
 
   /** Check if array is empty (0x0). */
@@ -143,7 +139,7 @@ final class ArrayResult private (
       val hasBox = boxHeight > 0 && boxWidth > 0
       val boxEnd = if hasBox then top + boxHeight else 0
       val colsL = cols.toLong
-      def columnPieces(from: Int, until: Int, vs: IndexedSeq[CellValue], n: Long) =
+      def columnPieces(from: Int, until: Int, vs: Vector[CellValue], n: Long) =
         (from until until).iterator.map(c => (Fill.entry(vs, c), n, c))
       // rows [from, until), every cell outside the box
       def outsideRows(from: Int, until: Int): Iterator[(CellValue, Long, Int)] =
@@ -174,8 +170,8 @@ final class ArrayResult private (
       val boxRowsIt =
         if !hasBox then Iterator.empty
         else
-          box.iterator.zipWithIndex.flatMap { (row, i) =>
-            val cells = row.iterator.map(cv => (cv, 1L, -1))
+          (0 until boxHeight).iterator.flatMap { i =>
+            val cells = (0 until boxWidth).iterator.map(c => (boxCell(i, c), 1L, -1))
             // grouping a fill by column (tally only): the box's first row emits its gaps as usual,
             // which meets every gap column's entry in row-major order; the gaps of the box's other
             // rows add nothing new, so they are skipped here and counted once the box is done, as
@@ -208,7 +204,7 @@ final class ArrayResult private (
   def map(f: CellValue => Either[EvalError, CellValue]): Either[EvalError, ArrayResult] =
     val g = geometry
     val mappedFill = ArrayResult.mapFill(g, outside)(f)
-    ArrayResult.mapBox(box, top, left, cols)(f) match
+    ArrayResult.mapBox(boxHeight, boxWidth, boxCell, top, left, cols)(f) match
       case Left((err, at)) =>
         mappedFill match
           case Left((fillErr, fillAt)) if fillAt < at => Left(fillErr)
@@ -216,30 +212,26 @@ final class ArrayResult private (
       case Right(mapped) =>
         mappedFill match
           case Left((fillErr, _)) => Left(fillErr)
-          case Right(newFill) =>
-            Right(ArrayResult.sparse(rows, cols, top, left, mapped, newFill, positionOrigin))
+          case Right(newFill) => Right(ArrayResult.sparse(rows, cols, top, left, mapped, newFill))
 
-  /** Apply a total `f` to every cell (to each fill entry once), retaining its result. */
+  /** Apply a total `f` to every cell (to each fill entry once). */
   def mapPure(f: CellValue => CellValue): ArrayResult =
-    mapValues(f, retainLazy = false)
-
-  /** Audited deterministic evaluator readers may recompute an axis value on access. */
-  private[formula] def mapPureLazy(f: CellValue => CellValue): ArrayResult =
-    mapValues(f, retainLazy = true)
-
-  private def mapValues(f: CellValue => CellValue, retainLazy: Boolean): ArrayResult =
     val g = geometry
     val newFill = outside match
       case Fill.Const(v) => Fill.Const(if outsideCount > 0L then f(v) else CellValue.Empty)
       case Fill.ByRow(vs) =>
-        Fill.ByRow(
-          ArrayResult.mapAxis(vs, r => if g.rowHasOutside(r) then f(vs(r)) else vs(r), retainLazy)
-        )
+        Fill.ByRow(vs.zipWithIndex.map((v, r) => if g.rowHasOutside(r) then f(v) else v))
       case Fill.ByCol(vs) =>
-        Fill.ByCol(
-          ArrayResult.mapAxis(vs, c => if g.colHasOutside(c) then f(vs(c)) else vs(c), retainLazy)
-        )
-    ArrayResult.sparse(rows, cols, top, left, box.map(_.map(f)), newFill, positionOrigin)
+        Fill.ByCol(vs.zipWithIndex.map((v, c) => if g.colHasOutside(c) then f(v) else v))
+    val mapped =
+      if lazyBox.isEmpty then box.map(_.map(f))
+      else Vector.tabulate(boxHeight)(r => Vector.tabulate(boxWidth)(c => f(boxCell(r, c))))
+    ArrayResult.sparse(rows, cols, top, left, mapped, newFill)
+
+  /** Only audited deterministic evaluator transforms may recompute their values on access. */
+  private[formula] def mapPureLazy(f: CellValue => CellValue): ArrayResult =
+    if hasLazyDenseBox then ArrayResult.lazyDense(rows, cols)((r, c) => f(apply(r, c)))
+    else mapPure(f)
 
   /**
    * The `rowCount` x `colCount` window whose top-left cell is (`rowFrom`, `colFrom`), read through
@@ -276,7 +268,20 @@ final class ArrayResult private (
         val c0 = math.max(left, colFrom)
         val c1 = math.min(left + boxWidth, math.min(cols, colFrom + nc))
         if r0 >= r1 || c0 >= c1 then
-          Right(ArrayResult.sparse(nr, nc, 0, 0, Vector.empty, windowFill, positionOrigin))
+          Right(ArrayResult.sparse(nr, nc, 0, 0, Vector.empty, windowFill))
+        else if lazyBox.nonEmpty then
+          val g = ArrayResult.Geometry(nr, nc, r0 - rowFrom, c0 - colFrom, r1 - r0, c1 - c0)
+          Right(
+            new ArrayResult(
+              nr,
+              nc,
+              r0 - rowFrom,
+              c0 - colFrom,
+              Vector.empty,
+              ArrayResult.canonical(g, windowFill),
+              Some(ArrayResult.LazyBox(r1 - r0, c1 - c0, (r, c) => apply(r0 + r, c0 + c)))
+            )
+          )
         else
           Right(
             ArrayResult.sparse(
@@ -285,8 +290,7 @@ final class ArrayResult private (
               r0 - rowFrom,
               c0 - colFrom,
               box.slice(r0 - top, r1 - top).map(_.slice(c0 - left, c1 - left)),
-              windowFill,
-              positionOrigin
+              windowFill
             )
           )
       else if nr.toLong * nc.toLong > ArrayResult.MaxCells then
@@ -299,8 +303,7 @@ final class ArrayResult private (
             0,
             0,
             Vector.tabulate(nr)(r => Vector.tabulate(nc)(c => apply(rowFrom + r, colFrom + c))),
-            Fill.Const(CellValue.Empty),
-            positionOrigin
+            Fill.Const(CellValue.Empty)
           )
         )
 
@@ -312,7 +315,18 @@ final class ArrayResult private (
         case Fill.Const(v) => Fill.Const(v)
         case Fill.ByRow(vs) => Fill.ByCol(vs)
         case Fill.ByCol(vs) => Fill.ByRow(vs)
-      new ArrayResult(cols, rows, left, top, box.transpose, swapped, positionOrigin)
+      lazyBox match
+        case Some(reader) =>
+          new ArrayResult(
+            cols,
+            rows,
+            left,
+            top,
+            Vector.empty,
+            swapped,
+            Some(ArrayResult.LazyBox(boxWidth, boxHeight, (r, c) => reader.read(c, r)))
+          )
+        case None => new ArrayResult(cols, rows, left, top, box.transpose, swapped)
 
   /**
    * The whole array as rows of cells, for consumers that need every cell (sorting, spilling,
@@ -321,7 +335,7 @@ final class ArrayResult private (
    */
   def toDense(label: String): Either[EvalError, Vector[Vector[CellValue]]] =
     if cellCount > ArrayResult.MaxCells then Left(ArrayResult.tooLarge(label, rows, cols))
-    else if isDense && top == 0 && left == 0 && boxHeight == rows then Right(box)
+    else if lazyBox.isEmpty && isDense && top == 0 && left == 0 && boxHeight == rows then Right(box)
     else Right(Vector.tabulate(rows)(r => Vector.tabulate(cols)(c => apply(r, c))))
 
   /**
@@ -338,7 +352,10 @@ final class ArrayResult private (
 
   private def sameCells(other: ArrayResult): Boolean =
     val g = geometry
-    if g == other.geometry && ArrayResult.isCanonical(g, outside) &&
+    if lazyBox.isEmpty && other.lazyBox.isEmpty && g == other.geometry && ArrayResult.isCanonical(
+        g,
+        outside
+      ) &&
       ArrayResult.isCanonical(g, other.outside)
     then box == other.box && outside == other.outside
     else ArrayResult.sameRuns(runs, other.runs)
@@ -371,11 +388,11 @@ object ArrayResult:
     /** One value for every cell outside the box. */
     case Const(value: CellValue)
 
-    /** Row values as an immutable indexed sequence; Vector construction remains supported. */
-    case ByRow(values: IndexedSeq[CellValue])
+    /** The value of row `r`'s cells outside the box is `values(r)`: one entry per row. */
+    case ByRow(values: Vector[CellValue])
 
-    /** Column values as an immutable indexed sequence; values may be computed on demand. */
-    case ByCol(values: IndexedSeq[CellValue])
+    /** The value of column `c`'s cells outside the box is `values(c)`: one entry per column. */
+    case ByCol(values: Vector[CellValue])
 
     /** The fill's value at (`row`, `col`), a cell outside the box. */
     def at(row: Int, col: Int): CellValue = this match
@@ -385,7 +402,7 @@ object ArrayResult:
 
   object Fill:
     /** `values(i)`, Empty past the end. */
-    private[eval] def entry(values: IndexedSeq[CellValue], i: Int): CellValue =
+    private[eval] def entry(values: Vector[CellValue], i: Int): CellValue =
       if i >= 0 && i < values.size then values(i) else CellValue.Empty
 
   /**
@@ -473,21 +490,27 @@ object ArrayResult:
    * Map `f` over the box row-major, stopping at the first `Left`, which comes back with its
    * row-major position in an array of `cols` columns whose box is at (`top`, `left`).
    */
-  private def mapBox(box: Vector[Vector[CellValue]], top: Int, left: Int, cols: Int)(
+  private def mapBox(
+    height: Int,
+    width: Int,
+    read: (Int, Int) => CellValue,
+    top: Int,
+    left: Int,
+    cols: Int
+  )(
     f: CellValue => Either[EvalError, CellValue]
   ): Either[(EvalError, Long), Vector[Vector[CellValue]]] =
     val out = new scala.collection.immutable.VectorBuilder[Vector[CellValue]]
     @scala.annotation.tailrec
     def rowLoop(i: Int): Either[(EvalError, Long), Vector[Vector[CellValue]]] =
-      if i >= box.size then Right(out.result())
+      if i >= height then Right(out.result())
       else
-        val row = box(i)
         val cellsOut = new scala.collection.immutable.VectorBuilder[CellValue]
         @scala.annotation.tailrec
         def cellLoop(j: Int): Option[(EvalError, Long)] =
-          if j >= row.size then None
+          if j >= width then None
           else
-            f(row(j)) match
+            f(read(i, j)) match
               case Right(v) =>
                 cellsOut += v
                 cellLoop(j + 1)
@@ -503,11 +526,9 @@ object ArrayResult:
    * Compute a fill entry by entry: `entry(i)` for every entry that has a cell outside the box of
    * `g` (Empty for one that has none, never computed). The `Left` whose first outside cell comes
    * first in row-major order wins, and comes back with that cell's position. A constant fill is one
-   * entry. `retainLazy` is only for deterministic pure readers: validation still visits every entry
-   * now, but a successful result recomputes values on demand rather than retaining them. Generic
-   * lifted calls keep eager storage (in particular, random draws are never replayed).
+   * entry.
    */
-  private[formula] def computeFill(g: Geometry, axis: Option[Boolean], retainLazy: Boolean = false)(
+  private[formula] def computeFill(g: Geometry, axis: Option[Boolean])(
     entry: Int => Either[EvalError, CellValue]
   ): Either[(EvalError, Long), Fill] =
     axis match
@@ -520,15 +541,15 @@ object ArrayResult:
         val failure = (0 until n).foldLeft(Option.empty[(EvalError, Long)]) { (worst, i) =>
           val at = if byRow then g.firstOutsideInRow(i) else g.firstOutsideInCol(i)
           if at == Long.MaxValue then
-            if !retainLazy then out += CellValue.Empty
+            out += CellValue.Empty
             worst
           else
             entry(i) match
               case Right(v) =>
-                if !retainLazy then out += v
+                out += v
                 worst
               case Left(e) =>
-                if !retainLazy then out += CellValue.Empty
+                out += CellValue.Empty
                 worst match
                   case Some((_, earlier)) if earlier <= at => worst
                   case _ => Some((e, at))
@@ -536,15 +557,7 @@ object ArrayResult:
         failure match
           case Some(f) => Left(f)
           case None =>
-            val values =
-              if retainLazy then
-                new AxisValues(
-                  n,
-                  i =>
-                    val has = if byRow then g.rowHasOutside(i) else g.colHasOutside(i)
-                    if has then entry(i).fold(_ => CellValue.Empty, identity) else CellValue.Empty
-                )
-              else out.result()
+            val values = out.result()
             Right(if byRow then Fill.ByRow(values) else Fill.ByCol(values))
 
   /** `f` over a fill's entries ([[computeFill]]: the first failure in row-major order wins). */
@@ -619,8 +632,7 @@ object ArrayResult:
     top: Int,
     left: Int,
     box: Vector[Vector[CellValue]],
-    fill: Fill,
-    positionOrigin: Boolean = false
+    fill: Fill
   ): ArrayResult =
     if rows <= 0 || cols <= 0 then empty
     else
@@ -630,27 +642,23 @@ object ArrayResult:
         if height0 == 0 || width0 == 0 then (0, 0, 0, 0, Vector.empty[Vector[CellValue]])
         else (height0, width0, top, left, box)
       val g = Geometry(rows, cols, at, from, height, width)
-      new ArrayResult(rows, cols, at, from, kept, canonical(g, fill), positionOrigin)
+      new ArrayResult(rows, cols, at, from, kept, canonical(g, fill))
 
   /** A `rows` x `cols` array holding `value` in every cell, stored as that one value. */
   private[formula] def constant(rows: Int, cols: Int, value: CellValue): ArrayResult =
     sparse(rows, cols, 0, 0, Vector.empty, Fill.Const(value))
 
   /** Whether `fill` is already in [[canonical]] form for `g`. */
-  private def isCanonical(g: Geometry, fill: Fill): Boolean = fill match
-    case Fill.ByRow(_: AxisValues) | Fill.ByCol(_: AxisValues) => false
-    case _ => canonical(g, fill) == fill
+  private def isCanonical(g: Geometry, fill: Fill): Boolean = canonical(g, fill) == fill
 
   /** See [[sparse]]: irrelevant entries Empty, a uniform fill one value. */
   private def canonical(g: Geometry, fill: Fill): Fill =
     if g.outsideCount == 0L then Fill.Const(CellValue.Empty)
     else
-      def axis(n: Int, vs: IndexedSeq[CellValue], has: Int => Boolean)(
-        make: IndexedSeq[CellValue] => Fill
+      def axis(n: Int, vs: Vector[CellValue], has: Int => Boolean)(
+        make: Vector[CellValue] => Fill
       ): Fill =
-        val entries = vs match
-          case _: AxisValues => returnLazyAxis(n, vs, has)
-          case _ => Vector.tabulate(n)(i => if has(i) then Fill.entry(vs, i) else CellValue.Empty)
+        val entries = Vector.tabulate(n)(i => if has(i) then Fill.entry(vs, i) else CellValue.Empty)
         val used = (0 until n).iterator.filter(has).map(entries(_))
         if !used.hasNext then Fill.Const(CellValue.Empty)
         else
@@ -661,46 +669,28 @@ object ArrayResult:
         case Fill.ByRow(vs) => axis(g.rows, vs, g.rowHasOutside)(Fill.ByRow(_))
         case Fill.ByCol(vs) => axis(g.cols, vs, g.colHasOutside)(Fill.ByCol(_))
 
-  /** Constant-storage, non-memoizing axis. Only deterministic pure readers belong here. */
-  private final class AxisValues(val length: Int, read: Int => CellValue)
-      extends IndexedSeq[CellValue]:
-    def apply(i: Int): CellValue =
-      if i >= 0 && i < length then read(i) else CellValue.Empty
-    override def slice(from: Int, until: Int): IndexedSeq[CellValue] =
-      val start = math.max(0, math.min(from, length))
-      val end = math.max(start, math.min(until, length))
-      new AxisValues(end - start, i => read(start + i))
+  /** A private non-memoizing box; geometry is the same as an eagerly populated box. */
+  private final case class LazyBox(rows: Int, cols: Int, read: (Int, Int) => CellValue)
 
-  private def mapAxis(
-    values: IndexedSeq[CellValue],
-    read: Int => CellValue,
-    retainLazy: Boolean
-  ): IndexedSeq[CellValue] =
-    values match
-      case _: AxisValues if retainLazy => new AxisValues(values.length, read)
-      case _ => Vector.tabulate(values.length)(read)
-
-  private def returnLazyAxis(
-    n: Int,
-    values: IndexedSeq[CellValue],
-    has: Int => Boolean
-  ): IndexedSeq[CellValue] =
-    new AxisValues(n, i => if has(i) then Fill.entry(values, i) else CellValue.Empty)
-
-  /** #735: one position per axis entry, without retaining numbers or per-row vectors. */
-  private[formula] def positions(start: Int, length: Int, alongRows: Boolean): ArrayResult =
-    if length <= 0 then empty
+  /** Known-pure dense cells without changing the geometry read by existing consumers. */
+  private[formula] def lazyDense(rows: Int, cols: Int)(read: (Int, Int) => CellValue): ArrayResult =
+    if rows <= 0 || cols <= 0 then empty
     else
-      val values = new AxisValues(length, i => CellValue.Number(BigDecimal(start.toLong + i)))
       new ArrayResult(
-        if alongRows then length else 1,
-        if alongRows then 1 else length,
+        rows,
+        cols,
         0,
         0,
         Vector.empty,
-        if alongRows then Fill.ByRow(values) else Fill.ByCol(values),
-        positionOrigin = true
+        Fill.Const(CellValue.Empty),
+        Some(LazyBox(rows, cols, read))
       )
+
+  /** #735: position numbers retain the former dense geometry, without allocating each cell. */
+  private[formula] def positions(start: Int, length: Int, alongRows: Boolean): ArrayResult =
+    lazyDense(if alongRows then length else 1, if alongRows then 1 else length) { (r, c) =>
+      CellValue.Number(BigDecimal(start.toLong + (if alongRows then r else c)))
+    }
 
   /** Empty array result. */
   val empty: ArrayResult = ArrayResult(Vector.empty)

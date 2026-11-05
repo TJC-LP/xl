@@ -11,11 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Lazy ROW/COLUMN positions** (#735): array-mode position sequences retain their shape without
   allocating a numeric cell and row vector per position. Aggregates stream the values;
-  deterministic arithmetic/comparisons and SUMPRODUCT keep axis storage lazy. Printing/spilling
-  still materializes cells, and SUMPRODUCT's existing whole-axis bounds are unchanged. The public
-  `ArrayResult.Fill.ByRow`/`ByCol` payload is now immutable `IndexedSeq[CellValue]`: constructing
-  with `Vector` still works, but clients requiring a `Vector` from extraction must use `.toVector`
-  and downstream binaries must be recompiled.
+  known-pure dense arithmetic/comparisons and SUMPRODUCT read through a private lazy box.
+  Printing/spilling still materializes cells. Public constructors, Fill Vector payloads,
+  callback execution, logical dense/sparse geometry and existing whole-axis bounds are unchanged.
 
 ### Added
 

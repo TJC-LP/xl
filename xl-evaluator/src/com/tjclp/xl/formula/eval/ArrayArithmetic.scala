@@ -786,6 +786,24 @@ object ArrayArithmetic:
     val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
     val outCells = outRows.toLong * outCols.toLong
     if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
+    else if pureFill && !perCell && operands.forall(_.isDense) && operands.exists(_.hasLazyDenseBox)
+    then
+      // Validate in row-major order, just like computeBox. Known-pure operators may then
+      // recompute a cell without storing the full result; public callbacks never enter here.
+      def value(r: Int, c: Int) = elem(operands.map(op => getWithBroadcastCV(op, r, c)))
+      val failure = (0 until outRows).iterator
+        .flatMap { r =>
+          (0 until outCols).iterator.map(c => value(r, c))
+        }
+        .collectFirst { case Left(err) => err }
+      failure match
+        case Some(err) => Left(err)
+        case None =>
+          Right(
+            ArrayResult.lazyDense(outRows, outCols)((r, c) =>
+              value(r, c).fold(_ => CellValue.Empty, identity)
+            )
+          )
     else
       val whole = BroadcastPlan(0, outRows, 0, outCols, FillAxis.Const, Vector.empty)
       def cellByCell: Either[EvalError, BroadcastPlan] =
@@ -874,8 +892,7 @@ object ArrayArithmetic:
           p.axis match
             case FillAxis.Const => None
             case FillAxis.ByRow => Some(true)
-            case FillAxis.ByCol => Some(false),
-          retainLazy = pureFill && operands.exists(_.hasLazyAxis)
+            case FillAxis.ByCol => Some(false)
         )(i => elem(p.outsides.map(_.entry(i))))
         computeBox(p.top, height, p.left, width, outCols)(r =>
           c => elem(operands.map(op => getWithBroadcastCV(op, r, c)))
@@ -888,17 +905,7 @@ object ArrayArithmetic:
             fillResult match
               case Left((fillErr, _)) => Left(fillErr)
               case Right(fill) =>
-                Right(
-                  ArrayResult.sparse(
-                    outRows,
-                    outCols,
-                    p.top,
-                    p.left,
-                    box,
-                    fill,
-                    positionOrigin = operands.exists(_.preservesRawRangeOrder)
-                  )
-                )
+                Right(ArrayResult.sparse(outRows, outCols, p.top, p.left, box, fill))
       }
 
   /**
