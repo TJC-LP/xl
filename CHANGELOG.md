@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
+  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
+  while retaining fractional periods, verified against desktop Excel 16.114.3.
+
 ### Security
 
 - **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256

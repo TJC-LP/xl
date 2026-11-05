@@ -238,3 +238,58 @@ trait FunctionSpecsFinancialTvm extends FunctionSpecsBase:
               }
       yield result
     }
+
+  /** GH-684: straight-line depreciation; zero life is a spreadsheet division error. */
+  val sln: FunctionSpec[BigDecimal] {
+    type Args = (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  } = FunctionSpec.simple[BigDecimal, (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])](
+    "SLN",
+    Arity.three,
+    flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
+  ) { (args, ctx) =>
+    val (costExpr, salvageExpr, lifeExpr) = args
+    for
+      // Match the existing financial functions: round numeric inputs before arithmetic/guards.
+      cost <- ctx.evalExpr(costExpr).map(_.toDouble)
+      salvage <- ctx.evalExpr(salvageExpr).map(_.toDouble)
+      life <- ctx.evalExpr(lifeExpr).map(_.toDouble)
+      result <-
+        if life == 0.0 then Left(EvalError.ErrorValue(CellError.Div0))
+        else
+          NumericGuard.contained("SLN", "SLN(cost, salvage, life)") {
+            Right(BigDecimal((cost - salvage) / life))
+          }
+    yield result
+  }
+
+  /** GH-684: sum-of-years' digits depreciation, retaining fractional life and period. */
+  val syd: FunctionSpec[BigDecimal] {
+    type Args = (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  } = FunctionSpec.simple[
+    BigDecimal,
+    (TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal], TExpr[BigDecimal])
+  ](
+    "SYD",
+    Arity.Exact(4),
+    flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
+  ) { (args, ctx) =>
+    val (costExpr, salvageExpr, lifeExpr, periodExpr) = args
+    for
+      // Match the existing financial functions: round numeric inputs before arithmetic/guards.
+      cost <- ctx.evalExpr(costExpr).map(_.toDouble)
+      salvage <- ctx.evalExpr(salvageExpr).map(_.toDouble)
+      life <- ctx.evalExpr(lifeExpr).map(_.toDouble)
+      period <- ctx.evalExpr(periodExpr).map(_.toDouble)
+      result <-
+        if life <= 0.0 || period <= 0.0 || period > life then
+          Left(EvalError.ErrorValue(CellError.Num))
+        else
+          NumericGuard.contained("SYD", "SYD(cost, salvage, life, per)") {
+            Right(
+              BigDecimal(
+                (cost - salvage) * (life - period + 1) * 2 / (life * (life + 1))
+              )
+            )
+          }
+    yield result
+  }
