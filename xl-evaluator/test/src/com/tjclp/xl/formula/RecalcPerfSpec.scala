@@ -5,7 +5,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator, IterativeCalc, RangeOperand}
-import com.tjclp.xl.formula.functions.{EvalContext, FunctionSpecsBase}
+import com.tjclp.xl.formula.functions.{EvalContext, FunctionSpecsAggregate, FunctionSpecsBase}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.sheets.Sheet
@@ -304,7 +304,7 @@ class RecalcPerfSpec extends FunSuite:
     }
   }
 
-  test("GH-736: INDEX keeps its declared shape while SUM folds only the populated box") {
+  test("GH-736: INDEX keeps its declared shape and sparse materialization beside SUM") {
     assertEquals(
       template.evaluateFormula("=SUM(INDEX($A$2:$A$100000,0))"),
       Right(num(BigDecimal(200)))
@@ -373,5 +373,121 @@ class RecalcPerfSpec extends FunSuite:
       val result = book.recalculate()
       assert(result.isClean, result.errors.toString)
       assertEquals(cached(result.workbook, "Out", ref"A1"), Some(num(BigDecimal(200 + 2 * input))))
+    }
+  }
+
+  private final class MeasuredSum extends FunctionSpecsAggregate:
+    var reads = 0
+    override protected def rangeCellReader(
+      target: Sheet,
+      ctx: EvalContext
+    ): ARef => Either[EvalError, CellValue] =
+      val read = super.rangeCellReader(target, ctx)
+      at =>
+        reads += 1
+        read(at)
+    def resolvedReference(
+      sheet: Sheet,
+      range: CellRange,
+      placement: Option[Evaluator.PlacementGuard] = None
+    ): Either[EvalError, BigDecimal] =
+      val ctx = EvalContext(
+        sheet,
+        Clock.system,
+        None,
+        [A] => (_: TExpr[A]) => Left(EvalError.EvalFailed("unused", None)),
+        _ => Left(EvalError.EvalFailed("unused", None)),
+        placementGuard = placement,
+        operands = EvalContext.Operands.array.copy(
+          // Isolate the aggregate after INDEX has returned its reference; invoke the real SUM
+          // spec and cell reader, without materializing through boundedReferenceValues.
+          referenceArg = Some(_ => Right(RangeOperand(sheet, range)))
+        )
+      )
+      val index = FormulaParser
+        .parse(s"=INDEX(${range.toA1},0)")
+        .fold(e => fail(e.toString), identity)
+      val (args, rest) = sum.argSpec
+        .parse(List(index), 0, "SUM")
+        .fold(e => fail(e.toString), identity)
+      assertEquals(rest, Nil)
+      sum.eval(args, ctx)
+
+  test("GH-736: resolved computed-reference SUM reads 200 cells at both declared sizes") {
+    Vector(10000, 100000).foreach { last =>
+      val measured = new MeasuredSum
+      val range = CellRange(ref"A2", ARef.from1(1, last))
+      assertEquals(measured.resolvedReference(template, range), Right(BigDecimal(200)))
+      assertEquals(measured.reads, 200)
+    }
+  }
+
+  test("GH-736: reference folds preserve internal blank gaps and small positional windows") {
+    val distant = Sheet(SheetName.unsafe("Distant"))
+      .put(ref"A3", num(BigDecimal(2)))
+      .put(ref"A100", num(BigDecimal(4)))
+    val measured = new MeasuredSum
+    assertEquals(
+      measured.resolvedReference(distant, CellRange(ref"A1", ref"A100000")),
+      Right(BigDecimal(6))
+    )
+    assertEquals(measured.reads, 98) // the populated box still includes its internal blank gap
+    val small = new MeasuredSum
+    assertEquals(
+      small.resolvedReference(template, CellRange(ref"A2", ref"A5")),
+      Right(BigDecimal(4))
+    )
+    assertEquals(small.reads, 4) // a small window never scans the whole sheet to find a box
+  }
+
+  test("GH-736: positioned folds still read an absent guarded placement in the blank tail") {
+    val guard = Evaluator.PlacementGuard.placed(template.name, ref"A9999")
+    val measured = new MeasuredSum
+    assertEquals(
+      measured.resolvedReference(template, CellRange(ref"A2", ref"A10000"), Some(guard)),
+      Left(EvalError.CircularRef(List(ref"A9999")))
+    )
+    assert(guard.read)
+  }
+
+  test("GH-736: all-empty finite reference folds keep COUNTBLANK and AVERAGE semantics") {
+    val empty = Sheet(SheetName.unsafe("Empty"))
+    Vector(
+      "SUM" -> num(BigDecimal(0)),
+      "COUNT" -> num(BigDecimal(0)),
+      "COUNTA" -> num(BigDecimal(0)),
+      "COUNTBLANK" -> num(BigDecimal(100000)),
+      "MIN" -> num(BigDecimal(0)),
+      "MAX" -> num(BigDecimal(0)),
+      "AVERAGE" -> CellValue.Error(CellError.Div0)
+    ).foreach { (fn, expected) =>
+      assertEquals(empty.evaluateFormula(s"=$fn(INDEX(A1:A100000,0))"), Right(expected), fn)
+    }
+  }
+
+  test("GH-736: sparse reference folds retain formula, text, boolean and blank-count policies") {
+    val mixed = Sheet(SheetName.unsafe("Mixed"))
+      .put(ref"A3", num(BigDecimal(2)))
+      .put(ref"A5", num(BigDecimal(4)))
+      .put(ref"A8", formula("=2+4"))
+      .put(ref"A9", CellValue.Text("9"))
+      .put(ref"A10", CellValue.Bool(true))
+      .put(ref"A11", formula("=\"\""))
+    Vector(
+      "SUM" -> 12,
+      "COUNT" -> 3,
+      "COUNTA" -> 6,
+      "COUNTBLANK" -> 99995,
+      "MIN" -> 2,
+      "MAX" -> 6,
+      "AVERAGE" -> 4,
+      "MEDIAN" -> 4,
+      "VAR" -> 4
+    ).foreach { (fn, expected) =>
+      assertEquals(
+        mixed.evaluateFormula(s"=$fn(INDEX(A1:A100000,0))"),
+        Right(num(BigDecimal(expected))),
+        fn
+      )
     }
   }
