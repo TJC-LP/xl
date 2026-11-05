@@ -50,6 +50,12 @@ mkdir -p "$BIN"
 COURSIER_VERSION="${XL_REMOTE_COURSIER_VERSION:-2.1.24}"
 SCALA_CLI_VERSION="${XL_REMOTE_SCALA_CLI_VERSION:-1.9.1}"
 
+# Every launcher fetched by this script must match committed bytes, including cache hits.
+. "$ROOT/scripts/verify-download.sh"
+CS_JAR_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "coursier-$COURSIER_VERSION") || exit 1
+CS_ARCHIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux.gz") || exit 1
+CS_NATIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux") || exit 1
+
 NOTES=""
 note() { NOTES="${NOTES:+$NOTES; }$*"; }
 warn() { echo "[remote-setup] WARN: $*" >&2; note "WARN: $*"; }
@@ -77,13 +83,16 @@ CS_JAR=""
 cs_run() {
   if [[ -n "$CS_JAR" ]]; then java -jar "$CS_JAR" "$@"; else "$CS" "$@"; fi
 }
-if [[ "$JVM_LAUNCHERS" == "true" ]]; then
+if [[ "$JVM_LAUNCHERS" == "true" || "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
+  # v2.1.24 has no Linux ARM64 native asset; use its portable JVM launcher.
   CS_JAR_PATH="$BIN/coursier.jar"
   if [[ -s "$CS_JAR_PATH" ]]; then
+    xl_verify_sha256 "$CS_JAR_SHA" "$CS_JAR_PATH" || exit 1
     CS_JAR="$CS_JAR_PATH"
   else
     URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/coursier"
     if curl -fsSL "$URL" -o "$CS_JAR_PATH.tmp" && [[ -s "$CS_JAR_PATH.tmp" ]]; then
+      xl_verify_sha256 "$CS_JAR_SHA" "$CS_JAR_PATH.tmp" || exit 1
       mv "$CS_JAR_PATH.tmp" "$CS_JAR_PATH" && CS_JAR="$CS_JAR_PATH"
       note "coursier: JAR launcher installed to $CS_JAR_PATH"
     else
@@ -91,18 +100,24 @@ if [[ "$JVM_LAUNCHERS" == "true" ]]; then
       warn "could not fetch the coursier JAR ($URL); ./mill still self-provisions its JDK, but scala-cli and java-on-PATH are unavailable"
     fi
   fi
-elif command -v cs >/dev/null 2>&1; then
-  CS="$(command -v cs)"
 elif [[ -x "$BIN/cs" ]]; then
+  xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs" || exit 1
   CS="$BIN/cs"
+elif command -v cs >/dev/null 2>&1; then
+  # An externally provisioned tool remains the caller's trust decision.
+  CS="$(command -v cs)"
 elif [[ "$(uname -s)" == "Linux" ]]; then
   case "$(uname -m)" in
     x86_64 | amd64) ARCH=x86_64 ;;
     aarch64 | arm64) ARCH=aarch64 ;;
     *) ARCH="" ;;
   esac
-  URL="https://github.com/coursier/launchers/raw/master/cs-${ARCH}-pc-linux.gz"
-  if [[ -n "$ARCH" ]] && curl -fsSL "$URL" | gzip -d > "$BIN/cs.tmp" 2>/dev/null && [[ -s "$BIN/cs.tmp" ]]; then
+  URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/cs-${ARCH}-pc-linux.gz"
+  if [[ -n "$ARCH" ]] && curl -fsSL "$URL" -o "$BIN/cs.gz.tmp" && [[ -s "$BIN/cs.gz.tmp" ]]; then
+    xl_verify_sha256 "$CS_ARCHIVE_SHA" "$BIN/cs.gz.tmp" || exit 1
+    gzip -dc "$BIN/cs.gz.tmp" > "$BIN/cs.tmp" || exit 1
+    xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs.tmp" || exit 1
+    rm -f "$BIN/cs.gz.tmp"
     chmod +x "$BIN/cs.tmp" && mv "$BIN/cs.tmp" "$BIN/cs" && CS="$BIN/cs"
     note "coursier: installed to $BIN/cs"
   else
@@ -139,7 +154,7 @@ if [[ -n "$CS" || -n "$CS_JAR" ]]; then
     else
       warn "scala-cli JVM bootstrap failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"
     fi
-  elif cs_run install --install-dir "$BIN" scala-cli >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
+  elif cs_run install --install-dir "$BIN" "scala-cli:$SCALA_CLI_VERSION" >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
     note "scala-cli installed to $BIN"
   else
     warn "scala-cli install failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"

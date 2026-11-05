@@ -11,52 +11,55 @@ Check: `which xl || echo "not installed"`; then `xl --version`.
 The latest published native binary; no JDK required.
 
 ```bash
-# Auto-detect platform and install latest release
-REPO="TJC-LP/xl"
-LATEST=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
+set -euo pipefail
+LATEST=$(curl -fLsS https://api.github.com/repos/TJC-LP/xl/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
 VERSION=${LATEST#v}
+case "$VERSION" in *[!0-9A-Za-z.+-]*|'') echo "Invalid release version" >&2; exit 1 ;; esac
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64)  BINARY="xl-$VERSION-linux-amd64" ;;
-  Linux-aarch64) BINARY="xl-$VERSION-linux-arm64" ;;
-  Darwin-x86_64) BINARY="xl-$VERSION-darwin-amd64" ;;
-  Darwin-arm64)  BINARY="xl-$VERSION-darwin-arm64" ;;
-  *) echo "Unsupported: $(uname -s)-$(uname -m)" && exit 1 ;;
+  Linux-x86_64) PLATFORM=linux-amd64 ;;
+  Linux-aarch64) PLATFORM=linux-arm64 ;;
+  Darwin-x86_64) PLATFORM=darwin-amd64 ;;
+  Darwin-arm64) PLATFORM=darwin-arm64 ;;
+  *) echo "Unsupported platform; use the verified JAR distribution" >&2; exit 1 ;;
 esac
-mkdir -p ~/.local/bin
-curl -fsSL "https://github.com/$REPO/releases/download/$LATEST/$BINARY" -o ~/.local/bin/xl || {
-  echo "Error: no $BINARY published for $LATEST — use the JAR distribution xl-cli-$VERSION.tar.gz instead" >&2
-  exit 1
-}
-chmod +x ~/.local/bin/xl
-echo "Installed xl $VERSION to ~/.local/bin/xl"
-xl --version
+BINARY="xl-${VERSION}-${PLATFORM}"
+INSTALL_DIR="${XL_INSTALL_DIR:-${HOME}/.local/bin}"
+mkdir -p "$INSTALL_DIR"
+WORK=$(mktemp -d "$INSTALL_DIR/.xl-download.XXXXXX")
+trap 'rm -rf "$WORK"' EXIT
+BASE="https://github.com/TJC-LP/xl/releases/download/v${VERSION}"
+curl -fLsS "$BASE/$BINARY" -o "$WORK/$BINARY"
+curl -fLsS "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
+EXPECTED=$(awk -v name="$BINARY" '$2 == name { print $1; n++ } END { if (n != 1) exit 1 }' "$WORK/SHA256SUMS")
+case "$EXPECTED" in *[!0-9a-f]*|'') echo "Invalid checksum manifest" >&2; exit 1 ;; esac
+[[ ${#EXPECTED} == 64 ]] || { echo "Invalid checksum length" >&2; exit 1; }
+if command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "$WORK/$BINARY")
+else
+  ACTUAL=$(shasum -a 256 "$WORK/$BINARY")
+fi
+[[ ${ACTUAL%% *} == "$EXPECTED" ]] || { echo "Release checksum mismatch" >&2; exit 1; }
+chmod +x "$WORK/$BINARY"
+mv "$WORK/$BINARY" "$INSTALL_DIR/xl"
+echo "Installed verified xl $VERSION to $INSTALL_DIR/xl"
 ```
 
-Ensure `~/.local/bin` is in your PATH: `export PATH="$HOME/.local/bin:$PATH"`
-
-## Alternative: GitHub CLI
-
-```bash
-# If gh is installed (simpler, handles auth for private repos)
-gh release download --repo TJC-LP/xl --pattern "xl-*-$(uname -s | tr A-Z a-z)-$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')" -D /tmp
-mv /tmp/xl-* ~/.local/bin/xl && chmod +x ~/.local/bin/xl
-```
+The release must provide `SHA256SUMS`; older releases without it fail closed. The manifest and
+binary are trusted through the same HTTPS release source; this detects changed bytes, not a
+compromised publisher. Ensure `~/.local/bin` is on PATH.
 
 ## Windows (PowerShell)
 
-```powershell
-$repo = "TJC-LP/xl"
-$latest = (Invoke-RestMethod "https://api.github.com/repos/$repo/releases/latest").tag_name
-$version = $latest -replace '^v', ''
-$url = "https://github.com/$repo/releases/download/$latest/xl-$version-windows-amd64.exe"
-Invoke-WebRequest -Uri $url -OutFile "$env:LOCALAPPDATA\xl.exe"
-Write-Host "Installed xl $version"
-```
+Download the matching `.exe` and `SHA256SUMS` from the same release into a temporary directory.
+Compare `(Get-FileHash -Algorithm SHA256 path/to/xl.exe).Hash` with the manifest entry for that exact
+asset before moving it to your installation directory. Refuse a missing, duplicate, or mismatched
+entry; do not execute an unverified file.
 
 ## JAR distribution
 
 Every release also attaches `xl-cli-<version>.tar.gz`: the assembly JAR plus a wrapper script,
-for platforms without a native binary. It needs a JRE (25 or later).
+for platforms without a native binary. Verify the tarball against its exact `SHA256SUMS` entry
+before extraction or running its installer. It needs a JRE (25 or later).
 
 ## Rasterizer for PNG / JPEG / PDF / WebP export
 

@@ -9,7 +9,7 @@ Check: `which scala-cli || echo "not installed"`
 | Platform | Command |
 |----------|---------|
 | macOS | `brew install Virtuslab/scala-cli/scala-cli` |
-| Linux | `curl -sSLf https://scala-cli.virtuslab.org/get \| sh` |
+| Linux | `cs install scala-cli:1.9.1` (requires an already trusted Coursier installation) |
 | Windows | `winget install virtuslab.scalacli` |
 
 No JDK prerequisite: scala-cli provisions a JVM through coursier on first use. The first run of
