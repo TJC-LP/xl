@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Agent credential discovery** (#838): load API keys from the process environment or local
+  working-directory/module `.env` files only; never search parent or legacy example directories.
+
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
   retain per-cell context, and validate after resolving the target and selecting the write mode.
