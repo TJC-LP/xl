@@ -2,6 +2,12 @@
 
 **Current Status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 ## Test Infrastructure
 
 ### Frameworks

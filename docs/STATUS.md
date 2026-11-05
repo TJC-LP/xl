@@ -284,6 +284,12 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 **9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 4225 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
