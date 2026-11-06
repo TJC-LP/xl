@@ -20,7 +20,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Verify download integrity boundaries
-        run: python3 scripts/test-download-verification.py
+        run: |
+          python3 scripts/test-download-verification.py
+          python3 scripts/test-remote-setup.py
+          python3 scripts/test-install-docs.py
 
       - name: plugin.json version equals build.mill
         run: |

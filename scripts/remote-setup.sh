@@ -52,10 +52,6 @@ SCALA_CLI_VERSION="${XL_REMOTE_SCALA_CLI_VERSION:-1.9.1}"
 
 # Every launcher fetched by this script must match committed bytes, including cache hits.
 . "$ROOT/scripts/verify-download.sh"
-CS_JAR_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "coursier-$COURSIER_VERSION") || exit 1
-CS_ARCHIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux.gz") || exit 1
-CS_NATIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux") || exit 1
-
 NOTES=""
 note() { NOTES="${NOTES:+$NOTES; }$*"; }
 warn() { echo "[remote-setup] WARN: $*" >&2; note "WARN: $*"; }
@@ -83,49 +79,68 @@ CS_JAR=""
 cs_run() {
   if [[ -n "$CS_JAR" ]]; then java -jar "$CS_JAR" "$@"; else "$CS" "$@"; fi
 }
-if [[ "$JVM_LAUNCHERS" == "true" || "$(uname -m)" == "aarch64" || "$(uname -m)" == "arm64" ]]; then
-  # v2.1.24 has no Linux ARM64 native asset; use its portable JVM launcher.
-  CS_JAR_PATH="$BIN/coursier.jar"
-  if [[ -s "$CS_JAR_PATH" ]]; then
-    xl_verify_sha256 "$CS_JAR_SHA" "$CS_JAR_PATH" || exit 1
-    CS_JAR="$CS_JAR_PATH"
+# Only execute downloaded/cache-managed tools after checking committed bytes.
+# Failure leaves CS empty and lets the remaining session exports complete.
+verified_fetch() {
+  local key="$1" url="$2" target="$3" expected
+  if ! expected=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "$key"); then
+    warn "no committed checksum for $key; skipping Coursier provisioning"
+    return 1
+  fi
+  if [[ -s "$target" ]]; then
+    if xl_verify_sha256 "$expected" "$target"; then return 0; fi
+    warn "discarding mismatched cached $key"
+    rm -f "$target"
+  fi
+  if curl -fsSL "$url" -o "$target.tmp" &&
+      xl_verify_sha256 "$expected" "$target.tmp"; then
+    mv "$target.tmp" "$target"
   else
+    rm -f "$target.tmp"
+    warn "could not obtain verified $key; skipping Coursier provisioning"
+    return 1
+  fi
+}
+SYSTEM=$(uname -s)
+ARCH=$(uname -m)
+PATH_CS=$(command -v cs || true)
+# A caller-installed tool is the caller's trust decision. Linux x86_64's
+# managed cache path is handled below, because older setup versions populated it.
+if [[ "$JVM_LAUNCHERS" != "true" && -n "$PATH_CS" &&
+      ( "$PATH_CS" != "$BIN/cs" || "$SYSTEM" != "Linux" ||
+        ( "$ARCH" != "x86_64" && "$ARCH" != "amd64" ) ) ]]; then
+  CS="$PATH_CS"
+elif [[ "$JVM_LAUNCHERS" == "true" ||
+        ( "$SYSTEM" == "Linux" && ( "$ARCH" == "aarch64" || "$ARCH" == "arm64" ) ) ]]; then
+  if ! java -version >/dev/null 2>&1; then
+    warn "Coursier JVM launcher needs a working Java; skipping provisioning"
+  else
+    CS_JAR_PATH="$BIN/coursier.jar"
     URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/coursier"
-    if curl -fsSL "$URL" -o "$CS_JAR_PATH.tmp" && [[ -s "$CS_JAR_PATH.tmp" ]]; then
-      xl_verify_sha256 "$CS_JAR_SHA" "$CS_JAR_PATH.tmp" || exit 1
-      mv "$CS_JAR_PATH.tmp" "$CS_JAR_PATH" && CS_JAR="$CS_JAR_PATH"
-      note "coursier: JAR launcher installed to $CS_JAR_PATH"
-    else
-      rm -f "$CS_JAR_PATH.tmp"
-      warn "could not fetch the coursier JAR ($URL); ./mill still self-provisions its JDK, but scala-cli and java-on-PATH are unavailable"
+    if verified_fetch "coursier-$COURSIER_VERSION" "$URL" "$CS_JAR_PATH"; then
+      CS_JAR="$CS_JAR_PATH"
     fi
   fi
-elif [[ -x "$BIN/cs" ]]; then
-  xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs" || exit 1
-  CS="$BIN/cs"
-elif command -v cs >/dev/null 2>&1; then
-  # An externally provisioned tool remains the caller's trust decision.
-  CS="$(command -v cs)"
-elif [[ "$(uname -s)" == "Linux" ]]; then
-  case "$(uname -m)" in
-    x86_64 | amd64) ARCH=x86_64 ;;
-    aarch64 | arm64) ARCH=aarch64 ;;
-    *) ARCH="" ;;
-  esac
-  URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/cs-${ARCH}-pc-linux.gz"
-  if [[ -n "$ARCH" ]] && curl -fsSL "$URL" -o "$BIN/cs.gz.tmp" && [[ -s "$BIN/cs.gz.tmp" ]]; then
-    xl_verify_sha256 "$CS_ARCHIVE_SHA" "$BIN/cs.gz.tmp" || exit 1
-    gzip -dc "$BIN/cs.gz.tmp" > "$BIN/cs.tmp" || exit 1
-    xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs.tmp" || exit 1
-    rm -f "$BIN/cs.gz.tmp"
-    chmod +x "$BIN/cs.tmp" && mv "$BIN/cs.tmp" "$BIN/cs" && CS="$BIN/cs"
-    note "coursier: installed to $BIN/cs"
+elif [[ "$SYSTEM" == "Linux" && ( "$ARCH" == "x86_64" || "$ARCH" == "amd64" ) ]]; then
+  if ! CS_NATIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux"); then
+    warn "no committed native Coursier checksum for $COURSIER_VERSION; skipping provisioning"
+  elif [[ -x "$BIN/cs" ]] && xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs"; then
+    CS="$BIN/cs"
   else
-    rm -f "$BIN/cs.tmp"
-    warn "could not fetch the coursier launcher ($URL); ./mill still self-provisions its JDK, but scala-cli and java-on-PATH are unavailable"
+    [[ ! -e "$BIN/cs" ]] || { warn "discarding mismatched cached cs"; rm -f "$BIN/cs"; }
+    URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/cs-x86_64-pc-linux.gz"
+    if verified_fetch "cs-$COURSIER_VERSION-x86_64-pc-linux.gz" "$URL" "$BIN/cs.gz" &&
+        gzip -dc "$BIN/cs.gz" > "$BIN/cs.tmp" &&
+        xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs.tmp"; then
+      chmod +x "$BIN/cs.tmp" && mv "$BIN/cs.tmp" "$BIN/cs" && CS="$BIN/cs"
+    else
+      rm -f "$BIN/cs.tmp"
+      warn "could not provision verified native Coursier"
+    fi
+    rm -f "$BIN/cs.gz"
   fi
 else
-  warn "no coursier launcher found and this is not Linux; install it manually (https://get-coursier.io) to use --force here"
+  warn "no trusted Coursier on PATH for $SYSTEM/$ARCH; skipping provisioning"
 fi
 
 # ---------- 2. JDK from .mill-jvm-version ----------

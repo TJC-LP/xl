@@ -85,8 +85,6 @@ class DownloadVerificationTest(unittest.TestCase):
                         mill.index('chmod +x "${MILL_TEMP_DOWNLOAD_FILE}"'))
         remote = (ROOT / 'scripts/remote-setup.sh').read_text()
         self.assertNotIn('coursier/launchers/raw/master', remote)
-        self.assertIn('xl_verify_sha256 "$CS_JAR_SHA" "$CS_JAR_PATH.tmp" || exit 1', remote)
-        self.assertIn('xl_verify_sha256 "$CS_ARCHIVE_SHA" "$BIN/cs.gz.tmp" || exit 1', remote)
         release = (ROOT / '.github/workflows/release.yml').read_text()
         self.assertIn('sha256sum xl-* > SHA256SUMS', release)
         self.assertIn('release-assets/SHA256SUMS', release)

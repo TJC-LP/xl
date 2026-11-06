@@ -8,19 +8,21 @@ Check: `which xl || echo "not installed"`; then `xl --version`.
 
 ## macOS / Linux / Windows Bash
 
-The latest published native binary; no JDK required.
+The pinned v0.25.0 native binary; no JDK required. Its digests below come from
+the official GitHub release asset metadata (checked November 6, 2026). This keeps
+installation working before releases begin shipping `SHA256SUMS`.
 
 ```bash
+(
 set -euo pipefail
-LATEST=$(curl -fLsS https://api.github.com/repos/TJC-LP/xl/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
-VERSION=${LATEST#v}
+VERSION=0.25.0
 case "$VERSION" in *[!0-9A-Za-z.+-]*|'') echo "Invalid release version" >&2; exit 1 ;; esac
 case "$(uname -s)-$(uname -m)" in
-  Linux-x86_64) PLATFORM=linux-amd64 ;;
-  Linux-aarch64) PLATFORM=linux-arm64 ;;
-  Darwin-x86_64) PLATFORM=darwin-amd64 ;;
-  Darwin-arm64) PLATFORM=darwin-arm64 ;;
-  MINGW*-*|MSYS*-*|CYGWIN*-*) PLATFORM=windows-amd64.exe ;;
+  Linux-x86_64) PLATFORM=linux-amd64; EXPECTED=b213be3184a37c936736a0a25719bf8fa9efa2b3c2539082ce5a87ed71319a53 ;;
+  Linux-aarch64) PLATFORM=linux-arm64; EXPECTED=347abb99781d8dea77a14a0e4eee4bcf4d5098c4771fb6360a96736c643c5182 ;;
+  Darwin-x86_64) PLATFORM=darwin-amd64; EXPECTED=90a0aeefdd6400eebd2e28d8efa29c873ffec3a8c13e761691f6f945363fbb42 ;;
+  Darwin-arm64) PLATFORM=darwin-arm64; EXPECTED=0acdfd68526f2a4b730eb73e478270ffb066dce24663658072e91711973e8480 ;;
+  MINGW*-*|MSYS*-*|CYGWIN*-*) PLATFORM=windows-amd64.exe; EXPECTED=3a1dae1db9e779bee7a6137fcd76ed8cec41f1c3b867c19d8014d002e1990e33 ;;
   *) echo "Unsupported platform; use the verified JAR distribution" >&2; exit 1 ;;
 esac
 BINARY="xl-${VERSION}-${PLATFORM}"
@@ -30,10 +32,6 @@ WORK=$(mktemp -d "$INSTALL_DIR/.xl-download.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 BASE="https://github.com/TJC-LP/xl/releases/download/v${VERSION}"
 curl -fLsS "$BASE/$BINARY" -o "$WORK/$BINARY"
-curl -fLsS "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
-EXPECTED=$(awk -v name="$BINARY" '$2 == name { print $1; n++ } END { if (n != 1) exit 1 }' "$WORK/SHA256SUMS")
-case "$EXPECTED" in *[!0-9a-f]*|'') echo "Invalid checksum manifest" >&2; exit 1 ;; esac
-[[ ${#EXPECTED} == 64 ]] || { echo "Invalid checksum length" >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL=$(sha256sum "$WORK/$BINARY")
 else
@@ -43,24 +41,27 @@ fi
 chmod +x "$WORK/$BINARY"
 mv "$WORK/$BINARY" "$INSTALL_DIR/xl"
 echo "Installed verified xl $VERSION to $INSTALL_DIR/xl"
+)
 ```
 
-The release must provide `SHA256SUMS`; older releases without it fail closed. The manifest and
-binary are trusted through the same HTTPS release source; this detects changed bytes, not a
-compromised publisher. Ensure `~/.local/bin` is on PATH.
+The pinned digests detect changed bytes, not a compromised publisher. Keep version and
+digests together when updating this example. Future release installers use `SHA256SUMS`
+and fail closed when it is missing. Ensure `~/.local/bin` is on PATH.
 
 ## Windows (PowerShell)
 
-Download the matching `.exe` and `SHA256SUMS` from the same release into a temporary directory.
-Compare `(Get-FileHash -Algorithm SHA256 path/to/xl.exe).Hash` with the manifest entry for that exact
-asset before moving it to your installation directory. Refuse a missing, duplicate, or mismatched
-entry; do not execute an unverified file.
+For v0.25.0, download `xl-0.25.0-windows-amd64.exe` from the official release.
+Compare `(Get-FileHash -Algorithm SHA256 path/to/xl.exe).Hash` with
+`3a1dae1db9e779bee7a6137fcd76ed8cec41f1c3b867c19d8014d002e1990e33` before moving or executing it.
+For later releases, require the exact asset entry in that release’s `SHA256SUMS`.
 
 ## JAR distribution
 
 Every release also attaches `xl-cli-<version>.tar.gz`: the assembly JAR plus a wrapper script,
-for platforms without a native binary. Verify the tarball against its exact `SHA256SUMS` entry
-before extraction or running its installer. It needs a JRE (25 or later).
+for platforms without a native binary. For v0.25.0, verify `xl-cli-0.25.0.tar.gz` against
+`b94b9e539df29cce397e6acb65014686202fdd6066758dc7251bf48ce205fd10`
+before extraction or running its installer. Later releases require the exact `SHA256SUMS`
+entry. It needs a JRE (25 or later).
 
 ## Rasterizer for PNG / JPEG / PDF / WebP export
 

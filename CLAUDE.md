@@ -322,7 +322,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.25.0 and its published asset digests so installation works before releases provide `SHA256SUMS`; update that version and all digests together. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 

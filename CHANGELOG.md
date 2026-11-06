@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
   digests before execution, publish release checksums, and verify native CLI downloads before installation.
+  Preserve session setup after verification failures, honor trusted platform tools, and provide
+  pinned current-release and Linux Scala CLI installers with isolated shell settings.
 
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
