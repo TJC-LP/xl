@@ -6,7 +6,8 @@ import com.tjclp.xl.formula.functions.{
   CriteriaRangeResize,
   FunctionRegistry,
   FunctionSpecs,
-  ReferenceOperators
+  ReferenceOperators,
+  TableColumnReferences
 }
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator, NameWalk, RecalcCounters}
@@ -125,7 +126,7 @@ object DependencyGraph:
     val dependencies = formulaCells.map { case (ref, formulaStr) =>
       val deps = FormulaParser.parse(formulaStr) match
         case scala.util.Right(expr) =>
-          extractDependenciesBoundedCached(expr, bounds, rangeCache, Some(ref))
+          extractDependenciesBoundedCached(expr, bounds, rangeCache, Some(ref), Some(sheet))
         case scala.util.Left(_) => Set.empty[ARef] // Parse error: no dependencies
       ref -> deps
     }.toMap
@@ -171,6 +172,8 @@ object DependencyGraph:
       case TExpr.ExternalRef(_, _, _, _) => true
       case TExpr.ExternalRange(_, _, _, _) => true
       case TExpr.Aggregate(_, _) => true
+
+      case TableColumnReferences.Ref(_) => true
 
       // Function calls - check arguments
       case call: TExpr.Call[?] =>
@@ -450,7 +453,7 @@ object DependencyGraph:
           // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
           (names.exists(text.contains) ||
             CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-            ReferenceOperators.mayContainComputedRange(expression) ||
+            expression.contains('[') || ReferenceOperators.mayContainComputedRange(expression) ||
             com.tjclp.xl.formula.functions.ReferenceFunctionNames
               .mayContainComputingCall(expression, text)) &&
           FormulaParser.parse(expression).exists(containsDynamicReference)
@@ -661,7 +664,7 @@ object DependencyGraph:
           val text = upper(expression)
           candidateTokens.exists(text.contains) ||
           CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-          ReferenceOperators.mayContainComputedRange(expression) ||
+          expression.contains('[') || ReferenceOperators.mayContainComputedRange(expression) ||
           com.tjclp.xl.formula.functions.ReferenceFunctionNames
             .mayContainComputingCall(expression, text)
         }
@@ -930,7 +933,8 @@ object DependencyGraph:
     expr: TExpr[A],
     bounds: Option[CellRange],
     rangeCache: scala.collection.mutable.HashMap[(ARef, ARef), Set[ARef]],
-    reader: Option[ARef] = None
+    reader: Option[ARef] = None,
+    tableSheet: Option[Sheet] = None
   ): Set[ARef] =
     // Helper to bound a CellRange
     def boundRange(range: CellRange): Set[ARef] =
@@ -942,7 +946,7 @@ object DependencyGraph:
       )
 
     def recurse[B](child: TExpr[B]): Set[ARef] =
-      extractDependenciesBoundedCached(child, bounds, rangeCache, reader)
+      extractDependenciesBoundedCached(child, bounds, rangeCache, reader, tableSheet)
 
     def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
       case TExpr.RangeLocation.Computed(expr) => recurse(expr)
@@ -976,6 +980,11 @@ object DependencyGraph:
       case TExpr.Percent(expr) => recurse(expr)
       case TExpr.Aggregate(_, location) => localCells(location)
 
+      case TableColumnReferences.Ref(column) =>
+        tableSheet
+          .flatMap(sheet => TableColumnReferences.resolve(column, sheet, None).toOption)
+          .fold(Set.empty[ARef])(ref => boundRange(ref.range))
+
       case call: TExpr.Call[?] =>
         // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
         // GH-669: an intersection of static locations depends only on the cells they share
@@ -988,7 +997,7 @@ object DependencyGraph:
             ReferenceOperators.staticShape,
             reader
           ),
-          extractDependenciesBoundedCached(_, bounds, rangeCache, inner),
+          extractDependenciesBoundedCached(_, bounds, rangeCache, inner, tableSheet),
           localCells,
           boundRange
         )
@@ -2435,6 +2444,11 @@ object DependencyGraph:
 
         // Reference functions
         case TExpr.Aggregate(_, location) => locCells(location)
+
+        case TableColumnReferences.Ref(column) =>
+          source
+            .flatMap(sheet => TableColumnReferences.resolve(column, sheet, workbook).toOption)
+            .fold(Set.empty[QualifiedRef])(ref => cellsFor(ref.sheet.name, ref.range))
 
         case call: TExpr.Call[?] =>
           // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first — a static

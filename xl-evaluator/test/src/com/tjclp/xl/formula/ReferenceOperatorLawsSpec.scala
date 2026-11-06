@@ -526,7 +526,11 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     assertEquals(
       Evaluator.referenceFunctions,
       referencing ++ Set("IF", "IFS", "CHOOSE", "SWITCH") ++
-        Set(functions.ReferenceOperators.IntersectionName, functions.ReferenceOperators.RangeName)
+        Set(
+          functions.ReferenceOperators.IntersectionName,
+          functions.ReferenceOperators.RangeName,
+          functions.TableColumnReferences.Name
+        )
     )
     assertEquals(
       functions.ReferenceOperators.selectingFunctions,
@@ -542,7 +546,7 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     )
     assertEquals(
       functions.ArgSpec.computedReferenceCalls,
-      referencing + functions.ReferenceOperators.RangeName
+      referencing + functions.ReferenceOperators.RangeName + functions.TableColumnReferences.Name
     )
     // neither operator is registered, nor reachable by name
     List(

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Evaluate qualified plain table-column references such as `SUM(Table1[Col])` and
+  `COUNTIF(Table1[Col],1)` as data-row references, including workbook table lookup,
+  dependency ordering and formula copy/structural-edit support (Refs #669).
+  Row-relative references, special selectors and escaped/nested column syntax remain unsupported.
+
+### Added
+
 - **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
   XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
   reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic

@@ -654,7 +654,7 @@ object ArgSpec:
    * contribution. The drift law ties the two sets together.
    */
   private[formula] val computedReferenceCalls: Set[String] =
-    ReferenceFunctionNames.computing + ReferenceOperators.RangeName
+    ReferenceFunctionNames.computing + ReferenceOperators.RangeName + TableColumnReferences.Name
 
   /** A call to one of [[computedReferenceCalls]], looking through the parser's coercion wrapper. */
   private object ComputedReferenceCall:
