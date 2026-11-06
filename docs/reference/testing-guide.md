@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #723 validation of code head 6e99bb0c against main db2b91d5 on 2026-11-05 recorded **9,964 cases**, including skips: 9,960 passed, 0 failed, 4 skipped.
+**Current Status**: the #669 validation of code head f5ae7704 on local #723 foundation 9043b6be on 2026-11-06 UTC recorded **10,035 cases**, including skips: 10,031 passed, 0 failed, 4 skipped.
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #723 validation of code head 6e99bb0c against main db2b91d5, 2026-11-05 (9,960 passed, 0 failed, 4 skipped). Counts include skipped cases.
+As of the #669 validation of code head f5ae7704 on local #723 foundation 9043b6be, 2026-11-06 UTC (10,031 passed, 0 failed, 4 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4242 |
+| xl-evaluator | 4307 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
-| xl-cli | 1972 |
+| xl-cli | 1978 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,964** |
+| **Total** | **10,035** |
 
 
 ## Test Quality Metrics
