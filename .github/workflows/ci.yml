@@ -19,6 +19,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Direct dependency age policy
+        run: |
+          python3 scripts/test_dependency_age.py
+          python3 scripts/dependency_age.py
+
       - name: plugin.json version equals build.mill
         run: |
           build_version=$(sed -n 's/.*getOrElse("PUBLISH_VERSION", *"\([^"]*\)").*/\1/p' build.mill)
