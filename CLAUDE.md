@@ -419,6 +419,11 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
+#736 test inventory (2026-11-05): eleven additional `RecalcPerfSpec` cases bring that suite
+to 19 observed cases, including the actual resolved-reference SUM reader budget and blank-border
+compatibility controls. Final all-module counts are recorded in the original #736 validation
+receipt; the historical totals below are not incremented by inference.
+
 #735 test inventory (2026-11-05): this change adds eleven evaluator regressions (three in
 `ArrayResultSpec`, two in `RowColumnArraySpec`, four in `Review735RegressionSpec`, one in
 `PositionCanonicalErrorSpec`, one in `MixedPositionErrorSpec`) and
