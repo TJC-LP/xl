@@ -45,6 +45,7 @@ object CriteriaRangeResize:
     def unresolved(location: TExpr.RangeLocation): Boolean = location match
       case named: TExpr.RangeLocation.Name => nameIsComputed(named)
       case TExpr.RangeLocation.Binding(_) => true
+      case TExpr.RangeLocation.Computed(_) => true
       case _ => false
 
     resizingFunctions.contains(name) && (values match
@@ -204,7 +205,7 @@ object CriteriaRangeResize:
       case TExpr.RangeLocation.External(index, name, range, _) =>
         TExpr.RangeLocation.External(index, name, resize(range, shape), RangeForm.Cells)
       case other @ (TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Binding(_) |
-          TExpr.RangeLocation.Error(_, _)) =>
+          TExpr.RangeLocation.Computed(_) | TExpr.RangeLocation.Error(_, _)) =>
         other
 
   /**

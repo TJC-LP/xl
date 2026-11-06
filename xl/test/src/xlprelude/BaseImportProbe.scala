@@ -117,3 +117,8 @@ object BaseImportProbe:
   val repairs: Vector[Finding] => Vector[Finding] =
     _.filter(f => f.severity == LintSeverity.Repair && f.category != LintCategory.ChildOrder)
   val effectiveNames: Workbook => Vector[DefinedName] = _.effectiveDefinedNames
+
+  // GH-723: the appended public range-location case is usable outside the library package.
+  val computedRangeLocation = com.tjclp.xl.formula.parser.FormulaParser
+    .parse("OFFSET(A1,0,0)")
+    .map(com.tjclp.xl.formula.ast.TExpr.RangeLocation.Computed(_))

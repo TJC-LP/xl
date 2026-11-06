@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
+  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
+  report unsupported evaluation instead of caching a fabricated #VALUE! result. Reference-producing INDEX and its
+  standalone value form remain supported.
+
 ### Added
+
+- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
+  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
+  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
+  recalculation. Adds `TExpr.RangeLocation.Computed` at the end of the public enum; downstream
+  exhaustive matches must handle the new case. Array-taking argument expansion remains separate.
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
   functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
