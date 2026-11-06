@@ -205,3 +205,136 @@ class ComputedReferenceInputSpec extends FunSuite:
       .value
     assertEquals(observed, CellValue.Formula(text, Some(CellValue.Error(CellError.Ref))))
   }
+
+  test("GH-723 selected input: OFFSET through IF") {
+    unsupported("COUNTIF(OFFSET(A1,IF(TRUE,{0,1},0),0),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(OFFSET(A1,IF(TRUE,{0,1},0),0),\">0\"))")
+  }
+
+  test("GH-723 selected input: OFFSET through IFS") {
+    unsupported("COUNTIF(OFFSET(A1,IFS(TRUE,{0,1}),0),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(OFFSET(A1,IFS(TRUE,{0,1}),0),\">0\"))")
+  }
+
+  test("GH-723 selected input: OFFSET through CHOOSE") {
+    unsupported("COUNTIF(OFFSET(A1,CHOOSE(1,{0,1},0),0),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(OFFSET(A1,CHOOSE(1,{0,1},0),0),\">0\"))")
+  }
+
+  test("GH-723 selected input: OFFSET through SWITCH") {
+    unsupported("COUNTIF(OFFSET(A1,SWITCH(1,1,{0,1},0),0),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(OFFSET(A1,SWITCH(1,1,{0,1},0),0),\">0\"))")
+  }
+
+  test("GH-723 selected input: OFFSET through LET") {
+    unsupported("COUNTIF(OFFSET(A1,LET(k,0,IF(TRUE,{0,1},k)),0),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(OFFSET(A1,LET(k,0,IF(TRUE,{0,1},k)),0),\">0\"))")
+  }
+
+  test("GH-723 selected input: INDIRECT through IF") {
+    unsupported("COUNTIF(INDIRECT(IF(TRUE,{\"A1\",\"A2\"},\"A1\")),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(INDIRECT(IF(TRUE,{\"A1\",\"A2\"},\"A1\")),\">0\"))")
+  }
+
+  test("GH-723 selected input: INDIRECT through IFS") {
+    unsupported("COUNTIF(INDIRECT(IFS(TRUE,{\"A1\",\"A2\"})),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(INDIRECT(IFS(TRUE,{\"A1\",\"A2\"})),\">0\"))")
+  }
+
+  test("GH-723 selected input: INDIRECT through CHOOSE") {
+    unsupported("COUNTIF(INDIRECT(CHOOSE(1,{\"A1\",\"A2\"},\"A1\")),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(INDIRECT(CHOOSE(1,{\"A1\",\"A2\"},\"A1\")),\">0\"))")
+  }
+
+  test("GH-723 selected input: INDIRECT through SWITCH") {
+    unsupported("COUNTIF(INDIRECT(SWITCH(1,1,{\"A1\",\"A2\"},\"A1\")),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(INDIRECT(SWITCH(1,1,{\"A1\",\"A2\"},\"A1\")),\">0\"))")
+  }
+
+  test("GH-723 selected input: INDIRECT through LET") {
+    unsupported("COUNTIF(INDIRECT(LET(k,\"A1\",IF(TRUE,{\"A1\",\"A2\"},k))),\">0\")")
+    unsupported("SUMPRODUCT(COUNTIF(INDIRECT(LET(k,\"A1\",IF(TRUE,{\"A1\",\"A2\"},k))),\">0\"))")
+  }
+
+  test("GH-723 selected input: unused array branches and scalar reductions remain supported") {
+    List(
+      "COUNTIF(OFFSET(A1,IF(FALSE,{0,1},1),0),\">0\")",
+      "COUNTIF(OFFSET(A1,SUM({0,1}),0),\">0\")",
+      "COUNTIF(INDIRECT(IF(FALSE,{\"A1\",\"A2\"},\"A1\")),\">0\")"
+    ).foreach(text =>
+      val result = recalc(text)
+      assertEquals(result.errors.size, 0, text)
+      val observed = result.workbook.sheets
+        .find(_.name == data.name)
+        .getOrElse(fail("missing Data"))(ref"F1")
+        .value
+      assertEquals(observed, CellValue.Formula(text, Some(CellValue.Number(1))), text)
+    )
+  }
+  test("GH-723 selected input: true selected references keep plain intersection") {
+    val text = "COUNTIF(OFFSET(A1,IF(TRUE,C1:C2,99),0),\">0\")"
+    val result = recalc(text)
+    assertEquals(result.errors.size, 0)
+    val observed = result.workbook.sheets
+      .find(_.name == data.name)
+      .getOrElse(fail("missing Data"))(ref"F1")
+      .value
+    assertEquals(observed, CellValue.Formula(text, Some(CellValue.Number(1))))
+    unsupported("SUMPRODUCT(" + text + ")")
+  }
+
+  test("GH-723 selected input: element-wise operators cannot erase bound or selected arrays") {
+    List(
+      "LET(k,{0,1},COUNTIF(OFFSET(A1,k+0,0),\">0\"))",
+      "COUNTIF(OFFSET(A1,IF(TRUE,{0,1},0)+0,0),\">0\")",
+      "LET(k,{1,2},COUNTIF(INDIRECT(\"A\"&k),\">0\"))",
+      "COUNTIF(OFFSET(A1,IF(TRUE,{0,100},0)%,0),\">0\")"
+    ).foreach(text =>
+      unsupported(text)
+      unsupported("SUMPRODUCT(" + text + ")")
+    )
+  }
+  test("GH-723 selected input: scalar operator operands keep values and single reads") {
+    List(
+      "COUNTIF(OFFSET(A1,C1+1,0),\">0\")",
+      "COUNTIF(OFFSET(A1,IF(TRUE,0,1)+1,0),\">0\")",
+      "COUNTIF(INDIRECT(\"A\"&1),\">0\")"
+    ).foreach(text => assertEquals(data.evaluateFormula(text), Right(CellValue.Number(1)), text))
+  }
+
+  test("GH-723 selected input: element-wise calls cannot erase nested or bound arrays") {
+    List(
+      "COUNTIF(OFFSET(A1,ABS(IF(TRUE,{0,1},0)),0),\">0\")",
+      "LET(k,{0,1},COUNTIF(OFFSET(A1,ABS(k),0),\">0\"))",
+      "COUNTIF(OFFSET(A1,LET(k,{0,1},ABS(k)),0),\">0\")"
+    ).foreach(text =>
+      unsupported(text)
+      unsupported("SUMPRODUCT(" + text + ")")
+    )
+  }
+  test("GH-723 selected input: nested scalar functions retain one random evaluation") {
+    val draws = new java.util.concurrent.atomic.AtomicInteger(0)
+    val rng = new Rng:
+      def nextDouble(): Double =
+        draws.incrementAndGet()
+        0.25
+    val text = "COUNTIF(OFFSET(A1,ABS(IF(TRUE,INT(RAND()),99)),0),\">0\")"
+    assertEquals(data.evaluateFormula(text, Clock.system, rng), Right(CellValue.Number(1)))
+    assertEquals(draws.get(), 1)
+  }
+
+  test("GH-723 input policy: supported producer lifting and reductions keep working") {
+    List(
+      "SUM(INDEX(A1:A2,{1;2}))" -> BigDecimal(4),
+      "SUM(XLOOKUP({1,3},A1:A2,B1:B2))" -> BigDecimal(30)
+    ).foreach((text, expected) =>
+      assertEquals(data.evaluateFormula(text), Right(CellValue.Number(expected)), text)
+    )
+  }
+  test("GH-723 input policy: an uncached precedent keeps its own plain-cell semantics") {
+    val sheet = data.put(ref"C1", CellValue.Formula("IF(TRUE,{0,1},0)", None))
+    assertEquals(
+      sheet.evaluateFormula("COUNTIF(OFFSET(A1,C1,0),\">0\")"),
+      Right(CellValue.Number(1))
+    )
+  }
