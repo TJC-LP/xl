@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- Enforce an explicit block-style action-pin grammar so unknown YAML structures fail closed; preserve scalar/comment content and document supported workflow forms.
+
+- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+
+- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
@@ -15,12 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Require matching quotes around pinned action references; reject stray quote suffixes.
+
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
   CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
   sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
   published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
 
 ### Fixed
+
+- **Immutable workflow actions** (#834): pin existing action versions to verified upstream
+  commits and reject mutable workflow references in CI.
 
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
