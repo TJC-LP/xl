@@ -269,10 +269,18 @@ final case class EvalContext(
         evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
           case RangeOperand(target, range) => Right((target, range, false))
           case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
-          case array: ArrayResult if array.rows == 1 && array.cols == 1 =>
-            array(0, 0) match
-              case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
-              case _ => Left(EvalError.ErrorValue(CellError.Value))
+          case array: ArrayResult =>
+            def unsupported = Left(
+              EvalError.EvalFailed(
+                "Computed range argument returned values; array-valued range arguments are unsupported",
+                None
+              )
+            )
+            if array.rows == 1 && array.cols == 1 then
+              array(0, 0) match
+                case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+                case _ => unsupported
+            else unsupported
           case _ => Left(EvalError.ErrorValue(CellError.Value))
         }
       case _ =>
@@ -660,8 +668,30 @@ object ArgSpec:
   private object ComputedReferenceCall:
     def unapply(e: TExpr[?]): Option[TExpr.Call[?]] = e match
       case TExpr.Coerced(inner, _) => unapply(inner)
-      case call: TExpr.Call[?] if computedReferenceCalls.contains(call.spec.name) => Some(call)
+      case call: TExpr.Call[?]
+          if computedReferenceCalls.contains(call.spec.name) && referenceResult(call) =>
+        Some(call)
       case _ => None
+
+    // A reference-computing spec may also return VALUES: INDEX over arithmetic, a scalar or an
+    // array constant is valid on its own, but remains outside reference-only argument support.
+    // Inspect only reference-bearing operands, not numeric INDEX/OFFSET arguments.
+    private def referenceResult(expr: TExpr[?]): Boolean = expr match
+      case TExpr.Coerced(inner, _) => referenceResult(inner)
+      case call: TExpr.Call[?] if call.spec.name == "INDEX" =>
+        call.spec.argSpec.toValues(call.args).headOption.exists(referenceArgument)
+      case call: TExpr.Call[?]
+          if ReferenceOperators.isOperatorCall(call) ||
+            call.spec.name == ReferenceOperators.RangeName =>
+        call.spec.argSpec.toValues(call.args).forall(referenceArgument)
+      case _ => true
+
+    private def referenceArgument(arg: ArgValue): Boolean = arg match
+      case ArgValue.Range(TExpr.RangeLocation.Computed(expr)) => referenceResult(expr)
+      case _: ArgValue.Range => true
+      case ArgValue.Expr(expr) =>
+        ReferenceOperators.isReferenceShape(expr) && referenceResult(expr)
+      case _ => false
 
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")

@@ -115,15 +115,9 @@ class ComputedRangeArgumentSpec extends FunSuite:
     assertEquals(FormulaPrinter.printFileForm(shifted), "COUNTIF(OFFSET(A2,0,0,3,1),1)")
   }
 
-  test("GH-723: INDEX value results remain invalid in reference-only slots") {
-    assertEquals(
-      data.evaluateFormula("COUNTIF(INDEX({1},1,1),1)"),
-      Right(CellValue.Error(CellError.Value))
-    )
-    assertEquals(
-      data.evaluateFormula("COUNTIF(INDEX({1},1,2),1)"),
-      Right(CellValue.Error(CellError.Ref))
-    )
+  test("GH-723: INDEX value inputs remain outside reference-only slot admission") {
+    assert(FormulaParser.parse("COUNTIF(INDEX({1},1,1),1)").isLeft)
+    assert(FormulaParser.parse("COUNTIF(INDEX({1},1,2),1)").isLeft)
   }
 
   test("GH-723: the computed-call pre-filter ignores literals and quoted payloads") {

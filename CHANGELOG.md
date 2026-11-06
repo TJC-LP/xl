@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
+  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
+  report unsupported evaluation instead of caching a fabricated #VALUE! result. Reference-producing INDEX and its
+  standalone value form remain supported.
+
 ### Added
 
 - **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
