@@ -2232,20 +2232,67 @@ private class EvaluatorImpl(
     // evaluates to an ArrayResult, and its top-left element must reach the function as a
     // number or a Left — never a raw CellValue the body would cast and throw on. Only the
     // Either container is cast.
+    // A reference producer cannot turn an unsupported array of selector inputs into one
+    // plausible reference by losing all but its first element. Keep the shape until this call's
+    // scalar boundary, after any supported ArrayLift has substituted one element per invocation.
+    // Evaluate once in the existing mode: plain-cell reference intersection stays unchanged.
+    val referenceScalar =
+      selectsReference && ReferenceFunctionNames.computing.contains(call.spec.name)
     def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
       val result: Either[EvalError, Any] = expr match
+        case TExpr.ToInt(inner) if referenceScalar =>
+          evalCoercedExpr(
+            inner.asInstanceOf[TExpr[Any]],
+            BindingCoercion.Integer,
+            sheet,
+            clock,
+            workbook,
+            currentCell,
+            collapse = false
+          )
+        case TExpr.UnaryPlus(inner) if referenceScalar => evalArg(inner)
         case TExpr.Coerced(inner, target) =>
-          evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
+          evalCoercedExpr(
+            inner,
+            target,
+            sheet,
+            clock,
+            workbook,
+            currentCell,
+            collapse = !referenceScalar
+          )
         case TExpr.CoercedBindingRef(name, target) =>
-          evalCoercedBinding(name, target, collapse = true, clock, workbook, currentCell)
+          evalCoercedBinding(
+            name,
+            target,
+            collapse = !referenceScalar,
+            clock,
+            workbook,
+            currentCell
+          )
         case other =>
           (eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
-            case ar: ArrayResult =>
+            case ar: ArrayResult if !referenceScalar =>
               val kind = TExpr.scalarKind(other)
               ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
             case value => Right(value)
           }
-      result.asInstanceOf[Either[EvalError, A]]
+      result
+        .flatMap {
+          case ar: ArrayResult if referenceScalar =>
+            if ar.rows != 1 || ar.cols != 1 then
+              Left(
+                EvalError.EvalFailed(
+                  s"${call.spec.name}: array-valued scalar inputs cannot produce a single reference",
+                  None
+                )
+              )
+            else
+              val kind = TExpr.scalarKind(expr)
+              ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
+          case value => Right(value)
+        }
+        .asInstanceOf[Either[EvalError, A]]
     // GH-346: functions that read uncached formula cells (aggregates, array materialization)
     // recurse through the same memo, so a shared precedent evaluates once per pass. Created
     // here when the pass has none yet — the ctx is per Call node, so it cannot leak across

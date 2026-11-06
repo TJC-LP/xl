@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
+  INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
+  Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
+
 - **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
   arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
   report unsupported evaluation instead of caching a fabricated #VALUE! result. Reference-producing INDEX and its
