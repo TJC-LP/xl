@@ -453,7 +453,8 @@ object DependencyGraph:
           // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
           (names.exists(text.contains) ||
             CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-            expression.contains('[') || ReferenceOperators.mayContainComputedRange(expression) ||
+            TableColumnReferences.mayContain(expression) || ReferenceOperators
+              .mayContainComputedRange(expression) ||
             com.tjclp.xl.formula.functions.ReferenceFunctionNames
               .mayContainComputingCall(expression, text)) &&
           FormulaParser.parse(expression).exists(containsDynamicReference)
@@ -664,7 +665,8 @@ object DependencyGraph:
           val text = upper(expression)
           candidateTokens.exists(text.contains) ||
           CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-          expression.contains('[') || ReferenceOperators.mayContainComputedRange(expression) ||
+          TableColumnReferences.mayContain(expression) || ReferenceOperators
+            .mayContainComputedRange(expression) ||
           com.tjclp.xl.formula.functions.ReferenceFunctionNames
             .mayContainComputingCall(expression, text)
         }

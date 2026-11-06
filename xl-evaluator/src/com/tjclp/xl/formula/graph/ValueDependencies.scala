@@ -3,7 +3,12 @@ package com.tjclp.xl.formula.graph
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.eval.{Evaluator, NameWalk}
-import com.tjclp.xl.formula.functions.{ArgValue, CriteriaRangeResize, ReferenceOperators}
+import com.tjclp.xl.formula.functions.{
+  ArgValue,
+  CriteriaRangeResize,
+  ReferenceOperators,
+  TableColumnReferences
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
@@ -49,7 +54,9 @@ private[xl] object ValueDependencies:
     ReferenceOperators.UnionName -> ((_, _) => true),
     ReferenceOperators.IntersectionName -> ((_, _) => true),
     // GH-713: `:` between computed references reads its operands as references
-    ReferenceOperators.RangeName -> ((_, _) => true)
+    ReferenceOperators.RangeName -> ((_, _) => true),
+    // Metadata identifiers pass no expression arguments through their reference.
+    TableColumnReferences.Name -> ((_, _) => false)
   )
 
   /**
@@ -136,6 +143,12 @@ private[xl] object ValueDependencies:
         (location, names, current.orElse(home)) match
           case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from)) =>
             resolver.range(scope, name, from)
+          case (
+                TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)),
+                Some(resolver),
+                Some(from)
+              ) =>
+            resolver.tableRange(column, from)
           case _ => None
       // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
       def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
@@ -196,6 +209,16 @@ private[xl] object ValueDependencies:
           // and reference selectors still evaluate, even if the body does not use the binding.
           bindingReads ++ loop(body, referenceOnly, scoped, at)
         case TExpr.Aggregate(_, location) => arg(ArgValue.Range(location), false, at)
+        case TableColumnReferences.Ref(column) =>
+          if referenceOnly then Set.empty
+          else
+            (names, current.orElse(home)) match
+              case (Some(resolver), Some(from)) =>
+                resolver
+                  .tableRange(column, from)
+                  .filter((sheet, _) => local(sheet))
+                  .fold(Set.empty[CellRange])((_, r) => cells(r))
+              case _ => Set.empty // without workbook metadata, the runtime placement guard decides
         case call: TExpr.Call[?] =>
           val name = call.spec.name
           // GH-761: SUMIF and AVERAGEIF size their third argument to their first, a defined name
@@ -281,12 +304,36 @@ private[xl] object ValueDependencies:
         }
       )
 
-    /** Whether `wb` defines any name: without one, no formula reads through a name. */
-    def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty
+    def tableRange(
+      column: TableColumnReferences.Column,
+      current: SheetName
+    ): Option[(SheetName, CellRange)] =
+      wb(current).toOption.flatMap { sheet =>
+        TableColumnReferences
+          .resolve(column, sheet, Some(wb))
+          .toOption
+          .map(ref => (ref.sheet.name, ref.range))
+      }
+
+    /** Names and tables can both hide cross-sheet reads from the CLI's lexical candidate index. */
+    def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty || wb.sheets.exists(_.tables.nonEmpty)
 
     /** The lower-cased names `wb` defines, for a text prefilter. */
     lazy val keys: Set[String] =
       wb.metadata.definedNames.iterator.map(_.name.toLowerCase(java.util.Locale.ROOT)).toSet
+
+    private lazy val tableKeys: Set[String] =
+      wb.sheets.iterator
+        .flatMap(_.tables.valuesIterator.map(_.displayName))
+        .map(DependencyGraph.resolutionKey)
+        .toSet
+
+    /**
+     * Preserve the existing defined-name prefilter; table candidates use the resolver's relation.
+     */
+    def containsToken(token: String): Boolean =
+      keys.contains(token.toLowerCase(java.util.Locale.ROOT)) ||
+        tableKeys.contains(DependencyGraph.resolutionKey(token))
 
     def reads(
       qualifier: Option[SheetName],

@@ -301,3 +301,19 @@ class TableColumnReferenceSpec extends FunSuite:
     val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
     assert(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty)
   }
+
+  test("GH-669: table scheduling prefilter ignores quotes, externals and excluded selectors") {
+    import com.tjclp.xl.formula.functions.TableColumnReferences
+    List("SUM(Table1[Col])", "COUNTIF(tAbLe1[Other Column],1)").foreach(text =>
+      assert(TableColumnReferences.mayContain(text), text)
+    )
+    List(
+      "\"Table1[Col]\"",
+      "'Table1[Col]'!A1",
+      "[1]Other!A1",
+      "Table1[[#Headers],[Col]]",
+      "Table1[@Col]",
+      "Table1[Col:Other]",
+      "Table1[]"
+    ).foreach(text => assert(!TableColumnReferences.mayContain(text), text))
+  }

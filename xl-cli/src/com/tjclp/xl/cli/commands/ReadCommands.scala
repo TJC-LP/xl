@@ -408,10 +408,18 @@ object ReadCommands:
       bounds = tempSheet.usedRange
       // Positioned or not, only the formula's value-read closure is analysed: never the whole
       // sheet, which a running total (B{n} = SUM($A$1:A{n})) makes quadratic to expand
-      reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
+      metadataReads = ValueDependencies.Names(tempBook)
+      reads = ValueDependencies.Reader(
+        bounds,
+        Some(tempSheet.name),
+        names = Some(metadataReads),
+        current = Some(tempSheet.name)
+      )
       targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
-      _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
+      _ <- at.flatMap(position =>
+        cycleThrough(tempSheet.name, closure, expr, targetDeps, position, metadataReads)
+      ) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
         case None => IO.unit
       graph = closure.graph
@@ -540,9 +548,15 @@ object ReadCommands:
     closure: ValueReads,
     expr: TExpr[?],
     targetDeps: Set[ARef],
-    at: ARef
+    at: ARef,
+    metadata: ValueDependencies.Names
   ): Option[List[ARef]] =
-    val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
+    val only = ValueDependencies.Reader(
+      Some(CellRange(at, at)),
+      Some(home),
+      names = Some(metadata),
+      current = Some(home)
+    )
     def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
     def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))
     // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
@@ -791,7 +805,7 @@ object ReadCommands:
         node,
         NameToken
           .findAllIn(text)
-          .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
+          .exists(names.containsToken)
       )
 
     // every formula that could read a sheet other than its own, gathered in one pass over the

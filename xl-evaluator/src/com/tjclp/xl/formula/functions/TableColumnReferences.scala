@@ -88,3 +88,46 @@ private[formula] object TableColumnReferences extends FunctionSpecsBase:
             Right(RangeOperand(sheet, CellRange(ARef.from0(col, first), ARef.from0(col, last))))
           case _ => invalid(s"Invalid or missing table column ${column.table}[${column.column}]")
       case _ => invalid(s"Missing or ambiguous table ${column.table}")
+
+  def isPlainColumnChar(c: Char): Boolean =
+    c.isLetterOrDigit || c == '_' || c == ' ' || c == '.'
+
+  /**
+   * Cheap scheduling prefilter; literals, external refs and unsupported nested selectors skip it.
+   */
+  def mayContain(text: String): Boolean =
+    @annotation.tailrec
+    def quoted(i: Int, quote: Char): Int =
+      if i >= text.length then i
+      else if text.charAt(i) != quote then quoted(i + 1, quote)
+      else if text.lift(i + 1).contains(quote) then quoted(i + 2, quote)
+      else i + 1
+    @annotation.tailrec
+    def bracket(i: Int, depth: Int): Int =
+      if i >= text.length || depth == 0 then i
+      else
+        text.charAt(i) match
+          case '[' => bracket(i + 1, depth + 1)
+          case ']' => bracket(i + 1, depth - 1)
+          case _ => bracket(i + 1, depth)
+    @annotation.tailrec
+    def endWhile(i: Int, accepts: Char => Boolean): Int =
+      if i < text.length && accepts(text.charAt(i)) then endWhile(i + 1, accepts) else i
+    @annotation.tailrec
+    def scan(i: Int): Boolean =
+      if i >= text.length then false
+      else
+        text.charAt(i) match
+          case '"' | '\'' => scan(quoted(i + 1, text.charAt(i)))
+          case '[' => scan(bracket(i + 1, 1))
+          case c if com.tjclp.xl.formula.parser.ReferenceChars.isToken(c) =>
+            val end = endWhile(i, com.tjclp.xl.formula.parser.ReferenceChars.isToken)
+            val columnEnd = endWhile(end + 1, isPlainColumnChar)
+            if text.lift(end).contains('[') && text.lift(columnEnd).contains(']') &&
+              text.substring(end + 1, columnEnd).trim.nonEmpty && !text
+                .substring(i, end)
+                .contains('$')
+            then true
+            else scan(end)
+          case _ => scan(i + 1)
+    scan(0)

@@ -901,7 +901,7 @@ object FormulaParser:
     val afterOpen = state.advance()
     @tailrec
     def read(s: ParserState): ParserState = s.currentChar match
-      case Some(c) if c.isLetterOrDigit || c == '_' || c == ' ' || c == '.' => read(s.advance())
+      case Some(c) if TableColumnReferences.isPlainColumnChar(c) => read(s.advance())
       case _ => s
     val end = read(afterOpen)
     val column = state.input.substring(afterOpen.pos, end.pos)
