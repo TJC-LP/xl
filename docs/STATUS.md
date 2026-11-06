@@ -283,24 +283,24 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 ### Test Coverage
 
 
-#735 test inventory (2026-11-05): this change adds eleven evaluator regressions (three in
-`ArrayResultSpec`, two in `RowColumnArraySpec`, four in `Review735RegressionSpec`, one in
-`PositionCanonicalErrorSpec`, one in `MixedPositionErrorSpec`) and
-one external-consumer `ArrayFillPreludeProbe`. The 9,947-case totals below are the dated
-2026-11-04 historical observation; final all-module counts belong in this contribution's
-validation receipt and must not be inferred by adding to an older base's total.
+#735 validation (2026-11-06): the final full-suite run on `9209ded1` recorded 9,961 cases:
+9,953 passed, zero failed and eight optional external-tool cases skipped. Counts below
+come from seven fresh module reports, including the branching-replay budget regression,
+the 30-stage LET regression and the external-consumer `ArrayFillPreludeProbe`.
+Historical #830/#831 combined validation on 2026-11-04 recorded 9,947 cases; it is
+separate from this current observation. Passing tests do not establish Excel parity.
 
-**Historical: 9,947 test cases** (combined validation of #830 and #831 against main 0294eee0, 2026-11-04): 9,943 passed, 0 failed, 4 skipped. Counts include skipped cases.
+**Current: 9,961 test cases** (#735 full-suite validation, 2026-11-06): 9,953 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4225 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4238 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 66 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 

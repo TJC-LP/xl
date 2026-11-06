@@ -3,12 +3,12 @@
 **Historical status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
 
 
-#735 test inventory (2026-11-05): this change adds eleven evaluator regressions (three in
-`ArrayResultSpec`, two in `RowColumnArraySpec`, four in `Review735RegressionSpec`, one in
-`PositionCanonicalErrorSpec`, one in `MixedPositionErrorSpec`) and
-one external-consumer `ArrayFillPreludeProbe`. The 9,947-case totals below are the dated
-2026-11-04 historical observation; final all-module counts belong in this contribution's
-validation receipt and must not be inferred by adding to an older base's total.
+#735 validation (2026-11-06): the final full-suite run on `9209ded1` recorded 9,961 cases:
+9,953 passed, zero failed and eight optional external-tool cases skipped. Counts below
+come from seven fresh module reports, including the branching-replay budget regression,
+the 30-stage LET regression and the external-consumer `ArrayFillPreludeProbe`.
+Historical #830/#831 combined validation on 2026-11-04 recorded 9,947 cases; it is
+separate from this current observation. Passing tests do not establish Excel parity.
 
 ## Test Infrastructure
 
@@ -289,18 +289,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the combined validation of #830 and #831 against main 0294eee0, 2026-11-04 (9,943 passed, 0 failed, 4 skipped). Counts include skipped cases.
+Observed in #735 full-suite validation on 2026-11-06: 9,953 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4225 |
+| xl-evaluator | 4238 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1972 |
 | xl-cats-effect | 217 |
 | xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,947** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
+| **Total** | **9,961** |
 
 
 ## Test Quality Metrics
