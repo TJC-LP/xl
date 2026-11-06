@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial

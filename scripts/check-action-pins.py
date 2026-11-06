@@ -28,9 +28,33 @@ def violations(text):
             # A list item's mapping keys are indented beyond its dash.
             scalar_indent = indent + (2 if line.lstrip().startswith("- ") else 0)
             continue
+        # Quoted scalar list items (tag/path filters) are not mapping keys.
+        if re.fullmatch(r"\s*-\s*(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*')\s*(?:#.*)?", line):
+            continue
+        # Escaped or multiline quoted keys can spell uses without its literal
+        # bytes. Keep quoted keys to a simple single-line spelling.
+        if re.match(r"^\s*(?:-\s*)?[\"']", line) and not re.match(
+                r"^\s*(?:-\s*)?(?:\"[^\"\\]*\"|'[^']*')\s*:", line):
+            errors.append((number, line.strip()))
+            continue
+        # Node properties, aliases, merge keys and explicit keys are outside this
+        # deliberately block-style policy. Reject them before they can obscure uses.
+        key = r"(?:\"[^\"]+\"|'[^']+'|[\w-]+)"
+        node = re.match(r"^\s*(?:-\s*)?[&*!?]", line) or re.match(
+            r"^\s*(?:-\s*)?(?:" + key + r"|<<)\s*:\s*[&*!]", line)
+        if node or re.match(r"^\s*(?:-\s*)?<<\s*:", line):
+            errors.append((number, line.strip()))
+            continue
+        # Empty mappings contain no action reference. Single-line scalar option
+        # maps are also safe here; nested collections and uses keys stay rejected.
+        empty_map = re.fullmatch(r"\s*(?:-\s*)?" + key + r"\s*:\s*\{\s*\}\s*(?:#.*)?", line)
+        options = re.fullmatch(r"\s*(?:-\s*)?(?:env|with|permissions)\s*:\s*\{([^{}\[\]]*)\}\s*(?:#.*)?", line)
+        if empty_map or (options and not KEY.search(options[1]) and
+                         not re.search(r"(?:^|[\s:,])[&*!?]", options[1])):
+            continue
         # Flow mappings remain unsupported and fail closed. Scalar values such
         # as run/name strings are not action references.
-        flow_mapping = re.match(r"^\s*(?:[-,]\s*)?(?:\[\s*)?\{", line) or re.match(r"^\s*(?:[\"][^\"]+[\"]|['][^']+[']|[\w-]+):\s*(?:\[\s*)?\{", line)
+        flow_mapping = re.match(r"^\s*(?:[-,]\s*)?(?:\[\s*)?\{", line) or re.match(r"^\s*(?:[\"][^\"]+[\"]|['][^']+[']|[\w-]+)\s*:\s*(?:\[\s*)?\{", line)
         if flow_mapping:
             errors.append((number, line.strip()))
             continue

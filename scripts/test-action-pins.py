@@ -48,6 +48,24 @@ class ActionPinsTest(unittest.TestCase):
     def test_quoted_flow_mapping_key_fails_closed(self):
         self.assertTrue(pins.violations('"steps": [{uses: actions/checkout@v4}]'))
 
+    def test_node_properties_aliases_and_explicit_keys_fail_closed(self):
+        for text in (r'- "us\u0065s": actions/checkout@v4', '- &co uses: actions/checkout@v4', '- &co {uses: actions/checkout@v4}',
+                     '- !!map {uses: actions/checkout@v4}', 'steps: &s [{uses: actions/checkout@v4}]',
+                     'steps : [{uses: actions/checkout@v4}]', '- *step', 'steps: *steps',
+                     '? uses\n: actions/checkout@v4', '- <<: *step'):
+            with self.subTest(text=text): self.assertTrue(pins.violations(text))
+
+    def test_harmless_option_maps_are_accepted(self):
+        for text in ('permissions: {}', 'env: {}', 'with: { fetch-depth: 0 }',
+                     'permissions: { contents: read }'):
+            with self.subTest(text=text): self.assertEqual([], pins.violations(text))
+        for text in ('with: { uses: actions/checkout@v4 }', 'env: { x: {uses: x} }'):
+            self.assertTrue(pins.violations(text))
+
+    def test_quoted_scalar_filters_are_not_keys(self):
+        for text in ("- 'v*'", "- 'src/**' # path filter", '- "scripts/**"'):
+            self.assertEqual([],pins.violations(text))
+
     def test_comments_are_ignored(self):
         self.assertEqual([], pins.violations(" # uses: owner/action@v1"))
 
