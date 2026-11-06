@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Installer test fixtures** (#837): derive release asset names and version-drift probes from the selected version and platform; exercise two future release bumps.
+
+- **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
@@ -21,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
 
 ### Fixed
+
+- **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
+  digests before execution, publish release checksums, and verify native CLI downloads before installation.
+  Preserve session setup after verification failures, honor trusted platform tools, and provide
+  pinned current-release and Linux Scala CLI installers with isolated shell settings.
 
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
