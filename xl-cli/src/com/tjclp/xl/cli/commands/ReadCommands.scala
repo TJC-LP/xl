@@ -413,7 +413,8 @@ object ReadCommands:
         bounds,
         Some(tempSheet.name),
         names = Some(metadataReads),
-        current = Some(tempSheet.name)
+        current = Some(tempSheet.name),
+        resolveDefinedNames = false
       )
       targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
@@ -555,7 +556,8 @@ object ReadCommands:
       Some(CellRange(at, at)),
       Some(home),
       names = Some(metadata),
-      current = Some(home)
+      current = Some(home),
+      resolveDefinedNames = false
     )
     def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
     def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))

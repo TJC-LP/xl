@@ -88,7 +88,9 @@ private[xl] object ValueDependencies:
     home: Option[SheetName],
     localReads: Boolean = true,
     names: Option[Names] = None,
-    current: Option[SheetName] = None
+    current: Option[SheetName] = None,
+    // A caller can supply table metadata while retaining guarded runtime resolution of names.
+    resolveDefinedNames: Boolean = true
   ):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
@@ -132,7 +134,7 @@ private[xl] object ValueDependencies:
       // a defined name's reads: what its definition reads on `home`, resolved from `current`
       def resolved(qualifier: Option[SheetName], name: String): Set[CellRange] =
         (names, home, current.orElse(home)) match
-          case (Some(resolver), Some(target), Some(from)) =>
+          case (Some(resolver), Some(target), Some(from)) if resolveDefinedNames =>
             resolver.reads(qualifier, name, from, target, bounds)
           case _ => Set.empty
       // a defined name read as a value
@@ -141,7 +143,8 @@ private[xl] object ValueDependencies:
       // the range a defined name in a range slot names, resolved from `current`, when it names one
       def namedRange(location: TExpr.RangeLocation): Option[(SheetName, CellRange)] =
         (location, names, current.orElse(home)) match
-          case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from)) =>
+          case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from))
+              if resolveDefinedNames =>
             resolver.range(scope, name, from)
           case (
                 TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)),
