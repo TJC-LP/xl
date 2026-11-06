@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
-import com.tjclp.xl.formula.functions.LiftSlot
+import com.tjclp.xl.formula.functions.{LiftSlot, TableColumnReferences}
 
 import com.tjclp.xl.cells.{CellError, CellValue}
 
@@ -51,6 +51,7 @@ private[formula] object ArrayLifting:
 
   /** The range a reference-shaped slot names — a range, or a defined name that may denote one. */
   def referenceLocation(expr: TExpr[?]): Option[TExpr.RangeLocation] = expr match
+    case TableColumnReferences.Ref(_) => Some(TExpr.RangeLocation.Computed(expr))
     case TExpr.RangeRef(range, form) => Some(TExpr.RangeLocation.Local(range, form))
     case TExpr.SheetRange(sheet, range, form) =>
       Some(TExpr.RangeLocation.CrossSheet(sheet, range, form))

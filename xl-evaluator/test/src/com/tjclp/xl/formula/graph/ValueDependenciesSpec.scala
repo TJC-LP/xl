@@ -11,7 +11,8 @@ import com.tjclp.xl.formula.functions.{
   FunctionRegistry,
   FunctionSpec,
   FunctionSpecs,
-  ReferenceOperators
+  ReferenceOperators,
+  TableColumnReferences
 }
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -128,7 +129,9 @@ class ValueDependenciesSpec extends FunSuite:
       operators.filterNot(ValueDependencies.referencePassing.contains),
       Set.empty[String]
     )
-    val stray = ValueDependencies.referencePassing.keySet.filter(_.startsWith("(")) -- operators
+    val stray = ValueDependencies.referencePassing.keySet.filter(
+      _.startsWith("(")
+    ) -- operators - TableColumnReferences.Name
     assertEquals(stray, Set.empty[String])
   }
 
@@ -325,6 +328,30 @@ class ValueDependenciesSpec extends FunSuite:
     assertEquals(
       readsOnData("=SUMIF(Data!D1:D2,\">0\",Other!loc)", "Data", names),
       ref"D1:D2".cells.toSet ++ ref"B1:B2".cells.toSet
+    )
+  }
+
+  test("GH-669: table value reads, inspectors and resized targets use workbook metadata") {
+    import com.tjclp.xl.tables.{TableColumn, TableSpec}
+    val table = TableSpec("Internal", "Table1", ref"B2:B5", Vector(TableColumn(1, "Col")))
+    val wb = Workbook(Sheet("Data").withTable(table), Sheet("Other"))
+    val names = ValueDependencies.Names(wb)
+    assert(names.nonEmpty)
+    assert(names.containsToken("table1"))
+    assertEquals(readsOnData("SUM(Table1[Col])", "Other", names), Set(ref"B3", ref"B4", ref"B5"))
+    assertEquals(
+      readsOnData("LET(r,Table1[Col],SUM(r))", "Other", names),
+      Set(ref"B3", ref"B4", ref"B5")
+    )
+    assertEquals(readsOnData("ROWS(Table1[Col])", "Other", names), Set.empty[ARef])
+    assertEquals(readsOnData("LET(r,Table1[Col],ROWS(r))", "Other", names), Set.empty[ARef])
+    assertEquals(
+      readsOnData("""SUMIF(Data!C3:C7,">0",Table1[Col])""", "Other", names),
+      Set(ref"C3", ref"C4", ref"C5", ref"C6", ref"C7", ref"B3", ref"B4", ref"B5", ref"B6", ref"B7")
+    )
+    assertEquals(
+      readsOnData("""SUMIF(Data!C3,">0",Table1[Col])""", "Other", names),
+      Set(ref"C3", ref"B3")
     )
   }
 

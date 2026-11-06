@@ -282,14 +282,14 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,964 test cases** (#723 validation of code head 6e99bb0c against main db2b91d5, 2026-11-05): 9,960 passed, 0 failed, 4 skipped. Counts include skipped cases.
+**10,035 test cases** (#669 validation of code head f5ae7704 on local #723 foundation 9043b6be, 2026-11-06 UTC): 10,031 passed, 0 failed, 4 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4242 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4307 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 1978 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |

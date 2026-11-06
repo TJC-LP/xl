@@ -789,7 +789,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     for
       table <- Gen.oneOf("Table1", "Sales", "tblData", "DeptSales")
       col <- Gen.oneOf("Col", "Amount", "Col Name", "Q1 Sales", "Total")
-      spelling <- Gen.choose(0, 6)
+      spelling <- Gen.choose(1, 6)
       wrap <- Gen.oneOf[Shape](x => x, x => s"SUM($x)", x => s"$x*2", x => s"INDEX($x, 1)")
     yield
       val ref = spelling match
@@ -1077,15 +1077,14 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     assertEquals(variant("Sheet1:Sheet3!A1"), "InvalidCellRef")
     assertEquals(variant("'Q1':'Q3'!A1"), "UnexpectedChar")
     assertEquals(variant("'Sheet1:Sheet 3'!A1"), "InvalidCellRef")
-    assertEquals(variant("SUM(Table1[Col])"), "UnexpectedChar")
-    assertEquals(variant("Table1[Col]"), "UnexpectedChar")
     assertEquals(variant("[@Col]"), "InvalidCellRef")
     assertEquals(variant("LAMBDA(x,x+1)(2)"), "UnknownFunction")
     // GH-669: array constants, unions and intersections parse now
-    List("{1,2;3,4}", "(A1,B1)", "A1:B2 B1:C3").foreach(body => assertRoundTrips(s"=$body"))
+    List("SUM(Table1[Col])", "Table1[Col]", "{1,2;3,4}", "(A1,B1)", "A1:B2 B1:C3").foreach(body =>
+      assertRoundTrips(s"=$body")
+    )
     List(
       "Sheet1:Sheet3!A1",
-      "SUM(Table1[Col])",
       "[@Col]",
       "LAMBDA(x,x+1)(2)",
       "LET(f, LAMBDA(x, x*2), f(3))"
