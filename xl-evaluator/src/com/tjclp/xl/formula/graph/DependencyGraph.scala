@@ -948,6 +948,13 @@ object DependencyGraph:
     def recurse[B](child: TExpr[B]): Set[ARef] =
       extractDependenciesBoundedCached(child, bounds, rangeCache, reader, tableSheet)
 
+    def tableRange(location: TExpr.RangeLocation): Option[CellRange] = location match
+      case TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)) =>
+        tableSheet
+          .flatMap(sheet => TableColumnReferences.resolve(column, sheet, None).toOption)
+          .map(_.range)
+      case _ => None
+
     def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
       case TExpr.RangeLocation.Computed(expr) => recurse(expr)
       case TExpr.RangeLocation.Local(range, _) => boundRange(range)
@@ -993,7 +1000,13 @@ object DependencyGraph:
         depsFromArgValues(
           ReferenceOperators.callDependencyValues(
             call,
-            CriteriaRangeResize.resizedArgs(call.spec.name, call.spec.argSpec.toValues(call.args)),
+            CriteriaRangeResize.resizedArgs(
+              call.spec.name,
+              call.spec.argSpec.toValues(call.args),
+              shapeOf = location => location.staticRange.orElse(tableRange(location)),
+              targetOf =
+                location => tableRange(location).fold(location)(TExpr.RangeLocation.Local(_))
+            ),
             ReferenceOperators.staticShape,
             reader
           ),
@@ -2472,6 +2485,10 @@ object DependencyGraph:
               targetOf = {
                 case named: TExpr.RangeLocation.Name =>
                   resolved(named).fold[TExpr.RangeLocation](named) { (target, range) =>
+                    TExpr.RangeLocation.CrossSheet(target.name, range)
+                  }
+                case computed @ TExpr.RangeLocation.Computed(TableColumnReferences.Ref(_)) =>
+                  resolved(computed).fold[TExpr.RangeLocation](computed) { (target, range) =>
                     TExpr.RangeLocation.CrossSheet(target.name, range)
                   }
                 case other => other

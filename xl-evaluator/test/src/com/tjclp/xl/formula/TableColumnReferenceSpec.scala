@@ -47,6 +47,8 @@ class TableColumnReferenceSpec extends FunSuite:
 
   for formula -> expected <- List(
       "SUM(Table1[Col])" -> 4,
+      "SUMPRODUCT(Table1[Col],Table1[Other Column])" -> 100,
+      "SUMPRODUCT(Table1[Col]*2)" -> 8,
       "COUNT(Table1[Col])" -> 2,
       "COUNTBLANK(Table1[Col])" -> 1,
       "COUNTIF(Table1[Col],\">1\")" -> 1,
@@ -251,3 +253,51 @@ class TableColumnReferenceSpec extends FunSuite:
       val sheet = data.withTable(table.copy(displayName = name))
       assertEquals(sheet.evaluateFormula(s"SUM($name[Col])"), Right(num(4)))
     }
+
+  test("GH-669: resized SUMIF table targets read fresh formula cells beyond the column") {
+    val sheet = data
+      .put(ref"C7", 1)
+      .put(ref"B7", CellValue.Formula("C7+10", Some(num(999))))
+      .put(ref"A1", CellValue.Formula("""SUMIF(C3:C7,">0",Table1[Col])""", Some(num(-1))))
+    assertEquals(sheet.evaluateWithDependencyCheck().toOption.get(ref"A1"), num(1015))
+    val wb = Workbook(sheet).recalculate()
+    assertEquals(cached(wb.workbook, "Data", ref"A1"), Some(num(1015)))
+  }
+
+  test("GH-669: resized table target edges expose the same cycles as explicit ranges") {
+    def cycle(formula: String): Sheet = data
+      .put(ref"C7", 1)
+      .put(ref"B7", CellValue.Formula("A1+1", Some(num(999))))
+      .put(ref"A1", CellValue.Formula(formula, Some(num(1))))
+    val explicit = cycle("""SUMIF(C3:C7,">0",B3:B5)""")
+    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(explicit)).isLeft)
+    val structured = cycle("""SUMIF(C3:C7,">0",Table1[Col])""")
+    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(structured)).isLeft)
+  }
+
+  for (criteria, cycleCell, expectedCycle) <- List(
+      ("C3:C7", ref"B7", true),
+      ("C3:C3", ref"B5", false)
+    )
+  do
+    test(s"GH-669: resized workbook target $criteria has exactly the needed cycle edges") {
+      val sheet = data
+        .put(ref"C7", 1)
+        .put(cycleCell, CellValue.Formula("A1+1", Some(num(999))))
+        .put(ref"A1", CellValue.Formula(s"""SUMIF($criteria,">0",Table1[Col])""", Some(num(1))))
+      val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
+      assertEquals(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty, expectedCycle)
+      assertEquals(
+        DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft,
+        expectedCycle
+      )
+    }
+
+  test("GH-669: table criteria shape resizes a literal SUMIF target in both graphs") {
+    val sheet = data
+      .put(ref"C5", CellValue.Formula("A1+1", Some(num(999))))
+      .put(ref"A1", CellValue.Formula("""SUMIF(Table1[Col],">0",C3)""", Some(num(1))))
+    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft)
+    val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
+    assert(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty)
+  }
