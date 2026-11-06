@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Release jobs must not restore or save shared Actions caches (GH-836)."""
+"""Reject known shared-cache actions and cache inputs in release jobs (GH-836).
+This lexical guard does not audit caching hidden inside arbitrary third-party code.
+"""
 import re
 import sys
 from pathlib import Path
@@ -8,8 +10,8 @@ from pathlib import Path
 def violations(text):
     return [(number, line.strip()) for number, line in enumerate(text.splitlines(), 1)
             if not line.lstrip().startswith("#") and
-            (re.search(r"actions/cache(?:[/@\s'\"]|$)", line) or
-             re.search(r"\brestore-keys\s*:", line))]
+            (re.search(r"(?:actions/cache|coursier/cache-action)(?:[/@\s'\"]|$)", line, re.IGNORECASE) or
+             re.search(r"(?:^|[\s{,])['\"]?(?:restore-keys|cache)['\"]?\s*:", line, re.IGNORECASE))]
 
 
 def main():

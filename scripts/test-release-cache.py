@@ -14,6 +14,11 @@ class ReleaseCacheTest(unittest.TestCase):
                        "actions/cache/restore@" + "a" * 40, "actions/cache/save@v4"):
             self.assertTrue(policy.violations("uses: " + action))
 
+    def test_alternate_cache_mechanisms_are_rejected(self):
+        for line in ("uses: Actions/Cache@v4", "uses: coursier/cache-action@v6",
+                     "cache: maven", '"cache": true'):
+            self.assertTrue(policy.violations(line), line)
+
     def test_restore_prefixes_are_rejected(self):
         self.assertTrue(policy.violations("restore-keys: release-coursier-"))
 
