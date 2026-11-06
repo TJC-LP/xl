@@ -62,6 +62,14 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
+- `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
+  source-free modeled sheets. It refuses external-workbook ordinal formulas (including ordinals
+  already valid in the destination), foreign source-backed sheets, tables/drawings/conditional
+  formats/validations, case-insensitive name collisions, and differing workbook default fonts or theme palettes. The unchanged sheet must belong to
+  the supplied source workbook. It preserves that sheet's model/style registry and tracks the
+  destination change. It does not merge source ZIP parts, remap names or ordinary formula
+  dependencies, or materialize cached values. Raw `put`/`update` remain low-level operations;
+  copying a loaded sheet with them can still rebind external links silently (part of #526).
 - `Workbook.upsert(name, f)` is total update-or-create; `Workbook.update(name, f)` returns
   `XLResult[Workbook]` and fails if the sheet is absent. Pick by intent.
 - `Excel.modify("file.xlsx")(f)` does read → transform → write in place with atomic file

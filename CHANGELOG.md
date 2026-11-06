@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Explicit conservative sheet adoption** (part of #526): `Workbook.adopt(sheet, from)` refuses
+  external-reference rebinding, foreign source-backed transfers, unsupported sheet payloads and
+  name collisions and incompatible default-font/theme contexts. Source-free simple sheets retain their model and styles; raw `put` is unchanged.
+
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
   functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
   while retaining fractional periods, verified against desktop Excel 16.114.3.

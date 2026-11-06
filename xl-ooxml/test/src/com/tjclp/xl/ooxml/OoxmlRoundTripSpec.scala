@@ -7,6 +7,7 @@ import java.nio.file.{Files, Path}
 import java.time.{Duration, LocalDate, LocalDateTime}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.api.*
+import com.tjclp.xl.style
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -31,6 +32,31 @@ class OoxmlRoundTripSpec extends FunSuite:
       .walk(tempDir)
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
+
+  test("GH-526: adopted source-free sheet retains cell style through source-backed write") {
+    val destinationPath = tempDir.resolve("adoption-source.xlsx")
+    XlsxWriter.write(Workbook("Destination"), destinationPath).fold(e => fail(e.message), identity)
+    val destination = XlsxReader.read(destinationPath).fold(e => fail(e.message), identity)
+    val portable = com.tjclp.xl.sheets
+      .Sheet("Portable")
+      .put(ref"A1", 42)
+      .style(ref"A1", CellStyle.default.bold)
+    val source = Workbook(portable)
+    val adopted = destination.adopt(portable, from = source).fold(e => fail(e.message), identity)
+    val output = tempDir.resolve("adoption-result.xlsx")
+    XlsxWriter.write(adopted, output).fold(e => fail(e.message), identity)
+    val read = XlsxReader.read(output).fold(e => fail(e.message), identity)
+    val sheet = read.sheets.find(_.name == portable.name).getOrElse(fail("Missing adopted sheet"))
+    assertEquals(sheet(ref"A1").value, portable(ref"A1").value)
+    // A read records numFmtId=0 for General; compare effective styling, as the existing
+    // full-feature round-trip control does, rather than the source-format provenance.
+    val actualStyle = sheet(ref"A1").styleId.flatMap(sheet.styleRegistry.get)
+    val expectedStyle = portable(ref"A1").styleId.flatMap(portable.styleRegistry.get)
+    assertEquals(
+      actualStyle.map(_.copy(numFmtId = None)),
+      expectedStyle.map(_.copy(numFmtId = None))
+    )
+  }
 
   test("Minimal workbook: write and read back") {
     // Create minimal workbook
