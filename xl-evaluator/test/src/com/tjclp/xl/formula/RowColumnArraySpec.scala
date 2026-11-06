@@ -360,3 +360,14 @@ class RowColumnArraySpec extends FunSuite:
     }
     assertEquals(evala("=SUM(ROW(A:A))"), Right(BigDecimal("549756338176")))
   }
+
+  test("#735: LET reusing derived ROW arrays stays bounded and preserves its sum") {
+    val levels = 30
+    val bindings = (1 to levels)
+      .map { i =>
+        s"stage_$i,stage_${i - 1}+stage_${i - 1}"
+      }
+      .mkString(",")
+    val formula = s"LET(stage_0,ROW(A1:A16),$bindings,SUM(stage_$levels))"
+    assertEquals(evala(formula), Right(BigDecimal(136) * BigDecimal(2).pow(levels)))
+  }
