@@ -9,6 +9,15 @@ spec.loader.exec_module(pins)
 
 
 class ActionPinsTest(unittest.TestCase):
+    def test_reference_quotes_must_pair(self):
+        for opening in ('', "'", '"'):
+            for closing in ('', "'", '"'):
+                for ref in ('a' * 40, 'main', 'v1.2.3', 'a' * 39, 'a' * 41):
+                    with self.subTest(opening=opening, closing=closing, ref=ref):
+                        text = '- uses: ' + opening + 'owner/action@' + ref + closing + ' # v1.2.3'
+                        self.assertEqual(opening != closing or ref != 'a' * 40,
+                                         bool(pins.violations(text)))
+
     def test_current_commit_is_accepted(self):
         self.assertEqual([], pins.violations("  - uses: actions/checkout@" + "a" * 40 + " # v4.4.0"))
 
