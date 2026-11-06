@@ -66,6 +66,23 @@ class ActionPinsTest(unittest.TestCase):
         for text in ("- 'v*'", "- 'src/**' # path filter", '- "scripts/**"'):
             self.assertEqual([],pins.violations(text))
 
+    def test_flow_sequence_mappings_are_rejected(self):
+        for text in ('steps: [uses: actions/checkout@v4]',
+                     'steps: [name: Checkout, uses: actions/checkout@v4]',
+                     'steps: [\n name: Checkout, uses: actions/checkout@v4\n]',
+                     '- [uses: actions/checkout@v4]'):
+            self.assertTrue(pins.violations(text),text)
+        self.assertEqual([],pins.violations('branches: [main, release]'))
+
+    def test_encoded_option_keys_are_rejected(self):
+        for key in ('with','env','permissions'):
+            self.assertTrue(pins.violations(key + r': { "\x75ses": org/repo/.github/workflows/w.yml@main }'))
+
+    def test_block_scalar_uses_actual_key_column(self):
+        for spaces in (1,2,3,5):
+            text='  -'+' '*spaces+'name: |\n'+' '*(spaces+6)+'Checkout\n'+' '*(spaces+3)+'uses: actions/checkout@v4'
+            self.assertEqual([3],[n for n,_ in pins.violations(text)])
+
     def test_comments_are_ignored(self):
         self.assertEqual([], pins.violations(" # uses: owner/action@v1"))
 

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+
 - **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
 
 ### Added

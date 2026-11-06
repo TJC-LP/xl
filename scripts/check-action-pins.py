@@ -26,7 +26,7 @@ def violations(text):
             scalar_indent = None
         if BLOCK_SCALAR.fullmatch(line) and not MAPPING_KEY.match(line):
             # A list item's mapping keys are indented beyond its dash.
-            scalar_indent = indent + (2 if line.lstrip().startswith("- ") else 0)
+            scalar_indent = re.match(r"^\s*(?:-\s+)?", line).end()
             continue
         # Quoted scalar list items (tag/path filters) are not mapping keys.
         if re.fullmatch(r"\s*-\s*(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*')\s*(?:#.*)?", line):
@@ -50,7 +50,16 @@ def violations(text):
         empty_map = re.fullmatch(r"\s*(?:-\s*)?" + key + r"\s*:\s*\{\s*\}\s*(?:#.*)?", line)
         options = re.fullmatch(r"\s*(?:-\s*)?(?:env|with|permissions)\s*:\s*\{([^{}\[\]]*)\}\s*(?:#.*)?", line)
         if empty_map or (options and not KEY.search(options[1]) and
-                         not re.search(r"(?:^|[\s:,])[&*!?]", options[1])):
+                         not re.search(r"[\"'\\]|(?:^|[\s:,])[&*!?]", options[1])):
+            continue
+        # Only complete plain scalar flow lists are supported (e.g. [main]).
+        # Reject other flow sequences at their opener, including multiline and
+        # implicit single-pair maps such as [uses: action@tag].
+        sequence = re.match(r"^\s*(?:-\s*)?(?:" + key + r"\s*:\s*)?\[", line)
+        if sequence:
+            tail = line[sequence.end():]
+            if not re.fullmatch(r"[\w./*+ -]*(?:,[\w./*+ -]*)*\]\s*(?:#.*)?", tail):
+                errors.append((number, line.strip()))
             continue
         # Flow mappings remain unsupported and fail closed. Scalar values such
         # as run/name strings are not action references.
