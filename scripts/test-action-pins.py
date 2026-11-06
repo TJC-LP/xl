@@ -24,6 +24,30 @@ class ActionPinsTest(unittest.TestCase):
         for line in ('- {uses: owner/action@v1}', '  "uses": owner/action@v1', "  uses: 'owner/action@v1'"):
             self.assertTrue(pins.violations(line))
 
+    def test_local_and_digest_references(self):
+        for value in ("./.github/actions/setup", "./.github/workflows/build.yml",
+                      "docker://alpine@sha256:" + "a" * 64):
+            self.assertEqual([], pins.violations("uses: " + value))
+        for value in ("docker://alpine:latest", "docker://alpine@sha256:" + "a" * 63):
+            self.assertTrue(pins.violations("uses: " + value))
+
+    def test_scalar_text_is_not_an_action_reference(self):
+        self.assertEqual([], pins.violations('run: echo "Release uses: tag"'))
+        self.assertEqual([], pins.violations('- name: "Check uses: value"'))
+        text = '  - run: |\n      uses: example text\n    name: example\n  - uses: owner/action@v1'
+        self.assertEqual([4], [n for n, _ in pins.violations(text)])
+
+    def test_folded_action_reference_fails_closed(self):
+        self.assertTrue(pins.violations("uses: >-\n  actions/checkout@v4"))
+
+    def test_multiline_flow_mapping_fails_closed(self):
+        for text in ("- {name: Checkout\n  , uses: actions/checkout@v4}",
+                     "- {\n  name: Checkout, uses: actions/checkout@v4\n  }"):
+            self.assertTrue(pins.violations(text))
+
+    def test_quoted_flow_mapping_key_fails_closed(self):
+        self.assertTrue(pins.violations('"steps": [{uses: actions/checkout@v4}]'))
+
     def test_comments_are_ignored(self):
         self.assertEqual([], pins.violations(" # uses: owner/action@v1"))
 
