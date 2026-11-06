@@ -45,7 +45,10 @@ HTTP(S) repository caches must have identical bytes. Unrecognised references,
 missing files/POMs, resolution failures and conflicting bytes fail the check.
 
 This is a CI comparison gate, not an offline resolver or forced-version policy.
-An ordinary `./mill` invocation does not enforce the lock automatically. The
+An ordinary `./mill` invocation does not enforce the lock automatically.
+Release jobs currently resolve their own artifacts without running this check,
+so this gate does not verify the dependency bytes used by native release builds,
+assembly bundles or Maven publication. Release enforcement is a separate follow-up. The
 gate runs after Mill bootstrap, so it is not a sandbox against executing an
 untrusted build or compiler plugin. It does not lock the Mill launcher, JDK
 download, GitHub Actions, external scala-cli/example toolchains, or artifacts
