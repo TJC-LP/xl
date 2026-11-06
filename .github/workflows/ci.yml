@@ -24,6 +24,7 @@ jobs:
           python3 scripts/test-download-verification.py
           python3 scripts/test-remote-setup.py
           python3 scripts/test-install-docs.py
+          python3 scripts/check-install-version.py
 
       - name: plugin.json version equals build.mill
         run: |

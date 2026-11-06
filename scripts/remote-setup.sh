@@ -50,7 +50,8 @@ mkdir -p "$BIN"
 COURSIER_VERSION="${XL_REMOTE_COURSIER_VERSION:-2.1.24}"
 SCALA_CLI_VERSION="${XL_REMOTE_SCALA_CLI_VERSION:-1.9.1}"
 
-# Every launcher fetched by this script must match committed bytes, including cache hits.
+# Coursier downloads in our private cache must match committed bytes, including cache hits.
+# Caller-provided PATH tools and Coursier-managed Scala CLI/JDK installs are separate trust inputs.
 . "$ROOT/scripts/verify-download.sh"
 NOTES=""
 note() { NOTES="${NOTES:+$NOTES; }$*"; }
@@ -76,6 +77,8 @@ fi
 # cs_run abstracts over the native launcher and the JAR so steps 2-3 read the same either way.
 CS=""
 CS_JAR=""
+CS_CACHE="$BIN/.xl-remote"
+mkdir -p "$CS_CACHE"
 cs_run() {
   if [[ -n "$CS_JAR" ]]; then java -jar "$CS_JAR" "$@"; else "$CS" "$@"; fi
 }
@@ -104,18 +107,20 @@ verified_fetch() {
 SYSTEM=$(uname -s)
 ARCH=$(uname -m)
 PATH_CS=$(command -v cs || true)
-# A caller-installed tool is the caller's trust decision. Linux x86_64's
-# managed cache path is handled below, because older setup versions populated it.
+# Caller tools elsewhere on PATH are caller-trusted. On Linux, legacy $BIN/cs
+# may be either user-owned or an old unverified download: preserve it, but use
+# the private verified cache instead. Never delete or replace that ambiguous file.
+# Only .xl-remote is setup-owned; no unverified executable from it is trusted.
 if [[ "$JVM_LAUNCHERS" != "true" && -n "$PATH_CS" &&
-      ( "$PATH_CS" != "$BIN/cs" || "$SYSTEM" != "Linux" ||
-        ( "$ARCH" != "x86_64" && "$ARCH" != "amd64" ) ) ]]; then
+      "$PATH_CS" != "$CS_CACHE/"* &&
+      ( "$SYSTEM" != "Linux" || "$PATH_CS" != "$BIN/cs" ) ]]; then
   CS="$PATH_CS"
 elif [[ "$JVM_LAUNCHERS" == "true" ||
         ( "$SYSTEM" == "Linux" && ( "$ARCH" == "aarch64" || "$ARCH" == "arm64" ) ) ]]; then
   if ! java -version >/dev/null 2>&1; then
     warn "Coursier JVM launcher needs a working Java; skipping provisioning"
   else
-    CS_JAR_PATH="$BIN/coursier.jar"
+    CS_JAR_PATH="$CS_CACHE/coursier.jar"
     URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/coursier"
     if verified_fetch "coursier-$COURSIER_VERSION" "$URL" "$CS_JAR_PATH"; then
       CS_JAR="$CS_JAR_PATH"
@@ -124,20 +129,20 @@ elif [[ "$JVM_LAUNCHERS" == "true" ||
 elif [[ "$SYSTEM" == "Linux" && ( "$ARCH" == "x86_64" || "$ARCH" == "amd64" ) ]]; then
   if ! CS_NATIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux"); then
     warn "no committed native Coursier checksum for $COURSIER_VERSION; skipping provisioning"
-  elif [[ -x "$BIN/cs" ]] && xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs"; then
-    CS="$BIN/cs"
+  elif [[ -x "$CS_CACHE/cs" ]] && xl_verify_sha256 "$CS_NATIVE_SHA" "$CS_CACHE/cs"; then
+    CS="$CS_CACHE/cs"
   else
-    [[ ! -e "$BIN/cs" ]] || { warn "discarding mismatched cached cs"; rm -f "$BIN/cs"; }
+    [[ ! -e "$CS_CACHE/cs" ]] || { warn "discarding mismatched cached cs"; rm -f "$CS_CACHE/cs"; }
     URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/cs-x86_64-pc-linux.gz"
-    if verified_fetch "cs-$COURSIER_VERSION-x86_64-pc-linux.gz" "$URL" "$BIN/cs.gz" &&
-        gzip -dc "$BIN/cs.gz" > "$BIN/cs.tmp" &&
-        xl_verify_sha256 "$CS_NATIVE_SHA" "$BIN/cs.tmp"; then
-      chmod +x "$BIN/cs.tmp" && mv "$BIN/cs.tmp" "$BIN/cs" && CS="$BIN/cs"
+    if verified_fetch "cs-$COURSIER_VERSION-x86_64-pc-linux.gz" "$URL" "$CS_CACHE/cs.gz" &&
+        gzip -dc "$CS_CACHE/cs.gz" > "$CS_CACHE/cs.tmp" &&
+        xl_verify_sha256 "$CS_NATIVE_SHA" "$CS_CACHE/cs.tmp"; then
+      chmod +x "$CS_CACHE/cs.tmp" && mv "$CS_CACHE/cs.tmp" "$CS_CACHE/cs" && CS="$CS_CACHE/cs"
     else
-      rm -f "$BIN/cs.tmp"
+      rm -f "$CS_CACHE/cs.tmp"
       warn "could not provision verified native Coursier"
     fi
-    rm -f "$BIN/cs.gz"
+    rm -f "$CS_CACHE/cs.gz"
   fi
 else
   warn "no trusted Coursier on PATH for $SYSTEM/$ARCH; skipping provisioning"

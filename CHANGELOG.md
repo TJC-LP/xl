@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial

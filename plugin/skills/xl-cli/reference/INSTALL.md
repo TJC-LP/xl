@@ -31,6 +31,12 @@ mkdir -p "$INSTALL_DIR"
 WORK=$(mktemp -d "$INSTALL_DIR/.xl-download.XXXXXX")
 trap 'rm -rf "$WORK"' EXIT
 BASE="https://github.com/TJC-LP/xl/releases/download/v${VERSION}"
+# v0.25.0 predates release manifests; its exact digests above are the only fallback.
+if [[ "$VERSION" != "0.25.0" ]]; then
+  curl -fLsS "$BASE/SHA256SUMS" -o "$WORK/SHA256SUMS"
+  EXPECTED=$(awk -v asset="$BINARY" '$2 == asset { count++; digest=$1 } END { if (count != 1) exit 1; print digest }' "$WORK/SHA256SUMS")
+  [[ "$EXPECTED" =~ ^[0-9a-f]{64}$ ]] || { echo "Invalid release checksum" >&2; exit 1; }
+fi
 curl -fLsS "$BASE/$BINARY" -o "$WORK/$BINARY"
 if command -v sha256sum >/dev/null 2>&1; then
   ACTUAL=$(sha256sum "$WORK/$BINARY")
@@ -45,8 +51,9 @@ echo "Installed verified xl $VERSION to $INSTALL_DIR/xl"
 ```
 
 The pinned digests detect changed bytes, not a compromised publisher. Keep version and
-digests together when updating this example. Future release installers use `SHA256SUMS`
-and fail closed when it is missing. Ensure `~/.local/bin` is on PATH.
+digests together for the legacy v0.25.0 fallback. Release preparation updates `VERSION`
+to match the skill and plugin; subsequent versions require their own `SHA256SUMS`
+with exactly one matching asset entry and fail closed when it is missing. Ensure `~/.local/bin` is on PATH.
 
 ## Windows (PowerShell)
 
