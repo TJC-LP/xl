@@ -54,6 +54,49 @@ def extract(text, filename, scala):
     return pins
 
 
+def extract_jmh(text, filename="xl-benchmarks/package.mill"):
+    """Recognize this benchmark module's literal setting, not arbitrary Scala."""
+    active = []
+    block = False
+    for number, line in enumerate(text.splitlines(), 1):
+        code, _, comment = line.partition('//')
+        code = code.strip()
+        if block or code.startswith('/*'):
+            if not block:
+                code = code[2:]
+            if '/*' in code:
+                raise ValueError(f'{filename}:{number}: nested block comment unsupported')
+            if '*/' in code:
+                _, _, tail = code.partition('*/')
+                if tail.strip():
+                    raise ValueError(f'{filename}:{number}: mixed block comment/code unsupported')
+                block = False
+            else:
+                block = True
+            continue
+        if '/*' in code or '*/' in code:
+            raise ValueError(f'{filename}:{number}: mixed block comment/code unsupported')
+        if code:
+            active.append((number, code, comment))
+    if block:
+        raise ValueError(f'{filename}: unclosed block comment')
+    declarations = [(i, row) for i, row in enumerate(active) if 'jmhCoreVersion' in row[1]]
+    if len(declarations) != 1 or any('jmhGeneratorByteCodeVersion' in row[1] for row in active):
+        raise ValueError(f'{filename}: require one JMH core literal and inherited generator version')
+    i, (number, code, comment) = declarations[0]
+    header = 'object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {'
+    match = re.fullmatch(r'def jmhCoreVersion = "([0-9][A-Za-z0-9_.+-]*)"', code)
+    if not match or i == 0 or active[i - 1][1] != header:
+        raise ValueError(f'{filename}:{number}: unsupported benchmark JMH declaration')
+    # A following Scala selection or infix line can continue a literal RHS.
+    # Recognize the existing next declaration (or the end of an empty module).
+    if i + 1 >= len(active) or active[i + 1][1] not in {'override def moduleDeps = Seq(', '}'}:
+        raise ValueError(f'{filename}:{number}: unsupported continuation after JMH literal')
+    reason = comment.partition('pinned:')[2].strip() if comment.strip().startswith('pinned:') else ''
+    return [Pin('org.openjdk.jmh', artifact, match[1], f'{filename}:{number}', reason)
+            for artifact in ('jmh-core', 'jmh-generator-bytecode')]
+
+
 def inventory(root):
     build = (root / 'build.mill').read_text()
     match = re.search(r'^val scala3Version = "([0-9.]+)"(?: // pinned: (.+))?$', build, re.M)
@@ -72,6 +115,7 @@ def inventory(root):
         raise ValueError('Review changed build-header dependencies')
     pins.append(Pin('com.lihaoyi', 'mill-contrib-jmh_3', (root / '.mill-version').read_text().strip(),
                     'build.mill:1', ''))
+    pins.extend(extract_jmh((root / 'xl-benchmarks/package.mill').read_text()))
     return pins
 
 

@@ -64,6 +64,18 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
+        "/^xl-benchmarks/package\\.mill$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r\\n|\\r|\\n)[ \\t]*def jmhCoreVersion = \"(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
+      ],
+      "depNameTemplate": "org.openjdk.jmh:jmh-core",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
         "/^\\.mill-version$/"
       ],
       "matchStrings": [

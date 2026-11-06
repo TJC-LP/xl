@@ -40,3 +40,22 @@ Committing configuration does not install an app. Repository administrators must
 authorize and enable Renovate, then confirm an actual update PR and CI run. Until
 that happens, the first-update acceptance criterion in #839 remains open. No
 hosted updater run is established by local schema or extraction tests.
+
+### Benchmark JMH setting
+
+The inventory also checks both `org.openjdk.jmh:jmh-core` and
+`org.openjdk.jmh:jmh-generator-bytecode`. Mill 1.1.5 inherits the generator version
+from `jmhCoreVersion`. The checker recognizes the literal declaration as the first
+active statement in the existing `xl-benchmarks/package.mill` package object,
+followed by the existing `moduleDeps` declaration (or the closing module brace);
+expressions, duplicate declarations, explicit generator overrides in this file,
+and mixed block-comment/code lines require a policy update. Standalone block
+comments and line comments are ignored. This is a deliberately bounded check of
+this benchmark module, not a Scala parser or a search for other JMH modules.
+
+One Renovate manager updates the shared core version; the generator follows it,
+and the age check validates both artifact timestamps. The existing 1.35 harness
+is retained for benchmark baseline comparability, with an inline age exemption.
+This does not assert that newer JMH is incompatible or unsafe. A future upgrade
+should refresh the benchmark baselines. The reason exempts age only; missing,
+future, or unavailable Maven timestamps still fail.

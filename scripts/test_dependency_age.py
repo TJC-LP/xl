@@ -36,10 +36,41 @@ class PolicyTests(unittest.TestCase):
             request.side_effect = OSError('network unavailable')
             with self.assertRaises(OSError): age.modified('https://example.test/a')
 
+
+    def test_jmh_artifacts_and_age_exemption(self):
+        header = 'object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {'
+        now = datetime(2026, 11, 6, tzinfo=timezone.utc)
+        for comment, expected in [('', False), (' // pinned: ', False),
+                                   (' // unrelated pinned: reason', False),
+                                   (' // pinned: baseline stability', True)]:
+            pins = age.extract_jmh(header + '\n  def jmhCoreVersion = "1.35"' + comment + '\n}')
+            self.assertEqual(['jmh-core', 'jmh-generator-bytecode'], [p.artifact for p in pins])
+            self.assertEqual(['1.35', '1.35'], [p.version for p in pins])
+            for pin in pins:
+                self.assertEqual(expected, age.evaluate(pin, now-timedelta(days=800), now)['passed'])
+                with self.assertRaises(ValueError):
+                    age.evaluate(pin, now+timedelta(seconds=1), now)
+
+    def test_jmh_comments_and_fail_closed_declarations(self):
+        header = 'object `package` extends build.XLInternalModule with contrib.jmh.JmhModule {'
+        literal = 'def jmhCoreVersion = "1.35"'
+        comments = '// def jmhGeneratorByteCodeVersion = "1"\n/*\ndef jmhCoreVersion = "9"\n*/\n'
+        self.assertEqual('1.35', age.extract_jmh(comments+header+'\n'+comments+literal+'\n}')[0].version)
+        invalid = ['', literal+'\n    .replace("1.35", "1.37")',
+                   literal+'\n    + "0"', literal+' + "x"', literal+'; println("x")',
+                   literal+'\n'+literal, literal+'\ndef jmhGeneratorByteCodeVersion = "1"',
+                   'def helper = {\n'+literal+'\n}', '// '+literal,
+                   '/* '+literal+' */', '/* comment */ '+literal,
+                   '/* unclosed', 'def jmhCoreVersion = version']
+        for body in invalid:
+            with self.subTest(body=body), self.assertRaises(ValueError):
+                age.extract_jmh(header+'\n'+body+'\n}')
+
     def test_repository_inventory_includes_tooling(self):
         pins = age.inventory(age.ROOT)
         self.assertGreater(len(pins), 28)
         self.assertIn('mill-contrib-jmh_3', [p.artifact for p in pins])
+        self.assertEqual(2, len([p for p in pins if p.group == 'org.openjdk.jmh']))
         self.assertIn('scala3-compiler_3', [p.artifact for p in pins])
 
 if __name__ == '__main__': unittest.main()
