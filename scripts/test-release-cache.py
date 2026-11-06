@@ -25,6 +25,26 @@ class ReleaseCacheTest(unittest.TestCase):
     def test_ordinary_release_steps_pass(self):
         self.assertEqual([], policy.violations("uses: actions/checkout@" + "a" * 40 + "\nrun: ./mill -i __.test"))
 
+    def test_scalar_text_and_trailing_comments_are_ignored(self):
+        for text in ('run: echo "no cache: cold build"',
+                     'name: Build # no actions/cache@v4',
+                     'run: |\n  echo "no cache: cold build"\n  # actions/cache@v4',
+                     'name: "actions/cache@v4 is forbidden"'):
+            self.assertEqual([],policy.violations(text),text)
+
+    def test_real_cache_after_scalar_still_fails(self):
+        text='  -   run: |\n        echo "cache: harmless"\n      uses: actions/cache@v4 # real step'
+        self.assertEqual([3],[n for n,_ in policy.violations(text)])
+        self.assertTrue(policy.violations('uses: "actions/cache@v4" # cache step'))
+        self.assertTrue(policy.violations('- {uses: actions/cache@v4}'))
+        self.assertTrue(policy.violations('with: {cache: maven}'))
+
+    def test_multiline_flow_cache_step_still_fails(self):
+        text='steps:\n  - {\n    name: Cache, uses: actions/cache@v4\n    }'
+        self.assertEqual([3],[n for n,_ in policy.violations(text)])
+        text += '\nrun: echo "no cache: harmless"'
+        self.assertEqual([3],[n for n,_ in policy.violations(text)])
+
     def test_comment_is_not_an_active_cache_step(self):
         self.assertEqual([], policy.violations("# actions/cache is deliberately absent"))
 
