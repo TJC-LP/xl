@@ -1,90 +1,124 @@
 #!/usr/bin/env python3
-"""Require reviewable immutable action references in block-style workflow YAML."""
+"""Enforce immutable uses references in a deliberately restricted block-YAML grammar.
+
+Recognize supported lines positively: unknown structure is an error, not an
+ignored line. This is a repository format policy, not a general YAML parser.
+"""
 import re
 import sys
 from pathlib import Path
 
 REFERENCE = re.compile(r"^\s*(?:-\s*)?uses:\s*['\"]?([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]{40})['\"]?\s+#\s+v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?\s*$")
-KEY = re.compile(r"(?:^|[\s{,])['\"]?uses['\"]?\s*:")
-
-
 LOCAL_OR_DOCKER = re.compile(r"^\s*(?:-\s*)?uses:\s*(?:\./[A-Za-z0-9_./-]+|docker://[A-Za-z0-9_./:-]+@sha256:[0-9a-f]{64})\s*(?:#.*)?$")
-MAPPING_KEY = re.compile(r"^\s*(?:-\s*)?['\"]?uses['\"]?\s*:")
-BLOCK_SCALAR = re.compile(r"^\s*(?:-\s*)?[\w-]+:\s*[|>][+\-1-9]*\s*(?:#.*)?$")
+MAPPING = re.compile(r'''(?P<key>[A-Za-z0-9_.-]+|"[^"\\]*"|'[^'\\]*') *:(?:[ \t]+|$)(?P<value>.*)$''')
+QUOTED = re.compile(r'''(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:[ \t]+\#.*)?$''')
+BLOCK_HEADER = re.compile(r'[|>](?:[1-9][+-]?|[+-][1-9]?|)$')
+PLAIN_LIST = re.compile(r'\[[\w./*+ -]*(?:,[\w./*+ -]*)*\]$')
+OPTION_ENTRY = re.compile(r'([A-Za-z0-9_.-]+) *: *[A-Za-z0-9_./+-][A-Za-z0-9_./*+-]*$')
+
+
+def without_comment(value):
+    # Called only for unquoted values. Quotes inside a YAML plain scalar are
+    # literal characters, not quote delimiters (e.g. run: echo "$REF#suffix").
+    return re.split(r'(?:^|[ \t])#', value, maxsplit=1)[0].rstrip()
+
+
+def scalar_or_options(value, key, sequence_item):
+    if value.startswith(('"', "'")):
+        return QUOTED.fullmatch(value) is not None
+    value = without_comment(value)
+    if not value:
+        return True
+    if value.startswith('['):
+        return (PLAIN_LIST.fullmatch(value) is not None
+                and not any(item.strip().startswith('*') for item in value[1:-1].split(',')))
+    if value.startswith('{'):
+        if re.fullmatch(r'\{[ \t]*\}', value):
+            return True
+        if key not in {'env', 'with', 'permissions'} or not value.endswith('}'):
+            return False
+        entries = [OPTION_ENTRY.fullmatch(entry.strip()) for entry in value[1:-1].split(',')]
+        return all(entry is not None and entry[1] != 'uses' for entry in entries)
+    # A scalar cannot begin with a collection/property/directive indicator.
+    if value[0] in '&*!?{}[],|>@`%' or re.match(r'[-:](?:[ \t]|$)', value):
+        return False
+    # A sequence item's unrecognized key must not fall back to scalar text.
+    if sequence_item and re.search(r':(?:[ \t]|$)', value):
+        return False
+    return True
 
 
 def violations(text):
     errors = []
-    scalar_indent = None
+    scalar_parent = None
+    scalar_content = None
+    # YAML permits a stream-leading BOM; it must not mask the first structure.
+    if text.startswith('\ufeff'):
+        text = text[1:]
     for number, line in enumerate(text.splitlines(), 1):
-        if not line.strip() or line.lstrip().startswith("#"):
+        indent = len(line) - len(line.lstrip(' '))
+        if not line.strip():
             continue
-        indent = len(line) - len(line.lstrip())
-        if scalar_indent is not None:
-            if indent > scalar_indent:
+        if scalar_parent is not None:
+            if scalar_content is None and indent > scalar_parent:
+                scalar_content = indent
+            if scalar_content is not None and indent >= scalar_content:
                 continue
-            scalar_indent = None
-        if BLOCK_SCALAR.fullmatch(line) and not MAPPING_KEY.match(line):
-            # A list item's mapping keys are indented beyond its dash.
-            scalar_indent = re.match(r"^\s*(?:-\s+)?", line).end()
+            scalar_parent = scalar_content = None
+        content = line[indent:]
+        if content.startswith('#'):
             continue
-        # Quoted scalar list items (tag/path filters) are not mapping keys.
-        if re.fullmatch(r"\s*-\s*(?:\"(?:[^\"\\]|\\.)*\"|'(?:[^']|'')*')\s*(?:#.*)?", line):
-            continue
-        # Escaped or multiline quoted keys can spell uses without its literal
-        # bytes. Keep quoted keys to a simple single-line spelling.
-        if re.match(r"^\s*(?:-\s*)?[\"']", line) and not re.match(
-                r"^\s*(?:-\s*)?(?:\"[^\"\\]*\"|'[^']*')\s*:", line):
+        if '\ufeff' in line or any(ord(c) < 32 and c != '\t' for c in line):
             errors.append((number, line.strip()))
             continue
-        # Node properties, aliases, merge keys and explicit keys are outside this
-        # deliberately block-style policy. Reject them before they can obscure uses.
-        key = r"(?:\"[^\"]+\"|'[^']+'|[\w-]+)"
-        node = re.match(r"^\s*(?:-\s*)?[&*!?]", line) or re.match(
-            r"^\s*(?:-\s*)?(?:" + key + r"|<<)\s*:\s*[&*!]", line)
-        if node or re.match(r"^\s*(?:-\s*)?<<\s*:", line):
-            errors.append((number, line.strip()))
-            continue
-        # Empty mappings contain no action reference. Single-line scalar option
-        # maps are also safe here; nested collections and uses keys stay rejected.
-        empty_map = re.fullmatch(r"\s*(?:-\s*)?" + key + r"\s*:\s*\{\s*\}\s*(?:#.*)?", line)
-        options = re.fullmatch(r"\s*(?:-\s*)?(?:env|with|permissions)\s*:\s*\{([^{}\[\]]*)\}\s*(?:#.*)?", line)
-        if empty_map or (options and not KEY.search(options[1]) and
-                         not re.search(r"[\"'\\]|(?:^|[\s:,])[&*!?]", options[1])):
-            continue
-        # Only complete plain scalar flow lists are supported (e.g. [main]).
-        # Reject other flow sequences at their opener, including multiline and
-        # implicit single-pair maps such as [uses: action@tag].
-        sequence = re.match(r"^\s*(?:-\s*)?(?:" + key + r"\s*:\s*)?\[", line)
+        sequence = re.match(r'-(?: +|$)', content)
         if sequence:
-            tail = line[sequence.end():]
-            if not re.fullmatch(r"[\w./*+ -]*(?:,[\w./*+ -]*)*\]\s*(?:#.*)?", tail):
+            indent += sequence.end()
+            content = content[sequence.end():]
+            if not content or content.startswith('#'):
+                continue
+        # Tabs after a dash are not supported indentation/separation. Refuse
+        # before scalar fallback so they cannot mask aliases/tags/collections.
+        if content.startswith('\t'):
+            errors.append((number, line.strip()))
+            continue
+        mapping = MAPPING.fullmatch(content)
+        if mapping is None:
+            if not sequence or not scalar_or_options(content, None, True):
                 errors.append((number, line.strip()))
             continue
-        # Flow mappings remain unsupported and fail closed. Scalar values such
-        # as run/name strings are not action references.
-        flow_mapping = re.match(r"^\s*(?:[-,]\s*)?(?:\[\s*)?\{", line) or re.match(r"^\s*(?:[\"][^\"]+[\"]|['][^']+[']|[\w-]+)\s*:\s*(?:\[\s*)?\{", line)
-        if flow_mapping:
-            errors.append((number, line.strip()))
-            continue
-        if MAPPING_KEY.match(line) or (line.lstrip().startswith(",") and KEY.search(line)):
+        key = mapping['key']
+        if key.startswith(('"', "'")):
+            key = key[1:-1]
+        value = mapping['value']
+        # This precedes every scalar/empty-map/list exemption. A uses value must
+        # be an immutable reference even when its value has the wrong YAML type.
+        if key == 'uses':
             if not REFERENCE.fullmatch(line) and not LOCAL_OR_DOCKER.fullmatch(line):
                 errors.append((number, line.strip()))
+            continue
+        header = without_comment(value)
+        if BLOCK_HEADER.fullmatch(header):
+            scalar_parent = indent
+            indicator = re.search(r'[1-9]', header)
+            scalar_content = indent + int(indicator[0]) if indicator else None
+        elif not scalar_or_options(value, key, False):
+            errors.append((number, line.strip()))
     return errors
 
 
 def main():
     root = Path(__file__).resolve().parents[1]
-    files = sorted((root / ".github/workflows").glob("*.yml")) + sorted((root / ".github/workflows").glob("*.yaml"))
-    errors = [f"{path.relative_to(root)}:{number}: {line}"
-              for path in files for number, line in violations(path.read_text())]
+    files = sorted((root / '.github/workflows').glob('*.yml')) + sorted((root / '.github/workflows').glob('*.yaml'))
+    errors = [f'{path.relative_to(root)}:{number}: {line}'
+              for path in files for number, line in violations(path.read_text(encoding='utf-8'))]
     if errors:
-        print("Actions must use a full lowercase commit SHA and a version comment; use block-style workflow mappings:", file=sys.stderr)
-        print("\n".join(errors), file=sys.stderr)
+        print('Actions require a full lowercase SHA and version comment; unsupported YAML must use the documented block-style forms:', file=sys.stderr)
+        print('\n'.join(errors), file=sys.stderr)
         return 1
-    print(f"Immutable action references verified in {len(files)} workflows")
+    print(f'Immutable action references verified in {len(files)} workflows')
     return 0
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     sys.exit(main())
