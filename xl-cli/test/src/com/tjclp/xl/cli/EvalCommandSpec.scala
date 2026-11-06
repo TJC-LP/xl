@@ -782,24 +782,6 @@ class EvalCommandSpec extends CatsEffectSuite:
     yield assert(result.contains(s"Result: $expected (number)"), result)
   }
 
-  test(
-    "GH-715: stale-reader checks over a running total of running totals are linear in the rows"
-  ) {
-    // Asking each stale B for its candidate readers afresh cost about rows²/2 containment checks
-    // (26 s at 20,000 rows). A reader leaves its index once stale, so the walk checks every B once
-    // for A1 and every C once for the first stale B: about two checks per row. The count is the
-    // gate; the clock on a shared runner is not (#843).
-    def checks(rows: Int): Long =
-      val sheet = runningTotals(rows)
-      ReadCommands
-        .uncacheReadersTraced(Workbook(sheet), sheet.name, Set(ARef.from0(0, 0)))
-        ._2
-        .checks
-    val (small, large) = (checks(5000), checks(20000))
-    assert(large <= 4.5 * small, s"checks $small -> $large: not linear")
-    assert(large < 20000L * 20000L / 8, s"$large checks at 20,000 rows: quadratic")
-  }
-
   test("GH-715: --at far below the used range, read through a whole column, is circular") {
     // the used range ends at D10; D5000 lies far outside it, yet SUM(D:D) there reads it
     val column = (1 to 10).foldLeft(Sheet("Test")) { (s, row) =>

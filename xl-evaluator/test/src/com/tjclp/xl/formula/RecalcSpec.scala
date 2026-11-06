@@ -270,20 +270,40 @@ class RecalcSpec extends FunSuite:
     )
 
   test("GH-274 dynamic self-reference is total and deterministic"):
-    val sheet = Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))
-    val r1 = Workbook(sheet).recalculate()
-    val r2 = Workbook(sheet).recalculate()
-    assertEquals(cached(r1.workbook, "S", ref"A1"), None)
-    // #829: the circular reference at the first re-entry, the same wording on every run and
-    // stack — it used to be the depth guard's or the stack's message, whichever came first
+    val self = Workbook(Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")")))
+    val books = List(
+      self,
+      Workbook(
+        Sheet(SheetName.unsafe("S"))
+          .put(ref"A1", formula("=INDIRECT(\"B1\")"))
+          .put(ref"B1", formula("=INDIRECT(\"A1\")"))
+      ),
+      Workbook(
+        Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"Other!A1\")")),
+        Sheet(SheetName.unsafe("Other")).put(ref"A1", formula("=INDIRECT(\"S!A1\")"))
+      )
+    )
+    books.foreach { book =>
+      val first = book.recalculate()
+      assertEquals(cached(first.workbook, "S", ref"A1"), None)
+      // every member of the cycle fails: each is rediscovered from its own root in the bucket
+      val expectedCells = book.sheets.flatMap(s => s.cells.keysIterator.map(s.name -> _)).toSet
+      assertEquals(first.errors.map(e => e.sheet -> e.ref).toSet, expectedCells)
+      // #829: the circular reference at the first re-entry, the same wording on every run and
+      // stack — it used to be the depth guard's or the stack's message, whichever came first
+      assert(
+        first.errors.forall(_.render.contains("Circular reference through")),
+        first.errors.map(_.render).mkString("\n")
+      )
+      (1 to 20).foreach(_ => assertEquals(book.recalculate(), first))
+    }
     assertEquals(
-      r1.errors.map(_.render),
+      self.recalculate().errors.map(_.render),
       Vector(
         "S!A1: Formula error in '=INDIRECT(\"A1\")': Circular reference through S!A1: " +
           "the cell is read again while its own evaluation is in progress"
       )
     )
-    assertEquals(r1, r2)
 
   test("GH-274 determinism: recalculate() twice yields identical RecalcResult"):
     val sheet = Sheet(SheetName.unsafe("S"))

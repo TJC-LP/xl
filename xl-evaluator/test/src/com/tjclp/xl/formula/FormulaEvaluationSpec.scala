@@ -1,0 +1,291 @@
+package com.tjclp.xl.formula
+
+import java.time.LocalDate
+
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.formula.eval.FormulaEvaluationError
+import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
+import munit.FunSuite
+
+/** GH-741: library callers get the same placement and closure protection as CLI eval. */
+class FormulaEvaluationSpec extends FunSuite:
+  private val at = ref"D5"
+  private val sheet = Sheet("Data").put(at, 99).put(ref"A1", 10)
+  private def number(n: Int): CellValue = CellValue.Number(BigDecimal(n))
+
+  private def cycle(result: Either[FormulaEvaluationError, CellValue], path: List[ARef]): Unit =
+    result match
+      case Left(failure) =>
+        assertEquals(failure.cycle, Some(path))
+        assert(failure.error.toString.contains("Circular reference detected"), failure.toString)
+      case other => fail(s"Expected cycle $path, got $other")
+
+  test("GH-741: placement refuses its old value, including own-sheet qualified reads") {
+    List("=D5+1", "=Data!D5+1").foreach { formula =>
+      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at), List(at, at))
+    }
+    assertEquals(sheet(at).value, number(99))
+  }
+
+  test("GH-741: a static precedent cycle retains the full path") {
+    val source = sheet
+      .put(ref"B1", CellValue.Formula("C1*2"))
+      .put(ref"C1", CellValue.Formula("D5"))
+    cycle(
+      SheetEvaluator.evaluateAt(Workbook(source), source, "B1+1", at),
+      List(at, ref"B1", ref"C1", at)
+    )
+  }
+
+  test("GH-741: transitive range cycles include placements outside the used range") {
+    val source = Sheet("Data")
+      .put(ref"A1", CellValue.Formula("B1+1"))
+      .put(ref"B1", CellValue.Formula("SUM(D:D)"))
+    cycle(
+      SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at),
+      List(at, ref"A1", ref"B1", at)
+    )
+    val empty = Sheet("Empty")
+    cycle(
+      SheetEvaluator.evaluateAt(Workbook(empty), empty, "SUM(XFD:XFD)", ref"XFD1048576"),
+      List(ref"XFD1048576", ref"XFD1048576")
+    )
+  }
+
+  List(
+    "INDIRECT(\"D5\")+1",
+    "IFERROR(INDIRECT(\"D5\"),0)",
+    "OFFSET(A1,4,3)",
+    "SUM(OFFSET(A1,0,3,9,1))"
+  ).foreach { formula =>
+    test(s"GH-741: runtime guard survives swallowed failures: $formula") {
+      cycle(SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at), List(at))
+    }
+  }
+
+  test("GH-741: runtime guard also checks precedent evaluations and uncached cross-sheet reads") {
+    val source = sheet.put(ref"C1", CellValue.Formula("IFERROR(INDIRECT(\"D5\"),0)"))
+    cycle(SheetEvaluator.evaluateAt(Workbook(source), source, "C1+1", at), List(at))
+    val other = Sheet("Other").put(ref"A1", CellValue.Formula("Data!D5*2"))
+    cycle(SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, "Other!A1", at), List(at))
+  }
+
+  List(
+    "IFERROR(COUNTIF(col,1),0)",
+    "IFERROR(COUNTIFS(col,1),0)",
+    "IFERROR(SUMIF(col,\">0\"),0)",
+    "IFERROR(AVERAGEIF(col,\">0\"),0)",
+    "IFERROR(MATCH(7,col,0),0)",
+    "IFERROR(VLOOKUP(7,block,2,FALSE),0)",
+    "IFERROR(XLOOKUP(7,col,col),0)",
+    "IFERROR(SUMPRODUCT(col),0)",
+    "IFERROR(SUM(col),0)",
+    "IFERROR(COUNTA(col),0)",
+    "IFERROR(COUNTBLANK(col),0)"
+  ).foreach { formula =>
+    test(s"GH-741: named range reader sees the guard: $formula") {
+      val book = Workbook(sheet).copy(metadata =
+        Workbook(sheet).metadata.copy(definedNames =
+          Vector(
+            DefinedName("col", "Data!$D$1:$D$9"),
+            DefinedName("block", "Data!$D$1:$E$9")
+          )
+        )
+      )
+      cycle(SheetEvaluator.evaluateAt(book, sheet, formula, at), List(at))
+    }
+  }
+
+  test("GH-741: positionless and positioned calls share override propagation through chains") {
+    val source = sheet
+      .put(ref"B1", CellValue.Formula("A1*2", Some(number(20))))
+      .put(ref"C1", CellValue.Formula("B1+50", Some(number(70))))
+      .put(ref"F1", CellValue.Formula("F1")) // unrelated cycle is never visited
+    val book = Workbook(source)
+    val overrides = Map(ref"A1" -> number(200))
+    assertEquals(SheetEvaluator.evaluateAt(book, source, "C1", at, overrides), Right(number(450)))
+    assertEquals(
+      SheetEvaluator.evaluateWithClosure(book, source, "C1", overrides),
+      Right(number(450))
+    )
+    assertEquals(source(ref"A1").value, number(10))
+    assertEquals(source(ref"C1").value, CellValue.Formula("B1+50", Some(number(70))))
+  }
+
+  test("GH-741: overrides invalidate transitive readers on other sheets") {
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Formula("Data!A1*2", Some(number(20))))
+      .put(ref"A2", CellValue.Formula("A1+1", Some(number(21))))
+    val book = Workbook(sheet, other)
+    val overrides = Map(ref"A1" -> number(200))
+    assertEquals(
+      SheetEvaluator.evaluateAt(book, sheet, "Other!A2", at, overrides),
+      Right(number(401))
+    )
+    assertEquals(
+      SheetEvaluator.evaluateWithClosure(book, sheet, "Other!A2", overrides),
+      Right(number(401))
+    )
+  }
+
+  test("GH-741: positioned implicit intersection differs from positionless array evaluation") {
+    val source = sheet.put(ref"A5", 3).put(ref"B5", 4).put(ref"B1", 2)
+    assertEquals(
+      SheetEvaluator.evaluateAt(Workbook(source), source, "SUM(A1:A5*B1:B5)", at),
+      Right(number(12))
+    )
+    assertEquals(
+      SheetEvaluator.evaluateWithClosure(Workbook(source), source, "SUM(A1:A5*B1:B5)"),
+      Right(number(32))
+    )
+  }
+
+  test("GH-741: array evaluation reuses precedent spill tracking") {
+    val source = sheet.put(
+      ref"B1",
+      CellValue.Formula("SEQUENCE(3)", None, FormulaKind.ArrayFormula(ref"B1:B3"))
+    )
+    SheetEvaluator.evaluateArrayWithClosure(Workbook(source), source, "B1#*2", ref"F1") match
+      case Right((computed, range)) =>
+        assertEquals(range, ref"F1:F3")
+        assertEquals(
+          List(ref"F1", ref"F2", ref"F3").map(computed(_).value),
+          List(number(2), number(4), number(6))
+        )
+      case Left(error) => fail(error.toString)
+  }
+
+  test("GH-741: existing placement content is replaced, even a broken formula") {
+    val source = sheet.put(at, CellValue.Formula("NOT_A_FUNCTION(1)"))
+    assertEquals(SheetEvaluator.evaluateAt(Workbook(source), source, "A1+1", at), Right(number(11)))
+    assert(
+      SheetEvaluator.evaluateAt(Workbook(source), source, "1", at, Map(at -> number(2))).isLeft
+    )
+  }
+
+  test("GH-741: cycles in the closure are refused even without a position") {
+    val source = sheet.put(ref"B1", CellValue.Formula("C1")).put(ref"C1", CellValue.Formula("B1"))
+    val result = SheetEvaluator.evaluateWithClosure(Workbook(source), source, "B1")
+    assert(result.left.exists(_.cycle.nonEmpty), result.toString)
+  }
+
+  test("GH-741: long cycle diagnostics are abbreviated but typed paths are complete") {
+    val source = (1 to 20).foldLeft(Sheet("Data")) { (s, row) =>
+      s.put(ARef.from0(0, row - 1), CellValue.Formula(if row == 20 then "D5" else s"A${row + 1}"))
+    }
+    val expected = at :: (1 to 20).map(row => ARef.from0(0, row - 1)).toList ::: List(at)
+    val result = SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at)
+    cycle(result, expected)
+    assert(result.left.exists(_.error.toString.contains("more")), result.toString)
+  }
+
+  test("GH-741: parser errors retain their diagnostic and have no cycle") {
+    val formula = "=1+"
+    val expected = FormulaParser.parse(formula).left.toOption.map(ParseError.toXLError(_, formula))
+    val result = SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at)
+    assertEquals(result.left.toOption.map(_.error), expected)
+    assertEquals(result.left.toOption.flatMap(_.cycle), None)
+  }
+
+  test("GH-741: cached cross-sheet cycle gap remains scoped to GH-729") {
+    val other = Sheet("Other").put(ref"A1", CellValue.Formula("Data!D5*2", Some(number(14))))
+    assertEquals(
+      SheetEvaluator.evaluateAt(Workbook(sheet, other), sheet, "Other!A1", at),
+      Right(number(14))
+    )
+  }
+
+  test("GH-741: low-level currentCell retains its existing position-only behavior") {
+    val sheet = Sheet("Data").put(ref"D5", 99)
+    assertEquals(
+      sheet.evaluateFormula("=D5+1", currentCell = Some(ref"D5")),
+      Right(CellValue.Number(BigDecimal(100)))
+    )
+  }
+
+  test("GH-741: ISBLANK preserves the existing guard on an indirect placement read") {
+    cycle(
+      SheetEvaluator.evaluateAt(Workbook(sheet), sheet, "ISBLANK(INDIRECT(\"D5\"))", at),
+      List(at)
+    )
+  }
+
+  test("GH-741: a failure is a Cycle with its complete path or a Failed with the diagnostic") {
+    val book = Workbook(sheet)
+    SheetEvaluator.evaluateAt(book, sheet, "D5+1", at) match
+      case Left(FormulaEvaluationError.Cycle(error, path)) =>
+        assertEquals(path, List(at, at))
+        assert(error.toString.contains("Circular reference detected"), error.toString)
+      case other => fail(s"Expected a cycle, got $other")
+    SheetEvaluator.evaluateAt(book, sheet, "=1+", at) match
+      case Left(failure @ FormulaEvaluationError.Failed(_)) => assertEquals(failure.cycle, None)
+      case other => fail(s"Expected a failure, got $other")
+  }
+
+  test("GH-741: a cycle the static reads cannot see is Failed with the evaluator's diagnostic") {
+    // A1 closes on itself through INDIRECT: no static read, so ordering the closure finds no
+    // cycle; the evaluator's re-entry guard (#829) catches it while A1 evaluates as a precedent,
+    // and the diagnostic names the cell. TODO #751: a structured marker makes it a Cycle.
+    val source = sheet.put(ref"A1", CellValue.Formula("INDIRECT(\"A1\")"))
+    List(
+      SheetEvaluator.evaluateWithClosure(Workbook(source), source, "A1"),
+      SheetEvaluator.evaluateAt(Workbook(source), source, "A1", at)
+    ).foreach {
+      case Left(FormulaEvaluationError.Failed(error)) =>
+        assert(error.toString.contains("Circular reference through Data!A1"), error.toString)
+      case other => fail(s"Expected the re-entry diagnostic, got $other")
+    }
+  }
+
+  test("GH-741: a padded formula is read by the canonical rule every entry point applies") {
+    List("  A1+1", " = A1 + 1 ", "=A1+1").foreach { formula =>
+      assertEquals(
+        SheetEvaluator.evaluateAt(Workbook(sheet), sheet, formula, at),
+        Right(number(11)),
+        formula
+      )
+    }
+  }
+
+  test("GH-741: array evaluation applies overrides and invalidates their cached readers") {
+    val source = sheet.put(ref"B1", CellValue.Formula("A1*2", Some(number(20))))
+    val overrides = Map(ref"A1" -> number(100))
+    SheetEvaluator.evaluateArrayWithClosure(
+      Workbook(source),
+      source,
+      "B1*{1;2}",
+      ref"F1",
+      overrides
+    ) match
+      case Right((computed, range)) =>
+        assertEquals(range, ref"F1:F2")
+        assertEquals(
+          List(ref"F1", ref"F2").map(computed(_).value),
+          List(number(200), number(400))
+        )
+      case Left(error) => fail(error.toString)
+  }
+
+  test("GH-741: a fixed clock and a seeded Rng pin TODAY and RAND across the closure") {
+    val source = sheet
+      .put(ref"B1", CellValue.Formula("TODAY()"))
+      .put(ref"C1", CellValue.Formula("RAND()"))
+    val book = Workbook(source)
+    val clock = Clock.fixedDate(LocalDate.of(2026, 11, 4))
+    // the precedent B1 is evaluated under the clock, then read
+    assertEquals(
+      SheetEvaluator.evaluateAt(book, source, "B1", at, clock = clock),
+      source.evaluateFormula("=TODAY()", clock).left.map(FormulaEvaluationError.Failed(_))
+    )
+    // one seeded Rng serves the closure: the first draw, as a direct evaluation draws it
+    def draw(): Either[FormulaEvaluationError, CellValue] =
+      SheetEvaluator.evaluateWithClosure(book, source, "C1", rng = Rng.seeded(7L))
+    assertEquals(draw(), draw())
+    assertEquals(
+      draw(),
+      source
+        .evaluateFormula("=RAND()", Clock.system, Rng.seeded(7L))
+        .left
+        .map(FormulaEvaluationError.Failed(_))
+    )
+  }

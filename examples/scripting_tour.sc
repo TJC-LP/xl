@@ -62,6 +62,10 @@ println(s"  ✓ Total revenue: $total")
 assert(sheet.evaluateFormula("=SLN(30000,7500,10)") == Right(CellValue.Number(BigDecimal(2250))))
 println(s"  ✓ First-year depreciation: ${sheet.evaluateFormula("=SYD(30000,7500,10,1)")}")
 
+// One-off formula as a plain cell, with the CLI's closure and cycle checks (GH-741)
+val positioned = SheetEvaluator.evaluateAt(wb, sheet, "=SUM(D2:D4)", ref"G5")
+println(s"  ✓ Positioned total: $positioned")
+
 // ========== 5. Typed extraction: readTyped returns Either[CodecError, Option[A]] ==========
 val firstUnits = sheet.readTyped[Int](ref"B2")
 println(s"  ✓ First product units: $firstUnits")

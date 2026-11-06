@@ -53,6 +53,8 @@ object formulaExports:
   export formula.eval.{CellEvalError, ErrorValueCell, IterativeCalc, RecalcResult}
   // The per-cell range evaluation behind `view --eval` (sheet.evaluateForRangePerCell)
   export formula.eval.RangeEvalResult
+  // GH-741: closure evaluation diagnostic and detected cycle path
+  export formula.eval.FormulaEvaluationError
   // GH-492: per-strongly-connected-component fixpoint verdicts on RecalcResult.cycles
   export formula.eval.SccReport
   // GH-482: within-component iteration scheme (IterativeCalc.scheme): GaussSeidel | Jacobi

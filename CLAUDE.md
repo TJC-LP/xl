@@ -56,7 +56,8 @@ val sheet = Sheet("Demo").put("A1" -> 100)
 Excel.write(Workbook(sheet), "output.xlsx")
 
 // Formula evaluation (when xl-evaluator is a dependency)
-sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method
+sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method (position-only if currentCell supplied)
+SheetEvaluator.evaluateAt(Workbook(sheet), sheet, "=A1*2", ref"D5") // Closure + placement/cycle checks
 FormulaParser.parse("=SUM(A1:A10)") // Parser at package level
 
 // Display formatting
@@ -100,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,947)
+./mill __.test             # Run all tests (10,016)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -334,7 +335,7 @@ All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtM
 - ❌ Error: `null`, `.get` on Try/Either
 - ⚠️ Warning: `.head/.tail` on collections, `.get` on Option, `var`/`while`/`return` (acceptable in tests/macros)
 
-**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`
+**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`. The one exception is the closure evaluation API (`SheetEvaluator.evaluateAt` and its positionless forms), whose Left is `FormulaEvaluationError`: the `XLError` plus the typed cycle path; `.left.map(_.error)` recovers the `XLResult`.
 
 ## Architecture Patterns
 
@@ -419,14 +420,18 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
+#741 reconciliation (2026-11-05): the full suite at `3365d726`, integrating the published
+extraction with main `db2b91d5`, recorded 10,016 cases: 10,012 passed, 0 failures/errors and
+4 optional-tool skips. Counts below are observed from that run, not inferred from earlier totals.
+
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,947 tests** by module: xl-evaluator (4225), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,016 test cases** by module: xl-evaluator (4296), xl-core (1875), xl-ooxml (1446), xl-cli (1969), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,947 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,016 test cases)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

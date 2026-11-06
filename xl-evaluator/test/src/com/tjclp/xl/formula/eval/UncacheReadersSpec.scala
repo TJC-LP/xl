@@ -1,21 +1,20 @@
-package com.tjclp.xl.cli
-
-import munit.{FunSuite, ScalaCheckSuite}
-import org.scalacheck.Gen
-import org.scalacheck.Prop.forAllNoShrink
+package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.cli.commands.ReadCommands
+import munit.{FunSuite, ScalaCheckSuite}
+import org.scalacheck.Gen
+import org.scalacheck.Prop.forAllNoShrink
 
 /**
- * GH-715: `--with`'s stale-reader search (`ReadCommands.uncacheReaders`) indexes formulas by the
- * ranges they read, across sheets, and drops a reader from its candidate sets once it is stale. On
- * small random books it must find exactly what the naive search finds: expand every range, then
+ * GH-715: `--with`'s stale-reader search (`FormulaEvaluation.uncacheReaders`) indexes formulas by
+ * the ranges they read, across sheets, and drops a reader from its candidate sets once it is stale.
+ * On small random books it must find exactly what the naive search finds: expand every range, then
  * take the transitive closure from the overridden cells. One sheet's name needs quoting and holds
  * an escaped quote, and a qualifier may be spelled in another case, so the one-pass index of the
- * sheet names a formula qualifies ([[ReadCommands.qualifiedSheets]]) is checked against them too.
+ * sheet names a formula qualifies ([[FormulaEvaluation.qualifiedSheets]]) is checked against them
+ * too.
  */
 class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
 
@@ -131,7 +130,7 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
   property("the stale set equals the naive expand-everything closure, across sheets") {
     forAllNoShrink(genModel, genChanged) { (model, changed) =>
       val before = book(model, changed)
-      val after = ReadCommands.uncacheReaders(before, SheetName.unsafe("S0"), changed)
+      val after = FormulaEvaluation.uncacheReaders(before, SheetName.unsafe("S0"), changed)
       def named(cells: Set[(Int, ARef)]): List[String] =
         cells.toList.map((s, ref) => s"${names(s)}!${ref.toA1}").sorted
       val formulas = before.sheets.flatMap(sheet =>
@@ -149,8 +148,36 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
     }
   }
 
+  /** B{n} = SUM($A$1:A{n}) and C{n} = SUM($B$1:B{n}) over A{n} = n, every formula cached. */
+  private def runningTotals(rows: Int): Sheet =
+    (1 to rows).foldLeft(Sheet("Test")) { (s, n) =>
+      val b = CellValue.Number(BigDecimal(n.toLong * (n + 1) / 2))
+      val c = CellValue.Number(BigDecimal(n.toLong * (n + 1) * (n + 2) / 6))
+      s.put(ARef.from0(0, n - 1), CellValue.Number(BigDecimal(n)))
+        .put(ARef.from0(1, n - 1), CellValue.Formula(s"=SUM($$A$$1:A$n)", Some(b)))
+        .put(ARef.from0(2, n - 1), CellValue.Formula(s"=SUM($$B$$1:B$n)", Some(c)))
+    }
+
+  test(
+    "GH-715: stale-reader checks over a running total of running totals are linear in the rows"
+  ) {
+    // Asking each stale B for its candidate readers afresh cost about rows²/2 containment checks
+    // (26 s at 20,000 rows). A reader leaves its index once stale, so the walk checks every B once
+    // for A1 and every C once for the first stale B: about two checks per row. The count is the
+    // gate; the clock on a shared runner is not (#843).
+    def checks(rows: Int): Long =
+      val sheet = runningTotals(rows)
+      FormulaEvaluation
+        .uncacheReadersTraced(Workbook(sheet), sheet.name, Set(ARef.from0(0, 0)))
+        ._2
+        .checks
+    val (small, large) = (checks(5000), checks(20000))
+    assert(large <= 4.5 * small, s"checks $small -> $large: not linear")
+    assert(large < 20000L * 20000L / 8, s"$large checks at 20,000 rows: quadratic")
+  }
+
   test("qualifiedSheets: every qualifier the parser reads, folded, quoted or not") {
-    def sheets(text: String): Set[String] = ReadCommands.qualifiedSheets(text)
+    def sheets(text: String): Set[String] = FormulaEvaluation.qualifiedSheets(text)
     assertEquals(sheets("=A1*2"), Set.empty[String])
     assertEquals(sheets("=Data!B1+data!B2"), Set("data"))
     assertEquals(sheets("=SUM('My Sheet''s'!A1:A3)"), Set("my sheet's"))
