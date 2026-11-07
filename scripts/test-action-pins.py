@@ -9,6 +9,21 @@ spec.loader.exec_module(pins)
 
 
 class ActionPinsTest(unittest.TestCase):
+    def test_reference_separators_are_ascii(self):
+        sha = 'a' * 40
+        unicode_spaces = ['\u00a0', '\u1680', *map(chr, range(0x2000, 0x200b)),
+                          '\u202f', '\u205f', '\u3000']
+        for separator in unicode_spaces:
+            for reference in ('owner/action@' + sha, './local-action',
+                              'docker://image@sha256:' + 'a' * 64):
+                with self.subTest(separator=repr(separator), reference=reference):
+                    self.assertTrue(pins.violations('- uses: ' + reference + separator + '#' + separator + 'v1.2.3'))
+        for separator in (' ', '\t'):
+            for quote in ('', "'", '"'):
+                self.assertEqual([], pins.violations('- uses: ' + quote + 'owner/action@' + sha + quote + separator + '#' + separator + 'v1.2.3'))
+        # Non-ASCII content is still harmless inside ordinary comments and script text.
+        self.assertEqual([], pins.violations('# a\u00a0comment\n- run: "echo a\u00a0b"'))
+
     def test_reference_quotes_must_pair(self):
         for opening in ('', "'", '"'):
             for closing in ('', "'", '"'):

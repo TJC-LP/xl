@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Require matching quotes around pinned action references; reject stray quote suffixes.
+- Require matching quotes and ASCII separators around pinned action references; reject suffixes that YAML would retain in a mutable ref.
 
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
   CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no

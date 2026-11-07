@@ -8,8 +8,8 @@ import re
 import sys
 from pathlib import Path
 
-REFERENCE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<quote>['\"]?)([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]{40})(?P=quote)\s+#\s+v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?\s*$")
-LOCAL_OR_DOCKER = re.compile(r"^\s*(?:-\s*)?uses:\s*(?:\./[A-Za-z0-9_./-]+|docker://[A-Za-z0-9_./:-]+@sha256:[0-9a-f]{64})\s*(?:#.*)?$")
+REFERENCE = re.compile(r"^\s*(?:-\s*)?uses:\s*(?P<quote>['\"]?)([A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+)@([0-9a-f]{40})(?P=quote)\s+#\s+v?\d+\.\d+\.\d+(?:[-+][\w.-]+)?\s*$", re.ASCII)
+LOCAL_OR_DOCKER = re.compile(r"^\s*(?:-\s*)?uses:\s*(?:\./[A-Za-z0-9_./-]+|docker://[A-Za-z0-9_./:-]+@sha256:[0-9a-f]{64})\s*(?:#.*)?$", re.ASCII)
 MAPPING = re.compile(r'''(?P<key>[A-Za-z0-9_.-]+|"[^"\\]*"|'[^'\\]*') *:(?:[ \t]+|$)(?P<value>.*)$''')
 QUOTED = re.compile(r'''(?:"(?:[^"\\]|\\.)*"|'(?:[^']|'')*')(?:[ \t]+\#.*)?$''')
 BLOCK_HEADER = re.compile(r'[|>](?:[1-9][+-]?|[+-][1-9]?|)$')
