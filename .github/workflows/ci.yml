@@ -83,6 +83,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-mill-
 
+      - name: Test dependency lock checker
+        run: python3 -B scripts/test-dependency-lock.py
+
+      - name: Verify resolved dependency coordinates and SHA-256
+        run: python3 -B scripts/dependency_lock.py check
+
       - name: Check Formatting
         run: ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources
 

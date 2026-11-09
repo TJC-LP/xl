@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
+  checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
+  existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
+
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
   CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
   sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
