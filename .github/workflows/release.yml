@@ -56,25 +56,6 @@ jobs:
         with:
           jvm: graalvm-community:25.0.1
 
-      - name: Cache Coursier
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cache/coursier
-            ~/.ivy2/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-coursier-native-
-
-      - name: Cache Mill
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.mill
-          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('**/build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mill-
-
       - name: Build native image (Unix)
         if: runner.os != 'Windows'
         run: ./mill xl-cli.nativeImage
@@ -193,25 +174,6 @@ jobs:
         with:
           jvm: temurin:25
 
-      - name: Cache Coursier
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.cache/coursier
-            ~/.ivy2/cache
-          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/package.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-coursier-
-
-      - name: Cache Mill
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
-        with:
-          path: |
-            ~/.mill
-          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-mill-
-
       - name: Fetch annotated tags
         run: git fetch --tags --force
 
@@ -301,29 +263,7 @@ jobs:
           EOF
 
           # Create install script that pins to this specific version (for reproducibility)
-          cat > skill-dist/install-cli.sh << 'INSTALL_EOF'
-          #!/bin/bash
-          set -e
-          VERSION="__VERSION__"
-          PLATFORM="$(uname -s)-$(uname -m)"
-          case "$PLATFORM" in
-            Linux-x86_64)  BINARY="xl-${VERSION}-linux-amd64" ;;
-            Linux-aarch64) BINARY="xl-${VERSION}-linux-arm64" ;;
-            Darwin-x86_64) BINARY="xl-${VERSION}-darwin-amd64" ;;
-            Darwin-arm64)  BINARY="xl-${VERSION}-darwin-arm64" ;;
-            MINGW*|MSYS*|CYGWIN*) BINARY="xl-${VERSION}-windows-amd64.exe" ;;
-            *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
-          esac
-          INSTALL_DIR="${HOME}/.local/bin"
-          mkdir -p "$INSTALL_DIR"
-          echo "Installing xl $VERSION for $PLATFORM..."
-          curl -fsSL "https://github.com/TJC-LP/xl/releases/download/v${VERSION}/${BINARY}" -o "$INSTALL_DIR/xl" || {
-            echo "Error: no ${BINARY} published for v${VERSION} — use the JAR distribution xl-cli-${VERSION}.tar.gz instead" >&2
-            exit 1
-          }
-          chmod +x "$INSTALL_DIR/xl"
-          echo "Installed xl $VERSION to $INSTALL_DIR/xl"
-          INSTALL_EOF
+          cp scripts/install-cli.sh skill-dist/install-cli.sh
 
           # Substitute version into install script
           sed -i "s/__VERSION__/$VERSION/g" skill-dist/install-cli.sh || \
@@ -382,6 +322,7 @@ jobs:
           cp native-binaries/xl-$VERSION-windows-amd64/xl-$VERSION-windows-amd64.exe release-assets/
           # Make Unix binaries executable
           chmod +x release-assets/xl-$VERSION-linux-amd64 release-assets/xl-$VERSION-linux-arm64 release-assets/xl-$VERSION-darwin-amd64 release-assets/xl-$VERSION-darwin-arm64
+          (cd release-assets && sha256sum xl-* > SHA256SUMS)
           ls -la release-assets/
 
       - name: Create GitHub Release
@@ -392,6 +333,7 @@ jobs:
           generate_release_notes: ${{ steps.version.outputs.has_notes != 'true' }}
           draft: false
           files: |
+            release-assets/SHA256SUMS
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
             release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-scripting-skill-${{ steps.version.outputs.version }}.zip
