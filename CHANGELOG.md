@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Workflow guard follow-up** (#836): ignore comments and shell scalar text while retaining checks on release cache actions and inputs.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
@@ -28,6 +30,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Immutable pre-commit hooks** (#835): retain pre-commit-hooks v4.5.0 at its verified
   commit and reject mutable or missing remote hook revisions in CI.
+
+- **Release cache isolation** (#836): release jobs no longer restore or save shared
+  Actions caches before building, signing, or publishing artifacts. CI guards this boundary.
 
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
