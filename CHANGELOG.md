@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+- **Workflow guard follow-up** (#836): ignore comments and shell scalar text while retaining checks on release cache actions and inputs.
+
 - **Installer test fixtures** (#837): derive release asset names and version-drift probes from the selected version and platform; exercise two future release bumps.
 
 - **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
@@ -19,12 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
+  checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
+  existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
+
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
   CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
   sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
   published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
 
 ### Fixed
+
+- **Immutable pre-commit hooks** (#835): retain pre-commit-hooks v4.5.0 at its verified
+  commit and reject mutable or missing remote hook revisions in CI.
+
+- **Release cache isolation** (#836): release jobs no longer restore or save shared
+  Actions caches before building, signing, or publishing artifacts. CI guards this boundary.
 
 - **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
   digests before execution, publish release checksums, and verify native CLI downloads before installation.

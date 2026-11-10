@@ -19,6 +19,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Verify immutable pre-commit pins
+        run: |
+          python3 scripts/test-hook-pins.py
+          python3 scripts/check-hook-pins.py
+
+      - name: Verify release cache isolation
+        run: |
+          python3 scripts/test-release-cache.py
+          python3 scripts/check-release-cache.py
+
       - name: Verify download integrity boundaries
         run: |
           python3 scripts/test-download-verification.py
@@ -89,6 +99,12 @@ jobs:
           key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
           restore-keys: |
             ${{ runner.os }}-mill-
+
+      - name: Test dependency lock checker
+        run: python3 -B scripts/test-dependency-lock.py
+
+      - name: Verify resolved dependency coordinates and SHA-256
+        run: python3 -B scripts/dependency_lock.py check
 
       - name: Check Formatting
         run: ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources
