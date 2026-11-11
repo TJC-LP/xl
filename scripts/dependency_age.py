@@ -97,6 +97,22 @@ def extract_jmh(text, filename="xl-benchmarks/package.mill"):
             for artifact in ('jmh-core', 'jmh-generator-bytecode')]
 
 
+MILL_REASON = re.compile(r'^// mill-version pinned:(.*)$', re.M)
+
+
+def mill_reason(build):
+    """Reason for keeping the .mill-version pin past 365 days.
+
+    .mill-version holds only a bare version and the build header line is checked
+    verbatim, so the reason lives on its own `// mill-version pinned: ...` line in
+    build.mill. Without one, an old Mill fails like any other unexplained pin.
+    """
+    reasons = MILL_REASON.findall(build)
+    if len(reasons) > 1:
+        raise ValueError('build.mill: more than one mill-version pinned reason')
+    return reasons[0].strip() if reasons else ''
+
+
 def inventory(root):
     build = (root / 'build.mill').read_text()
     match = re.search(r'^val scala3Version = "([0-9.]+)"(?: // pinned: (.+))?$', build, re.M)
@@ -114,7 +130,7 @@ def inventory(root):
     if headers != ['//| mvnDeps: ["com.lihaoyi::mill-contrib-jmh:$MILL_VERSION"]']:
         raise ValueError('Review changed build-header dependencies')
     pins.append(Pin('com.lihaoyi', 'mill-contrib-jmh_3', (root / '.mill-version').read_text().strip(),
-                    'build.mill:1', ''))
+                    'build.mill:1', mill_reason(build)))
     pins.extend(extract_jmh((root / 'xl-benchmarks/package.mill').read_text()))
     return pins
 

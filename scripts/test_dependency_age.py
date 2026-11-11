@@ -66,6 +66,23 @@ class PolicyTests(unittest.TestCase):
             with self.subTest(body=body), self.assertRaises(ValueError):
                 age.extract_jmh(header+'\n'+body+'\n}')
 
+    def test_mill_pin_reason(self):
+        header = '//| mvnDeps: ["com.lihaoyi::mill-contrib-jmh:$MILL_VERSION"]\n'
+        for extra, expected in [('', ''), ('// mill-version pinned: \n', ''),
+                                ('// unrelated mill-version pinned: text\n', ''),
+                                ('// mill-version pinned: wait for launcher digests\n',
+                                 'wait for launcher digests')]:
+            with self.subTest(extra=extra):
+                self.assertEqual(expected, age.mill_reason(header + extra + 'import mill._\n'))
+        with self.assertRaises(ValueError):
+            age.mill_reason(header + '// mill-version pinned: a\n// mill-version pinned: b\n')
+
+    def test_old_mill_needs_a_reason(self):
+        now = datetime(2027, 4, 1, tzinfo=timezone.utc)
+        for reason, passed in [('', False), ('wait for launcher digests', True)]:
+            pin = age.Pin('com.lihaoyi', 'mill-contrib-jmh_3', '1.1.5', 'build.mill:1', reason)
+            self.assertEqual(passed, age.evaluate(pin, now-timedelta(days=400), now)['passed'])
+
     def test_repository_inventory_includes_tooling(self):
         pins = age.inventory(age.ROOT)
         self.assertGreater(len(pins), 28)

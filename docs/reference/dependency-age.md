@@ -9,6 +9,11 @@ check. A pin older than 365 days needs a nonempty `// pinned: reason` comment on
 its declaration line. Keep reasons specific and revisit them when dependencies
 change. A latest stable version can itself be older than 365 days.
 
+The Mill version in `.mill-version` (checked as `mill-contrib-jmh_3`) has no
+declaration line to annotate, so its reason goes on one dedicated line in
+`build.mill`: `// mill-version pinned: <reason>`. Add it only when Mill passes
+365 days and an upgrade has to wait; more than one such line fails the check.
+
 The checker supports the repository's literal `mvn"group:artifact:version"`, `::`
 and `:::` syntax and rejects unsupported interpolated Maven literals. It does not
 interpret arbitrary Scala programs. Changes to dependency declaration style or
@@ -26,9 +31,8 @@ Mill version updates are proposed from its official releases. Automerge is off.
 
 Retain SHA-pinned Actions and frozen hook revisions. Hooks must use the
 `rev: <full SHA> # frozen: vX.Y.Z` convention for Renovate to preserve and update
-frozen revisions. Integrate the hook-pinning contribution (#835) before enabling
-the updater. A Mill update also requires refreshing committed launcher digests
-(#837). Dependency changes require regenerating/reviewing the lock (#833), then
+frozen revisions (#835). A Mill update also requires refreshing the committed
+launcher digests (#837). Dependency changes require regenerating/reviewing the lock (#833), then
 running the repository's validation gates. Renovate does not silently regenerate
 these security records in this configuration.
 
