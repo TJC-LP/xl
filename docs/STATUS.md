@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-11-05 (#838 test-count validation)
+**Last Updated**: 2026-11-11 (0.26.0)
 
 ## Current State
 
@@ -8,10 +8,13 @@
 
 ### What Works (Production-Ready)
 
-**Unreleased** (#788) — `xl sheets` reports preserved macro, international macro, chart and dialog
-sheets separately with kind/name/state; they remain unavailable to `-s`. `xl lint` reports macro
-presence and directly associated `Auto_Open` names at severity `info`; `--strict` gates info too.
-`Excel.readMetadata(...).preservedSheets` exposes the same read-only tab metadata.
+**New in 0.26.0** (2026-11-11) — criteria and lookups follow desktop Excel, deterministic dynamic cycles, one parse per formula per recalculation, and supply-chain hardening; two **Breaking** entries and two binary changes:
+- ✅ **Criteria and lookups as in desktop Excel** (#774, #773, #780, #731, #724, #775, #693) — wildcards match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error cells, MATCH/XMATCH/XLOOKUP/VLOOKUP/HLOOKUP share one exact test, rich text is text (`ISTEXT`, UNIQUE, SORT), COUNTBLANK counts empty text and takes a reference only; each is a marked behaviour change
+- ✅ **Circular references** — a cycle through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), `x#`) fails with the same `Circular reference through …` error on every run (#828, #829); a running total through `INDEX(…, ROW()-1)` is no longer one (#743, #745)
+- ✅ **Recalculation** — each formula is parsed once per pass (#790); whole-column lookups share the pass's used-range memo (#747); numeric-text criteria windows are sized exactly (#842)
+- ✅ **Functions and fixes** — `SLN`, `SYD` (#684), `ISNONTEXT` (#775), two-argument `IF` (#723, **Breaking**: `IfArgs`), array fallbacks in `IFERROR`/`IFNA` (#754), INDEX over a value (#725, #753), ROWS/COLUMNS of an error (#725), `x#` on a non-spilling formula (#803), `#NUM!` for invalid date serials and bounded numeric text (#726), names like `B2_x` after a range's `:` (#841); `TExpr.RangeLocation.Binding` noted late as **Breaking** from 0.24.0
+- ✅ **CLI and I/O** — `xl sheets` lists preserved macro, international macro, chart and dialog sheets and `xl lint` reports a `macro-sheet` finding (#788, binary: `LightMetadata.preservedSheets`); `--stream putf` drags over a range (#789); spill-aware `sort` and streamed writes (#738, binary: `WorksheetMetadata.clearContents`); streaming dynamic-array round trips (#749); `eval --with` through OFFSET/INDIRECT readers (#763); `evala --at` validation (#727); international macro sheets in `xl lint` (#791)
+- ✅ **Supply chain** (#833–#839) — checksummed dependency lock, dependency age policy and a compatible dependency refresh, actions and pre-commit hooks pinned to verified commits, release jobs without shared caches, verified launcher and release downloads with a `SHA256SUMS` release asset, and agent credentials read only from the environment or a local `.env`
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
