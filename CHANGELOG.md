@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- **Dependency age policy follow-ups** (#839): pin reasons now carry a review date
+  (`// pinned until YYYY-MM-DD: reason`) and stop exempting an old pin after it, at most a
+  year ahead. The live age check runs in its own CI job, so a Maven Central outage cannot
+  skip the release-version gates. Renovate reads the full-cross plugin suffix from
+  `scala3Version` and updates the compiler and wartremover together. A URL inside a block
+  comment in a `.mill` file no longer breaks the check. **Behaviour change:** an undated
+  `// pinned:` comment is now an error; the existing pins are reviewed by 2027-11-05.
+
 - Include the benchmark JMH core and inherited bytecode generator in dependency-age checks and Renovate updates.
 
 - **Dependency age policy and compatible refresh** (#839): CI checks direct Maven dependency age,

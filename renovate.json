@@ -40,12 +40,14 @@
     {
       "customType": "regex",
       "managerFilePatterns": [
-        "/(^|/)(build|package)\\.mill$/"
+        "/^build\\.mill$/"
       ],
+      "matchStringsStrategy": "combination",
       "matchStrings": [
+        "val scala3Version = \"(?<scalaVersion>[0-9.]+)\"",
         "mvn\"(?<group>[A-Za-z0-9_.-]+):::(?<artifact>[A-Za-z0-9_.-]+):(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
       ],
-      "depNameTemplate": "{{{group}}}:{{{artifact}}}_3.9.0",
+      "depNameTemplate": "{{{group}}}:{{{artifact}}}_{{{scalaVersion}}}",
       "datasourceTemplate": "maven",
       "versioningTemplate": "maven"
     },
@@ -99,6 +101,14 @@
         "org.scala-lang:scala3-compiler_3"
       ],
       "allowedVersions": "/^3\\.9\\./"
+    },
+    {
+      "description": "Full-cross plugins are published per Scala patch; update them with the compiler.",
+      "matchPackageNames": [
+        "org.scala-lang:scala3-compiler_3",
+        "/^org\\.wartremover:wartremover_3\\./"
+      ],
+      "groupName": "Scala 3.9 toolchain"
     }
   ]
 }

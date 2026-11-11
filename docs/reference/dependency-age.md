@@ -2,21 +2,27 @@
 
 `python3 scripts/dependency_age.py` checks the direct Maven declarations in tracked
 Mill files, the Scala compiler, and the Mill-versioned JMH build plugin. CI runs
-its offline regression tests and the live check. It uses Maven Central POM
+its offline regression tests and the live check in their own `dependency-age` job,
+so a Maven Central outage cannot skip the release-version gates. It uses Maven Central POM
 `Last-Modified` timestamps, not a vulnerability database or proof of maintenance.
 A missing/invalid timestamp, missing artifact or failed network request fails the
-check. A pin older than 365 days needs a nonempty `// pinned: reason` comment on
-its declaration line. Keep reasons specific and revisit them when dependencies
-change. A latest stable version can itself be older than 365 days.
+check. A pin older than 365 days needs a dated reason on its declaration line:
+`// pinned until YYYY-MM-DD: reason`. The reason counts through the review date and
+stops counting after it, so every exemption is revisited at least yearly; a date
+more than 366 days ahead, an undated `// pinned:` comment, a blank reason or an
+invalid date fails the check. A latest stable version can itself be older than 365
+days; record that as the reason and re-check it by the review date.
 
 The Mill version in `.mill-version` (checked as `mill-contrib-jmh_3`) has no
 declaration line to annotate, so its reason goes on one dedicated line in
-`build.mill`: `// mill-version pinned: <reason>`. Add it only when Mill passes
+`build.mill`: `// mill-version pinned until YYYY-MM-DD: <reason>`. Add it only when Mill passes
 365 days and an upgrade has to wait; more than one such line fails the check.
 
 The checker supports the repository's literal `mvn"group:artifact:version"`, `::`
 and `:::` syntax and rejects unsupported interpolated Maven literals. It does not
-interpret arbitrary Scala programs. Changes to dependency declaration style or
+interpret arbitrary Scala programs. Block comments are found before line comments
+and outside `"..."` literals, so a URL in a doc comment is safe; nested block
+comments and a dependency inside or beside a block comment fail closed. Changes to dependency declaration style or
 build-header dependencies require extending and reviewing the checker rather
 than moving declarations outside its inventory. It checks direct pins, not the
 entire resolved transitive graph; the dependency lock work in #833 covers selected
@@ -25,8 +31,11 @@ resolved artifact bytes separately.
 `renovate.json` uses Renovate's supported `custom.regex` manager for these Mill
 literals, plus `github-actions` and explicitly enabled `pre-commit`. There is no
 native `mill` manager in the verified Renovate 44.221.1 source. Custom extraction
-uses Scala binary suffix `_3` and compiler-plugin suffix `_3.9.0`; when changing
-Scala, review those templates together. Scala updates are restricted to 3.9 LTS.
+uses Scala binary suffix `_3`. The full-cross (`:::`) compiler-plugin suffix is read
+from `build.mill`'s `scala3Version` with a `combination` match, which supports one
+full-cross dependency, in `build.mill` only; the age check enforces that. The Scala
+compiler and the wartremover plugin update in one "Scala 3.9 toolchain" PR. Scala
+updates are restricted to 3.9 LTS.
 Mill version updates are proposed from its official releases. Automerge is off.
 
 Retain SHA-pinned Actions and frozen hook revisions. Hooks must use the

@@ -41,11 +41,6 @@ jobs:
           python3 scripts/test-install-docs.py
           python3 scripts/check-install-version.py
 
-      - name: Direct dependency age policy
-        run: |
-          python3 scripts/test_dependency_age.py
-          python3 scripts/dependency_age.py
-
       - name: plugin.json version equals build.mill
         run: |
           build_version=$(sed -n 's/.*getOrElse("PUBLISH_VERSION", *"\([^"]*\)").*/\1/p' build.mill)
@@ -76,6 +71,20 @@ jobs:
               exit 1
             }
           fi
+
+  # Live Maven Central lookups run in their own job, so a network failure or an
+  # unexplained old pin cannot skip the version gates in plugin-version (#839).
+  dependency-age:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Direct dependency age policy
+        run: |
+          python3 scripts/test_dependency_age.py
+          python3 scripts/dependency_age.py
 
   build:
     runs-on: ubuntu-latest

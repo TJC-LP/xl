@@ -9,7 +9,7 @@ object `package` extends build.XLModule {
   override def moduleDeps = Seq(build.`xl-core`)
 
   override def mvnDeps = Seq(
-    mvn"org.typelevel::cats-core:2.13.0" // pinned: 2.13.0 is the latest stable Cats release on Maven Central as of 2026-11-05.
+    mvn"org.typelevel::cats-core:2.13.0" // pinned until 2027-11-05: 2.13.0 is the latest stable Cats release on Maven Central as of 2026-11-05.
   )
 
   object test extends ScalaTests with build.XLTestModule {
