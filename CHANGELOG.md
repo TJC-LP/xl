@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
 
+- Enforce an explicit block-style action-pin grammar so unknown YAML structures fail closed; preserve scalar/comment content and document supported workflow forms.
+
+- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+
+- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+
 ### Added
 
 - **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
@@ -24,6 +30,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
   checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
   existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
+
+- Require matching quotes and ASCII separators around pinned action references; reject suffixes that YAML would retain in a mutable ref.
 
 - **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
   CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
@@ -42,6 +50,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   digests before execution, publish release checksums, and verify native CLI downloads before installation.
   Preserve session setup after verification failures, honor trusted platform tools, and provide
   pinned current-release and Linux Scala CLI installers with isolated shell settings.
+
+- **Immutable workflow actions** (#834): pin existing action versions to verified upstream
+  commits and reject mutable workflow references in CI.
 
 - **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
   8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,

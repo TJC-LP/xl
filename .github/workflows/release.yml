@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Extract version from tag
         id: version
@@ -52,7 +52,7 @@ jobs:
         shell: bash
 
       - name: Set up GraalVM
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: graalvm-community:25.0.1
 
@@ -148,7 +148,7 @@ jobs:
           }
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
           path: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}
@@ -164,13 +164,13 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0  # Required for version history
           fetch-tags: true
 
       - name: Set up JDK
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
 
@@ -301,7 +301,7 @@ jobs:
           cd scripting-skill-dist && zip -r ../xl-scripting-skill-$VERSION.zip . && cd ..
 
       - name: Download native binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: native-binaries
 
@@ -326,7 +326,7 @@ jobs:
           ls -la release-assets/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v0.1.15
         with:
           # Use tag message if available, otherwise generate notes
           body: ${{ steps.version.outputs.body }}
