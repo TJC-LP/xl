@@ -17,7 +17,29 @@ jobs:
     timeout-minutes: 5
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Verify immutable action pins
+        run: |
+          python3 scripts/test-action-pins.py
+          python3 scripts/check-action-pins.py
+
+      - name: Verify immutable pre-commit pins
+        run: |
+          python3 scripts/test-hook-pins.py
+          python3 scripts/check-hook-pins.py
+
+      - name: Verify release cache isolation
+        run: |
+          python3 scripts/test-release-cache.py
+          python3 scripts/check-release-cache.py
+
+      - name: Verify download integrity boundaries
+        run: |
+          python3 scripts/test-download-verification.py
+          python3 scripts/test-remote-setup.py
+          python3 scripts/test-install-docs.py
+          python3 scripts/check-install-version.py
 
       - name: Direct dependency age policy
         run: |
@@ -60,15 +82,15 @@ jobs:
     timeout-minutes: 40
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up JDK
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
 
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/coursier
@@ -80,13 +102,19 @@ jobs:
       # Note: out/ intentionally not cached - stale artifacts cause
       # build issues and cache invalidation problems between Mill versions
       - name: Cache Mill
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.mill
           key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
           restore-keys: |
             ${{ runner.os }}-mill-
+
+      - name: Test dependency lock checker
+        run: python3 -B scripts/test-dependency-lock.py
+
+      - name: Verify resolved dependency coordinates and SHA-256
+        run: python3 -B scripts/dependency_lock.py check
 
       - name: Check Formatting
         run: ./mill mill.scalalib.scalafmt.ScalafmtModule/checkFormatAll __.sources
@@ -108,15 +136,15 @@ jobs:
     continue-on-error: true
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up JDK
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
 
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/coursier
@@ -126,7 +154,7 @@ jobs:
             ${{ runner.os }}-coursier-
 
       - name: Cache Mill
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.mill
@@ -146,16 +174,16 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up JDK + scala-cli
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
           apps: scala-cli
 
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/coursier
@@ -165,7 +193,7 @@ jobs:
             ${{ runner.os }}-coursier-
 
       - name: Cache Mill
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.mill
@@ -192,15 +220,15 @@ jobs:
     timeout-minutes: 45
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Set up JDK
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
 
       - name: Cache Coursier
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.cache/coursier
@@ -210,7 +238,7 @@ jobs:
             ${{ runner.os }}-coursier-
 
       - name: Cache Mill
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             ~/.mill
