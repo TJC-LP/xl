@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import java.time.{LocalDate, LocalDateTime}
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import java.util.concurrent.locks.LockSupport
-import java.util.concurrent.{ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
+import java.util.concurrent.{ConcurrentHashMap, ConcurrentLinkedQueue, CountDownLatch, TimeUnit}
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
@@ -33,6 +33,28 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
 
   private def num(d: Double): CellValue = CellValue.Number(BigDecimal(d))
   private def formula(expr: String): CellValue = CellValue.Formula(expr, None)
+
+  /**
+   * GH-520: assert that the pool workers that ran THIS test's tasks have exited. A global
+   * `xl-recalc-worker-*` scan is racy: the executor reaches TERMINATED (so `awaitTermination`
+   * returns) while the last worker is still unwinding out of `runWorker`, so `Thread.isAlive` can
+   * briefly read true, and threads from earlier pools can be mid-exit too. Joining each recorded
+   * worker under one deadline absorbs that window; a worker that really leaks (still running a task
+   * or parked in the pool) stays alive past the deadline and fails the assertion.
+   */
+  private def assertWorkersExited(workers: java.util.Set[Thread]): Unit =
+    val recorded = workers.asScala.toVector
+    assert(recorded.nonEmpty, "no recalc worker ran a task")
+    assert(
+      recorded.forall(_.getName.startsWith("xl-recalc-worker-")),
+      recorded.map(_.getName).mkString(", ")
+    )
+    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+    recorded.foreach { thread =>
+      val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
+      thread.join(math.max(1L, remainingMs))
+    }
+    assertEquals(recorded.filter(_.isAlive), Vector.empty)
 
   private def assertSameResult(sequential: RecalcResult, parallel: RecalcResult): Unit =
     assertEquals(parallel.errors, sequential.errors)
@@ -284,10 +306,12 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
     val finished = CountDownLatch(1)
     val interruptedAtReturn = AtomicBoolean(false)
     val results = new ConcurrentLinkedQueue[RecalcResult]()
+    val workers = ConcurrentHashMap.newKeySet[Thread]()
     val clock = new Clock:
       def today(): LocalDate = LocalDate.of(2026, 8, 7)
 
       def now(): LocalDateTime =
+        workers.add(Thread.currentThread())
         started.countDown()
         try
           release.await()
@@ -319,15 +343,15 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
     val result = Option(results.poll()).getOrElse(fail("interrupted recalc returned no result"))
     assertEquals(result.errors.size, 20)
     assert(result.errors.forall(_.error.message.contains("interrupted")))
-    val liveWorkers = Thread.getAllStackTraces.keySet().asScala.filter { thread =>
-      thread.isAlive && thread.getName.startsWith("xl-recalc-worker-")
-    }
-    assertEquals(liveWorkers.toVector, Vector.empty)
+    assertWorkersExited(workers)
 
   test("GH-520: worker interruption is reported per cell and shuts down the pool"):
+    val workers = ConcurrentHashMap.newKeySet[Thread]()
     val clock = new Clock:
       def today(): LocalDate = LocalDate.of(2026, 8, 7)
-      def now(): LocalDateTime = throw new InterruptedException("injected worker failure")
+      def now(): LocalDateTime =
+        workers.add(Thread.currentThread())
+        throw new InterruptedException("injected worker failure")
     val sheet = (0 until 20).foldLeft(Sheet(SheetName.unsafe("WorkerFailure"))) { (s, col) =>
       s.put(ARef.from0(col, 0), formula("=NOW()"))
     }
@@ -335,10 +359,7 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
     val result = Workbook(sheet).recalculateParallel(clock, 8)
     assertEquals(result.errors.size, 20)
     assert(result.errors.forall(_.error.message.contains("worker failed")))
-    val liveWorkers = Thread.getAllStackTraces.keySet().asScala.filter { thread =>
-      thread.isAlive && thread.getName.startsWith("xl-recalc-worker-")
-    }
-    assertEquals(liveWorkers.toVector, Vector.empty)
+    assertWorkersExited(workers)
 
   // ===== GH-537: dynamicCells classifies sheet-independent names once, dedups by case =====
 
