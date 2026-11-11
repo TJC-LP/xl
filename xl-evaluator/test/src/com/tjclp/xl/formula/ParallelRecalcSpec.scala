@@ -34,27 +34,35 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
   private def num(d: Double): CellValue = CellValue.Number(BigDecimal(d))
   private def formula(expr: String): CellValue = CellValue.Formula(expr, None)
 
+  private def liveRecalcWorkers(): Set[Thread] =
+    Thread.getAllStackTraces
+      .keySet()
+      .asScala
+      .iterator
+      .filter(thread => thread.isAlive && thread.getName.startsWith("xl-recalc-worker-"))
+      .toSet
+
   /**
-   * GH-520: assert that the pool workers that ran THIS test's tasks have exited. A global
-   * `xl-recalc-worker-*` scan is racy: the executor reaches TERMINATED (so `awaitTermination`
-   * returns) while the last worker is still unwinding out of `runWorker`, so `Thread.isAlive` can
-   * briefly read true, and threads from earlier pools can be mid-exit too. Joining each recorded
-   * worker under one deadline absorbs that window; a worker that really leaks (still running a task
-   * or parked in the pool) stays alive past the deadline and fails the assertion.
+   * GH-520: assert that THIS test's pool workers have exited. A bare global `xl-recalc-worker-*`
+   * scan is racy: the executor reaches TERMINATED (so `awaitTermination` returns) while the last
+   * worker is still unwinding out of `runWorker`, so `Thread.isAlive` can briefly read true, and
+   * threads from earlier pools can be mid-exit too. The candidates are the workers that ran the
+   * test's Clock plus every worker that appeared since `before` was taken. The pinned Clock is a
+   * lazy val, so only one worker may reach the test's `now()`, and the snapshot diff covers the
+   * rest. Each candidate is joined under one shared deadline. A worker that really leaks (still
+   * running a task or parked in the pool) stays alive past the deadline and fails the assertion.
    */
-  private def assertWorkersExited(workers: java.util.Set[Thread]): Unit =
-    val recorded = workers.asScala.toVector
-    assert(recorded.nonEmpty, "no recalc worker ran a task")
-    assert(
-      recorded.forall(_.getName.startsWith("xl-recalc-worker-")),
-      recorded.map(_.getName).mkString(", ")
-    )
+  private def assertWorkersExited(before: Set[Thread], ranClock: java.util.Set[Thread]): Unit =
+    val ran = ranClock.asScala.toSet
+    assert(ran.nonEmpty, "no recalc worker ran the test Clock")
+    assert(ran.forall(_.getName.startsWith("xl-recalc-worker-")), ran.map(_.getName).mkString(", "))
+    val candidates = (ran ++ (liveRecalcWorkers() -- before)).toVector
     val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-    recorded.foreach { thread =>
+    candidates.foreach { thread =>
       val remainingMs = TimeUnit.NANOSECONDS.toMillis(deadline - System.nanoTime())
       thread.join(math.max(1L, remainingMs))
     }
-    assertEquals(recorded.filter(_.isAlive), Vector.empty)
+    assertEquals(candidates.filter(_.isAlive), Vector.empty)
 
   private def assertSameResult(sequential: RecalcResult, parallel: RecalcResult): Unit =
     assertEquals(parallel.errors, sequential.errors)
@@ -331,6 +339,7 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
       "parallel-recalc-interruption-test"
     )
 
+    val workersBefore = liveRecalcWorkers()
     caller.start()
     assert(started.await(5, TimeUnit.SECONDS), "worker never entered the blocking Clock")
     caller.interrupt()
@@ -343,7 +352,7 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
     val result = Option(results.poll()).getOrElse(fail("interrupted recalc returned no result"))
     assertEquals(result.errors.size, 20)
     assert(result.errors.forall(_.error.message.contains("interrupted")))
-    assertWorkersExited(workers)
+    assertWorkersExited(workersBefore, workers)
 
   test("GH-520: worker interruption is reported per cell and shuts down the pool"):
     val workers = ConcurrentHashMap.newKeySet[Thread]()
@@ -356,10 +365,11 @@ class ParallelRecalcSpec extends ScalaCheckSuite:
       s.put(ARef.from0(col, 0), formula("=NOW()"))
     }
 
+    val workersBefore = liveRecalcWorkers()
     val result = Workbook(sheet).recalculateParallel(clock, 8)
     assertEquals(result.errors.size, 20)
     assert(result.errors.forall(_.error.message.contains("worker failed")))
-    assertWorkersExited(workers)
+    assertWorkersExited(workersBefore, workers)
 
   // ===== GH-537: dynamicCells classifies sheet-independent names once, dedups by case =====
 
