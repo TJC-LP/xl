@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Include the benchmark JMH core and inherited bytecode generator in dependency-age checks and Renovate updates.
+
+- **Dependency age policy and compatible refresh** (#839): CI checks direct Maven dependency age,
+  records justified pins, and prepares Renovate updates while retaining Scala 3.9 LTS. Published
+  modules now depend on newer compatible versions, which users resolve transitively:
+  cats-effect 3.6.3 → 3.7.1, fs2-core/fs2-io 3.12.2 → 3.14.0 and fs2-data-xml/fs2-data-xml-scala
+  1.11.1 → 1.14.1 (`xl-cats-effect`); scala-xml 2.3.0 → 2.5.0 (`xl-ooxml`); cats-core 2.12.0 →
+  2.13.0 (`xl-core`, `xl-evaluator`) and cats-laws 2.12.0 → 2.13.0 (`xl-core`).
+
 - **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
   checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
   existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
