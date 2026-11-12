@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.26.0] - 2026-11-11
+## [0.26.0] - 2026-11-12
 
 Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards
 match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error
@@ -15,7 +15,8 @@ cells, MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP share one exact test, rich te
 text, and COUNTBLANK counts empty text. A cycle closing through a reference computed at run time is
 a circular reference with the same error on every run (#828, #829), and a running total through
 `INDEX(…, ROW()-1)` is no longer one (#743, #745). Each formula is parsed once per recalculation
-(#790). Many entries are behaviour changes, each marked; two are **Breaking** (`IfArgs`, #723, and
+(#790), ROW and COLUMN position arrays are lazy (#735), and reference aggregates skip absent
+blank borders (#736). Many entries are behaviour changes, each marked; two are **Breaking** (`IfArgs`, #723, and
 `TExpr.RangeLocation.Binding`, noted late from 0.24.0) and two are binary changes
 (`LightMetadata.preservedSheets`, #788; `StreamingTransform.WorksheetMetadata.clearContents`, #738).
 
@@ -187,6 +188,18 @@ which the documented CLI installer checks.
 - Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
   PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
   Parser security settings and finite entity-size limits are unchanged.
+
+- **Reference aggregates skip absent blank borders** (#736): SUM and the other reference folds
+  reuse the populated box for ranges larger than their sheet's stored records. COUNTBLANK retains
+  the missing-blank count. Small bounded windows and positioned evaluation guards keep their
+  positional reads; declared array shapes and internal blank gaps are unchanged.
+
+- **Lazy ROW/COLUMN positions** (#735): array-mode position sequences retain their shape without
+  allocating a numeric cell and row vector per position. Aggregates stream the values;
+  known-pure dense arithmetic/comparisons and SUMPRODUCT read through a private lazy box.
+  Derived lazy reads have a fixed work budget; larger expression trees store an intermediate
+  result so repeated LET operands cannot compound recomputation. Printing/spilling still materializes cells. Public constructors, Fill Vector payloads,
+  callback execution, logical dense/sparse geometry and existing whole-axis bounds are unchanged.
 
 ### Fixed
 
@@ -470,6 +483,10 @@ which the documented CLI installer checks.
   while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
   stacks are covered; injected overflow coverage still requires a lint finding. Internal
   formula/cache assertions run even when LibreOffice is unavailable.
+
+- **Finite computed-reference regression budgets** (#736): pin 200 reader calls for both array
+  materialization and SUM over 10k/100k declared templates; preserve INDEX/XLOOKUP/colon shapes,
+  blank padding, arithmetic alignment, spill output, first errors and formula precedents.
 
 ## [0.25.0] - 2026-10-19
 

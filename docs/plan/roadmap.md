@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-11-11
+**Last Updated**: 2026-11-12
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,7 +10,7 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,953 tests (CI on main 03f2dab, 2026-11-11).
+**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,978 tests (CI on main dadf3b68, 2026-11-12).
 
 **Current Version**: **0.26.0** (criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693); dynamic cycles are deterministic circular references (#828, #829); one parse per formula per recalculation (#790); `SLN`, `SYD`, `ISNONTEXT`, two-argument `IF`; supply-chain hardening (#833–#839))
 
@@ -23,7 +23,7 @@ executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (ba
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
 
-### v0.26.0 — Excel-parity criteria and lookups, supply-chain hardening (Released 2026-11-11)
+### v0.26.0 — Excel-parity criteria and lookups, supply-chain hardening (Released 2026-11-12)
 
 **Criteria and lookups (#774, #773, #780, #731, #724, #775, #693).** SUMIF(S), COUNTIF(S),
 AVERAGEIF(S), MINIFS, MAXIFS and match_mode 2 lookups read wildcards, `~` and `<>` as desktop Excel
@@ -32,7 +32,8 @@ counts empty text. Each change is a marked behaviour change, checked against des
 
 **Evaluation.** Dynamic cycles are caught at the first re-entry and reported the same way on every
 run (#828, #829); `INDEX(…, ROW()-1)` running totals are no longer circular (#743, #745); each
-formula is parsed once per recalculation (#790). Two **Breaking** entries: `IfArgs` for two-argument
+formula is parsed once per recalculation (#790); ROW/COLUMN position arrays are lazy (#735) and
+reference aggregates skip absent blank borders (#736). Two **Breaking** entries: `IfArgs` for two-argument
 `IF` (#723) and `TExpr.RangeLocation.Binding` (#710, #753, noted late from 0.24.0).
 
 **Supply chain (#833–#839).** Dependency lock and age policy, immutable action and hook pins,

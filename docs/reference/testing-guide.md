@@ -1,6 +1,20 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #838 validation against main db2b91d5 on 2026-11-05 recorded **9,953 cases**, including skips: 9,949 passed, 0 failed, 4 skipped.
+**Current Status**: the #736 validation on the updated #735 parent (main 03f2dab0) on 2026-11-11 recorded **9,978 cases**, including skips: 9,970 passed, 0 failed, 8 skipped.
+
+
+#736 test inventory (2026-11-05): eleven additional `RecalcPerfSpec` cases bring that suite
+to 19 observed cases, including the actual resolved-reference SUM reader budget and blank-border
+compatibility controls. Final all-module counts are recorded in the original #736 validation
+receipt; the historical totals below are not incremented by inference.
+
+#736 validation on the updated #735 parent (main 03f2dab0, 2026-11-11): the full suite
+recorded 9,978 cases: 9,970 passed, zero failed and eight optional external-tool cases
+skipped. Counts below come from seven fresh module reports, including the 19 `RecalcPerfSpec`
+cases, the #735 branching-replay budget and 30-stage LET regressions and the
+external-consumer `ArrayFillPreludeProbe`.
+Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
+observation. Passing tests do not establish Excel parity.
 
 ## Test Infrastructure
 
@@ -281,18 +295,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #838 validation against main db2b91d5, 2026-11-05 (9,949 passed, 0 failed, 4 skipped). Counts include skipped cases.
+Observed in #736 full-suite validation on the updated #735 parent, 2026-11-11: 9,970 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4225 |
+| xl-evaluator | 4249 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1972 |
 | xl-cats-effect | 217 |
 | xl-agent | 153 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,953** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
+| **Total** | **9,978** |
 
 
 ## Test Quality Metrics

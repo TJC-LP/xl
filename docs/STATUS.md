@@ -1,6 +1,6 @@
 # XL Project Status
 
-**Last Updated**: 2026-11-11 (0.26.0)
+**Last Updated**: 2026-11-12 (0.26.0)
 
 ## Current State
 
@@ -8,10 +8,10 @@
 
 ### What Works (Production-Ready)
 
-**New in 0.26.0** (2026-11-11) — criteria and lookups follow desktop Excel, deterministic dynamic cycles, one parse per formula per recalculation, and supply-chain hardening; two **Breaking** entries and two binary changes:
+**New in 0.26.0** (2026-11-12) — criteria and lookups follow desktop Excel, deterministic dynamic cycles, one parse per formula per recalculation, and supply-chain hardening; two **Breaking** entries and two binary changes:
 - ✅ **Criteria and lookups as in desktop Excel** (#774, #773, #780, #731, #724, #775, #693) — wildcards match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error cells, MATCH/XMATCH/XLOOKUP/VLOOKUP/HLOOKUP share one exact test, rich text is text (`ISTEXT`, UNIQUE, SORT), COUNTBLANK counts empty text and takes a reference only; each is a marked behaviour change
 - ✅ **Circular references** — a cycle through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), `x#`) fails with the same `Circular reference through …` error on every run (#828, #829); a running total through `INDEX(…, ROW()-1)` is no longer one (#743, #745)
-- ✅ **Recalculation** — each formula is parsed once per pass (#790); whole-column lookups share the pass's used-range memo (#747); numeric-text criteria windows are sized exactly (#842)
+- ✅ **Recalculation** — each formula is parsed once per pass (#790); whole-column lookups share the pass's used-range memo (#747); numeric-text criteria windows are sized exactly (#842); ROW/COLUMN position arrays are lazy (#735) and reference aggregates skip absent blank borders (#736)
 - ✅ **Functions and fixes** — `SLN`, `SYD` (#684), `ISNONTEXT` (#775), two-argument `IF` (#723, **Breaking**: `IfArgs`), array fallbacks in `IFERROR`/`IFNA` (#754), INDEX over a value (#725, #753), ROWS/COLUMNS of an error (#725), `x#` on a non-spilling formula (#803), `#NUM!` for invalid date serials and bounded numeric text (#726), names like `B2_x` after a range's `:` (#841); `TExpr.RangeLocation.Binding` noted late as **Breaking** from 0.24.0
 - ✅ **CLI and I/O** — `xl sheets` lists preserved macro, international macro, chart and dialog sheets and `xl lint` reports a `macro-sheet` finding (#788, binary: `LightMetadata.preservedSheets`); `--stream putf` drags over a range (#789); spill-aware `sort` and streamed writes (#738, binary: `WorksheetMetadata.clearContents`); streaming dynamic-array round trips (#749); `eval --with` through OFFSET/INDIRECT readers (#763); `evala --at` validation (#727); international macro sheets in `xl lint` (#791)
 - ✅ **Supply chain** (#833–#839) — checksummed dependency lock, dependency age policy and a compatible dependency refresh, actions and pre-commit hooks pinned to verified commits, release jobs without shared caches, verified launcher and release downloads with a `SHA256SUMS` release asset, and agent credentials read only from the environment or a local `.env`
@@ -285,17 +285,31 @@
 
 ### Test Coverage
 
-**9,953 test cases** (#838 validation against main db2b91d5, 2026-11-05): 9,949 passed, 0 failed, 4 skipped. Counts include skipped cases.
+
+#736 test inventory (2026-11-05): eleven additional `RecalcPerfSpec` cases bring that suite
+to 19 observed cases, including the actual resolved-reference SUM reader budget and blank-border
+compatibility controls. Final all-module counts are recorded in the original #736 validation
+receipt; the historical totals below are not incremented by inference.
+
+#736 validation on the updated #735 parent (main 03f2dab0, 2026-11-11): the full suite
+recorded 9,978 cases: 9,970 passed, zero failed and eight optional external-tool cases
+skipped. Counts below come from seven fresh module reports, including the 19 `RecalcPerfSpec`
+cases, the #735 branching-replay budget and 30-stage LET regressions and the
+external-consumer `ArrayFillPreludeProbe`.
+Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
+observation. Passing tests do not establish Excel parity.
+
+**Current: 9,978 test cases** (#736 full-suite validation on the updated #735 parent, 2026-11-11): 9,970 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4225 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4249 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 66 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 
