@@ -31,7 +31,9 @@ jobs:
           - os: macos-15-intel
             platform: darwin-amd64
             extension: ""
-          - os: macos-14
+          # macos-14 images are retired ("configuration not supported" on the
+          # v0.26.0 tag run); macos-15 is the arm64 image.
+          - os: macos-15
             platform: darwin-arm64
             extension: ""
           - os: windows-latest
