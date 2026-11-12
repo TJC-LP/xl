@@ -6,7 +6,8 @@ import com.tjclp.xl.formula.functions.{
   FunctionRegistry,
   FunctionSpec,
   FunctionSpecs,
-  ReferenceOperators
+  ReferenceOperators,
+  TableColumnReferences
 }
 import com.tjclp.xl.formula.{Arity}
 
@@ -27,7 +28,7 @@ import scala.annotation.tailrec
  * Supported syntax:
  *   - Literals: numbers (42, 3.14), booleans (TRUE, FALSE), strings ("text")
  *   - Cell references: A1, $A$1, Sheet1!A1, 'Quoted Name'!A1
- *   - Ranges: A1:B10
+ *   - Ranges: A1:B10; qualified plain table columns: Table1[Col] (data rows only)
  *   - External-workbook references (GH-353): [2]Book1!A1, [2]Book1!A1:B2, '[3]Sheet Name'!B2
  *     (unresolvable — carried as ExternalRef/ExternalRange for closed-workbook cache semantics)
  *   - Operators: +, -, *, /, ^, =, <>, <, <=, >, >=, &, postfix % (GH-355)
@@ -293,7 +294,9 @@ object FormulaParser:
       // GH-669: with no operand after it — the end of the text, a binary operator, a closer or a
       // separator — the word is a NAME (`=NOT`, `=NOT&"x"`, `IF(NOT,…)`; NOT is a legal defined
       // name Excel resolves), read by parsePrimary like any other identifier
-      next >= 0 && rem.charAt(next) != '(' && startsOperand(rem.charAt(next))
+      next >= 0 && !rem.lift(3).contains('[') && rem.charAt(next) != '(' && startsOperand(
+        rem.charAt(next)
+      )
     }
 
   /**
@@ -889,6 +892,33 @@ object FormulaParser:
     // Note: This function is called within the boundary block from parseExpr,
     // so we can use early returns via simple control flow
 
+    // A qualified table column precedes literal/cell/name interpretation of its identifier.
+    if s2.currentChar.contains('[') then
+      parseTableColumn(state.input.substring(startPos, s2.pos), s2)
+    else parseBareFunctionOrRef(state, s2, startPos, ident)
+
+  private def parseTableColumn(table: String, state: ParserState): ParseResult[TExpr[?]] =
+    val afterOpen = state.advance()
+    @tailrec
+    def read(s: ParserState): ParserState = s.currentChar match
+      case Some(c) if TableColumnReferences.isPlainColumnChar(c) => read(s.advance())
+      case _ => s
+    val end = read(afterOpen)
+    val column = state.input.substring(afterOpen.pos, end.pos)
+    if table.contains('$') || column.trim.isEmpty then
+      Left(ParseError.UnexpectedChar('[', state.pos, "expected plain table column"))
+    else
+      end.currentChar match
+        case Some(']') => Right((TableColumnReferences(table, column), end.advance()))
+        case Some(c) => Left(ParseError.UnexpectedChar(c, end.pos, "expected plain column and ']'"))
+        case None => Left(ParseError.UnexpectedEOF(end.pos, "expected ']'"))
+
+  private def parseBareFunctionOrRef(
+    state: ParserState,
+    s2: ParserState,
+    startPos: Int,
+    ident: String
+  ): ParseResult[TExpr[?]] =
     // Check for boolean literals
     ident match
       // GH-669: `TRUE()`/`FALSE()` are calls (the registry's zero-argument TRUE and FALSE), so the
