@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #723 validation after merging main 03f2dab0 on 2026-11-12 recorded **9,977 cases**, including skips: 9,969 passed, 0 failed, 8 skipped.
+**Current Status**: the #723 validation after merging main 1f110960 on 2026-11-12 recorded **9,991 cases**, including skips: 9,983 passed, 0 failed, 8 skipped.
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #723 validation after merging main 03f2dab0, 2026-11-12 (9,969 passed, 0 failed, 8 skipped). Counts include skipped cases.
+As of the #723 validation after merging main 1f110960, 2026-11-12 (9,983 passed, 0 failed, 8 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4249 |
+| xl-evaluator | 4262 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1972 |
 | xl-cats-effect | 217 |
 | xl-agent | 153 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,977** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
+| **Total** | **9,991** |
 
 
 ## Test Quality Metrics

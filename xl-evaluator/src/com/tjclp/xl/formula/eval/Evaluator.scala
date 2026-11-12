@@ -3070,7 +3070,7 @@ private class EvaluatorImpl(
             case Left(e) => CellValue.Error(EvalError.toCellError(e).getOrElse(CellError.Value))
     eval(operand.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell).flatMap {
       case ar: ArrayResult if allowArrayResults =>
-        Right(ar.mapPure(serialElement))
+        Right(ar.mapPureLazy(serialElement))
       case ar: ArrayResult => ScalarCoercion.collapseTo(label, ar, Some(BindingCoercion.Numeric))
       case value => ScalarCoercion.coerce(label, value, BindingCoercion.Numeric)
     }
@@ -3342,7 +3342,7 @@ private class EvaluatorImpl(
       yVal <- evalMaybeArray(yExpr, sheet, clock, workbook, currentCell)
       xOp <- toOperand(xVal, sheet)
       yOp <- toOperand(yVal, sheet)
-      result <- ArrayArithmetic.broadcast(xOp, yOp, op)
+      result <- ArrayArithmetic.broadcastPure(xOp, yOp, op)
       output <- result match
         case ArrayArithmetic.ArrayOperand.Scalar(v) => Right(v)
         case ArrayArithmetic.ArrayOperand.Array(arr) =>
@@ -3373,7 +3373,7 @@ private class EvaluatorImpl(
   ): Either[EvalError, Any] =
     def broadcastToBool(left: ArrayResult, right: ArrayResult): Either[EvalError, Any] =
       ArrayArithmetic
-        .broadcastOrderedCompare(left, right, op)
+        .broadcastOrderedComparePure(left, right, op)
         .flatMap(collapseUnlessArrayMode("comparison", BindingCoercion.Bool))
     def single(scalar: Any): ArrayResult =
       ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar))

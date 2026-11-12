@@ -114,3 +114,76 @@ class ArrayResultSpec extends FunSuite:
       ArrayResult(Vector.fill(3)(Vector.fill(2)(n(5))))
     )
   }
+
+  test("#735: lazy positions preserve shape, reads, equality, slices and transpose") {
+    List(true, false).foreach { alongRows =>
+      val lazyAxis = ArrayResult.positions(4, 7, alongRows)
+      val dense =
+        if alongRows then ArrayResult((4 to 10).map(i => Vector(n(i))).toVector)
+        else ArrayResult(Vector((4 to 10).map(n).toVector))
+      assertEquals(lazyAxis, dense)
+      assertEquals(dense, lazyAxis)
+      assertEquals(lazyAxis.hashCode, dense.hashCode)
+      assertEquals(lazyAxis.transpose, dense.transpose)
+      assertEquals(lazyAxis.toDense("test"), dense.toDense("test"))
+      assertEquals(lazyAxis.slice(1, 3, 0, 1), dense.slice(1, 3, 0, 1))
+      assertEquals(lazyAxis.slice(-1, 3, 0, 2), dense.slice(-1, 3, 0, 2))
+      assertEquals(lazyAxis.mapPure(_ => n(9)), dense.mapPure(_ => n(9)))
+      val err = EvalError.EvalFailed("at six", None)
+      assertEquals(lazyAxis.map(v => if v == n(6) then Left(err) else Right(v)), Left(err))
+      assertEquals(lazyAxis.cells.toVector, dense.cells.toVector)
+    }
+    assertEquals(ArrayResult.positions(4, 0, true), ArrayResult.empty)
+  }
+
+  test("#735: lazy comparison keeps error elements and row-major first error") {
+    val positions = ArrayResult.positions(1, 3, true)
+    val errors = ArrayResult(
+      Vector(
+        Vector(CellValue.Error(CellError.Div0)),
+        Vector(CellValue.Error(CellError.NA)),
+        Vector(n(3))
+      )
+    )
+    val compared =
+      com.tjclp.xl.formula.eval.ArrayArithmetic.broadcastOrderedCompare(positions, errors, _ < 0)
+    compared match
+      case Right(ar) =>
+        assertEquals(
+          ar.cells.toVector,
+          Vector(
+            CellValue.Error(CellError.Div0),
+            CellValue.Error(CellError.NA),
+            CellValue.Bool(false)
+          )
+        )
+        assertEquals(ar.tally.next()._1, CellValue.Error(CellError.Div0))
+      case Left(err) => fail(s"comparison should carry errors: $err")
+    assertEquals(positions.slice(0, 1, 0, 1).map(_(0, 0)), Right(n(1)))
+    val horizontal = positions.transpose
+    assertEquals(horizontal.slice(0, 1, 1, 2), Right(ArrayResult(Vector(Vector(n(2), n(3))))))
+  }
+
+  test("#735: lazy box geometry survives pure transforms, slices and transpose") {
+    val positions = ArrayResult.positions(1, 3, true)
+    val constant = positions.mapPureLazy(_ => n(1))
+    val stored = ArrayResult(Vector.fill(3)(Vector(n(1))))
+    assert(constant.isDense)
+    assertEquals(constant.boxArea, 3L)
+    assertEquals(constant.retainedBoxCells, 0L)
+    assert(constant.transpose.hasLazyDenseBox)
+    assert(constant.slice(0, 2, 0, 1).exists(_.hasLazyDenseBox))
+    val padded = constant.slice(-1, 2, 0, 1)
+    assertEquals(padded, stored.slice(-1, 2, 0, 1))
+    assert(padded.exists(ar => !ar.isDense && ar.retainedBoxCells == 0L))
+    assertEquals(constant.map(Right(_)), Right(stored))
+    assertEquals(constant.mapPure(identity), stored)
+    assertEquals(constant, stored)
+    assertEquals(stored, constant)
+    assertEquals(constant.hashCode, stored.hashCode)
+    assertEquals(
+      positions.toString,
+      ArrayResult(Vector(Vector(n(1)), Vector(n(2)), Vector(n(3)))).toString
+    )
+    assert(positions.slice(4, 2, 0, 1).exists(_.cells.forall(_ == CellValue.Empty)))
+  }
