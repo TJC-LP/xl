@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Reference aggregates skip absent blank borders** (#736): SUM and the other reference folds
+  reuse the populated box for ranges larger than their sheet's stored records. COUNTBLANK retains
+  the missing-blank count. Small bounded windows and positioned evaluation guards keep their
+  positional reads; declared array shapes and internal blank gaps are unchanged.
+
 - **Lazy ROW/COLUMN positions** (#735): array-mode position sequences retain their shape without
   allocating a numeric cell and row vector per position. Aggregates stream the values;
   known-pure dense arithmetic/comparisons and SUMPRODUCT read through a private lazy box.
@@ -162,6 +167,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
 
 ### Testing
+
+- **Finite computed-reference regression budgets** (#736): pin 200 reader calls for both array
+  materialization and SUM over 10k/100k declared templates; preserve INDEX/XLOOKUP/colon shapes,
+  blank padding, arithmetic alignment, spill output, first errors and formula precedents.
 
 - `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
   `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
