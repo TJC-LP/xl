@@ -1,14 +1,13 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Historical status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
+**Current Status**: the #735 validation after merging main 03f2dab0 on 2026-11-11 recorded **9,967 cases**, including skips: 9,959 passed, 0 failed, 8 skipped.
 
-
-#735 validation (2026-11-06): the final full-suite run on `9209ded1` recorded 9,961 cases:
-9,953 passed, zero failed and eight optional external-tool cases skipped. Counts below
+#735 validation after merging main 03f2dab0 (2026-11-11): the full suite recorded 9,967 cases:
+9,959 passed, zero failed and eight optional external-tool cases skipped. Counts below
 come from seven fresh module reports, including the branching-replay budget regression,
 the 30-stage LET regression and the external-consumer `ArrayFillPreludeProbe`.
-Historical #830/#831 combined validation on 2026-11-04 recorded 9,947 cases; it is
-separate from this current observation. Passing tests do not establish Excel parity.
+Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
+observation. Passing tests do not establish Excel parity.
 
 ## Test Infrastructure
 
@@ -289,7 +288,7 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-Observed in #735 full-suite validation on 2026-11-06: 9,953 passed, 0 failed, 8 skipped. Counts include skipped cases.
+Observed in #735 full-suite validation after merging main, 2026-11-11: 9,959 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
@@ -298,9 +297,9 @@ Observed in #735 full-suite validation on 2026-11-06: 9,953 passed, 0 failed, 8 
 | xl-ooxml | 1446 |
 | xl-cli | 1972 |
 | xl-cats-effect | 217 |
-| xl-agent | 147 |
+| xl-agent | 153 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **9,961** |
+| **Total** | **9,967** |
 
 
 ## Test Quality Metrics
