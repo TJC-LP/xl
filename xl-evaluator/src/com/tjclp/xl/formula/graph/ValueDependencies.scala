@@ -142,6 +142,8 @@ private[xl] object ValueDependencies:
       def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
       def arg(a: ArgValue, addressOnly: Boolean, reader: Option[ARef]): Set[CellRange] = a match
         case ArgValue.Expr(child) => loop(child, addressOnly, env, reader)
+        case ArgValue.Range(TExpr.RangeLocation.Computed(child)) =>
+          loop(child, addressOnly, env, reader)
         case ArgValue.Range(location) =>
           // Non-static lexical locations print as their declared identifier. This also covers
           // range-slot bindings without confusing qualified names, cell addresses or errors with

@@ -78,6 +78,13 @@ trait TExprRangeLocation:
      */
     case Binding(name: String)
 
+    /**
+     * GH-723: a range computed by an expression; resolved only inside EvalContext. Appended to
+     * retain all earlier case ordinals. Its expression participates in structural walks and
+     * dependency analysis; it never denotes a statically known range.
+     */
+    case Computed(expression: TExpr[?])
+
   object RangeLocation:
     extension (loc: RangeLocation)
       /**
@@ -93,6 +100,7 @@ trait TExprRangeLocation:
         case External(_, _, r, _) => Some(r)
         case Name(_, _) => None
         case Binding(_) => None
+        case Computed(_) => None
         case Error(_, _) => None
 
       /** Get sheet name for cross-sheet, None for local or external-workbook locations */
@@ -145,4 +153,6 @@ trait TExprRangeLocation:
             case Some(s) => s"${SheetName.quoteForFormula(s.value)}!$n"
             case None => n
         case Binding(n) => n
+        case Computed(expr) =>
+          com.tjclp.xl.formula.printer.FormulaPrinter.print(expr, includeEquals = false)
         case Error(e, q) => com.tjclp.xl.formula.printer.FormulaPrinter.qualifiedError(e, q)

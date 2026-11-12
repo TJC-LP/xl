@@ -285,25 +285,11 @@
 
 ### Test Coverage
 
-
-#736 test inventory (2026-11-05): eleven additional `RecalcPerfSpec` cases bring that suite
-to 19 observed cases, including the actual resolved-reference SUM reader budget and blank-border
-compatibility controls. Final all-module counts are recorded in the original #736 validation
-receipt; the historical totals below are not incremented by inference.
-
-#736 validation on the updated #735 parent (main 03f2dab0, 2026-11-11): the full suite
-recorded 9,978 cases: 9,970 passed, zero failed and eight optional external-tool cases
-skipped. Counts below come from seven fresh module reports, including the 19 `RecalcPerfSpec`
-cases, the #735 branching-replay budget and 30-stage LET regressions and the
-external-consumer `ArrayFillPreludeProbe`.
-Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
-observation. Passing tests do not establish Excel parity.
-
-**Current: 9,978 test cases** (#736 full-suite validation on the updated #735 parent, 2026-11-11): 9,970 passed, 0 failed, 8 skipped. Counts include skipped cases.
+**10,046 test cases** (#723 validation with the reference-input fix df803ef6 after merging main 69c259e3 (0.26.0), 2026-11-12): 10,038 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4249 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4317 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |

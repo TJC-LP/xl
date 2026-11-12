@@ -354,6 +354,8 @@ object FormulaShifter:
       case name @ RangeLocation.Name(_, _) => name
       // GH-710: a LET name is an identifier too (its binding's value shifts in the LET)
       case binding @ RangeLocation.Binding(_) => binding
+      case RangeLocation.Computed(expr) =>
+        RangeLocation.Computed(shiftInternal(expr, colDelta, rowDelta, voidedLog))
       // GH-612: an error has no coordinates
       case error @ RangeLocation.Error(_, _) => error
 
@@ -388,6 +390,7 @@ object FormulaShifter:
     def matches(sheet: com.tjclp.xl.SheetName): Boolean =
       sheet.value.equalsIgnoreCase(editedSheet)
     def goLoc(location: RangeLocation): Boolean = location match
+      case RangeLocation.Computed(expr) => go(expr)
       case RangeLocation.CrossSheet(sheet, _, _) => matches(sheet)
       case RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
           RangeLocation.Name(_, _) | RangeLocation.Binding(_) | RangeLocation.Error(_, _) =>
@@ -448,6 +451,7 @@ object FormulaShifter:
       case Some(ErrorQualifier.External(_, _)) | None => false
     // GH-394: a sheet-qualified name can also sit in a range slot (`SUMIF(Model!rev_range, …)`)
     def goLoc(location: RangeLocation): Boolean = location match
+      case RangeLocation.Computed(expr) => go(expr)
       case RangeLocation.Name(_, Some(scope)) => scope.value.equalsIgnoreCase(sheet)
       case RangeLocation.Error(_, qualifier) => names(qualifier)
       case RangeLocation.Name(_, None) | RangeLocation.Local(_, _) |
@@ -508,6 +512,7 @@ object FormulaShifter:
       case external: ErrorQualifier.External => external
     def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
     def goLocation(location: RangeLocation): RangeLocation = location match
+      case RangeLocation.Computed(expr) => RangeLocation.Computed(go(expr))
       case RangeLocation.CrossSheet(sheet, range, form) =>
         RangeLocation.CrossSheet(target(sheet), range, form)
       // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
@@ -711,6 +716,10 @@ object FormulaShifter:
       case RangeLocation.Name(_, _) => location
       // GH-710: a LET name is an identifier (its binding's value shifts in the LET)
       case RangeLocation.Binding(_) => location
+      case RangeLocation.Computed(expr) =>
+        RangeLocation.Computed(
+          shiftStructuralInternal(expr, shiftLocal, editedSheet, isRow, at, delta, voidedLog)
+        )
       // GH-612: an error has no coordinates
       case RangeLocation.Error(_, _) => location
 

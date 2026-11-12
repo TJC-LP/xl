@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
+  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
+  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
+  recalculation. Array-taking argument expansion remains separate.
+
+- **Breaking: `TExpr.RangeLocation` gains a `Computed(expression)` case** (#723): added at
+  the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
+  arm, and fails to compile under `-Werror` until it has one.
+
+### Fixed
+
+- **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
+  INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
+  Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
+
+- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
+  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
+  report unsupported evaluation instead of caching a fabricated #VALUE! result.
+  Reference-producing INDEX and its standalone value form remain supported.
+
 ## [0.26.0] - 2026-11-12
 
 Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards

@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,978)
+./mill __.test             # Run all tests (10,046)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -419,27 +419,14 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
-#736 test inventory (2026-11-05): eleven additional `RecalcPerfSpec` cases bring that suite
-to 19 observed cases, including the actual resolved-reference SUM reader budget and blank-border
-compatibility controls. Final all-module counts are recorded in the original #736 validation
-receipt; the historical totals below are not incremented by inference.
-
-#736 validation on the updated #735 parent (main 03f2dab0, 2026-11-11): the full suite
-recorded 9,978 cases: 9,970 passed, zero failed and eight optional external-tool cases
-skipped. Counts below come from seven fresh module reports, including the 19 `RecalcPerfSpec`
-cases, the #735 branching-replay budget and 30-stage LET regressions and the
-external-consumer `ArrayFillPreludeProbe`.
-Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
-observation. Passing tests do not establish Excel parity.
-
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,978 test cases** by module: xl-evaluator (4249), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,046 test cases** (#723 validation with the reference-input fix `df803ef6` after merging main `69c259e3` (0.26.0), 2026-11-12; 10,038 passed, 8 skipped) by module: xl-evaluator (4317), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,978 test cases)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,046 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
