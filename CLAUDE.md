@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (9,947)
+./mill __.test             # Run all tests (9,978)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -322,7 +322,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.25.0 and its published asset digests so installation works before releases provide `SHA256SUMS`; update that version and all digests together. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -424,21 +424,22 @@ to 19 observed cases, including the actual resolved-reference SUM reader budget 
 compatibility controls. Final all-module counts are recorded in the original #736 validation
 receipt; the historical totals below are not incremented by inference.
 
-#735 test inventory (2026-11-05): this change adds eleven evaluator regressions (three in
-`ArrayResultSpec`, two in `RowColumnArraySpec`, four in `Review735RegressionSpec`, one in
-`PositionCanonicalErrorSpec`, one in `MixedPositionErrorSpec`) and
-one external-consumer `ArrayFillPreludeProbe`. The 9,947-case totals below are the dated
-2026-11-04 historical observation; final all-module counts belong in this contribution's
-validation receipt and must not be inferred by adding to an older base's total.
+#736 validation on the updated #735 parent (main 03f2dab0, 2026-11-11): the full suite
+recorded 9,978 cases: 9,970 passed, zero failed and eight optional external-tool cases
+skipped. Counts below come from seven fresh module reports, including the 19 `RecalcPerfSpec`
+cases, the #735 branching-replay budget and 30-stage LET regressions and the
+external-consumer `ArrayFillPreludeProbe`.
+Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
+observation. Passing tests do not establish Excel parity.
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**9,947 tests** by module: xl-evaluator (4225), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**9,978 test cases** by module: xl-evaluator (4249), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 9,947 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 9,978 test cases)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

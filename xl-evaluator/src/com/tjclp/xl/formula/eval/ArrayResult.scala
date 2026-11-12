@@ -64,6 +64,12 @@ final class ArrayResult private (
   /** A logically dense array whose numbers are computed instead of retained. */
   private[formula] def hasLazyDenseBox: Boolean = lazyBox.nonEmpty && isDense
 
+  /** Bounded estimate of work to read a cell, including any deferred operand reads. */
+  private[formula] def lazyReadCost: Int = lazyBox.fold(1)(_.readCost)
+
+  /** A view adds one read without forgetting the work already deferred below it. */
+  private def viewReadCost: Int = math.min(ArrayResult.MaxLazyReadCost + 1, lazyReadCost + 1)
+
   /**
    * Number of cells in the array (`rows * cols`), as a Long so a whole-sheet shape cannot overflow.
    */
@@ -230,7 +236,8 @@ final class ArrayResult private (
 
   /** Only audited deterministic evaluator transforms may recompute their values on access. */
   private[formula] def mapPureLazy(f: CellValue => CellValue): ArrayResult =
-    if hasLazyDenseBox then ArrayResult.lazyDense(rows, cols)((r, c) => f(apply(r, c)))
+    if hasLazyDenseBox && lazyReadCost < ArrayResult.MaxLazyReadCost then
+      ArrayResult.lazyDense(rows, cols, viewReadCost)((r, c) => f(apply(r, c)))
     else mapPure(f)
 
   /**
@@ -279,7 +286,9 @@ final class ArrayResult private (
               c0 - colFrom,
               Vector.empty,
               ArrayResult.canonical(g, windowFill),
-              Some(ArrayResult.LazyBox(r1 - r0, c1 - c0, (r, c) => apply(r0 + r, c0 + c)))
+              Some(
+                ArrayResult.LazyBox(r1 - r0, c1 - c0, (r, c) => apply(r0 + r, c0 + c), viewReadCost)
+              )
             )
           )
         else
@@ -324,7 +333,9 @@ final class ArrayResult private (
             top,
             Vector.empty,
             swapped,
-            Some(ArrayResult.LazyBox(boxWidth, boxHeight, (r, c) => reader.read(c, r)))
+            Some(
+              ArrayResult.LazyBox(boxWidth, boxHeight, (r, c) => reader.read(c, r), viewReadCost)
+            )
           )
         case None => new ArrayResult(cols, rows, left, top, box.transpose, swapped)
 
@@ -670,10 +681,20 @@ object ArrayResult:
         case Fill.ByCol(vs) => axis(g.cols, vs, g.colHasOutside)(Fill.ByCol(_))
 
   /** A private non-memoizing box; geometry is the same as an eagerly populated box. */
-  private final case class LazyBox(rows: Int, cols: Int, read: (Int, Int) => CellValue)
+  private final case class LazyBox(
+    rows: Int,
+    cols: Int,
+    read: (Int, Int) => CellValue,
+    readCost: Int
+  )
+
+  /** Keep deferred expression trees small; larger derived results use the existing stored box. */
+  private[formula] val MaxLazyReadCost: Int = 8
 
   /** Known-pure dense cells without changing the geometry read by existing consumers. */
-  private[formula] def lazyDense(rows: Int, cols: Int)(read: (Int, Int) => CellValue): ArrayResult =
+  private[formula] def lazyDense(rows: Int, cols: Int, readCost: Int = 1)(
+    read: (Int, Int) => CellValue
+  ): ArrayResult =
     if rows <= 0 || cols <= 0 then empty
     else
       new ArrayResult(
@@ -683,7 +704,7 @@ object ArrayResult:
         0,
         Vector.empty,
         Fill.Const(CellValue.Empty),
-        Some(LazyBox(rows, cols, read))
+        Some(LazyBox(rows, cols, read, readCost))
       )
 
   /** #735: position numbers retain the former dense geometry, without allocating each cell. */

@@ -785,8 +785,14 @@ object ArrayArithmetic:
     val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
     val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
     val outCells = outRows.toLong * outCols.toLong
+    // Count operand reads, not just depth: reusing the same LET value on both sides doubles
+    // its deferred work. Saturation also keeps a wide call from overflowing the estimate.
+    val readCost = operands.foldLeft(1) { (cost, operand) =>
+      math.min(ArrayResult.MaxLazyReadCost + 1, cost + operand.lazyReadCost)
+    }
     if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
-    else if pureFill && !perCell && operands.forall(_.isDense) && operands.exists(_.hasLazyDenseBox)
+    else if pureFill && !perCell && readCost <= ArrayResult.MaxLazyReadCost &&
+      operands.forall(_.isDense) && operands.exists(_.hasLazyDenseBox)
     then
       // Validate in row-major order, just like computeBox. Known-pure operators may then
       // recompute a cell without storing the full result; public callbacks never enter here.
@@ -800,7 +806,7 @@ object ArrayArithmetic:
         case Some(err) => Left(err)
         case None =>
           Right(
-            ArrayResult.lazyDense(outRows, outCols)((r, c) =>
+            ArrayResult.lazyDense(outRows, outCols, readCost)((r, c) =>
               value(r, c).fold(_ => CellValue.Empty, identity)
             )
           )

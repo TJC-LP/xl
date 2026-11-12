@@ -8,7 +8,7 @@ import mill.scalalib.publish._
 import mill.scalalib.scalafmt._
 import contrib.jmh.JmhModule
 
-val scala3Version = "3.9.0"
+val scala3Version = "3.9.0" // pinned: Scala 3.9 LTS; compiler/plugin upgrades require compatibility validation.
 val organization = "com.tjclp"
 
 /** Shared build configuration constants */
