@@ -19,6 +19,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
 
+### Changed
+
+- **Lazy ROW/COLUMN positions** (#735): array-mode position sequences retain their shape without
+  allocating a numeric cell and row vector per position. Aggregates stream the values;
+  known-pure dense arithmetic/comparisons and SUMPRODUCT read through a private lazy box.
+  Derived lazy reads have a fixed work budget; larger expression trees store an intermediate
+  result so repeated LET operands cannot compound recomputation. Printing/spilling still materializes cells. Public constructors, Fill Vector payloads,
+  callback execution, logical dense/sparse geometry and existing whole-axis bounds are unchanged.
+
 ### Fixed
 
 - **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or

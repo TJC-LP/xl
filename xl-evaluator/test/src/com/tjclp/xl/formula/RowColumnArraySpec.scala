@@ -336,3 +336,38 @@ class RowColumnArraySpec extends FunSuite:
       assertEquals(asValues, Right(BigDecimal(expected)), fn)
       assertEquals(asReference, Right(BigDecimal(expected)), fn)
   }
+
+  test("#735: whole-column positions have no retained numeric box") {
+    evala("=ROW(A:A)") match
+      case Right(ar: ArrayResult) =>
+        assertEquals(ar.retainedBoxCells, 0L)
+        assertEquals(ar.boxArea, 1048576L)
+        assert(ar.isDense)
+        assert(ar.hasLazyDenseBox)
+        assertEquals((ar.rows, ar.cols), (1048576, 1))
+        assertEquals(ar(1048575, 0), number(1048576))
+      case other => fail(s"expected array: $other")
+  }
+
+  test("#735: position comparisons and arithmetic retain no numeric box") {
+    List("=ROW(A:A)>1000000", "=ROW(A:A)*2", "=COLUMN(1:1)=100").foreach { formula =>
+      evala(formula) match
+        case Right(ar: ArrayResult) =>
+          assertEquals(ar.retainedBoxCells, 0L)
+          assert(ar.isDense)
+          assert(ar.hasLazyDenseBox)
+        case other => fail(s"expected array: $other")
+    }
+    assertEquals(evala("=SUM(ROW(A:A))"), Right(BigDecimal("549756338176")))
+  }
+
+  test("#735: LET reusing derived ROW arrays stays bounded and preserves its sum") {
+    val levels = 30
+    val bindings = (1 to levels)
+      .map { i =>
+        s"stage_$i,stage_${i - 1}+stage_${i - 1}"
+      }
+      .mkString(",")
+    val formula = s"LET(stage_0,ROW(A1:A16),$bindings,SUM(stage_$levels))"
+    assertEquals(evala(formula), Right(BigDecimal(136) * BigDecimal(2).pow(levels)))
+  }
