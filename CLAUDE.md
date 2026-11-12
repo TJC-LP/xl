@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,106)
+./mill __.test             # Run all tests (10,117)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -421,12 +421,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,106 test cases** (#669 validation after merging #723 sync `322ced1f` on main `1f110960`, 2026-11-12; 10,098 passed, 8 skipped) by module: xl-evaluator (4371), xl-core (1875), xl-ooxml (1446), xl-cli (1978), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,117 test cases** (#669 validation after merging #723 sync `e7a756cc` on main `dadf3b68`, 2026-11-12; 10,109 passed, 8 skipped) by module: xl-evaluator (4382), xl-core (1875), xl-ooxml (1446), xl-cli (1978), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,106 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,117 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
