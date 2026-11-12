@@ -841,7 +841,8 @@ object Evaluator:
       node: NameWalk.Node,
       asReference: Boolean,
       arrayMode: Boolean,
-      cell: Option[ARef]
+      cell: Option[ARef],
+      preserveInputArrays: Boolean = false
     )
 
     /** `height`: the most names below the entry's own on a chain its evaluation followed. */
@@ -1752,7 +1753,9 @@ private class EvaluatorImpl(
   arrayRangeBounds: Option[CellRange => CellRange] = None,
   // #767: the pass slot of a top-level evaluation at its own slot; derived evaluators of the same
   // formula keep it, a precedent evaluated on demand (a deeper evaluator) does not
-  passPosition: EvalPosition = EvalPosition.None
+  passPosition: EvalPosition = EvalPosition.None,
+  // Only while evaluating a reference producer's scalar input; plain references still intersect.
+  preserveInputArrays: Boolean = false
 ) extends Evaluator:
   /** Current recursion depth for cross-sheet formula evaluation. */
   protected def currentDepth: Int = 0
@@ -1792,8 +1795,32 @@ private class EvaluatorImpl(
       workbookPath,
       aggregateMemo,
       arrayRangeBounds = arrayRangeBounds,
-      passPosition = passPosition
+      passPosition = passPosition,
+      preserveInputArrays = preserveInputArrays
     )
+
+  /** Same formula/environment, with array shape retained only under a reference scalar input. */
+  private def inputArrayPolicy(preserve: Boolean): EvaluatorImpl =
+    if preserve == preserveInputArrays then this
+    else
+      new EvaluatorWithDepth(
+        currentDepth,
+        allowArrayResults,
+        bindings,
+        rng,
+        memoOpt,
+        resolvingNames,
+        workbookPath,
+        aggregateMemoOpt,
+        placementGuard,
+        arrayRangeBounds = arrayRangeBounds,
+        passPosition = passPosition,
+        preserveInputArrays = preserve
+      )
+
+  private lazy val shapePreservingInputs: EvaluatorImpl = inputArrayPolicy(true)
+  private lazy val ordinaryScalarInputs: EvaluatorImpl = inputArrayPolicy(false)
+
   // Suppress asInstanceOf warning for GADT type handling (required for type parameter erasure)
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   def eval[A](
@@ -2055,6 +2082,8 @@ private class EvaluatorImpl(
         // takes one integer.
         eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
           .flatMap {
+            case ar: ArrayResult if preserveInputArrays && (ar.rows != 1 || ar.cols != 1) =>
+              Right(ar)
             case ar: ArrayResult =>
               ScalarCoercion.collapseTo("ToInt", ar, Some(BindingCoercion.Integer))
             case value => ScalarCoercion.coerce("ToInt", value, BindingCoercion.Integer)
@@ -2105,7 +2134,19 @@ private class EvaluatorImpl(
                   case None => evalAggregateNode(agg, range, targetSheet, clock, workbook)
 
       case call: TExpr.Call[?] =>
-        evalCall(call, sheet, clock, workbook, currentCell, selectsReference = false)
+        evalCall(
+          call,
+          sheet,
+          clock,
+          workbook,
+          currentCell,
+          selectsReference = preserveInputArrays && call.spec.flags.selector
+        )
+          .flatMap {
+            case RangeOperand(target, range) if preserveInputArrays && call.spec.flags.selector =>
+              derefRange(range, target, clock, workbook, currentCell)
+            case value => Right(value)
+          }
           .asInstanceOf[Either[EvalError, A]]
 
       // ===== GH-193: LET lexical bindings =====
@@ -2214,7 +2255,8 @@ private class EvaluatorImpl(
       aggregateMemoOpt,
       placementGuard,
       arrayRangeBounds = None,
-      passPosition = passPosition
+      passPosition = passPosition,
+      preserveInputArrays = preserveInputArrays
     )
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
@@ -2237,20 +2279,68 @@ private class EvaluatorImpl(
     // evaluates to an ArrayResult, and its top-left element must reach the function as a
     // number or a Left — never a raw CellValue the body would cast and throw on. Only the
     // Either container is cast.
+    // Do not lose array provenance inside a scalar selector before a reference producer sees it.
+    // Keep the original mode (and therefore plain reference intersection), but retain array values
+    // through operators, coercions, names, LET and nested element-wise calls. Supported ArrayLift
+    // substitutes one element before this boundary. Selector conditions retain legacy scalar rules;
+    // their selected results travel through the reference callback, whole and lazily.
+    val referenceScalar = !call.spec.flags.selector &&
+      (preserveInputArrays || (selectsReference && ReferenceFunctionNames.computing.contains(
+        call.spec.name
+      )))
+    val scalarEvaluator =
+      if referenceScalar then shapePreservingInputs
+      else if preserveInputArrays && call.spec.flags.selector then ordinaryScalarInputs
+      else this
     def evalArg[A](expr: TExpr[A]): Either[EvalError, A] =
-      val result: Either[EvalError, Any] = expr match
-        case TExpr.Coerced(inner, target) =>
-          evalCoercedExpr(inner, target, sheet, clock, workbook, currentCell, collapse = true)
-        case TExpr.CoercedBindingRef(name, target) =>
-          evalCoercedBinding(name, target, collapse = true, clock, workbook, currentCell)
-        case other =>
-          (eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
-            case ar: ArrayResult =>
-              val kind = TExpr.scalarKind(other)
+      val result: Either[EvalError, Any] =
+        if referenceScalar then
+          scalarEvaluator.eval(expr.asInstanceOf[TExpr[Any]], sheet, clock, workbook, currentCell)
+        else
+          expr match
+            case TExpr.Coerced(inner, target) =>
+              scalarEvaluator.evalCoercedExpr(
+                inner,
+                target,
+                sheet,
+                clock,
+                workbook,
+                currentCell,
+                collapse = true
+              )
+            case TExpr.CoercedBindingRef(name, target) =>
+              scalarEvaluator.evalCoercedBinding(
+                name,
+                target,
+                collapse = true,
+                clock,
+                workbook,
+                currentCell
+              )
+            case other =>
+              (scalarEvaluator
+                .eval(other, sheet, clock, workbook, currentCell): Either[EvalError, Any]).flatMap {
+                case ar: ArrayResult =>
+                  val kind = TExpr.scalarKind(other)
+                  ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
+                case value => Right(value)
+              }
+      result
+        .flatMap {
+          case ar: ArrayResult if referenceScalar =>
+            if ar.rows != 1 || ar.cols != 1 then
+              Left(
+                EvalError.EvalFailed(
+                  s"${call.spec.name}: array-valued scalar inputs cannot produce a single reference",
+                  None
+                )
+              )
+            else
+              val kind = TExpr.scalarKind(expr)
               ScalarCoercion.collapseTo(kind.fold("argument")(coercionLabel), ar, kind)
-            case value => Right(value)
-          }
-      result.asInstanceOf[Either[EvalError, A]]
+          case value => Right(value)
+        }
+        .asInstanceOf[Either[EvalError, A]]
     // GH-346: functions that read uncached formula cells (aggregates, array materialization)
     // recurse through the same memo, so a shared precedent evaluates once per pass. Created
     // here when the pass has none yet — the ctx is per Call node, so it cannot leak across
@@ -2274,7 +2364,8 @@ private class EvaluatorImpl(
         aggregateMemoOpt,
         placementGuard,
         arrayRangeBounds = bounds,
-        passPosition = passPosition
+        passPosition = passPosition,
+        preserveInputArrays = preserveInputArrays
       )
         .eval(expr, sheet, clock, workbook, currentCell)
 
@@ -2636,7 +2727,8 @@ private class EvaluatorImpl(
         aggregateMemoOpt,
         placementGuard,
         arrayRangeBounds = arrayRangeBounds,
-        passPosition = passPosition
+        passPosition = passPosition,
+        preserveInputArrays = preserveInputArrays
       )
     // An array evaluation binds references when a range slot reads a LET name (GH-710) or when
     // something inspects a reference's position or shape (GH-712). One flag for the whole LET,
@@ -2776,7 +2868,13 @@ private class EvaluatorImpl(
                 val memo = resolvingNames.memo.getOrElse(new Evaluator.NameMemo)
                 val trail = Evaluator.NameTrail(resolvingNames.path + node, Some(memo))
                 val bodyRng = if resolvingNames.memo.isEmpty then memo.counting(rng) else rng
-                val key = Evaluator.NameMemo.Key(node, asReference, allowArrayResults, currentCell)
+                val key = Evaluator.NameMemo.Key(
+                  node,
+                  asReference,
+                  allowArrayResults,
+                  currentCell,
+                  preserveInputArrays
+                )
                 memo.getOrCompute(key, definingSheet, wb, trail.path.size) {
                   evalNameBody(
                     name,
@@ -2855,7 +2953,8 @@ private class EvaluatorImpl(
               aggregateMemoOpt,
               placementGuard,
               arrayRangeBounds = None,
-              passPosition = passPosition
+              passPosition = passPosition,
+              preserveInputArrays = preserveInputArrays
             )
             // Keep references through name aliases and LET bodies too. Materializing
             // an alias here loses its position, so a plain consumer would read the
@@ -3115,7 +3214,9 @@ private class EvaluatorImpl(
     asReference: Boolean = false
   ): Either[EvalError, Any] =
     def coerced(value: Any): Either[EvalError, Any] = value match
-      case arr: ArrayResult if !collapse => Right(arr)
+      case arr: ArrayResult
+          if !collapse || (preserveInputArrays && (arr.rows != 1 || arr.cols != 1)) =>
+        Right(arr)
       case arr: ArrayResult =>
         ScalarCoercion.coerce(s"LET binding '$name'", ScalarCoercion.collapseArray(arr), target)
       case other => ScalarCoercion.coerce(s"LET binding '$name'", other, target)
@@ -3144,7 +3245,9 @@ private class EvaluatorImpl(
     collapse: Boolean
   ): Either[EvalError, Any] =
     eval(inner, sheet, clock, workbook, currentCell).flatMap {
-      case arr: ArrayResult if !collapse => Right(arr)
+      case arr: ArrayResult
+          if !collapse || (preserveInputArrays && (arr.rows != 1 || arr.cols != 1)) =>
+        Right(arr)
       case arr: ArrayResult =>
         ScalarCoercion.coerce(coercionLabel(target), ScalarCoercion.collapseArray(arr), target)
       case value => ScalarCoercion.coerce(coercionLabel(target), value, target)
@@ -3319,7 +3422,7 @@ private class EvaluatorImpl(
     label: String,
     target: BindingCoercion
   )(arr: ArrayResult): Either[EvalError, Any] =
-    if allowArrayResults then Right(arr)
+    if allowArrayResults || preserveInputArrays then Right(arr)
     else ScalarCoercion.coerce(label, ScalarCoercion.collapseArray(arr), target)
 
   /**
@@ -3473,7 +3576,9 @@ private class EvaluatorWithDepth(
   // GH-715: required, so every derived evaluator decides it; see Evaluator.PlacementGuard
   guard: Option[Evaluator.PlacementGuard],
   arrayRangeBounds: Option[CellRange => CellRange] = None,
-  passPosition: EvalPosition = EvalPosition.None
+  passPosition: EvalPosition = EvalPosition.None,
+  // Only while evaluating a reference producer's scalar input; plain references still intersect.
+  preserveInputArrays: Boolean = false
 ) extends EvaluatorImpl(
       allowArrayResults,
       bindings,
@@ -3482,7 +3587,8 @@ private class EvaluatorWithDepth(
       workbookPath,
       aggregateMemo,
       arrayRangeBounds = arrayRangeBounds,
-      passPosition = passPosition
+      passPosition = passPosition,
+      preserveInputArrays = preserveInputArrays
     ):
   override protected def currentDepth: Int = depth
   override protected def memoOpt: Option[Evaluator.EvalMemo] = memo
@@ -3499,5 +3605,6 @@ private class EvaluatorWithDepth(
       aggregateMemo,
       guard,
       arrayRangeBounds = arrayRangeBounds,
-      passPosition = passPosition
+      passPosition = passPosition,
+      preserveInputArrays = preserveInputArrays
     )
