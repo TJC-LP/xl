@@ -322,7 +322,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.25.0 and its published asset digests so installation works before releases provide `SHA256SUMS`; update that version and all digests together. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.26.0; its installer (`reference/INSTALL.md`) verifies the binary against that release's `SHA256SUMS` and keeps the inline v0.25.0 digests only as the legacy fallback for the release that predates manifests (keep that version and its digests together). The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -421,7 +421,7 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,046 test cases** (#723 validation with the reference-input fix `df803ef6` after merging main `dadf3b68`, 2026-11-12; 10,038 passed, 8 skipped) by module: xl-evaluator (4317), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,046 test cases** (#723 validation with the reference-input fix `df803ef6` after merging main `69c259e3` (0.26.0), 2026-11-12; 10,038 passed, 8 skipped) by module: xl-evaluator (4317), xl-core (1875), xl-ooxml (1446), xl-cli (1972), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 

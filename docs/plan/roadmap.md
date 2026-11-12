@@ -2,7 +2,7 @@
 
 > **Track Progress**: [GitHub Issues](https://github.com/TJC-LP/xl/issues)
 
-**Last Updated**: 2026-10-19
+**Last Updated**: 2026-11-12
 
 > **Completed release records**: [archive/plan/v0.10.0-execution.md](../archive/plan/v0.10.0-execution.md) (0.10.0 tracker) and [archive/plan/v0.10.0-triage.md](../archive/plan/v0.10.0-triage.md) (rationale + per-issue verdicts).
 
@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **125 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,616 tests passing; one existing performance comparison ignored.
+**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,978 tests (CI on main dadf3b68, 2026-11-12).
 
-**Current Version**: **0.25.0** (recalculation speed and memory: per-pass caches, an equality criteria index and a compact dependency graph, one canonical evaluation order (#767); shared-string hygiene (#768, #781, #783); `~` in criteria (#765), `T()` (#684), CLI global-flag errors (#766), macro sheets and chartsheets in `<sheets>` (#785))
+**Current Version**: **0.26.0** (criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693); dynamic cycles are deterministic circular references (#828, #829); one parse per formula per recalculation (#790); `SLN`, `SYD`, `ISNONTEXT`, two-argument `IF`; supply-chain hardening (#833–#839))
 
 ---
 
@@ -22,6 +22,26 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.26.0 — Excel-parity criteria and lookups, supply-chain hardening (Released 2026-11-12)
+
+**Criteria and lookups (#774, #773, #780, #731, #724, #775, #693).** SUMIF(S), COUNTIF(S),
+AVERAGEIF(S), MINIFS, MAXIFS and match_mode 2 lookups read wildcards, `~` and `<>` as desktop Excel
+does; MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP share one exact test; rich text is text; COUNTBLANK
+counts empty text. Each change is a marked behaviour change, checked against desktop Excel for Mac.
+
+**Evaluation.** Dynamic cycles are caught at the first re-entry and reported the same way on every
+run (#828, #829); `INDEX(…, ROW()-1)` running totals are no longer circular (#743, #745); each
+formula is parsed once per recalculation (#790); ROW/COLUMN position arrays are lazy (#735) and
+reference aggregates skip absent blank borders (#736). Two **Breaking** entries: `IfArgs` for two-argument
+`IF` (#723) and `TExpr.RangeLocation.Binding` (#710, #753, noted late from 0.24.0).
+
+**Supply chain (#833–#839).** Dependency lock and age policy, immutable action and hook pins,
+release jobs without shared caches, verified downloads and a `SHA256SUMS` release asset.
+
+**Also:** `SLN`, `SYD`, `ISNONTEXT`, `IFERROR`/`IFNA` array fallbacks, preserved sheets in
+`xl sheets` and a `macro-sheet` lint finding (#788), `--stream putf` dragging (#789) and
+spill-aware writes (#738).
 
 ### v0.25.0 — recalculation speed and shared-string hygiene (Released 2026-10-19)
 
@@ -153,7 +173,7 @@ with the `[N]` scanner promoted to xl-core; `Merge` later), the ADR-017 Wave 2b 
 [#583](https://github.com/TJC-LP/xl/issues/583)/[#584](https://github.com/TJC-LP/xl/issues/584)/[#586](https://github.com/TJC-LP/xl/issues/586)/[#587](https://github.com/TJC-LP/xl/issues/587)/[#591](https://github.com/TJC-LP/xl/issues/591)
 (a dependency chain, not a cluster: #587's evaluator half ∥ #583's codec → #583's CLI wiring →
 #587's CLI wiring → {#586, #591} → #584 last), [#505](https://github.com/TJC-LP/xl/issues/505)
-(Batik lays text out wider than AWT measures — fixed in Unreleased by declaring the measured
+(Batik lays text out wider than AWT measures — fixed in 0.26.0 by declaring the measured
 SVG text advance; [pixel evidence](../images/issue-505/README.md)),
 [#485](https://github.com/TJC-LP/xl/issues/485) (native smoke in CI),
 [#540](https://github.com/TJC-LP/xl/issues/540) (EvalPort interop — a maintainer decision),
