@@ -292,6 +292,12 @@ observation. Passing tests do not establish Excel parity.
 
 **Current: 9,967 test cases** (#735 full-suite validation after merging main, 2026-11-11): 9,959 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 4238 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |

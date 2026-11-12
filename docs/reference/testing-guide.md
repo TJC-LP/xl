@@ -9,6 +9,12 @@ the 30-stage LET regression and the external-consumer `ArrayFillPreludeProbe`.
 Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
 observation. Passing tests do not establish Excel parity.
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 ## Test Infrastructure
 
 ### Frameworks
