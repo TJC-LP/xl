@@ -212,7 +212,7 @@ object ArrayArithmetic:
    * The smallest range holding every cell of `sheet` inside `range` that holds a value (a
    * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
    */
-  private def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
+  private[formula] def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
     val r0 = range.rowStart.index0
     val r1 = range.rowEnd.index0
     val c0 = range.colStart.index0
