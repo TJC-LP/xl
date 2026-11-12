@@ -44,7 +44,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Extract version from tag
         id: version
@@ -52,28 +52,9 @@ jobs:
         shell: bash
 
       - name: Set up GraalVM
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: graalvm-community:25.0.1
-
-      - name: Cache Coursier
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/coursier
-            ~/.ivy2/cache
-          key: ${{ runner.os }}-${{ runner.arch }}-coursier-native-${{ hashFiles('**/build.mill', '**/package.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-coursier-native-
-
-      - name: Cache Mill
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.mill
-          key: ${{ runner.os }}-${{ runner.arch }}-mill-${{ hashFiles('**/build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-mill-
 
       - name: Build native image (Unix)
         if: runner.os != 'Windows'
@@ -167,7 +148,7 @@ jobs:
           }
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}
           path: xl-${{ steps.version.outputs.version }}-${{ matrix.platform }}${{ matrix.extension }}
@@ -183,34 +164,15 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0  # Required for version history
           fetch-tags: true
 
       - name: Set up JDK
-        uses: coursier/setup-action@v1
+        uses: coursier/setup-action@039f736548afa5411c1382f40a5bd9c2d30e0383 # v1.3.9
         with:
           jvm: temurin:25
-
-      - name: Cache Coursier
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cache/coursier
-            ~/.ivy2/cache
-          key: ${{ runner.os }}-coursier-${{ hashFiles('**/build.mill', '**/package.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-coursier-
-
-      - name: Cache Mill
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.mill
-          key: ${{ runner.os }}-mill-${{ hashFiles('**/build.mill') }}
-          restore-keys: |
-            ${{ runner.os }}-mill-
 
       - name: Fetch annotated tags
         run: git fetch --tags --force
@@ -301,29 +263,7 @@ jobs:
           EOF
 
           # Create install script that pins to this specific version (for reproducibility)
-          cat > skill-dist/install-cli.sh << 'INSTALL_EOF'
-          #!/bin/bash
-          set -e
-          VERSION="__VERSION__"
-          PLATFORM="$(uname -s)-$(uname -m)"
-          case "$PLATFORM" in
-            Linux-x86_64)  BINARY="xl-${VERSION}-linux-amd64" ;;
-            Linux-aarch64) BINARY="xl-${VERSION}-linux-arm64" ;;
-            Darwin-x86_64) BINARY="xl-${VERSION}-darwin-amd64" ;;
-            Darwin-arm64)  BINARY="xl-${VERSION}-darwin-arm64" ;;
-            MINGW*|MSYS*|CYGWIN*) BINARY="xl-${VERSION}-windows-amd64.exe" ;;
-            *) echo "Unsupported platform: $PLATFORM" && exit 1 ;;
-          esac
-          INSTALL_DIR="${HOME}/.local/bin"
-          mkdir -p "$INSTALL_DIR"
-          echo "Installing xl $VERSION for $PLATFORM..."
-          curl -fsSL "https://github.com/TJC-LP/xl/releases/download/v${VERSION}/${BINARY}" -o "$INSTALL_DIR/xl" || {
-            echo "Error: no ${BINARY} published for v${VERSION} — use the JAR distribution xl-cli-${VERSION}.tar.gz instead" >&2
-            exit 1
-          }
-          chmod +x "$INSTALL_DIR/xl"
-          echo "Installed xl $VERSION to $INSTALL_DIR/xl"
-          INSTALL_EOF
+          cp scripts/install-cli.sh skill-dist/install-cli.sh
 
           # Substitute version into install script
           sed -i "s/__VERSION__/$VERSION/g" skill-dist/install-cli.sh || \
@@ -361,7 +301,7 @@ jobs:
           cd scripting-skill-dist && zip -r ../xl-scripting-skill-$VERSION.zip . && cd ..
 
       - name: Download native binaries
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           path: native-binaries
 
@@ -382,16 +322,18 @@ jobs:
           cp native-binaries/xl-$VERSION-windows-amd64/xl-$VERSION-windows-amd64.exe release-assets/
           # Make Unix binaries executable
           chmod +x release-assets/xl-$VERSION-linux-amd64 release-assets/xl-$VERSION-linux-arm64 release-assets/xl-$VERSION-darwin-amd64 release-assets/xl-$VERSION-darwin-arm64
+          (cd release-assets && sha256sum xl-* > SHA256SUMS)
           ls -la release-assets/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v0.1.15
         with:
           # Use tag message if available, otherwise generate notes
           body: ${{ steps.version.outputs.body }}
           generate_release_notes: ${{ steps.version.outputs.has_notes != 'true' }}
           draft: false
           files: |
+            release-assets/SHA256SUMS
             release-assets/xl-cli-${{ steps.version.outputs.version }}.tar.gz
             release-assets/xl-skill-${{ steps.version.outputs.version }}.zip
             release-assets/xl-scripting-skill-${{ steps.version.outputs.version }}.zip

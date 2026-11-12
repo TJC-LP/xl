@@ -54,8 +54,12 @@ Then the individual fields:
    `<!-- unreleased-contract -->` marker with its blockquote ("X has not shipped yet … install from
    source … the last release lacks …"), **remove both** now: this release ships that contract. A
    marker left behind, or a `Requires` version that differs from `plugin.json` without the marker,
-   fails CI's `plugin-version` gate. The install snippets auto-detect the latest release and need
-   no edit.
+   fails CI's `plugin-version` gate. Also set `VERSION=NEW` in
+   `plugin/skills/xl-cli/reference/INSTALL.md`: `check-install-version.py` rejects a stale
+   installer version. Keep the v0.25.0 legacy digest fallback unchanged; newer versions
+   obtain the exact asset checksum from that release's `SHA256SUMS` and fail closed until
+   the release assets and manifest are published. Update the introductory pinned-version
+   prose too. Never reuse the old release's hashes for new bytes.
 6. **`CHANGELOG.md`** — insert `## [NEW] - <YYYY-MM-DD>` directly under `## [Unreleased]` so every
    entry moves under the new heading and `[Unreleased]` is left empty. The tag message is
    extracted from this heading (step 7): a missing heading gives an empty GitHub release. If the
