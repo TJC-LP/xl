@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -80,7 +80,10 @@ Excel.write(updated, "output.xlsx")
   `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0).
   `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
   dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
-  limits as `Excel.read`.
+  limits as `Excel.read`. Since 0.26.0 ([#788](https://github.com/TJC-LP/xl/issues/788)) its
+  `preservedSheets` lists the read-only macro, international macro, chart and dialog sheets the
+  model leaves out (`PreservedSheetInfo`: name, `kind`, state, 1-based `sourceIndex`, in tab
+  order); `sheets` stays worksheets only.
 - `Excel.write` also accepts an `XLResult[Workbook]` directly.
 
 > **Formulas are written with whatever cache they carry — never `Excel.write` a freshly built
@@ -218,7 +221,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -383,7 +386,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -417,7 +420,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -463,7 +466,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -653,7 +656,7 @@ explicit `recalculate().toEither` pattern above when a dirty result must abort *
 lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (126 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (128 functions supported —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 
@@ -749,7 +752,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -889,7 +892,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -915,7 +918,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -1003,7 +1006,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

@@ -7,19 +7,211 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-- **Workflow guard follow-up** (#836): ignore comments and shell scalar text while retaining checks on release cache actions and inputs.
+### Added
 
-- **Installer test fixtures** (#837): derive release asset names and version-drift probes from the selected version and platform; exercise two future release bumps.
+- Evaluate qualified plain table-column references such as `SUM(Table1[Col])` and
+  `COUNTIF(Table1[Col],1)` as data-row references, including workbook table lookup,
+  dependency ordering and formula copy/structural-edit support (Refs #669).
+  Row-relative references, special selectors and escaped/nested column syntax remain unsupported.
 
-- **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
+- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
+  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
+  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
+  recalculation. Adds `TExpr.RangeLocation.Computed` at the end of the public enum; downstream
+  exhaustive matches must handle the new case. Array-taking argument expansion remains separate.
 
-- Enforce an explicit block-style action-pin grammar so unknown YAML structures fail closed; preserve scalar/comment content and document supported workflow forms.
+### Fixed
 
-- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+- **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
+  INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
+  Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
 
-- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
+  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
+  report unsupported evaluation instead of caching a fabricated #VALUE! result. Reference-producing INDEX and its
+  standalone value form remain supported.
+
+## [0.26.0] - 2026-11-12
+
+Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards
+match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error
+cells, MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP share one exact test, rich text is
+text, and COUNTBLANK counts empty text. A cycle closing through a reference computed at run time is
+a circular reference with the same error on every run (#828, #829), and a running total through
+`INDEX(…, ROW()-1)` is no longer one (#743, #745). Each formula is parsed once per recalculation
+(#790), ROW and COLUMN position arrays are lazy (#735), and reference aggregates skip absent
+blank borders (#736). Many entries are behaviour changes, each marked; two are **Breaking** (`IfArgs`, #723, and
+`TExpr.RangeLocation.Binding`, noted late from 0.24.0) and two are binary changes
+(`LightMetadata.preservedSheets`, #788; `StreamingTransform.WorksheetMetadata.clearContents`, #738).
+
+New: `SLN`, `SYD`, `ISNONTEXT`, two-argument `IF`, array fallbacks in `IFERROR`/`IFNA`, preserved
+macro and chart sheets in `xl sheets` and a `macro-sheet` lint finding.
+
+Security (#833–#839): a checksummed dependency lock, a dependency age policy with a compatible
+refresh of published dependencies, workflow actions and pre-commit hooks pinned to verified
+commits, release jobs without shared caches, verified launcher and release downloads, and agent
+credentials read only from the environment or a local `.env`. Releases now attach `SHA256SUMS`,
+which the documented CLI installer checks.
+
+### Added
+
+- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
+  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
+  while retaining fractional periods, verified against desktop Excel 16.114.3.
+
+- `ISNONTEXT` (#775): TRUE for a number, logical, error or blank cell, FALSE for text, empty text
+  and rich text.
+
+- **Two-argument IF** (#723, part a): `IF(test, value_if_true)` parses, and a false test gives the
+  logical FALSE; the test is coerced as in the three-argument form. Over an array test the
+  unmatched elements are FALSE, which SUM, COUNT and MAX skip and COUNTA counts. An empty third
+  argument is unchanged: `IF(FALSE,5,)` is 0. **Behaviour change:** `IF(FALSE,5)` was a parse
+  error ("expected 3 arguments") and is now FALSE; a workbook cell holding one now recalculates.
+
+- **IFERROR and IFNA preserve array fallbacks** (#754): in array contexts a scalar error selects
+  the whole fallback, and an array primary selects fallback elements with row/column broadcasting.
+  Fallbacks stay lazy, and a successful scalar stays scalar. SUMPRODUCT applies its shared
+  whole-column bounds to fallback arguments too.
+  **Behaviour change:** `SUMPRODUCT(IFERROR(1/0,{10,20}))` returns 30 instead of 10;
+  with A5:A7 = 1,2,3, `SUMPRODUCT((A:A>0)*IFERROR(1/0,ROW(A:A)))` returns 18 instead of 15
+  (the bounded A1:A10 form returns 18 instead of 3). IFNA follows the same Excel array rule;
+  the issue reports #N/A from LibreOffice 24.2 for the whole-column IFNA case. A fresh
+  LibreOfficeDev 26.8 alpha check with correctly prefixed `_xlfn.IFNA` storage matches Excel.
+
+- `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,
+  name and visibility in a separate read-only section (`preservedSheets` in JSON), in quick,
+  streaming and stats modes. Worksheet indices and `-s` resolution remain worksheet-only.
+  `Excel.readMetadata` exposes the same read-only metadata (#788). **Binary change:**
+  `LightMetadata` gains a defaulted `preservedSheets` field.
+
+- `xl lint` reports one `macro-sheet` finding (severity `info`) per Excel 4.0 macro sheet, including
+  hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
+  Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
+  `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
 
 ### Changed
+
+- **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
+  Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
+  call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
+
+- **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
+  #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
+  needs the new arm, and fails to compile under `-Werror` until it has one.
+
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+
+- **One exact lookup test for MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP; rich text is text**
+  (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
+  - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
+    **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
+    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
+    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
+    of the text `1`.
+  - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
+    `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
+    `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
+    `10` and the text `abc`. XMATCH and XLOOKUP still apply wildcards only in match_mode 2.
+  - A `~` with nothing after it drops from a lookup value that takes wildcards (MATCH type 0, exact
+    VLOOKUP/HLOOKUP, match_mode 2). **Behaviour change:** `MATCH("a~",r,0)` and
+    `XMATCH("a~",r,2)` found the text `a~` and now find the text `a`.
+  - **Behaviour change:** MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0.
+    `MATCH(A6,r,0)` over a blank A6 was `#N/A` and now finds the 0 key.
+  - **Behaviour change:** MATCH over a range with more than one row and more than one column is
+    `#N/A` in every match_type. `MATCH("fig",G1:I5,0)` returned the row-major position (4) and now
+    returns `#N/A`.
+  - A rich-text key matches its plain text in every exact lookup. **Behaviour change:**
+    `MATCH("kiwi",r,0)`, `XLOOKUP("kiwi",…)` and `VLOOKUP("kiwi",…,FALSE)` missed a rich-text
+    `kiwi` (`#N/A`) and now find it.
+  - **Behaviour change:** `ISTEXT` of a rich-text cell was FALSE and is now TRUE. UNIQUE reads rich
+    text as its plain text (rich `kiwi`, `kiwi` and `KIWI` were two rows and are now one), and SORT
+    places rich text among the text instead of after it.
+
+- **COUNTBLANK counts empty text and takes a reference only** (#731). Checked against desktop
+  Excel for Mac on one synthetic workbook.
+  - COUNTBLANK counts a cell holding text of length 0: the constant `""`, a formula whose value is
+    `""` (cached or not) and rich text with no characters. **Behaviour change:** with A2 and A13
+    blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
+    now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
+    returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
+    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
+    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
+  - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
+    a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
+    `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
+    `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
+  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
+    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
+    `#REF!`.
+  - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
+    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
+    without a workbook) is not blank and the rest of the range is still counted; an uncached data
+    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
+    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
+
+- **INDEX over a scalar or any other value** (#725, #753): INDEX's first argument may be a value,
+  indexed as an array, a scalar as a 1x1 one. Index 1, 0 or omitted gives the value with its type
+  (`INDEX("",1)` is text, `INDEX(TRUE,1,1)` TRUE); out of bounds or area_num 2 is `#REF!`; a
+  negative or text index, or area_num 0, is `#VALUE!`; an array row_num spreads
+  (`SUM(INDEX(5,{1,1}))` is 10). The value is evaluated as an array, outside SUMPRODUCT's shared
+  extent (`INDEX(A1:A3*2,2)`). A call returning a reference there (OFFSET, INDIRECT, IF, CHOOSE,
+  XLOOKUP) is still a parse error (#723). **Behaviour change:** `INDEX(5,1)`, `INDEX(1+2,1)` and
+  `INDEX(SUM(A1:A3),1)` were parse errors and are now the value; `INDEX(konst,1)` with a name
+  `konst = 5`, and `LET(x,5,INDEX(x,1))`, were `#VALUE!` and are now 5. A name bound to an array,
+  constant or computed, is indexed too: `INDEX(arrThree,2)` with `arrThree = {1,2,3}` was
+  `#VALUE!` and is now 2.
+
+- **Behaviour change: invalid date serials return `#NUM!`** (#726). YEAR/MONTH/DAY and
+  other date slots now return `#NUM!` for serials outside 0..2958465, through literals,
+  references, numeric text, computed values, LET and lifted arrays. Previously they returned
+  `#VALUE!`; ERROR.TYPE now reports 6 instead of 3. IFERROR still catches the error.
+
+- **Behaviour change: numeric text in scalar slots and arithmetic uses bounded ASCII syntax** (#726). Full-width
+  digits (such as `ABS("５")`) and overflow/underflow text (`ABS("1e400")`, `"1e-400"`)
+  now return `#VALUE!`, instead of unrestricted BigDecimal values. Nonzero text must fit
+  Excel's normal double range; signs, decimal points, scientific notation and surrounding
+  whitespace remain accepted. Extreme exponents are refused before BigDecimal construction
+  or scaling, including in ROUND. Zero text is canonicalised to avoid retaining extreme
+  scales. Currency, locale and date/time text coercions are unchanged.
+
+- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
+  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
+  Parser security settings and finite entity-size limits are unchanged.
 
 - **Reference aggregates skip absent blank borders** (#736): SUM and the other reference folds
   reuse the populated box for ranges larger than their sheet's stored records. COUNTBLANK retains
@@ -35,76 +227,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
-  INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
-  Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
-
-- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
-  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
-  report unsupported evaluation instead of caching a fabricated #VALUE! result. Reference-producing INDEX and its
-  standalone value form remain supported.
-
-### Added
-
-- Evaluate qualified plain table-column references such as `SUM(Table1[Col])` and
-  `COUNTIF(Table1[Col],1)` as data-row references, including workbook table lookup,
-  dependency ordering and formula copy/structural-edit support (Refs #669).
-  Row-relative references, special selectors and escaped/nested column syntax remain unsupported.
-
-- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
-  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
-  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
-  recalculation. Adds `TExpr.RangeLocation.Computed` at the end of the public enum; downstream
-  exhaustive matches must handle the new case. Array-taking argument expansion remains separate.
-
-- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
-  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
-  while retaining fractional periods, verified against desktop Excel 16.114.3.
-
-### Security
-
-- Include the benchmark JMH core and inherited bytecode generator in dependency-age checks and Renovate updates.
-
-- **Dependency age policy and compatible refresh** (#839): CI checks direct Maven dependency age,
-  records justified pins, and prepares Renovate updates while retaining Scala 3.9 LTS. Published
-  modules now depend on newer compatible versions, which users resolve transitively:
-  cats-effect 3.6.3 → 3.7.1, fs2-core/fs2-io 3.12.2 → 3.14.0 and fs2-data-xml/fs2-data-xml-scala
-  1.11.1 → 1.14.1 (`xl-cats-effect`); scala-xml 2.3.0 → 2.5.0 (`xl-ooxml`); cats-core 2.12.0 →
-  2.13.0 (`xl-core`, `xl-evaluator`) and cats-laws 2.12.0 → 2.13.0 (`xl-core`).
-
-- **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
-  checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
-  existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
-
-- Require matching quotes and ASCII separators around pinned action references; reject suffixes that YAML would retain in a mutable ref.
-
-- **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
-  CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
-  sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
-  published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
-
-### Fixed
-
-- **Immutable pre-commit hooks** (#835): retain pre-commit-hooks v4.5.0 at its verified
-  commit and reject mutable or missing remote hook revisions in CI.
-
-- **Release cache isolation** (#836): release jobs no longer restore or save shared
-  Actions caches before building, signing, or publishing artifacts. CI guards this boundary.
-
-- **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
-  digests before execution, publish release checksums, and verify native CLI downloads before installation.
-  Preserve session setup after verification failures, honor trusted platform tools, and provide
-  pinned current-release and Linux Scala CLI installers with isolated shell settings.
-
-- **Immutable workflow actions** (#834): pin existing action versions to verified upstream
-  commits and reject mutable workflow references in CI.
-
-- **Agent credential discovery** (#838): load API keys from the process environment or local
-  working-directory/module `.env` files only; never search parent or legacy example directories.
-
-- **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
-  8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
-  retain per-cell context, and validate after resolving the target and selecting the write mode.
 - **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
   through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), a range reaching an
   uncached cell, `x#`) is invisible to the dependency graph, and its evaluation ran until either
@@ -139,23 +261,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Invalid cell reference 'A1:My_Sheet!B2'`. `A1:B2`, `A:A`, `1:$3`, `$A$1:$B$2`, `A1:INDEX(…)`,
   `A1:B2!`, `Sheet1!A1:B2` and `A1:Sheet2!B2` are unchanged.
 
-- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
-  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
-  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
-  small-stack lint test permits safe completion after JVM warm-up and checks the real lint path
-  while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
-  stacks are covered; injected overflow coverage still requires a lint finding. Internal
-  formula/cache assertions run even when LibreOffice is unavailable.
-
-- **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
-  right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
-  to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
+- **ROWS and COLUMNS of an error are that error** (#725): an argument that evaluates to an error
+  value is the result, as in Excel: an OFFSET off the top, left or bottom edge, a name or LET name
+  computing one, an INDIRECT to a missing sheet, `NA()`. A reference to a cell holding an error is
+  still a reference (`ROWS(A6)` is 1), also through a LET (`ROWS(LET(x,A6,x))` is 1), and an
+  array keeps its shape whatever it holds, written, named or LET-bound (`ROWS({1,#N/A;2,3})` is 2,
+  `ROWS({#N/A})` and `ROWS(arrNA)` with `arrNA = {#N/A}` are 1). A LET in a reference position
+  binds references in an array context as it does in a plain cell. **Behaviour change:**
+  `ROWS(OFFSET(A1,-1,0,10,1))` and `ROWS(dynRef)` with `dynRef = OFFSET(Sheet1!$A$1,-1,0,10,1)`
+  were 1 and are now `#REF!`;
+  `ROWS(NA())` and `ROWS(INDEX({#N/A},1))` were 1 and are now `#N/A`.
 
 - **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
   desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
   `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
   is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
   is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
+
+- **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
+  8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
+  retain per-cell context, and validate after resolving the target and selecting the write mode.
+
 - **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
   unchanged into every cell, so every row after the first computed the first row's result. It is now
   dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
@@ -171,40 +297,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
   `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
 
-### Testing
+- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
+  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
+  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
+  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
+  is now stale under any override, and its readers with it.
+  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
+  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
 
-- **Finite computed-reference regression budgets** (#736): pin 200 reader calls for both array
-  materialization and SUM over 10k/100k declared templates; preserve INDEX/XLOOKUP/colon shapes,
-  blank padding, arithmetic alignment, spill output, first errors and formula precedents.
+- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
+  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
+  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
+  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
 
-- `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
-  `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
-  generator wrote an unparsable formula (law-fuzz seed `ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=`).
-  `CriteriaIndexSpec`'s candidate property is total for a window of no rows (a shrunk `n`) and
-  checks the listing decision both ways.
-- `PassCacheLawSpec`'s generated books always hold a criteria reader whose window excludes the
-  dynamic row (#828): a reader covering that row is a member of the deferred bucket, which the pass
-  never slices, and each generated window avoided it with probability about 0.24, so about one
-  book in 2,500 could build no slice and the "not vacuous" property failed about once in a hundred
-  runs. The suite now takes the law-fuzz seed plumbing (`XL_ROUNDTRIP_RANDOM_SEED`,
-  `-Dxl.roundtrip.seed`), so a printed seed replays.
-- **Performance gates are counters, not clocks** (#843): `FormulaGraphPerfSpec`'s #743 gate missed
-  its 5 s budget in about a third of CI runs, where `./mill -i __.test` shares a 4-core runner among
-  several test JVMs, and nine more tests carried wall-clock budgets with the same failure mode (five
-  of them equal to MUnit's 30 s default timeout, so they never decided anything). The formula-graph
-  build now counts its range lookups and index work (`RecalcCounters.RangeLookups`,
-  `RangeLookupWork`); the #743 and GH-522 gates pin those counts at 2,000 and 8,000 rows; the #692
-  lookup gate pins `UsedRangeScans`; the GH-714 drag pins `ImplicitIntersection.Report`; the GH-715
-  stale-reader walk pins its containment checks (`ReadCommands.UncacheTrace`); every other
-  wall-clock assert in `__.test` is a diagnostic clue (`RecalcPerfSpec`, `StylePerformanceSpec`,
-  `EvaluationTotalitySpec`, ...), with `munitTimeout` overrides where a fixture is large.
-  `LintOracleSpec` proves a real overflow at the stack boundary (recursing to the overflow, then
-  calling the oracle while unwinding) instead of hoping a 64 KB stack hint, below the JVM's minimum,
-  overflows on the JIT tier at hand; it warms the oracle on the normal stack first, and its
-  small-stack threads are daemons joined with a bound.
-- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
-  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
-  cases assert on (#728).
+- **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
+  including its anchor, instead of moving cells with an inconsistent array extent. An excluded
+  header and disjoint spills remain allowed (#738).
+
+- **Behaviour change:** streamed `put`, `putf` and batch content writes reject writes inside a
+  live dynamic spill and clear the old spill when overwriting its anchor, keeping styles.
+  Previously those paths left orphaned cached constants or wrote into live spills. Batch writes
+  apply the rule in operation order; style-only writes retain array and cell metadata (#738).
+
+- **Binary change:** `StreamingTransform.WorksheetMetadata` gains a defaulted `clearContents`
+  range field for spill cleanup. Recompile callers and update positional pattern matches (#738).
+
+- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
+  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
+  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
+  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
+  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
+  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
+  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
+  and the destination is written after input consumption. Row memory remains bounded.
+
 - **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
   recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
   (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
@@ -218,6 +347,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xl/sharedStrings.xml` was not given its text; it is now appended to the shared-string table and
   the cell is written as a `t="s"` reference (a table of Alpha, Beta, Gamma with `count="3"` becomes
   Alpha, Beta, Gamma, Zeta with `count="4"` `uniqueCount="4"`). The cell reads as the same text.
+
 - **`xl lint` accepts international macro sheets** (#791): a `<sheet>` whose relationship is
   `xlIntlMacrosheet` was reported as `wrong-rel-type` ("expected worksheet"), its part was not
   scanned, and a shared string referenced only from it was reported as `shared-string-orphan`. The
@@ -225,67 +355,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shared-string indices).
   Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
   and possibly a `shared-string-orphan` finding; it now gets neither.
-- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
-  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
-  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
-  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
-  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
-  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
-  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
-  and the destination is written after input consumption. Row memory remains bounded.
-- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
-  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
-  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
-  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
-  is now stale under any override, and its readers with it.
-  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
-  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
-- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
-  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
-  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
-  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
-  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
-  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
-  every other ref argument: write `C2`.
-- **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
-  including its anchor, instead of moving cells with an inconsistent array extent. An excluded
-  header and disjoint spills remain allowed (#738).
-- **Behaviour change:** streamed `put`, `putf` and batch content writes reject writes inside a
-  live dynamic spill and clear the old spill when overwriting its anchor, keeping styles.
-  Previously those paths left orphaned cached constants or wrote into live spills. Batch writes
-  apply the rule in operation order; style-only writes retain array and cell metadata (#738).
-- **Binary change:** `StreamingTransform.WorksheetMetadata` gains a defaulted `clearContents`
-  range field for spill cleanup. Recompile callers and update positional pattern matches (#738).
-### Added
 
-- `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,
-  name and visibility in a separate read-only section (`preservedSheets` in JSON), in quick,
-  streaming and stats modes. Worksheet indices and `-s` resolution remain worksheet-only.
-  `Excel.readMetadata` exposes the same read-only metadata (#788). **Binary change:**
-  `LightMetadata` gains a defaulted `preservedSheets` field.
-- `xl lint` reports one `macro-sheet` finding (severity `info`) per Excel 4.0 macro sheet, including
-  hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
-  Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
-  `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
-### Changed
+- **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
+  right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
+  to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
 
-- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
-  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
-  Parser security settings and finite entity-size limits are unchanged.
-### Testing
-
-- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
-  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
-  unrelated SUMPRODUCT/array bindings (#748).
 ### Performance
-
-- **A criteria window whose matching rows are numeric text is sized exactly** (#842):
-  `CriteriaCandidates.compute` counted a row once per posting list it sits in — text `"1"` holds
-  the keys Text("1") and Num(1), and a lookup for `"1"` reads both — so a window with few such rows
-  could be counted past half its size, refused candidates, and scanned. The selection is now
-  counted distinctly by a bounded merge over the posting lists that stops once it passes n/2; a
-  one-list lookup is still counted by binary search. Results are unchanged: the index is a filter,
-  and a refused call tested every row with the same matcher.
 
 - **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
   iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while
@@ -301,6 +376,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cell, exact `BigDecimal` scale included, and every error with the reuse on and off, in sequential,
   parallel and iterative passes. The data-table seeder's what-if fixpoints still parse their cycle
   members themselves.
+
 - **A running total through `INDEX(…, ROW()-1)` is no longer a circular reference** (#743, #745).
   INDEX at a position written with literals, `ROW()` and `COLUMN()` (combined with `+`, `-` and
   `*`) now depends only on the cells it selects for the formula that holds it, in every dependency
@@ -320,191 +396,121 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     which reads its own cell, is still circular.
   - **Behaviour change:** an edit to a cell inside INDEX's array but outside its folded selection
     (B6 for `=INDEX(B:B,ROW()-1)` in B5) used to mark the formula dirty; it no longer does.
-- **ROWS and COLUMNS of an error are that error** (#725): an argument that evaluates to an error
-  value is the result, as in Excel: an OFFSET off the top, left or bottom edge, a name or LET name
-  computing one, an INDIRECT to a missing sheet, `NA()`. A reference to a cell holding an error is
-  still a reference (`ROWS(A6)` is 1), also through a LET (`ROWS(LET(x,A6,x))` is 1), and an
-  array keeps its shape whatever it holds, written, named or LET-bound (`ROWS({1,#N/A;2,3})` is 2,
-  `ROWS({#N/A})` and `ROWS(arrNA)` with `arrNA = {#N/A}` are 1). A LET in a reference position
-  binds references in an array context as it does in a plain cell. **Behaviour change:**
-  `ROWS(OFFSET(A1,-1,0,10,1))` and `ROWS(dynRef)` with `dynRef = OFFSET(Sheet1!$A$1,-1,0,10,1)`
-  were 1 and are now `#REF!`;
-  `ROWS(NA())` and `ROWS(INDEX({#N/A},1))` were 1 and are now `#N/A`.
-- **INDEX over a scalar or any other value** (#725, #753): INDEX's first argument may be a value,
-  indexed as an array, a scalar as a 1x1 one. Index 1, 0 or omitted gives the value with its type
-  (`INDEX("",1)` is text, `INDEX(TRUE,1,1)` TRUE); out of bounds or area_num 2 is `#REF!`; a
-  negative or text index, or area_num 0, is `#VALUE!`; an array row_num spreads
-  (`SUM(INDEX(5,{1,1}))` is 10). The value is evaluated as an array, outside SUMPRODUCT's shared
-  extent (`INDEX(A1:A3*2,2)`). A call returning a reference there (OFFSET, INDIRECT, IF, CHOOSE,
-  XLOOKUP) is still a parse error (#723). **Behaviour change:** `INDEX(5,1)`, `INDEX(1+2,1)` and
-  `INDEX(SUM(A1:A3),1)` were parse errors and are now the value; `INDEX(konst,1)` with a name
-  `konst = 5`, and `LET(x,5,INDEX(x,1))`, were `#VALUE!` and are now 5. A name bound to an array,
-  constant or computed, is indexed too: `INDEX(arrThree,2)` with `arrThree = {1,2,3}` was
-  `#VALUE!` and is now 2.
-- **Two-argument IF** (#723, part a): `IF(test, value_if_true)` parses, and a false test gives the
-  logical FALSE; the test is coerced as in the three-argument form. Over an array test the
-  unmatched elements are FALSE, which SUM, COUNT and MAX skip and COUNTA counts. An empty third
-  argument is unchanged: `IF(FALSE,5,)` is 0. **Behaviour change:** `IF(FALSE,5)` was a parse
-  error ("expected 3 arguments") and is now FALSE; a workbook cell holding one now recalculates.
 
-### Changed
-
-- **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
-  Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
-  call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
-- **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
-  #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
-  needs the new arm, and fails to compile under `-Werror` until it has one.
-- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
-  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
-  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
-  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
-    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
-    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
-    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
-  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
-    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
-    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
-    criterion `""` still does.
-  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
-    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
-  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
-    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
-    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
-    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
-    longer finds TRUE.
-  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
-    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
-    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
-    counts the blank rows.
-  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
-    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
-    formula's empty text, which it left out.
-  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
-    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
-    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
-    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
-  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
-    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
-    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
-  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
-    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
-    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
-    numbers in scientific notation.
-- **COUNTBLANK counts empty text and takes a reference only** (#731). Checked against desktop
-  Excel for Mac on one synthetic workbook.
-  - COUNTBLANK counts a cell holding text of length 0: the constant `""`, a formula whose value is
-    `""` (cached or not) and rich text with no characters. **Behaviour change:** with A2 and A13
-    blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
-    now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
-    returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
-    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
-    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
-  - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
-    a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
-    `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
-    `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
-  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
-    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
-    `#REF!`.
-  - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
-    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
-    without a workbook) is not blank and the rest of the range is still counted; an uncached data
-    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
-    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
-- **Behaviour change: invalid date serials return `#NUM!`** (#726). YEAR/MONTH/DAY and
-  other date slots now return `#NUM!` for serials outside 0..2958465, through literals,
-  references, numeric text, computed values, LET and lifted arrays. Previously they returned
-  `#VALUE!`; ERROR.TYPE now reports 6 instead of 3. IFERROR still catches the error.
-- **Behaviour change: numeric text in scalar slots and arithmetic uses bounded ASCII syntax** (#726). Full-width
-  digits (such as `ABS("５")`) and overflow/underflow text (`ABS("1e400")`, `"1e-400"`)
-  now return `#VALUE!`, instead of unrestricted BigDecimal values. Nonzero text must fit
-  Excel's normal double range; signs, decimal points, scientific notation and surrounding
-  whitespace remain accepted. Extreme exponents are refused before BigDecimal construction
-  or scaling, including in ROUND. Zero text is canonicalised to avoid retaining extreme
-  scales. Currency, locale and date/time text coercions are unchanged.
-- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
-  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
-  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
-  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
-    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
-    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
-    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
-  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
-    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
-    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
-    criterion `""` still does.
-  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
-    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
-  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
-    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
-    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
-    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
-    longer finds TRUE.
-  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
-    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
-    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
-    counts the blank rows.
-  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
-    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
-    formula's empty text, which it left out.
-  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
-    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
-    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
-    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
-  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
-    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
-    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
-  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
-    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
-    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
-    numbers in scientific notation.
-- **One exact lookup test for MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP; rich text is text**
-  (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
-  - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
-    **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
-    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
-    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
-    of the text `1`.
-  - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
-    `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
-    `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
-    `10` and the text `abc`. XMATCH and XLOOKUP still apply wildcards only in match_mode 2.
-  - A `~` with nothing after it drops from a lookup value that takes wildcards (MATCH type 0, exact
-    VLOOKUP/HLOOKUP, match_mode 2). **Behaviour change:** `MATCH("a~",r,0)` and
-    `XMATCH("a~",r,2)` found the text `a~` and now find the text `a`.
-  - **Behaviour change:** MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0.
-    `MATCH(A6,r,0)` over a blank A6 was `#N/A` and now finds the 0 key.
-  - **Behaviour change:** MATCH over a range with more than one row and more than one column is
-    `#N/A` in every match_type. `MATCH("fig",G1:I5,0)` returned the row-major position (4) and now
-    returns `#N/A`.
-  - A rich-text key matches its plain text in every exact lookup. **Behaviour change:**
-    `MATCH("kiwi",r,0)`, `XLOOKUP("kiwi",…)` and `VLOOKUP("kiwi",…,FALSE)` missed a rich-text
-    `kiwi` (`#N/A`) and now find it.
-  - **Behaviour change:** `ISTEXT` of a rich-text cell was FALSE and is now TRUE. UNIQUE reads rich
-    text as its plain text (rich `kiwi`, `kiwi` and `KIWI` were two rows and are now one), and SORT
-    places rich text among the text instead of after it.
-
-### Added
-
-- `ISNONTEXT` (#775): TRUE for a number, logical, error or blank cell, FALSE for text, empty text
-  and rich text.
-- **IFERROR and IFNA preserve array fallbacks** (#754): in array contexts a scalar error selects
-  the whole fallback, and an array primary selects fallback elements with row/column broadcasting.
-  Fallbacks stay lazy, and a successful scalar stays scalar. SUMPRODUCT applies its shared
-  whole-column bounds to fallback arguments too.
-  **Behaviour change:** `SUMPRODUCT(IFERROR(1/0,{10,20}))` returns 30 instead of 10;
-  with A5:A7 = 1,2,3, `SUMPRODUCT((A:A>0)*IFERROR(1/0,ROW(A:A)))` returns 18 instead of 15
-  (the bounded A1:A10 form returns 18 instead of 3). IFNA follows the same Excel array rule;
-  the issue reports #N/A from LibreOffice 24.2 for the whole-column IFNA case. A fresh
-  LibreOfficeDev 26.8 alpha check with correctly prefixed `_xlfn.IFNA` storage matches Excel.
-### Performance
+- **A criteria window whose matching rows are numeric text is sized exactly** (#842):
+  `CriteriaCandidates.compute` counted a row once per posting list it sits in — text `"1"` holds
+  the keys Text("1") and Num(1), and a lookup for `"1"` reads both — so a window with few such rows
+  could be counted past half its size, refused candidates, and scanned. The selection is now
+  counted distinctly by a bounded merge over the posting lists that stops once it passes n/2; a
+  one-list lookup is still counted by binary search. Results are unchanged: the index is a filter,
+  and a refused call tested every row with the same matcher.
 
 - Whole-column and whole-row lookups and returned references reuse the recalculation pass's
   existing used-range memo (#747). MATCH, XMATCH, XLOOKUP, VLOOKUP, HLOOKUP, LOOKUP, INDEX,
   INDIRECT, OFFSET, aggregates and logical range reads share one scan per sheet and structural
   generation, including empty sheets. Bounded references skip the scan; formula results and
   clipping geometry are unchanged.
+
+### Security
+
+- **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
+  CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
+  sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
+  published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
+
+- **Dependency age policy and compatible refresh** (#839): CI checks direct Maven dependency age,
+  records justified pins, and prepares Renovate updates while retaining Scala 3.9 LTS. Published
+  modules now depend on newer compatible versions, which users resolve transitively:
+  cats-effect 3.6.3 → 3.7.1, fs2-core/fs2-io 3.12.2 → 3.14.0 and fs2-data-xml/fs2-data-xml-scala
+  1.11.1 → 1.14.1 (`xl-cats-effect`); scala-xml 2.3.0 → 2.5.0 (`xl-ooxml`); cats-core 2.12.0 →
+  2.13.0 (`xl-core`, `xl-evaluator`) and cats-laws 2.12.0 → 2.13.0 (`xl-core`).
+
+- Include the benchmark JMH core and inherited bytecode generator in dependency-age checks and Renovate updates.
+
+- **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
+  checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
+  existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
+
+- **Agent credential discovery** (#838): load API keys from the process environment or local
+  working-directory/module `.env` files only; never search parent or legacy example directories.
+
+- **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
+  digests before execution, publish release checksums, and verify native CLI downloads before installation.
+  Preserve session setup after verification failures, honor trusted platform tools, and provide
+  pinned current-release and Linux Scala CLI installers with isolated shell settings.
+
+- **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
+
+- **Installer test fixtures** (#837): derive release asset names and version-drift probes from the selected version and platform; exercise two future release bumps.
+
+- **Release cache isolation** (#836): release jobs no longer restore or save shared
+  Actions caches before building, signing, or publishing artifacts. CI guards this boundary.
+
+- **Workflow guard follow-up** (#836): ignore comments and shell scalar text while retaining checks on release cache actions and inputs.
+
+- **Immutable workflow actions** (#834): pin existing action versions to verified upstream
+  commits and reject mutable workflow references in CI.
+
+- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+
+- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+
+- Enforce an explicit block-style action-pin grammar so unknown YAML structures fail closed; preserve scalar/comment content and document supported workflow forms.
+
+- Require matching quotes and ASCII separators around pinned action references; reject suffixes that YAML would retain in a mutable ref.
+
+- **Immutable pre-commit hooks** (#835): retain pre-commit-hooks v4.5.0 at its verified
+  commit and reject mutable or missing remote hook revisions in CI.
+
+### Testing
+
+- **Performance gates are counters, not clocks** (#843): `FormulaGraphPerfSpec`'s #743 gate missed
+  its 5 s budget in about a third of CI runs, where `./mill -i __.test` shares a 4-core runner among
+  several test JVMs, and nine more tests carried wall-clock budgets with the same failure mode (five
+  of them equal to MUnit's 30 s default timeout, so they never decided anything). The formula-graph
+  build now counts its range lookups and index work (`RecalcCounters.RangeLookups`,
+  `RangeLookupWork`); the #743 and GH-522 gates pin those counts at 2,000 and 8,000 rows; the #692
+  lookup gate pins `UsedRangeScans`; the GH-714 drag pins `ImplicitIntersection.Report`; the GH-715
+  stale-reader walk pins its containment checks (`ReadCommands.UncacheTrace`); every other
+  wall-clock assert in `__.test` is a diagnostic clue (`RecalcPerfSpec`, `StylePerformanceSpec`,
+  `EvaluationTotalitySpec`, ...), with `munitTimeout` overrides where a fixture is large.
+  `LintOracleSpec` proves a real overflow at the stack boundary (recursing to the overflow, then
+  calling the oracle while unwinding) instead of hoping a 64 KB stack hint, below the JVM's minimum,
+  overflows on the JIT tier at hand; it warms the oracle on the normal stack first, and its
+  small-stack threads are daemons joined with a bound.
+
+- `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
+  `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
+  generator wrote an unparsable formula (law-fuzz seed `ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=`).
+  `CriteriaIndexSpec`'s candidate property is total for a window of no rows (a shrunk `n`) and
+  checks the listing decision both ways.
+
+- `PassCacheLawSpec`'s generated books always hold a criteria reader whose window excludes the
+  dynamic row (#828): a reader covering that row is a member of the deferred bucket, which the pass
+  never slices, and each generated window avoided it with probability about 0.24, so about one
+  book in 2,500 could build no slice and the "not vacuous" property failed about once in a hundred
+  runs. The suite now takes the law-fuzz seed plumbing (`XL_ROUNDTRIP_RANDOM_SEED`,
+  `-Dxl.roundtrip.seed`), so a printed seed replays.
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
+
+- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
+  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
+  unrelated SUMPRODUCT/array bindings (#748).
+
+- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
+  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
+  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
+  small-stack lint test permits safe completion after JVM warm-up and checks the real lint path
+  while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
+  stacks are covered; injected overflow coverage still requires a lint finding. Internal
+  formula/cache assertions run even when LibreOffice is unavailable.
+
+- **Finite computed-reference regression budgets** (#736): pin 200 reader calls for both array
+  materialization and SUM over 10k/100k declared templates; preserve INDEX/XLOOKUP/colon shapes,
+  blank padding, arithmetic alignment, spill output, first errors and formula precedents.
 
 ## [0.25.0] - 2026-10-19
 

@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #669 validation after merging #723 sync e7a756cc on main dadf3b68 on 2026-11-12 recorded **10,117 cases**, including skips: 10,109 passed, 0 failed, 8 skipped.
+**Current Status**: the #669 validation after merging #723 sync 872443a4 on main 69c259e3 (0.26.0) on 2026-11-12 recorded **10,117 cases**, including skips: 10,109 passed, 0 failed, 8 skipped.
 
 ## Test Infrastructure
 
@@ -281,7 +281,7 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #669 validation after merging #723 sync e7a756cc on main dadf3b68, 2026-11-12 (10,109 passed, 0 failed, 8 skipped). Counts include skipped cases.
+As of the #669 validation after merging #723 sync 872443a4 on main 69c259e3 (0.26.0), 2026-11-12 (10,109 passed, 0 failed, 8 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
