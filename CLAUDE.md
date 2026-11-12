@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,035)
+./mill __.test             # Run all tests (10,048)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -322,7 +322,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.25.0 and its published asset digests so installation works before releases provide `SHA256SUMS`; update that version and all digests together. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -421,12 +421,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,035 test cases** (#669 code head `f5ae7704` on local #723 foundation `9043b6be`, 2026-11-06 UTC; 10,031 passed, 4 skipped) by module: xl-evaluator (4307), xl-core (1875), xl-ooxml (1446), xl-cli (1978), xl-cats-effect (217), xl-agent (147), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,048 test cases** (#669 validation after merging #723 sync `70cfe78a` on main `03f2dab0`, 2026-11-12; 10,040 passed, 8 skipped) by module: xl-evaluator (4314), xl-core (1875), xl-ooxml (1446), xl-cli (1978), xl-cats-effect (217), xl-agent (153), xl prelude probes (65). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,035 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,048 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
