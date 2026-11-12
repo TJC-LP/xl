@@ -282,17 +282,25 @@ presence and directly associated `Auto_Open` names at severity `info`; `--strict
 
 ### Test Coverage
 
-**9,953 test cases** (#838 validation against main db2b91d5, 2026-11-05): 9,949 passed, 0 failed, 4 skipped. Counts include skipped cases.
+
+#735 validation after merging main 03f2dab0 (2026-11-11): the full suite recorded 9,967 cases:
+9,959 passed, zero failed and eight optional external-tool cases skipped. Counts below
+come from seven fresh module reports, including the branching-replay budget regression,
+the 30-stage LET regression and the external-consumer `ArrayFillPreludeProbe`.
+Main's #838 validation on 2026-11-05 recorded 9,953 cases; it is separate from this
+observation. Passing tests do not establish Excel parity.
+
+**Current: 9,967 test cases** (#735 full-suite validation after merging main, 2026-11-11): 9,959 passed, 0 failed, 8 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4225 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-evaluator | 4238 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
 | xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
 | xl-cli | 1972 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 66 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 
