@@ -199,13 +199,23 @@ trait TExprAnalysis:
    *   The expression to transform
    * @param f
    *   Function that takes (optional sheet name, original range) and returns constrained range
+   * @param calls
+   *   #755: a replacement for a call met where a range would be transformed (SUMPRODUCT writes a
+   *   computed reference with a known range as that range); the replacement is transformed in its
+   *   place, the hook included, so a hook must not return a call it would replace again. None keeps
+   *   the call, walked as usual
    * @return
    *   New expression with transformed ranges
    */
   // GADT type erasure requires asInstanceOf; @nowarn for exhaustive pattern match false positives
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @annotation.nowarn("msg=Unreachable case")
-  def transformRanges[A](expr: TExpr[A], f: (Option[SheetName], CellRange) => CellRange): TExpr[A] =
+  def transformRanges[A](
+    expr: TExpr[A],
+    f: (Option[SheetName], CellRange) => CellRange,
+    calls: Call[?] => Option[TExpr[?]] = (_: Call[?]) => None
+  ): TExpr[A] =
+    def go[B](e: TExpr[B]): TExpr[B] = transformRanges(e, f, calls)
     (expr match
       // GH-612: a bounded whole-column range is a corner range from here on (evaluation only)
       case RangeRef(range, form) =>
@@ -217,27 +227,27 @@ trait TExprAnalysis:
       // Binary operators - transform operands (GH-680: a chain's left spine in one loop)
       case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
           _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
-        BinarySpine.mapOperands(chain)(transformRanges(_, f))
+        BinarySpine.mapOperands(chain)(go(_))
       // Type conversion
       case ToInt(e) =>
-        ToInt(transformRanges(e, f))
+        ToInt(go(e))
       case DateToSerial(e) =>
-        DateToSerial(transformRanges(e, f))
+        DateToSerial(go(e))
       case DateTimeToSerial(e) =>
-        DateTimeToSerial(transformRanges(e, f))
+        DateTimeToSerial(go(e))
       // GH-374/GH-355: unary plus and percent are transparent — transform ranges under them
       case UnaryPlus(e) =>
-        UnaryPlus(transformRanges(e, f))
+        UnaryPlus(go(e))
       case Percent(e) =>
-        Percent(transformRanges(e, f))
+        Percent(go(e))
       // GH-193: LET — transform ranges in binding values and the body
       case Let(bindings, body) =>
         Let(
-          bindings.map((name, value) => (name, transformRanges(value, f))),
-          transformRanges(body, f)
+          bindings.map((name, value) => (name, go(value))),
+          go(body)
         )
       // GH-306: runtime coercion wrapper — transform the wrapped expression
-      case Coerced(inner, target) => Coerced(transformRanges(inner, f), target)
+      case Coerced(inner, target) => Coerced(go(inner), target)
       // A lifted call evaluates element-wise over its lifted scalar slots, so a range there is an
       // element source like an operand's and takes the same bounds (SUMPRODUCT(--(A:A>0),ABS(B:B))
       // must not mismatch its dimensions), and so does the range of a call flagged
@@ -249,16 +259,20 @@ trait TExprAnalysis:
       // expression arguments: under SUMPRODUCT an array condition broadcasts against its
       // branches, so SUMPRODUCT(IF(A:A>4,B:B,A:A)) needs its condition and both branches at one
       // size
-      case call: Call[?] if call.spec.flags.selector =>
-        Call(call.spec, call.spec.argSpec.map(call.args)(transformRanges(_, f), identity, identity))
-      case call: Call[?] => transformLiftedSlots(call, f)
+      case call: Call[?] =>
+        calls(call) match
+          case Some(replacement) => go(replacement)
+          case None if call.spec.flags.selector =>
+            Call(call.spec, call.spec.argSpec.map(call.args)(go(_), identity, identity))
+          case None => transformLiftedSlots(call, f, calls)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other
     ).asInstanceOf[TExpr[A]]
 
   private def transformLiftedSlots[A](
     call: Call[A],
-    f: (Option[SheetName], CellRange) => CellRange
+    f: (Option[SheetName], CellRange) => CellRange,
+    calls: Call[?] => Option[TExpr[?]]
   ): TExpr[A] =
     if !call.spec.flags.entersArrayRangeBounds then call
     else
@@ -271,7 +285,7 @@ trait TExprAnalysis:
           // GH-754: a selected fallback is an element source too, even though it must not
           // participate in eager scalar-slot lifting.
           if enters(position) || call.spec.arrayBoundSlots.contains(position) then
-            transformRanges(slot, f)
+            transformRanges(slot, f, calls)
           else slot
         }
       Call(call.spec, call.spec.argSpec.replaceScalarSlots(call.args, replacements)._1)

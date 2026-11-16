@@ -127,6 +127,35 @@ private[formula] object SumProductTail:
     spec.flags.volatile && !ClockReads.contains(spec.name.toUpperCase)
 
   /**
+   * #755: a computed reference whose range is known before evaluation, written as that range
+   * ([[ReferenceOperators.exactReference]]): `INDEX(A:A,0)` as `A:A`, `A1:INDEX(A:A,1048576)` as
+   * `A1:A1048576`. SUMPRODUCT trims such a reference to the shared extent as it trims the written
+   * range (`constrainComputedRange`), so the plan reads it the same way and moves it onto the blank
+   * line. Other computed references (OFFSET, INDIRECT, XLOOKUP) are None and stay as they are, so
+   * an argument reading a whole column only through one has no tail.
+   *
+   * The positions are folded for cell A1: only ROW() and COLUMN() read the formula's own cell, and
+   * [[plan]] rules out every argument that calls them.
+   */
+  private def written(call: TExpr.Call[?]): Option[TExpr[?]] =
+    if !ReferenceOperators.isReferenceShape(call) then None
+    else
+      ReferenceOperators
+        .exactReference(call, Some(ARef.from0(0, 0)))
+        .map((sheet, range) =>
+          sheet.fold[TExpr[?]](TExpr.RangeRef(range))(TExpr.SheetRange(_, range))
+        )
+
+  /**
+   * #755: `expr` with each computed reference [[written]] as its range, only where SUMPRODUCT's
+   * trimming reaches ([[TExpr.transformRanges]]: operators, selectors, lifted slots). Inside a
+   * range slot (`SUM(INDEX(B:B,0))`) the call stays: it is one fixed reference there, as
+   * `SUM(B:B)`.
+   */
+  private[formula] def writtenReferences[A](expr: TExpr[A]): TExpr[A] =
+    TExpr.transformRanges(expr, (_, range) => range, written)
+
+  /**
    * The arguments to read over the blank line, decided before anything is evaluated: each
    * expression with its trimmed whole columns on the line, a range location as is (its caller maps
    * it). None — no tail, the trimmed sum stands — unless all hold:
@@ -168,12 +197,15 @@ private[formula] object SumProductTail:
     val lines = args.map {
       case Left(location) => (spansLocation(location), Left(location))
       case Right(expr) =>
-        val line = TExpr.transformRanges(expr, (_, r) => tail.line(r))
-        (
-          readsLineOnly(expr, line) && !WorkbookAudit.callsWhere(expr, drawsViaName, draws) &&
-            !WorkbookAudit.callsWhere(expr, (_, _) => false, _.flags.boundsReferenceAxis),
-          Right(line)
-        )
+        // #755: a computed reference with a known range reads as that range; the replacements are
+        // plain ranges in the positions the walk reaches, so the line is the written form's
+        val writtenExpr = writtenReferences(expr)
+        val line = TExpr.transformRanges(writtenExpr, (_, r) => tail.line(r))
+        val readsLine = readsLineOnly(writtenExpr, line)
+        val drawsNone = !WorkbookAudit.callsWhere(expr, drawsViaName, draws)
+        val readsNoPosition =
+          !WorkbookAudit.callsWhere(expr, (_, _) => false, _.flags.boundsReferenceAxis)
+        (readsLine && drawsNone && readsNoPosition, Right(line))
     }
     Option.when(trimmedExtent.toLong == tail.kept && lines.forall(_._1))(lines.map(_._2))
 

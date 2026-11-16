@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SUMPRODUCT counts the blank rows of a whole column INDEX or `:` computes** (#755): a computed
+  reference whose range is known before evaluation — INDEX at literal positions (`INDEX(A:A,0)`,
+  `INDEX(A:B,0,2)`) and a `:` range of such operands (`A1:INDEX(A:A,1048576)`) — adds back the
+  blank rows past the used range, as the written range does. **Behaviour change:** with data in
+  rows 1-3 and A2 blank, `SUMPRODUCT(--(INDEX(A:A,0)=""))` and
+  `SUMPRODUCT(--(A1:INDEX(A:A,1048576)=""))` were 1 and are now 1048574, Excel's value (#755's
+  report). Products with a value column are unchanged. OFFSET, INDIRECT, XLOOKUP and an INDEX
+  position read from a cell keep the trimmed sum, as does a computed range starting below row 1
+  (`A2:INDEX(A:A,1048576)`); see LIMITATIONS.
+
 - **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
   **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
   **Behaviour change:** a whole column beside INDEX over an edge range one row shorter, `=SUMPRODUCT(A:A*INDEX(B2:B1048576,0))`, is `#N/A` as in Excel (1,048,576 rows against 1,048,575); it was a sum when the sheet's data started at row 2, because the whole column was trimmed at the top to the same rows.
