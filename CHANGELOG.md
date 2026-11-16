@@ -23,7 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
   path, the message adds `(resolved to <absolute path> from working directory <dir>)`, in text and
   in the `--json` envelope's `error.message`, so a run from the wrong directory says where xl looked.
-  `error.location.file` keeps the path as given; absolute paths are unchanged.
+  `error.location.file` keeps the path as given; absolute paths are unchanged. A `.` segment is
+  dropped from the resolved path (`./model.xlsx` reads as `<dir>/model.xlsx`); `..` is kept, since
+  through a symlinked directory collapsing it would name a different file.
   **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
   `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
 

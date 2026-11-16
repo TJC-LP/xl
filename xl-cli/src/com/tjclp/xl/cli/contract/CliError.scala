@@ -2,6 +2,7 @@ package com.tjclp.xl.cli.contract
 
 import java.nio.file.{NoSuchFileException, Path, Paths}
 
+import scala.jdk.CollectionConverters.*
 import scala.util.Try
 import scala.util.control.NoStackTrace
 
@@ -74,7 +75,11 @@ object CliError:
       at <- e.location if e.code == ErrorCode.IO_READ
       file <- at.file
       path <- Try(Paths.get(file)).toOption if !path.isAbsolute
-    yield s" (resolved to ${cwd.resolve(path)} from working directory $cwd)"
+    yield
+      // `.` cannot change which file is meant, so it is dropped (`./model.xlsx` reads as
+      // `<cwd>/model.xlsx`); `..` is kept, as above
+      val shown = path.iterator.asScala.filterNot(_.toString == ".").foldLeft(cwd)(_.resolve(_))
+      s" (resolved to $shown from working directory $cwd)"
     suffix.filterNot(e.message.endsWith).fold(e)(s => e.copy(message = e.message + s))
 
   /**
