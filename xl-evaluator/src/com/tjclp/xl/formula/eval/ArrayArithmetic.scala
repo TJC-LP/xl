@@ -212,7 +212,7 @@ object ArrayArithmetic:
    * The smallest range holding every cell of `sheet` inside `range` that holds a value (a
    * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
    */
-  private def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
+  private[formula] def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
     val r0 = range.rowStart.index0
     val r1 = range.rowEnd.index0
     val c0 = range.colStart.index0
@@ -263,6 +263,22 @@ object ArrayArithmetic:
     right: ArrayOperand,
     op: BinaryOp
   ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = false)
+
+  /** Built-in evaluator operators are deterministic; public callbacks remain eagerly stored. */
+  private[formula] def broadcastPure(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = true)
+
+  private def broadcastWithFill(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
     (left, right) match
       // scalar * scalar -> scalar (fast path)
       case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
@@ -270,15 +286,17 @@ object ArrayArithmetic:
 
       // scalar * array -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
-        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op).map(ArrayOperand.Array(_))
+        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * scalar -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
-        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op).map(ArrayOperand.Array(_))
+        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * array -> broadcast with dimension matching
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
-        broadcastArrays(l, r, op).map(ArrayOperand.Array(_))
+        broadcastArrays(l, r, op, pureFill).map(ArrayOperand.Array(_))
 
   /**
    * GH-335: Excel's total order for the comparison operators, shared by the scalar and
@@ -361,7 +379,22 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    orderedCompareWithFill(left, right, op, pureFill = false)
+
+  private[formula] def broadcastOrderedComparePure(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean
+  ): Either[EvalError, ArrayResult] =
+    orderedCompareWithFill(left, right, op, pureFill = true)
+
+  private def orderedCompareWithFill(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayResult] =
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       val l = elements.headOption.getOrElse(CellValue.Empty)
       val r = elements.lift(1).getOrElse(CellValue.Empty)
       carriedError(l).orElse(carriedError(r)) match
@@ -391,10 +424,10 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
+        Right(left.mapPureLazy(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
-        broadcastN(Vector(left, rightArr)) { elements =>
+        broadcastN(Vector(left, rightArr), pureFill = true) { elements =>
           Right(
             equalityElement(
               elements.headOption.getOrElse(CellValue.Empty),
@@ -614,9 +647,10 @@ object ArrayArithmetic:
   private def broadcastArrays(
     left: ArrayResult,
     right: ArrayResult,
-    op: BinaryOp
+    op: BinaryOp,
+    pureFill: Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       applyOpCarrying(
         elements.headOption.getOrElse(CellValue.Empty),
         elements.lift(1).getOrElse(CellValue.Empty),
@@ -738,15 +772,44 @@ object ArrayArithmetic:
    * whole row, both padded) is computed cell by cell when the result is at most
    * [[ArrayResult.MaxCells]] cells, and otherwise over the smallest rectangle that leaves a fill by
    * one axis outside it, refused when that rectangle is past [[ArrayResult.MaxBoxCells]] (and past
-   * the operands' boxes together).
+   * the operands' boxes together). `pureFill` permits non-memoizing axis storage only for
+   * deterministic arithmetic/comparison operators; generic lifted calls retain eager execution.
    */
-  private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
+  private[formula] def broadcastN(
+    operands: Vector[ArrayResult],
+    perCell: Boolean = false,
+    pureFill: Boolean = false
+  )(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
     val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
     val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
     val outCells = outRows.toLong * outCols.toLong
+    // Count operand reads, not just depth: reusing the same LET value on both sides doubles
+    // its deferred work. Saturation also keeps a wide call from overflowing the estimate.
+    val readCost = operands.foldLeft(1) { (cost, operand) =>
+      math.min(ArrayResult.MaxLazyReadCost + 1, cost + operand.lazyReadCost)
+    }
     if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
+    else if pureFill && !perCell && readCost <= ArrayResult.MaxLazyReadCost &&
+      operands.forall(_.isDense) && operands.exists(_.hasLazyDenseBox)
+    then
+      // Validate in row-major order, just like computeBox. Known-pure operators may then
+      // recompute a cell without storing the full result; public callbacks never enter here.
+      def value(r: Int, c: Int) = elem(operands.map(op => getWithBroadcastCV(op, r, c)))
+      val failure = (0 until outRows).iterator
+        .flatMap { r =>
+          (0 until outCols).iterator.map(c => value(r, c))
+        }
+        .collectFirst { case Left(err) => err }
+      failure match
+        case Some(err) => Left(err)
+        case None =>
+          Right(
+            ArrayResult.lazyDense(outRows, outCols, readCost)((r, c) =>
+              value(r, c).fold(_ => CellValue.Empty, identity)
+            )
+          )
     else
       val whole = BroadcastPlan(0, outRows, 0, outCols, FillAxis.Const, Vector.empty)
       def cellByCell: Either[EvalError, BroadcastPlan] =

@@ -397,6 +397,7 @@ object WorkbookAudit:
         p(call.spec) ||
         call.spec.argSpec.toValues(call.args).exists {
           case ArgValue.Expr(e) => go(e)
+          case ArgValue.Range(TExpr.RangeLocation.Computed(e)) => go(e)
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) => viaName(scope, name)
           case _ => false
         }

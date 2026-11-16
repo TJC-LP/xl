@@ -835,7 +835,9 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
       2 -> genStructuredRef,
       1 -> genLambda,
       // a lookup over an array constant stays out of scope: MATCH's lookup_array is a range slot
-      1 -> genArrayConstant.map(constant => s"MATCH(1, $constant, 0)")
+      1 -> genArrayConstant
+        .suchThat(body => !body.startsWith("INDEX("))
+        .map(constant => s"MATCH(1, $constant, 0)")
     )
 
   /** GH-669 / GH-713: grammar the parser used to refuse and now accepts. */

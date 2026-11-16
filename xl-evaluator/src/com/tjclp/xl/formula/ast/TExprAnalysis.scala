@@ -104,6 +104,7 @@ trait TExprAnalysis:
           // Range positions carry externality via RangeLocation.External (SUMIF([2]Book1!…, …));
           // Cells positions hold local literal ranges only
           case ArgValue.Range(RangeLocation.External(_, _, _, _)) => true
+          case ArgValue.Range(RangeLocation.Computed(e)) => containsExternalRef(e)
           case _ => false
         }
     case Aggregate(_, RangeLocation.External(_, _, _, _)) => true
@@ -166,6 +167,7 @@ trait TExprAnalysis:
               List((Some(sheet), range))
             // GH-353: external-workbook ranges are not in this workbook — nothing to bound.
             // GH-394: a Name's target range is behind the workbook name table — statically unknown
+            case ArgValue.Range(RangeLocation.Computed(e)) if rangeSlots => go(e)
             case ArgValue.Range(_) => Nil
             case _ => Nil
           }
