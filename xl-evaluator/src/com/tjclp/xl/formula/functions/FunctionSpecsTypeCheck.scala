@@ -85,7 +85,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       ArrayArithmetic.carriedError(value).exists(err => !catchOnlyNa || err == CellError.NA)
     def selectedFallback: Either[EvalError, Any] =
       evalMaybeArrayArg(ctx, fallback).map {
-        case array: ArrayResult => array.mapPure(unwrapCachedValue)
+        case array: ArrayResult => array.mapPureLazy(unwrapCachedValue)
         case scalar => toCellValue(ExprValue.from(scalar))
       }
     evalMaybeArrayArg(ctx, primary) match
@@ -94,7 +94,7 @@ trait FunctionSpecsTypeCheck extends FunctionSpecsBase:
       case Left(error) => Left(error)
       case Right(array: ArrayResult) =>
         if !array.tally.exists((value, _) => catches(value)) then
-          Right(array.mapPure(unwrapCachedValue))
+          Right(array.mapPureLazy(unwrapCachedValue))
         else
           // A failing fallback carries its Excel error only at selected positions. Structural
           // failures without an Excel value remain loud, as in the other array conditionals.

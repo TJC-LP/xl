@@ -8,14 +8,16 @@ Check: `which xl || echo "not installed"`; then `xl --version`.
 
 ## macOS / Linux / Windows Bash
 
-The pinned v0.25.0 native binary; no JDK required. Its digests below come from
-the official GitHub release asset metadata (checked November 6, 2026). This keeps
-installation working before releases begin shipping `SHA256SUMS`.
+The pinned v0.26.0 native binary; no JDK required. The script verifies it against the
+exact entry for its asset in that release's `SHA256SUMS` and fails closed when the manifest
+or entry is missing. The inline digests below are the legacy v0.25.0 fallback, which
+predates release manifests; they come from the official GitHub release asset metadata
+(checked November 6, 2026).
 
 ```bash
 (
 set -euo pipefail
-VERSION=0.25.0
+VERSION=0.26.0
 case "$VERSION" in *[!0-9A-Za-z.+-]*|'') echo "Invalid release version" >&2; exit 1 ;; esac
 case "$(uname -s)-$(uname -m)" in
   Linux-x86_64) PLATFORM=linux-amd64; EXPECTED=b213be3184a37c936736a0a25719bf8fa9efa2b3c2539082ce5a87ed71319a53 ;;
