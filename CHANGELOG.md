@@ -239,6 +239,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unrelated SUMPRODUCT/array bindings (#748).
 ### Performance
 
+- **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
+  `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
+  its first argument, and an array constant was spelled out cell by cell. The call is now printed
+  on the error path alone; messages and results are unchanged.
+
 - **A criteria window whose matching rows are numeric text is sized exactly** (#842):
   `CriteriaCandidates.compute` counted a row once per posting list it sits in — text `"1"` holds
   the keys Text("1") and Num(1), and a lookup for `"1"` reads both — so a window with few such rows
@@ -309,6 +314,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
+  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
+  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
+  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
+  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
+  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
+  no faster default gives the same result.
 - **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
   Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
   call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
