@@ -1,7 +1,8 @@
 package com.tjclp.xl.cli.contract
 
-import java.nio.file.NoSuchFileException
+import java.nio.file.{NoSuchFileException, Path, Paths}
 
+import scala.util.Try
 import scala.util.control.NoStackTrace
 
 import cats.effect.ExitCode
@@ -58,6 +59,24 @@ final class CliSignal(val payload: Payload, val error: CliError)
     with NoStackTrace
 
 object CliError:
+
+  /**
+   * GH-870: an `IO_READ` whose location is a relative path also names where that path resolved —
+   * `<message> (resolved to <absolute> from working directory <cwd>)` — so a run from the wrong
+   * directory says where xl looked. The location keeps the path as given; an absolute path, an
+   * `IO_READ` with no file, and every other code are returned unchanged. `cwd` is a parameter so
+   * the rule stays pure; the runner passes the process's working directory.
+   */
+  def resolvingInputPath(e: CliError, cwd: Path): CliError =
+    val relative = for
+      at <- e.location if e.code == ErrorCode.IO_READ
+      file <- at.file
+      path <- Try(Paths.get(file)).toOption if !path.isAbsolute
+    yield path
+    relative.fold(e) { path =>
+      val absolute = cwd.resolve(path).normalize
+      e.copy(message = s"${e.message} (resolved to $absolute from working directory $cwd)")
+    }
 
   /**
    * The projection from the domain: `code = e.code`, `hint = e.hint`, `candidates = e.candidates`.
