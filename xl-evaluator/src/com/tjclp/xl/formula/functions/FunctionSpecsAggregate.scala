@@ -1944,15 +1944,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
-  /** The context of SUMPRODUCT's #VALUE! for arguments of different shapes. */
-  private val SumProductDimensionMismatch = "SUMPRODUCT: all arrays must have same dimensions"
-
-  /** Whether `err` is SUMPRODUCT's own #VALUE! for arguments of different shapes. */
-  private def isDimensionMismatch(err: EvalError): Boolean = err match
-    case EvalError.ErrorValue(CellError.Value, Some(context)) =>
-      context.startsWith(SumProductDimensionMismatch)
-    case _ => false
-
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -2023,16 +2014,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // cannot be added back for them, the sum is taken the way it was then (below)
             val edgeTrimmed = rangesWithSheets.exists { (r, _) =>
               !r.isFullColumn && !r.isFullRow &&
-              (RangeEdges.reachesLastRow(r) || RangeEdges.reachesLastColumn(r)) &&
+              RangeEdges.reachesEdge(r) &&
               constrainRange(r, bounds).cellCount < r.cellCount
             }
 
             // the trimmed sum under `bounds` (computed with `edges = false`: the bound before
             // GH-746), with the blank tail when it can be added (None when rows were dropped but the
-            // tail could not be read)
+            // tail could not be read). A failure says whether it is this call's own dimension check
+            // (true): the arguments came back at different shapes, which an error from inside an
+            // argument (a nested SUMPRODUCT's included) never is
             def sumUnder(
               bounds: SharedBounds
-            ): Either[EvalError, (BigDecimal, Option[BigDecimal])] =
+            ): Either[(EvalError, Boolean), (BigDecimal, Option[BigDecimal])] =
               val edges = bounds.edges
 
               // A computed reference takes the shared extent only for axes represented in the
@@ -2101,7 +2094,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   edges
                 )
 
-              resolvedResult.flatMap { resolved =>
+              resolvedResult.left.map((_, false)).flatMap { resolved =>
                 resolved match
                   case Nil => Right((BigDecimal(0), Some(BigDecimal(0))))
                   case first :: rest =>
@@ -2113,20 +2106,23 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                         EvalError.ErrorValue(
                           CellError.Value,
                           Some(
-                            s"$SumProductDimensionMismatch (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})"
+                            s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})"
                           )
                         )
                     }
 
                     dimensionError match
-                      case Some(err) => Left(err)
+                      case Some(err) => Left((err, true))
                       case None =>
                         // Compute final dimensions
                         val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
                         val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
-                        sumOfProducts(resolved, finalRows, finalCols, ctx).flatMap { sum =>
-                          blankTailSum(finalRows, finalCols).map(tail => (sum, tail))
-                        }
+                        sumOfProducts(resolved, finalRows, finalCols, ctx)
+                          .flatMap { sum =>
+                            blankTailSum(finalRows, finalCols).map(tail => (sum, tail))
+                          }
+                          .left
+                          .map((_, false))
               }
 
             // GH-746: an edge range the bound trimmed whose blank tail cannot be added (ROW over
@@ -2141,9 +2137,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             // evaluates SUMPRODUCT twice where the tail is not read; a tail plan that reads those
             // shapes (#755) would make the second pass rare.
             def total(
-              result: Either[EvalError, (BigDecimal, Option[BigDecimal])]
+              result: Either[(EvalError, Boolean), (BigDecimal, Option[BigDecimal])]
             ): Either[EvalError, BigDecimal] =
-              result.map((sum, tail) => sum + tail.getOrElse(BigDecimal(0)))
+              result.left.map(_._1).map((sum, tail) => sum + tail.getOrElse(BigDecimal(0)))
 
             // GH-746: an argument that draws a random number (RAND, RANDBETWEEN, directly or
             // through a name) gets no blank tail and would be evaluated twice below, so it is
@@ -2154,23 +2150,29 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               case Left(_) => false
             }
 
-            // GH-746: the full read misaligns only where an argument reads an edge range through a
-            // range slot (INDEX(B2:B1048576,0), B5:INDEX(B:B,…)): the reference it computes stops
-            // at the used rows while the written ranges beside it do not. Its failure is then
-            // SUMPRODUCT's dimension #VALUE!, or the #N/A that pads the shorter side of an operator;
-            // any other error, or any error without such a slot, is Excel's for those rows
-            lazy val readsEdgeThroughSlot = args.exists {
+            // GH-746: the full read misaligns only where an argument computes a reference over a
+            // range that reaches the edge (INDEX(B2:B1048576,0), B5:INDEX(B:B,…), XLOOKUP, OFFSET):
+            // that reference stops at the used rows while the written ranges beside it do not. Its
+            // failure is then SUMPRODUCT's dimension #VALUE!, or the #N/A that pads the shorter side
+            // of an operator. Any other error, or an #N/A without such a reference (a lookup range,
+            // `MATCH(A2:A1048576,C:C,0)` over a blank), is Excel's for those rows
+            lazy val computesEdgeReference = args.exists {
               case Right(expr) =>
-                val values = TExpr.collectValueRanges(expr).map(_._2).toSet
-                TExpr
-                  .collectRanges(expr)
-                  .exists((_, r) => RangeEdges.reachesEdge(r) && !values.contains(r))
+                WorkbookAudit.hasCallWhere(
+                  expr,
+                  (_, _) => false,
+                  call =>
+                    call.spec match
+                      case _: FunctionSpec.Referencing[?, ?] =>
+                        TExpr.collectRanges(call).exists((_, r) => RangeEdges.reachesEdge(r))
+                      case _ => false
+                )
               case Left(_) => false
             }
-            def misaligned(err: EvalError): Boolean =
-              isDimensionMismatch(err) || (readsEdgeThroughSlot && (err match
-                case EvalError.ErrorValue(CellError.NA, _) => true
-                case _ => false))
+            def misaligned(err: EvalError, ownDimensionCheck: Boolean): Boolean =
+              ownDimensionCheck || (err match
+                case EvalError.ErrorValue(CellError.NA, _) => computesEdgeReference
+                case _ => false)
 
             if edgeTrimmed && draws then total(sumUnder(sharedBounds(edges = false)))
             else
@@ -2178,7 +2180,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case Right((sum, Some(tail))) => Right(sum + tail)
                 case Right((sum, None)) if edgeTrimmed =>
                   sumUnder(sharedBounds(edges = false)) match
-                    case Left(err) if misaligned(err) => Right(sum)
+                    case Left((err, own)) if misaligned(err, own) => Right(sum)
                     case whole => total(whole)
                 case other => total(other)
           }

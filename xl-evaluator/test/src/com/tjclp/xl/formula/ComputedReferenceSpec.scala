@@ -249,6 +249,17 @@ class ComputedReferenceSpec extends FunSuite:
     )
     // RAND gets no blank tail; the argument is summed once over every row: each blank row counts
     assertEquals(at("SUMPRODUCT((A2:A1048576=\"\")*(RAND()>=0))"), Right(number(1048572)))
+    // a lookup range in MATCH's slot computes no reference: MATCH of a blank is #N/A in Excel, so
+    // the full read's #N/A is the answer, not a misalignment
+    val withC = (1 to 3).foldLeft(e)((acc, r) => acc.put(ARef.from1(3, r), number(r)))
+    val placed = withC.put(
+      ref"H1",
+      CellValue.Formula("SUMPRODUCT(MATCH(A2:A1048576,C:C,0)*ROW(A2:A1048576))", None)
+    )
+    assertEquals(
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))),
+      Right(CellValue.Error(CellError.NA))
+    )
   }
 
   test("an edge range across columns lines up with INDEX over the same columns (#746)") {
