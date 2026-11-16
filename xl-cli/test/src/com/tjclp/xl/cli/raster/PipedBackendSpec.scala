@@ -586,9 +586,46 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(
         warnings,
         Vector(
-          "Warning: broken failed (broken conversion failed (exit 1): boom), using rsvg-convert"
+          "Warning: broken conversion failed (exit 1): boom; using rsvg-convert"
         )
       )
+    }
+  }
+
+  test("GH-867: a failure with no message is named by its backend and type") {
+    val chain = List(backend("bare", IO.raiseError(new RuntimeException())), writer("rsvg-convert"))
+    quietRun(chain).map { (used, warnings) =>
+      assertEquals(used, "rsvg-convert")
+      assertEquals(
+        warnings,
+        Vector("Warning: bare: java.lang.RuntimeException; using rsvg-convert")
+      )
+    }
+  }
+
+  test("GH-867: a warning that cannot be printed does not undo the export or run another backend") {
+    withDir { dir =>
+      IO.ref(false).flatMap { ranAfter =>
+        val chain = List(
+          backend("broken", IO.raiseError(RasterError.ConversionFailed("broken", "boom", 1))),
+          writer("rsvg-convert"),
+          backend("after", ranAfter.set(true))
+        )
+        RasterizerChain
+          .tryChain(
+            tinySvg,
+            dir.resolve("out.png"),
+            RasterFormat.Png,
+            96,
+            chain,
+            Nil,
+            warn = _ => IO.raiseError(new java.io.IOException("stderr closed"))
+          )
+          .flatMap { used =>
+            assertEquals(used, "rsvg-convert")
+            ranAfter.get.map(after => assert(!after, "the chain went on past a successful export"))
+          }
+      }
     }
   }
 
