@@ -8,6 +8,7 @@ import java.nio.file.{
   Files,
   NoSuchFileException,
   Path,
+  Paths,
   StandardCopyOption
 }
 
@@ -2202,6 +2203,9 @@ EXAMPLES:
    * its rows arrive ([[emitStreamed]]).
    */
   private[cli] def emit(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    withResolvedInput(outcome).flatMap(emitResolved(_, mode, io))
+
+  private def emitResolved(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
     outcome.payload match
       case Some(Payload.Streamed(_)) => emitStreamed(outcome, mode, io)
       case _ =>
@@ -2251,8 +2255,23 @@ EXAMPLES:
 
   /** The stderr of an outcome whose stdout is already written, then its exit code. */
   private def report(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
-    val stderr = Render.stderr(mode)(outcome)
-    (if stderr.isEmpty then IO.unit else io.err(stderr)).as(outcome.exitCode)
+    withResolvedInput(outcome).flatMap { resolved =>
+      val stderr = Render.stderr(mode)(resolved)
+      (if stderr.isEmpty then IO.unit else io.err(stderr)).as(resolved.exitCode)
+    }
+
+  /**
+   * GH-870: the one seam every failure leaves through, so each `IO_READ` site — the missing-file
+   * diagnostic, the reader's own message, lint's, the streaming reader's and writer's — names the
+   * absolute path of a relative input and the working directory it resolved against
+   * ([[CliError.resolvingInputPath]]).
+   */
+  private def withResolvedInput(outcome: Outcome): IO[Outcome] =
+    outcome.error match
+      case Some(error) if error.code == ErrorCode.IO_READ =>
+        IO.delay(Paths.get("").toAbsolutePath)
+          .map(cwd => outcome.copy(error = Some(CliError.resolvingInputPath(error, cwd))))
+      case _ => IO.pure(outcome)
 
   /**
    * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory

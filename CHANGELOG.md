@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
+  path, the message adds `(resolved to <absolute path> from working directory <dir>)`, in text and
+  in the `--json` envelope's `error.message`, so a run from the wrong directory says where xl looked.
+  `error.location.file` keeps the path as given; absolute paths are unchanged.
+  **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
+  `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
+
 - **macOS install hint for rasterizers** (#866): on macOS, `RASTERIZER_UNAVAILABLE` and the
   `xl rasterizers` warning list `brew install librsvg` (rsvg-convert) first and
   `brew install imagemagick` for the ImageMagick opt-in, in place of the apt commands; a forced
