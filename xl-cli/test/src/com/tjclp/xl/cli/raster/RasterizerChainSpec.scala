@@ -136,7 +136,8 @@ class RasterizerChainSpec extends CatsEffectSuite:
   test("NoRasterizerAvailable on the native binary says Batik is unavailable by design (GH-359)") {
     val error = RasterError.NoRasterizerAvailable(
       List("Batik", "cairosvg", "rsvg-convert", "resvg"),
-      runningNativeImage = true
+      runningNativeImage = true,
+      macOS = false
     )
     assert(error.message.contains("native binary"), s"native wording: ${error.message}")
     assert(error.message.contains("by design"), s"by-design wording: ${error.message}")
@@ -208,6 +209,54 @@ class RasterizerChainSpec extends CatsEffectSuite:
 
   test("NativeImage.inNativeImage is false when tests run on the JVM") {
     assert(!NativeImage.inNativeImage)
+  }
+
+  test("GH-866: HostOs.detectMacOS reads os.name") {
+    assert(HostOs.detectMacOS(Map("os.name" -> "Mac OS X").get))
+    assert(!HostOs.detectMacOS(Map("os.name" -> "Linux").get))
+    assert(!HostOs.detectMacOS(Map("os.name" -> "Windows 11").get))
+    assert(!HostOs.detectMacOS(_ => None))
+  }
+
+  test("GH-866: on macOS the no-rasterizer message offers brew install librsvg first") {
+    val error = RasterError.NoRasterizerAvailable(
+      List("Batik", "cairosvg", "rsvg-convert", "resvg"),
+      runningNativeImage = true,
+      macOS = true
+    )
+    val lines = error.message.linesIterator.toVector
+    val first = lines.dropWhile(_ != "Install one of:").drop(1).headOption
+    assertEquals(first, Some("  - rsvg-convert: brew install librsvg"), error.message)
+    assert(error.message.contains("brew install imagemagick"), error.message)
+    assert(!error.message.contains("apt install"), s"no apt on macOS: ${error.message}")
+    assert(error.message.contains("pip install cairosvg"), error.message)
+    assert(error.message.contains("linebender/resvg/releases"), error.message)
+  }
+
+  test("GH-866: off macOS the no-rasterizer message is unchanged (apt, no brew)") {
+    val error = RasterError.NoRasterizerAvailable(List("Batik"), macOS = false)
+    assert(error.message.contains("rsvg-convert: apt install librsvg2-bin (Debian/Ubuntu)"))
+    assert(!error.message.contains("brew"), error.message)
+  }
+
+  test("GH-866: a forced backend that is missing names the macOS install") {
+    assertEquals(
+      RasterInstall.hintFor("rsvg-convert", macOS = true),
+      "Install: brew install librsvg"
+    )
+    assertEquals(
+      RasterInstall.hintFor("imagemagick", macOS = true),
+      "Install: brew install imagemagick"
+    )
+    assertEquals(
+      RasterInstall.hintFor("rsvg-convert", macOS = false),
+      "Install: apt install librsvg2-bin (Debian/Ubuntu)"
+    )
+    assertEquals(
+      RasterInstall.hintFor("imagemagick", macOS = false),
+      "Install: apt install imagemagick"
+    )
+    assertEquals(RasterInstall.hintFor("cairosvg", macOS = true), "Install: pip install cairosvg")
   }
 
   // ========== RasterizerChain Configuration Tests ==========

@@ -45,8 +45,10 @@ import com.tjclp.xl.ooxml.lint.{LintSeverity, WorkbookLint}
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
+  HostOs,
   ImageMagick,
   NativeImage,
+  RasterInstall,
   RasterizerChain,
   Resvg,
   RsvgConvert
@@ -2462,7 +2464,9 @@ EXAMPLES:
       val anyAvailable = rows.exists(_.status == "available")
       val payload = mode match
         case OutputMode.Text =>
-          Payload.text(renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage))
+          Payload.text(
+            renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage, HostOs.isMacOS)
+          )
         case OutputMode.Json =>
           Payload.Json(
             ujson.Obj(
@@ -2524,7 +2528,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean = HostOs.isMacOS
   ): (String, Boolean) =
     val rows = rasterizerRows(
       batikAvail,
@@ -2536,7 +2541,7 @@ EXAMPLES:
       nativeImage
     )
     val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
-    (renderRasterizerText(rows, anyAvailable, nativeImage), anyAvailable)
+    (renderRasterizerText(rows, anyAvailable, nativeImage, macOS), anyAvailable)
 
   /** The rows of the table, in display order. */
   private def rasterizerRows(
@@ -2591,7 +2596,8 @@ EXAMPLES:
   private def renderRasterizerText(
     rows: Vector[RasterizerRow],
     anyAvailable: Boolean,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): String =
     val sb = new StringBuilder
     sb.append("SVG Rasterizer Status\n")
@@ -2611,12 +2617,15 @@ EXAMPLES:
         sb.append("This is the native binary: the bundled Batik backend needs AWT and can\n")
         sb.append("never work here - install one of the external tools below.\n")
       sb.append("\nInstall one of:\n")
+      // GH-866: on macOS one brew command gives a working backend, so it leads
+      if macOS then sb.append("  brew install librsvg           # rsvg-convert, fast\n")
       sb.append("  pip install cairosvg           # Python, most portable\n")
-      sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+      if !macOS then sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
       sb.append(
         "  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases\n"
       )
-      sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
+      val imageMagick = f"${RasterInstall.imageMagick(macOS)}%-30s"
+      sb.append(s"  $imageMagick # then pass --rasterizer imagemagick\n")
 
     sb.toString
 

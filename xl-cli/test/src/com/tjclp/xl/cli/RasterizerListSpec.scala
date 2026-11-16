@@ -17,7 +17,8 @@ class RasterizerListSpec extends FunSuite:
     resvg: Boolean = false,
     imageMagick: Boolean = false,
     imageMagickDiag: String = "ImageMagick not found",
-    nativeImage: Boolean = false
+    nativeImage: Boolean = false,
+    macOS: Boolean = false
   ): (String, Boolean) =
     Main.renderRasterizerTable(
       batikAvail = batik,
@@ -26,7 +27,8 @@ class RasterizerListSpec extends FunSuite:
       resvgAvail = resvg,
       imageMagickAvail = imageMagick,
       imageMagickDiag = imageMagickDiag,
-      nativeImage = nativeImage
+      nativeImage = nativeImage,
+      macOS = macOS
     )
 
   private def lineFor(output: String, backend: String): String =
@@ -81,6 +83,15 @@ class RasterizerListSpec extends FunSuite:
     assert(out.contains("apt install librsvg2-bin"), "rsvg-convert one-liner")
     assert(out.contains("linebender/resvg/releases"), "resvg prebuilt release pointer")
     assert(out.contains("--rasterizer imagemagick"), "ImageMagick opt-in reminder")
+  }
+
+  test("GH-866: nothing installed on macOS: brew install librsvg is the first one-liner") {
+    val (out, hasWorking) = render(nativeImage = true, macOS = true)
+    assert(!hasWorking)
+    val first = out.linesIterator.dropWhile(_ != "Install one of:").drop(1).nextOption()
+    assert(first.exists(_.startsWith("  brew install librsvg")), s"first install line:\n$out")
+    assert(out.contains("brew install imagemagick"), out)
+    assert(!out.contains("apt install"), s"no apt on macOS:\n$out")
   }
 
   test("nothing installed on native binary: warning names Batik as by-design dead (GH-359)") {
