@@ -35,7 +35,7 @@ import com.tjclp.xl.cli.contract.CliException
  * fallbacks for environments where AWT is unavailable (native image):
  *   1. Batik (pure JVM, requires AWT - the default)
  *   2. cairosvg (Python, very portable - pip install cairosvg)
- *   3. rsvg-convert (librsvg, fast - apt install librsvg2-bin)
+ *   3. rsvg-convert (librsvg, fast - apt install librsvg2-bin; brew install librsvg on macOS)
  *   4. resvg (Rust, best quality - cargo install resvg)
  *
  * ImageMagick is not part of the automatic chain (its SVG delegate configuration is fragile,
@@ -133,8 +133,18 @@ object HostOs:
  */
 object RasterInstall:
 
+  /** The package that provides `rsvg-convert`: `librsvg` (Homebrew) or `librsvg2-bin` (apt). */
+  def rsvgConvertPackage(macOS: Boolean): String =
+    if macOS then "librsvg" else "librsvg2-bin"
+
+  /** The bare install command for `rsvg-convert`. */
+  def rsvgConvertCommand(macOS: Boolean): String =
+    if macOS then s"brew install ${rsvgConvertPackage(macOS)}"
+    else s"apt install ${rsvgConvertPackage(macOS)}"
+
+  /** The install command, naming the distribution where it is not macOS. */
   def rsvgConvert(macOS: Boolean): String =
-    if macOS then "brew install librsvg" else "apt install librsvg2-bin (Debian/Ubuntu)"
+    if macOS then rsvgConvertCommand(macOS) else s"${rsvgConvertCommand(macOS)} (Debian/Ubuntu)"
 
   def imageMagick(macOS: Boolean): String =
     if macOS then "brew install imagemagick" else "apt install imagemagick"

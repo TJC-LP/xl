@@ -2511,7 +2511,8 @@ EXAMPLES:
           resvgAvail = resvgAvail,
           imageMagickAvail = imageMagickAvail,
           imageMagickDiag = imageMagickDiag,
-          nativeImage = NativeImage.inNativeImage
+          nativeImage = NativeImage.inNativeImage,
+          macOS = HostOs.isMacOS
         )
     }
 
@@ -2538,7 +2539,8 @@ EXAMPLES:
       resvgAvail,
       imageMagickAvail,
       imageMagickDiag,
-      nativeImage
+      nativeImage,
+      macOS
     )
     val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
     (renderRasterizerText(rows, anyAvailable, nativeImage, macOS), anyAvailable)
@@ -2551,7 +2553,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): Vector[RasterizerRow] =
     // Batik - the default backend; "unavailable" when AWT not present (native image)
     val batikStatus = if batikAvail then "available" else "unavailable"
@@ -2566,7 +2569,7 @@ EXAMPLES:
 
     // rsvg-convert
     val rsvgStatus = if rsvgAvail then "available" else "missing"
-    val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+    val rsvgNote = if rsvgAvail then RasterInstall.rsvgConvertPackage(macOS) else "Not in PATH"
 
     // resvg
     val resvgStatus = if resvgAvail then "available" else "missing"
@@ -2618,9 +2621,10 @@ EXAMPLES:
         sb.append("never work here - install one of the external tools below.\n")
       sb.append("\nInstall one of:\n")
       // GH-866: on macOS one brew command gives a working backend, so it leads
-      if macOS then sb.append("  brew install librsvg           # rsvg-convert, fast\n")
+      val rsvg = f"  ${RasterInstall.rsvgConvertCommand(macOS)}%-30s # rsvg-convert, fast\n"
+      if macOS then sb.append(rsvg)
       sb.append("  pip install cairosvg           # Python, most portable\n")
-      if !macOS then sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+      if !macOS then sb.append(rsvg)
       sb.append(
         "  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases\n"
       )
