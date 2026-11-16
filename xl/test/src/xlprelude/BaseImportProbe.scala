@@ -118,6 +118,11 @@ object BaseImportProbe:
     _.filter(f => f.severity == LintSeverity.Repair && f.category != LintCategory.ChildOrder)
   val effectiveNames: Workbook => Vector[DefinedName] = _.effectiveDefinedNames
 
+  // GH-723: the appended public range-location case is usable outside the library package.
+  val computedRangeLocation = com.tjclp.xl.formula.parser.FormulaParser
+    .parse("OFFSET(A1,0,0)")
+    .map(com.tjclp.xl.formula.ast.TExpr.RangeLocation.Computed(_))
+
   // GH-526: public adoption signature must remain usable outside the library package.
   val adoptionSheet: Sheet = Sheet("Adopted").put(ref"A1", 42)
   val adoptionSource: Workbook = Workbook(adoptionSheet)

@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the combined validation of #830 and #831 against main 0294eee0 on 2026-11-04 recorded **9,947 cases**, including skips: 9,943 passed, 0 failed, 4 skipped.
+**Current Status**: the #723 validation with the reference-input fix df803ef6 after merging main 69c259e3 (0.26.0) on 2026-11-12 recorded **10,046 cases**, including skips: 10,038 passed, 0 failed, 8 skipped.
 
 Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
 `SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
@@ -287,18 +287,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the combined validation of #830 and #831 against main 0294eee0, 2026-11-04 (9,943 passed, 0 failed, 4 skipped). Counts include skipped cases.
+As of the #723 validation with the reference-input fix df803ef6 after merging main 69c259e3 (0.26.0), 2026-11-12 (10,038 passed, 0 failed, 8 skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4225 |
+| xl-evaluator | 4317 |
 | xl-core | 1875 |
 | xl-ooxml | 1446 |
 | xl-cli | 1972 |
 | xl-cats-effect | 217 |
-| xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 65 |
-| **Total** | **9,947** |
+| xl-agent | 153 |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
+| **Total** | **10,046** |
 
 
 ## Test Quality Metrics

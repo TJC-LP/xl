@@ -309,7 +309,10 @@ object FormulaPrinter:
       case call: TExpr.Call[?] =>
         val printer = ArgPrinter(
           expr = expr => printExpr(expr, precedence = 0, sep),
-          location = formatLocation,
+          location = {
+            case TExpr.RangeLocation.Computed(expr) => printExpr(expr, precedence = 0, sep)
+            case location => formatLocation(location)
+          },
           cellRange = formatRange,
           separator = sep
         )
@@ -398,6 +401,7 @@ object FormulaPrinter:
           case None => name
       // GH-710: a LET name in a range slot prints as its identifier
       case TExpr.RangeLocation.Binding(name) => name
+      case TExpr.RangeLocation.Computed(expr) => print(expr, includeEquals = false)
       // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
       case TExpr.RangeLocation.Error(error, qualifier) => qualifiedError(error, qualifier)
 

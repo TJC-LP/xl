@@ -704,7 +704,7 @@ object SheetEvaluator:
   ): XLResult[ArrayResult] =
     evaluateArrayRaw(sheet, formula, originRef, evaluator.withArrayResults, clock, workbook)
       .map {
-        case ar: ArrayResult => ar.mapPure(spillValue)
+        case ar: ArrayResult => ar.mapPureLazy(spillValue)
         case other => ArrayResult.single(spillValue(EvalResult.toCellValue(other)))
       }
 
