@@ -234,6 +234,40 @@ class ComputedReferenceSpec extends FunSuite:
     )
   }
 
+  test("an error over an edge range's blank rows stands; RAND keeps the pre-#746 sum (#746)") {
+    // A2:A4 = 1,2,3, the formula at H1. 1/blank is #DIV/0! in Excel for every blank row; the
+    // tail cannot be added (ROW over the range), and the full read's error is Excel's answer
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(
+      at("SUMPRODUCT((1/A2:A1048576)*ROW(A2:A1048576))"),
+      Right(CellValue.Error(CellError.Div0))
+    )
+    // RAND gets no blank tail; the argument is summed once over every row: each blank row counts
+    assertEquals(at("SUMPRODUCT((A2:A1048576=\"\")*(RAND()>=0))"), Right(number(1048572)))
+  }
+
+  test("an edge range across columns lines up with INDEX over the same columns (#746)") {
+    // the column twin of the row cases: B2:D2 = 1,2,3 and B3:D3 = 10,20,30, the formula at A9.
+    // B2:XFD2 and B3:XFD3 run from column B to the sheet's last column: 16383 columns each
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("C"))) {
+      case (acc, (c, a, b)) => acc.put(ARef.from1(c, 2), number(a)).put(ARef.from1(c, 3), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"A9", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"A9", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(at("SUMPRODUCT(B2:XFD2*INDEX(B3:XFD3,1,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(B2:XFD2,INDEX(B3:XFD3,1,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(--(B2:XFD2=\"\"))"), Right(number(16380)))
+    assertEquals(at("COUNTIF(B2:XFD2,\"\")"), Right(number(16380)))
+    // 16383 columns against a whole row's 16384 stay #VALUE!
+    assertEquals(at("SUMPRODUCT(B2:XFD2,3:3)"), Right(CellValue.Error(CellError.Value)))
+  }
+
   test("a large computed reference reads only its populated cells, at its full shape") {
     // B3 = 5, C4 = 7, D6 an uncached formula (=B3*2): a range with more positions than the sheet
     // has cells is read from the cells' side, every other position the shared blank — the same

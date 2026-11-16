@@ -344,7 +344,7 @@ trait FunctionSpecsBase:
    * 93.5 s to 0.27 s); `ComputedReferenceSpec` pins this predicate.
    */
   private[formula] def readsUsedRange(reference: CellRange): Boolean =
-    reference.rowEnd.index0 == Row.MaxIndex0 || reference.colEnd.index0 == Column.MaxIndex0
+    RangeEdges.reachesEdge(reference)
 
   /**
    * A reference's values at its full shape, as array mode reads a range: position by position when
