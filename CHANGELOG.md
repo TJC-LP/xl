@@ -39,8 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passes over backends that are not installed, or cannot write the format, no longer prints
   `Warning: Batik, cairosvg unavailable, using rsvg-convert`; the `Exported: …` line already names
   the backend used. A backend that is installed but fails before a later one succeeds is still
-  reported: `Warning: <reason>; using <backend>`. When every backend fails,
-  `RASTERIZER_UNAVAILABLE` lists all of them as before.
+  reported: `Warning: <reason>; using <backend>`, on one line. When every backend fails,
+  `RASTERIZER_UNAVAILABLE` still lists all of them, each by its own one-line message (no longer
+  `cairosvg (cairosvg conversion failed …)`).
   **Behaviour change:** `xl … --format png` on a machine with only rsvg-convert prints just the
   `Exported:` line.
 

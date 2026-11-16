@@ -603,6 +603,52 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
+  test("GH-867: a multi-line failure reason is reported on one line") {
+    val chain = List(
+      backend(
+        "cairosvg",
+        IO.raiseError(
+          RasterError.ConversionFailed("cairosvg", "Traceback:\n  File x\n\nOSError", 1)
+        )
+      ),
+      writer("rsvg-convert")
+    )
+    quietRun(chain).map { (_, warnings) =>
+      assertEquals(
+        warnings,
+        Vector(
+          "Warning: cairosvg conversion failed (exit 1): Traceback: File x OSError; using rsvg-convert"
+        )
+      )
+    }
+  }
+
+  test("GH-867: when every backend fails, each is listed once, by its own message") {
+    val chain = List(
+      backend("absent", IO.unit, available = false),
+      backend("broken", IO.raiseError(RasterError.ConversionFailed("broken", "boom", 1))),
+      backend("bare", IO.raiseError(new RuntimeException()))
+    )
+    withDir { dir =>
+      failure(
+        RasterizerChain
+          .tryChain(tinySvg, dir.resolve("out.png"), RasterFormat.Png, 96, chain, Nil)
+          .void
+      ).map {
+        case none: RasterError.NoRasterizerAvailable =>
+          assertEquals(
+            none.triedRasterizers,
+            List(
+              "absent",
+              "broken conversion failed (exit 1): boom",
+              "bare: java.lang.RuntimeException"
+            )
+          )
+        case other => fail(s"expected NoRasterizerAvailable, got $other")
+      }
+    }
+  }
+
   test("GH-867: a warning that cannot be printed does not undo the export or run another backend") {
     withDir { dir =>
       IO.ref(false).flatMap { ranAfter =>

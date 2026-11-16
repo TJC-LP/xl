@@ -422,13 +422,19 @@ object RasterizerChain:
           next(rest, s"${rasterizer.name} (format not supported)", None)
         case _ =>
           // Other error (likely AWT/native image issue): try the next one, and say so if a later
-          // backend succeeds. The whole message: ConversionFailed already keeps only stderr's
-          // tail. A backend's own message usually names it ("cairosvg conversion failed (exit
-          // 1): …"); otherwise the name leads.
-          val reason = Option(error.getMessage).getOrElse(error.getClass.getName)
+          // backend succeeds. The whole message (ConversionFailed already keeps only stderr's
+          // tail) on one line, so the warning and the all-fail list stay one line per backend.
+          // A backend's own message usually names it ("cairosvg conversion failed (exit 1):
+          // …"); otherwise the name leads. The same text goes in both places.
+          val reason = Option(error.getMessage)
+            .getOrElse(error.getClass.getName)
+            .linesIterator
+            .map(_.strip)
+            .filter(_.nonEmpty)
+            .mkString(" ")
           val described =
             if reason.startsWith(rasterizer.name) then reason else s"${rasterizer.name}: $reason"
-          next(rest, s"${rasterizer.name} ($reason)", Some(described))
+          next(rest, described, Some(described))
 
     remaining match
       case Nil =>
