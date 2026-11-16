@@ -94,6 +94,14 @@ class RasterizerListSpec extends FunSuite:
     assert(!out.contains("apt install"), s"no apt on macOS:\n$out")
   }
 
+  test("GH-866: an available rsvg-convert names the package for the platform") {
+    val (mac, _) = render(rsvg = true, macOS = true)
+    val macRow = lineFor(mac, "rsvg-convert")
+    assert(macRow.endsWith("| librsvg"), s"macOS row: $macRow")
+    val (linux, _) = render(rsvg = true, macOS = false)
+    assert(lineFor(linux, "rsvg-convert").endsWith("| librsvg2-bin"), linux)
+  }
+
   test("nothing installed on native binary: warning names Batik as by-design dead (GH-359)") {
     val (out, hasWorking) = render(nativeImage = true)
     assert(!hasWorking)
