@@ -529,6 +529,69 @@ class PipedBackendSpec extends CatsEffectSuite:
       def isAvailable = IO.pure(available)
       def convertSvgToRaster(svg: String, out: Path, format: RasterFormat, dpi: Int) = conversion
 
+  /** A stand-in backend that writes a real image file wherever the chain asks. */
+  private def writer(label: String): Rasterizer =
+    new Rasterizer:
+      val name = label
+      def isAvailable = IO.pure(true)
+      def convertSvgToRaster(svg: String, out: Path, format: RasterFormat, dpi: Int) =
+        IO.blocking(Files.write(out, Array[Byte](1, 2, 3))).void
+
+  /** Run `chain` to success, collecting what it would have printed as warnings. */
+  private def quietRun(chain: List[Rasterizer]): IO[(String, Vector[String])] =
+    withDir { dir =>
+      IO.ref(Vector.empty[String]).flatMap { warned =>
+        RasterizerChain
+          .tryChain(
+            tinySvg,
+            dir.resolve("out.png"),
+            RasterFormat.Png,
+            96,
+            chain,
+            Nil,
+            warn = line => warned.update(_ :+ line)
+          )
+          .flatMap(used => warned.get.map(used -> _))
+      }
+    }
+
+  test("GH-867: falling past backends that are not installed prints no warning") {
+    val chain = List(
+      backend("Batik", IO.unit, available = false),
+      backend("cairosvg", IO.unit, available = false),
+      writer("rsvg-convert")
+    )
+    quietRun(chain).map { (used, warnings) =>
+      assertEquals(used, "rsvg-convert")
+      assertEquals(warnings, Vector.empty)
+    }
+  }
+
+  test("GH-867: a backend that cannot write the format is skipped quietly too") {
+    val chain = List(
+      backend("narrow", IO.raiseError(RasterError.FormatNotSupported("narrow", RasterFormat.Png))),
+      writer("rsvg-convert")
+    )
+    quietRun(chain).map((_, warnings) => assertEquals(warnings, Vector.empty))
+  }
+
+  test("GH-867: an installed backend that ran and failed is still reported once") {
+    val chain = List(
+      backend("cairosvg", IO.unit, available = false),
+      backend("broken", IO.raiseError(RasterError.ConversionFailed("broken", "boom", 1))),
+      writer("rsvg-convert")
+    )
+    quietRun(chain).map { (used, warnings) =>
+      assertEquals(used, "rsvg-convert")
+      assertEquals(
+        warnings,
+        Vector(
+          "Warning: broken failed (broken conversion failed (exit 1): boom), using rsvg-convert"
+        )
+      )
+    }
+  }
+
   test("a backend that times out stops the default chain: the next one is not run") {
     withDir { dir =>
       IO.ref(false).flatMap { ran =>

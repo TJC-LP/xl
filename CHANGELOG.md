@@ -28,6 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Behaviour change:** on macOS, the "Install one of:" list opens with
   `rsvg-convert: brew install librsvg`.
 
+- **No fallback warning on a successful raster export** (#867): a PNG/PDF/JPEG/WebP export that
+  passes over backends that are not installed, or cannot write the format, no longer prints
+  `Warning: Batik, cairosvg unavailable, using rsvg-convert`; the `Exported: …` line already names
+  the backend used. A backend that is installed but fails before a later one succeeds is still
+  reported: `Warning: <backend> failed (<reason>), using <backend>`. When every backend fails,
+  `RASTERIZER_UNAVAILABLE` lists all of them as before.
+  **Behaviour change:** `xl … --format png` on a machine with only rsvg-convert prints just the
+  `Exported:` line.
+
 - **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
   INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
   Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
