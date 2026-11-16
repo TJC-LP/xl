@@ -348,7 +348,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     foldRawRange(agg, targetSheet, constrained, ctx, acc)
       .map((_, blanksTrimmed(agg, range, constrained)))
 
-  /** Stream one already-constrained raw range into the supplied accumulator. */
+  /**
+   * Stream one already-constrained reference in row-major order. #736: when the range is larger
+   * than the sheet's records, reuse #750's populated box and skip its absent blank border. Small
+   * bounded windows keep the positional path (#747); positioned evaluations do too, because an
+   * absent cell can be their guarded placement. Formula/data-table records remain inside the box.
+   * Only COUNTBLANK observes the dropped Empty cells; its closed-form count preserves them.
+   */
   private def foldRawRange[A](
     agg: Aggregator[A],
     targetSheet: com.tjclp.xl.sheets.Sheet,
@@ -356,7 +362,19 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     initial: A
   ): Either[EvalError, A] =
-    range.cells.foldLeft[Either[EvalError, A]](Right(initial)) {
+    val selected =
+      if range.cellCount <= targetSheet.cells.size.toLong ||
+        ctx.placementGuard.exists(_.positioned)
+      then range
+      else
+        ctx.passMemo
+          .populatedBox(targetSheet, range)(ArrayArithmetic.populatedBox(range, targetSheet))
+          .getOrElse(CellRange.empty)
+    val start =
+      if agg.countsEmpty then
+        agg.combineN(initial, aggregateCountUnit, range.cellCount - selected.cellCount)
+      else initial
+    selected.cells.foldLeft[Either[EvalError, A]](Right(start)) {
       case (Left(err), _) => Left(err)
       case (Right(current), cellRef) =>
         triageCellForAggregate(agg, targetSheet, cellRef, ctx, current)
@@ -1681,6 +1699,13 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
       Right(coerceToNumeric(array(row, col)))
 
+  /** #735: dense geometry and original error scans, without retaining a numeric matrix. */
+  private final case class LazyDenseArray(array: ArrayResult) extends ResolvedArray:
+    def rows: Int = array.rows
+    def cols: Int = array.cols
+    def valueAt(row: Int, col: Int, ctx: EvalContext): Either[EvalError, BigDecimal] =
+      Right(coerceToNumeric(array(row, col)))
+
   /**
    * GH-197: an evaluated SUMPRODUCT argument as a numeric matrix: an array with boolean coercion, a
    * scalar as 1x1. GH-337: a carried error element fails loudly naming the code — coercing it to 0
@@ -1691,6 +1716,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case ar: ArrayResult =>
         ar.tally.map(_._1).collectFirst(Function.unlift(ArrayArithmetic.carriedError)) match
           case Some(err) => Left(propagatedElementError("SUMPRODUCT", err))
+          case None if ar.hasLazyDenseBox => Right(LazyDenseArray(ar))
           case None if !ar.isDense => Right(SparseArray(ar))
           case None =>
             Right(
@@ -1813,16 +1839,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     colBands: List[(Int, Int)]
   ): (Int, Int) => BigDecimal =
     // the product of the fills along one axis, entry by entry; None when no fill varies along it
-    def axisProducts(n: Int, of: PartialFunction[ArrayResult.Fill, Vector[CellValue]]) =
+    def axisProducts(
+      of: PartialFunction[ArrayResult.Fill, scala.collection.immutable.IndexedSeq[CellValue]]
+    ) =
       val varying = fills.collect(of)
       if varying.isEmpty then None
       else
-        Some(Vector.tabulate(n) { i =>
+        Some((i: Int) =>
           varying.foldLeft(BigDecimal(1))((acc, vs) =>
             acc * coerceToNumeric(vs.lift(i).getOrElse(CellValue.Empty))
           )
-        })
-    def bandSums(products: Option[Vector[BigDecimal]], bands: List[(Int, Int)]) =
+        )
+    def bandSums(products: Option[Int => BigDecimal], bands: List[(Int, Int)]) =
       bands.map { (from, until) =>
         products match
           case None => BigDecimal(math.max(until - from, 0))
@@ -1832,8 +1860,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case (acc, ArrayResult.Fill.Const(v)) => acc * coerceToNumeric(v)
       case (acc, _) => acc
     }
-    val rowSums = bandSums(axisProducts(rows, { case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
-    val colSums = bandSums(axisProducts(cols, { case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
+    val rowSums = bandSums(axisProducts({ case ArrayResult.Fill.ByRow(vs) => vs }), rowBands)
+    val colSums = bandSums(axisProducts({ case ArrayResult.Fill.ByCol(vs) => vs }), colBands)
     (ri, ci) => constant * rowSums(ri) * colSums(ci)
 
   /**

@@ -152,10 +152,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
         else
           val (first, last) = axis(range)
           if first == last then Right(BigDecimal(first + 1))
-          else
-            val values = (first to last).map(i => CellValue.Number(BigDecimal(i + 1))).toVector
-            if alongRows then Right(ArrayResult(values.map(Vector(_))))
-            else Right(ArrayResult(Vector(values)))
+          else Right(ArrayResult.positions(first + 1, last - first + 1, alongRows))
     def notAReference: EvalError =
       EvalError.EvalFailed(
         s"$fnName requires a cell reference",
