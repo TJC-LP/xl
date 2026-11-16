@@ -102,6 +102,28 @@ class RasterizerListSpec extends FunSuite:
     assert(lineFor(linux, "rsvg-convert").endsWith("| librsvg2-bin"), linux)
   }
 
+  test("GH-866: the install block is byte for byte as before off macOS, brew-first on macOS") {
+    def block(out: String): String = out.substring(out.indexOf("Install one of:"))
+    assertEquals(
+      block(render()._1),
+      """Install one of:
+        |  pip install cairosvg           # Python, most portable
+        |  apt install librsvg2-bin       # rsvg-convert, fast
+        |  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases
+        |  apt install imagemagick        # then pass --rasterizer imagemagick
+        |""".stripMargin
+    )
+    assertEquals(
+      block(render(macOS = true)._1),
+      """Install one of:
+        |  brew install librsvg           # rsvg-convert, fast
+        |  pip install cairosvg           # Python, most portable
+        |  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases
+        |  brew install imagemagick       # then pass --rasterizer imagemagick
+        |""".stripMargin
+    )
+  }
+
   test("nothing installed on native binary: warning names Batik as by-design dead (GH-359)") {
     val (out, hasWorking) = render(nativeImage = true)
     assert(!hasWorking)
