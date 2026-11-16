@@ -301,7 +301,7 @@ class ErrorContractSpec extends CatsEffectSuite:
   test("GH-870: a relative input path's IO_READ names the absolute path and working directory") {
     val typed = "gh-870-no-such-input.xlsx"
     val cwd = Paths.get("").toAbsolutePath
-    val absolute = cwd.resolve(typed).normalize
+    val absolute = cwd.resolve(typed)
     val expected = s"No such file: $typed (resolved to $absolute from working directory $cwd)"
     for
       text <- CliHarness.run("-f", typed, "cell", "A1")

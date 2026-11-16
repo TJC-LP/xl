@@ -136,16 +136,28 @@ class CliErrorSpec extends FunSuite:
     )
     // the rest of the error is untouched: location stays the path as given
     assertEquals(resolved.copy(message = missing.message), missing)
-    // `..` is resolved, so the message names the file xl actually tried
+    // `..` is kept, not collapsed: through a symlinked directory a lexical `..` names a different
+    // file from the one the OS opened, so the message shows the path exactly as resolved
     val up = missing.copy(
-      message = "IO error: ../model.xlsx (Permission denied)",
-      location = Some(Location.file("../model.xlsx"))
+      message = "IO error: link/../model.xlsx (Permission denied)",
+      location = Some(Location.file("link/../model.xlsx"))
     )
     assertEquals(
       CliError.resolvingInputPath(up, cwd).message,
-      "IO error: ../model.xlsx (Permission denied) (resolved to /work/model.xlsx " +
-        "from working directory /work/books)"
+      "IO error: link/../model.xlsx (Permission denied) (resolved to " +
+        "/work/books/link/../model.xlsx from working directory /work/books)"
     )
+  }
+
+  test("GH-870: resolving an error twice adds the resolution once") {
+    val cwd = Paths.get("/work/books")
+    val missing = CliError(
+      ErrorCode.IO_READ,
+      "No such file: model.xlsx",
+      location = Some(Location.file("model.xlsx"))
+    )
+    val once = CliError.resolvingInputPath(missing, cwd)
+    assertEquals(CliError.resolvingInputPath(once, cwd), once)
   }
 
   test("GH-870: an absolute path, a pathless IO_READ, and every other code are left as they are") {
