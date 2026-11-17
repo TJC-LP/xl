@@ -38,6 +38,11 @@ trait Aggregator[A]:
    * #750: combine `value` into the accumulator `n` times, equal to `n` successive [[combine]]
    * calls. Every built-in aggregator overrides it in closed form, so a sparse array's fill (a
    * million blank or equal cells) folds in one step; this default repeats [[combine]].
+   *
+   * #758: the default is O(n), and `n` is the number of cells a sparse array's fill covers — up to
+   * 17,179,869,184 (2^34) for a whole-sheet argument such as `A:XFD*1`, so an aggregator that keeps
+   * it makes that many [[combine]] calls. Override it in closed form (SUM: `acc + value * n`). It
+   * cannot be derived from [[combine]] alone: that would need a way to merge two accumulators.
    */
   def combineN(acc: A, value: BigDecimal, n: Long): A =
     @scala.annotation.tailrec

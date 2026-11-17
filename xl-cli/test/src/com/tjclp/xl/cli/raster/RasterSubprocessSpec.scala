@@ -226,8 +226,10 @@ class RasterSubprocessSpec extends FunSuite:
         val lines = run.stdout.linesIterator.toVector
         assertEquals(lines.headOption, Some(ErrorCode.RASTERIZER_UNAVAILABLE), run.stdout)
         val message = lines.drop(1).mkString("\n")
-        assert(message.contains("cairosvg (cairosvg conversion failed (exit 1)"), message)
-        assert(message.contains("rsvg-convert (rsvg-convert conversion failed (exit 1)"), message)
+        // GH-867: each backend once, by its own message (no `cairosvg (cairosvg …` wrapper)
+        assert(message.contains("cairosvg conversion failed (exit 1)"), message)
+        assert(message.contains("rsvg-convert conversion failed (exit 1)"), message)
+        assert(!message.contains("cairosvg (cairosvg"), message)
         assert(!message.contains("Stream closed"), message)
         assert(!message.contains("Broken pipe"), message)
       finally Files.deleteIfExists(out)
@@ -448,11 +450,11 @@ class RasterSubprocessSpec extends FunSuite:
       assertEquals(run.exit, 0, run.stderr)
       val message = run.stdout.linesIterator.drop(1).mkString("\n")
       assert(
-        message.contains(s"cairosvg (cairosvg conversion failed (exit 1): $longMessage)"),
+        message.contains(s"cairosvg conversion failed (exit 1): $longMessage"),
         message
       )
       assert(
-        message.contains(s"rsvg-convert (rsvg-convert conversion failed (exit 1): $longMessage)"),
+        message.contains(s"rsvg-convert conversion failed (exit 1): $longMessage"),
         message
       )
     finally Files.deleteIfExists(out)
@@ -471,7 +473,7 @@ class RasterSubprocessSpec extends FunSuite:
         Vector("cairosvg", "rsvg-convert", "resvg").foreach { backend =>
           assert(
             message.contains(
-              s"$backend ($backend conversion failed (exit 0): wrote no output)"
+              s"$backend conversion failed (exit 0): wrote no output"
             ),
             message
           )

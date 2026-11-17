@@ -2488,7 +2488,9 @@ Two rows worth spelling out:
 - A missing or unreadable input file is `code: IO_READ`, exit `3`, on every verb — `sheets`,
   `names`, `view`, `cell`, `diff`, `lint` alike. A file that does not exist is the one message
   `No such file: <path>` with the hint `check the path; the previous write may have failed`
-  (0.22.0); any other read failure keeps the reader's own message, its prefix once.
+  (0.22.0); any other read failure keeps the reader's own message, its prefix once. When the
+  path was relative, the message ends `(resolved to <absolute path> from working directory <dir>)`
+  (#870); `location.file` stays the path as given.
 - A workbook path passed positionally (`xl view input.xlsx A1:B4`) is a `USAGE` error whose hint
   says `did you mean -f input.xlsx? …` (0.22.0): the file is never positional.
 - An unknown defined name (`name rm Nope`) is `NAME_NOT_FOUND` with the nearest names as

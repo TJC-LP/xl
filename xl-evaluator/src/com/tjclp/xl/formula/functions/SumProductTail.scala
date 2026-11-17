@@ -17,24 +17,16 @@ import com.tjclp.xl.sheets.Sheet
  */
 private[formula] object SumProductTail:
 
-  /** Whether `range` runs to the sheet's last row (`A:A`, `A2:A1048576`): trimmable along rows. */
-  def reachesLastRow(range: CellRange): Boolean = range.rowEnd.index0 == Row.MaxIndex0
-
-  /**
-   * Whether `range` runs to the sheet's last column (`2:2`, `C2:XFD2`): trimmable along columns.
-   */
-  def reachesLastColumn(range: CellRange): Boolean = range.colEnd.index0 == Column.MaxIndex0
-
   /**
    * Whether the shared bound trims `range` along rows: any range reaching the last row, or with
    * `edges = false` only a whole column (the rule before GH-746, which SUMPRODUCT falls back to).
    */
   def trimsRows(range: CellRange, edges: Boolean): Boolean =
-    if edges then reachesLastRow(range) else range.isFullColumn
+    if edges then RangeEdges.reachesLastRow(range) else range.isFullColumn
 
   /** [[trimsRows]] along columns: a range reaching the last column, or only a whole row. */
   def trimsColumns(range: CellRange, edges: Boolean): Boolean =
-    if edges then reachesLastColumn(range) else range.isFullRow
+    if edges then RangeEdges.reachesLastColumn(range) else range.isFullRow
 
   /**
    * What the bound dropped: how many rows (columns), along which axis, how many it kept of each
