@@ -390,11 +390,21 @@ object WorkbookAudit:
     expr: TExpr[?],
     viaName: (Option[SheetName], String) => Boolean,
     p: com.tjclp.xl.formula.functions.FunctionSpec[?] => Boolean
+  ): Boolean = hasCallWhere(expr, viaName, call => p(call.spec))
+
+  /**
+   * [[callsWhere]] asked of the call itself, its arguments included (GH-746: SUMPRODUCT asks for a
+   * reference-returning call over a range that reaches the sheet's edge).
+   */
+  private[formula] def hasCallWhere(
+    expr: TExpr[?],
+    viaName: (Option[SheetName], String) => Boolean,
+    p: TExpr.Call[?] => Boolean
   ): Boolean =
-    def go(e: TExpr[?]): Boolean = callsWhere(e, viaName, p)
+    def go(e: TExpr[?]): Boolean = hasCallWhere(e, viaName, p)
     expr match
       case call: TExpr.Call[?] =>
-        p(call.spec) ||
+        p(call) ||
         call.spec.argSpec.toValues(call.args).exists {
           case ArgValue.Expr(e) => go(e)
           case ArgValue.Range(TExpr.RangeLocation.Computed(e)) => go(e)

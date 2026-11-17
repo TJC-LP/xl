@@ -30,6 +30,17 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   private type RowBounds = (Row, Row)
   private type ColBounds = (Column, Column)
+
+  /**
+   * The shared bound and the trimming rule it was computed under (GH-746: `edges`, any range
+   * reaching the sheet's edge, or with `edges = false` whole columns and rows only). One value, so
+   * [[constrainRange]] always trims by the rule its bound assumed.
+   */
+  private final case class SharedBounds(
+    rows: Option[RowBounds],
+    cols: Option[ColBounds],
+    edges: Boolean
+  )
   private val aggregateCountUnit = BigDecimal(1)
 
   /**
@@ -55,21 +66,53 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * counts the dropped cells through [[blankCriteriaCount]], and SUMPRODUCT reads one dropped row
    * for all of them (`SumProductTail`). A reference folded on its own by an aggregate, AND or OR
    * reads [[usedArea]] instead, whose dropped cells only COUNTBLANK observes ([[blanksTrimmed]]).
+   *
+   * GH-746: a range that reaches the sheet's last row but starts below row 1 (`A2:A1048576`) is
+   * trimmable too, as INDEX's `boundedReferenceValues` already treats it. It keeps its own start,
+   * so once one is present no range is trimmed at the top: every range that reaches the edge ends
+   * at one shared row (the last used row, or the lowest such start if that is further down) and
+   * keeps its start, so ranges of different heights stay different heights (`A2:A1048576` against
+   * `B:B` is still #VALUE!). Columns reaching XFD work the same way.
+   *
+   * That holds only when every range of more than one row reaches the edge: a range that stops
+   * short of it can share an edge range's height (`B1:B1048575` beside `A2:A1048576`) without
+   * sharing its rows, and trimming one but not the other would part them. Then nothing is trimmed
+   * along that axis — the shared end is the sheet's last row — as before GH-746.
    */
   private def computeBounds(
     ctx: EvalContext,
-    ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)]
-  ): (Option[RowBounds], Option[ColBounds]) =
+    ranges: List[(CellRange, com.tjclp.xl.sheets.Sheet)],
+    edges: Boolean = true
+  ): SharedBounds =
     val hasFullColumn = ranges.exists(_._1.isFullColumn)
     val hasFullRow = ranges.exists(_._1.isFullRow)
-    if !hasFullColumn && !hasFullRow then (None, None)
+    // the starts of the edge ranges that are not whole columns (rows): GH-746
+    // (`edges = false`: whole columns and rows only, the bound before GH-746)
+    val edgeRowStarts = ranges.collect {
+      case (r, _) if edges && RangeEdges.reachesLastRow(r) && !r.isFullColumn =>
+        r.rowStart.index0
+    }
+    val edgeColStarts = ranges.collect {
+      case (r, _) if edges && RangeEdges.reachesLastColumn(r) && !r.isFullRow =>
+        r.colStart.index0
+    }
+    if !hasFullColumn && !hasFullRow && edgeRowStarts.isEmpty && edgeColStarts.isEmpty then
+      SharedBounds(None, None, edges)
     else
       // Computing usedRange scans every populated cell. Bounded ranges need no shared bounds, so
       // keep that scan entirely off their hot path; #767: a recalculation pass scans each sheet
       // once per structural generation (PassCache.usedRange)
       val usedRanges = ranges.flatMap((_, sheet) => usedRangeOf(ctx, sheet))
       val rowBounds =
-        if hasFullColumn then
+        if edgeRowStarts.nonEmpty then
+          val allReachEdge =
+            ranges.forall((r, _) => r.height <= 1 || RangeEdges.reachesLastRow(r))
+          val end =
+            if allReachEdge then
+              (usedRanges.map(_.rowEnd.index0) ++ edgeRowStarts).foldLeft(0)(Math.max)
+            else Row.MaxIndex0
+          Some((Row.from0(0), Row.from0(end)))
+        else if hasFullColumn then
           if usedRanges.isEmpty then None
           else
             val minRow =
@@ -79,7 +122,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
             Some((Row.from0(minRow), Row.from0(maxRow)))
         else None
       val colBounds =
-        if hasFullRow then
+        if edgeColStarts.nonEmpty then
+          val allReachEdge =
+            ranges.forall((r, _) => r.width <= 1 || RangeEdges.reachesLastColumn(r))
+          val end =
+            if allReachEdge then
+              (usedRanges.map(_.colEnd.index0) ++ edgeColStarts).foldLeft(0)(Math.max)
+            else Column.MaxIndex0
+          Some((Column.from0(0), Column.from0(end)))
+        else if hasFullRow then
           if usedRanges.isEmpty then None
           else
             val minCol =
@@ -88,29 +139,32 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
               usedRanges.foldLeft(Int.MinValue)((acc, r) => Math.max(acc, r.colEnd.index0))
             Some((Column.from0(minCol), Column.from0(maxCol)))
         else None
-      (rowBounds, colBounds)
+      SharedBounds(rowBounds, colBounds, edges)
 
   /**
    * GH-192: Constrain full-column/row ranges to shared bounds.
    *
    * If all sheets are empty (no usedRange), full-column/row ranges collapse to CellRange.empty.
+   * GH-746: a range that reaches the sheet's last row (column) but starts below row 1 (column A)
+   * keeps its start and takes the shared end (under a bound computed with `edges = false`, whole
+   * columns and rows only, the rule before GH-746).
    */
-  private def constrainRange(
-    range: CellRange,
-    bounds: (Option[RowBounds], Option[ColBounds])
-  ): CellRange =
-    val (rowBounds, colBounds) = bounds
+  private def constrainRange(range: CellRange, bounds: SharedBounds): CellRange =
+    val SharedBounds(rowBounds, colBounds, edges) = bounds
     if range.isFullColumn && rowBounds.isEmpty then CellRange.empty
     else if range.isFullRow && colBounds.isEmpty then CellRange.empty
     else
       val rowStart =
         if range.isFullColumn then rowBounds.map(_._1).getOrElse(range.rowStart) else range.rowStart
       val rowEnd =
-        if range.isFullColumn then rowBounds.map(_._2).getOrElse(range.rowEnd) else range.rowEnd
+        if SumProductTail.trimsRows(range, edges) then rowBounds.map(_._2).getOrElse(range.rowEnd)
+        else range.rowEnd
       val colStart =
         if range.isFullRow then colBounds.map(_._1).getOrElse(range.colStart) else range.colStart
       val colEnd =
-        if range.isFullRow then colBounds.map(_._2).getOrElse(range.colEnd) else range.colEnd
+        if SumProductTail.trimsColumns(range, edges) then
+          colBounds.map(_._2).getOrElse(range.colEnd)
+        else range.colEnd
 
       if rowStart.index0 > rowEnd.index0 || colStart.index0 > colEnd.index0 then CellRange.empty
       else
@@ -313,7 +367,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * Each lies outside every involved sheet's used range, so each is blank.
    */
   private def cellsTrimmed(range: CellRange, constrained: CellRange): Long =
-    if range.isFullColumn || range.isFullRow then range.cellCount - constrained.cellCount
+    if readsUsedRange(range) then range.cellCount - constrained.cellCount
     else 0L
 
   /**
@@ -1890,6 +1944,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
+  /** GH-746: the functions whose reference SUMPRODUCT's shared bound cannot see or bound. */
+  private val OpaqueReferenceFunctions = Set("OFFSET", "INDIRECT")
+
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -1950,96 +2007,229 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
           allRangesWithSheets.flatMap { rangesWithSheets =>
             // GH-192/197: Compute shared bounds across ALL ranges (locations + expressions)
-            val bounds: (Option[RowBounds], Option[ColBounds]) =
-              if rangesWithSheets.nonEmpty then computeBounds(ctx, rangesWithSheets)
-              else (None, None)
+            def sharedBounds(edges: Boolean): SharedBounds =
+              if rangesWithSheets.nonEmpty then computeBounds(ctx, rangesWithSheets, edges)
+              else SharedBounds(None, None, edges)
+            val bounds = sharedBounds(edges = true)
 
-            // A computed reference takes the shared extent only for axes represented in the
-            // static inputs. No discovered whole axis is different from an empty used extent:
-            // INDEX(namedColumn,0) still materializes by its own reference rules. The extent is
-            // sheet-agnostic on purpose: computeBounds unions the used ranges of every sheet the
-            // operands name, and every operand takes that one extent, so a computed reference on
-            // any sheet (ROW(INDEX(Other!A:A,0))) lines up with A:A here; its sheet is not needed.
-            val boundsColumns = rangesWithSheets.exists(_._1.isFullColumn)
-            val boundsRows = rangesWithSheets.exists(_._1.isFullRow)
-            def constrainComputedRange(range: CellRange): CellRange =
-              if (range.isFullColumn && boundsColumns) || (range.isFullRow && boundsRows) then
-                constrainRange(range, bounds)
-              else range
+            // GH-746: whether the bound trimmed a range that reaches the edge from below row 1
+            // (column A). Those ranges read every row before GH-746, so where the blank tail
+            // cannot be added back for them, the sum is taken the way it was then (below)
+            val edgeTrimmed = rangesWithSheets.exists { (r, _) =>
+              !r.isFullColumn && !r.isFullRow &&
+              RangeEdges.reachesEdge(r) &&
+              constrainRange(r, bounds).cellCount < r.cellCount
+            }
 
-            // Helper to constrain ranges in expressions
-            def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
-              TExpr.transformRanges(
-                expr,
-                { (sheetOpt, range) =>
-                  constrainRange(range, bounds)
+            // the trimmed sum under `bounds` (computed with `edges = false`: the bound before
+            // GH-746), with the blank tail when it can be added (None when rows were dropped but the
+            // tail could not be read). A failure says whether it is this call's own dimension check
+            // (true): the arguments came back at different shapes, which an error from inside an
+            // argument (a nested SUMPRODUCT's included) never is
+            def sumUnder(
+              bounds: SharedBounds
+            ): Either[(EvalError, Boolean), (BigDecimal, Option[BigDecimal])] =
+              val edges = bounds.edges
+
+              // A computed reference takes the shared extent only for axes represented in the
+              // static inputs. No discovered whole axis is different from an empty used extent:
+              // INDEX(namedColumn,0) still materializes by its own reference rules. The extent is
+              // sheet-agnostic on purpose: computeBounds unions the used ranges of every sheet the
+              // operands name, and every operand takes that one extent, so a computed reference on
+              // any sheet (ROW(INDEX(Other!A:A,0))) lines up with A:A here; its sheet is not needed.
+              // GH-746: "whole axis" is any range that reaches the sheet's last row (column), as for
+              // the static ranges in computeBounds
+              val boundsColumns =
+                rangesWithSheets.exists(r => SumProductTail.trimsRows(r._1, edges))
+              val boundsRows =
+                rangesWithSheets.exists(r => SumProductTail.trimsColumns(r._1, edges))
+              def constrainComputedRange(range: CellRange): CellRange =
+                if (SumProductTail.trimsRows(range, edges) && boundsColumns) ||
+                  (SumProductTail.trimsColumns(range, edges) && boundsRows)
+                then constrainRange(range, bounds)
+                else range
+
+              // Helper to constrain ranges in expressions
+              def constrainExprRanges(expr: TExpr[Any]): TExpr[Any] =
+                TExpr.transformRanges(
+                  expr,
+                  { (sheetOpt, range) =>
+                    constrainRange(range, bounds)
+                  }
+                )
+
+              // GH-197: Resolve each argument to a ResolvedArray with bounded ranges
+              val resolvedResult: Either[EvalError, List[ResolvedArray]] =
+                args.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
+                  case (Left(err), _) => Left(err)
+                  case (Right(acc), Left(loc)) =>
+                    // Range location - resolve to sheet and constrain
+                    ctx.resolveRange(loc).map { case (sheet, range) =>
+                      acc :+ RangeArray(sheet, constrainRange(range, bounds))
+                    }
+                  case (Right(acc), Right(expr)) =>
+                    // GH-197: Expression - constrain ranges, then evaluate with array support
+                    val boundedExpr = constrainExprRanges(expr)
+                    ctx.evalBoundedArrayExpr(boundedExpr, constrainComputedRange).flatMap { value =>
+                      sumProductArray(value).map(acc :+ _)
+                    }
                 }
-              )
 
-            // GH-197: Resolve each argument to a ResolvedArray with bounded ranges
-            val resolvedResult: Either[EvalError, List[ResolvedArray]] =
-              args.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
-                case (Left(err), _) => Left(err)
-                case (Right(acc), Left(loc)) =>
-                  // Range location - resolve to sheet and constrain
-                  ctx.resolveRange(loc).map { case (sheet, range) =>
-                    acc :+ RangeArray(sheet, constrainRange(range, bounds))
-                  }
-                case (Right(acc), Right(expr)) =>
-                  // GH-197: Expression - constrain ranges, then evaluate with array support
-                  val boundedExpr = constrainExprRanges(expr)
-                  ctx.evalBoundedArrayExpr(boundedExpr, constrainComputedRange).flatMap { value =>
-                    sumProductArray(value).map(acc :+ _)
-                  }
+              // GH-711/GH-192: the rows (or columns) the shared bound trimmed off are blank in every
+              // argument, so each adds one same product: the arguments read over one blank row.
+              // Excel sums every one (SUMPRODUCT(--(A:A="")) counts each blank row, an IF condition
+              // over A:A tests each), so the trimmed sum gains count × that product. Only when every
+              // argument spans the trimmed axis and reads one row there at the trimmed width; any
+              // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
+              def blankTailSum(rows: Int, cols: Int): Either[EvalError, Option[BigDecimal]] =
+                SumProductTail.sum[ResolvedArray](
+                  rangesWithSheets.map(_._1),
+                  (bounds.rows, bounds.cols),
+                  args,
+                  rows,
+                  cols,
+                  ctx.resolveRange(_),
+                  drawsViaName(ctx),
+                  line => ctx.evalArrayExpr(line).flatMap(sumProductArray),
+                  RangeArray(_, _),
+                  arr => (arr.rows, arr.cols),
+                  sumOfProducts(_, _, _, ctx),
+                  edges
+                )
+
+              resolvedResult.left.map((_, false)).flatMap { resolved =>
+                resolved match
+                  case Nil => Right((BigDecimal(0), Some(BigDecimal(0))))
+                  case first :: rest =>
+                    // Validate dimensions match
+                    // GH-344 4b: SUMPRODUCT keeps exact-dimension enforcement — Excel raises
+                    // #VALUE! here, never the broadcast #N/A padding
+                    val dimensionError = rest.collectFirst {
+                      case arr if arr.rows != first.rows || arr.cols != first.cols =>
+                        EvalError.ErrorValue(
+                          CellError.Value,
+                          Some(
+                            s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})"
+                          )
+                        )
+                    }
+
+                    dimensionError match
+                      case Some(err) => Left((err, true))
+                      case None =>
+                        // Compute final dimensions
+                        val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
+                        val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
+                        sumOfProducts(resolved, finalRows, finalCols, ctx)
+                          .flatMap { sum =>
+                            blankTailSum(finalRows, finalCols).map(tail => (sum, tail))
+                          }
+                          .left
+                          .map((_, false))
               }
 
-            // GH-711/GH-192: the rows (or columns) the shared bound trimmed off are blank in every
-            // argument, so each adds one same product: the arguments read over one blank row.
-            // Excel sums every one (SUMPRODUCT(--(A:A="")) counts each blank row, an IF condition
-            // over A:A tests each), so the trimmed sum gains count × that product. Only when every
-            // argument spans the trimmed axis and reads one row there at the trimmed width; any
-            // other shape (a bounded range, a shape-sensitive ROW(A:A)) keeps the trimmed sum.
-            def blankTailSum(rows: Int, cols: Int): Either[EvalError, BigDecimal] =
-              SumProductTail.sum[ResolvedArray](
-                rangesWithSheets.map(_._1),
-                bounds,
-                args,
-                rows,
-                cols,
-                ctx.resolveRange(_),
-                drawsViaName(ctx),
-                line => ctx.evalArrayExpr(line).flatMap(sumProductArray),
-                RangeArray(_, _),
-                arr => (arr.rows, arr.cols),
-                sumOfProducts(_, _, _, ctx)
-              )
+            // GH-746: an edge range the bound trimmed whose blank tail cannot be added (ROW over
+            // it, a whole column in a range slot beside it) would lose its blank rows' products, so
+            // the sum is taken as before GH-746, every row of it read. Only where that fails by
+            // misaligning (`misaligned`: the failure GH-746 fixes, INDEX over the same rows bounded
+            // while the written range is not) does the trimmed sum stand, the same limit whole
+            // columns have; any other error is Excel's for those rows (`1/A2:A1048576` over a
+            // blank is #DIV/0!) and stands. An error under the new bound stands too: it keeps
+            // every range's start, so a shape mismatch there is Excel's
+            // (`SUMPRODUCT(A:A*INDEX(B2:B1048576,0))` is #N/A however the data lies). This
+            // evaluates SUMPRODUCT twice where the tail is not read; a tail plan that reads those
+            // shapes (#755) would make the second pass rare.
+            def total(
+              result: Either[(EvalError, Boolean), (BigDecimal, Option[BigDecimal])]
+            ): Either[EvalError, BigDecimal] =
+              result.left.map(_._1).map((sum, tail) => sum + tail.getOrElse(BigDecimal(0)))
 
-            resolvedResult.flatMap { resolved =>
-              resolved match
-                case Nil => Right(BigDecimal(0))
-                case first :: rest =>
-                  // Validate dimensions match
-                  // GH-344 4b: SUMPRODUCT keeps exact-dimension enforcement — Excel raises
-                  // #VALUE! here, never the broadcast #N/A padding
-                  val dimensionError = rest.collectFirst {
-                    case arr if arr.rows != first.rows || arr.cols != first.cols =>
-                      EvalError.ErrorValue(
-                        CellError.Value,
-                        Some(
-                          s"SUMPRODUCT: all arrays must have same dimensions (first is ${first.rows}×${first.cols}, got ${arr.rows}×${arr.cols})"
-                        )
-                      )
-                  }
-
-                  dimensionError match
-                    case Some(err) => Left(err)
-                    case None =>
-                      // Compute final dimensions
-                      val finalRows = resolved.headOption.map(_.rows).getOrElse(0)
-                      val finalCols = resolved.headOption.map(_.cols).getOrElse(0)
-                      sumOfProducts(resolved, finalRows, finalCols, ctx).flatMap { sum =>
-                        blankTailSum(finalRows, finalCols).map(tail => sum + tail)
-                      }
+            // GH-746: an argument that draws a random number (RAND, RANDBETWEEN, directly or
+            // through a name) gets no blank tail and would be evaluated twice below, so it is
+            // summed as before GH-746, once, every row read
+            lazy val draws = args.exists {
+              case Right(expr) =>
+                WorkbookAudit.callsWhere(expr, drawsViaName(ctx), SumProductTail.draws)
+              case Left(_) => false
             }
+
+            // GH-746: the full read misaligns only where an argument computes a reference over a
+            // range that reaches the edge (INDEX(B2:B1048576,0), B5:INDEX(B:B,…), XLOOKUP, OFFSET):
+            // that reference stops at the used rows while the written ranges beside it do not. Its
+            // failure is then SUMPRODUCT's dimension #VALUE!, or the #N/A that pads the shorter side
+            // of an operator. Any other error, or an #N/A without such a reference (a lookup range,
+            // `MATCH(A2:A1048576,C:C,0)` over a blank), is Excel's for those rows
+            lazy val computesEdgeReference = args.exists {
+              case Right(expr) =>
+                WorkbookAudit.hasCallWhere(
+                  expr,
+                  (_, _) => false,
+                  call =>
+                    call.spec match
+                      // its own arguments only: a nested call is visited on its own by the walk
+                      case _: FunctionSpec.Referencing[?, ?] =>
+                        call.spec.argSpec.toValues(call.args).exists {
+                          case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) =>
+                            RangeEdges.reachesEdge(r)
+                          case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
+                            RangeEdges.reachesEdge(r)
+                          case ArgValue.Expr(TExpr.RangeRef(r, _)) => RangeEdges.reachesEdge(r)
+                          case ArgValue.Expr(TExpr.SheetRange(_, r, _)) => RangeEdges.reachesEdge(r)
+                          case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
+                          case _ => false
+                        }
+                      case _ => false
+                )
+              case Left(_) => false
+            }
+            def misaligned(err: EvalError, ownDimensionCheck: Boolean): Boolean =
+              ownDimensionCheck || (err match
+                case EvalError.ErrorValue(CellError.NA, _) => computesEdgeReference
+                case _ => false)
+
+            // GH-746: the shared bound reaches an edge range only as a value the arguments read
+            // (an expression position, trimmed with the written ranges) or as the reference
+            // INDEX, XLOOKUP or `:` computes (bounded through `constrainComputedRange`). In any
+            // other function's range slot it keeps every row while the trimmed ranges beside it do
+            // not, even when the same range is also read as a value: FILTER(B2:B1048576,…) or SORT
+            // returns all of it, and OFFSET, INDIRECT or a defined name builds a range the bound
+            // never sees. Such a SUMPRODUCT is summed as before GH-746, every row read, which also
+            // keeps a lookup range's genuine error (MATCH(…,C:C,0))
+            lazy val unboundedRead = args.exists {
+              case Right(expr) =>
+                WorkbookAudit.hasCallWhere(
+                  expr,
+                  (_, _) => true,
+                  call =>
+                    val opaque = OpaqueReferenceFunctions.contains(call.spec.name.toUpperCase)
+                    val bounded = call.spec match
+                      case _: FunctionSpec.Referencing[?, ?] => !opaque
+                      case _ => false
+                    opaque || (!bounded && call.spec.argSpec.toValues(call.args).exists {
+                      case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) =>
+                        RangeEdges.reachesEdge(r)
+                      case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
+                        RangeEdges.reachesEdge(r)
+                      case ArgValue.Range(_) => true
+                      case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
+                      case _ => false
+                    })
+                )
+              case Left(TExpr.RangeLocation.Local(_, _)) |
+                  Left(TExpr.RangeLocation.CrossSheet(_, _, _)) =>
+                false
+              case Left(_) => true
+            }
+
+            if edgeTrimmed && (draws || unboundedRead) then
+              total(sumUnder(sharedBounds(edges = false)))
+            else
+              sumUnder(bounds) match
+                case Right((sum, Some(tail))) => Right(sum + tail)
+                case Right((sum, None)) if edgeTrimmed =>
+                  sumUnder(sharedBounds(edges = false)) match
+                    case Left((err, own)) if misaligned(err, own) => Right(sum)
+                    case whole => total(whole)
+                case other => total(other)
           }
     }
