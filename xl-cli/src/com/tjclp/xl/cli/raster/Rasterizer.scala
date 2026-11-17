@@ -35,7 +35,7 @@ import com.tjclp.xl.cli.contract.CliException
  * fallbacks for environments where AWT is unavailable (native image):
  *   1. Batik (pure JVM, requires AWT - the default)
  *   2. cairosvg (Python, very portable - pip install cairosvg)
- *   3. rsvg-convert (librsvg, fast - apt install librsvg2-bin)
+ *   3. rsvg-convert (librsvg, fast - apt install librsvg2-bin; brew install librsvg on macOS)
  *   4. resvg (Rust, best quality - cargo install resvg)
  *
  * ImageMagick is not part of the automatic chain (its SVG delegate configuration is fragile,
@@ -114,6 +114,59 @@ object NativeImage:
       prop("java.vm.name").exists(_.contains("Substrate"))
 
 /**
+ * GH-866: whether the host is macOS, so the install hints name Homebrew there (`brew install
+ * librsvg`) instead of apt. Read from `os.name` with the property lookup injectable, like
+ * [[NativeImage]].
+ */
+object HostOs:
+
+  /** True when `os.name` names macOS. */
+  lazy val isMacOS: Boolean = detectMacOS(sys.props.get)
+
+  private[cli] def detectMacOS(prop: String => Option[String]): Boolean =
+    prop("os.name").exists(_.toLowerCase(java.util.Locale.ROOT).startsWith("mac"))
+
+/**
+ * The install one-liners for the external backends, by platform (GH-866): Homebrew on macOS — where
+ * `rsvg-convert` is the quickest working backend and comes first — apt elsewhere. Every place that
+ * tells a user how to get a rasterizer reads them here.
+ */
+object RasterInstall:
+
+  /** The package that provides `rsvg-convert`: `librsvg` (Homebrew) or `librsvg2-bin` (apt). */
+  def rsvgConvertPackage(macOS: Boolean): String =
+    if macOS then "librsvg" else "librsvg2-bin"
+
+  /** The bare install command for `rsvg-convert`. */
+  def rsvgConvertCommand(macOS: Boolean): String =
+    if macOS then s"brew install ${rsvgConvertPackage(macOS)}"
+    else s"apt install ${rsvgConvertPackage(macOS)}"
+
+  /** The install command, naming the distribution where it is not macOS. */
+  def rsvgConvert(macOS: Boolean): String =
+    if macOS then rsvgConvertCommand(macOS) else s"${rsvgConvertCommand(macOS)} (Debian/Ubuntu)"
+
+  def imageMagick(macOS: Boolean): String =
+    if macOS then "brew install imagemagick" else "apt install imagemagick"
+
+  /** `Install: …` for a backend `--rasterizer` asked for and could not find. */
+  def hintFor(
+    name: String,
+    macOS: Boolean = HostOs.isMacOS,
+    nativeImage: Boolean = NativeImage.inNativeImage
+  ): String = name match
+    case "batik" =>
+      if nativeImage then
+        "Batik is bundled but needs AWT - unavailable in the native binary by design"
+      else "Batik is bundled but requires AWT, which is unavailable in this environment"
+    case "cairosvg" => "Install: pip install cairosvg"
+    case "rsvg-convert" => s"Install: ${rsvgConvert(macOS)}"
+    case "resvg" =>
+      "Install: cargo install resvg, or a prebuilt binary from https://github.com/linebender/resvg/releases"
+    case "imagemagick" => s"Install: ${imageMagick(macOS)}"
+    case _ => s"Unknown rasterizer: $name"
+
+/**
  * Errors that can occur during rasterization.
  */
 sealed trait RasterError extends Exception:
@@ -124,7 +177,8 @@ object RasterError:
   /** No rasterizer available on the system */
   case class NoRasterizerAvailable(
     triedRasterizers: List[String],
-    runningNativeImage: Boolean = NativeImage.inNativeImage
+    runningNativeImage: Boolean = NativeImage.inNativeImage,
+    macOS: Boolean = HostOs.isMacOS
   ) extends RasterError:
     def message: String =
       val platformNote =
@@ -134,6 +188,15 @@ object RasterError:
         else
           "Note: the JAR distribution rasterizes out-of-the-box (bundled Batik); the\n" +
             "native binary always needs one of the external tools below."
+      val rsvg = s"  - rsvg-convert: ${RasterInstall.rsvgConvert(macOS)}"
+      val others = List(
+        "  - cairosvg: pip install cairosvg",
+        "  - resvg: cargo install resvg, or a prebuilt binary from",
+        "    https://github.com/linebender/resvg/releases"
+      )
+      // GH-866: on macOS one brew command gives a working backend, so it leads
+      val installLines =
+        (if macOS then rsvg :: others else others.head :: rsvg :: others.tail).mkString("\n")
       s"""No SVG rasterizer available. Tried: ${triedRasterizers.mkString(", ")}
          |
          |$platformNote
@@ -141,11 +204,8 @@ object RasterError:
          |Run `xl rasterizers` to see backend status on this machine.
          |
          |Install one of:
-         |  - cairosvg: pip install cairosvg
-         |  - rsvg-convert: apt install librsvg2-bin (Debian/Ubuntu)
-         |  - resvg: cargo install resvg, or a prebuilt binary from
-         |    https://github.com/linebender/resvg/releases
-         |  - ImageMagick (not tried automatically): apt install imagemagick,
+         |$installLines
+         |  - ImageMagick (not tried automatically): ${RasterInstall.imageMagick(macOS)},
          |    then pass --rasterizer imagemagick
          |
          |Or use --format svg for vector output.""".stripMargin
@@ -279,7 +339,7 @@ object RasterizerChain:
                 IO.raiseError(
                   RasterError.RasterizerNotFound(
                     name,
-                    installHintFor(name.toLowerCase)
+                    RasterInstall.hintFor(name.toLowerCase)
                   )
                 )
             }
@@ -633,18 +693,6 @@ object RasterizerChain:
         discard(backup)
         throw failed
     discard(backup)
-
-  private def installHintFor(name: String): String = name match
-    case "batik" =>
-      if NativeImage.inNativeImage then
-        "Batik is bundled but needs AWT - unavailable in the native binary by design"
-      else "Batik is bundled but requires AWT, which is unavailable in this environment"
-    case "cairosvg" => "Install: pip install cairosvg"
-    case "rsvg-convert" => "Install: apt install librsvg2-bin (Debian/Ubuntu)"
-    case "resvg" =>
-      "Install: cargo install resvg, or a prebuilt binary from https://github.com/linebender/resvg/releases"
-    case "imagemagick" => "Install: apt install imagemagick"
-    case _ => s"Unknown rasterizer: $name"
 
   /**
    * Scale SVG width/height attributes for requested DPI.

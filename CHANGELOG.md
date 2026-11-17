@@ -43,6 +43,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
   `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
 
+- **macOS install hint for rasterizers** (#866): on macOS, `RASTERIZER_UNAVAILABLE` and the
+  `xl rasterizers` warning list `brew install librsvg` (rsvg-convert) first and
+  `brew install imagemagick` for the ImageMagick opt-in, in place of the apt commands; a forced
+  `--rasterizer rsvg-convert` or `imagemagick` that is missing names the same brew command. Other
+  platforms are unchanged.
+  **Behaviour change:** on macOS, the "Install one of:" list opens with
+  `rsvg-convert: brew install librsvg`.
+
 - **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
   INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
   Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
