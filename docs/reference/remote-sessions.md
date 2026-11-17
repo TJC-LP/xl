@@ -39,7 +39,9 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    `$CLAUDE_ENV_FILE` (sourced before every Bash call), and prints a summary that lands in
    Claude's context. Idempotent: the toolchain comes from the environment cache, `PATH` is built
    without repeating a prefix it already has, and a line is appended to the env file only when it is
-   not already there — so a second SessionStart takes seconds and adds nothing.
+   not already there, and the pre-fetch is skipped while a stamp of the build definition (`*.mill`,
+   `.mill-version`, `.mill-jvm-version`) still matches — so a second SessionStart takes seconds and adds
+   nothing.
 
    **TLS-intercepting proxies.** Some sandboxes route HTTPS through a proxy that re-terminates TLS
    and inject its CA into the JVM via `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=…`. GraalVM
@@ -63,7 +65,8 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    rerunning resumes where it stopped. The hook therefore retries every network step with backoff
    and pre-fetches the whole dependency set inside its own time budget: about 3 minutes and 600 MB
    cold, under a minute warm. Later `./mill` and `make install-jar` calls then start from cache.
-   Knobs: `XL_REMOTE_PREFETCH=false` skips the pre-fetch, and `XL_REMOTE_DEADLINE=<seconds>`
+   Only download errors are retried: a broken build fails once and the hook moves on. Every attempt,
+   including coursier's, is cut off at the deadline. Knobs: `XL_REMOTE_PREFETCH=false` skips the pre-fetch, and `XL_REMOTE_DEADLINE=<seconds>`
    (default 540, under the hook's 600 s timeout) bounds the retries. If a later build still prints
    a 429, rerun the same command.
 3. **`.claude/settings.json`** — allowlists the build, test, format, gate, and read-only `git`/`gh`

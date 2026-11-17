@@ -67,13 +67,17 @@ note() { NOTES="${NOTES:+$NOTES; }$*"; }
 warn() { echo "[remote-setup] WARN: $*" >&2; note "WARN: $*"; }
 DEADLINE="${XL_REMOTE_DEADLINE:-540}" # seconds since start ($SECONDS); keeps the hook under its timeout
 # retry N CMD...: run CMD up to N times, doubling a delay (XL_REMOTE_RETRY_DELAY, default 10 s)
-# between attempts and never sleeping past DEADLINE (HTTP 429, see above).
+# between attempts and never sleeping past DEADLINE (HTTP 429, see above). CMD bounds each attempt
+# by the time left (`timeout $(left)`), and exits NO_RETRY for a failure a rerun cannot fix.
+NO_RETRY=100
+left() { local t=$((DEADLINE - SECONDS)); ((t > 0)) && echo "$t"; }
 retry() {
-  local n="$1" delay="${XL_REMOTE_RETRY_DELAY:-10}" i
+  local n="$1" delay="${XL_REMOTE_RETRY_DELAY:-10}" i rc
   shift
   for ((i = 1; i <= n; i++)); do
     "$@" && return 0
-    ((i < n && SECONDS + delay < DEADLINE)) || return 1
+    rc=$?
+    ((rc != NO_RETRY && i < n && SECONDS + delay < DEADLINE)) || return 1
     sleep "$delay"
     delay=$((delay * 2))
   done
@@ -101,8 +105,10 @@ CS=""
 CS_JAR=""
 CS_CACHE="$BIN/.xl-remote"
 mkdir -p "$CS_CACHE"
-cs_run() {
-  if [[ -n "$CS_JAR" ]]; then java -jar "$CS_JAR" "$@"; else "$CS" "$@"; fi
+cs_run() { # bounded by DEADLINE so a stalled download cannot outlive the hook's timeout
+  local t
+  t=$(left) || return 1
+  if [[ -n "$CS_JAR" ]]; then timeout "$t" java -jar "$CS_JAR" "$@"; else timeout "$t" "$CS" "$@"; fi
 }
 # Only execute downloaded/cache-managed tools after checking committed bytes.
 # Failure leaves CS empty and lets the remaining session exports complete.
@@ -206,19 +212,34 @@ fi
 # ---------- 4. Pre-fetch the build's dependencies ----------
 # Downloads land in the shared coursier cache, so later `./mill` and `make install-jar` calls start
 # offline instead of each meeting Maven Central's rate limit on their own. Fast when the cache is warm.
+# A stamp of the build definition skips it on a later start or resume that changed nothing.
 if [[ "${XL_REMOTE_PREFETCH:-true}" == "true" && -f "$ROOT/build.mill" ]]; then
   PREFETCH_LOG="$CS_CACHE/prefetch.log"
+  PREFETCH_STAMP="$CS_CACHE/prefetch.stamp"
+  BUILD_KEY="$( (cd "$ROOT" && echo "${MILL_VERSION_EXPORT:-}" && cat .mill-version .mill-jvm-version 2>/dev/null &&
+    find . -name '*.mill' -not -path './out/*' -not -path './.git/*' | LC_ALL=C sort | xargs cat) |
+    sha256sum | cut -d' ' -f1)"
   prefetch() {
-    local left=$((DEADLINE - SECONDS))
-    ((left > 30)) || return 1
+    local t log="$PREFETCH_LOG.attempt"
+    t=$(left) && ((t > 30)) || return 1
     (cd "$ROOT" && env ${MILL_VERSION_EXPORT:+MILL_VERSION="$MILL_VERSION_EXPORT"} \
-      timeout "$left" ./mill --no-daemon __.prepareOffline) >> "$PREFETCH_LOG" 2>&1
+      timeout "$t" ./mill --no-daemon __.prepareOffline) > "$log" 2>&1 && { cat "$log" >> "$PREFETCH_LOG"; return 0; }
+    cat "$log" >> "$PREFETCH_LOG"
+    # Only a download error (429 and friends) is worth a rerun; a broken build fails the same way again.
+    grep -qE 'response code: (429|50[234])|Failed to download|Error downloading' "$log" || return "$NO_RETRY"
+    return 1
   }
-  : > "$PREFETCH_LOG"
-  if retry 5 prefetch; then
-    note "build dependencies pre-fetched"
+  if [[ -f "$PREFETCH_STAMP" && "$(cat "$PREFETCH_STAMP")" == "$BUILD_KEY" ]]; then
+    note "build dependencies already pre-fetched"
   else
-    warn "dependency pre-fetch did not finish ($(grep -c 'response code: 429' "$PREFETCH_LOG") HTTP 429 answers; log: $PREFETCH_LOG); rerun ./mill, it resumes from the cache"
+    : > "$PREFETCH_LOG"
+    if retry 5 prefetch; then
+      printf '%s\n' "$BUILD_KEY" > "$PREFETCH_STAMP"
+      note "build dependencies pre-fetched"
+    else
+      warn "dependency pre-fetch did not finish ($(grep -c 'response code: 429' "$PREFETCH_LOG") HTTP 429 answers; log: $PREFETCH_LOG); rerun ./mill, it resumes from the cache"
+    fi
+    rm -f "$PREFETCH_LOG.attempt"
   fi
 fi
 

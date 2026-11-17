@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class RemoteSetupTest(unittest.TestCase):
     def run_setup(self, system='Linux', arch='x86_64', cached=False,
                   external=False, version='2.1.24', payload=False, tamper=False, user_owned=False,
-                  mill_failures=None):
+                  mill_failures=None, mill_error='Server returned HTTP response code: 429', repeat=1):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td)
             project = t / 'project'; (project / 'scripts').mkdir(parents=True)
@@ -48,14 +48,15 @@ class RemoteSetupTest(unittest.TestCase):
                 (project / 'build.mill').write_text('')
                 executable(project / 'mill', 'echo run >> "$FIXTURE/mill-runs"\n'
                            f'[ "$(wc -l < "$FIXTURE/mill-runs")" -gt {mill_failures} ] && exit 0\n'
-                           'echo "Server returned HTTP response code: 429"; exit 1')
+                           f'echo "{mill_error}"; exit 1')
             env = {'PATH':str(managed)+':'+str(tools)+':/usr/bin:/bin','HOME':str(t),
                    'FIXTURE':str(t),'CLAUDE_PROJECT_DIR':str(project),
                    'CLAUDE_CODE_REMOTE':'true','XL_REMOTE_BIN':str(managed),
                    'CLAUDE_ENV_FILE':str(t/'exports'), 'XL_REMOTE_COURSIER_VERSION':version,
                    'XL_REMOTE_RETRY_DELAY':'0'}
-            p = subprocess.run(['/bin/bash',str(project/'scripts/remote-setup.sh'),'--force'],
-                               env=env,capture_output=True,text=True,timeout=10)
+            for _ in range(repeat):
+                p = subprocess.run(['/bin/bash',str(project/'scripts/remote-setup.sh'),'--force'],
+                                   env=env,capture_output=True,text=True,timeout=10)
             if user_owned:
                 self.assertTrue((managed/'cs').exists(), 'caller tool was deleted')
                 self.assertIn('user-owned', (managed/'cs').read_text())
@@ -107,6 +108,16 @@ class RemoteSetupTest(unittest.TestCase):
         p, runs = self.run_setup(mill_failures=2)
         self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(3, runs)
         self.assertIn('build dependencies pre-fetched', p.stdout)
+
+    def test_prefetch_does_not_retry_a_broken_build(self):
+        p, runs = self.run_setup(mill_failures=99, mill_error='[error] build.mill: compile error')
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(1, runs)
+        self.assertIn('pre-fetch did not finish', p.stderr)
+
+    def test_prefetch_is_skipped_once_stamped(self):
+        p, runs = self.run_setup(mill_failures=0, repeat=2)
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(1, runs)
+        self.assertIn('already pre-fetched', p.stdout)
 
     def test_prefetch_gives_up_with_a_warning(self):
         p, runs = self.run_setup(mill_failures=99)
