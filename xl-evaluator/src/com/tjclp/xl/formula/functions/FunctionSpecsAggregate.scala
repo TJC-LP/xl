@@ -2188,17 +2188,15 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case _ => false)
 
             // GH-746: the shared bound reaches an edge range only as a value the arguments read
-            // (`TExpr.collectValueRanges`, trimmed with the written ranges) or as the reference
-            // INDEX, XLOOKUP or `:` computes (bounded through `constrainComputedRange`). Read
-            // anywhere else, it keeps every row while the trimmed ranges beside it do not:
-            // FILTER(B2:B1048576,…) or SORT returns all of it, and OFFSET, INDIRECT or a defined name
-            // builds a range the bound never sees. Such a SUMPRODUCT is summed as before GH-746,
-            // every row read, which also keeps a lookup range's genuine error (MATCH(…,C:C,0))
+            // (an expression position, trimmed with the written ranges) or as the reference
+            // INDEX, XLOOKUP or `:` computes (bounded through `constrainComputedRange`). In any
+            // other function's range slot it keeps every row while the trimmed ranges beside it do
+            // not, even when the same range is also read as a value: FILTER(B2:B1048576,…) or SORT
+            // returns all of it, and OFFSET, INDIRECT or a defined name builds a range the bound
+            // never sees. Such a SUMPRODUCT is summed as before GH-746, every row read, which also
+            // keeps a lookup range's genuine error (MATCH(…,C:C,0))
             lazy val unboundedRead = args.exists {
               case Right(expr) =>
-                val values = TExpr.collectValueRanges(expr).map(_._2).toSet
-                def outsideBound(r: CellRange): Boolean =
-                  RangeEdges.reachesEdge(r) && !values.contains(r)
                 WorkbookAudit.hasCallWhere(
                   expr,
                   (_, _) => true,
@@ -2208,13 +2206,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       case _: FunctionSpec.Referencing[?, ?] => !opaque
                       case _ => false
                     opaque || (!bounded && call.spec.argSpec.toValues(call.args).exists {
-                      case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) => outsideBound(r)
+                      case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) =>
+                        RangeEdges.reachesEdge(r)
                       case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
-                        outsideBound(r)
+                        RangeEdges.reachesEdge(r)
                       case ArgValue.Range(_) => true
-                      case ArgValue.Expr(TExpr.RangeRef(r, _)) => outsideBound(r)
-                      case ArgValue.Expr(TExpr.SheetRange(_, r, _)) => outsideBound(r)
-                      case ArgValue.Cells(r) => outsideBound(r)
+                      case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
                       case _ => false
                     })
                 )

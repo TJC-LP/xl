@@ -283,6 +283,12 @@ class ComputedReferenceSpec extends FunSuite:
     // FILTER and SORT return every row of the range they are given
     assertEquals(at("SUMPRODUCT(A2:A1048576*FILTER(B2:B1048576,TRUE))"), Right(number(140)))
     assertEquals(at("SUMPRODUCT(A2:A1048576*SORT(B2:B1048576))"), Right(number(140)))
+    // ... even when the same range is also read as a value beside them
+    assertEquals(
+      at("SUMPRODUCT(A2:A1048576*B2:B1048576*FILTER(B2:B1048576,TRUE))"),
+      Right(number(3600))
+    )
+    assertEquals(at("SUMPRODUCT(B2:B1048576*SORT(B2:B1048576))"), Right(number(1400)))
   }
 
   test("an edge range across columns lines up with INDEX over the same columns (#746)") {
