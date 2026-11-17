@@ -22,14 +22,23 @@
 # instead: `./mill` via MILL_VERSION=<.mill-version>-jvm, coursier via its JAR, scala-cli via a
 # coursier bootstrap launcher. `curl` is unaffected either way (it honours SSL_CERT_FILE).
 #
+# Rate limits: Maven Central intermittently answers a cloud sandbox's burst of parallel downloads
+# with HTTP 429. Coursier retries only socket/TLS exceptions, so one 429 fails a whole resolution
+# (`Failed to download ….pom`, then `Server returned HTTP response code: 429`). What succeeded stays
+# in the cache, so a rerun fetches only what is missing: every network step here is retried with
+# backoff, and step 4 pre-fetches all of the build's dependencies so later `./mill` calls hit cache.
+#
 # Steps:
 #   0. Detect an injected JVM truststore; if present, switch ./mill to the JVM launcher.
 #   1. Obtain coursier (`cs` native launcher, or the JAR behind a proxy) if missing.
 #   2. Provision the JDK named in .mill-jvm-version through coursier (shared cache with Mill).
 #   3. Install scala-cli (native launcher, or a JVM bootstrap behind a proxy).
-#   4. Append MILL_VERSION/JAVA_HOME/PATH to $CLAUDE_ENV_FILE, which Claude Code sources before
+#   4. Pre-fetch Mill and every dependency (`./mill --no-daemon __.prepareOffline`), retried until
+#      XL_REMOTE_DEADLINE seconds after the hook started (default 540, under the 600 s hook timeout);
+#      XL_REMOTE_PREFETCH=false skips it.
+#   5. Append MILL_VERSION/JAVA_HOME/PATH to $CLAUDE_ENV_FILE, which Claude Code sources before
 #      every Bash call (each line once; a re-run appends nothing already there).
-#   5. Print a one-paragraph status; SessionStart stdout lands in Claude's context.
+#   6. Print a one-paragraph status; SessionStart stdout lands in Claude's context.
 #
 # Usage: bash scripts/remote-setup.sh [--force]
 set -uo pipefail
@@ -56,6 +65,19 @@ SCALA_CLI_VERSION="${XL_REMOTE_SCALA_CLI_VERSION:-1.9.1}"
 NOTES=""
 note() { NOTES="${NOTES:+$NOTES; }$*"; }
 warn() { echo "[remote-setup] WARN: $*" >&2; note "WARN: $*"; }
+DEADLINE="${XL_REMOTE_DEADLINE:-540}" # seconds since start ($SECONDS); keeps the hook under its timeout
+# retry N CMD...: run CMD up to N times, doubling a delay (XL_REMOTE_RETRY_DELAY, default 10 s)
+# between attempts and never sleeping past DEADLINE (HTTP 429, see above).
+retry() {
+  local n="$1" delay="${XL_REMOTE_RETRY_DELAY:-10}" i
+  shift
+  for ((i = 1; i <= n; i++)); do
+    "$@" && return 0
+    ((i < n && SECONDS + delay < DEADLINE)) || return 1
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+}
 
 # ---------- 0. TLS-intercepting proxy → JVM launchers ----------
 JVM_LAUNCHERS=false
@@ -95,7 +117,7 @@ verified_fetch() {
     warn "discarding mismatched cached $key"
     rm -f "$target"
   fi
-  if curl -fsSL "$url" -o "$target.tmp" &&
+  if curl -fsSL "$url" -o "$target.tmp" --retry 4 &&
       xl_verify_sha256 "$expected" "$target.tmp"; then
     mv "$target.tmp" "$target"
   else
@@ -155,7 +177,7 @@ JVM_INDEX_OPT=()
 [[ "$JVM_LAUNCHERS" == "true" ]] && JVM_INDEX_OPT=(--jvm-index "https://raw.githubusercontent.com/coursier/jvm-index/master/index.json")
 JAVA_HOME_NEW=""
 if [[ -n "$CS" || -n "$CS_JAR" ]]; then
-  if JAVA_HOME_NEW="$(cs_run java-home --jvm "$JVM_SPEC" ${JVM_INDEX_OPT[@]+"${JVM_INDEX_OPT[@]}"} 2>/dev/null)" && [[ -x "$JAVA_HOME_NEW/bin/java" ]]; then
+  if JAVA_HOME_NEW="$(retry 3 cs_run java-home --jvm "$JVM_SPEC" ${JVM_INDEX_OPT[@]+"${JVM_INDEX_OPT[@]}"} 2>/dev/null)" && [[ -x "$JAVA_HOME_NEW/bin/java" ]]; then
     note "JDK $JVM_SPEC at $JAVA_HOME_NEW"
   else
     JAVA_HOME_NEW=""
@@ -168,20 +190,39 @@ if [[ -n "$CS" || -n "$CS_JAR" ]]; then
   elif [[ -n "$CS_JAR" ]]; then
     # A coursier bootstrap is a JVM launcher: it fetches scala-cli's jars through the JVM (and so
     # through the injected truststore) instead of downloading the native image.
-    if cs_run bootstrap "org.virtuslab.scala-cli:cli_3:${SCALA_CLI_VERSION}" -M scala.cli.ScalaCli \
+    if retry 3 cs_run bootstrap "org.virtuslab.scala-cli:cli_3:${SCALA_CLI_VERSION}" -M scala.cli.ScalaCli \
         -o "$BIN/scala-cli" -f >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
       note "scala-cli $SCALA_CLI_VERSION installed to $BIN as a JVM launcher"
     else
       warn "scala-cli JVM bootstrap failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"
     fi
-  elif cs_run install --install-dir "$BIN" "scala-cli:$SCALA_CLI_VERSION" >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
+  elif retry 3 cs_run install --install-dir "$BIN" "scala-cli:$SCALA_CLI_VERSION" >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
     note "scala-cli installed to $BIN"
   else
     warn "scala-cli install failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"
   fi
 fi
 
-# ---------- 4. Export to the session ----------
+# ---------- 4. Pre-fetch the build's dependencies ----------
+# Downloads land in the shared coursier cache, so later `./mill` and `make install-jar` calls start
+# offline instead of each meeting Maven Central's rate limit on their own. Fast when the cache is warm.
+if [[ "${XL_REMOTE_PREFETCH:-true}" == "true" && -f "$ROOT/build.mill" ]]; then
+  PREFETCH_LOG="$CS_CACHE/prefetch.log"
+  prefetch() {
+    local left=$((DEADLINE - SECONDS))
+    ((left > 30)) || return 1
+    (cd "$ROOT" && env ${MILL_VERSION_EXPORT:+MILL_VERSION="$MILL_VERSION_EXPORT"} \
+      timeout "$left" ./mill --no-daemon __.prepareOffline) >> "$PREFETCH_LOG" 2>&1
+  }
+  : > "$PREFETCH_LOG"
+  if retry 5 prefetch; then
+    note "build dependencies pre-fetched"
+  else
+    warn "dependency pre-fetch did not finish ($(grep -c 'response code: 429' "$PREFETCH_LOG") HTTP 429 answers; log: $PREFETCH_LOG); rerun ./mill, it resumes from the cache"
+  fi
+fi
+
+# ---------- 5. Export to the session ----------
 # The hook runs on every SessionStart, so $CLAUDE_ENV_FILE may already hold these lines and PATH
 # may already start with these directories: prepend only what is missing, append only new lines.
 prepend_path() { # prepend_path DIR PATH → DIR:PATH, or PATH unchanged when DIR is already on it
@@ -201,6 +242,6 @@ else
   note "CLAUDE_ENV_FILE unset, so nothing was exported (prefix PATH with $BIN and the JDK bin yourself${MILL_VERSION_EXPORT:+, and export MILL_VERSION=$MILL_VERSION_EXPORT} if needed)"
 fi
 
-# ---------- 5. Context for Claude ----------
+# ---------- 6. Context for Claude ----------
 echo "xl remote setup (scripts/remote-setup.sh): ${NOTES}. Mill pins its own JDK via .mill-jvm-version. In a fresh sandbox the first ./mill build downloads dependencies: give it a 600000 ms Bash timeout. Not available here: gtr, GraalVM (use 'make install-jar', not 'make install'). Details: docs/reference/remote-sessions.md."
 exit 0
