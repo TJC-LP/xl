@@ -17,7 +17,8 @@ class RasterizerListSpec extends FunSuite:
     resvg: Boolean = false,
     imageMagick: Boolean = false,
     imageMagickDiag: String = "ImageMagick not found",
-    nativeImage: Boolean = false
+    nativeImage: Boolean = false,
+    macOS: Boolean = false
   ): (String, Boolean) =
     Main.renderRasterizerTable(
       batikAvail = batik,
@@ -26,7 +27,8 @@ class RasterizerListSpec extends FunSuite:
       resvgAvail = resvg,
       imageMagickAvail = imageMagick,
       imageMagickDiag = imageMagickDiag,
-      nativeImage = nativeImage
+      nativeImage = nativeImage,
+      macOS = macOS
     )
 
   private def lineFor(output: String, backend: String): String =
@@ -81,6 +83,45 @@ class RasterizerListSpec extends FunSuite:
     assert(out.contains("apt install librsvg2-bin"), "rsvg-convert one-liner")
     assert(out.contains("linebender/resvg/releases"), "resvg prebuilt release pointer")
     assert(out.contains("--rasterizer imagemagick"), "ImageMagick opt-in reminder")
+  }
+
+  test("GH-866: nothing installed on macOS: brew install librsvg is the first one-liner") {
+    val (out, hasWorking) = render(nativeImage = true, macOS = true)
+    assert(!hasWorking)
+    val first = out.linesIterator.dropWhile(_ != "Install one of:").drop(1).nextOption()
+    assert(first.exists(_.startsWith("  brew install librsvg")), s"first install line:\n$out")
+    assert(out.contains("brew install imagemagick"), out)
+    assert(!out.contains("apt install"), s"no apt on macOS:\n$out")
+  }
+
+  test("GH-866: an available rsvg-convert names the package for the platform") {
+    val (mac, _) = render(rsvg = true, macOS = true)
+    val macRow = lineFor(mac, "rsvg-convert")
+    assert(macRow.endsWith("| librsvg"), s"macOS row: $macRow")
+    val (linux, _) = render(rsvg = true, macOS = false)
+    assert(lineFor(linux, "rsvg-convert").endsWith("| librsvg2-bin"), linux)
+  }
+
+  test("GH-866: the install block is byte for byte as before off macOS, brew-first on macOS") {
+    def block(out: String): String = out.substring(out.indexOf("Install one of:"))
+    assertEquals(
+      block(render()._1),
+      """Install one of:
+        |  pip install cairosvg           # Python, most portable
+        |  apt install librsvg2-bin       # rsvg-convert, fast
+        |  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases
+        |  apt install imagemagick        # then pass --rasterizer imagemagick
+        |""".stripMargin
+    )
+    assertEquals(
+      block(render(macOS = true)._1),
+      """Install one of:
+        |  brew install librsvg           # rsvg-convert, fast
+        |  pip install cairosvg           # Python, most portable
+        |  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases
+        |  brew install imagemagick       # then pass --rasterizer imagemagick
+        |""".stripMargin
+    )
   }
 
   test("nothing installed on native binary: warning names Batik as by-design dead (GH-359)") {

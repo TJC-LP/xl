@@ -12,6 +12,7 @@ import com.tjclp.xl.formula.functions.{
   LiftSlot,
   ReferenceFunctionNames,
   ReferenceOperators,
+  TableColumnReferences,
   SumProductTail
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
@@ -350,6 +351,10 @@ object Evaluator:
         resolveNameToRange(name, scope, currentSheet, workbook, resolvingNames, memo)
       // GH-710: a LET name's reference lives in the LET environment, which only a function's
       // EvalContext carries (EvalContext.resolveRange)
+      case TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)) =>
+        TableColumnReferences
+          .resolve(column, currentSheet, workbook)
+          .map(ref => (ref.sheet, ref.range))
       case TExpr.RangeLocation.Computed(_) =>
         Left(
           EvalError.ErrorValue(
@@ -897,7 +902,7 @@ object Evaluator:
    */
   private[formula] val referenceFunctions: Set[String] =
     ReferenceFunctionNames.selecting ++ ReferenceFunctionNames.computing +
-      ReferenceOperators.IntersectionName + ReferenceOperators.RangeName
+      ReferenceOperators.IntersectionName + ReferenceOperators.RangeName + TableColumnReferences.Name
 
   /**
    * GH-669: an operator node (binary, `%` or unary `+`) whose operands are only array constants,

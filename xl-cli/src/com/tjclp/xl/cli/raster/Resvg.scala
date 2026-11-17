@@ -48,10 +48,7 @@ object Resvg extends Rasterizer:
         isAvailable.flatMap {
           case false =>
             IO.raiseError(
-              RasterError.RasterizerNotFound(
-                name,
-                "Install: cargo install resvg"
-              )
+              RasterError.RasterizerNotFound(name, RasterInstall.hintFor(name))
             )
 
           case true =>

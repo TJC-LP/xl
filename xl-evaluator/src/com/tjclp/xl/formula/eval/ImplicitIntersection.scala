@@ -4,7 +4,12 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
-import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry, ReferenceOperators}
+import com.tjclp.xl.formula.functions.{
+  ArgValue,
+  FunctionRegistry,
+  ReferenceOperators,
+  TableColumnReferences
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -158,6 +163,8 @@ private[xl] object ImplicitIntersection:
     case _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ExternalRange | _: TExpr.NameRef |
         _: TExpr.SheetNameRef =>
       true
+    // GH-669: a table column is a multi-cell reference like `B3:B5`, though carried as a call
+    case TableColumnReferences.Ref(_) => true
     case TExpr.Lit(value) =>
       value match
         case _: ArrayResult => true

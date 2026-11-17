@@ -52,10 +52,7 @@ object RsvgConvert extends Rasterizer:
         isAvailable.flatMap {
           case false =>
             IO.raiseError(
-              RasterError.RasterizerNotFound(
-                name,
-                "Install: apt install librsvg2-bin (Debian/Ubuntu)"
-              )
+              RasterError.RasterizerNotFound(name, RasterInstall.hintFor(name))
             )
 
           case true =>

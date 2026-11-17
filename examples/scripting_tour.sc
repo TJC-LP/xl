@@ -92,6 +92,7 @@ val orders = Vector(
   Order(2, "Globex", 1, BigDecimal("120.00"), None)
 )
 val placed = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe // header + rows + Excel table
+assert(placed.sheet.evaluateFormula("=SUM(Orders[qty])") == Right(CellValue.Number(BigDecimal(4))))
 val back = placed.sheet.readRowsByHeader[Order](Row.from1(1))            // Either[RowCodecError, Vector[Order]]
 println(s"  ✓ Records: wrote ${placed.count} rows over ${placed.range.map(_.toA1).getOrElse("-")}, read back ${back.map(_.size).getOrElse(-1)}")
 

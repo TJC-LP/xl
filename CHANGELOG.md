@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Qualified table-column references** (part of #669): plain references such as
+  `SUM(Table1[Col])` and `COUNTIF(Table1[Col],1)` evaluate as data-row references, including
+  workbook table lookup, dependency ordering and formula copy/structural-edit support.
+  Row-relative references, special selectors and escaped/nested column syntax remain
+  unsupported.
+
 - **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
   XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
   reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
@@ -18,7 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+### Changed
+
+- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
+  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
+  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
+  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
+  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
+  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
+  no faster default gives the same result.
+
 ### Fixed
+
+- **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
+  **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
+  **Behaviour change:** a whole column beside INDEX over an edge range one row shorter, `=SUMPRODUCT(A:A*INDEX(B2:B1048576,0))`, is `#N/A` as in Excel (1,048,576 rows against 1,048,575); it was a sum when the sheet's data started at row 2, because the whole column was trimmed at the top to the same rows.
 
 - **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
   path, the message adds `(resolved to <absolute path> from working directory <dir>)`, in text and
@@ -29,6 +49,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
   `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
 
+- **macOS install hint for rasterizers** (#866): on macOS, `RASTERIZER_UNAVAILABLE` and the
+  `xl rasterizers` warning list `brew install librsvg` (rsvg-convert) first and
+  `brew install imagemagick` for the ImageMagick opt-in, in place of the apt commands; a forced
+  `--rasterizer rsvg-convert` or `imagemagick` that is missing names the same brew command. Other
+  platforms are unchanged.
+  **Behaviour change:** on macOS, the "Install one of:" list opens with
+  `rsvg-convert: brew install librsvg`.
+
+- **No fallback warning on a successful raster export** (#867): a PNG/PDF/JPEG/WebP export that
+  passes over backends that are not installed, or cannot write the format, no longer prints
+  `Warning: Batik, cairosvg unavailable, using rsvg-convert`; the `Exported: …` line already names
+  the backend used. A backend that is installed but fails before a later one succeeds is still
+  reported: `Warning: <reason>; using <backend>`, on one line. When every backend fails,
+  `RASTERIZER_UNAVAILABLE` still lists all of them, each by its own one-line message (no longer
+  `cairosvg (cairosvg conversion failed …)`).
+  **Behaviour change:** `xl … --format png` on a machine with only rsvg-convert prints just the
+  `Exported:` line.
+
 - **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
   INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
   Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
@@ -37,6 +75,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
   report unsupported evaluation instead of caching a fabricated #VALUE! result.
   Reference-producing INDEX and its standalone value form remain supported.
+
+### Performance
+
+- **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
+  `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
+  its first argument, and an array constant was spelled out cell by cell. The call is now printed
+  on the error path alone; messages and results are unchanged.
 
 ## [0.26.0] - 2026-11-12
 

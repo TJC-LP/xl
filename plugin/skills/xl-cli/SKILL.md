@@ -210,8 +210,8 @@ edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
 `png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
 what is available (the native binary needs one external tool: `pip install cairosvg` or
-`apt install librsvg2-bin`; the chain tries them in that order and falls through to the next on a
-failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
+`apt install librsvg2-bin` — `brew install librsvg` on macOS; the chain tries them in that order
+and falls through to the next on a failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
 librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/TJC-LP/xl/issues/664));
 on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
 (ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`
