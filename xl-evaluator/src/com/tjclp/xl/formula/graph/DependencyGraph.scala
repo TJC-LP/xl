@@ -256,6 +256,9 @@ object DependencyGraph:
             named => nameIsComputed(named.name, named.scope)
           ))) || values.exists {
           case ArgValue.Expr(e) => recurse(e)
+          // GH-669: a table column's cells come from table metadata, which both graphs resolve
+          // exactly, so it is static like a plain range
+          case ArgValue.Range(TExpr.RangeLocation.Computed(TableColumnReferences.Ref(_))) => false
           case ArgValue.Range(TExpr.RangeLocation.Computed(e)) =>
             includeDynamicCalls || recurse(e)
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>

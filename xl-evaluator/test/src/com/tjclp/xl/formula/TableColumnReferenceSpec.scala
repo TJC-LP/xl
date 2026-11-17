@@ -317,3 +317,70 @@ class TableColumnReferenceSpec extends FunSuite:
       "Table1[]"
     ).foreach(text => assert(!TableColumnReferences.mayContain(text), text))
   }
+
+  test("GH-669: criteria-function table slots resolve statically, so they are not dynamic") {
+    val readers = data
+      .put(ref"E1", CellValue.Formula("SUMIF(Table1[Col],\">0\")"))
+      .put(ref"E2", CellValue.Formula("COUNTIF(Table1[Col],\">0\")"))
+      .put(ref"E3", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])"))
+      .put(ref"E4", CellValue.Formula("SUM(Table1[Col])"))
+      .put(ref"E5", CellValue.Formula("COUNTIF(OFFSET(B3,0,0,3,1),\">0\")"))
+    // only the genuinely computed OFFSET range stays dynamic
+    assertEquals(DependencyGraph.dynamicCells(readers), Set(ref"E5"))
+    assertEquals(
+      DependencyGraph.dynamicCells(Workbook(Sheet("Reader"), readers)).map(_.ref),
+      Set(ref"E5")
+    )
+  }
+
+  test("GH-669: dirty recalc refreshes static table criteria readers on both sheets") {
+    val source = data.put(ref"E1", CellValue.Formula("SUMIF(Table1[Col],\">0\")", Some(num(-1))))
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+      .put(ref"A2", CellValue.Formula("SUMIF(Data!B3:B5,\">0\",Table1[Other Column])"))
+    val wb = Workbook(reader, source).recalculate().workbook
+    assertEquals(cached(wb, "Data", ref"E1"), Some(num(4)))
+    assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
+    assertEquals(cached(wb, "Reader", ref"A2"), Some(num(40)))
+    val edited = wb.put(wb(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 5))
+    val dirty = edited.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    assertEquals(cached(dirty, "Data", ref"E1"), Some(num(9)))
+    assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
+    assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(60)))
+  }
+
+  test("GH-669: the table index follows each workbook value, never a previous one") {
+    val reader = Sheet("Reader")
+    val first = Workbook(reader, data)
+    assertEquals(first.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+    // a different workbook value: renamed table, then a second copy making the name ambiguous
+    val renamed =
+      Workbook(reader, data.removeTable("Internal").withTable(table.copy(displayName = "Sales")))
+    assertEquals(
+      renamed.evaluateFormula("SUM(Table1[Col])", "Reader"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+    assertEquals(renamed.evaluateFormula("SUM(Sales[Col])", "Reader"), Right(num(4)))
+    val twice = Workbook(reader.withTable(table.copy(name = "Copy", range = ref"E2:F6")), data)
+    assertEquals(
+      twice.evaluateFormula("SUM(Table1[Col])", "Reader"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+    // and back to the first value
+    assertEquals(first.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+  }
+
+  test("GH-669: indexed lookup folds case exactly as equalsIgnoreCase") {
+    for (displayName, spelled) <- List("Ünits", "üNITS") -> List("ünits") match
+        case (names, spells) => names.flatMap(n => spells.map(s => (n, s)))
+    do
+      val wb = Workbook(
+        Sheet("Reader"),
+        data.removeTable("Internal").withTable(table.copy(displayName = displayName))
+      )
+      assertEquals(
+        wb.evaluateFormula(s"SUM($spelled[Col])", "Reader"),
+        Right(num(4)),
+        s"$displayName vs $spelled"
+      )
+  }

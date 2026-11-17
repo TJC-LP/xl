@@ -7,6 +7,7 @@ import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.tables.TableSpec
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -69,12 +70,14 @@ private[formula] object TableColumnReferences extends FunctionSpecsBase:
   ): Either[EvalError, RangeOperand] =
     def invalid(detail: String): Left[EvalError, Nothing] =
       Left(EvalError.ErrorValue(CellError.Ref, Some(detail)))
-    val matches = workbook.fold(Vector(current))(_.sheets).flatMap { sheet =>
-      sheet.tables.valuesIterator
-        .filter(_.displayName.equalsIgnoreCase(column.table))
-        .map(table => (sheet, table))
-        .toVector
-    }
+    val matches = workbook match
+      case None =>
+        current.tables.valuesIterator
+          .filter(_.displayName.equalsIgnoreCase(column.table))
+          .map(table => (current, table))
+          .toVector
+      case Some(wb) =>
+        tablesNamed(wb, column.table)
     matches match
       case Vector((sheet, table)) =>
         val columns = table.columns.zipWithIndex.filter(_._1.name.equalsIgnoreCase(column.column))
@@ -88,6 +91,46 @@ private[formula] object TableColumnReferences extends FunctionSpecsBase:
             Right(RangeOperand(sheet, CellRange(ARef.from0(col, first), ARef.from0(col, last))))
           case _ => invalid(s"Invalid or missing table column ${column.table}[${column.column}]")
       case _ => invalid(s"Missing or ambiguous table ${column.table}")
+
+  /**
+   * A key equal for two names exactly when `String.equalsIgnoreCase` holds: the JDK compares each
+   * code point's lower case of its upper case, so folding the same way buckets without changing
+   * which tables match.
+   */
+  private def foldKey(name: String): String =
+    val folded = new java.lang.StringBuilder(name.length)
+    name.codePoints.forEach(cp =>
+      folded.appendCodePoint(Character.toLowerCase(Character.toUpperCase(cp)))
+    )
+    folded.toString
+
+  // Tables by folded display name, as (sheet position, table): positions rather than sheets, so the
+  // index never retains a sheet, and the workbook only weakly.
+  private type Index = Map[String, Vector[(Int, TableSpec)]]
+
+  // A recalculation resolves every table reference against one workbook value, so the last
+  // workbook's index, matched by identity, turns a scan of every table per reference into one scan
+  // per workbook. Concurrent passes over different workbooks only rebuild; they never share.
+  private val lastIndex =
+    new java.util.concurrent.atomic.AtomicReference[Option[(ref.WeakReference[Workbook], Index)]](
+      None
+    )
+
+  private def indexOf(wb: Workbook): Index =
+    lastIndex.get() match
+      case Some((held, index)) if held.get.exists(_ eq wb) => index
+      case _ =>
+        val built: Index = wb.sheets.zipWithIndex
+          .flatMap((sheet, i) => sheet.tables.valuesIterator.map(table => (i, table)))
+          .groupBy((_, table) => foldKey(table.displayName))
+        lastIndex.set(Some((ref.WeakReference(wb), built)))
+        built
+
+  private def tablesNamed(wb: Workbook, name: String): Vector[(Sheet, TableSpec)] =
+    indexOf(wb)
+      .getOrElse(foldKey(name), Vector.empty)
+      .filter((_, table) => table.displayName.equalsIgnoreCase(name))
+      .map((i, table) => (wb.sheets(i), table))
 
   def isPlainColumnChar(c: Char): Boolean =
     c.isLetterOrDigit || c == '_' || c == ' ' || c == '.'
