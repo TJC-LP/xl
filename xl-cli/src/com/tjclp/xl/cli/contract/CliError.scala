@@ -77,8 +77,10 @@ object CliError:
       path <- Try(Paths.get(file)).toOption if !path.isAbsolute
     yield
       // `.` cannot change which file is meant, so it is dropped (`./model.xlsx` reads as
-      // `<cwd>/model.xlsx`); `..` is kept, as above
-      val shown = path.iterator.asScala.filterNot(_.toString == ".").foldLeft(cwd)(_.resolve(_))
+      // `<cwd>/model.xlsx`); `..` is kept, as above. A relative path can still carry a root on
+      // Windows (`D:model.xlsx`, `\model.xlsx`); the walk starts from it so the drive is kept.
+      val start = Option(path.getRoot).fold(cwd)(cwd.resolve)
+      val shown = path.iterator.asScala.filterNot(_.toString == ".").foldLeft(start)(_.resolve(_))
       s" (resolved to $shown from working directory $cwd)"
     suffix.filterNot(e.message.endsWith).fold(e)(s => e.copy(message = e.message + s))
 
