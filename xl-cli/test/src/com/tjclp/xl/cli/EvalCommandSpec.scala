@@ -1360,3 +1360,59 @@ class EvalCommandSpec extends CatsEffectSuite:
       assertEquals(good.exit, 0, good.stderr)
       assert(good.stdout.contains("C2:C4"), good.stdout)
   }
+
+  private def tableFixture: (Sheet, Workbook) =
+    import com.tjclp.xl.tables.{TableColumn, TableSpec}
+    val table = TableSpec("Internal", "Table1", ref"B2:B4", Vector(TableColumn(1, "Col")))
+    val data = Sheet("Data").withTable(table).put(ref"B3" -> 1, ref"B4" -> 3, ref"C3" -> 2)
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(CellValue.Number(999))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(CellValue.Number(1998))))
+    (data, Workbook(data, reader))
+
+  test("GH-669: eval refreshes a table column's poisoned formula precedents") {
+    val (data, wb) = tableFixture
+    val poisoned = data.put(ref"B3", CellValue.Formula("C3+1", Some(CellValue.Number(999))))
+    for
+      plain <- ReadCommands.eval(wb.put(poisoned), Some(poisoned), "SUM(B3:B4)", None, Nil)
+      table <- ReadCommands.eval(wb.put(poisoned), Some(poisoned), "SUM(Table1[Col])", None, Nil)
+    yield
+      assert(plain.contains("Result: 6 (number)"), plain)
+      assert(table.contains("Result: 6 (number)"), table)
+  }
+
+  test("GH-669: eval --with invalidates cross-sheet cached table readers transitively") {
+    val (data, wb) = tableFixture
+    ReadCommands
+      .eval(wb, Some(data), "Reader!A2", None, List("B3=10"))
+      .map(result => assert(result.contains("26"), result))
+  }
+
+  test("GH-669: positioned shape inspection reads no table values while SUM detects a cycle") {
+    val (data, wb) = tableFixture
+    for
+      shape <- ReadCommands.eval(wb, Some(data), "ROWS(Table1[Col])", Some("B3"), Nil)
+      cycle <- ReadCommands.eval(wb, Some(data), "SUM(Table1[Col])", Some("B3"), Nil).attempt
+    yield
+      assert(shape.contains("2"), shape)
+      assert(cycle.isLeft, cycle.toString)
+  }
+
+  for (display, spelling) <- List("Items" -> "ıtems", "Sales" -> "ſales") do
+    test(s"GH-669: --with table candidates match resolver case folding for $spelling") {
+      val (data, _) = tableFixture
+      val table = data.tables("Internal").copy(displayName = display)
+      val source = data.withTable(table)
+      val reader = Sheet("Reader").put(
+        ref"A1",
+        CellValue.Formula(s"SUM($spelling[Col])", Some(CellValue.Number(999)))
+      )
+      val wb = Workbook(source, reader)
+      assertEquals(wb.evaluateFormula(s"SUM($spelling[Col])", "Data"), Right(CellValue.Number(4)))
+      for
+        plain <- ReadCommands.eval(wb, Some(source), "SUM(B3:B4)", None, List("B3=10"))
+        table <- ReadCommands.eval(wb, Some(source), "Reader!A1", None, List("B3=10"))
+      yield
+        assert(plain.contains("Result: 13 (number)"), plain)
+        assert(table.contains("Result: 13 (number)"), table)
+    }
