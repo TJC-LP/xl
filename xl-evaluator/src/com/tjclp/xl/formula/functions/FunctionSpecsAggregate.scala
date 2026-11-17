@@ -1944,6 +1944,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
         }
     }
 
+  /** GH-746: the functions whose reference SUMPRODUCT's shared bound cannot see or bound. */
+  private val OpaqueReferenceFunctions = Set("OFFSET", "INDIRECT")
+
   val sumproduct: FunctionSpec[BigDecimal] { type Args = SumProductArgs } =
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
@@ -2163,8 +2166,18 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   (_, _) => false,
                   call =>
                     call.spec match
+                      // its own arguments only: a nested call is visited on its own by the walk
                       case _: FunctionSpec.Referencing[?, ?] =>
-                        TExpr.collectRanges(call).exists((_, r) => RangeEdges.reachesEdge(r))
+                        call.spec.argSpec.toValues(call.args).exists {
+                          case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) =>
+                            RangeEdges.reachesEdge(r)
+                          case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
+                            RangeEdges.reachesEdge(r)
+                          case ArgValue.Expr(TExpr.RangeRef(r, _)) => RangeEdges.reachesEdge(r)
+                          case ArgValue.Expr(TExpr.SheetRange(_, r, _)) => RangeEdges.reachesEdge(r)
+                          case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
+                          case _ => false
+                        }
                       case _ => false
                 )
               case Left(_) => false
@@ -2174,7 +2187,45 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                 case EvalError.ErrorValue(CellError.NA, _) => computesEdgeReference
                 case _ => false)
 
-            if edgeTrimmed && draws then total(sumUnder(sharedBounds(edges = false)))
+            // GH-746: the shared bound reaches an edge range only as a value the arguments read
+            // (`TExpr.collectValueRanges`, trimmed with the written ranges) or as the reference
+            // INDEX, XLOOKUP or `:` computes (bounded through `constrainComputedRange`). Read
+            // anywhere else, it keeps every row while the trimmed ranges beside it do not:
+            // FILTER(B2:B1048576,…) or SORT returns all of it, and OFFSET, INDIRECT or a defined name
+            // builds a range the bound never sees. Such a SUMPRODUCT is summed as before GH-746,
+            // every row read, which also keeps a lookup range's genuine error (MATCH(…,C:C,0))
+            lazy val unboundedRead = args.exists {
+              case Right(expr) =>
+                val values = TExpr.collectValueRanges(expr).map(_._2).toSet
+                def outsideBound(r: CellRange): Boolean =
+                  RangeEdges.reachesEdge(r) && !values.contains(r)
+                WorkbookAudit.hasCallWhere(
+                  expr,
+                  (_, _) => true,
+                  call =>
+                    val opaque = OpaqueReferenceFunctions.contains(call.spec.name.toUpperCase)
+                    val bounded = call.spec match
+                      case _: FunctionSpec.Referencing[?, ?] => !opaque
+                      case _ => false
+                    opaque || (!bounded && call.spec.argSpec.toValues(call.args).exists {
+                      case ArgValue.Range(TExpr.RangeLocation.Local(r, _)) => outsideBound(r)
+                      case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
+                        outsideBound(r)
+                      case ArgValue.Range(_) => true
+                      case ArgValue.Expr(TExpr.RangeRef(r, _)) => outsideBound(r)
+                      case ArgValue.Expr(TExpr.SheetRange(_, r, _)) => outsideBound(r)
+                      case ArgValue.Cells(r) => outsideBound(r)
+                      case _ => false
+                    })
+                )
+              case Left(TExpr.RangeLocation.Local(_, _)) |
+                  Left(TExpr.RangeLocation.CrossSheet(_, _, _)) =>
+                false
+              case Left(_) => true
+            }
+
+            if edgeTrimmed && (draws || unboundedRead) then
+              total(sumUnder(sharedBounds(edges = false)))
             else
               sumUnder(bounds) match
                 case Right((sum, Some(tail))) => Right(sum + tail)
