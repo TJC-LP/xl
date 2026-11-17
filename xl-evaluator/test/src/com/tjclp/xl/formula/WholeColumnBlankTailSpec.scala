@@ -460,15 +460,43 @@ class WholeColumnBlankTailSpec extends FunSuite:
     assertEquals(run("=SUMPRODUCT(--(INDEX(A:A,0)=\"\"),--(B:B=\"\"))"), Right(num(1048573)))
   }
 
+  test("#755: a computed range from below row 1 counts as its written edge range (#746)") {
+    // A2:A1048576 is 1048575 rows with only A3 filled: 1048574, as the written range gives
+    assertEquals(eval("=SUMPRODUCT(--(A2:A1048576=\"\"))", computed), Right(num(1048574)))
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:INDEX(A:A,1048576)=\"\"))", computed),
+      Right(num(1048574))
+    )
+    assertEquals(
+      eval("=SUMPRODUCT(--(INDEX(A2:A1048576,0)=\"\"))", computed),
+      Right(num(1048574))
+    )
+    // beside a written edge range of the same rows, the value column's blank rows add 0
+    assertEquals(
+      eval("=SUMPRODUCT((A2:A1048576=\"\")*INDEX(B2:B1048576,0))", computed),
+      Right(num(20))
+    )
+  }
+
+  test("#755: on a one-row used range, INDEX over an edge range reads blank on the tail") {
+    // only A2 and B2 filled: every blank row of A pairs with a blank B, so the product is 0
+    // (#746's LIMITATIONS note; not checked in Excel). Before #755 the tail read INDEX at B2's
+    // value and counted 7 for each of the 1048574 blank rows
+    val one = Sheet(SheetName.unsafe("S")).put(ref"A2", num(1)).put(ref"B2", num(7))
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:A1048576=\"\")*INDEX(B2:B1048576,0))", one),
+      Right(num(0))
+    )
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:A1048576=\"\")*(B2:INDEX(B:B,1048576)))", one),
+      Right(num(0))
+    )
+  }
+
   test("#755 limit: a computed whole column only evaluation can place keeps the trimmed sum") {
     // Excel counts every blank row (1048574); xl counts the used rows' blank, A2 (LIMITATIONS)
     assertEquals(eval("=SUMPRODUCT(--(OFFSET(A:A,0,0)=\"\"))", computed), Right(num(1)))
     assertEquals(eval("=SUMPRODUCT(--(INDIRECT(\"A:A\")=\"\"))", computed), Right(num(1)))
-    // a computed range from below row 1: its rows start at 2, the tail's whole column at 1
-    assertEquals(
-      eval("=SUMPRODUCT(--(A2:INDEX(A:A,1048576)=\"\"))", computed),
-      Right(num(1))
-    )
     // ROW beside it reads positions, as beside a written whole column: no tail
     assertEquals(eval("=SUMPRODUCT((INDEX(A:A,0)=\"\")*ROW(A:A))", computed), Right(num(2)))
   }
