@@ -18,6 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+### Changed
+
+- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
+  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
+  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
+  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
+  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
+  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
+  no faster default gives the same result.
+
 ### Fixed
 
 - **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
@@ -28,16 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
   report unsupported evaluation instead of caching a fabricated #VALUE! result.
   Reference-producing INDEX and its standalone value form remain supported.
-
-### Changed
-
-- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
-  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
-  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
-  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
-  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
-  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
-  no faster default gives the same result.
 
 ### Performance
 

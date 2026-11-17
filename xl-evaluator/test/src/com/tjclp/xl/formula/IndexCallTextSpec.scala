@@ -33,6 +33,7 @@ class IndexCallTextSpec extends FunSuite:
    * INDEX(PROBE(), row) over a test function PROBE() that returns the column {1;2;3} and counts how
    * often the printer renders it.
    */
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private final class PrintCounter:
     private val renders = new java.util.concurrent.atomic.AtomicInteger(0)
     def count: Int = renders.get
@@ -45,17 +46,38 @@ class IndexCallTextSpec extends FunSuite:
           "PROBE()"
         }
       )((_, _) => Right(ArrayResult(Vector(Vector(N("1")), Vector(N("2")), Vector(N("3"))))))
+    private def call(row: TExpr[BigDecimal]): TExpr[ArrayResult] =
+      TExpr.Call(
+        FunctionSpecs.index,
+        (Right(TExpr.Call(probe, EmptyTuple).asInstanceOf[TExpr[Any]]), row, None, None)
+      )
     @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
     def index(row: Int): Either[EvalError, ArrayResult] =
-      val operand = TExpr.Call(probe, EmptyTuple).asInstanceOf[TExpr[Any]]
-      Evaluator.instance.eval(
-        TExpr.Call(FunctionSpecs.index, (Right(operand), TExpr.Lit(BigDecimal(row)), None, None)),
+      Evaluator.instance.eval(call(TExpr.Lit(BigDecimal(row))), data)
+
+    /** INDEX over an array of rows, evaluated as an array: one selection per element. */
+    @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+    def indexEach(rows: Int*): Either[EvalError, Any] =
+      val positions = ArrayResult(rows.toVector.map(r => Vector(N(r.toString))))
+      Evaluator.instance.withArrayResults.eval(
+        call(TExpr.Lit(positions).asInstanceOf[TExpr[BigDecimal]]),
         data
       )
 
   test("#758: an INDEX selection that succeeds never prints its operand") {
     val counter = PrintCounter()
     assertEquals(counter.index(2), Right(ArrayResult(Vector(Vector(N("2"))))))
+    assertEquals(counter.count, 0)
+  }
+
+  test("#758: INDEX lifted over an array of positions never prints its operand") {
+    // each element selects on its own (Excel's rule for an array position); none fails, so none
+    // builds a message
+    val counter = PrintCounter()
+    assertEquals(
+      counter.indexEach(1, 2, 3),
+      Right(ArrayResult(Vector(Vector(N("1")), Vector(N("2")), Vector(N("3")))))
+    )
     assertEquals(counter.count, 0)
   }
 
