@@ -378,7 +378,11 @@ object RasterizerChain:
         }.flatMap(_.fold(IO.unit)(IO.raiseError))
 
   /**
-   * Try each rasterizer in the chain until one succeeds.
+   * Try each rasterizer in the chain until one succeeds. `tried` collects every backend passed
+   * over, for [[RasterError.NoRasterizerAvailable]] when none succeeds; `failed` only those that
+   * were installed and ran but failed. GH-867: a success prints nothing about backends that are
+   * simply not installed (or cannot write the format) — the export's own line names the backend
+   * used — and warns, through `warn`, only when an installed backend failed first.
    */
   private[raster] def tryChain(
     svg: String,
@@ -386,8 +390,51 @@ object RasterizerChain:
     format: RasterFormat,
     dpi: Int,
     remaining: List[Rasterizer],
-    tried: List[String]
+    tried: List[String],
+    failed: List[String] = Nil,
+    warn: String => IO[Unit] = stderrWarning(_)
   ): IO[String] =
+    def next(rest: List[Rasterizer], skipped: String, ranAndFailed: Option[String]): IO[String] =
+      tryChain(svg, outputPath, format, dpi, rest, tried :+ skipped, failed ++ ranAndFailed, warn)
+
+    // The export succeeded: warn about installed backends that failed first. This runs outside
+    // the failure handling below, so a sink that fails can neither pass for this backend failing
+    // nor undo the export.
+    def succeeded(rasterizer: Rasterizer): IO[String] =
+      val report =
+        if failed.isEmpty then IO.unit
+        else warn(s"Warning: ${failed.mkString("; ")}; using ${rasterizer.name}").attempt.void
+      report.as(rasterizer.name)
+
+    def recover(rasterizer: Rasterizer, rest: List[Rasterizer])(error: Throwable): IO[String] =
+      error match
+        // GH-690: a backend rendered but the image could not replace the output path; another
+        // backend cannot repair the destination
+        case output: RasterError.OutputFailed => IO.raiseError(output)
+        case output: RasterError.UnsupportedOutput => IO.raiseError(output)
+        // a backend that ran out its deadline already cost minutes: report it rather than spend
+        // as long again on each remaining backend
+        case timedOut: RasterError.TimedOut => IO.raiseError(timedOut)
+        // a usage error (a malformed XL_SPILL_DIR) is every backend's: report it once
+        case usage: CliException => IO.raiseError(usage)
+        case _: RasterError.FormatNotSupported =>
+          // Format not supported by this rasterizer: try the next one, quietly
+          next(rest, s"${rasterizer.name} (format not supported)", None)
+        case _ =>
+          // Other error (likely AWT/native image issue): try the next one, and say so if a later
+          // backend succeeds. The whole message (ConversionFailed already keeps only stderr's
+          // tail) on one line, so the warning and the all-fail list stay one line per backend.
+          // A backend's own message usually names it ("cairosvg conversion failed (exit 1):
+          // …"); otherwise the name leads. The same text goes in both places.
+          // A missing or blank message falls back to the exception's type.
+          val reason = Option(error.getMessage)
+            .map(_.linesIterator.map(_.strip).filter(_.nonEmpty).mkString(" "))
+            .filter(_.nonEmpty)
+            .getOrElse(error.getClass.getName)
+          val described =
+            if reason.startsWith(rasterizer.name) then reason else s"${rasterizer.name}: $reason"
+          next(rest, described, Some(described))
+
     remaining match
       case Nil =>
         IO.raiseError(RasterError.NoRasterizerAvailable(tried))
@@ -395,55 +442,15 @@ object RasterizerChain:
       case rasterizer :: rest =>
         rasterizer.isAvailable.flatMap {
           case false =>
-            // Not available, try next
-            tryChain(svg, outputPath, format, dpi, rest, tried :+ rasterizer.name)
-
+            // Not installed: try the next one, quietly
+            next(rest, rasterizer.name, None)
           case true =>
-            // Available, try to convert
             attempt(rasterizer, svg, outputPath, format, dpi)
-              .map { _ =>
-                // Log if we fell back from the default
-                if tried.nonEmpty then
-                  System.err.println(
-                    s"Warning: ${tried.mkString(", ")} unavailable, using ${rasterizer.name}"
-                  )
-                rasterizer.name
-              }
-              .handleErrorWith { error =>
-                // Conversion failed, try next (unless it's a format error)
-                error match
-                  // GH-690: a backend rendered but the image could not replace the output path;
-                  // another backend cannot repair the destination
-                  case output: RasterError.OutputFailed => IO.raiseError(output)
-                  case output: RasterError.UnsupportedOutput => IO.raiseError(output)
-                  // a backend that ran out its deadline already cost minutes: report it rather
-                  // than spend as long again on each remaining backend
-                  case timedOut: RasterError.TimedOut => IO.raiseError(timedOut)
-                  // a usage error (a malformed XL_SPILL_DIR) is every backend's: report it once
-                  case usage: CliException => IO.raiseError(usage)
-                  case _: RasterError.FormatNotSupported =>
-                    // Format not supported by this rasterizer, try next
-                    tryChain(
-                      svg,
-                      outputPath,
-                      format,
-                      dpi,
-                      rest,
-                      tried :+ s"${rasterizer.name} (format not supported)"
-                    )
-                  case _ =>
-                    // Other error (likely AWT/native image issue), try next
-                    tryChain(
-                      svg,
-                      outputPath,
-                      format,
-                      dpi,
-                      rest,
-                      // the whole message: ConversionFailed already keeps only stderr's tail
-                      tried :+ s"${rasterizer.name} (${error.getMessage})"
-                    )
-              }
+              .redeemWith(recover(rasterizer, rest), _ => succeeded(rasterizer))
         }
+
+  /** Where [[tryChain]]'s warning goes in the CLI: stderr, beside the export's own line. */
+  private def stderrWarning(line: String): IO[Unit] = IO.blocking(System.err.println(line))
 
   /**
    * One backend's conversion, trusted only by its result (GH-690): the backend writes a hidden file
