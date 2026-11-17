@@ -45,7 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the `--json` envelope's `error.message`, so a run from the wrong directory says where xl looked.
   `error.location.file` keeps the path as given; absolute paths are unchanged. A `.` segment is
   dropped from the resolved path (`./model.xlsx` reads as `<dir>/model.xlsx`); `..` is kept, since
-  through a symlinked directory collapsing it would name a different file.
+  through a symlinked directory collapsing it would name a different file. On Windows a relative
+  path that carries a root (`\model.xlsx`) keeps its drive; one on another drive (`D:model.xlsx`)
+  gets no suffix, since xl cannot tell that drive's working directory.
   **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
   `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
 
