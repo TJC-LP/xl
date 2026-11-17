@@ -240,11 +240,12 @@ trait TExprAnalysis:
         UnaryPlus(go(e))
       case Percent(e) =>
         Percent(go(e))
-      // GH-193: LET — transform ranges in binding values and the body
+      // GH-193: LET — transform ranges in binding values and the body. #755: the call hook stays
+      // out: a binding may be read in a range slot (MAX(t)), where its call is one fixed reference
       case Let(bindings, body) =>
         Let(
-          bindings.map((name, value) => (name, go(value))),
-          go(body)
+          bindings.map((name, value) => (name, transformRanges(value, f))),
+          transformRanges(body, f)
         )
       // GH-306: runtime coercion wrapper — transform the wrapped expression
       case Coerced(inner, target) => Coerced(go(inner), target)

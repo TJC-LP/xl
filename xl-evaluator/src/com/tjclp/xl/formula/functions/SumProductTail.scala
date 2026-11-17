@@ -126,11 +126,14 @@ private[formula] object SumProductTail:
    * line. Other computed references (OFFSET, INDIRECT, XLOOKUP) are None and stay as they are, so
    * an argument reading a whole column only through one has no tail.
    *
-   * The positions are folded for cell A1: only ROW() and COLUMN() read the formula's own cell, and
-   * [[plan]] rules out every argument that calls them.
+   * The positions are folded for cell A1: only ROW() and COLUMN() read the formula's own cell, so a
+   * call that reads either stays computed (`INDEX(A:A,ROW()):A1048576` is not `A1:A1048576` in C5).
+   * Both callers rely on this, [[plan]] and SUMPRODUCT's range collection.
    */
   private def written(call: TExpr.Call[?]): Option[TExpr[?]] =
-    if !ReferenceOperators.isReferenceShape(call) then None
+    if !ReferenceOperators.isReferenceShape(call) ||
+      WorkbookAudit.callsWhere(call, (_, _) => false, _.flags.boundsReferenceAxis)
+    then None
     else
       ReferenceOperators
         .exactReference(call, Some(ARef.from0(0, 0)))
@@ -142,7 +145,8 @@ private[formula] object SumProductTail:
    * #755: `expr` with each computed reference [[written]] as its range, only where SUMPRODUCT's
    * trimming reaches ([[TExpr.transformRanges]]: operators, selectors, lifted slots). Inside a
    * range slot (`SUM(INDEX(B:B,0))`) the call stays: it is one fixed reference there, as
-   * `SUM(B:B)`.
+   * `SUM(B:B)`. So does a LET binding, which the body may read in a range slot
+   * (`LET(t,INDEX(B:B,0),--(A:A<MAX(t)))`).
    */
   private[formula] def writtenReferences[A](expr: TExpr[A]): TExpr[A] =
     TExpr.transformRanges(expr, (_, range) => range, written)

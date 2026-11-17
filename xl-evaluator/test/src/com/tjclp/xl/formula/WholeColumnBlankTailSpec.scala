@@ -497,8 +497,34 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // Excel counts every blank row (1048574); xl counts the used rows' blank, A2 (LIMITATIONS)
     assertEquals(eval("=SUMPRODUCT(--(OFFSET(A:A,0,0)=\"\"))", computed), Right(num(1)))
     assertEquals(eval("=SUMPRODUCT(--(INDIRECT(\"A:A\")=\"\"))", computed), Right(num(1)))
+    // an INDEX position the formula's own cell gives is placed only at evaluation (review of
+    // #881): in C5, A5:A1048576 is every row blank in Excel (1048572); xl reads the used rows,
+    // here A5 alone, as origin/main does
+    val placedRow = computed.put(
+      ref"C5",
+      CellValue.Formula("SUMPRODUCT(--(INDEX(A:A,ROW()):A1048576=\"\"))", None)
+    )
+    assertEquals(
+      placedRow.evaluateCell(ref"C5", Clock.system, Some(Workbook(Vector(placedRow)))),
+      Right(num(1))
+    )
+    // a LET-bound computed column stays computed: the trimmed sum, A2 (origin/main's answer)
+    assertEquals(
+      eval("=SUMPRODUCT(LET(t,INDEX(A:A,0),--(t=\"\")))", computed),
+      Right(num(1))
+    )
     // ROW beside it reads positions, as beside a written whole column: no tail
     assertEquals(eval("=SUMPRODUCT((INDEX(A:A,0)=\"\")*ROW(A:A))", computed), Right(num(2)))
+  }
+
+  test("#755: a LET binding read in a range slot stays the reference it computes") {
+    // review of #881 (A1=4, A2=5, B1=10): MAX(t) is MAX(B:B), 10, so every row of A, blank
+    // included, is below it: 1048576, as origin/main gives. Rewriting the binding to B:B moved it
+    // onto the blank line, where MAX read one blank cell
+    assertEquals(
+      eval("=SUMPRODUCT(LET(t,INDEX(B:B,0),--(A:A<MAX(t))))", sheet.put(ref"B1", num(10))),
+      Right(num(1048576))
+    )
   }
 
   test("#755: a placed formula counts the same") {
@@ -536,4 +562,15 @@ class WholeColumnBlankTailSpec extends FunSuite:
     // a position read from a cell, or OFFSET, stays computed
     assertEquals(written("--(INDEX(A:A,B1)=\"\")"), "--(INDEX(A:A,B1)=\"\")")
     assertEquals(written("--(OFFSET(A:A,0,0)=\"\")"), "--(OFFSET(A:A,0,0)=\"\")")
+    // review of #881: ROW() and COLUMN() read the formula's own cell, which the fold does not know
+    assertEquals(
+      written("--(INDEX(A:A,ROW()):A1048576=\"\")"),
+      "--(INDEX(A:A,ROW()):A1048576=\"\")"
+    )
+    assertEquals(written("--(INDEX(A:B,0,COLUMN())=\"\")"), "--(INDEX(A:B,0,COLUMN())=\"\")")
+    // review of #881: a LET binding stays computed, since the body may read it in a range slot
+    assertEquals(
+      written("LET(t,INDEX(B:B,0),--(A:A<MAX(t)))"),
+      "LET(t,INDEX(B:B,0),--(A:A<MAX(t)))"
+    )
   }

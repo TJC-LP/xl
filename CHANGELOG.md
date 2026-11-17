@@ -46,8 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was 1 and is now 1048574, as the written `A2:A1048576` gives. **Behaviour change:** with only A2
   and B2 filled, `SUMPRODUCT(--(A2:A1048576="")*INDEX(B2:B1048576,0))` was B2 × 1048574 and is
   now 0, the blank rows reading INDEX's range as blank. Products with a value column over the data
-  rows are unchanged. OFFSET, INDIRECT, XLOOKUP and an INDEX position read from a cell keep the
-  trimmed sum; see LIMITATIONS.
+  rows are unchanged. OFFSET, INDIRECT, XLOOKUP, an INDEX position read from a cell or from ROW()
+  or COLUMN(), and a LET-bound computed reference keep the trimmed sum; see LIMITATIONS.
 
 - **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
   **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
