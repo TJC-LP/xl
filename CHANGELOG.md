@@ -24,6 +24,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+### Changed
+
+- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
+  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
+  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
+  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
+  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
+  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
+  no faster default gives the same result.
+
 ### Fixed
 
 - **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
@@ -41,6 +51,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
   report unsupported evaluation instead of caching a fabricated #VALUE! result.
   Reference-producing INDEX and its standalone value form remain supported.
+
+### Performance
+
+- **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
+  `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
+  its first argument, and an array constant was spelled out cell by cell. The call is now printed
+  on the error path alone; messages and results are unchanged.
 
 ## [0.26.0] - 2026-11-12
 
