@@ -2,7 +2,7 @@ package com.tjclp.xl.cli.contract
 
 import java.io.ByteArrayOutputStream
 import java.nio.charset.StandardCharsets
-import java.nio.file.{Files, Path}
+import java.nio.file.{Files, Path, Paths}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
 
 import cats.effect.{IO, Resource}
@@ -297,6 +297,23 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(error("message"), ujson.Str(s"No such file: $missing"))
       assertEquals(error("hint"), ujson.Str("check the path; the previous write may have failed"))
       assertEquals(error("location")("file"), ujson.Str(missing))
+
+  test("GH-870: a relative input path's IO_READ names the absolute path and working directory") {
+    val typed = "gh-870-no-such-input.xlsx"
+    val cwd = Paths.get("").toAbsolutePath
+    val absolute = cwd.resolve(typed)
+    val expected = s"No such file: $typed (resolved to $absolute from working directory $cwd)"
+    for
+      text <- CliHarness.run("-f", typed, "cell", "A1")
+      json <- CliHarness.run("-f", typed, "--json", "cell", "A1")
+    yield
+      assertFailure(text, 3, expected, "IO_READ")
+      val error = ujson.read(json.stdout)("error")
+      assertEquals(error("code"), ujson.Str("IO_READ"))
+      assertEquals(error("message"), ujson.Str(expected))
+      // the location keeps the path as given; the message carries the resolution
+      assertEquals(error("location")("file"), ujson.Str(typed))
+  }
 
   test("GH-617: a refused argument is INVALID_ARGUMENT (exit 3) on the verbs and in batch") {
     val out = (tag: String) => fixtures().resolve(s"invalid-arg-$tag.xlsx").toString

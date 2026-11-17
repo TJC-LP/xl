@@ -45,6 +45,8 @@ object CriteriaRangeResize:
     def unresolved(location: TExpr.RangeLocation): Boolean = location match
       case named: TExpr.RangeLocation.Name => nameIsComputed(named)
       case TExpr.RangeLocation.Binding(_) => true
+      // GH-669: both graphs resolve a table column's shape and target from table metadata
+      case TExpr.RangeLocation.Computed(TableColumnReferences.Ref(_)) => false
       case TExpr.RangeLocation.Computed(_) => true
       case _ => false
 
