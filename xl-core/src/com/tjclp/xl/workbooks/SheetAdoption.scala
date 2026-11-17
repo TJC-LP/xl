@@ -13,19 +13,19 @@ private[workbooks] object SheetAdoption:
       refuse(sheet, "sheet does not match a member of the supplied source workbook")
     else if destination == from then Right(destination)
     else
+      // Filter first: only the few affected cells are sorted into row-major order
       val affected = sheet.cells.toVector
-        .sortBy { case (ref, _) =>
-          (ref.row.index0, ref.col.index0)
-        }
         .flatMap { case (ref, cell) =>
           cell.value match
             case CellValue.Formula(expression, _, _) =>
               val ordinals = FormulaStorage.externalOrdinals(expression).toVector.sorted
               Option.when(ordinals.nonEmpty)(
-                s"${ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})"
+                (ref, s"${ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})")
               )
             case _ => None
         }
+        .sortBy { case (ref, _) => (ref.row.index0, ref.col.index0) }
+        .map(_._2)
       if affected.nonEmpty then
         refuse(
           sheet,
@@ -56,7 +56,10 @@ private[workbooks] object SheetAdoption:
           refuse(sheet, s"it is ${state.getOrElse("")} and the destination has no visible sheet")
         else
           val placed = destination.put(sheet)
-          val states = placed.metadata.sheetStates + (sheet.name -> state)
+          // Sheet names are case-insensitive: drop any stale entry for this name in any spelling
+          val states = placed.metadata.sheetStates.filterNot((name, _) =>
+            name.value.equalsIgnoreCase(sheet.name.value)
+          ) + (sheet.name -> state)
           Right(placed.copy(metadata = placed.metadata.copy(sheetStates = states)))
 
   private def refuse(sheet: Sheet, reason: String): XLResult[Workbook] =

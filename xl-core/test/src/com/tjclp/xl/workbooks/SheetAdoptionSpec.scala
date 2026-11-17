@@ -149,6 +149,11 @@ class SheetAdoptionSpec extends FunSuite:
       base.copy(metadata = base.metadata.copy(sheetStates = Map(sheet.name -> Some("hidden"))))
     val result = stale.adopt(sheet, Workbook(sheet)).fold(e => fail(e.toString), identity)
     assertEquals(result.getSheetState(sheet.name), None)
+    val otherCase = base.copy(metadata =
+      base.metadata.copy(sheetStates = Map(SheetName.unsafe("PORTABLE") -> Some("hidden")))
+    )
+    val cleared = otherCase.adopt(sheet, Workbook(sheet)).fold(e => fail(e.toString), identity)
+    assertEquals(cleared.metadata.sheetStates, Map(sheet.name -> None))
   }
 
   test("GH-526: refuses a hidden sheet that would leave the destination with no visible sheet") {

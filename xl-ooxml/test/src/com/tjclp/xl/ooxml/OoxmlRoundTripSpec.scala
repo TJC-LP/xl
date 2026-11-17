@@ -58,6 +58,23 @@ class OoxmlRoundTripSpec extends FunSuite:
     )
   }
 
+  test("GH-526: an adopted hidden sheet stays hidden through write and read") {
+    val front = com.tjclp.xl.sheets.Sheet("Front").put(ref"A1", 1)
+    val lookup = com.tjclp.xl.sheets.Sheet("Lookup").put(ref"A1", 2)
+    Vector("hidden", "veryHidden").foreach { state =>
+      val source = Workbook(Vector(front, lookup))
+        .setSheetState(lookup.name, Some(state))
+        .fold(e => fail(e.message), identity)
+      val adopted =
+        Workbook("Destination").adopt(lookup, from = source).fold(e => fail(e.message), identity)
+      val output = tempDir.resolve(s"adoption-$state.xlsx")
+      XlsxWriter.write(adopted, output).fold(e => fail(e.message), identity)
+      val read = XlsxReader.read(output).fold(e => fail(e.message), identity)
+      assertEquals(read.getSheetState(lookup.name), Some(state), state)
+      assertEquals(read.getSheetState(SheetName.unsafe("Destination")), None, state)
+    }
+  }
+
   test("Minimal workbook: write and read back") {
     // Create minimal workbook
     val wb = Workbook("Test")
