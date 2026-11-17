@@ -384,3 +384,65 @@ class TableColumnReferenceSpec extends FunSuite:
         s"$displayName vs $spelled"
       )
   }
+
+  test("GH-669: alternating workbooks each keep resolving their own tables") {
+    val reader = Sheet("Reader")
+    val a = Workbook(reader, data)
+    val b =
+      Workbook(reader, data.removeTable("Internal").withTable(table.copy(displayName = "Sales")))
+    for _ <- 1 to 3 do
+      assertEquals(a.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+      assertEquals(b.evaluateFormula("SUM(Sales[Col])", "Reader"), Right(num(4)))
+      assertEquals(
+        b.evaluateFormula("SUM(Table1[Col])", "Reader"),
+        Right(CellValue.Error(CellError.Ref))
+      )
+  }
+
+  test("GH-669: sheet-level dirty recalc refreshes a static table criteria reader") {
+    val sheet = data
+      .put(ref"E1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+      .put(ref"E2", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])", Some(num(-1))))
+    val fresh = sheet.recalculateDependents(Set(ref"B3"))
+    val edited = fresh.put(ref"B4", 5).recalculateDependents(Set(ref"B4"))
+    def value(s: Sheet, at: ARef) = s(at).value match
+      case CellValue.Formula(_, cache, _) => cache
+      case other => Some(other)
+    assertEquals(value(edited, ref"E1"), Some(num(3)))
+    assertEquals(value(edited, ref"E2"), Some(num(60)))
+  }
+
+  test("GH-669: inserting a row inside a table refreshes table criteria readers") {
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+    val wb = Workbook(reader, data).recalculate().workbook
+    assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
+    // 0-based 3 is row 4, inside the table's data rows B3:B5
+    val inserted = StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), 3, 1)
+    val withValue = inserted.put(inserted(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 7))
+    val dirty = withValue.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
+  }
+
+  test("GH-669: a table column in an intersecting position gets the implicit-intersection check") {
+    import com.tjclp.xl.formula.eval.ImplicitIntersection
+    def diverges(text: String) =
+      FormulaParser.parse(text).fold(e => fail(e.toString), ImplicitIntersection.mayDiverge)
+    assert(diverges("Table1[Col]*2"))
+    assert(diverges("SUM(ABS(Table1[Col]))"))
+    assert(diverges("Table1[Col]"))
+    // a range slot takes the reference whole in both modes
+    assert(!diverges("COUNTIF(Table1[Col],\">0\")"))
+    val wb = Workbook(
+      data
+        .put(ref"F4", CellValue.Formula("Table1[Col]*2"))
+        .put(ref"F5", CellValue.Formula("SUM(Table1[Col])"))
+    )
+    val report = ImplicitIntersection.check(
+      wb,
+      Iterator(data.name -> ref"F4", data.name -> ref"F5"),
+      Clock.system
+    )
+    // SUM gives one value either way, so only the broadcast product is reported
+    assertEquals(report.hits.map(_.cell), Vector(ref"F4"))
+  }

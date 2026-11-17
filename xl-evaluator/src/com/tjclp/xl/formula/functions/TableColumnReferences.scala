@@ -108,22 +108,30 @@ private[formula] object TableColumnReferences extends FunctionSpecsBase:
   // index never retains a sheet, and the workbook only weakly.
   private type Index = Map[String, Vector[(Int, TableSpec)]]
 
-  // A recalculation resolves every table reference against one workbook value, so the last
-  // workbook's index, matched by identity, turns a scan of every table per reference into one scan
-  // per workbook. Concurrent passes over different workbooks only rebuild; they never share.
-  private val lastIndex =
-    new java.util.concurrent.atomic.AtomicReference[Option[(ref.WeakReference[Workbook], Index)]](
-      None
+  // A recalculation resolves every table reference against one workbook value, so an index per
+  // recent workbook, matched by identity, turns a scan of every table per reference into one scan
+  // per workbook. A few slots, most recent first, let concurrent recalculations of different
+  // workbooks each keep theirs instead of evicting each other on every lookup; entries whose
+  // workbook has been collected are dropped on the next miss.
+  private val MaxIndexes = 4
+  private val recentIndexes =
+    new java.util.concurrent.atomic.AtomicReference[Vector[(ref.WeakReference[Workbook], Index)]](
+      Vector.empty
     )
 
   private def indexOf(wb: Workbook): Index =
-    lastIndex.get() match
-      case Some((held, index)) if held.get.exists(_ eq wb) => index
-      case _ =>
+    recentIndexes.get().collectFirst {
+      case (held, index) if held.get.exists(_ eq wb) => index
+    } match
+      case Some(index) => index
+      case None =>
         val built: Index = wb.sheets.zipWithIndex
           .flatMap((sheet, i) => sheet.tables.valuesIterator.map(table => (i, table)))
           .groupBy((_, table) => foldKey(table.displayName))
-        lastIndex.set(Some((ref.WeakReference(wb), built)))
+        recentIndexes.updateAndGet { entries =>
+          ((ref.WeakReference(wb), built) +: entries.filter((held, _) => held.get.nonEmpty))
+            .take(MaxIndexes)
+        }
         built
 
   private def tablesNamed(wb: Workbook, name: String): Vector[(Sheet, TableSpec)] =
