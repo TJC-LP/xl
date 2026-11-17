@@ -136,35 +136,51 @@ class RasterSubprocessSpec extends FunSuite:
       Files.deleteIfExists(out)
       Files.deleteIfExists(err)
 
-  /** `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. */
+  /**
+   * `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. With
+   * `repeat`, the fork is [[CliRepeatProbe]], which runs the command that many times in one JVM.
+   */
   private def forcedView(
     shimDir: Path,
     backend: String,
     format: String,
     range: String,
     jvmFlags: List[String] = Nil,
-    output: Option[Path] = None
+    output: Option[Path] = None,
+    repeat: Option[Int] = None
   ): Forked =
     val fixtures = TestFixtures.materialize.unsafeRunSync()
-    try
-      forkWith(
-        shimDir,
-        jvmFlags,
-        "com.tjclp.xl.cli.Main",
-        "-f",
-        fixtures.resolve("simple.xlsx").toString,
-        "-s",
-        "Data",
-        "view",
-        range,
-        "--format",
-        format,
-        "--raster-output",
-        output.getOrElse(fixtures.resolve(s"out.$format")).toString,
-        "--rasterizer",
-        backend
-      )
+    val (mainClass, prefix) = repeat match
+      case Some(times) => ("com.tjclp.xl.cli.raster.CliRepeatProbe", List(times.toString))
+      case None => ("com.tjclp.xl.cli.Main", Nil)
+    val args = List(
+      "-f",
+      fixtures.resolve("simple.xlsx").toString,
+      "-s",
+      "Data",
+      "view",
+      range,
+      "--format",
+      format,
+      "--raster-output",
+      output.getOrElse(fixtures.resolve(s"out.$format")).toString,
+      "--rasterizer",
+      backend
+    )
+    try forkWith(shimDir, jvmFlags, mainClass, (prefix ++ args)*)
     finally TestFixtures.delete(fixtures).unsafeRunSync()
+
+  /** [[CliRepeatProbe]]'s stdout split by attempt: each one's exit code and stderr, in order. */
+  private def attempts(run: Forked): Vector[(Int, String)] =
+    val Header = """@@ attempt \d+ exit (\d+)""".r
+    run.stdout.linesWithSeparators.foldLeft(Vector.empty[(Int, String)]) { (acc, line) =>
+      line.stripLineEnd match
+        case Header(exit) => acc :+ (exit.toInt -> "")
+        case _ =>
+          acc.lastOption.fold(acc) { case (exit, err) =>
+            acc.dropRight(1) :+ (exit -> (err + line))
+          }
+    }
 
   /** The sizes each forced case runs at: past the pipe buffer, and inside it. */
   private val ranges = Vector("A1:Z1000" -> "large SVG", "A1:B2" -> "small SVG")
@@ -194,14 +210,23 @@ class RasterSubprocessSpec extends FunSuite:
     // The probe's 1x1 SVG fits the stdin buffer, so the old fs2 write failed only when the shim
     // exited before fs2 closed stdin — a race the JIT usually won. An interpreted JVM (-Xint) loses
     // it every time (measured 4/4 against the fs2 probe, 1/16 with the JIT under load); the repeats
-    // keep the case honest if a faster machine narrows the window again.
-    (1 to 3).foreach { attempt =>
-      val run = forcedView(dir, "imagemagick", "png", "A1:B2", List("-Xint"))
-      val clue = s"attempt $attempt: ${run.stderr}"
-      assertEquals(run.exit, 3, clue)
-      assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), clue)
-      assert(!run.stderr.contains("Stream closed"), clue)
-      assert(!run.stderr.contains("\tat "), s"no stack trace, $clue")
+    // keep the case honest if a faster machine narrows the window again. GH-877: the repeats run
+    // in one interpreted JVM; three, each paying the interpreted startup, overran munit's 30 s on
+    // a loaded CI runner. A failed probe is not cached, so each attempt runs the race again. Since
+    // PipedBackend writes stdin on a pipe thread (#703) the race is rarely lost even with -Xint
+    // (0 of 36 attempts instrumented locally), and either outcome ends in the same typed error.
+    val run = forcedView(dir, "imagemagick", "png", "A1:B2", List("-Xint"), repeat = Some(3))
+    val runs = attempts(run)
+    assertEquals(runs.size, 3, s"stdout: ${run.stdout}\nstderr: ${run.stderr}")
+    assertEquals(run.exit, 0, run.stderr)
+    assert(!run.stderr.contains("\tat "), s"no stack trace in the fork: ${run.stderr}")
+    assert(!run.stderr.contains("Stream closed"), run.stderr)
+    runs.zipWithIndex.foreach { case ((exit, stderr), i) =>
+      val clue = s"attempt ${i + 1}: $stderr"
+      assertEquals(exit, 3, clue)
+      assert(stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), clue)
+      assert(!stderr.contains("Stream closed"), clue)
+      assert(!stderr.contains("\tat "), s"no stack trace, $clue")
     }
   }
 

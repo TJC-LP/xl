@@ -49,6 +49,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rows are unchanged. OFFSET, INDIRECT, XLOOKUP, an INDEX position read from a cell or from ROW()
   or COLUMN(), and a LET-bound computed reference keep the trimmed sum; see LIMITATIONS.
 
+- **RasterSubprocessSpec CI timeout** (#877): the forced-ImageMagick race case started three
+  interpreted (`-Xint`) JVMs in a row and overran munit's 30 s per-test limit on loaded CI
+  runners. Its three attempts now run in one interpreted JVM (a test-only `CliRepeatProbe`), with
+  the same assertions on each; the case takes about a third of the time (6.7–8.5 s → 2.1–3.4 s
+  in an alternating local A/B). Tests only; no behaviour change.
+
 - **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
   **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
   **Behaviour change:** a whole column beside INDEX over an edge range one row shorter, `=SUMPRODUCT(A:A*INDEX(B2:B1048576,0))`, is `#N/A` as in Excel (1,048,576 rows against 1,048,575); it was a sum when the sheet's data started at row 2, because the whole column was trimmed at the top to the same rows.
@@ -56,7 +62,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
   path, the message adds `(resolved to <absolute path> from working directory <dir>)`, in text and
   in the `--json` envelope's `error.message`, so a run from the wrong directory says where xl looked.
-  `error.location.file` keeps the path as given; absolute paths are unchanged.
+  `error.location.file` keeps the path as given; absolute paths are unchanged. A `.` segment is
+  dropped from the resolved path (`./model.xlsx` reads as `<dir>/model.xlsx`); `..` is kept, since
+  through a symlinked directory collapsing it would name a different file. On Windows a relative
+  path that carries a root (`\model.xlsx`) keeps its drive; one on another drive (`D:model.xlsx`)
+  gets no suffix, since xl cannot tell that drive's working directory.
   **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
   `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
 

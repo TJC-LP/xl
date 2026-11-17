@@ -149,6 +149,31 @@ class CliErrorSpec extends FunSuite:
     )
   }
 
+  test("GH-870: `.` segments are dropped from the resolved path; `..` is kept") {
+    val cwd = Paths.get("/work/books")
+    def resolved(typed: String): String =
+      CliError
+        .resolvingInputPath(
+          CliError(
+            ErrorCode.IO_READ,
+            s"No such file: $typed",
+            location = Some(Location.file(typed))
+          ),
+          cwd
+        )
+        .message
+    assertEquals(
+      resolved("./model.xlsx"),
+      "No such file: ./model.xlsx (resolved to /work/books/model.xlsx " +
+        "from working directory /work/books)"
+    )
+    assertEquals(
+      resolved("./q3/./link/../model.xlsx"),
+      "No such file: ./q3/./link/../model.xlsx (resolved to /work/books/q3/link/../model.xlsx " +
+        "from working directory /work/books)"
+    )
+  }
+
   test("GH-870: resolving an error twice adds the resolution once") {
     val cwd = Paths.get("/work/books")
     val missing = CliError(
