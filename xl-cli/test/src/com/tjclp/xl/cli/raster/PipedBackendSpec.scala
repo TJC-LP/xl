@@ -603,6 +603,23 @@ class PipedBackendSpec extends CatsEffectSuite:
     }
   }
 
+  test("GH-867: a blank failure message is named by its backend and type") {
+    val chain = List(
+      backend("blank", IO.raiseError(new RuntimeException(""))),
+      backend("spaces", IO.raiseError(new RuntimeException(" \n  "))),
+      writer("rsvg-convert")
+    )
+    quietRun(chain).map { (used, warnings) =>
+      assertEquals(used, "rsvg-convert")
+      assertEquals(
+        warnings,
+        Vector(
+          "Warning: blank: java.lang.RuntimeException; spaces: java.lang.RuntimeException; using rsvg-convert"
+        )
+      )
+    }
+  }
+
   test("GH-867: a multi-line failure reason is reported on one line") {
     val chain = List(
       backend(

@@ -426,12 +426,11 @@ object RasterizerChain:
           // tail) on one line, so the warning and the all-fail list stay one line per backend.
           // A backend's own message usually names it ("cairosvg conversion failed (exit 1):
           // …"); otherwise the name leads. The same text goes in both places.
+          // A missing or blank message falls back to the exception's type.
           val reason = Option(error.getMessage)
-            .getOrElse(error.getClass.getName)
-            .linesIterator
-            .map(_.strip)
+            .map(_.linesIterator.map(_.strip).filter(_.nonEmpty).mkString(" "))
             .filter(_.nonEmpty)
-            .mkString(" ")
+            .getOrElse(error.getClass.getName)
           val described =
             if reason.startsWith(rasterizer.name) then reason else s"${rasterizer.name}: $reason"
           next(rest, described, Some(described))
