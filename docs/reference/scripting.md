@@ -70,6 +70,9 @@ Excel.write(updated, "output.xlsx")
   destination change. It does not merge source ZIP parts, remap names or ordinary formula
   dependencies, or materialize cached values. Raw `put`/`update` remain low-level operations;
   copying a loaded sheet with them can still rebind external links silently (part of #526).
+  The sheet's hidden/veryHidden state in `from` is carried over. `from` is trusted: pass the
+  workbook the sheet was actually read from. Wrapping a loaded sheet in a fresh `Workbook(sheet)`
+  hides its source and fonts, and the guard cannot detect that.
 - `Workbook.upsert(name, f)` is total update-or-create; `Workbook.update(name, f)` returns
   `XLResult[Workbook]` and fails if the sheet is absent. Pick by intent.
 - `Excel.modify("file.xlsx")(f)` does read → transform → write in place with atomic file

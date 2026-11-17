@@ -127,3 +127,35 @@ class SheetAdoptionSpec extends FunSuite:
     assert(failure(destination.adopt(sheet, themed)).contains("default font or theme"))
     assert(destination.adopt(sheet, source.withDefaultFont(Font.default)).isRight)
   }
+
+  test("GH-526: adoption carries the source sheet's hidden and veryHidden state") {
+    val lookup = Sheet("Lookup").put(ref"A1", 1)
+    val front = Sheet("Front").put(ref"A1", 2)
+    val destination = Workbook("Destination")
+    Vector("hidden", "veryHidden").foreach { state =>
+      val source = Workbook(Vector(front, lookup))
+        .setSheetState(lookup.name, Some(state))
+        .fold(e => fail(e.toString), identity)
+      val result = destination.adopt(lookup, from = source).fold(e => fail(e.toString), identity)
+      assertEquals(result.getSheetState(lookup.name), Some(state), state)
+      assertEquals(result.getSheetState(SheetName.unsafe("Destination")), None, state)
+    }
+  }
+
+  test("GH-526: a visible adopted sheet overwrites a stale destination state for that name") {
+    val sheet = Sheet("Portable").put(ref"A1", 1)
+    val base = Workbook("Destination")
+    val stale =
+      base.copy(metadata = base.metadata.copy(sheetStates = Map(sheet.name -> Some("hidden"))))
+    val result = stale.adopt(sheet, Workbook(sheet)).fold(e => fail(e.toString), identity)
+    assertEquals(result.getSheetState(sheet.name), None)
+  }
+
+  test("GH-526: refuses a hidden sheet that would leave the destination with no visible sheet") {
+    val lookup = Sheet("Lookup").put(ref"A1", 1)
+    val source = Workbook(Vector(Sheet("Front"), lookup))
+      .setSheetState(lookup.name, Some("hidden"))
+      .fold(e => fail(e.toString), identity)
+    val empty = Workbook(Vector.empty[Sheet])
+    assert(failure(empty.adopt(lookup, source)).contains("no visible sheet"))
+  }

@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Explicit conservative sheet adoption** (part of #526): `Workbook.adopt(sheet, from)` refuses
   external-reference rebinding, foreign source-backed transfers, unsupported sheet payloads and
   name collisions and incompatible default-font/theme contexts. Source-free simple sheets retain their model and styles; raw `put` is unchanged.
+  The sheet's hidden/veryHidden state carries over. The checks trust `from`: pass the workbook the
+  sheet was read from, since wrapping a loaded sheet in `Workbook(sheet)` hides its source.
 
 ### Fixed
 

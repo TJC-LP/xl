@@ -75,6 +75,14 @@ final case class Workbook(
    * source/destination workbook is a no-op only after membership validation; edited sheets are
    * never discarded.
    *
+   * The sheet's visibility in `from` (hidden or veryHidden) is carried to the destination; a hidden
+   * sheet is refused if the destination would then have no visible sheet.
+   *
+   * `from` is trusted caller input: every check reads it as supplied, and a [[Sheet]] carries no
+   * record of the file it came from. Pass the workbook the sheet was actually read from. Wrapping a
+   * loaded sheet in a fresh `Workbook(sheet)` hides its source context, default font and theme, so
+   * the guard cannot refuse it.
+   *
    * No formula/name rewriting, link-table merging or cached-value materialization is performed.
    * Ordinary formula dependencies remain the caller's responsibility. Raw put/update are unchanged.
    */

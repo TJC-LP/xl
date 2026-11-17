@@ -56,8 +56,9 @@ println(s"wrote ${sheet.cells.size} cells")
 `Workbook.adopt` is deliberately conservative: only source-free simple sheets can cross books.
 External ordinal formulas, foreign source-backed sheets, tables, drawings, conditional formats,
 validations, name collisions and differing workbook default fonts/theme palettes are refused. It never remaps ordinary references or names; raw
-`put` stays low-level and can silently rebind copied external ordinals. The full package-migration
-portion of #526 remains open.
+`put` stays low-level and can silently rebind copied external ordinals. Pass the workbook the sheet
+was actually read from as `from`: wrapping a loaded sheet in `Workbook(sheet)` bypasses the checks.
+Hidden/veryHidden state carries over. The full package-migration portion of #526 remains open.
 
 ```scala
 // Create / read / write (sync facade; throws only at this IO edge)

@@ -47,7 +47,17 @@ private[workbooks] object SheetAdoption:
         refuse(sheet, "tables, drawings, conditional formats and validations are not yet supported")
       else if destination.sheets.exists(_.name.value.equalsIgnoreCase(sheet.name.value)) then
         Left(XLError.DuplicateSheet(sheet.name.value))
-      else Right(destination.put(sheet))
+      else
+        // Visibility lives in workbook metadata keyed by name, not on the sheet. Write the source
+        // state explicitly (None = visible) so a stale destination entry for this name is replaced.
+        val state = from.getSheetState(sheet.name)
+        val anyVisible = destination.sheets.exists(s => destination.getSheetState(s.name).isEmpty)
+        if state.nonEmpty && !anyVisible then
+          refuse(sheet, s"it is ${state.getOrElse("")} and the destination has no visible sheet")
+        else
+          val placed = destination.put(sheet)
+          val states = placed.metadata.sheetStates + (sheet.name -> state)
+          Right(placed.copy(metadata = placed.metadata.copy(sheetStates = states)))
 
   private def refuse(sheet: Sheet, reason: String): XLResult[Workbook] =
     Left(XLError.InvalidWorkbook(s"Cannot adopt sheet '${sheet.name.value}': $reason"))

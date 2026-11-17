@@ -126,7 +126,8 @@ println("\n✨ One import. Compile-time refs. Total loops. Either at the edges."
 
 // GH-526: explicit adoption guards external ordinals and opaque source preservation.
 val portable = Sheet("Portable").put(ref"A1", 42).style(ref"A1", header)
-val portableSource = Workbook(portable) // source-free modeled sheet
+val portableSource = Workbook(portable) // built in code, so it has no source file to hide
+// For a sheet read from a file, pass the workbook it was read from, never Workbook(sheet).
 val adopted = wb.adopt(portable, from = portableSource).unsafe
 assert(adopted.sheets.contains(portable))
 // Loaded foreign sheets are refused until package migration is supported; raw put stays low-level.
