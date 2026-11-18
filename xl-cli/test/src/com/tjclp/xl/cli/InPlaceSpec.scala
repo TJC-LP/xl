@@ -459,7 +459,8 @@ class InPlaceSpec extends CatsEffectSuite:
   }
 
   // GH-868: -o and -i stage the output in an owner-only temp file, which used to be renamed into
-  // place with its 0600 mode. A new output now gets the umask's mode; a replaced one keeps its own.
+  // place with its 0600 mode. A new output now gets the umask's mode; a replaced one keeps its own,
+  // its group bits capped at its others bits.
 
   private val posix =
     java.nio.file.FileSystems.getDefault.supportedFileAttributeViews.contains("posix")
@@ -500,13 +501,13 @@ class InPlaceSpec extends CatsEffectSuite:
         val dir = Files.createTempDirectory("xl-gh868-o-keep-")
         val out = dir.resolve("out.xlsx")
         Files.copy(input, out)
-        setMode(out, "rw-r-----")
+        setMode(out, "rw-r--r--")
         out
       }.flatMap { out =>
         runCliCaptured("-f", input.toString, "-s", "Test", "-o", out.toString, "put", "A2", "99")
           .map { case (code, _) =>
             assertEquals(code, ExitCode.Success)
-            assertEquals(mode(out), "rw-r-----")
+            assertEquals(mode(out), "rw-r--r--")
           }
       }
     }
@@ -515,7 +516,7 @@ class InPlaceSpec extends CatsEffectSuite:
   test("-i put: the input keeps its mode, owner-only included (GH-868)") {
     assume(posix, "POSIX permissions only")
     withTempExcelFile { input =>
-      val modes = List("rw-r-----", "rw-------")
+      val modes = List("rw-r--r--", "rw-------")
       modes.traverse_ { m =>
         IO.blocking(setMode(input, m)) *>
           runCliCaptured("-f", input.toString, "-s", "Test", "-i", "put", "A2", "99").map {

@@ -42,10 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended up `0600` (`-rw-------`) whatever the umask. The staged file stays owner-only while it is
   written, then takes the right mode just before the rename.
   **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
-  umask `022`); a replaced output keeps its own mode and group, so a private (`0600`) file stays
-  private. Where the writer cannot give the output the original's group, or the original has an
-  extended ACL (whose mask its group bits are), the group gets no more than everyone else already
-  had. An extended ACL is not carried over: the users and groups it names lose that access.
+  umask `022`). A replaced output keeps its mode and, where the writer may set it, its group, with
+  its group bits capped at its others bits: `0644` and `0600` stay as they are, a group-shared
+  `0664` becomes `0644` and `0660` becomes `0600`. The JVM cannot read POSIX ACLs (on a file with
+  one, the group bits are the ACL mask), so the cap is what guarantees no user or group gains access.
+  An extended ACL is not carried over: the users and groups it names lose that access.
 
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency

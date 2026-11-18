@@ -14,7 +14,8 @@ import com.tjclp.xl.macros.ref
 /**
  * GH-868: the streaming transforms and `Excel.modify` stage their output in an owner-only temp file
  * and rename it into place, so the output used to end up 0600 whatever the umask. A new output now
- * gets the mode any new file gets in its directory; a replaced one keeps its mode.
+ * gets the mode any new file gets in its directory; a replaced one keeps its mode, its group bits
+ * capped at its others bits.
  */
 class OutputFileModeSpec extends CatsEffectSuite:
 
@@ -64,9 +65,9 @@ class OutputFileModeSpec extends CatsEffectSuite:
     for
       dir <- IO.blocking(Files.createTempDirectory("xl-gh868-stream-keep-"))
       source <- book(dir)
-      _ <- IO.blocking(setMode(source, "rw-r-----"))
+      _ <- IO.blocking(setMode(source, "rw-r--r--"))
       _ <- streamPut(source, source)
-    yield assertEquals(mode(source), "rw-r-----")
+    yield assertEquals(mode(source), "rw-r--r--")
   }
 
   test("Excel.modify keeps the file's mode (GH-868)") {
@@ -74,7 +75,7 @@ class OutputFileModeSpec extends CatsEffectSuite:
     for
       dir <- IO.blocking(Files.createTempDirectory("xl-gh868-modify-"))
       source <- book(dir)
-      _ <- IO.blocking(setMode(source, "rw-r-----"))
+      _ <- IO.blocking(setMode(source, "rw-r--r--"))
       _ <- IO.blocking(Excel.modify(source.toString)(wb => wb))
-    yield assertEquals(mode(source), "rw-r-----")
+    yield assertEquals(mode(source), "rw-r--r--")
   }
