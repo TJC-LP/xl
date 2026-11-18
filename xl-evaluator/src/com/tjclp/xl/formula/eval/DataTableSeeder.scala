@@ -261,9 +261,10 @@ object DataTableSeeder:
   private[eval] def seedSample(
     wb: Workbook,
     clock: Clock,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    graph: RecalcGraph
   ): Workbook =
-    seedWorkbook(wb, None, clock, declaredIterative(wb), pick)._1
+    seedWorkbook(wb, None, clock, declaredIterative(wb), pick, Some(graph))._1
 
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
@@ -285,7 +286,8 @@ object DataTableSeeder:
     scope: Option[(SheetName, Option[CellRange])],
     clock: Clock,
     iterative: Option[IterativeCalc],
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    built: Option[RecalcGraph] = None
   ): (Workbook, Vector[SeedTableWarning]) =
     val targets: Vector[SheetName] = scope match
       case Some((name, _)) => Vector(name)
@@ -298,7 +300,7 @@ object DataTableSeeder:
     lazy val cycles: CycleContext =
       // #891: the recalculation graph — the cycles `recalc` isolates, #504's precise lookup reads,
       // case-insensitive sheet qualifiers — and its one parse of each formula
-      val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
+      val graph = built.getOrElse(RecalcGraph.build(wb, RecalcCounters.disabled))
       CycleContext(graph, graph.cyclicCore, DependencyGraph.dynamicCells(wb, graph.parses))
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb.sheets.find(_.name == name) match

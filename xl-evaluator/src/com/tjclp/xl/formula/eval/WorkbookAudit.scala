@@ -263,7 +263,8 @@ object WorkbookAudit:
       .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, graph, volatile) }
     if tables.isEmpty then Vector.empty
     else
-      val seeded = DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator)
+      val seeded =
+        DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator, graph)
       val after = seeded.sheets.iterator.map(s => s.name -> s).toMap
       tables.flatMap { case (sheet, (interior, _)) =>
         val sampled = sampleOf(interior)

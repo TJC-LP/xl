@@ -866,7 +866,7 @@ object DependencyGraph:
    * `members` is sorted by [[QualifiedRef.gridKey]] (sheet name, row, column) — the deterministic
    * member order the Jacobi fixpoint needs (values are order-independent under Jacobi, but error
    * vectors, report members and seeded-RNG draw order are not). `cyclic` is true for a multi-node
-   * component or a self-looping singleton, matching [[qualifiedCyclicNodes]] exactly.
+   * component or a self-looping singleton.
    *
    * No `derives CanEqual`: [[QualifiedRef]] does not derive it.
    */
@@ -883,13 +883,13 @@ object DependencyGraph:
    * This is what lets one iterative recalculation reach the workbook's GLOBAL fixpoint: walking the
    * condensation once (acyclic components evaluate, cyclic components fixpoint) guarantees every
    * precedent is a freshly computed value before anything reads it, so no read can fall back to a
-   * loaded cache. `qualifiedCyclicNodes` flattens the same Tarjan run into an undifferentiated
-   * `Set` and is kept for the callers that only need the membership test.
+   * loaded cache.
    *
-   * Laws (property-tested in DependencyGraphSpec):
+   * Laws (property-tested in DependencyGraphSpec and, against a hash-map Tarjan oracle,
+   * QualifiedSccOracleSpec):
    *   - partition — `flatMap(_.members).toSet == dependencies.keySet`, no duplicates
    *   - order — for every edge u → v with different components, index(scc(v)) < index(scc(u))
-   *   - cyclic-view — `filter(_.cyclic).flatMap(_.members).toSet == qualifiedCyclicNodes(deps)`
+   *   - cyclic — a component is cyclic exactly when it has two members or one reads itself
    *   - determinism — depends only on the graph's VALUE, never on Map/Set iteration order
    *
    * Runs in O(V + E + C log C). Only nodes present in `dependencies` (formula cells) are ordered:

@@ -74,6 +74,25 @@ class RangeEvaluationPerCellSpec extends FunSuite:
     assertEquals(perCell.blocked, Vector.empty)
   }
 
+  test("#891: on an iterating book, a cycle keeps its converged values and feeds its readers") {
+    // A1 = B1/2 + 3 and B1 = A1/2 + 1 hold converged caches (14/3, 10/3); C1 reads A1. Excel shows
+    // those values, so a window evaluates C1 off the cache and reports no circular reference
+    val sheet = withCells(
+      ref"A1" -> cached("B1/2+3", num(BigDecimal(14) / 3)),
+      ref"B1" -> cached("A1/2+1", num(BigDecimal(10) / 3)),
+      ref"C1" -> formula("A1*3")
+    )
+    val book = Workbook(sheet).copy(metadata =
+      Workbook().metadata.copy(calcPr =
+        Some(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(100), None))
+      )
+    )
+    val result = sheet.evaluateForRangePerCell(range("A1:C1"), Clock.system, Some(book))
+    assertEquals(result.failures, Vector.empty)
+    assertEquals(result.blocked, Vector.empty)
+    assertEquals(result.values.get(ref"C1"), Some(num(BigDecimal(14) / 3 * 3)))
+  }
+
   test("one failing cell leaves the others live, and is reported with its location") {
     val result = degraded.evaluateForRangePerCell(range("A1:G4"), Clock.system, None)
     assertEquals(result.values.get(ref"F3"), Some(num(10)))

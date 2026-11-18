@@ -1,6 +1,5 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -8,7 +7,7 @@ import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.functions.CriteriaRangeResize
 import com.tjclp.xl.formula.AfterEditSyntax.*
 import com.tjclp.xl.formula.EvalAllSyntax.*
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -305,13 +304,13 @@ class CriteriaRangeDependencySpec extends FunSuite:
     val wb = staticBook
     assertEquals(DependencyGraph.dynamicCells(wb), Set.empty[QualifiedRef])
     assertEquals(com.tjclp.xl.formula.eval.WorkbookAudit.of(wb).dynamic, Vector.empty)
-    val (graph, _) = NaiveGraphs.fromWorkbookBounded(wb)
+    val graph = QualifiedGraph.of(wb)
     // staticTarget names C1, but the call reads C1:C3: the graph records the resized cells
     List(ref"E2", ref"E3", ref"E4", ref"E5").foreach { at =>
-      val deps = graph.getOrElse(q(at), Set.empty)
+      val deps = graph.precedentsOf(q(at))
       assert(Set(q(ref"C1"), q(ref"C2"), q(ref"C3")).subsetOf(deps), s"$at: $deps")
     }
-    assert(Set(q(ref"C2"), q(ref"C3")).subsetOf(graph.getOrElse(q(ref"E1"), Set.empty)))
+    assert(Set(q(ref"C2"), q(ref"C3")).subsetOf(graph.precedentsOf(q(ref"E1"))))
   }
 
   test("#733: an edit inside the resized target refreshes the static readers") {
@@ -359,9 +358,9 @@ class CriteriaRangeDependencySpec extends FunSuite:
       val wb = Workbook(sheet.put(ref"C5", CellValue.Formula(formula, None)))
         .withDefinedName("amt", "S!$C$1:$C$10")
         .withDefinedName("amtAlias", "amt")
-      val (graph, _) = NaiveGraphs.fromWorkbookBounded(wb)
+      // C5 itself is occupied: an over-read of C1:C10 would list it
       assertEquals(
-        graph.getOrElse(q(ref"C5"), Set.empty).filter(_.ref.col == ref"C1".col),
+        QualifiedGraph.of(wb).precedentsOf(q(ref"C5")).filter(_.ref.col == ref"C1".col),
         Set(q(ref"C1"), q(ref"C2"), q(ref"C3")),
         formula
       )

@@ -1,6 +1,5 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -141,6 +140,14 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
 
+  /** The members of the cyclic components of the product condensation (the iterative kernel). */
+  private def cyclicNodes(deps: Map[QualifiedRef, Set[QualifiedRef]]): Set[QualifiedRef] =
+    com.tjclp.xl.formula.graph.DependencyGraph
+      .qualifiedSccOrder(deps)
+      .filter(_.cyclic)
+      .flatMap(_.members)
+      .toSet
+
   test("stack safety: 100k-deep dependency chain neither overflows nor reports cycles"):
     // Graph built directly (no parsing) — pins the iterative Tarjan engine. The recursive
     // strongConnect this replaces overflowed around ~10k frames, violating recalculate's
@@ -151,10 +158,7 @@ class RecalcSpec extends FunSuite:
     val deps = (0 until n).map { i =>
       node(i) -> (if i + 1 < n then Set(node(i + 1)) else Set.empty[QualifiedRef])
     }.toMap
-    assertEquals(
-      com.tjclp.xl.formula.graph.NaiveGraphs.qualifiedCyclicNodes(deps),
-      Set.empty[QualifiedRef]
-    )
+    assertEquals(cyclicNodes(deps), Set.empty[QualifiedRef])
 
   test("stack safety: 100k-node cycle is fully collected without overflow"):
     val n = 100000
@@ -162,7 +166,7 @@ class RecalcSpec extends FunSuite:
     val deps = (0 until n).map { i =>
       node(i) -> Set(node((i + 1) % n)) // last points back to first
     }.toMap
-    assertEquals(com.tjclp.xl.formula.graph.NaiveGraphs.qualifiedCyclicNodes(deps).size, n)
+    assertEquals(cyclicNodes(deps).size, n)
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000

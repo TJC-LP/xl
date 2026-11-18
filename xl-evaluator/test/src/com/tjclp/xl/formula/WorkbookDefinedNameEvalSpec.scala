@@ -1,10 +1,9 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -169,8 +168,7 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
   test("GH-384: dependency graph carries an edge from the name user to the name's target") {
     val other = Sheet(SheetName.unsafe("Other")).put(a1, formula("=IF(case=2, 10, 20)"))
     val wb = Workbook(model.put(b2, formula("=1+1")), other).withDefinedName("case", "Model!$B$2")
-    val (graph, _) = NaiveGraphs.fromWorkbookBounded(wb)
-    val edges = graph.getOrElse(QualifiedRef(SheetName.unsafe("Other"), a1), Set.empty)
+    val edges = QualifiedGraph.of(wb).precedentsOf(QualifiedRef(SheetName.unsafe("Other"), a1))
     assert(
       edges.contains(QualifiedRef(SheetName.unsafe("Model"), b2)),
       s"expected Other!A1 -> Model!B2 edge via defined name, got $edges"

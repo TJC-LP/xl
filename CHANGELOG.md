@@ -56,7 +56,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   included), so the after-edit pass every CLI write ends with now evaluates each uncached formula
   with the edit, and what reads it, exactly as a full recalculation would: a formula that fails
   again withdraws its readers' caches instead of being read as empty. A book saved without caches
-  therefore computes in full on its first edit, as Excel computes it on open. The uncached pass
+  therefore computes in full on its first edit, as Excel computes it on open. A formula xl cannot
+  evaluate (an unsupported function, a closed external workbook) holds no value after a
+  recalculation, so every later write re-evaluates it and lists it in the summary: **`--strict`
+  now fails any write to such a book**, where it used to pass when the edit did not reach the
+  formula (2 of 60 real books; the written bytes are unchanged). The uncached pass
   (`recalculateUncached`) now lists circular cells before the cells they block, as the full pass
   does.
 

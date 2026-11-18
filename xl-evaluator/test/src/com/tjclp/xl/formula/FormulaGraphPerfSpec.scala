@@ -1,23 +1,29 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
+import scala.collection.immutable.BitSet
+
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.RecalcCounters
 import com.tjclp.xl.formula.eval.RecalcCounters.Counter
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
 /**
- * Regression gates for the formula-only graph used by whole-workbook recalculation.
+ * Regression gates for the graphs whole-workbook recalculation (the compact graph) and inspection
+ * (`QualifiedGraph`, the symbolic dependency index) build.
  *
- * The performance gates pin the build's work counters (`RangeLookups`, `RangeLookupWork`,
- * `GraphEdges`), never its wall time: a shared CI runner that is running three other test JVMs
- * stretches a 2 s build past 5 s (#843), while a counter is an exact function of the workbook and
- * the algorithm. Wall time appears only in the assertion clues.
+ * The performance gates pin the build's work counters and graph sizes, never its wall time: a
+ * shared CI runner that is running three other test JVMs stretches a 2 s build past 5 s (#843),
+ * while a counter is an exact function of the workbook and the algorithm. Wall time appears only in
+ * the assertion clues.
+ *
+ * #891: the per-cell formula graph these gates were first written against is a test oracle now
+ * (`NaiveGraphs`); its own range-lookup counters left with it, and the compact graph's equivalence
+ * to it is CompactGraphSpec's.
  */
 class FormulaGraphPerfSpec extends FunSuite:
 
@@ -32,20 +38,37 @@ class FormulaGraphPerfSpec extends FunSuite:
         .put(ARef.from0(2, row - 1), formula("=SUM($B$1:INDEX(B:B,ROW()))"))
     })
 
-  /** The formula graph of `wb` with its build counters; the wall time is diagnostic only. */
-  private def measured(wb: Workbook): (
-    Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]],
-    Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]],
-    RecalcCounters.Snapshot,
-    Long
-  ) =
+  /**
+   * The recalculation graph's direct formula-to-formula reads: every formula (a key even when it
+   * reads none) and the other formulas it reads. Self-reads are left out (`memberPrecedents` drops
+   * them; a cell reading itself is a cycle, CompactGraphSpec's).
+   */
+  private def formulaReads(
+    graph: CompactGraph
+  ): Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]] =
+    val reads = graph.memberPrecedents(BitSet.fromSpecific(0 until graph.formulaCount))
+    (0 until graph.formulaCount).iterator.map { n =>
+      graph.nodes.qualified(n) -> reads.getOrElse(n, Set.empty).map(graph.nodes.qualified)
+    }.toMap
+
+  /**
+   * The inspection graph's reads restricted to the other formula cells: the topology recalc needs.
+   */
+  private def inspectionFormulaReads(
+    wb: Workbook
+  ): Map[DependencyGraph.QualifiedRef, Set[DependencyGraph.QualifiedRef]] =
+    val dependencies = QualifiedGraph.of(wb).dependencies
+    dependencies.map((formula, reads) => formula -> (reads & dependencies.keySet - formula))
+
+  /** The compact graph of `wb` with its build counters; the wall time is diagnostic only. */
+  private def measured(wb: Workbook): (CompactGraph, RecalcCounters.Snapshot, Long) =
     val counters = RecalcCounters.create()
     val started = System.nanoTime()
-    val (dependencies, dependents) = NaiveGraphs.fromWorkbookFormulaGraph(wb, counters)
+    val graph = CompactGraph.build(wb, counters)
     val elapsedMs = (System.nanoTime() - started) / 1000000L
-    (dependencies, dependents, counters.snapshot, elapsedMs)
+    (graph, counters.snapshot, elapsedMs)
 
-  test("formula-only graph equals the bounded graph restricted to formula nodes"):
+  test("the recalculation graph's formula reads equal the inspection graph's, on formula nodes"):
     val data = Sheet(SheetName.unsafe("Data"))
       .put(ref"A1", number(1))
       .put(ref"A2", number(2))
@@ -55,15 +78,9 @@ class FormulaGraphPerfSpec extends FunSuite:
       .put(ref"A1", formula("=SUM(Data!A:A)+Data!B3"))
     val wb = Workbook(data, summary)
 
-    val (bounded, _) = NaiveGraphs.fromWorkbookBounded(wb)
-    val formulaNodes = bounded.keySet
-    val expected = bounded.view.mapValues(_ & formulaNodes).toMap
-    val (actual, actualReverse) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
+    assertEquals(formulaReads(CompactGraph.build(wb)), inspectionFormulaReads(wb))
 
-    assertEquals(actual, expected)
-    assertEquals(actualReverse, NaiveGraphs.reverseEdges(expected))
-
-  test("constant driver ranges contribute no topology edges and expand once (GH-522)"):
+  test("constant driver ranges contribute no topology edges and are one range node (GH-522)"):
     val driverRows = 5000
     val formulaCount = 1000
     val data = (1 to driverRows).foldLeft(Sheet(SheetName.unsafe("Data"))) { (sheet, row) =>
@@ -74,18 +91,19 @@ class FormulaGraphPerfSpec extends FunSuite:
     }
     val wb = Workbook(data, model)
 
-    val (dependencies, dependents, snap, elapsedMs) = measured(wb)
+    val (graph, snap, elapsedMs) = measured(wb)
     val clue = s"${snap.render} (${elapsedMs} ms)"
 
-    assertEquals(dependencies.size, formulaCount)
-    assert(dependencies.valuesIterator.forall(_.isEmpty))
-    assertEquals(dependents, Map.empty)
-    // one expansion shared by the 1,000 readers (GH-522: it was one per reader, ~5M refs); Data
-    // holds no formula, so the lookup examines no index entry
-    assertEquals(snap(Counter.RangeLookups), 1L, clue)
-    assertEquals(snap(Counter.RangeLookupWork), 0L, clue)
+    val reads = formulaReads(graph)
+    assertEquals(reads.size, formulaCount)
+    assert(reads.valuesIterator.forall(_.isEmpty))
+    // one range node shared by the 1,000 readers (GH-522: it was one expansion per reader, ~5M
+    // refs); Data holds no formula, so no segment node
+    assertEquals(graph.rangeCount, 1, clue)
+    assertEquals(snap(Counter.RangeNodes), 1L, clue)
+    assertEquals(snap(Counter.VirtualNodes), 0L, clue)
 
-  test("range lookup finds formula cells across columns, rows and whole-row/column ranges"):
+  test("range reads find formula cells across columns, rows and whole-row/column ranges"):
     // formulas in A..E rows 1..20 (every other cell), read through ranges of each shape
     val grid = (for col <- 0 until 5; row <- 0 until 20 if (col + row) % 2 == 0 yield (col, row))
       .foldLeft(Sheet(SheetName.unsafe("S"))) { case (sheet, (col, row)) =>
@@ -104,83 +122,64 @@ class FormulaGraphPerfSpec extends FunSuite:
       current.put(ARef.from0(10, i), formula(text))
     }
     val wb = Workbook(sheet)
-    val (bounded, _) = NaiveGraphs.fromWorkbookBounded(wb)
-    val expected = bounded.view.mapValues(_ & bounded.keySet).toMap
-    val (actual, _) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
-    assertEquals(actual, expected)
+    val actual = formulaReads(CompactGraph.build(wb))
+    assertEquals(actual, inspectionFormulaReads(wb))
     // the reader of B3:D9 depends on exactly the grid formulas inside it
     val inBox =
       for col <- 1 to 3; row <- 2 to 8 if (col + row) % 2 == 0
       yield DependencyGraph.QualifiedRef(sheet.name, ARef.from0(col, row))
     assertEquals(actual(DependencyGraph.QualifiedRef(sheet.name, ARef.from0(10, 0))), inBox.toSet)
 
-  test("#743: an INDEX(…,ROW()) running total builds the formula graph in linear work"):
-    // each row reads its own B1:B{r} (and INDEX's own B{r}), a distinct range per row; a scan of
-    // every formula per range was quadratic: 2 x rows^2 entries, about 1.3e8 at 8,000 rows, where
-    // the column index examines one entry per lookup (the one column holding formulas, C, which
-    // lies past B). Two sizes: the work must grow with the rows, never with their square.
-    def work(rows: Int): (Long, Long) =
-      val (dependencies, _, snap, elapsedMs) = measured(runningTotals(rows))
+  test("#743: an INDEX(…,ROW()) running total builds a recalculation graph linear in its rows"):
+    // each row reads its own B1:B{r} (and INDEX's own B{r}), a distinct range per row, all over
+    // constants: no formula reads another, and the graph holds a bounded number of range nodes per
+    // row. Two sizes: the graph must grow with the rows, never with their square.
+    def size(rows: Int): (Long, Long) =
+      val (graph, snap, elapsedMs) = measured(runningTotals(rows))
       val clue = s"$rows rows: ${snap.render} (${elapsedMs} ms)"
-      assertEquals(dependencies.size, rows)
-      assert(dependencies.valuesIterator.forall(_.isEmpty), clue)
-      assertEquals(snap(Counter.GraphEdges), 0L, clue)
-      assert(snap(Counter.RangeLookups) >= rows.toLong, clue)
-      assert(snap(Counter.RangeLookups) <= 2L * rows + 2L, clue)
-      assert(snap(Counter.RangeLookupWork) <= 2L * rows + 2L, clue)
-      (snap(Counter.RangeLookups), snap(Counter.RangeLookupWork))
-    val (lookupsSmall, workSmall) = work(2000)
-    val (lookupsLarge, workLarge) = work(8000)
-    // four times the rows: at most about four times the work (a scan per lookup would be sixteen)
-    assert(lookupsLarge <= 4.5 * lookupsSmall, s"lookups $lookupsSmall -> $lookupsLarge")
-    assert(workLarge <= 4.5 * workSmall, s"index work $workSmall -> $workLarge")
-
-  test("the lookup work counter grows with the formula cells a range covers"):
-    // D{n} = SUM($C$1:C{n}) over formulas in C: every covered cell is an entry examined and an
-    // edge, so the work is quadratic exactly as the per-cell graph's edges are (RecalcPerfGatesSpec
-    // pins rows*(rows+1)/2 edges for the legacy engine on this shape). The #743 shape above covers
-    // no formula and stays flat: a regression to a scan could not hide behind an empty result.
-    val rows = 200
-    val sheet = (1 to rows).foldLeft(Sheet(SheetName.unsafe("S"))) { (current, row) =>
-      current
-        .put(ARef.from0(2, row - 1), formula(s"=$row*2"))
-        .put(ARef.from0(3, row - 1), formula(s"=SUM($$C$$1:C$row)"))
-    }
-    val (_, _, snap, elapsedMs) = measured(Workbook(sheet))
-    val clue = s"${snap.render} (${elapsedMs} ms)"
-    val edges = rows.toLong * (rows + 1) / 2
-    assertEquals(snap(Counter.GraphEdges), edges, clue)
-    assertEquals(snap(Counter.RangeLookups), rows.toLong, clue)
-    // every covered formula cell, plus the column entries and the one row entry past each range
-    assert(snap(Counter.RangeLookupWork) >= edges, clue)
-    assert(snap(Counter.RangeLookupWork) <= edges + 4L * rows, clue)
+      val reads = formulaReads(graph)
+      assertEquals(reads.size, rows)
+      assert(reads.valuesIterator.forall(_.isEmpty), clue)
+      assertEquals(snap(Counter.VirtualNodes), 0L, clue)
+      assert(snap(Counter.RangeNodes) >= rows.toLong, clue)
+      assert(snap(Counter.RangeNodes) <= 2L * rows + 2L, clue)
+      (snap(Counter.RangeNodes), snap(Counter.GraphEdges))
+    val (rangesSmall, edgesSmall) = size(2000)
+    val (rangesLarge, edgesLarge) = size(8000)
+    // four times the rows: at most about four times the graph (a quadratic one would be sixteen)
+    assert(rangesLarge <= 4.5 * rangesSmall, s"range nodes $rangesSmall -> $rangesLarge")
+    assert(edgesLarge <= 4.5 * edgesSmall, s"edges $edgesSmall -> $edgesLarge")
 
   test("formula cells inside ranges remain topology precedents"):
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", number(1))
       .put(ref"A2", formula("=A1+1"))
       .put(ref"A3", formula("=SUM(A1:A2)"))
-    val (dependencies, _) = NaiveGraphs.fromWorkbookFormulaGraph(Workbook(sheet))
+    val dependencies = formulaReads(CompactGraph.build(Workbook(sheet)))
     val qA2 = DependencyGraph.QualifiedRef(sheet.name, ref"A2")
     val qA3 = DependencyGraph.QualifiedRef(sheet.name, ref"A3")
 
     assertEquals(dependencies(qA2), Set.empty)
     assertEquals(dependencies(qA3), Set(qA2))
 
-  test("bounded graph reuses one expansion across anchor spellings of the same range"):
+  test("the inspection graph reuses one expansion across anchor spellings of the same range"):
     val sheet = (1 to 1000)
       .foldLeft(Sheet(SheetName.unsafe("S"))) { (current, row) =>
         current.put(ARef.from0(0, row - 1), number(row))
       }
       .put(ref"B1", formula("=SUM(A1:A1000)"))
       .put(ref"B2", formula("=SUM($A$1:$A$1000)"))
+    val wb = Workbook(sheet)
 
-    val (graph, _) = NaiveGraphs.fromWorkbookBounded(Workbook(sheet))
-    val relative = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B1"))
-    val anchored = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B2"))
+    val graph = QualifiedGraph.of(wb)
+    val relative = graph.precedentsOf(DependencyGraph.QualifiedRef(sheet.name, ref"B1"))
+    val anchored = graph.precedentsOf(DependencyGraph.QualifiedRef(sheet.name, ref"B2"))
 
     assertEquals(relative.size, 1000)
     assert(anchored eq relative, "anchor-only spelling differences must hit the same range cache")
+    assertEquals(graph.rangeCells.size, 1)
+    // and the recalculation graph holds the range once
+    assertEquals(CompactGraph.build(wb).rangeCount, 1)
 
   test("symbolic range index survives clearing the old used-range boundary"):
     val sheetName = SheetName.unsafe("S")

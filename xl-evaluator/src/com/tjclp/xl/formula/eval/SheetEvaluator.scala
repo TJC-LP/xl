@@ -351,12 +351,19 @@ object SheetEvaluator:
         CellEvalError(sheet.name, ref, XLError.FormulaError(formulaText(ref), reason))
 
       val core = graph.cyclicCore
-      val cyclic = onSheet(core) & targets
+      // #891 (Excel parity): a book whose calcPr iterates holds converged values in its cycles, and
+      // Excel shows them. Its cycle members are neither failures nor re-evaluated here: they keep
+      // their caches and everything downstream evaluates off them. Otherwise a cycle fails its
+      // members and blocks what reads them.
+      val iterating = book.metadata.calcPr.exists(_.iterativeCalculation)
+      val cyclic = if iterating then Set.empty[ARef] else onSheet(core) & targets
       // every target downstream of any cycle of the book, on this sheet or another: the canonical
       // order below leaves them all out
-      val coreBlocked = graph.dependents(core, Set.empty)
+      val coreBlocked =
+        if iterating then Set.empty[QualifiedRef] else graph.dependents(core, Set.empty)
       val cycleBlocked = (onSheet(coreBlocked) & targets) -- cyclic
-      val live = targets -- cyclic -- cycleBlocked
+      val live =
+        targets -- cyclic -- cycleBlocked -- (if iterating then onSheet(core) else Set.empty)
 
       type State = (Sheet, Map[ARef, CellValue], Vector[CellEvalError], Set[ARef])
       val start: State =

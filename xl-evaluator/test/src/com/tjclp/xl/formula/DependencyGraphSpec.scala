@@ -1,6 +1,5 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -293,12 +292,13 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     }
   }
 
-  property("GH-492 cyclic-view: the cyclic components flatten to exactly qualifiedCyclicNodes") {
+  property("GH-492 cyclic flag: a component is cyclic iff it has two members or a self-read") {
     forAll(sccGraphGen) { deps =>
       val comps = DependencyGraph.qualifiedSccOrder(deps)
-      val fromComps = comps.filter(_.cyclic).flatMap(_.members).toSet
-      (fromComps == NaiveGraphs.qualifiedCyclicNodes(deps)) :|
-        s"cyclic view mismatch: $fromComps vs ${NaiveGraphs.qualifiedCyclicNodes(deps)}"
+      val wrong = comps.filterNot { c =>
+        c.cyclic == (c.members.size > 1 || c.members.exists(m => deps(m).contains(m)))
+      }
+      wrong.isEmpty :| s"cyclic flag wrong on $wrong for $deps"
     }
   }
 

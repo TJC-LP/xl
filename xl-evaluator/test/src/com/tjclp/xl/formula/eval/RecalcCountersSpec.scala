@@ -97,8 +97,6 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.NameParses), 1L)
     Vector(
       Counter.VirtualNodes,
-      Counter.RangeLookups,
-      Counter.RangeLookupWork,
       Counter.CriteriaIndexed,
       Counter.CriteriaNotIndexable,
       Counter.SlicesBuilt,

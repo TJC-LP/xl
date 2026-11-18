@@ -1,6 +1,5 @@
 package com.tjclp.xl.formula
 
-import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -496,8 +495,8 @@ class RangeOperatorSpec extends FunSuite:
     val placed =
       named.put(sheet1.put(ref"H1", CellValue.Formula("SUM(OtherTop:OtherBottom)", None)))
     val h1 = DependencyGraph.QualifiedRef(sheet1Name, ref"H1")
-    val (edges, _) = NaiveGraphs.fromWorkbookBounded(placed)
-    assert(edges(h1).contains(DependencyGraph.QualifiedRef(otherName, ref"A2")), edges(h1))
+    val edges = QualifiedGraph.of(placed).precedentsOf(h1)
+    assert(edges.contains(DependencyGraph.QualifiedRef(otherName, ref"A2")), edges)
     def cached(wb: Workbook): Option[CellValue] =
       wb(sheet1Name).toOption.flatMap(_.cells.get(ref"H1")).map(_.value) match
         case Some(CellValue.Formula(_, value, _)) => value
@@ -587,8 +586,8 @@ class RangeOperatorSpec extends FunSuite:
       other.put(ref"B10", CellValue.Formula("SUM(Sheet1!A1:INDEX(Sheet1!A:A,3))", None))
     )
     assert(!DependencyGraph.dynamicCells(covered).contains(at(otherName, "B10")))
-    val (edges, _) = NaiveGraphs.fromWorkbookBounded(covered)
-    assert(edges(at(otherName, "B10")).contains(at(sheet1Name, "A3")), edges(at(otherName, "B10")))
+    val edges = QualifiedGraph.of(covered).precedentsOf(at(otherName, "B10"))
+    assert(edges.contains(at(sheet1Name, "A3")), edges)
     val settled = covered.recalculate().workbook
     def b10(wb: Workbook): Option[CellValue] =
       wb(otherName).toOption.flatMap(_.cells.get(ref"B10")).map(_.value) match

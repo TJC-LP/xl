@@ -115,9 +115,7 @@ object NaiveGraphs:
    * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
    *
    * #767: `counters` times each formula parse as the `Parse` phase and records the graph's node and
-   * edge counts, plus the range lookups the build resolved (`RangeLookups`, one per distinct range)
-   * and the index entries they examined (`RangeLookupWork`, linear in the lookups and the formula
-   * cells found, never in the sheet's formulas: #743); the disabled default does none of it.
+   * edge counts; the disabled default does none of it.
    */
   def fromWorkbookFormulaGraph(
     workbook: com.tjclp.xl.workbooks.Workbook,
@@ -138,13 +136,8 @@ object NaiveGraphs:
     // counted at the memo miss, not inside the memo: a build that stopped sharing expansions
     // (GH-522) would count one lookup per reader again
     val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
-      counters.increment(RecalcCounters.Counter.RangeLookups)
       formulaColumns.get(sheet) match
-        case Some(columns) =>
-          val examined = counters.tally(RecalcCounters.Counter.RangeLookupWork)
-          val cells = columns.within(range, examined).map(ref => QualifiedRef(sheet, ref)).toSet
-          examined.flush()
-          cells
+        case Some(columns) => columns.within(range).map(ref => QualifiedRef(sheet, ref)).toSet
         case None => Set.empty
     }
 
@@ -235,7 +228,7 @@ object NaiveGraphs:
      * `examined` (the first entry past the range included): the work of one lookup, which a scan of
      * the sheet's formulas would make proportional to the sheet instead.
      */
-    def within(range: CellRange, examined: RecalcCounters.Tally): Iterator[ARef] =
+    def within(range: CellRange): Iterator[ARef] =
       val firstCol = range.colStart.index0
       val lastCol = range.colEnd.index0
       val firstRow = range.rowStart.index0
@@ -243,7 +236,6 @@ object NaiveGraphs:
       Iterator
         .range(columns.search(firstCol).insertionPoint, columns.length)
         .map { i =>
-          examined.increment()
           columns(i)
         }
         .takeWhile(_ <= lastCol)
@@ -252,7 +244,6 @@ object NaiveGraphs:
           Iterator
             .range(rows.search(firstRow).insertionPoint, rows.length)
             .map { j =>
-              examined.increment()
               rows(j)
             }
             .takeWhile(_ <= lastRow)
