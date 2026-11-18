@@ -8,7 +8,7 @@ import java.nio.file.{Files as JFiles, Path}
 import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.ooxml.{ContentTypes, Relationships, XmlSecurity, XmlUtil}
+import com.tjclp.xl.ooxml.{ContentTypes, OutputFileMode, Relationships, XmlSecurity, XmlUtil}
 import com.tjclp.xl.styles.CellStyle
 import scala.collection.mutable
 import scala.util.Using
@@ -407,6 +407,7 @@ object ZipTransformer:
         zipOut.close()
 
       // Atomic rename
+      OutputFileMode.prepare(tempPath, output) // GH-868: umask mode, or the replaced file's
       try
         JFiles.move(
           tempPath,
@@ -465,6 +466,7 @@ object ZipTransformer:
         zipOut.close()
 
       // Atomic rename
+      OutputFileMode.prepare(tempPath, output) // GH-868: umask mode, or the replaced file's
       try
         JFiles.move(
           tempPath,
@@ -523,6 +525,7 @@ object ZipTransformer:
         zipIn.close()
         zipOut.close()
 
+      OutputFileMode.prepare(tempPath, output) // GH-868: umask mode, or the replaced file's
       try
         JFiles.move(
           tempPath,
@@ -577,6 +580,7 @@ object ZipTransformer:
         zipIn.close()
         zipOut.close()
 
+      OutputFileMode.prepare(tempPath, output) // GH-868: umask mode, or the replaced file's
       try
         JFiles.move(
           tempPath,
