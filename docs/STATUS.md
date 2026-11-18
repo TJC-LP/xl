@@ -285,7 +285,7 @@
 
 ### Test Coverage
 
-**10,180 test cases** (the #891 audit-performance stack (on #893), 2026-11-18): 10,180 passed, 0 failed, none ignored. Counts include skipped cases.
+**10,130 test cases** (the #891 purge (PR A, on #896), 2026-11-18): 10,130 passed, 0 failed, none ignored. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
