@@ -285,7 +285,7 @@
 
 ### Test Coverage
 
-**10,117 test cases** (#669 validation after merging #723 sync 872443a4 on main 69c259e3 (0.26.0), 2026-11-12): 10,109 passed, 0 failed, 8 skipped. Counts include skipped cases.
+**10,180 test cases** (the #891 audit-performance stack (on #893), 2026-11-18): 10,180 passed, 0 failed, 0 skipped. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
