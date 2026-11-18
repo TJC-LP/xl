@@ -62,6 +62,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same assertions on each; the case takes about a third of the time (6.7–8.5 s → 2.1–3.4 s
   in an alternating local A/B). Tests only; no behaviour change.
 
+- **The stdin race case tests the failed write again** (#879): since the pipe-thread stdin write
+  (#703), the forced-ImageMagick case's `-Xint` JVM almost never lost the race it was written for
+  (0 of 36 instrumented attempts; about 1 in 600 early-exit probes measured in-process), so it no
+  longer covered the failed write. `PipedBackendSpec` now drives that branch deterministically,
+  with an input larger than any pipe buffer sent to a child that closes stdin: a probe is false
+  even on exit 0 with output, and a conversion keeps the child's own failure rather than a raw
+  `IOException`. The end-to-end case runs once in an ordinary JVM, and `CliRepeatProbe` (#877) is
+  removed. Tests only; no behaviour change.
+
 - **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
   **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
   **Behaviour change:** a whole column beside INDEX over an edge range one row shorter, `=SUMPRODUCT(A:A*INDEX(B2:B1048576,0))`, is `#N/A` as in Excel (1,048,576 rows against 1,048,575); it was a sum when the sheet's data started at row 2, because the whole column was trimmed at the top to the same rows.

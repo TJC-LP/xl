@@ -214,6 +214,31 @@ class PipedBackendSpec extends CatsEffectSuite:
       assertEquals(missing, None)
   }
 
+  /**
+   * GH-879: a child that closes stdin unread, with an input past any pipe buffer, so the stdin
+   * write fails whatever the timing. ImageMagick's own probe input fits the buffer, and its write
+   * failed in about 1 of 600 early-exit runs measured locally, too rarely for the end-to-end case
+   * to cover this branch.
+   */
+  private val closesStdin = "exec 0<&-; "
+  private val pastPipeBuffer = Array.fill[Byte](4 << 20)('x')
+
+  test("GH-879: a probe whose stdin write fails is false, even on exit 0 with output") {
+    // without the write's status, the exit code and stdout alone would make this a success
+    PipedBackend
+      .succeeds("sh", List("-c", closesStdin + "echo converted; exit 0"), pastPipeBuffer)
+      .map(ok => assert(!ok, "a failed stdin write cannot pass the probe"))
+  }
+
+  test("GH-879: a failed stdin write leaves the child's own failure, not a raw IOException") {
+    val script = closesStdin + "echo backend-said-no >&2; exit 1"
+    failure(PipedBackend.run("shim", "sh", List("-c", script), pastPipeBuffer, 30.seconds)).map {
+      case RasterError.ConversionFailed("shim", stderr, 1) =>
+        assertEquals(stderr.strip, "backend-said-no")
+      case other => fail(s"expected the child's ConversionFailed, got $other")
+    }
+  }
+
   /** Whether a read-only file refuses this user's writes: false for root, which bypasses modes. */
   private lazy val enforcesPermissions: Boolean =
     val probe = Files.createTempFile("xl-raster-perm-", ".probe")

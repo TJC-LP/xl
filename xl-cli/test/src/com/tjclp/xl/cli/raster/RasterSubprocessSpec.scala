@@ -100,22 +100,12 @@ class RasterSubprocessSpec extends FunSuite:
 
   /** Run `mainClass args` in a fresh JVM whose PATH puts `shimDir` first. */
   private def fork(shimDir: Path, mainClass: String, args: String*): Forked =
-    forkWith(shimDir, Nil, mainClass, args*)
-
-  /** [[fork]], with extra flags for the forked JVM. */
-  private def forkWith(
-    shimDir: Path,
-    jvmFlags: List[String],
-    mainClass: String,
-    args: String*
-  ): Forked =
     val java = Path.of(System.getProperty("java.home"), "bin", "java").toString
     val out = Files.createTempFile("xl-fork-", ".out")
     val err = Files.createTempFile("xl-fork-", ".err")
     try
       val builder = new ProcessBuilder(
-        (List(java, "-Djava.awt.headless=true") ++ jvmFlags ++
-          List("-cp", classpath, mainClass) ++ args).asJava
+        (List(java, "-Djava.awt.headless=true", "-cp", classpath, mainClass) ++ args).asJava
       )
       builder.environment().put("PATH", s"$shimDir${File.pathSeparator}/usr/bin:/bin")
       // a JVM that picks one of these up announces it on stderr ("Picked up …"); the child never
@@ -136,23 +126,15 @@ class RasterSubprocessSpec extends FunSuite:
       Files.deleteIfExists(out)
       Files.deleteIfExists(err)
 
-  /**
-   * `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. With
-   * `repeat`, the fork is [[CliRepeatProbe]], which runs the command that many times in one JVM.
-   */
+  /** `xl -f simple.xlsx view <range> --format <fmt> --rasterizer <backend>` in a fork. */
   private def forcedView(
     shimDir: Path,
     backend: String,
     format: String,
     range: String,
-    jvmFlags: List[String] = Nil,
-    output: Option[Path] = None,
-    repeat: Option[Int] = None
+    output: Option[Path] = None
   ): Forked =
     val fixtures = TestFixtures.materialize.unsafeRunSync()
-    val (mainClass, prefix) = repeat match
-      case Some(times) => ("com.tjclp.xl.cli.raster.CliRepeatProbe", List(times.toString))
-      case None => ("com.tjclp.xl.cli.Main", Nil)
     val args = List(
       "-f",
       fixtures.resolve("simple.xlsx").toString,
@@ -167,20 +149,8 @@ class RasterSubprocessSpec extends FunSuite:
       "--rasterizer",
       backend
     )
-    try forkWith(shimDir, jvmFlags, mainClass, (prefix ++ args)*)
+    try fork(shimDir, "com.tjclp.xl.cli.Main", args*)
     finally TestFixtures.delete(fixtures).unsafeRunSync()
-
-  /** [[CliRepeatProbe]]'s stdout split by attempt: each one's exit code and stderr, in order. */
-  private def attempts(run: Forked): Vector[(Int, String)] =
-    val Header = """@@ attempt \d+ exit (\d+)""".r
-    run.stdout.linesWithSeparators.foldLeft(Vector.empty[(Int, String)]) { (acc, line) =>
-      line.stripLineEnd match
-        case Header(exit) => acc :+ (exit.toInt -> "")
-        case _ =>
-          acc.lastOption.fold(acc) { case (exit, err) =>
-            acc.dropRight(1) :+ (exit -> (err + line))
-          }
-    }
 
   /** The sizes each forced case runs at: past the pipe buffer, and inside it. */
   private val ranges = Vector("A1:Z1000" -> "large SVG", "A1:B2" -> "small SVG")
@@ -207,27 +177,15 @@ class RasterSubprocessSpec extends FunSuite:
   shims.test(
     "forced imagemagick whose probe conversion exits early: RASTERIZER_UNAVAILABLE, no trace"
   ) { dir =>
-    // The probe's 1x1 SVG fits the stdin buffer, so the old fs2 write failed only when the shim
-    // exited before fs2 closed stdin — a race the JIT usually won. An interpreted JVM (-Xint) loses
-    // it every time (measured 4/4 against the fs2 probe, 1/16 with the JIT under load); the repeats
-    // keep the case honest if a faster machine narrows the window again. GH-877: the repeats run
-    // in one interpreted JVM; three, each paying the interpreted startup, overran munit's 30 s on
-    // a loaded CI runner. A failed probe is not cached, so each attempt runs the race again. Since
-    // PipedBackend writes stdin on a pipe thread (#703) the race is rarely lost even with -Xint
-    // (0 of 36 attempts instrumented locally), and either outcome ends in the same typed error.
-    val run = forcedView(dir, "imagemagick", "png", "A1:B2", List("-Xint"), repeat = Some(3))
-    val runs = attempts(run)
-    assertEquals(runs.size, 3, s"stdout: ${run.stdout}\nstderr: ${run.stderr}")
-    assertEquals(run.exit, 0, run.stderr)
-    assert(!run.stderr.contains("\tat "), s"no stack trace in the fork: ${run.stderr}")
+    // The end-to-end contract only: a typed error, no trace. The probe's 1x1 SVG fits the stdin
+    // buffer, so its write fails only if the shim exits before it lands — a race the pipe-thread
+    // write (#703) almost always wins, even in an interpreted JVM (GH-879). PipedBackendSpec's
+    // GH-879 cases drive the failed write deterministically.
+    val run = forcedView(dir, "imagemagick", "png", "A1:B2")
+    assertEquals(run.exit, 3, run.stderr)
+    assert(run.stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), run.stderr)
     assert(!run.stderr.contains("Stream closed"), run.stderr)
-    runs.zipWithIndex.foreach { case ((exit, stderr), i) =>
-      val clue = s"attempt ${i + 1}: $stderr"
-      assertEquals(exit, 3, clue)
-      assert(stderr.contains(s"code: ${ErrorCode.RASTERIZER_UNAVAILABLE}"), clue)
-      assert(!stderr.contains("Stream closed"), clue)
-      assert(!stderr.contains("\tat "), s"no stack trace, $clue")
-    }
+    assert(!run.stderr.contains("\tat "), s"no stack trace: ${run.stderr}")
   }
 
   shims.test("forced rsvg-convert asked for jpeg: a typed code, not INTERNAL") { dir =>
