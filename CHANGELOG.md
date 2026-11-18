@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
+  clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
+  the values and formulas but keeps each cell's number format, font, fill, border and hyperlink,
+  and leaves merged regions merged. A cell with no style or hyperlink is still removed.
+  `clear --all` is unchanged: it removes the cells and unmerges what the range touches;
+  `--styles` and `--comments` are unchanged. **Behaviour change:** after `clear B4:E5` over cells
+  formatted `#,##0_);\(#,##0\);\-\-_)` in blue Times New Roman, B4:E5 are empty and keep that
+  format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
+  merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. The
+  library's `Edit.Clear` / `Sheet.clearRange` keep their old rule for now.
+
 - **Relational numeric criteria match number cells only** (#798): `">n"`, `">=n"`, `"<n"` and
   `"<=n"` in COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS and MINIFS now match numbers and dates
   only, as desktop Excel does; numeric text and booleans no longer match. Equality (`"4"`, `"=4"`)
