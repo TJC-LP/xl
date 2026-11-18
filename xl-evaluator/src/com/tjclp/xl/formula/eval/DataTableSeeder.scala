@@ -786,6 +786,16 @@ object DataTableSeeder:
           (q, idx, expr)
         }
       }
+    // #891: the members' formulas are the same for every interior cell, so they parse once per
+    // table here rather than once per sampled cell inside each fixpoint
+    val memberParses: Map[String, XLResult[TExpr[?]]] =
+      members.iterator
+        .map(_._3)
+        .distinct
+        .map(text => text -> SheetEvaluator.parseFormula(text))
+        .toMap
+    val parseMember: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
+      memberParses.getOrElse(text, SheetEvaluator.parseFormula(text))
     val probes = guardProbes(sheet, kind)
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
@@ -806,6 +816,7 @@ object DataTableSeeder:
           prepared.sheets,
           tableIdx,
           members,
+          parseMember,
           cone,
           probes
         )
@@ -881,6 +892,7 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     members: List[(QualifiedRef, Int, String)],
+    parseMember: (QualifiedRef, String) => XLResult[TExpr[?]],
     cone: WhatIfCone,
     probes: Map[ARef, TExpr[?]]
   ): Option[CellOutcome] =
@@ -921,7 +933,8 @@ object DataTableSeeder:
               clock,
               Rng.system,
               rng => Evaluator.instance(rng),
-              Map.empty
+              Map.empty,
+              parseMember
             )
           val results = outcome.results
           val converged = outcome.converged
