@@ -8,7 +8,6 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.formula.eval.ArrayArithmetic
 import scala.util.boundary
 import boundary.break
 import scala.util.matching.Regex
@@ -24,8 +23,10 @@ import scala.util.matching.Regex
  *     operand that contains `*` or `?`, `~x` stands for a literal `x` (`~*`, `~?`, `~~`). In an
  *     operand with neither, `~` is an ordinary character (GH-765): `"a~~b"` matches only the text
  *     `a~~b`.
- *   - **Greater**: `">100"`, `">=50"` → Numeric comparison; `">m"` → Text comparison
- *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison; `"<m"` → Text comparison
+ *   - **Greater**: `">100"`, `">=50"` → Numeric comparison against number and date cells only
+ *     (#798: numeric text and booleans never match); `">m"` → Text comparison
+ *   - **Less**: `"<10"`, `"<=5"` → Numeric comparison, number and date cells only (#798); `"<m"` →
+ *     Text comparison
  *   - **Not Equal**: `"<>0"` → every cell but a number equal to 0 (#731); `"<>x"` → Text
  *     inequality; bare `"<>"` → every cell but a truly empty one; `"<>A*"` → negated wildcard.
  *     Every `<>` criterion matches error cells.
@@ -405,9 +406,11 @@ object CriteriaMatcher:
           case _ => false
 
   /**
-   * Numeric comparison matching. `"<>n"` (#731) matches every cell but a number (or date) equal to
-   * `n`: blanks, text (the text `"4"` included, although `"=4"` matches it too), booleans and
-   * errors all match, as in desktop Excel. Uncached formulas never match.
+   * Numeric comparison matching. `">n"`, `">=n"`, `"<n"` and `"<=n"` (#798) match number (and date)
+   * cells only: numeric text such as `"4"`, booleans, blanks and errors never match, as in desktop
+   * Excel, though `"=4"` still matches the text `"4"`. `"<>n"` (#731) matches every cell but a
+   * number (or date) equal to `n`: blanks, text (the text `"4"` included), booleans and errors all
+   * match. Uncached formulas never match.
    */
   private def matchesCompare(
     cellValue: CellValue,
@@ -417,7 +420,7 @@ object CriteriaMatcher:
     op match
       case CompareOp.Neq => !isNumberEqual(cellValue, threshold)
       case _ =>
-        extractNumeric(cellValue) match
+        orderableNumber(cellValue) match
           case Some(value) =>
             op match
               case CompareOp.Gt => value > threshold
@@ -506,19 +509,17 @@ object CriteriaMatcher:
       case other => !matchesWildcard(other, pattern)
 
   /**
-   * Extract numeric value from cell, with type coercion.
+   * The number a cell offers to a numeric ordering criterion (#798): a number, or a date as its
+   * Excel serial. Deliberately narrower than coercion: numeric text and booleans never satisfy
+   * `">=4"`, matching Excel (criteria comparisons are type-segregated, like
+   * [[extractOrderableText]] for text).
    */
-  private def extractNumeric(cellValue: CellValue): Option[BigDecimal] =
+  private def orderableNumber(cellValue: CellValue): Option[BigDecimal] =
     cellValue match
       case CellValue.Number(n) => Some(n)
-      case CellValue.Text(s) => parseNumeric(s)
-      case CellValue.Bool(b) => Some(ArrayArithmetic.boolToNumeric(b))
-      case CellValue.DateTime(dt) =>
-        // Convert to Excel serial number for comparison
-        Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
-      case CellValue.Formula(_, Some(cached), _) => extractNumeric(cached)
-      // GH-197: Uncached formula - can't extract numeric without evaluation context
-      case CellValue.Formula(_, None, _) => None
+      case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
+      case CellValue.Formula(_, Some(cached), _) => orderableNumber(cached)
+      // GH-197: an uncached formula has no value to compare without an evaluation context
       case _ => None
 
   /**

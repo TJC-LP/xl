@@ -188,6 +188,36 @@ class CriteriaExcelParitySpec extends FunSuite:
     check("=SUMIF(A1:A14,\"<>\",B1:B14)", rows(1, 2, 3, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14))
   }
 
+  // ===== #798: ">n", ">=n", "<n", "<=n" match number cells only =====
+
+  test("#798: a relational numeric criterion skips numeric text") {
+    // desktop Excel (Mac 16.114), from the issue: rows 4, 5 and 14, not the text "4" in row 11
+    check("=SUMIF(A1:A14,\">=4\",B1:B14)", rows(4, 5, 14))
+    check("=SUMIF(A1:A14,\">3\",B1:B14)", rows(4, 5, 14))
+    check("=SUMIF(A1:A14,\"<=4\",B1:B14)", rows(4))
+    check("=SUMIF(A1:A14,\"<5\",B1:B14)", rows(4))
+    // equality still matches the text "4" (#773)
+    check("=SUMIF(A1:A14,\"=4\",B1:B14)", rows(4, 11))
+  }
+
+  test("#798: a relational numeric criterion skips booleans") {
+    check("=SUMIF(A1:A14,\">=0\",B1:B14)", rows(4, 5, 14))
+    check("=SUMIF(A1:A14,\">0\",B1:B14)", rows(4, 5, 14))
+    check("=SUMIF(A1:A14,\"<4\",B1:B14)", num(0))
+    check("=COUNTIF(G1:H3,\"<=4\")", num(2))
+  }
+
+  test("#798: every criteria function reads relational criteria the same way") {
+    check("=COUNTIF(A1:A14,\">=4\")", num(3))
+    check("=COUNTIFS(A1:A14,\">=4\",A1:A14,\"<=5\")", num(2))
+    check("=SUMIFS(B1:B14,A1:A14,\">=4\")", rows(4, 5, 14))
+    check("=AVERAGEIF(A1:A14,\"<=5\",B1:B14)", num(12))
+    check("=AVERAGEIFS(B1:B14,A1:A14,\"<=4\")", num(8))
+    check("=MAXIFS(B1:B14,A1:A14,\">=4\")", num(8192))
+    check("=MINIFS(B1:B14,A1:A14,\"<=4\")", num(8))
+    check("=MAXIFS(B1:B14,A1:A14,\"<4\")", num(0))
+  }
+
   // ===== A second grid: an error inside the range a criteria function adds up =====
 
   /**

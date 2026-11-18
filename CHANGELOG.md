@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Relational numeric criteria match number cells only** (#798): `">n"`, `">=n"`, `"<n"` and
+  `"<=n"` in COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS and MINIFS now match numbers and dates
+  only, as desktop Excel does; numeric text and booleans no longer match. Equality (`"4"`, `"=4"`)
+  still matches the text `"4"`, and `"<>n"` is unchanged (#731). **Behaviour change:** with the text
+  `"4"` beside the numbers 4, 5 and 45, `=SUMIF(A1:A14,">=4",B1:B14)` on #798's grid is 8216 (was
+  9240), Excel's value. **Behaviour change:** a TRUE or FALSE cell no longer counts as 1 or 0
+  for a relational criterion: `=COUNTIF(A1:A3,"<4")` over 4, TRUE, 5 is 0 (was 1).
+
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency
   (`./mill --no-daemon __.prepareOffline`) and retries it, the JDK and the scala-cli bootstrap with
