@@ -8,6 +8,9 @@ import com.tjclp.xl.sheets.store.{
   CellCursor,
   Entry,
   Meta,
+  Block,
+  Cells,
+  Group,
   Node,
   RowLeaf,
   Shift,
@@ -22,12 +25,13 @@ import com.tjclp.xl.styles.units.StyleId
  * access patterns of a spreadsheet engine (#891).
  *
  * '''Layout.''' A bitmap trie keyed by the row index read as an unsigned 32-bit number, five bits
- * per level, so a lookup is a few shifts and popcounts with no hashing. Each row is a leaf holding
- * its cells as parallel arrays (a metadata word with the value tag, style and link flags; the
- * value; the hyperlink), indexed by 64-column bitmaps. Every trie node carries summaries (cell
- * count, valued count, column bounds, a value-tag mask), so `size`, `usedRange`, `extent` and
- * `hasTag` read them instead of scanning. Updates copy one row and the path above it; the rest is
- * shared with the previous store.
+ * per level, so a lookup is a few shifts and popcounts with no hashing. Cells live in parallel
+ * arrays (a metadata word with the value tag, style and link flags; the value; the hyperlink)
+ * indexed by 64-column bitmaps: one set per row, or, for a narrow group of 32 rows that shares one
+ * 64-column chunk (tall narrow data), one set for the whole group. Every trie node carries
+ * summaries (cell count, valued count, column bounds, a value-tag mask), so `size`, `usedRange`,
+ * `extent` and `hasTag` read them instead of scanning. Updates copy one row (or one narrow group)
+ * and the path above it; the rest is shared with the previous store.
  *
  * '''Order.''' [[iterator]], [[refs]], [[inRange]] and `toString` go row-major: rows ascending as
  * unsigned 32-bit numbers, then columns ascending as signed `Int`s. On Excel's grid that is the
@@ -47,7 +51,7 @@ import com.tjclp.xl.styles.units.StyleId
 // Local loops over the trie's arrays (the house style for flat-array code, see SccKernel).
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
 final class CellStore private (
-  private[xl] val root: Node,
+  private[xl] val root: Entry,
   private[xl] val height: Int
 ):
   import CellStore.*
@@ -63,41 +67,40 @@ final class CellStore private (
   def isEmpty: Boolean = root.count == 0
   def nonEmpty: Boolean = root.count != 0
 
-  private def leafOf(ref: ARef): RowLeaf = Trie.lookup(root, height, Trie.key(ref.row.index0))
+  private def cellsAt(ref: ARef): Cells = Trie.lookup(root, height, Trie.key(ref.row.index0))
 
-  def contains(ref: ARef): Boolean = leafOf(ref).rank(ref.col.index0) >= 0
+  /** The array position of `ref`'s cell within `c`, or -1. */
+  private def posIn(c: Cells, ref: ARef): Int =
+    c.find(Trie.key(ref.row.index0), ref.col.index0)
+
+  def contains(ref: ARef): Boolean = posIn(cellsAt(ref), ref) >= 0
 
   /** The cell at `ref`, built from the stored fields. */
   def get(ref: ARef): Option[Cell] =
-    val leaf = leafOf(ref)
-    val p = leaf.rank(ref.col.index0)
+    val c = cellsAt(ref)
+    val p = posIn(c, ref)
     if p < 0 then None
     else
-      val m = leaf.meta(p)
+      val m = c.meta(p)
       Some(
-        Cell(
-          ref,
-          leaf.values(p),
-          Meta.style(m),
-          if Meta.hasLink(m) then Some(leaf.links(p)) else None
-        )
+        Cell(ref, c.values(p), Meta.style(m), if Meta.hasLink(m) then Some(c.links(p)) else None)
       )
 
   /** The value at `ref`, Empty when no cell is stored there. Allocates nothing. */
   def valueAt(ref: ARef): CellValue =
-    val leaf = leafOf(ref)
-    val p = leaf.rank(ref.col.index0)
-    if p < 0 then CellValue.Empty else leaf.values(p)
+    val c = cellsAt(ref)
+    val p = posIn(c, ref)
+    if p < 0 then CellValue.Empty else c.values(p)
 
   def styleAt(ref: ARef): Option[StyleId] =
-    val leaf = leafOf(ref)
-    val p = leaf.rank(ref.col.index0)
-    if p < 0 then None else Meta.style(leaf.meta(p))
+    val c = cellsAt(ref)
+    val p = posIn(c, ref)
+    if p < 0 then None else Meta.style(c.meta(p))
 
   def hyperlinkAt(ref: ARef): Option[String] =
-    val leaf = leafOf(ref)
-    val p = leaf.rank(ref.col.index0)
-    if p < 0 || !Meta.hasLink(leaf.meta(p)) then None else Some(leaf.links(p))
+    val c = cellsAt(ref)
+    val p = posIn(c, ref)
+    if p < 0 || !Meta.hasLink(c.meta(p)) then None else Some(c.links(p))
 
   /** Every stored cell, row-major (see the class notes for the order off the grid). */
   def iterator: Iterator[Cell] = cellsOf(CellCursor.all(this))
@@ -287,7 +290,7 @@ final class CellStore private (
     if isEmpty || rowFrom > rowTo then this
     else
       val shift = 5 * (height - 1)
-      def span(r: Node, lo: Long, hi: Long): Node = Trie.mapRows(r, shift, 0L, lo, hi, skip, f)
+      def span(r: Entry, lo: Long, hi: Long): Entry = Trie.mapRows(r, shift, 0L, lo, hi, skip, f)
       val next =
         if rowFrom >= 0 || rowTo < 0 then span(root, Trie.key(rowFrom), Trie.key(rowTo))
         else span(span(root, 0L, Trie.key(rowTo)), Trie.key(rowFrom), Trie.UnsignedMask)
@@ -374,7 +377,7 @@ object CellStore:
 
   def newBuilder: Builder = new Builder
 
-  private def normalized(root: Node, height: Int): CellStore =
+  private def normalized(root: Entry, height: Int): CellStore =
     val (r, h) = Trie.shrink(root, height)
     if r.count == 0 then empty else new CellStore(r, h)
 
@@ -483,18 +486,24 @@ object CellStore:
 
   private def check(s: CellStore): Either[String, Unit] =
     if s.height == 0 then
-      if s.root.count == 0 && s.root.bitmap == 0 then Right(()) else Left("height 0 but non-empty")
+      if s.root.count == 0 && (s.root eq Node.Empty) then Right(())
+      else Left("height 0 but non-empty")
     else if s.root.count == 0 then Left("empty root with height > 0")
-    else if s.height > 1 && s.root.bitmap == 1 then Left("root not minimal: only slot 0")
     else if Trie.heightFor(
         Trie.lastKey(s.root, 5 * (s.height - 1), 0L, 0L, Trie.UnsignedMask, false)
       ) != s.height
     then Left("height is not the minimal height for the largest row key")
-    else checkNode(s.root, 5 * (s.height - 1), 0L)
+    else checkEntry(s.root, 5 * (s.height - 1), 0L)
+
+  private def checkEntry(e: Entry, shift: Int, prefix: Long): Either[String, Unit] = e match
+    case n: Node => checkNode(n, shift, prefix)
+    case b: Block => if shift != 0 then Left("block above shift 0") else checkBlock(b, prefix)
+    case l: RowLeaf => Left(s"leaf outside a shift-0 node at $prefix")
 
   private def checkNode(node: Node, shift: Int, prefix: Long): Either[String, Unit] =
     if node.children.length != Integer.bitCount(node.bitmap) then Left("children size != popcount")
     else if node.bitmap == 0 then Left("empty inner node")
+    else if shift == 0 && blockShaped(node) then Left(s"shift-0 node at $prefix should be a block")
     else
       var count = 0
       var valued = 0
@@ -514,8 +523,9 @@ object CellStore:
         err = child match
           case l: RowLeaf =>
             if shift != 0 then Left("leaf above shift 0") else checkLeaf(l, childLo)
-          case n: Node =>
-            if shift == 0 then Left("node at shift 0") else checkNode(n, shift - 5, childLo)
+          case other =>
+            if shift == 0 then Left("group below shift 0")
+            else checkEntry(other, shift - 5, childLo)
         if child.count == 0 then err = Left("empty child")
         count += child.count
         valued += child.valued
@@ -531,25 +541,41 @@ object CellStore:
       then Left(s"node summary mismatch at prefix $prefix")
       else Right(())
 
-  private def checkLeaf(l: RowLeaf, key: Long): Either[String, Unit] =
-    val n = l.count
-    if n == 0 then Left(s"empty leaf at $key")
-    else if l.values.length != n then Left("values length")
-    else if l.links.length != 0 && l.links.length != n then Left("links length")
+  /** The block rule, restated independently of [[Group]]: one shared chunk, at most the cap. */
+  private def blockShaped(node: Node): Boolean =
+    val chunks = node.children.toList.map {
+      case l: RowLeaf => if l.chunkCount == 1 then Some(l.chunkAt(0)) else None
+      case _ => None
+    }
+    chunks.forall(_.isDefined) && chunks.distinct.size == 1 &&
+    node.count <= Group.MaxBlockCells
+
+  /** Per-cell checks shared by leaves and blocks: meta bits, tags, canonical links. */
+  private def checkCells(c: Cells): Either[String, Unit] =
+    val n = c.count
+    if c.values.length != n then Left("values length")
+    else if c.links.length != 0 && c.links.length != n then Left("links length")
     else
       var anyLink = false
       var err: Either[String, Unit] = Right(())
       var p = 0
       while p < n do
-        val m = l.meta(p)
+        val m = c.meta(p)
         if Meta.hasLink(m) then anyLink = true
-        else if l.links.length > 0 && l.links(p) != "" then err = Left("filler link not empty")
+        else if c.links.length > 0 && c.links(p) != "" then err = Left("filler link not empty")
         if !Meta.hasStyle(m) && Meta.rawStyle(m) != 0 then err = Left("style bits without flag")
         if (m & ~(Meta.TagBits | Meta.StyleBit | Meta.LinkBit | 0xffffffffL)) != 0L then
           err = Left("stray meta bits")
-        if Meta.tag(m) != Meta.tagOf(l.values(p)) then err = Left("tag mismatch")
+        if Meta.tag(m) != Meta.tagOf(c.values(p)) then err = Left("tag mismatch")
         p += 1
-      if anyLink != (l.links.length > 0) then err = Left("links array not canonical")
+      if anyLink != (c.links.length > 0) then err = Left("links array not canonical")
+      err
+
+  private def checkLeaf(l: RowLeaf, key: Long): Either[String, Unit] =
+    val n = l.count
+    if n == 0 then Left(s"empty leaf at $key")
+    else
+      var err = checkCells(l)
       // chunk index: ascending chunks, non-zero masks, cumulative bases, narrow iff one chunk
       var base = 0
       var i = 0
@@ -568,6 +594,36 @@ object CellStore:
       if again.valued != l.valued || again.minCol != l.minCol || again.maxCol != l.maxCol ||
         again.vMinCol != l.vMinCol || again.vMaxCol != l.vMaxCol || again.tagMask != l.tagMask
       then err = Left("leaf summary mismatch")
+      err
+
+  private def checkBlock(b: Block, prefix: Long): Either[String, Unit] =
+    val rows = b.rows
+    if b.rowMask == 0 || b.count == 0 then Left(s"empty block at $prefix")
+    else if b.count > Group.MaxBlockCells then Left(s"block over the cell cap at $prefix")
+    else if b.uniform && b.masks.length != 1 then Left("uniform block with several masks")
+    else if !b.uniform && (b.masks.length != rows || b.bases.length != rows) then
+      Left("per-row masks/bases sized wrong")
+    else
+      var err = checkCells(b)
+      val rowMasks = new Array[Long](rows)
+      var base = 0
+      var i = 0
+      while i < rows do
+        rowMasks(i) = b.rowMaskAt(i)
+        if rowMasks(i) == 0L then err = Left("empty row in block")
+        if b.rowBaseAt(i) != base then err = Left("bad row base")
+        base += java.lang.Long.bitCount(rowMasks(i))
+        i += 1
+      if base != b.count then err = Left("row masks do not cover the arrays")
+      // canonical masks and summaries: rebuild from the per-row masks and compare
+      if err.isRight then
+        val again = Group.make(b.rowMask, b.chunk, rowMasks, b.meta, b.values, b.links)
+        if !java.util.Arrays.equals(again.masks, b.masks) ||
+          !java.util.Arrays.equals(again.bases, b.bases)
+        then err = Left("block masks not canonical")
+        else if again.valued != b.valued || again.minCol != b.minCol || again.maxCol != b.maxCol ||
+          again.vMinCol != b.vMinCol || again.vMaxCol != b.vMaxCol || again.tagMask != b.tagMask
+        then err = Left("block summary mismatch")
       err
 
   private def cellsOf(c: CellCursor): Iterator[Cell] = new Iterator[Cell]:

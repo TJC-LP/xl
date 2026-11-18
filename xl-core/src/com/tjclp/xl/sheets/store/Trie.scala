@@ -4,11 +4,12 @@ package com.tjclp.xl.sheets.store
  * The row-radix bitmap trie under [[com.tjclp.xl.sheets.CellStore]] (#891).
  *
  * A row key is the row index read as an unsigned 32-bit number, held in a `Long`. A trie of height
- * `h` (1 to 7) consumes five key bits per level, the root at shift `5 * (h - 1)`, the bottom node
- * at shift 0 holding [[RowLeaf]]s. Height is minimal: `h` is the fewest levels that cover the
- * largest key, so the root of a trie taller than one level always has a child in a slot other than
- * 0. Height 0 is the empty trie, whose root is [[Node.Empty]]. Lookups are index arithmetic on the
- * key bits; nothing is hashed.
+ * `h` (1 to 7) consumes five key bits per level, the root at shift `5 * (h - 1)`. The entries at
+ * shift 0 are slot groups (see [[Group]]): a [[Block]] when the group's cells share one 64-column
+ * chunk, otherwise a [[Node]] of [[RowLeaf]]s. Height is minimal: `h` is the fewest levels that
+ * cover the largest key, so a root taller than one level always has a child in a slot other than 0.
+ * Height 0 is the empty trie, whose root is [[Node.Empty]]. Lookups are index arithmetic on the key
+ * bits; nothing is hashed.
  */
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -31,30 +32,32 @@ private[xl] object Trie:
 
   def slotIndex(bitmap: Int, slot: Int): Int = Integer.bitCount(bitmap & ((1 << slot) - 1))
 
-  /** The leaf at `key` ([[RowLeaf.Empty]] when the row holds nothing). */
-  def lookup(root: Node, height: Int, key: Long): RowLeaf =
+  /**
+   * The entry holding row `key`'s cells: its [[RowLeaf]] or the [[Block]] of its group (then
+   * `find(key, col)` locates a cell). [[RowLeaf.Empty]] when the row cannot be present.
+   */
+  def lookup(root: Entry, height: Int, key: Long): Cells =
     if height == 0 || !covers(height, key) then RowLeaf.Empty
     else
-      var node = root
+      var e = root
       var shift = 5 * (height - 1)
-      var result: RowLeaf = RowLeaf.Empty
+      var result: Cells = RowLeaf.Empty
       var searching = true
       while searching do
-        val slot = ((key >>> shift) & 31L).toInt
-        val bit = 1 << slot
-        if (node.bitmap & bit) == 0 then searching = false
-        else
-          node.children(Integer.bitCount(node.bitmap & (bit - 1))) match
-            case leaf: RowLeaf =>
-              result = leaf
-              searching = false
-            case child: Node =>
-              node = child
+        e match
+          case c: Cells =>
+            result = c
+            searching = false
+          case node: Node =>
+            val bit = 1 << ((key >>> shift) & 31L).toInt
+            if (node.bitmap & bit) == 0 then searching = false
+            else
+              e = node.children(Integer.bitCount(node.bitmap & (bit - 1)))
               shift -= 5
       result
 
   /** `root` (of height `from`) wrapped in slot-0 nodes up to height `to`. */
-  def grow(root: Node, from: Int, to: Int): Node =
+  def grow(root: Entry, from: Int, to: Int): Entry =
     if root.count == 0 then Node.Empty
     else
       var r = root
@@ -65,18 +68,18 @@ private[xl] object Trie:
       r
 
   /** The minimal-height form of a trie: strips slot-0-only roots; an empty trie has height 0. */
-  def shrink(root: Node, height: Int): (Node, Int) =
+  def shrink(root: Entry, height: Int): (Entry, Int) =
     if root.count == 0 then (Node.Empty, 0)
     else
       var r = root
       var h = height
       var going = true
-      while going && h > 1 && r.bitmap == 1 do
-        r.children(0) match
-          case n: Node =>
-            r = n
+      while going && h > 1 do
+        r match
+          case n: Node if n.bitmap == 1 =>
+            r = n.children(0)
             h -= 1
-          case _: RowLeaf => going = false
+          case _ => going = false
       (r, h)
 
   def removeAt(children: Array[Entry], i: Int): Array[Entry] =
@@ -98,201 +101,296 @@ private[xl] object Trie:
     out
 
   /**
-   * `node` (at `shift`) with the leaf at `key` replaced by `f` of it (`f` sees [[RowLeaf.Empty]]
-   * when the row is absent; returning an empty leaf removes the row). Returns `node` itself when
-   * `f` returns its argument. The key must be covered by the node.
+   * `e` (at `shift`) with the row at `key` replaced by `f` of it (`f` sees [[RowLeaf.Empty]] when
+   * the row is absent; returning an empty leaf removes the row). Returns `e` itself when `f`
+   * returns its argument. The key must be covered by the entry.
    */
-  def modify(node: Node, shift: Int, key: Long, f: RowLeaf => RowLeaf): Node =
-    val slot = ((key >>> shift) & 31L).toInt
-    val bit = 1 << slot
-    val i = Integer.bitCount(node.bitmap & (bit - 1))
-    if (node.bitmap & bit) != 0 then
-      val child = node.children(i)
-      val updated: Entry = child match
-        case leaf: RowLeaf => f(leaf)
-        case n: Node => modify(n, shift - 5, key, f)
-      if updated eq child then node
-      else if updated.count == 0 then
-        if node.bitmap == bit then Node.Empty
-        else Node.of(node.bitmap & ~bit, removeAt(node.children, i))
-      else Node.of(node.bitmap, replaceAt(node.children, i, updated))
-    else
-      val created: Entry =
-        if shift == 0 then f(RowLeaf.Empty) else modify(Node.Empty, shift - 5, key, f)
-      if created.count == 0 then node
-      else Node.of(node.bitmap | bit, insertAt(node.children, i, created))
+  def modify(e: Entry, shift: Int, key: Long, f: RowLeaf => RowLeaf): Entry = e match
+    case b: Block =>
+      val low = (key & 31L).toInt
+      val present = (b.rowMask & (1 << low)) != 0
+      val old = if present then Group.rowLeaf(b, b.rowIndex(low)) else RowLeaf.Empty
+      val next = f(old)
+      if next eq old then b else Group.withRow(b, low, old, next)
+    case leaf: RowLeaf => f(leaf) // not reached: leaves sit under shift-0 nodes
+    case node: Node =>
+      val slot = ((key >>> shift) & 31L).toInt
+      val bit = 1 << slot
+      val i = Integer.bitCount(node.bitmap & (bit - 1))
+      val result: Entry =
+        if (node.bitmap & bit) != 0 then
+          val child = node.children(i)
+          val updated: Entry = child match
+            case leaf: RowLeaf => f(leaf)
+            case other => modify(other, shift - 5, key, f)
+          if updated eq child then node
+          else if updated.count == 0 then
+            if node.bitmap == bit then Node.Empty
+            else Node.of(node.bitmap & ~bit, removeAt(node.children, i))
+          else Node.of(node.bitmap, replaceAt(node.children, i, updated))
+        else
+          val created: Entry =
+            if shift == 0 then f(RowLeaf.Empty) else modify(Node.Empty, shift - 5, key, f)
+          if created.count == 0 then node
+          else Node.of(node.bitmap | bit, insertAt(node.children, i, created))
+      result match
+        case n: Node if shift == 0 && !(n eq node) => Group.compact(n)
+        case other => other
 
   /**
-   * `node` (at `shift`, covering keys from `prefix`) with `f` applied to every leaf whose key lies
-   * in `[lo, hi]`. A subtree for which `skip` holds is kept as it is, and so is every subtree in
-   * which `f` returns each leaf unchanged; leaves `f` empties are removed.
+   * `e` (at `shift`, covering keys from `prefix`) with `f` applied to every row whose key lies in
+   * `[lo, hi]`. A subtree or row for which `skip` holds is kept as it is, and so is every subtree
+   * in which `f` returns each row unchanged; rows `f` empties are removed.
    */
   def mapRows(
-    node: Node,
+    e: Entry,
     shift: Int,
     prefix: Long,
     lo: Long,
     hi: Long,
     skip: Entry => Boolean,
     f: RowLeaf => RowLeaf
-  ): Node =
-    if node.count == 0 || skip(node) then node
-    else
-      val n = node.children.length
-      val out = new Array[Entry](n)
-      var outBitmap = 0
-      var k = 0
+  ): Entry =
+    if e.count == 0 || skip(e) then e
+    else if shift == 0 then
+      val (lows, leaves, n) = Group.explode(e)
       var changed = false
-      var bm = node.bitmap
       var i = 0
-      while bm != 0 do
-        val slot = Integer.numberOfTrailingZeros(bm)
-        bm &= bm - 1
-        val childLo = prefix + (slot.toLong << shift)
-        val childHi = childLo + (1L << shift) - 1
-        val child = node.children(i)
-        val next: Entry =
-          if childHi < lo || childLo > hi || skip(child) then child
-          else
-            child match
-              case leaf: RowLeaf => f(leaf)
-              case inner: Node => mapRows(inner, shift - 5, childLo, lo, hi, skip, f)
-        if !(next eq child) then changed = true
-        if next.count > 0 then
-          out(k) = next
-          outBitmap |= 1 << slot
-          k += 1
+      while i < n do
+        val k = prefix + lows(i)
+        if k >= lo && k <= hi && !skip(leaves(i)) then
+          val next = f(leaves(i))
+          if !(next eq leaves(i)) then
+            changed = true
+            leaves(i) = next
         i += 1
-      if !changed then node
-      else if k == n then Node.of(outBitmap, out)
-      else Node.of(outBitmap, java.util.Arrays.copyOf(out, k))
+      if !changed then e
+      else
+        // drop the rows f emptied, then rebuild the group canonically
+        var k = 0
+        var j = 0
+        while j < n do
+          if leaves(j).count > 0 then
+            lows(k) = lows(j)
+            leaves(k) = leaves(j)
+            k += 1
+          j += 1
+        Group.of(lows, leaves, k)
+    else
+      e match
+        case node: Node =>
+          val n = node.children.length
+          val out = new Array[Entry](n)
+          var outBitmap = 0
+          var k = 0
+          var changed = false
+          var bm = node.bitmap
+          var i = 0
+          while bm != 0 do
+            val slot = Integer.numberOfTrailingZeros(bm)
+            bm &= bm - 1
+            val childLo = prefix + (slot.toLong << shift)
+            val childHi = childLo + (1L << shift) - 1
+            val child = node.children(i)
+            val next =
+              if childHi < lo || childLo > hi then child
+              else mapRows(child, shift - 5, childLo, lo, hi, skip, f)
+            if !(next eq child) then changed = true
+            if next.count > 0 then
+              out(k) = next
+              outBitmap |= 1 << slot
+              k += 1
+            i += 1
+          if !changed then node
+          else if k == n then Node.of(outBitmap, out)
+          else Node.of(outBitmap, java.util.Arrays.copyOf(out, k))
+        case other => other // not reached: only nodes sit above shift 0
 
   /**
-   * The smallest key in `[lo, hi]` under `node` holding a cell (a valued cell when `valuedOnly`),
-   * or -1.
+   * The smallest key in `[lo, hi]` under `e` holding a cell (a valued cell when `valuedOnly`), or
+   * -1.
    */
-  def firstKey(
-    node: Node,
-    shift: Int,
-    prefix: Long,
-    lo: Long,
-    hi: Long,
-    valuedOnly: Boolean
-  ): Long =
-    var bm = node.bitmap
-    var i = 0
+  def firstKey(e: Entry, shift: Int, prefix: Long, lo: Long, hi: Long, valuedOnly: Boolean): Long =
     var found = -1L
-    while found < 0 && bm != 0 do
-      val slot = Integer.numberOfTrailingZeros(bm)
-      bm &= bm - 1
-      val childLo = prefix + (slot.toLong << shift)
-      val childHi = childLo + (1L << shift) - 1
-      val child = node.children(i)
-      if childLo > hi then bm = 0
-      else if childHi >= lo && (!valuedOnly || child.valued > 0) then
-        child match
-          case _: RowLeaf => found = childLo
-          case inner: Node => found = firstKey(inner, shift - 5, childLo, lo, hi, valuedOnly)
-      i += 1
+    e match
+      case b: Block =>
+        var bm = b.rowMask
+        var i = 0
+        while found < 0 && bm != 0 do
+          val low = Integer.numberOfTrailingZeros(bm)
+          bm &= bm - 1
+          val k = prefix + low
+          if k > hi then bm = 0
+          else if k >= lo && (!valuedOnly || Group.rowValued(b, i)) then found = k
+          i += 1
+      case node: Node =>
+        var bm = node.bitmap
+        var i = 0
+        while found < 0 && bm != 0 do
+          val slot = Integer.numberOfTrailingZeros(bm)
+          bm &= bm - 1
+          val childLo = prefix + (slot.toLong << shift)
+          val childHi = childLo + (1L << shift) - 1
+          val child = node.children(i)
+          if childLo > hi then bm = 0
+          else if childHi >= lo && (!valuedOnly || child.valued > 0) then
+            child match
+              case _: RowLeaf => found = childLo
+              case other => found = firstKey(other, shift - 5, childLo, lo, hi, valuedOnly)
+          i += 1
+      case _: RowLeaf => ()
     found
 
-  /** The largest key in `[lo, hi]` under `node` holding a (valued) cell, or -1. */
-  def lastKey(node: Node, shift: Int, prefix: Long, lo: Long, hi: Long, valuedOnly: Boolean): Long =
-    var bm = node.bitmap
-    var i = node.children.length - 1
+  /** The largest key in `[lo, hi]` under `e` holding a (valued) cell, or -1. */
+  def lastKey(e: Entry, shift: Int, prefix: Long, lo: Long, hi: Long, valuedOnly: Boolean): Long =
     var found = -1L
-    while found < 0 && bm != 0 do
-      val slot = 31 - Integer.numberOfLeadingZeros(bm)
-      bm &= ~(1 << slot)
-      val childLo = prefix + (slot.toLong << shift)
-      val childHi = childLo + (1L << shift) - 1
-      val child = node.children(i)
-      if childHi < lo then bm = 0
-      else if childLo <= hi && (!valuedOnly || child.valued > 0) then
-        child match
-          case _: RowLeaf => found = childLo
-          case inner: Node => found = lastKey(inner, shift - 5, childLo, lo, hi, valuedOnly)
-      i -= 1
+    e match
+      case b: Block =>
+        var bm = b.rowMask
+        var i = b.rows - 1
+        while found < 0 && bm != 0 do
+          val low = 31 - Integer.numberOfLeadingZeros(bm)
+          bm &= ~(1 << low)
+          val k = prefix + low
+          if k < lo then bm = 0
+          else if k <= hi && (!valuedOnly || Group.rowValued(b, i)) then found = k
+          i -= 1
+      case node: Node =>
+        var bm = node.bitmap
+        var i = node.children.length - 1
+        while found < 0 && bm != 0 do
+          val slot = 31 - Integer.numberOfLeadingZeros(bm)
+          bm &= ~(1 << slot)
+          val childLo = prefix + (slot.toLong << shift)
+          val childHi = childLo + (1L << shift) - 1
+          val child = node.children(i)
+          if childHi < lo then bm = 0
+          else if childLo <= hi && (!valuedOnly || child.valued > 0) then
+            child match
+              case _: RowLeaf => found = childLo
+              case other => found = lastKey(other, shift - 5, childLo, lo, hi, valuedOnly)
+          i -= 1
+      case _: RowLeaf => ()
     found
 
   /**
    * The trie holding `leaves(i)` at `keys(i)` for `i < n`; keys strictly ascending, leaves
    * non-empty. Returns the root and its (minimal) height.
    */
-  def build(keys: Array[Long], leaves: Array[RowLeaf], n: Int): (Node, Int) =
+  def build(keys: Array[Long], leaves: Array[RowLeaf], n: Int): (Entry, Int) =
     if n == 0 then (Node.Empty, 0)
     else
       val h = heightFor(keys(n - 1))
-      (buildNode(keys, leaves, 0, n, 5 * (h - 1)), h)
+      (buildEntry(keys, leaves, 0, n, 5 * (h - 1)), h)
 
-  private def buildNode(
+  private def buildEntry(
     keys: Array[Long],
     leaves: Array[RowLeaf],
     from: Int,
     until: Int,
     shift: Int
-  ): Node =
-    val tmp = new Array[Entry](32)
-    var bitmap = 0
-    var k = 0
-    var i = from
-    while i < until do
-      val slot = ((keys(i) >>> shift) & 31L).toInt
-      var j = i + 1
-      while j < until && ((keys(j) >>> shift) & 31L).toInt == slot do j += 1
-      tmp(k) = if shift == 0 then leaves(i) else buildNode(keys, leaves, i, j, shift - 5)
-      bitmap |= 1 << slot
-      k += 1
-      i = j
-    Node.of(bitmap, java.util.Arrays.copyOf(tmp, k))
+  ): Entry =
+    if shift == 0 then
+      val n = until - from
+      val lows = new Array[Int](n)
+      val ls = new Array[RowLeaf](n)
+      var i = 0
+      while i < n do
+        lows(i) = (keys(from + i) & 31L).toInt
+        ls(i) = leaves(from + i)
+        i += 1
+      Group.of(lows, ls, n)
+    else
+      val tmp = new Array[Entry](32)
+      var bitmap = 0
+      var k = 0
+      var i = from
+      while i < until do
+        val slot = ((keys(i) >>> shift) & 31L).toInt
+        var j = i + 1
+        while j < until && ((keys(j) >>> shift) & 31L).toInt == slot do j += 1
+        tmp(k) = buildEntry(keys, leaves, i, j, shift - 5)
+        bitmap |= 1 << slot
+        k += 1
+        i = j
+      Node.of(bitmap, java.util.Arrays.copyOf(tmp, k))
 
   /**
-   * The union of two nodes at the same `shift`; on a row both hold, the rows merge through
+   * The union of two entries at the same `shift`; on a row both hold, the rows merge through
    * [[RowLeaf.merge]] (`b` wins, or with `valuesOnly` `b`'s values over `a`'s styles and links).
-   * Returns `a` itself when the union adds nothing to it.
+   * Above shift 0, returns `a` itself when the union adds nothing to it.
    */
-  def union(a: Node, b: Node, shift: Int, valuesOnly: Boolean): Node =
+  def union(a: Entry, b: Entry, shift: Int, valuesOnly: Boolean): Entry =
     if b.count == 0 then a
     else if a.count == 0 then b
-    else
-      val bitmap = a.bitmap | b.bitmap
-      val out = new Array[Entry](Integer.bitCount(bitmap))
-      var changed = bitmap != a.bitmap
-      var bm = bitmap
+    else if shift == 0 then
+      val (la, va, na) = Group.explode(a)
+      val (lb, vb, nb) = Group.explode(b)
+      val lows = new Array[Int](na + nb)
+      val leaves = new Array[RowLeaf](na + nb)
+      var i = 0
+      var j = 0
       var k = 0
-      while bm != 0 do
-        val slot = Integer.numberOfTrailingZeros(bm)
-        bm &= bm - 1
-        val bit = 1 << slot
-        val inA = (a.bitmap & bit) != 0
-        val inB = (b.bitmap & bit) != 0
-        val child: Entry =
-          if !inB then a.children(slotIndex(a.bitmap, slot))
-          else if !inA then b.children(slotIndex(b.bitmap, slot))
-          else
-            val ca = a.children(slotIndex(a.bitmap, slot))
-            val cb = b.children(slotIndex(b.bitmap, slot))
-            (ca, cb) match
-              case (la: RowLeaf, lb: RowLeaf) => RowLeaf.merge(la, lb, valuesOnly)
-              case (na: Node, nb: Node) => union(na, nb, shift - 5, valuesOnly)
-              case _ => ca // unreachable: siblings sit at one depth
-        if inA && !(child eq a.children(slotIndex(a.bitmap, slot))) then changed = true
-        out(k) = child
+      while i < na || j < nb do
+        if j >= nb || (i < na && la(i) < lb(j)) then
+          lows(k) = la(i); leaves(k) = va(i); i += 1
+        else if i >= na || lb(j) < la(i) then
+          lows(k) = lb(j); leaves(k) = vb(j); j += 1
+        else
+          lows(k) = la(i); leaves(k) = RowLeaf.merge(va(i), vb(j), valuesOnly); i += 1; j += 1
         k += 1
-      if changed then Node.of(bitmap, out) else a
+      Group.of(lows, leaves, k)
+    else
+      (a, b) match
+        case (na: Node, nb: Node) =>
+          val bitmap = na.bitmap | nb.bitmap
+          val out = new Array[Entry](Integer.bitCount(bitmap))
+          var changed = bitmap != na.bitmap
+          var bm = bitmap
+          var k = 0
+          while bm != 0 do
+            val slot = Integer.numberOfTrailingZeros(bm)
+            bm &= bm - 1
+            val bit = 1 << slot
+            val inA = (na.bitmap & bit) != 0
+            val inB = (nb.bitmap & bit) != 0
+            val child: Entry =
+              if !inB then na.children(slotIndex(na.bitmap, slot))
+              else if !inA then nb.children(slotIndex(nb.bitmap, slot))
+              else
+                union(
+                  na.children(slotIndex(na.bitmap, slot)),
+                  nb.children(slotIndex(nb.bitmap, slot)),
+                  shift - 5,
+                  valuesOnly
+                )
+            if inA && !(child eq na.children(slotIndex(na.bitmap, slot))) then changed = true
+            out(k) = child
+            k += 1
+          if changed then Node.of(bitmap, out) else a
+        case _ => a // not reached: only nodes sit above shift 0
 
-  /** Calls `f(key, leaf)` for every row under `node`, in ascending key order. */
-  def foreachRow(node: Node, shift: Int, prefix: Long, f: (Long, RowLeaf) => Unit): Unit =
-    var bm = node.bitmap
-    var i = 0
-    while bm != 0 do
-      val slot = Integer.numberOfTrailingZeros(bm)
-      bm &= bm - 1
-      val childLo = prefix + (slot.toLong << shift)
-      node.children(i) match
-        case leaf: RowLeaf => f(childLo, leaf)
-        case inner: Node => foreachRow(inner, shift - 5, childLo, f)
-      i += 1
+  /**
+   * Calls `f(key, leaf)` for every row under `e`, in ascending key order (block rows are copied).
+   */
+  def foreachRow(e: Entry, shift: Int, prefix: Long, f: (Long, RowLeaf) => Unit): Unit =
+    if shift == 0 then
+      val (lows, leaves, n) = Group.explode(e)
+      var i = 0
+      while i < n do
+        f(prefix + lows(i), leaves(i))
+        i += 1
+    else
+      e match
+        case node: Node =>
+          var bm = node.bitmap
+          var i = 0
+          while bm != 0 do
+            val slot = Integer.numberOfTrailingZeros(bm)
+            bm &= bm - 1
+            foreachRow(node.children(i), shift - 5, prefix + (slot.toLong << shift), f)
+            i += 1
+        case _ => ()
 
   /** Structural equality of two entries, short-circuiting on shared subtrees. */
   def same(a: Entry, b: Entry): Boolean =
@@ -310,11 +408,15 @@ private[xl] object Trie:
                   ok = same(na.children(i), nb.children(i))
                   i += 1
                 ok
-            case _: RowLeaf => false
+            case _ => false
+        case ba: Block =>
+          b match
+            case bb: Block => Group.same(ba, bb)
+            case _ => false
         case la: RowLeaf =>
           b match
             case lb: RowLeaf => RowLeaf.same(la, lb)
-            case _: Node => false
+            case _ => false
 
 /**
  * A stable sort of `Long` keys that reports the permutation, so equal keys keep their arrival order

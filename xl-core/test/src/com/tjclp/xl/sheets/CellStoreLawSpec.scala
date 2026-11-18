@@ -281,6 +281,38 @@ class CellStoreLawSpec extends ScalaCheckSuite:
     }
   }
 
+  test("tall narrow data and narrow tables are stored as 32-row blocks") {
+    import com.tjclp.xl.sheets.store.{Block, Entry, Node, RowLeaf}
+    def shapes(e: Entry): (Int, Int) = e match
+      case b: Block => (1, 0)
+      case l: RowLeaf => (0, 1)
+      case n: Node => n.children.map(shapes).foldLeft((0, 0))((a, b) => (a._1 + b._1, a._2 + b._2))
+    val column =
+      CellStore.from((0 until 1000).map(r => Cell(ARef.from0(0, r), CellValue.Number(r))))
+    val table = CellStore.from(
+      for r <- 0 until 320; c <- 0 until 20 yield Cell(ARef.from0(c, r), CellValue.Number(c))
+    )
+    val wide = CellStore.from(
+      for r <- 0 until 64; c <- 0 until 100 yield Cell(ARef.from0(c, r), CellValue.Number(c))
+    )
+    assertEquals(shapes(column.root), (32, 0)) // ceil(1000 / 32) blocks, no per-row leaves
+    assertEquals(shapes(table.root), (0, 320)) // 20 columns: over the block cap, per-row leaves
+    val narrow = CellStore.from(
+      for r <- 0 until 320; c <- 0 until 8 yield Cell(ARef.from0(c, r), CellValue.Number(c))
+    )
+    assertEquals(shapes(narrow.root), (10, 0))
+    // one more column in one row tips its group over the cap, and removing it tips it back
+    val over = narrow.updated(Cell(ARef.from0(8, 40), CellValue.Number(1)))
+    assertEquals(shapes(over.root), (9, 32))
+    assertEquals(over.removed(ARef.from0(8, 40)), narrow)
+    assertEquals(shapes(wide.root), (0, 64)) // rows wider than one chunk stay per-row leaves
+    // one row breaking out of the chunk turns its group into leaves, and back on removal
+    val broken = column.updated(Cell(ARef.from0(64, 5), CellValue.Text("x")))
+    assertEquals(shapes(broken.root), (31, 32))
+    assertEquals(broken.removed(ARef.from0(64, 5)), column)
+    assertEquals(shapes(broken.removed(ARef.from0(64, 5)).root), (32, 0))
+  }
+
   // ----- examples documenting the order and edge semantics -----
 
   test("iteration is row-major: unsigned rows (negative rows last), signed columns") {
@@ -453,7 +485,11 @@ object CellStoreLawSpec:
     3 -> Gen.choose(0, 200),
     1 -> Gen.choose(Int.MinValue, Int.MaxValue)
   )
-  val genRef: Gen[ARef] = for r <- genRow; c <- genCol yield ARef.from0(c, r)
+  val genRef: Gen[ARef] = Gen.frequency(
+    4 -> (for r <- genRow; c <- genCol yield ARef.from0(c, r)),
+    // tall narrow data: lands in the multi-row blocks of the narrow start shapes
+    1 -> (for r <- Gen.choose(0, 70); c <- Gen.choose(0, 9) yield ARef.from0(c, r))
+  )
 
   val genRange: Gen[CellRange] = Gen.frequency(
     4 -> (for a <- genRef; b <- genRef yield CellRange(a, b)),
@@ -500,7 +536,40 @@ object CellStoreLawSpec:
       .map(n => List.tabulate(n)(i => Cell(ARef.from0(i, 7), CellValue.Number(BigDecimal(i))))),
     1 -> Gen
       .choose(1, 300)
-      .map(n => List.tabulate(n)(i => Cell(ARef.from0(3, i * 7), CellValue.Text("c"))))
+      .map(n => List.tabulate(n)(i => Cell(ARef.from0(3, i * 7), CellValue.Text("c")))),
+    // a tall dense column: uniform blocks
+    1 -> Gen
+      .choose(1, 200)
+      .map(n => List.tabulate(n)(i => Cell(ARef.from0(0, i), CellValue.Number(BigDecimal(i))))),
+    // tall narrow data with holes, styles and links: per-row masks in one block
+    1 -> (for
+      n <- Gen.choose(1, 120)
+      holes <- Gen.listOfN(n * 5, Gen.frequency(4 -> true, 1 -> false))
+      style <- genStyle
+      link <- genLink
+    yield List.tabulate(n * 5)(k => (k / 5, k % 5)).zip(holes).collect { case ((r, c), true) =>
+      Cell(
+        ARef.from0(c, r),
+        if c == 2 then CellValue.Empty else CellValue.Text(s"$r"),
+        if r % 3 == 0 then style else None,
+        if c == 4 then link else None
+      )
+    }),
+    // groups at the block size cap: 32 rows of 8 columns (a block) or 9 (per-row leaves)
+    1 -> Gen
+      .oneOf(8, 9)
+      .map(w =>
+        List.tabulate(32 * w)(k => Cell(ARef.from0(k % w, k / w), CellValue.Number(BigDecimal(k))))
+      ),
+    // rows of differing widths sharing a block, one of them crossing into a second chunk
+    1 -> Gen
+      .choose(0, 31)
+      .map(wide =>
+        (0 until 32).toList.flatMap { r =>
+          val width = if r == wide then 70 else r % 7 + 1
+          (0 until width).map(c => Cell(ARef.from0(c, r), CellValue.Bool(c % 2 == 0)))
+        }
+      )
   )
 
   val genTagMask: Gen[Int] = Gen.oneOf(

@@ -22,7 +22,7 @@ import com.tjclp.xl.styles.units.StyleId
 // A cursor is mutable by design (one per walk, never shared); its state is vars and its walk loops.
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
 private[xl] final class CellCursor private (
-  root: Node,
+  root: Entry,
   height: Int,
   lo1: Long,
   hi1: Long,
@@ -38,7 +38,16 @@ private[xl] final class CellCursor private (
   /** 0: walking `[lo1, hi1]`; 1: walking `[lo2, hi2]`; 2: done. */
   private var span = if emptyWindow || height == 0 then 2 else 0
   private var nextKey = lo1
+
+  // The current row: a leaf, or row `blockRow` (key bits `blockLow`) of a block. `cells` holds
+  // the arrays either way.
+  private var cells: Cells = RowLeaf.Empty
   private var leaf: RowLeaf = RowLeaf.Empty
+  private var block: Block = Group.Placeholder
+  private var inBlock = false
+  private var blockRow = 0
+  private var blockLow = 0
+
   private var rowKey = 0L
   private var chunkIdx = 0
   private var chunkCol = 0
@@ -47,7 +56,7 @@ private[xl] final class CellCursor private (
   private var pending = 0L
   private var pos = 0
   private var curCol = 0
-  private var leafActive = false
+  private var rowActive = false
 
   /** Moves to the next cell; false once the window is exhausted. */
   def next(): Boolean =
@@ -61,7 +70,8 @@ private[xl] final class CellCursor private (
         curCol = chunkCol + b
         result = true
         going = false
-      else if leafActive && chunkIdx + 1 < leaf.chunkCount && leaf.chunkAt(chunkIdx + 1) <= chunkHi
+      else if rowActive && !inBlock && chunkIdx + 1 < leaf.chunkCount &&
+        leaf.chunkAt(chunkIdx + 1) <= chunkHi
       then loadChunk(chunkIdx + 1)
       else if !advanceRow() then going = false
     result
@@ -70,18 +80,18 @@ private[xl] final class CellCursor private (
   def row: Int = rowKey.toInt
   def col: Int = curCol
   def ref: ARef = ARef.from0(curCol, rowKey.toInt)
-  def value: CellValue = leaf.values(pos)
-  def meta: Long = leaf.meta(pos)
-  def tag: Int = Meta.tag(leaf.meta(pos))
-  def hasStyle: Boolean = Meta.hasStyle(leaf.meta(pos))
+  def value: CellValue = cells.values(pos)
+  def meta: Long = cells.meta(pos)
+  def tag: Int = Meta.tag(cells.meta(pos))
+  def hasStyle: Boolean = Meta.hasStyle(cells.meta(pos))
 
   /** The raw style index; meaningful only when [[hasStyle]]. */
-  def rawStyle: Int = Meta.rawStyle(leaf.meta(pos))
-  def styleId: Option[StyleId] = Meta.style(leaf.meta(pos))
-  def hasLink: Boolean = Meta.hasLink(leaf.meta(pos))
+  def rawStyle: Int = Meta.rawStyle(cells.meta(pos))
+  def styleId: Option[StyleId] = Meta.style(cells.meta(pos))
+  def hasLink: Boolean = Meta.hasLink(cells.meta(pos))
 
   /** The hyperlink; "" when [[hasLink]] is false. */
-  def link: String = leaf.linkAt(pos)
+  def link: String = cells.linkAt(pos)
   def hyperlink: Option[String] = if hasLink then Some(link) else None
 
   /** The current cell as a [[Cell]] (allocates). */
@@ -89,52 +99,90 @@ private[xl] final class CellCursor private (
 
   private def loadChunk(i: Int): Unit =
     chunkIdx = i
-    val c = leaf.chunkAt(i)
+    val c = if inBlock then block.chunk else leaf.chunkAt(i)
     chunkCol = c << 6
-    chunkMask = leaf.maskAt(i)
-    chunkBase = leaf.baseAt(i)
+    chunkMask = if inBlock then block.rowMaskAt(blockRow) else leaf.maskAt(i)
+    chunkBase = if inBlock then block.rowBaseAt(blockRow) else leaf.baseAt(i)
     val lowBit = if c == chunkLo then colLo & 63 else 0
     val highBit = if c == chunkHi then colHi & 63 else 63
     pending = chunkMask & (-1L << lowBit) & (-1L >>> (63 - highBit))
 
+  /** Loads the current row's first chunk inside the column window; false when it has none. */
+  private def enterRow(): Boolean =
+    if inBlock then
+      if block.chunk < chunkLo || block.chunk > chunkHi then false
+      else
+        loadChunk(0)
+        true
+    else if leaf.maxCol < colLo || leaf.minCol > colHi then false
+    else
+      val i = leaf.chunkFrom(chunkLo)
+      if i < leaf.chunkCount && leaf.chunkAt(i) <= chunkHi then
+        loadChunk(i)
+        true
+      else false
+
   private def advanceRow(): Boolean =
-    leafActive = false
     pending = 0L
     var found = false
     while !found && span < 2 do
       val hi = if span == 0 then hi1 else hi2
-      if nextKey > hi || !ceil(nextKey) || rowKey > hi then
+      // the next row of the current block, when there is one, needs no descent from the root
+      val inBlockNext =
+        if rowActive && inBlock && blockLow < 31 then block.rowMask & (-1 << (blockLow + 1)) else 0
+      rowActive = false
+      if inBlockNext != 0 && rowKey - blockLow + Integer.numberOfTrailingZeros(inBlockNext) <= hi
+      then
+        val low = Integer.numberOfTrailingZeros(inBlockNext)
+        rowKey = rowKey - blockLow + low
+        blockLow = low
+        blockRow += 1
+        nextKey = rowKey + 1
+        rowActive = true
+        found = enterRow()
+      else if nextKey > hi || !ceil(nextKey) || rowKey > hi then
         span += 1
         nextKey = lo2
       else
         nextKey = rowKey + 1
-        if leaf.maxCol >= colLo && leaf.minCol <= colHi then
-          val i = leaf.chunkFrom(chunkLo)
-          if i < leaf.chunkCount && leaf.chunkAt(i) <= chunkHi then
-            leafActive = true
-            loadChunk(i)
-            found = true
+        rowActive = true
+        found = enterRow()
     found
 
-  /** Positions `leaf`/`rowKey` on the first row at or after `k`; false when there is none. */
+  /** Positions the cursor on the first row at or after `k`; false when there is none. */
   private def ceil(k: Long): Boolean =
     Trie.covers(height, k) && ceilIn(root, 5 * (height - 1), 0L, k)
 
-  private def ceilIn(node: Node, shift: Int, prefix: Long, k: Long): Boolean =
-    val start = if k <= prefix then 0 else ((k >>> shift) & 31L).toInt
-    var bm = node.bitmap & (-1 << start)
-    var found = false
-    while !found && bm != 0 do
-      val slot = Integer.numberOfTrailingZeros(bm)
-      bm &= bm - 1
-      val childLo = prefix + (slot.toLong << shift)
-      node.children(Trie.slotIndex(node.bitmap, slot)) match
-        case l: RowLeaf =>
-          leaf = l
-          rowKey = childLo
-          found = true
-        case inner: Node => found = ceilIn(inner, shift - 5, childLo, k)
-    found
+  private def ceilIn(e: Entry, shift: Int, prefix: Long, k: Long): Boolean = e match
+    case b: Block =>
+      val start = if k <= prefix then 0 else (k & 31L).toInt
+      val bm = b.rowMask & (-1 << start)
+      if bm == 0 then false
+      else
+        val low = Integer.numberOfTrailingZeros(bm)
+        block = b
+        cells = b
+        inBlock = true
+        blockLow = low
+        blockRow = b.rowIndex(low)
+        rowKey = prefix + low
+        true
+    case l: RowLeaf =>
+      leaf = l
+      cells = l
+      inBlock = false
+      rowKey = prefix
+      true
+    case node: Node =>
+      val start = if k <= prefix then 0 else ((k >>> shift) & 31L).toInt
+      var bm = node.bitmap & (-1 << start)
+      var found = false
+      while !found && bm != 0 do
+        val slot = Integer.numberOfTrailingZeros(bm)
+        bm &= bm - 1
+        val childLo = prefix + (slot.toLong << shift)
+        found = ceilIn(node.children(Trie.slotIndex(node.bitmap, slot)), shift - 5, childLo, k)
+      found
 
 private[xl] object CellCursor:
   private val U = Trie.UnsignedMask

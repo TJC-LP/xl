@@ -84,7 +84,9 @@ private[xl] sealed abstract class Entry(
 /**
  * An inner trie node. `children` holds one entry per set bit of `bitmap`, in slot order; slot `s`
  * of a node at `shift` covers row keys whose bits `shift+4..shift` equal `s`. A node at shift 0
- * holds [[RowLeaf]]s, every other node holds nodes. No child is ever empty.
+ * holds [[RowLeaf]]s; a node at shift 5 holds shift-0 groups ([[Node]]s or [[Block]]s); every other
+ * node holds nodes. No child is ever empty. A shift-0 node exists only when its rows cannot form a
+ * [[Block]] (they span more than one 64-column chunk between them).
  */
 private[xl] final class Node private (
   val bitmap: Int,
@@ -130,6 +132,76 @@ private[xl] object Node:
       new Node(bitmap, children, count, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask)
 
 /**
+ * An entry that holds cells: a [[RowLeaf]] (one row) or a [[Block]] (the rows of one 32-row slot
+ * group). `meta(p)` is the [[Meta]] word, `values(p)` the value and `links(p)` the hyperlink when
+ * `links` is non-empty; `links` has length 0 unless some cell carries a link, and holds "" for the
+ * cells that do not.
+ */
+private[xl] sealed abstract class Cells(
+  val meta: Array[Long],
+  val values: Array[CellValue],
+  val links: Array[String],
+  valued: Int,
+  minCol: Int,
+  maxCol: Int,
+  vMinCol: Int,
+  vMaxCol: Int,
+  tagMask: Int
+) extends Entry(meta.length, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask):
+  /** The array position of the cell at (`key`, `col`), or -1. A leaf ignores `key`. */
+  def find(key: Long, col: Int): Int
+
+  def linkAt(p: Int): String = if links.length == 0 then "" else links(p)
+
+/**
+ * The rows of one 32-row slot group whose cells all sit in one 64-column chunk, at most
+ * [[Group.MaxBlockCells]] of them, stored as one set of parallel arrays (#891). It takes the place
+ * of a shift-0 [[Node]] and its [[RowLeaf]]s, so a tall narrow sheet pays one object and three
+ * arrays per 32 rows instead of per row.
+ *
+ * `rowMask` bit `r` says row `prefix + r` is present; present rows are numbered `i` in ascending
+ * order. Row `i`'s columns are the set bits of its chunk mask over `chunk`; its cells sit at
+ * `base(i) ..` in the arrays, ordered by column. When every present row has the same mask (a dense
+ * table or column) `masks` holds that one mask and `bases` is empty, and `base(i)` is `i` times the
+ * row width; otherwise `masks(i)` and `bases(i)` are stored per row. The choice is canonical: a
+ * block is uniform exactly when its rows' masks are all equal.
+ */
+private[xl] final class Block(
+  val rowMask: Int,
+  val chunk: Int,
+  val masks: Array[Long],
+  val bases: Array[Int],
+  meta: Array[Long],
+  values: Array[CellValue],
+  links: Array[String],
+  valued: Int,
+  minCol: Int,
+  maxCol: Int,
+  vMinCol: Int,
+  vMaxCol: Int,
+  tagMask: Int
+) extends Cells(meta, values, links, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask):
+  def rows: Int = Integer.bitCount(rowMask)
+  def uniform: Boolean = bases.length == 0
+
+  /** The index of present row `low` (0..31); meaningful only when the row is present. */
+  def rowIndex(low: Int): Int = Integer.bitCount(rowMask & ((1 << low) - 1))
+
+  def rowMaskAt(i: Int): Long = if bases.length == 0 then masks(0) else masks(i)
+
+  def rowBaseAt(i: Int): Int =
+    if bases.length == 0 then i * java.lang.Long.bitCount(masks(0)) else bases(i)
+
+  def find(key: Long, col: Int): Int =
+    val bit = 1 << (key & 31L).toInt
+    if (rowMask & bit) == 0 || (col >> 6) != chunk then -1
+    else
+      val i = Integer.bitCount(rowMask & (bit - 1))
+      val m = rowMaskAt(i)
+      val cb = 1L << (col & 63)
+      if (m & cb) == 0L then -1 else rowBaseAt(i) + java.lang.Long.bitCount(m & (cb - 1))
+
+/**
  * One row's cells as a structure of arrays (#891). The row number is not stored: the trie path is
  * the key, so a row shift can re-key a leaf without rebuilding it.
  *
@@ -143,16 +215,18 @@ private[xl] object Node:
 // loops behind pure signatures; nothing mutable escapes.
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
 private[xl] sealed abstract class RowLeaf(
-  val meta: Array[Long],
-  val values: Array[CellValue],
-  val links: Array[String],
+  meta: Array[Long],
+  values: Array[CellValue],
+  links: Array[String],
   valued: Int,
   minCol: Int,
   maxCol: Int,
   vMinCol: Int,
   vMaxCol: Int,
   tagMask: Int
-) extends Entry(meta.length, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask):
+) extends Cells(meta, values, links, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask):
+  def find(key: Long, col: Int): Int = rank(col)
+
   def chunkCount: Int
   def chunkAt(i: Int): Int
   def maskAt(i: Int): Long
@@ -163,8 +237,6 @@ private[xl] sealed abstract class RowLeaf(
 
   /** The array position of column `col`, or -1 when the row has no cell there. */
   def rank(col: Int): Int
-
-  def linkAt(p: Int): String = if links.length == 0 then "" else links(p)
 
   /** The row's columns, ascending. */
   def cols: Array[Int] =
