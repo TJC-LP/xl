@@ -46,8 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
   merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
   cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
-  last hyperlink still comes back on write until #895 is fixed). The library's
-  `Edit.Clear` / `Sheet.clearRange` keep their old rule for now (#890).
+  last hyperlink still comes back on write until #895 is fixed). The library follows the same
+  rule since #890.
+
+- **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
+  ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
+  CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
+  style is removed (unless its row or column has a default style, as #897 does for the CLI), and
+  merged regions stay merged. A clear with `styles` as well as `contents`
+  (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
+  comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
+  `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars
+  `Remove`/`RemoveRange` to a contents-and-styles clear. **Behaviour change:**
+  `sheet.clearRange(A1:A1, ClearWhat.contents)` on a Percent-formatted A1 inside a merged A1:B1
+  leaves A1 empty with its Percent format and A1:B1 merged (was: A1 removed, A1:B1 unmerged).
 
 - **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
   and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming
