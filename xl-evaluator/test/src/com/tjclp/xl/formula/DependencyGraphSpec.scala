@@ -52,6 +52,28 @@ class DependencyGraphSpec extends ScalaCheckSuite:
 
   // ===== Dependency Extraction Tests (10 tests) =====
 
+  test("QualifiedRef: the cells of a sheet hash apart (#891)") {
+    // A Long hashes as high ^ low, which for an ARef is row ^ column: before the override every
+    // anti-diagonal of this 200 x 64 grid shared one hash (256 distinct hashes for 12,800 cells).
+    val sheet = SheetName.unsafe("Model")
+    val refs =
+      for
+        row <- 0 until 200
+        col <- 0 until 64
+      yield DependencyGraph.QualifiedRef(sheet, ARef.from0(col, row))
+    val distinct = refs.map(_.hashCode).toSet.size
+    assert(distinct > refs.size * 99 / 100, s"$distinct distinct hashes for ${refs.size} cells")
+    val other = SheetName.unsafe("Other")
+    assertEquals(
+      DependencyGraph.QualifiedRef(sheet, ARef.from0(3, 7)).hashCode,
+      DependencyGraph.QualifiedRef(sheet, ARef.from0(3, 7)).hashCode
+    )
+    assertNotEquals(
+      DependencyGraph.QualifiedRef(sheet, ARef.from0(3, 7)).hashCode,
+      DependencyGraph.QualifiedRef(other, ARef.from0(3, 7)).hashCode
+    )
+  }
+
   test("extractDependencies: Lit has no dependencies") {
     val expr = TExpr.Lit(BigDecimal(42))
     assertEquals(DependencyGraph.extractDependencies(expr), Set.empty[ARef])

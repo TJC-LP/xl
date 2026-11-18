@@ -123,6 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **`QualifiedRef` hashes the row and the column as separate words** (#891): the derived hash
+  mixed the cell as a `Long`, whose hash is `row ^ column`, so every cell on an anti-diagonal of a
+  sheet collided (512 distinct hashes for a 500 x 64 sheet) and hash sets and maps of qualified
+  cells scanned buckets of up to min(rows, columns) entries. `xl audit` on three real workbooks,
+  JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. `ARef` keys are
+  unchanged and still collide.
+
 - **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
   `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
   its first argument, and an array constant was spelled out cell by cell. The call is now printed
