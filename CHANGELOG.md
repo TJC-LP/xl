@@ -48,6 +48,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one, the group bits are the ACL mask), so the cap is what guarantees no user or group gains access.
   An extended ACL is not carried over: the users and groups it names lose that access.
 
+- **Relational numeric criteria match number cells only** (#798): `">n"`, `">=n"`, `"<n"` and
+  `"<=n"` in COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS and MINIFS now match numbers and dates
+  only, as desktop Excel does; numeric text and booleans no longer match. Equality (`"4"`, `"=4"`)
+  still matches the text `"4"`, and `"<>n"` is unchanged (#731). **Behaviour change:** with the text
+  `"4"` beside the numbers 4, 5 and 45, `=SUMIF(A1:A14,">=4",B1:B14)` on #798's grid is 8216 (was
+  9240), Excel's value. **Behaviour change:** a TRUE or FALSE cell no longer counts as 1 or 0
+  for a relational criterion: `=COUNTIF(A1:A3,"<4")` over 4, TRUE, 5 is 0 (was 1).
+
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency
   (`./mill --no-daemon __.prepareOffline`) and retries it, the JDK and the scala-cli bootstrap with
@@ -73,6 +81,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   runners. Its three attempts now run in one interpreted JVM (a test-only `CliRepeatProbe`), with
   the same assertions on each; the case takes about a third of the time (6.7–8.5 s → 2.1–3.4 s
   in an alternating local A/B). Tests only; no behaviour change.
+
+- **The stdin race case tests the failed write again** (#879): since the pipe-thread stdin write
+  (#703), the forced-ImageMagick case's `-Xint` JVM almost never lost the race it was written for
+  (0 of 36 instrumented attempts; about 1 in 600 early-exit probes measured in-process), so it no
+  longer covered the failed write. `PipedBackendSpec` now drives that branch deterministically,
+  with an input larger than any pipe buffer sent to a child that closes stdin: a probe is false
+  even on exit 0 with output, and a conversion keeps the child's own failure rather than a raw
+  `IOException`. The end-to-end case runs once in an ordinary JVM, and `CliRepeatProbe` (#877) is
+  removed. Tests only; no behaviour change.
 
 - **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
   **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
