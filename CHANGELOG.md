@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
+  (`scripts/remote-setup.sh`) now pre-fetches every build dependency
+  (`./mill --no-daemon __.prepareOffline`) and retries it, the JDK and the scala-cli bootstrap with
+  backoff. Maven Central intermittently answers a sandbox's parallel downloads with HTTP 429, which
+  coursier never retries, so the first `./mill` or `make install-jar` of a session failed with
+  `Failed to download ….pom`. Opt out with `XL_REMOTE_PREFETCH=false`.
+
 - **SUMPRODUCT counts the blank rows of a whole column INDEX or `:` computes** (#755): a computed
   reference whose range is known before evaluation — INDEX at literal positions (`INDEX(A:A,0)`,
   `INDEX(A:B,0,2)`, `INDEX(A2:A1048576,0)`) and a `:` range of such operands

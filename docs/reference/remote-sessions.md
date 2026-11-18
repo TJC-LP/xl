@@ -34,11 +34,14 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    allowlist of cloud environments.)
 2. **`scripts/remote-setup.sh`** — a SessionStart hook declared in `.claude/settings.json`. It exits
    immediately unless `CLAUDE_CODE_REMOTE=true`. Remotely it fetches the Coursier launcher,
-   provisions the same JDK (shared cache with Mill), installs `scala-cli`, appends `JAVA_HOME` and
-   `PATH` to `$CLAUDE_ENV_FILE` (sourced before every Bash call), and prints a summary that lands in
+   provisions the same JDK (shared cache with Mill), installs `scala-cli`, pre-fetches every build
+   dependency (`./mill --no-daemon __.prepareOffline`), appends `JAVA_HOME` and `PATH` to
+   `$CLAUDE_ENV_FILE` (sourced before every Bash call), and prints a summary that lands in
    Claude's context. Idempotent: the toolchain comes from the environment cache, `PATH` is built
    without repeating a prefix it already has, and a line is appended to the env file only when it is
-   not already there — so a second SessionStart takes seconds and adds nothing.
+   not already there, and the pre-fetch is skipped while a stamp of the build definition (`*.mill`,
+   `.mill-version`, `.mill-jvm-version`) still matches — so a second SessionStart takes seconds and adds
+   nothing.
 
    **TLS-intercepting proxies.** Some sandboxes route HTTPS through a proxy that re-terminates TLS
    and inject its CA into the JVM via `JAVA_TOOL_OPTIONS=-Djavax.net.ssl.trustStore=…`. GraalVM
@@ -51,6 +54,21 @@ Mill 1.1.5, and `scala-cli` for the examples harness. Three things close the gap
    pin itself is untouched), runs coursier from its JAR, and installs scala-cli as a coursier
    bootstrap launcher. `curl` needs nothing (it reads `SSL_CERT_FILE`). Doing it by hand:
    `export MILL_VERSION=1.1.5-jvm` before `./mill`.
+
+   **Maven Central rate limits (HTTP 429).** The sandbox's agent proxy already trusts its own CA in
+   the JDK's `cacerts` (`curl -sS "$HTTPS_PROXY/__agentproxy/status"` shows `javaTrustStorePath`),
+   so TLS is not the problem there. What fails is a burst of parallel downloads: Maven Central
+   intermittently answers some of them with `429 Too Many Requests`, and coursier retries only
+   socket and TLS exceptions, so a single 429 fails the resolution. Mill prints
+   `Failed to download https://repo1.maven.org/….pom`, and the cause line reads
+   `Server returned HTTP response code: 429`. Downloads that succeeded stay in the coursier cache, so
+   rerunning resumes where it stopped. The hook therefore retries every network step with backoff
+   and pre-fetches the whole dependency set inside its own time budget: about 3 minutes and 600 MB
+   cold, under a minute warm. Later `./mill` and `make install-jar` calls then start from cache.
+   Only download errors are retried: a broken build fails once and the hook moves on. Every attempt,
+   including coursier's, is cut off at the deadline. Knobs: `XL_REMOTE_PREFETCH=false` skips the pre-fetch, and `XL_REMOTE_DEADLINE=<seconds>`
+   (default 540, under the hook's 600 s timeout) bounds the retries. If a later build still prints
+   a 429, rerun the same command.
 3. **`.claude/settings.json`** — allowlists the build, test, format, gate, and read-only `git`/`gh`
    commands so a session is not blocked on approvals for routine work. Pushing and opening PRs still
    ask.
@@ -69,9 +87,9 @@ first `./mill` in each session finds the toolchain and dependency cache already 
 # xl: provision the Scala/Mill toolchain once; Anthropic snapshots the result for later sessions.
 # Every step is guarded, so this is harmless in a checkout that is not xl.
 cd "$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-[ -f scripts/remote-setup.sh ] && CLAUDE_CODE_REMOTE=true bash scripts/remote-setup.sh || true
-# Pre-fetch Mill, the compiler bridge, and every dependency (network only, no compile).
-[ -f build.mill ] && timeout 180 ./mill --no-daemon __.prepareOffline || true
+# The hook also pre-fetches Mill and every dependency, retrying Maven Central's HTTP 429s;
+# XL_REMOTE_DEADLINE keeps it inside the setup script's ~5-minute limit.
+[ -f scripts/remote-setup.sh ] && CLAUDE_CODE_REMOTE=true XL_REMOTE_DEADLINE=270 bash scripts/remote-setup.sh || true
 exit 0
 ```
 

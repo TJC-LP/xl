@@ -11,7 +11,8 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class RemoteSetupTest(unittest.TestCase):
     def run_setup(self, system='Linux', arch='x86_64', cached=False,
-                  external=False, version='2.1.24', payload=False, tamper=False, user_owned=False):
+                  external=False, version='2.1.24', payload=False, tamper=False, user_owned=False,
+                  mill_failures=None, mill_error='Server returned HTTP response code: 429', repeat=1):
         with tempfile.TemporaryDirectory() as td:
             t = Path(td)
             project = t / 'project'; (project / 'scripts').mkdir(parents=True)
@@ -43,15 +44,25 @@ class RemoteSetupTest(unittest.TestCase):
                 manifest = project / 'scripts/launcher-checksums.txt'
                 manifest.write_text(hashlib.sha256(archive).hexdigest() + '  cs-2.1.24-x86_64-pc-linux.gz\n' + hashlib.sha256(native).hexdigest() + '  cs-2.1.24-x86_64-pc-linux\n')
                 executable(tools / 'curl', 'cp "$FIXTURE/payload.gz" "$4"')
+            if mill_failures is not None:  # ./mill answers HTTP 429 this many times, then succeeds
+                (project / 'build.mill').write_text('')
+                executable(project / 'mill', 'echo run >> "$FIXTURE/mill-runs"\n'
+                           f'[ "$(wc -l < "$FIXTURE/mill-runs")" -gt {mill_failures} ] && exit 0\n'
+                           f'echo "{mill_error}"; exit 1')
             env = {'PATH':str(managed)+':'+str(tools)+':/usr/bin:/bin','HOME':str(t),
                    'FIXTURE':str(t),'CLAUDE_PROJECT_DIR':str(project),
                    'CLAUDE_CODE_REMOTE':'true','XL_REMOTE_BIN':str(managed),
-                   'CLAUDE_ENV_FILE':str(t/'exports'), 'XL_REMOTE_COURSIER_VERSION':version}
-            p = subprocess.run(['/bin/bash',str(project/'scripts/remote-setup.sh'),'--force'],
-                               env=env,capture_output=True,text=True,timeout=10)
+                   'CLAUDE_ENV_FILE':str(t/'exports'), 'XL_REMOTE_COURSIER_VERSION':version,
+                   'XL_REMOTE_RETRY_DELAY':'0'}
+            for _ in range(repeat):
+                p = subprocess.run(['/bin/bash',str(project/'scripts/remote-setup.sh'),'--force'],
+                                   env=env,capture_output=True,text=True,timeout=10)
             if user_owned:
                 self.assertTrue((managed/'cs').exists(), 'caller tool was deleted')
                 self.assertIn('user-owned', (managed/'cs').read_text())
+            runs = (t/'mill-runs').read_text().count('run') if (t/'mill-runs').exists() else 0
+            if mill_failures is not None:
+                return p, runs
             return p, (t/'exports').exists(), marker.read_text() if marker.exists() else '', (t/'curl-called').exists()
 
     def test_bad_cached_tool_is_not_executed_and_exports_continue(self):
@@ -92,5 +103,25 @@ class RemoteSetupTest(unittest.TestCase):
         self.assertEqual(0,p.returncode,p.stderr);self.assertTrue(exports)
         self.assertFalse(download);self.assertEqual('',executed)
         self.assertIn('working Java',p.stderr)
+
+    def test_prefetch_retries_rate_limited_downloads(self):
+        p, runs = self.run_setup(mill_failures=2)
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(3, runs)
+        self.assertIn('build dependencies pre-fetched', p.stdout)
+
+    def test_prefetch_does_not_retry_a_broken_build(self):
+        p, runs = self.run_setup(mill_failures=99, mill_error='[error] build.mill: compile error')
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(1, runs)
+        self.assertIn('pre-fetch did not finish', p.stderr)
+
+    def test_prefetch_is_skipped_once_stamped(self):
+        p, runs = self.run_setup(mill_failures=0, repeat=2)
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(1, runs)
+        self.assertIn('already pre-fetched', p.stdout)
+
+    def test_prefetch_gives_up_with_a_warning(self):
+        p, runs = self.run_setup(mill_failures=99)
+        self.assertEqual(0, p.returncode, p.stderr); self.assertEqual(5, runs)
+        self.assertIn('5 HTTP 429 answers', p.stderr)
 
 if __name__ == '__main__': unittest.main()
