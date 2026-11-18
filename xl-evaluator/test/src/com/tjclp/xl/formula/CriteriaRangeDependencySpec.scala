@@ -5,7 +5,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.functions.CriteriaRangeResize
-import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
+import com.tjclp.xl.formula.AfterEditSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -48,7 +48,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
           .put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
           .put(ref"F1", CellValue.Formula("E1*2", Some(n(initial * 2))))
         assertEquals(original.evaluateCell(ref"E1"), Right(n(initial)))
-        val updated = original.put(ref"C2", n(200)).recalculateDependents(Set(ref"C2"))
+        val updated = original.put(ref"C2", n(200)).afterEdit(Set(ref"C2"))
         assertEquals(cache(updated, ref"E1"), Some(n(expected)))
         assertEquals(cache(updated, ref"F1"), Some(n(expected * 2)))
       }
@@ -67,7 +67,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
         assertEquals(original.evaluateCell(ref"E1", Clock.system, Some(wb)), Right(n(initial)))
         val updated = wb
           .put(original.put(ref"C2", n(200)))
-          .recalculateDependents(original.name, Set(ref"C2"))
+          .afterEdit(original.name, Set(ref"C2"))
         assertEquals(cache(resultSheet(updated), ref"E1"), Some(n(expected)))
       }
     }
@@ -107,7 +107,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
         .put(ref"Z2", n(2))
         .put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
       val edited = original.put(ref"Z2", n(20))
-      val updated = edited.recalculateDependents(Set(ref"Z2"))
+      val updated = edited.afterEdit(Set(ref"Z2"))
       assertEquals(cache(updated, ref"Y2"), Some(n(200)))
       assertEquals(cache(updated, ref"E1"), Some(n(expected)))
       val cone = DependentRecalculation.recalculateAfterEdit(
@@ -129,7 +129,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       assertEquals(DependencyGraph.dynamicCells(original), Set(QualifiedRef(calcName, ref"E1")))
       val updated = original
         .put(sheet.put(ref"C2", n(200)))
-        .recalculateDependents(sheet.name, Set(ref"C2"))
+        .afterEdit(sheet.name, Set(ref"C2"))
       assertEquals(cache(resultSheet(updated, calcName), ref"E1"), Some(n(expected)))
     }
   }
@@ -179,7 +179,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       }
       val updated = wb
         .put(original.put(ref"C2", n(200)))
-        .recalculateDependents(original.name, Set(ref"C2"))
+        .afterEdit(original.name, Set(ref"C2"))
       List(ref"E1", ref"E2", ref"E3").foreach { at =>
         assertEquals(cache(resultSheet(updated), at), Some(n(expected)), at.toA1)
       }
@@ -316,7 +316,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
     val wb = staticBook
     val viaDependents = wb
       .put(resultSheet(wb).put(ref"C2", n(200)))
-      .recalculateDependents(S, Set(ref"C2"))
+      .afterEdit(S, Set(ref"C2"))
     val cone = DependentRecalculation.recalculateAfterEdit(
       wb.put(resultSheet(wb).put(ref"C2", n(200))),
       S,
@@ -368,7 +368,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       assertEquals(cache(resultSheet(result.workbook), ref"C5"), Some(n(60)), formula)
       val updated = result.workbook
         .put(resultSheet(result.workbook).put(ref"C2", n(200)))
-        .recalculateDependents(S, Set(ref"C2"))
+        .afterEdit(S, Set(ref"C2"))
       assertEquals(cache(resultSheet(updated), ref"C5"), Some(n(240)), formula)
     }
   }
@@ -432,7 +432,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
     assertEquals(DependencyGraph.dynamicCells(wb), Set(q(ref"E1"), q(ref"E2")))
     val updated = wb
       .put(resultSheet(wb).put(ref"C2", n(200)))
-      .recalculateDependents(S, Set(ref"C2"))
+      .afterEdit(S, Set(ref"C2"))
     List(ref"E1", ref"E2", ref"E3").foreach { at =>
       assertEquals(cache(resultSheet(updated), at), Some(n(240)), at.toA1)
     }

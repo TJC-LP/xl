@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.AfterEditSyntax.*
 import java.nio.file.Files
 
 import munit.FunSuite
@@ -98,13 +99,13 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(out(ref"C1").value, CellValue.Formula("F2+1", Some(num(43))))
   }
 
-  test("recalculateDependents keeps the ArrayFormula kind through cache refresh (.copy)") {
+  test("afterEdit keeps the ArrayFormula kind through cache refresh (.copy)") {
     import com.tjclp.xl.formula.eval.DependentRecalculation.*
     val arr = FormulaKind.ArrayFormula(range("C1:C1"))
     val sheet = Sheet(S)
       .put(ref"A1", num(10))
       .put(ref"C1", CellValue.Formula("A1*2", Some(num(20)), arr))
-    val updated = sheet.put(ref"A1", num(100)).recalculateDependents(Set(ref"A1"))
+    val updated = sheet.put(ref"A1", num(100)).afterEdit(Set(ref"A1"))
     assertEquals(updated(ref"C1").value, CellValue.Formula("A1*2", Some(num(200)), arr))
   }
 
@@ -129,13 +130,13 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
   }
 
-  test("recalculateDependents never touches a dataTable record (pinned, not a dependent)") {
+  test("afterEdit never touches a dataTable record (pinned, not a dependent)") {
     import com.tjclp.xl.formula.eval.DependentRecalculation.*
     val tableCell = CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42)))
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", tableCell)
-    val updated = sheet.put(ref"A1", num(999)).recalculateDependents(Set(ref"A1"))
+    val updated = sheet.put(ref"A1", num(999)).afterEdit(Set(ref"A1"))
     assertEquals(updated(ref"F2").value, tableCell)
   }
 

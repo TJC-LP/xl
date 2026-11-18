@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import scala.collection.immutable.BitSet
 
-import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, FormulaParses}
+import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, FormulaParses, ReferenceScan}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.workbooks.Workbook
 
@@ -65,6 +65,62 @@ private[eval] final class RecalcGraph private (graph: CompactGraph, counters: Re
     else
       val candidates = (0 until table.formulaCount).iterator.filterNot(removedIds.contains)
       Left(Unordered(refs(candidates), refs(kahn.remaining)))
+
+  /** Whether `q` is a formula node of the graph. */
+  def isFormula(q: QualifiedRef): Boolean = table.lookup(q).isDefined
+
+  /**
+   * #891: the dirty cone of an edit to the cells `seeds` (formulas or not): the seeds, every
+   * formula that reads one (by a point reference or through a range that contains it) and every
+   * formula downstream of those, every dynamic reader in `dynamic` with its dependents, and
+   * (GH-606) every unresolved reader in `reaches` whose textual reach is unbounded or touches the
+   * cone, with its dependents, iterated until no reader joins. Reads are the recalculation graph's:
+   * a fixed-column VLOOKUP/HLOOKUP reads its key and result strips only (#504), so an edit
+   * elsewhere in its table leaves it clean.
+   */
+  def editCone(
+    seeds: Set[QualifiedRef],
+    dynamic: Set[QualifiedRef],
+    reaches: Map[QualifiedRef, ReferenceScan.Reach]
+  ): Set[QualifiedRef] =
+    val readers = scala.collection.mutable.BitSet.empty
+    seeds.foreach { q =>
+      val sheet = table.sheetOf(q.sheet)
+      if sheet >= 0 then
+        table.lookup(q).foreach(readers += _)
+        graph.foreachReaderOfCell(sheet, q.ref.row.index0, q.ref.col.index0)(readers += _)
+    }
+    val unbounded = reaches.iterator.collect { case (reader, ReferenceScan.Reach.Unbounded) =>
+      reader
+    }
+    readers ++= ids(dynamic.iterator ++ unbounded)
+
+    def closed(roots: BitSet): BitSet =
+      if roots.isEmpty then roots
+      else
+        val reach = graph.reach(roots, BitSet.empty)
+        counters.add(RecalcCounters.Counter.GraphWork, reach.work)
+        roots ++ reach.formulas
+
+    val bounded = reaches.toVector.collect { case (reader, areas: ReferenceScan.Reach.Areas) =>
+      reader -> (areas: ReferenceScan.Reach)
+    }
+
+    @scala.annotation.tailrec
+    def close(
+      cone: Set[QualifiedRef],
+      pending: Vector[(QualifiedRef, ReferenceScan.Reach)]
+    ): Set[QualifiedRef] =
+      val cellsBySheet = cone
+        .groupMap(_.sheet)(_.ref)
+        .map((sheet, cells) => sheet -> ReferenceScan.SheetCells.of(cells))
+      val (joining, waiting) = pending
+        .filterNot((reader, _) => cone.contains(reader))
+        .partition((_, reach) => reach.touches(cellsBySheet))
+      if joining.isEmpty then cone
+      else close(cone ++ refs(closed(ids(joining.iterator.map(_._1)))), waiting)
+
+    close(seeds ++ refs(closed(readers.toImmutable)), bounded)
 
   /** The SCC condensation, in `DependencyGraph.qualifiedSccOrder`'s order. */
   lazy val components: Vector[DependencyGraph.Scc] =

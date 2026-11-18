@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.contract.OffGridHit
 import com.tjclp.xl.formula.SheetEvaluator
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
+import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, EvalFormulaSupport}
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.sheets.Sheet
@@ -212,9 +212,18 @@ object CopyOps:
         if valuesOnly || !cacheCopiedFormulas || liveFormulas.isEmpty then materialized
         else populateFormulaCaches(materialized, wb, liveFormulas.map((src, _, _) => targetOf(src)))
       val wbWithCopied = wb.put(cached)
+      // #891: the shared after-edit pass; its errors reach the run's end-of-edit recalculation
+      // summary, which re-evaluates the same cone
       val result =
         if recalcDependents then
-          wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet ++ release)
+          DependentRecalculation
+            .recalculateAfterEdit(
+              wbWithCopied,
+              cached.name,
+              targetRange.cells.toSet ++ release,
+              Clock.system
+            )
+            .workbook
         else wbWithCopied
       (result, OffGridHit.of(targetSheet.name, offGrid))
     }

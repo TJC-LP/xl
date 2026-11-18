@@ -565,27 +565,18 @@ object RecalcResult:
     case CellValue.Formula(_, Some(cached), _) => carriedCellError(cached)
     case _ => None
 
-  /** One cache/diagnostic contract for whole-workbook and targeted recalculation. */
+  /**
+   * [[cacheResultsWith]] that withdraws no cache downstream of a failure: for the uncached pass,
+   * which promises every cached cell stays byte-identical (GH-468), and for a pass with nothing to
+   * evaluate.
+   */
   private[eval] def cacheResults(
     wb: Workbook,
     successful: Map[SheetName, Map[ARef, CellValue]],
     failures: Vector[CellEvalError],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    cycleReports: Vector[SccReport] = Vector.empty,
     reasons: Map[QualifiedRef, String] = Map.empty
   ): RecalcResult =
-    cacheResultsWith(
-      wb,
-      successful,
-      failures,
-      (failed, pinned) =>
-        DependencyGraph.qualifiedTransitiveDependents(
-          dependents.view.mapValues(_ -- pinned).toMap,
-          failed
-        ),
-      cycleReports,
-      reasons
-    )
+    cacheResultsWith(wb, successful, failures, (_, _) => Set.empty, Vector.empty, reasons)
 
   /**
    * [[cacheResults]] with the invalidation walk supplied: `dependentsOf(failed, pinned)` is every

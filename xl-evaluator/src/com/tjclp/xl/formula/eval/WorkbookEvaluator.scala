@@ -168,7 +168,7 @@ object WorkbookEvaluator:
      * resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell
      * recursion-guard errors while the rest of the workbook still evaluates. Because `recalculate`
      * is always full-workbook, Excel's "volatile" marking is moot here; the targeted
-     * `recalculateDependents` treats dynamic cells as always dirty instead.
+     * `recalculateAfterEdit` treats dynamic cells as always dirty instead.
      */
     def recalculate(clock: Clock = Clock.system): RecalcResult =
       recalculateImpl(wb, clock, None, None)
@@ -276,9 +276,10 @@ object WorkbookEvaluator:
      * The public form of the after-edit seam (ADR-017 §2.8): recalculate the formulas an edit of
      * `modified` on `sheet` can have affected — the edited cells themselves when they are formulas,
      * their transitive dependents, every dynamic (INDIRECT/OFFSET) reader and every reader the
-     * graph cannot resolve whose formula text can name a dirty cell (`DependencyGraph.editCone`,
-     * GH-606) — leaving every other cache byte-identical and never touching the clock for an
-     * unaffected volatile cell (GH-504/GH-508). Wraps
+     * graph cannot resolve whose formula text can name a dirty cell
+     * (`DependentRecalculation.editCone`, GH-606) — leaving every other cache byte-identical and
+     * never touching the clock for an unaffected volatile cell (GH-504/GH-508). The cone evaluates
+     * in the canonical order, drawing `options.rng` as a full recalculation would (#891). Wraps
      * `DependentRecalculation.recalculateAfterEdit`; it never re-derives the cone.
      *
      * When the resolved [[IterativeMode]] iterates (a `<calcPr iterate>` book under the default
@@ -293,7 +294,14 @@ object WorkbookEvaluator:
       options: RecalcOptions
     ): RecalcResult =
       if resolveIterative(wb, options).isDefined then recalculate(options)
-      else DependentRecalculation.recalculateAfterEdit(wb, sheet, modified, options.clock)
+      else
+        DependentRecalculation.recalculateAfterEdit(
+          wb,
+          sheet,
+          modified,
+          options.clock,
+          rng = options.rng
+        )
 
     /**
      * Compute ONLY the formula cells that have no cached value (`Formula(_, None, _)`), in
@@ -412,7 +420,7 @@ object WorkbookEvaluator:
         case (ref, cell) if isUncachedEvaluable(cell.value) => QualifiedRef(sheet.name, ref)
       }
     }.toSet
-    if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
+    if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty)
     else
       val calculationClock = pinnedCalculationClock(options.clock)
       val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
@@ -451,7 +459,7 @@ object WorkbookEvaluator:
                 XLError.FormulaError(formulaText(q), unresolvable(unordered))
               )
             }
-          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual, Map.empty)
+          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual)
         case Right(sorted) =>
           val order = sorted.order
           // GH-274: dynamic readers and their static dependents evaluate last, as in the full pass,
@@ -501,11 +509,10 @@ object WorkbookEvaluator:
                       state.copy(errors = state.errors :+ CellEvalError(q.sheet, q.ref, error))
             }
           }
-          // No dependents edges on purpose: cacheResults would otherwise withdraw the caches of
-          // cached cells downstream of a failure, and this pass promises cached cells stay
-          // byte-identical unconditionally (GH-468).
+          // cacheResults withdraws nothing downstream of a failure: this pass promises cached cells
+          // stay byte-identical unconditionally (GH-468).
           counters.time(RecalcCounters.Phase.Finalize)(
-            RecalcResult.cacheResults(wb, values, errors, Map.empty, reasons = reasons)
+            RecalcResult.cacheResults(wb, values, errors, reasons = reasons)
           )
 
   /** #790: the formula parses `memo`'s pass reuses (none when it has no pass cache). */

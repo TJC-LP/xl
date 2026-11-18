@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.StructuralEditor
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
+import com.tjclp.xl.formula.AfterEditSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
@@ -186,7 +186,7 @@ class TableColumnReferenceSpec extends FunSuite:
     assertEquals(cached(result.workbook, "Reader", ref"A1"), Some(num(14)))
     val updated =
       result.workbook.put(result.workbook(SheetName.unsafe("Data")).toOption.get.put(ref"C3", 20))
-    val dirty = updated.recalculateDependents(SheetName.unsafe("Data"), Set(ref"C3"))
+    val dirty = updated.afterEdit(SheetName.unsafe("Data"), Set(ref"C3"))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(24)))
     assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(48)))
   }
@@ -343,7 +343,7 @@ class TableColumnReferenceSpec extends FunSuite:
     assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
     assertEquals(cached(wb, "Reader", ref"A2"), Some(num(40)))
     val edited = wb.put(wb(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 5))
-    val dirty = edited.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    val dirty = edited.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
     assertEquals(cached(dirty, "Data", ref"E1"), Some(num(9)))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
     assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(60)))
@@ -403,8 +403,8 @@ class TableColumnReferenceSpec extends FunSuite:
     val sheet = data
       .put(ref"E1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
       .put(ref"E2", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])", Some(num(-1))))
-    val fresh = sheet.recalculateDependents(Set(ref"B3"))
-    val edited = fresh.put(ref"B4", 5).recalculateDependents(Set(ref"B4"))
+    val fresh = sheet.afterEdit(Set(ref"B3"))
+    val edited = fresh.put(ref"B4", 5).afterEdit(Set(ref"B4"))
     def value(s: Sheet, at: ARef) = s(at).value match
       case CellValue.Formula(_, cache, _) => cache
       case other => Some(other)
@@ -420,7 +420,7 @@ class TableColumnReferenceSpec extends FunSuite:
     // 0-based 3 is row 4, inside the table's data rows B3:B5
     val inserted = StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), 3, 1)
     val withValue = inserted.put(inserted(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 7))
-    val dirty = withValue.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    val dirty = withValue.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
   }
 

@@ -6,7 +6,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.{DependentRecalculation, NameWalk, WorkbookAudit}
-import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
+import com.tjclp.xl.formula.AfterEditSyntax.*
 import com.tjclp.xl.formula.graph.{DependencyGraph, NameChanges, QualifiedGraph, ReferenceScan}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -215,7 +215,7 @@ class DefinedNameWalkSpec extends FunSuite:
       val wb = lazyDeepName(body)
       val sheet = wb(S).fold(err => fail(err.message), identity)
       val edited = wb.put(sheet.put(at("B1"), num(7)))
-      val result = edited.recalculateDependents(S, Set(at("B1")))
+      val result = edited.afterEdit(S, Set(at("B1")))
       assertEquals(cached(result, q(S, "A1")), Some(num(7)))
       assertEquals(cached(result, q(S, "C1")), Some(num(8)))
     }

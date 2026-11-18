@@ -34,6 +34,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `sheet.recalculateDependents` and `wb.recalculateDependents(WithClock)` are
+  removed** (#891). They were a second and third copy of targeted recalculation that ordered by a
+  hash-seeded FIFO and dropped evaluation errors. Use `wb.recalculateAfterEdit(sheet, refs,
+  options)`: it evaluates the edited formulas too, reports and withdraws cycle members and the
+  formulas a failure blocks, and draws `options.rng` (previously ignored there) in the canonical
+  order a full recalculation uses.
+
+- **Targeted recalculation runs on the compact graph in canonical order** (#891). The after-edit
+  pass (every CLI write, `copy` included) orders its cone with the graph a full recalculation
+  uses, so seeded RAND draws match a full pass; the cone uses the same precise lookup reads (#504):
+  an edit inside a fixed-column VLOOKUP/HLOOKUP table but off its key and result columns no longer
+  re-evaluates the lookup. A batch `copy` now refreshes through the same pass, so a pasted formula
+  that fails is reported. The internal `RecalcEngine.Legacy` (the per-cell graph kept as a rollback
+  for #767) is gone.
+
 - **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
   `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
   anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision

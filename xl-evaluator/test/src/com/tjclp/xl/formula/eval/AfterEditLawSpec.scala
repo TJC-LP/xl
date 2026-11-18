@@ -1,0 +1,206 @@
+package com.tjclp.xl.formula.eval
+
+import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.formula.{Clock, Rng}
+import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
+import com.tjclp.xl.formula.graph.CompactGraphGens
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.workbooks.Workbook
+import munit.ScalaCheckSuite
+import org.scalacheck.{Gen, Prop}
+
+/**
+ * #891: the after-edit pass is a full recalculation restricted to what the edit can change. On a
+ * book a full recalculation has just settled, edit one constant (or clear it, or write a formula
+ * into it) and recalculate after the edit: the workbook is exactly what a full recalculation of the
+ * edited book gives, every cell, outside the cone as well as in it. The cone is the recalculation
+ * graph's (#504's precise lookups); the generators cover ranges, whole columns and rows, running
+ * totals, defined names, VLOOKUP strips, INDIRECT/OFFSET, cycles and unknown sheets.
+ */
+class AfterEditLawSpec extends ScalaCheckSuite:
+
+  override def scalaCheckTestParameters =
+    super.scalaCheckTestParameters.withMinSuccessfulTests(200)
+
+  private val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 1, 2))
+
+  private def options = RecalcOptions(
+    clock = clock,
+    rng = Rng.seeded(5L),
+    iterative = IterativeMode.Off
+  )
+
+  /** The edit: a sheet, a cell, and what it becomes. */
+  private final case class Edit(sheet: SheetName, ref: ARef, value: Option[CellValue])
+
+  private val genEdit: Gen[Edit] =
+    for
+      sheet <- Gen.oneOf(CompactGraphGens.sheetNames).map(SheetName.unsafe)
+      col <- Gen.choose(0, CompactGraphGens.Cols - 1)
+      row <- Gen.choose(0, CompactGraphGens.Rows - 1)
+      value <- Gen.frequency(
+        6 -> Gen.choose(-5, 50).map(n => Some(CellValue.Number(BigDecimal(n)))),
+        2 -> Gen.const(None),
+        1 -> Gen.const(Some(CellValue.Text("x"))),
+        1 -> Gen.const(Some(CellValue.Formula("A1+1")))
+      )
+    yield Edit(sheet, ARef.from0(col, row), value)
+
+  private def applyEdit(wb: Workbook, edit: Edit): Workbook =
+    wb.sheets.find(_.name == edit.sheet).fold(wb) { sheet =>
+      val next: Sheet = edit.value match
+        case Some(v) => sheet.put(Cell(edit.ref, v))
+        case None => sheet.remove(edit.ref)
+      wb.put(next)
+    }
+
+  private def cellsOf(wb: Workbook): Map[SheetName, Map[ARef, Cell]] =
+    wb.sheets.iterator.map(s => s.name -> s.cells).toMap
+
+  /** Formula cells holding no cache (a data-table record's is its own). */
+  private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
+    wb.sheets.iterator.flatMap { s =>
+      s.cells.iterator.collect {
+        case (ref, Cell(_, CellValue.Formula(_, None, kind), _, _, _))
+            if !kind.isInstanceOf[com.tjclp.xl.cells.FormulaKind.DataTable] =>
+          QualifiedRef(s.name, ref)
+      }
+    }.toSet
+
+  property("after an edit: the cone equals a full recalculation, the rest is untouched") {
+    Prop.forAll(CompactGraphGens.genWorkbook, genEdit) { (wb, edit) =>
+      val settled = wb.recalculate(options).workbook
+      val edited = applyEdit(settled, edit)
+      val after = cellsOf(
+        edited.recalculateAfterEdit(edit.sheet, Set(edit.ref), options).workbook
+      )
+      val full = cellsOf(edited.recalculate(options).workbook)
+      val before = cellsOf(edited)
+      val cone = DependentRecalculation.editCone(edited, Set(QualifiedRef(edit.sheet, edit.ref)))
+      // the gap the pass inherits (pinned below): a formula outside the cone that holds no cache
+      // failed on every earlier pass; a full recalculation fails it again and withdraws what reads
+      // it, the after-edit pass leaves it alone and reads it as empty
+      val graph = RecalcGraph.build(edited, RecalcCounters.disabled)
+      val stale = uncachedFormulas(edited) -- cone
+      val exempt = graph.dependents(stale, Set.empty)
+      def at(cells: Map[SheetName, Map[ARef, Cell]], q: QualifiedRef) =
+        cells.get(q.sheet).flatMap(_.get(q.ref))
+      val all = (before.toVector ++ full.toVector)
+        .flatMap((name, cells) => cells.keysIterator.map(QualifiedRef(name, _)))
+        .distinct
+      val outside = all.filterNot(cone.contains).filter(q => at(after, q) != at(before, q))
+      val inside = all
+        .filter(q => cone.contains(q) && !exempt.contains(q))
+        .filter(q => at(after, q) != at(full, q))
+      def show(qs: Vector[QualifiedRef], other: Map[SheetName, Map[ARef, Cell]], label: String) =
+        qs.map(q => s"$q: $label=${at(other, q).map(_.value)} after=${at(after, q).map(_.value)}")
+      Prop.all(
+        Prop(outside.isEmpty) :| s"edit $edit, outside the cone\n${show(outside, before, "before")
+            .mkString("\n")}",
+        Prop(inside.isEmpty) :| s"edit $edit, in the cone\n${show(inside, full, "full")
+            .mkString("\n")}"
+      )
+    }
+  }
+
+  test("inherited gap: a lookup over an always-failing formula outside the cone keeps a value") {
+    // D1 fails on every pass (an unknown sheet), so a settled book holds it uncached; E1 looks up
+    // through the table D1 sits in. An edit to A2 (E1's key column) re-evaluates E1, which reads
+    // D1 as empty; a full recalculation fails D1 again and withdraws E1. Pinned as today's
+    // behaviour, not as the target: the decision whether after-edit should re-run such cells is
+    // open (#891 follow-up).
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      .put(ARef.from0(0, 1), CellValue.Number(BigDecimal(2)))
+      .put(ARef.from0(1, 0), CellValue.Formula("'Gone'!A1"))
+      .put(ARef.from0(1, 1), CellValue.Number(BigDecimal(7)))
+      .put(ARef.from0(4, 0), CellValue.Formula("VLOOKUP(2,A1:B2,2,FALSE)"))
+    val settled = Workbook(sheet).recalculate(options).workbook
+    val edited = settled(sheet.name).fold(
+      e => fail(e.toString),
+      s => settled.put(s.put(ARef.from0(0, 1), CellValue.Number(BigDecimal(2))))
+    )
+    val after = edited.recalculateAfterEdit(sheet.name, Set(ARef.from0(0, 1)), options)
+    val full = edited.recalculate(options)
+    def e1(r: RecalcResult) =
+      r.workbook(sheet.name).toOption.flatMap(_.cells.get(ARef.from0(4, 0))).map(_.value)
+    assertEquals(e1(after), Some(CellValue.Formula("VLOOKUP(2,A1:B2,2,FALSE)", Some(n(7)))))
+    assertEquals(e1(full), Some(CellValue.Formula("VLOOKUP(2,A1:B2,2,FALSE)", None)))
+  }
+
+  private def n(i: Int): CellValue = CellValue.Number(BigDecimal(i))
+
+  /** The book with every VLOOKUP/HLOOKUP formula replaced by a constant (#504's one difference). */
+  private def withoutLookups(wb: Workbook): Workbook =
+    wb.copy(sheets = wb.sheets.map { s =>
+      s.copy(cells = s.cells.view.mapValues { cell =>
+        cell.value match
+          case CellValue.Formula(text, _, _) if text.toUpperCase.contains("LOOKUP(") =>
+            cell.copy(value = CellValue.Number(BigDecimal(1)))
+          case _ => cell
+      }.toMap)
+    })
+
+  property("the compact-graph pass equals the per-cell pass it replaced (no fixed lookups)") {
+    Prop.forAll(CompactGraphGens.genWorkbook, genEdit, Gen.oneOf(true, false)) {
+      (generated, edit, settle) =>
+        val wb = withoutLookups(generated)
+        val start = if settle then wb.recalculate(options).workbook else wb
+        val edited = applyEdit(start, edit)
+        val now = DependentRecalculation.recalculateAfterEdit(
+          edited,
+          edit.sheet,
+          Set(edit.ref),
+          clock,
+          rng = Rng.seeded(5L)
+        )
+        val old = OldAfterEdit.oldRecalculateAfterEdit(edited, edit.sheet, Set(edit.ref), clock)
+        Prop.all(
+          Prop(now.workbook == old.workbook) :| s"workbook, edit $edit",
+          Prop(now.errors.toSet == old.errors.toSet) :|
+            s"errors, edit $edit\nnew-only ${now.errors.toSet -- old.errors.toSet}\nold-only ${old.errors.toSet -- now.errors.toSet}",
+          Prop(now.evaluated == old.evaluated) :| s"evaluated, edit $edit"
+        )
+    }
+  }
+
+  test("#504: an edit inside a fixed-column VLOOKUP's table, off its strips, leaves it clean") {
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      .put(ARef.from0(1, 0), CellValue.Number(BigDecimal(10)))
+      .put(ARef.from0(2, 0), CellValue.Number(BigDecimal(100)))
+      .put(ARef.from0(4, 0), CellValue.Formula("VLOOKUP(1,A1:C1,3,FALSE)"))
+    val settled = Workbook(sheet).recalculate(options).workbook
+    // B1 lies in the table but neither in the key column A nor the result column C
+    val edited = settled(sheet.name).fold(
+      e => fail(e.toString),
+      s => settled.put(s.put(ARef.from0(1, 0), CellValue.Number(BigDecimal(20))))
+    )
+    val result = edited.recalculateAfterEdit(sheet.name, Set(ARef.from0(1, 0)), options)
+    assertEquals(result.evaluated.getOrElse(sheet.name, Map.empty), Map.empty)
+    // the per-cell pass's declared-range cone re-evaluated it, to the same value
+    val old = OldAfterEdit.oldRecalculateAfterEdit(edited, sheet.name, Set(ARef.from0(1, 0)), clock)
+    assertEquals(
+      old.evaluated.get(sheet.name).flatMap(_.get(ARef.from0(4, 0))),
+      Some(CellValue.Number(BigDecimal(100)))
+    )
+    // same cells; the per-cell pass also re-wrote the cell, marking the sheet modified
+    assertEquals(
+      result.workbook(sheet.name).map(_.cells),
+      old.workbook(sheet.name).map(_.cells)
+    )
+  }
+
+  test("a seeded RAND reader draws the same value after an edit as in a full recalculation") {
+    val sheet = Sheet(SheetName.unsafe("S"))
+      .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
+      .put(ARef.from0(1, 0), CellValue.Formula("A1+RAND()"))
+      .put(ARef.from0(1, 1), CellValue.Formula("A1*2+RAND()"))
+    val edited = Workbook(sheet).put(sheet.put(ARef.from0(0, 0), CellValue.Number(BigDecimal(2))))
+    val after =
+      edited.recalculateAfterEdit(sheet.name, Set(ARef.from0(0, 0)), options).evaluated
+    val full = edited.recalculate(options).evaluated
+    assertEquals(after, full)
+  }

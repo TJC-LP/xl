@@ -1459,7 +1459,7 @@ object WriteCommands:
       .toMap
 
   /**
-   * The dirty dependency cone of an edit — `DependencyGraph.editCone`, the same cone
+   * The dirty dependency cone of an edit — `DependentRecalculation.editCone`, the same cone
    * `DependentRecalculation.recalculateAfterEdit` evaluates, grouped by sheet: the changed cells
    * themselves plus every transitive dependent, workbook-wide (cross-sheet dependents included).
    * Dynamic-reference cells (INDIRECT / OFFSET) on every sheet join unconditionally and drag their
@@ -1474,9 +1474,7 @@ object WriteCommands:
     import DependencyGraph.QualifiedRef
     val seeded: Set[QualifiedRef] =
       seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
-    val dynamic: Set[QualifiedRef] = DependencyGraph.dynamicCells(wb)
-    val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
-    DependencyGraph.editCone(wb, seeded, dependencyIndex, dynamic).groupMap(_.sheet)(_.ref)
+    DependentRecalculation.editCone(wb, seeded).groupMap(_.sheet)(_.ref)
 
   /**
    * Carry the recalculated caches of the cone — and only those — back onto the edited workbook.
