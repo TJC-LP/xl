@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **SUMPRODUCT counts the blank rows of a whole column INDEX or `:` computes** (#755): a computed
+  reference whose range is known before evaluation — INDEX at literal positions (`INDEX(A:A,0)`,
+  `INDEX(A:B,0,2)`, `INDEX(A2:A1048576,0)`) and a `:` range of such operands
+  (`A1:INDEX(A:A,1048576)`, `A2:INDEX(A:A,1048576)`) — is bounded and adds back the blank rows past
+  the used range as its written range does. **Behaviour change:** with data in rows 1-3 and A2
+  blank, `SUMPRODUCT(--(INDEX(A:A,0)=""))` and `SUMPRODUCT(--(A1:INDEX(A:A,1048576)=""))` were 1
+  and are now 1048574, Excel's value (#755's report); `SUMPRODUCT(--(A2:INDEX(A:A,1048576)=""))`
+  was 1 and is now 1048574, as the written `A2:A1048576` gives. **Behaviour change:** with only A2
+  and B2 filled, `SUMPRODUCT(--(A2:A1048576="")*INDEX(B2:B1048576,0))` was B2 × 1048574 and is
+  now 0, the blank rows reading INDEX's range as blank. Products with a value column over the data
+  rows are unchanged. OFFSET, INDIRECT, XLOOKUP, an INDEX position read from a cell or from ROW()
+  or COLUMN(), and a LET-bound computed reference keep the trimmed sum; see LIMITATIONS.
+
 - **RasterSubprocessSpec CI timeout** (#877): the forced-ImageMagick race case started three
   interpreted (`-Xint`) JVMs in a row and overran munit's 30 s per-test limit on loaded CI
   runners. Its three attempts now run in one interpreted JVM (a test-only `CliRepeatProbe`), with
