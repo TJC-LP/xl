@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
+  clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
+  the values and formulas and drops the cell's hyperlink, but keeps its number format, font,
+  fill and border, and leaves merged regions merged. A cell with no style is still removed.
+  `clear --all` is unchanged: it removes the cells and unmerges what the range touches;
+  `--styles` and `--comments` are unchanged. **Behaviour change:** after `clear B4:E5` over cells
+  formatted `#,##0_);\(#,##0\);\-\-_)` in blue Times New Roman, B4:E5 are empty and keep that
+  format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
+  merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
+  cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
+  last hyperlink still comes back on write until #895 is fixed). The library's
+  `Edit.Clear` / `Sheet.clearRange` keep their old rule for now (#890).
+
 - **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
   and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming
   transforms) staged its output in an owner-only temp file and renamed it into place, so the output

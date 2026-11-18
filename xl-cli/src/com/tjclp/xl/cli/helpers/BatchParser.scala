@@ -2313,7 +2313,8 @@ object BatchParser:
    * A `clear` of contents, styles and/or comments, as the clear verb does it: GH-714 — a contents
    * clear takes a cleared anchor's whole spill and leaves the cells of a live spill whose anchor
    * stays as they were, returned for the `SPILL_CELLS_SKIPPED` warning
-   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
+   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`). GH-886 — a contents clear keeps
+   * formatting and merges; `all` drops the cells and unmerges what the range touches.
    */
   private def applyClear(
     wb: Workbook,
@@ -2332,7 +2333,10 @@ object BatchParser:
         .when(clearContents)(
           wb.sheets
             .find(_.name == sheetName)
-            .map(s => DynamicArrayAuthoring.clearContents(s, spillsOn(sheetName), Vector(range)))
+            .map(s =>
+              DynamicArrayAuthoring
+                .clearContents(s, spillsOn(sheetName), Vector(range), keepFormatting = !all)
+            )
         )
         .flatten
       result <- updateSheet(wb, sheetName) { sheet =>
@@ -2343,8 +2347,8 @@ object BatchParser:
         val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
 
-        // Unmerge overlapping regions when clearing contents
-        if clearContents then
+        // GH-886: a contents clear keeps merges and formatting; only `all` unmerges
+        if all then
           val overlapping = s3.mergedRanges.filter(_.intersects(range))
           overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
         else s3
