@@ -324,15 +324,19 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    *   - indexMap maps plain text to SST index (deduplication by content)
    *   - totalCount = number of text/richtext cell instances in workbook
    *   - totalCount >= strings.size (equality only when no duplicates)
-   *   - Iteration order is stable (sheets processed in Vector order)
-   * DETERMINISTIC: Yes (stable Vector traversal, deterministic deduplication) ERROR CASES: None
-   * (total function, handles empty workbook → empty SST)
+   *   - Entries are numbered in first-reference order: sheets in Vector order, cells row-major
+   * DETERMINISTIC: Yes (canonical traversal, deterministic deduplication) ERROR CASES: None (total
+   * function, handles empty workbook → empty SST)
    *
    * @param wb
    *   Workbook to extract strings from
    * @return
    *   SharedStrings with deduplicated entries and total count
    */
+  private val rowMajor: java.util.Comparator[com.tjclp.xl.cells.Cell] = (x, y) =>
+    val byRow = Integer.compare(x.ref.row.index0, y.ref.row.index0)
+    if byRow != 0 then byRow else Integer.compare(x.ref.col.index0, y.ref.col.index0)
+
   def fromWorkbook(wb: Workbook, escapeFormulas: Boolean = false): SharedStrings =
     fromSheets(wb.sheets, escapeFormulas)
 
@@ -341,9 +345,13 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * sheets it regenerates, since a sheet copied verbatim keeps its own inline strings (GH-768).
    */
   def fromSheets(sheets: Iterable[Sheet], escapeFormulas: Boolean): SharedStrings =
-    // Stream entries using iterator for lazy evaluation
+    // #891: each sheet's cells row-major, never in `sheet.cells`' hash order. The table's indices
+    // are written into every text cell, so a hash-ordered walk made the bytes a function of how
+    // `ARef` hashes rather than of the workbook.
     val allEntries = sheets.iterator.flatMap { sheet =>
-      sheet.cells.values.iterator.flatMap { cell =>
+      val cells = sheet.cells.values.toArray
+      java.util.Arrays.sort(cells, SharedStrings.rowMajor)
+      cells.iterator.flatMap { cell =>
         cell.value match
           case com.tjclp.xl.cells.CellValue.Text(s) =>
             val safeText = if escapeFormulas then CellValue.escape(s) else s
