@@ -332,10 +332,15 @@ class ClearCommandSpec extends FunSuite:
   private val dataRange = CellRange.parse("B4:E5").fold(e => fail(e), identity)
   private val titleRange = CellRange.parse("A1:F1").fold(e => fail(e), identity)
 
-  /** A formatted report: a merged bold title over A1:F1 and styled numbers in B4:E5. */
+  /**
+   * A formatted report: a merged bold title over A1:F1, styled numbers in B4:E5, and an unstyled
+   * note in A3.
+   */
   private def template: Sheet =
     val withValues = dataRange.cells.zipWithIndex.foldLeft(
-      Sheet("Summary").put(ARef.from0(0, 0), CellValue.Text("Quarterly report"))
+      Sheet("Summary")
+        .put(ARef.from0(0, 0), CellValue.Text("Quarterly report"))
+        .put(ARef.from0(0, 2), CellValue.Number(1))
     ) { case (s, (r, i)) => s.put(r, CellValue.Number(BigDecimal(1000 * (i + 1)))) }
     withValues
       .withRangeStyle(dataRange, numStyle)
@@ -430,8 +435,11 @@ class ClearCommandSpec extends FunSuite:
   }
 
   test("GH-886 clear: an unstyled cell with no comment is still removed outright") {
+    val a3 = ARef.from0(0, 2)
+    assertEquals(template.cells.get(a3).map(_.value), Some(CellValue.Number(1)), "fixture: A3")
+    assertEquals(template.cells.get(a3).flatMap(_.styleId), None, "fixture: A3 unstyled")
     val s = clearVerb("A3:A3")
-    assertEquals(s.cells.get(ARef.from0(0, 2)), None)
+    assertEquals(s.cells.get(a3), None)
   }
 
   // ========== Combined Flags ==========
