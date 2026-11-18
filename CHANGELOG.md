@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
+  and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming
+  transforms) staged its output in an owner-only temp file and renamed it into place, so the output
+  ended up `0600` (`-rw-------`) whatever the umask. The staged file stays owner-only while it is
+  written, then takes the right mode just before the rename.
+  **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
+  umask `022`); a replaced output keeps its own mode, so a private (`0600`) file stays private.
+
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency
   (`./mill --no-daemon __.prepareOffline`) and retries it, the JDK and the scala-cli bootstrap with
