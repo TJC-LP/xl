@@ -64,9 +64,10 @@ object StaleDataTable:
  *   - `errorCells` — a cached Excel error on a formula, or a bare error value
  *   - `uncachedFormulas` — formulas with no cached value (`xl recalc` fills them)
  *   - `unparseable` — formulas this evaluator cannot parse, each with the parser's one-line reason
- *   - `cycles` — the cyclic strongly connected components of the formula graph, when the file's
- *     `calcPr` does NOT enable iterative calculation (Excel shows such a book with a circular
- *     reference warning and zeros)
+ *   - `cycles` — the cyclic strongly connected components of the recalculation graph (#891: the
+ *     cycles `recalc` isolates, with #504's precise lookup reads), when the file's `calcPr` does
+ *     NOT enable iterative calculation (Excel shows such a book with a circular reference warning
+ *     and zeros)
  *   - `unresolvedReaders` — formulas whose name references the static graph cannot resolve
  *     (GH-507); an unparseable formula is reported once, in `unparseable`
  *
@@ -199,8 +200,11 @@ object WorkbookAudit:
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
     val unparseableRefs = unparseable.iterator.map(_._1).toSet
     val graph = QualifiedGraph.of(wb, parses)
-    // sccs come dependency-first; the report reads in workbook order like every other bucket
-    val cyclic = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
+    // #891: the cycles a recalculation sees — the recalculation graph's components, with #504's
+    // precise lookup reads — so `audit` never reports a cycle `recalc` does not have. They come
+    // dependency-first; the report reads in workbook order like every other bucket
+    val cyclic =
+      recalcGraph.components.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
     // With iterative calculation on, a circular model is the file's declared intent, not a finding
     val iterative = wb.metadata.calcPr.exists(_.iterativeCalculation)
 

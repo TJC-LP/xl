@@ -49,6 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that fails is reported. The internal `RecalcEngine.Legacy` (the per-cell graph kept as a rollback
   for #767) is gone.
 
+- **`audit`'s cycles are the ones `recalc` isolates** (#891): they come from the recalculation
+  graph, with #504's precise lookup reads, so a fixed-column VLOOKUP/HLOOKUP whose table contains
+  its own cell (off its key and result columns) is no longer reported as circular while `recalc`
+  evaluates it. `QualifiedGraph.sccs` (the declared-reads view behind `deps`) is unchanged.
+
 - **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
   `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
   anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision
