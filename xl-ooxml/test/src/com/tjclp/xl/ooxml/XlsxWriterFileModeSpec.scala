@@ -101,11 +101,46 @@ class XlsxWriterFileModeSpec extends FunSuite:
     assertEquals(mode(dest), "rw-rw----")
   }
 
-  test("when the group cannot be carried over, the group bits are dropped (GH-868 review)") {
-    val shared = PosixFilePermissions.fromString("rw-rw-r--")
-    assertEquals(
-      PosixFilePermissions.toString(OutputFileMode.narrowed(shared, groupKept = false)),
-      "rw----r--"
-    )
-    assertEquals(OutputFileMode.narrowed(shared, groupKept = true).asScala, shared.asScala)
+  test("untrusted group bits are cut to the others bits (GH-868 review)") {
+    def cut(m: String): String =
+      PosixFilePermissions.toString(
+        OutputFileMode.narrowed(PosixFilePermissions.fromString(m), groupTrusted = false)
+      )
+    assertEquals(cut("rw-rw----"), "rw-------")
+    assertEquals(cut("rw-rw-r--"), "rw-r--r--")
+    assertEquals(cut("rw-r--r--"), "rw-r--r--")
+    val shared = PosixFilePermissions.fromString("rw-rw----")
+    assertEquals(OutputFileMode.narrowed(shared, groupTrusted = true).asScala, shared.asScala)
+  }
+
+  /** Run a command, true when it exits 0. */
+  private def run(cmd: String*): Boolean =
+    try
+      val proc = new ProcessBuilder(cmd*).redirectErrorStream(true).start()
+      proc.getInputStream.readAllBytes(): Unit
+      proc.waitFor() == 0
+    catch case _: java.io.IOException => false
+
+  /**
+   * Give `p` a POSIX.1e extended ACL entry for the current user (Linux `setfacl`). Only these ACLs
+   * turn the group bits into a mask; a macOS ACL adds to the mode bits and never widens them.
+   */
+  private def addAcl(p: Path): Boolean =
+    val user = System.getProperty("user.name")
+    val added = run("setfacl", "-m", s"u:$user:r", p.toString)
+    val proc = new ProcessBuilder("ls", "-ld", p.toString).start()
+    val listing = new String(proc.getInputStream.readAllBytes())
+    proc.waitFor(): Unit
+    added && listing.lift(10).contains('+')
+
+  test("an overwritten file with an extended ACL never widens its group (GH-868 review)") {
+    assume(posix, "POSIX permissions only")
+    val dir = Files.createTempDirectory("xl-gh868-acl-")
+    val dest = dir.resolve("dest.xlsx")
+    Files.writeString(dest, "old")
+    setMode(dest, "rw-rw----")
+    assume(addAcl(dest), "needs Linux setfacl")
+    assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
+    // the group bits were the ACL mask, not the group's own entry: cut to the others bits
+    assertEquals(mode(dest), "rw-------")
   }

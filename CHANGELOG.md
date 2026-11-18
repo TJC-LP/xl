@@ -43,8 +43,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written, then takes the right mode just before the rename.
   **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
   umask `022`); a replaced output keeps its own mode and group, so a private (`0600`) file stays
-  private. Where the writer cannot give the output the original's group, the group bits are dropped
-  rather than granted to a different group.
+  private. Where the writer cannot give the output the original's group, or the original has an
+  extended ACL (whose mask its group bits are), the group gets no more than everyone else already
+  had. An extended ACL is not carried over: the users and groups it names lose that access.
 
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency
