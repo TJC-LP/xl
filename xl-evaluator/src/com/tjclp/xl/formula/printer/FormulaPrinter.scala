@@ -406,21 +406,11 @@ object FormulaPrinter:
       case TExpr.RangeLocation.Error(error, qualifier) => qualifiedError(error, qualifier)
 
   /**
-   * Format ARef to A1 notation with anchor support.
-   *
-   * Helper function to avoid opaque type extension method issues. Manually extracts col/row from
-   * packed Long representation and adds $ prefixes based on anchor mode.
+   * Format ARef to A1 notation with anchor support: `$` prefixes per the anchor mode.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[printer] def formatARef(aref: ARef, anchor: Anchor): String =
-    // ARef is opaque type = Long with (row << 32) | col packing
-    // Extract col (low 32 bits) and row (high 32 bits)
-    val arefLong: Long = aref.asInstanceOf[Long] // Safe: ARef is opaque type = Long
-    val colIndex = (arefLong & 0xffffffffL).toInt
-    val rowIndex = (arefLong >> 32).toInt
-
-    // Convert to A1 notation
-    val col = Column.from0(colIndex)
+    val col = aref.col
+    val rowIndex = aref.row.index0
 
     // Format column letter with optional $ prefix
     val colLetter = Column.toLetter(col)

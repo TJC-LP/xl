@@ -1487,10 +1487,10 @@ object DependencyGraph:
     // unambiguously in diagnostics ('A1'!B2, not A1!B2)
     override def toString: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
 
-    // The derived hash mixes `ref` as a Long, whose hash is `high ^ low`: row ^ column. Every
-    // cell on an anti-diagonal of a sheet then shares one hash, so a sheet of R rows by C columns
-    // has about max(R, C) distinct hashes and hash sets and maps of its cells scan buckets of
-    // about min(R, C) entries. Mix the row and the column as separate words instead.
+    // #891: mix the row and the column as separate words. The derived hash mixed `ref` as a boxed
+    // Long, whose hash was row ^ column (one hash per anti-diagonal) until ARef folded the row
+    // into its low word; mixing the two Ints directly stays spread whatever the packing and boxes
+    // nothing.
     override def hashCode: Int =
       import scala.util.hashing.MurmurHash3
       val withSheet = MurmurHash3.mix(MurmurHash3.productSeed, sheet.hashCode)

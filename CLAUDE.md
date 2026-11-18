@@ -78,7 +78,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 **Addressing** (`xl-core/src/com/tjclp/xl/addressing/`):
 - `Column`, `Row` → opaque Int (zero-overhead)
-- `ARef` → opaque Long (64-bit packed: `(row << 32) | col`)
+- `ARef` → opaque Long (64-bit packed: `(row << 32) | (col ^ (row << 14))`, so its hash spreads; #891)
 - `CellRange(start, end)` → normalized, inclusive range
 
 **Domain** (`xl-core/src/com/tjclp/xl/`):
@@ -341,7 +341,7 @@ All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtM
 ### 1. Opaque Types
 ```scala
 opaque type Column = Int   // Cannot mix Int as Column
-opaque type ARef = Long    // Packed: (row << 32) | col
+opaque type ARef = Long    // Packed: (row << 32) | (col ^ (row << 14))
 ```
 
 ### 2. Monoid Composition
@@ -407,9 +407,13 @@ sheet.toHtml(ref"A1:B10")  // HTML table with inline CSS
 
 ### ARef Packing
 ```scala
-// Pack: (row << 32) | (col & 0xFFFFFFFF)
+// Pack: (row << 32) | ((col ^ (row << 14)) & 0xFFFFFFFF)   unpack: col = low ^ (row << 14)
 // Valid: Column 0-16383 (A-XFD), Row 0-1048575 (1-1048576)
 ```
+The XOR is for hashing (#891): a `Long` hashes as `high ^ low`, which for `(row << 32) | col` is
+`row ^ col`, one hash per anti-diagonal of the sheet. Inside the grid the low word is
+`row << 14 | col`, so packed values still order row-major; the packing is a bijection on all `Int`
+pairs, off-grid refs included. Never decode the `Long` by hand: use `ref.row` / `ref.col`.
 
 ### Style Deduplication
 Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitting cells.
