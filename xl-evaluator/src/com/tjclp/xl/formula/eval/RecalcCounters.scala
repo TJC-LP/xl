@@ -62,10 +62,10 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph (`RecalcEngine.Legacy`) has no virtual or range nodes and
-   * does not count `GraphWork`; only it counts `RangeLookups` and `RangeLookupWork`. Every criteria
-   * call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed criterion also
-   * counts once as `CriteriaWindowOnly` or `CriteriaNotIndexable`.
+   * What a pass counts. Only the per-cell formula graph of targeted recalculation counts
+   * `RangeLookups` and `RangeLookupWork`. Every criteria call counts once as `CriteriaIndexed` or
+   * `CriteriaScan`; a call with no indexed criterion also counts once as `CriteriaWindowOnly` or
+   * `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -82,14 +82,14 @@ private[formula] object RecalcCounters:
 
     /**
      * Edges walked by the compact graph's passes: Tarjan, Kahn's in-degree count and order, and the
-     * reachability walks (blocked cells, the dynamic bucket, invalidation). 0 for the legacy graph.
+     * reachability walks (blocked cells, the dynamic bucket, invalidation).
      */
     case GraphWork
 
     /**
-     * Distinct (sheet, range) lookups the per-cell formula graph (`RecalcEngine.Legacy`, targeted
-     * recalculation) resolved against its formula-cell index: one per memo miss, so every formula
-     * sharing a driver range costs one (GH-522). 0 for the compact graph.
+     * Distinct (sheet, range) lookups the per-cell formula graph (targeted recalculation) resolved
+     * against its formula-cell index: one per memo miss, so every formula sharing a driver range
+     * costs one (GH-522). 0 for the compact graph.
      */
     case RangeLookups
 

@@ -323,19 +323,17 @@ object WorkbookEvaluator:
   private[formula] def recalculateCounted(
     wb: Workbook,
     options: RecalcOptions,
-    counters: RecalcCounters,
-    engine: RecalcEngine = RecalcEngine.Compact
+    counters: RecalcCounters
   ): RecalcResult =
-    recalculateOptionsImpl(wb, options, new Evaluator.AggregateMemo(counters = counters), engine)
+    recalculateOptionsImpl(wb, options, new Evaluator.AggregateMemo(counters = counters))
 
   /** `wb.recalculateUncached(options)` (what `Excel.writeChecked` runs) with `counters`. */
   private[formula] def recalculateUncachedCounted(
     wb: Workbook,
     options: RecalcOptions,
-    counters: RecalcCounters,
-    engine: RecalcEngine = RecalcEngine.Compact
+    counters: RecalcCounters
   ): RecalcResult =
-    recalculateUncachedImpl(wb, options, new Evaluator.AggregateMemo(counters = counters), engine)
+    recalculateUncachedImpl(wb, options, new Evaluator.AggregateMemo(counters = counters))
 
   /**
    * `wb.recalculate(options)` with the generation's aggregate memo supplied by the caller: the #767
@@ -367,8 +365,7 @@ object WorkbookEvaluator:
   private def recalculateOptionsImpl(
     wb: Workbook,
     options: RecalcOptions,
-    memo: Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    memo: Evaluator.AggregateMemo
   ): RecalcResult =
     val iterative = resolveIterative(wb, options)
     val base = iterative match
@@ -378,19 +375,17 @@ object WorkbookEvaluator:
           options.clock,
           Some(options.rng),
           Some(calc),
-          generationMemo = memo,
-          engine = engine
+          generationMemo = memo
         )
       case None if options.parallelism > 1 =>
-        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo, engine)
+        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo)
       case None =>
         recalculateImpl(
           wb,
           options.clock,
           Some(options.rng),
           None,
-          generationMemo = memo,
-          engine = engine
+          generationMemo = memo
         )
     if !options.seedTables then base
     else
@@ -409,8 +404,7 @@ object WorkbookEvaluator:
   private def recalculateUncachedImpl(
     wb: Workbook,
     options: RecalcOptions,
-    memo: Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    memo: Evaluator.AggregateMemo
   ): RecalcResult =
     val counters = memo.counters
     val uncached: Set[QualifiedRef] = wb.sheets.iterator.flatMap { sheet =>
@@ -422,7 +416,7 @@ object WorkbookEvaluator:
     else
       val calculationClock = pinnedCalculationClock(options.clock)
       val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
-        RecalcGraph.build(wb, engine, counters)
+        RecalcGraph.build(wb, counters)
       )
       // #790: evaluation reuses the build's parse of each formula
       memo.passCache.foreach(_.useParses(graph.parses))
@@ -549,8 +543,7 @@ object WorkbookEvaluator:
     rngOpt: Option[Rng],
     iterativeOpt: Option[IterativeCalc],
     parallelism: Int = 1,
-    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
   ): RecalcResult =
     // One recalculate call is one volatile calculation generation. The lazy snapshot preserves
     // the old no-volatile fast path (the supplied clock is never touched), while ensuring an
@@ -579,7 +572,7 @@ object WorkbookEvaluator:
     // the compact graph keeps one node per distinct range and per formula-column segment, so its
     // size is O((formulas + ranges) log rows), never O(formulas × range size).
     val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
-      RecalcGraph.build(wb, engine, counters)
+      RecalcGraph.build(wb, counters)
     )
     // #790: evaluation reuses the build's parse of each formula
     generationMemo.passCache.foreach(_.useParses(graph.parses))

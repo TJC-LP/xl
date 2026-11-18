@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.perf
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.{IterativeMode, RecalcCounters, RecalcEngine, RecalcOptions}
+import com.tjclp.xl.formula.eval.{IterativeMode, RecalcCounters, RecalcOptions}
 import com.tjclp.xl.formula.eval.RecalcCounters.{Counter, Phase}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator
 import com.tjclp.xl.formula.perf.LoadsBookHarness.Mode
@@ -169,13 +169,4 @@ class RecalcPerfGatesSpec extends FunSuite:
     // pieces per D_n, one reader edge each
     val log2 = 32 - Integer.numberOfLeadingZeros(rows)
     assert(run.counters(Counter.GraphEdges) <= 2L * rows * (log2 + 2), run.counters.render)
-    // the legacy graph: D_n reads C_2..C_n, 1 + 2 + ... + rows edges
-    val legacy = RecalcCounters.create()
-    WorkbookEvaluator.recalculateCounted(
-      LoadsBook.runTotal(rows),
-      RecalcOptions(iterative = IterativeMode.Off),
-      legacy,
-      RecalcEngine.Legacy
-    )
-    assertEquals(legacy.snapshot(Counter.GraphEdges), rows.toLong * (rows + 1) / 2)
   }

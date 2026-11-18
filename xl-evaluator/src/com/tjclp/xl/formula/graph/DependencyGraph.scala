@@ -1381,9 +1381,8 @@ object DependencyGraph:
    * the same collections in the same order, so the emitted order is unchanged: FIFO queue seeded in
    * `allNodes` iteration order, newly-ready nodes appended in the iteration order of the filtered
    * dependents set. #767: whole-workbook recalculation no longer orders with this FIFO (its seed
-   * order is the CHAMP hash order of the node set); it uses the grid-ordered
-   * [[canonicalTopologicalSort]] or `CompactGraph.kahn`, and re-lists a parallel pass's errors in
-   * that order.
+   * order is the CHAMP hash order of the node set); it uses the grid-ordered `CompactGraph.kahn`,
+   * and re-lists a parallel pass's errors in that order.
    */
   @SuppressWarnings(Array("org.wartremover.warts.While"))
   private def kahnOrder[K](
@@ -2047,41 +2046,6 @@ object DependencyGraph:
     dependents: Map[QualifiedRef, Set[QualifiedRef]]
   ): Either[Set[QualifiedRef], List[QualifiedRef]] =
     kahnOrder(dependencies, dependents)
-
-  /**
-   * #767: the canonical evaluation order of the workbook-level graph — Kahn's algorithm whose ready
-   * set is a min-heap in grid order ([[QualifiedRef.gridKey]]), i.e. the lexicographically smallest
-   * topological order. Its result is a function of the graph's value, never of Map/Set iteration
-   * order; `CompactGraph.kahn` emits the same order. Left carries the nodes it could not order.
-   * `RecalcEngine.Legacy` orders with it.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.While"))
-  private[formula] def canonicalTopologicalSort(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Either[Set[QualifiedRef], List[QualifiedRef]] =
-    val allNodes = dependencies.keySet
-    val inDegree = scala.collection.mutable.HashMap.empty[QualifiedRef, Int]
-    allNodes.foreach { node =>
-      inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
-    }
-    val ready = new java.util.PriorityQueue[QualifiedRef](
-      math.max(1, allNodes.size),
-      QualifiedRef.gridOrdering
-    )
-    allNodes.foreach(node => if inDegree(node) == 0 then ready.add(node))
-    val ordered = scala.collection.mutable.ListBuffer.empty[QualifiedRef]
-    while !ready.isEmpty do
-      val node = ready.poll()
-      ordered += node
-      dependents.getOrElse(node, Set.empty).foreach { dep =>
-        if allNodes.contains(dep) then
-          val remaining = inDegree(dep) - 1
-          inDegree(dep) = remaining
-          if remaining == 0 then ready.add(dep)
-      }
-    if ordered.size == allNodes.size then scala.util.Right(ordered.toList)
-    else scala.util.Left(allNodes -- ordered)
 
   /** Unbounded range expansion — the original `fromWorkbook` semantics. */
   private val unboundedQualifiedCells: (SheetName, CellRange) => Set[QualifiedRef] =

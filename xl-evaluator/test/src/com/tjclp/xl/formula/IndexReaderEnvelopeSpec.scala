@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.{RecalcCounters, RecalcEngine, RecalcOptions, WorkbookEvaluator}
+import com.tjclp.xl.formula.eval.{RecalcCounters, RecalcOptions, WorkbookEvaluator}
 import com.tjclp.xl.formula.functions.{FunctionSpec, ReferenceOperators}
 import com.tjclp.xl.formula.functions.ReferenceOperators.{Envelope, Operand}
 import com.tjclp.xl.formula.graph.CompactGraph
@@ -51,14 +51,13 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
     assertEquals(bySheet, legacy.nonEmpty, "sheet graph vs legacy")
     legacy
 
-  private def recalc(sheet: Sheet, engine: RecalcEngine): Map[ARef, CellValue] =
+  private def recalc(sheet: Sheet): Map[ARef, CellValue] =
     val result = WorkbookEvaluator.recalculateCounted(
       Workbook(Vector(sheet)),
       RecalcOptions(),
-      RecalcCounters.disabled,
-      engine
+      RecalcCounters.disabled
     )
-    assertEquals(result.errors, Vector.empty, s"$engine errors")
+    assertEquals(result.errors, Vector.empty, "errors")
     result.evaluated.getOrElse(name, Map.empty)
 
   private val issue: Sheet =
@@ -72,9 +71,7 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
 
   test("#743: B5 = SUM(B1:INDEX(B:B,ROW()-1)) is acyclic in every graph and sums B1:B4") {
     assertEquals(cyclic(issue), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      assertEquals(recalc(issue, engine).get(at("B5")), Some(N(10)), engine.toString)
-    }
+    assertEquals(recalc(issue).get(at("B5")), Some(N(10)))
   }
 
   test("#743: the edges are B1:B4, in the workbook graph and the edit-cone index") {
@@ -103,11 +100,9 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       "D3" -> F("INDEX($A$3:$Z$3,1,COLUMN()-1)*2")
     )
     assertEquals(cyclic(row), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      val values = recalc(row, engine)
-      assertEquals(values.get(at("C3")), Some(N(11)), engine.toString)
-      assertEquals(values.get(at("D3")), Some(N(22)), engine.toString)
-    }
+    val values = recalc(row)
+    assertEquals(values.get(at("C3")), Some(N(11)))
+    assertEquals(values.get(at("D3")), Some(N(22)))
   }
 
   test("#743: a 1,000-row running-total column computes with no cycle") {
@@ -121,12 +116,10 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
           .put(ARef.from1(3, r), F("MAX(C$1:INDEX(C:C,ROW()-1))+1"))
     }
     assertEquals(cyclic(sheet), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      val values = recalc(sheet, engine)
-      assertEquals(values.get(ARef.from1(2, rows)), Some(N(rows * (rows + 1) / 2)), s"$engine B")
-      assertEquals(values.get(ARef.from1(3, rows)), Some(N(rows)), s"$engine C")
-      assertEquals(values.get(ARef.from1(2, 500)), Some(N(500 * 501 / 2)), s"$engine B500")
-    }
+    val values = recalc(sheet)
+    assertEquals(values.get(ARef.from1(2, rows)), Some(N(rows * (rows + 1) / 2)), "B")
+    assertEquals(values.get(ARef.from1(3, rows)), Some(N(rows)), "C")
+    assertEquals(values.get(ARef.from1(2, 500)), Some(N(500 * 501 / 2)), "B500")
   }
 
   test("#743 limit: INDEX under a `:` operand not fixed for the reader, or in a name, keeps B:B") {

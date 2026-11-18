@@ -12,30 +12,36 @@ import munit.ScalaCheckSuite
 import org.scalacheck.{Gen, Prop}
 
 /**
- * #767: `RecalcEngine.Compact` and `RecalcEngine.Legacy` give the same `RecalcResult` on every path
- * — sequential (with a seeded RAND, whose draws follow evaluation order), parallel,
- * `recalculateUncached`, and iterative under both schemes — and the order is the canonical one:
- * error vectors in grid order, parallel equal to sequential.
+ * #767/#891: the recalculation order is canonical. A result depends only on the workbook's value:
+ * the same whatever order its cells were inserted in (sequential with a seeded RAND, whose draws
+ * follow evaluation order, and iterative under both schemes); a parallel pass equals the sequential
+ * one; error vectors list in grid order. (Until #891 these laws compared the compact graph against
+ * a second, per-cell engine, which is gone.)
  */
-class RecalcEngineParitySpec extends ScalaCheckSuite:
+class RecalcOrderLawSpec extends ScalaCheckSuite:
 
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(80)
 
   private val clock = Clock.fixedDate(java.time.LocalDate.of(2026, 1, 2))
 
-  private def same(compact: RecalcResult, legacy: RecalcResult, label: String): Prop =
+  private def same(a: RecalcResult, b: RecalcResult, label: String): Prop =
     Prop.all(
-      Prop(
-        compact.errors == legacy.errors
-      ) :| s"$label errors\n${compact.errors}\n${legacy.errors}",
-      Prop(compact.evaluated == legacy.evaluated) :| s"$label evaluated",
-      Prop(compact.workbook == legacy.workbook) :| s"$label workbook",
-      Prop(compact.errorReasons == legacy.errorReasons) :| s"$label reasons",
-      Prop(compact.converged == legacy.converged) :| s"$label converged",
-      Prop(compact.iterationsUsed == legacy.iterationsUsed) :| s"$label rounds",
-      Prop(compact.cycles == legacy.cycles) :| s"$label cycles"
+      Prop(a.errors == b.errors) :| s"$label errors\n${a.errors}\n${b.errors}",
+      Prop(a.evaluated == b.evaluated) :| s"$label evaluated",
+      Prop(a.workbook == b.workbook) :| s"$label workbook",
+      Prop(a.errorReasons == b.errorReasons) :| s"$label reasons",
+      Prop(a.converged == b.converged) :| s"$label converged",
+      Prop(a.iterationsUsed == b.iterationsUsed) :| s"$label rounds",
+      Prop(a.cycles == b.cycles) :| s"$label cycles"
     )
+
+  /** The same workbook with every sheet's cells inserted in a seeded shuffled order. */
+  private def shuffled(wb: Workbook, seed: Long): Workbook =
+    val rnd = new scala.util.Random(seed)
+    wb.copy(sheets = wb.sheets.map { s =>
+      s.copy(cells = rnd.shuffle(s.cells.toVector).foldLeft(Map.empty[ARef, Cell])(_ + _))
+    })
 
   /** The random graph books plus a few seeded RAND readers, so evaluation order is observable. */
   private val genBook: Gen[Workbook] =
@@ -50,25 +56,20 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
       }
     }
 
-  private def run(engine: RecalcEngine, options: RecalcOptions)(wb: Workbook): RecalcResult =
-    recalculateCounted(wb, options, RecalcCounters.disabled, engine)
+  private def run(options: RecalcOptions)(wb: Workbook): RecalcResult =
+    recalculateCounted(wb, options, RecalcCounters.disabled)
 
-  property("sequential with a seeded Rng: Compact equals Legacy") {
-    Prop.forAll(genBook) { wb =>
+  property("sequential with a seeded Rng: the result ignores the cells' insertion order") {
+    Prop.forAll(genBook, Gen.choose(0L, 1000L)) { (wb, seed) =>
       def opts = RecalcOptions(clock = clock, rng = Rng.seeded(7L), iterative = IterativeMode.Off)
-      same(run(RecalcEngine.Compact, opts)(wb), run(RecalcEngine.Legacy, opts)(wb), "sequential")
+      same(run(opts)(wb), run(opts)(shuffled(wb, seed)), "sequential")
     }
   }
 
-  property("parallel: Compact equals Legacy, and equals the sequential pass") {
+  property("parallel equals the sequential pass") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val par = RecalcOptions(clock = clock, iterative = IterativeMode.Off, parallelism = 3)
-      val seq = par.copy(parallelism = 1)
-      val compact = run(RecalcEngine.Compact, par)(wb)
-      Prop.all(
-        same(compact, run(RecalcEngine.Legacy, par)(wb), "parallel"),
-        same(compact, run(RecalcEngine.Compact, seq)(wb), "parallel vs sequential")
-      )
+      same(run(par)(wb), run(par.copy(parallelism = 1))(wb), "parallel vs sequential")
     }
   }
 
@@ -77,7 +78,7 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
 
   /** The widest wave a parallel recalculation of `wb` would run (its cyclic core removed). */
   private def widestWave(wb: Workbook): Int =
-    val graph = RecalcGraph.build(wb, RecalcEngine.Compact, RecalcCounters.disabled)
+    val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
     val core = graph.cyclicCore
     val removed = core ++ graph.dependents(core, Set.empty)
     graph.order(removed).fold(_ => 0, o => o.waves(o.order).map(_.length).maxOption.getOrElse(0))
@@ -88,38 +89,25 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
     assert(books.count(widestWave(_) >= 16) >= books.size / 2, books.map(widestWave).toString)
   }
 
-  property("parallel over tall books: Compact equals Legacy and the sequential pass") {
+  property("parallel over tall books equals the sequential pass") {
     Prop.forAll(genTall) { wb =>
       val par = RecalcOptions(clock = clock, iterative = IterativeMode.Off, parallelism = 4)
-      val seq = par.copy(parallelism = 1)
-      val compact = run(RecalcEngine.Compact, par)(wb)
-      Prop.all(
-        same(compact, run(RecalcEngine.Legacy, par)(wb), "parallel"),
-        same(compact, run(RecalcEngine.Compact, seq)(wb), "parallel vs sequential")
-      )
+      same(run(par)(wb), run(par.copy(parallelism = 1))(wb), "parallel vs sequential")
     }
   }
 
-  property("recalculateUncached: Compact equals Legacy") {
-    Prop.forAll(genBook) { wb =>
-      def opts = RecalcOptions(clock = clock, rng = Rng.seeded(7L), iterative = IterativeMode.Off)
-      same(
-        recalculateUncachedCounted(wb, opts, RecalcCounters.disabled, RecalcEngine.Compact),
-        recalculateUncachedCounted(wb, opts, RecalcCounters.disabled, RecalcEngine.Legacy),
-        "uncached"
+  property("iterative, Gauss-Seidel and Jacobi: the result ignores the cells' insertion order") {
+    Prop.forAll(
+      genBook,
+      Gen.oneOf(IterationScheme.GaussSeidel, IterationScheme.Jacobi),
+      Gen.choose(0L, 1000L)
+    ) { (wb, scheme, seed) =>
+      def opts = RecalcOptions(
+        clock = clock,
+        rng = Rng.seeded(11L),
+        iterative = IterativeMode.Force(IterativeCalc(25, BigDecimal("0.001"), scheme = scheme))
       )
-    }
-  }
-
-  property("iterative, Gauss-Seidel and Jacobi: Compact equals Legacy") {
-    Prop.forAll(genBook, Gen.oneOf(IterationScheme.GaussSeidel, IterationScheme.Jacobi)) {
-      (wb, scheme) =>
-        def opts = RecalcOptions(
-          clock = clock,
-          rng = Rng.seeded(11L),
-          iterative = IterativeMode.Force(IterativeCalc(25, BigDecimal("0.001"), scheme = scheme))
-        )
-        same(run(RecalcEngine.Compact, opts)(wb), run(RecalcEngine.Legacy, opts)(wb), s"$scheme")
+      same(run(opts)(wb), run(opts)(shuffled(wb, seed)), s"$scheme")
     }
   }
 
@@ -143,19 +131,17 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
         sheet("B", "A3" -> fx("A3*2"), "B1" -> fx("A3"))
       )
     )
-    Vector(RecalcEngine.Compact, RecalcEngine.Legacy).foreach { engine =>
-      val opts = RecalcOptions(clock = clock, iterative = IterativeMode.Off)
-      val errors = run(engine, opts)(wb).errors.map(e => s"${e.sheet.value}!${e.ref.toA1}")
-      // circular first, then blocked; each in (sheet name, row, column) order
-      assertEquals(errors, Vector("B!A3", "b!A2", "b!A10", "B!B1", "b!C1"), engine.toString)
-    }
+    val opts = RecalcOptions(clock = clock, iterative = IterativeMode.Off)
+    val errors = run(opts)(wb).errors.map(e => s"${e.sheet.value}!${e.ref.toA1}")
+    // circular first, then blocked; each in (sheet name, row, column) order
+    assertEquals(errors, Vector("B!A3", "b!A2", "b!A10", "B!B1", "b!C1"))
   }
 
   test("a seeded RAND draws in grid order whatever the cells' insertion order") {
     val cells = (1 to 12).reverse.map(r => s"A$r" -> fx("RAND()"))
     val wb = Workbook(Vector(sheet("S", cells*)))
     val opts = RecalcOptions(clock = clock, rng = Rng.seeded(3L), iterative = IterativeMode.Off)
-    val result = run(RecalcEngine.Compact, opts)(wb)
+    val result = run(opts)(wb)
     val rng = Rng.seeded(3L)
     val expected = (1 to 12).map(_ => rng.nextDouble())
     val actual = (1 to 12).map { r =>
@@ -180,12 +166,8 @@ class RecalcEngineParitySpec extends ScalaCheckSuite:
       )
     }
     val wb = Workbook(Vector(sheet("P", cells*)))
-    val seq =
-      run(RecalcEngine.Compact, RecalcOptions(clock = clock, iterative = IterativeMode.Off))(wb)
-    val par = run(
-      RecalcEngine.Compact,
-      RecalcOptions(clock = clock, iterative = IterativeMode.Off, parallelism = 4)
-    )(wb)
+    val seq = run(RecalcOptions(clock = clock, iterative = IterativeMode.Off))(wb)
+    val par = run(RecalcOptions(clock = clock, iterative = IterativeMode.Off, parallelism = 4))(wb)
     assertEquals(par.errors, seq.errors)
     val listed = seq.errors.map(e => QualifiedRef(e.sheet, e.ref))
     assertEquals(listed, listed.sortBy(QualifiedRef.gridKey))
