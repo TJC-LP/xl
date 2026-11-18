@@ -360,7 +360,13 @@ class ClearCommandSpec extends FunSuite:
       assertEquals(style.map(_.border), Some(numStyle.border), s"${r.toA1}: border")
     }
 
-  private def clearVerb(range: String, all: Boolean = false, stream: Boolean = false): Sheet =
+  private def clearVerb(
+    range: String,
+    all: Boolean = false,
+    stream: Boolean = false,
+    styles: Boolean = false,
+    comments: Boolean = false
+  ): Sheet =
     val sheet = template
     CellCommands
       .clear(
@@ -368,8 +374,8 @@ class ClearCommandSpec extends FunSuite:
         Some(sheet),
         range,
         all = all,
-        styles = false,
-        comments = false,
+        styles = styles,
+        comments = comments,
         outputPath,
         config,
         stream = stream
@@ -432,6 +438,50 @@ class ClearCommandSpec extends FunSuite:
       .head
     dataRange.cells.foreach(r => assertEquals(all.cells.get(r), None, r.toA1))
     assertEquals(all.mergedRanges, Set.empty[CellRange])
+  }
+
+  // ========== GH-894: --styles is Excel's Clear Formats, which unmerges ==========
+
+  test("GH-894 clear --styles: unmerges the merge it touches and keeps the value") {
+    val s = clearVerb("A1", styles = true)
+    assertEquals(s.mergedRanges, Set.empty[CellRange])
+    assertEquals(
+      s.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Text("Quarterly report"))
+    )
+    assertNotEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
+  }
+
+  test("GH-894 clear --styles: a range that only overlaps the merge unmerges it too") {
+    assertEquals(clearVerb("C1:D2", styles = true).mergedRanges, Set.empty[CellRange])
+  }
+
+  test("GH-894 clear --styles --stream: unmerges too") {
+    assertEquals(clearVerb("A1", styles = true, stream = true).mergedRanges, Set.empty[CellRange])
+  }
+
+  test("GH-894 clear --comments: keeps the merge (comments are not formatting)") {
+    assertEquals(clearVerb("A1", comments = true).mergedRanges, Set(titleRange))
+  }
+
+  test("GH-894 batch clear styles=true: unmerges; comments=true keeps the merge") {
+    def run(styles: Boolean, comments: Boolean): Sheet =
+      BatchParser
+        .applyBatchOperations(
+          Workbook(template),
+          None,
+          Vector(BatchOp.Clear("Summary!A1", all = false, styles = styles, comments = comments))
+        )
+        .unsafeRunSync()
+        .sheets
+        .head
+    val styled = run(styles = true, comments = false)
+    assertEquals(styled.mergedRanges, Set.empty[CellRange])
+    assertEquals(
+      styled.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Text("Quarterly report"))
+    )
+    assertEquals(run(styles = false, comments = true).mergedRanges, Set(titleRange))
   }
 
   test("GH-886 clear: a hyperlink goes with the contents; its cell keeps its formatting") {

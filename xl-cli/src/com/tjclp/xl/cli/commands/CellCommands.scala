@@ -95,7 +95,8 @@ object CellCommands:
    *     hyperlinks go; number formats, fonts, fills, borders and merges stay (GH-886)
    *   - --all: Clear contents, styles, and comments; removes the cells and unmerges any merged
    *     region the range touches
-   *   - --styles: Clear styles only (reset styleId to None)
+   *   - --styles: Clear styles only (reset styleId to None) and unmerge any merged region the range
+   *     touches, as Excel's Clear Formats (GH-894)
    *   - --comments: Clear comments only
    *
    * Flags can be combined (e.g., --styles --comments clears both).
@@ -149,10 +150,11 @@ object CellCommands:
       sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
 
-      // GH-886: a merge is formatting. A contents clear keeps it (Excel's Clear Contents does);
-      // --all unmerges every merged region the range touches, as before.
+      // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it (Excel's
+      // Clear Contents does); --styles and --all unmerge every merged region the range touches,
+      // as Excel's Clear Formats and Clear All do.
       sheet4 =
-        if all then
+        if clearStyles then
           val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
           overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
         else sheet3

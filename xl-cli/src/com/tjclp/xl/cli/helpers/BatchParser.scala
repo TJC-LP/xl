@@ -2314,7 +2314,8 @@ object BatchParser:
    * clear takes a cleared anchor's whole spill and leaves the cells of a live spill whose anchor
    * stays as they were, returned for the `SPILL_CELLS_SKIPPED` warning
    * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`). GH-886 — a contents clear keeps
-   * formatting and merges; `all` drops the cells and unmerges what the range touches.
+   * formatting and merges; `all` drops the cells and unmerges what the range touches. GH-894 —
+   * `styles` unmerges what the range touches too, as Excel's Clear Formats does.
    */
   private def applyClear(
     wb: Workbook,
@@ -2347,8 +2348,9 @@ object BatchParser:
         val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
 
-        // GH-886: a contents clear keeps merges and formatting; only `all` unmerges
-        if all then
+        // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it; a
+        // styles clear (`styles` or `all`) unmerges, as Excel's Clear Formats does.
+        if clearStyles then
           val overlapping = s3.mergedRanges.filter(_.intersects(range))
           overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
         else s3

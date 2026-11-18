@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
+  and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
+  the range touches, as `--all` already did. A contents clear (no flags) and `--comments` still
+  keep merges. **Behaviour change:** on a sheet where A1:F1 is a merged title "Sample Co" in
+  Georgia 16 bold, `clear A1 --styles` leaves A1 holding "Sample Co" with default formatting and
+  A1:F1 no longer merged (was still merged).
+
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
   the values and formulas and drops the cell's hyperlink, but keeps its number format, font,
