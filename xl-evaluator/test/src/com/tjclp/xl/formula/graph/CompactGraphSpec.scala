@@ -112,6 +112,38 @@ class CompactGraphSpec extends ScalaCheckSuite:
     }
   }
 
+  /** The upstream walk over the legacy graph: precedent formulas of `seeds`, never past `stop`. */
+  private def naivePrecedents(
+    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    seeds: Set[QualifiedRef],
+    stop: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    @scala.annotation.tailrec
+    def go(frontier: List[QualifiedRef], seen: Set[QualifiedRef]): Set[QualifiedRef] =
+      frontier match
+        case Nil => seen
+        case q :: rest =>
+          val expand = !(stop.contains(q) && !seeds.contains(q))
+          val next =
+            if expand then deps.getOrElse(q, Set.empty).filter(deps.contains) else Set.empty
+          val fresh = next -- seen
+          go(fresh.toList ++ rest, seen ++ next)
+    go(seeds.toList, Set.empty)
+
+  property("#891 precedent closure: the legacy upstream walk, stopping at the stop set") {
+    Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
+      val f = fixture(wb)
+      val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
+      val seeds = all.zipWithIndex.collect { case (q, i) if i % 4 == 0 => q }.toSet
+      val stop = all.zipWithIndex.collect { case (q, i) if i % 4 == 1 => q }.toSet
+      val legacy = naivePrecedents(f.deps, seeds, stop)
+      val compact = f.refs(f.graph.precedentClosure(f.ids(seeds), f.ids(stop)).formulas)
+      Prop(
+        compact == legacy
+      ) :| s"compact-only ${compact -- legacy}\nlegacy-only ${legacy -- compact}"
+    }
+  }
+
   property("cycles: the cyclic formulas equal the legacy graph's") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val f = fixture(wb)

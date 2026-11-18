@@ -182,6 +182,81 @@ private[formula] final class CompactGraph private (
     Reach((found --= seeds).toImmutable, work)
 
   /**
+   * #891: the transpose of the edge array — for each node, the nodes it reads from — as one CSR
+   * pair (`predOff` of length `nodeCount + 1`, `predDst`), built by a counting pass and a prefix
+   * sum. Derived from the graph's value on first use; the graph stays immutable.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private lazy val predecessors: (IArray[Int], IArray[Int]) =
+    val n = nodeCount
+    val off = new Array[Int](n + 1)
+    var e = 0
+    while e < succDst.length do
+      off(succDst(e) + 1) += 1
+      e += 1
+    var k = 0
+    while k < n do
+      off(k + 1) += off(k)
+      k += 1
+    val dst = new Array[Int](succDst.length)
+    val fill = java.util.Arrays.copyOf(off, n)
+    var u = 0
+    while u < n do
+      var i = succOff(u)
+      val end = succOff(u + 1)
+      while i < end do
+        val v = succDst(i)
+        dst(fill(v)) = u
+        fill(v) += 1
+        i += 1
+      u += 1
+    (IArray.unsafeFromArray(off), IArray.unsafeFromArray(dst))
+
+  /**
+   * #891: every formula `seeds` (formula ids) read, directly or transitively, the seeds excluded
+   * unless a cycle leads back to them — the upstream mirror of [[reach]]. A formula of `stop` is
+   * listed when reached but its own precedents are not walked (a data table's substituted input).
+   * Virtual nodes are walked through: a range node reads the segments and formulas that make it up,
+   * so a formula reached through a range is every formula inside the range.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def precedentClosure(seeds: BitSet, stop: BitSet): Reach =
+    val (predOff, predDst) = predecessors
+    val n = nodeCount
+    val f = formulaCount
+    val visited = new Array[Boolean](n)
+    val queue = new Array[Int](n)
+    var head = 0
+    var tail = 0
+    seeds.foreach { s =>
+      if s >= 0 && s < f && !visited(s) then
+        visited(s) = true
+        queue(tail) = s
+        tail += 1
+    }
+    val found = mutable.BitSet.empty
+    var work = 0L
+    while head < tail do
+      val u = queue(head)
+      head += 1
+      if !(u < f && stop.contains(u) && !seeds.contains(u)) then
+        var e = predOff(u)
+        val end = predOff(u + 1)
+        while e < end do
+          val p = predDst(e)
+          work += 1
+          if !visited(p) then
+            visited(p) = true
+            queue(tail) = p
+            tail += 1
+            if p < f then found += p
+          else if p < f && seeds.contains(p) then found += p
+          e += 1
+      // a formula that reads itself is its own precedent
+      if u < f && readsItself(u) then found += u
+    Reach(found.toImmutable, work)
+
+  /**
    * The canonical evaluation order of every formula outside `removed`: Kahn's algorithm with a
    * min-heap on formula id, i.e. the lexicographically smallest topological order in grid order
    * (design §3.4).
