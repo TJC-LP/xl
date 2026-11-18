@@ -1815,17 +1815,11 @@ object DependencyGraph:
    * qualified analog of `cyclicNodes`, sharing the iterative (stack-safe) Tarjan engine. Detects
    * cycles that span sheets, which per-sheet analysis cannot see.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def qualifiedCyclicNodes(
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Set[QualifiedRef] =
-    var cyclic = Set.empty[QualifiedRef]
-    foreachSccOf(dependencies) {
-      case single :: Nil =>
-        if dependencies.get(single).exists(_.contains(single)) then cyclic = cyclic + single
-      case multi => cyclic = cyclic ++ multi
-    }
-    cyclic
+    val csr = QualifiedCsr.of(dependencies)
+    csr.components.cyclic.iterator.map(csr.nodes.qualified).toSet
 
   /**
    * GH-492: one node of the SCC condensation of the workbook-level graph.
@@ -1863,68 +1857,73 @@ object DependencyGraph:
    * Tarjan also visits constants reached as successors, and those are always singletons with no
    * outgoing edges, so filtering them out can never split a real component.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def qualifiedSccOrder(
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Vector[Scc] =
-    var collected = Vector.empty[Scc]
-    foreachSccOf(dependencies) { scc =>
-      val cyclic = scc match
-        case single :: Nil => dependencies.get(single).exists(_.contains(single))
-        case _ => true
-      val kept = scc.filter(dependencies.contains)
-      if kept.nonEmpty then
-        collected = collected :+ Scc(kept.toVector.sortBy(QualifiedRef.gridKey), cyclic)
-    }
-    val comps = collected
-    if comps.isEmpty then Vector.empty
-    else
-      val compOf: Map[QualifiedRef, Int] =
-        comps.zipWithIndex.flatMap((c, i) => c.members.map(_ -> i)).toMap
-      // Condensation edges, deduplicated, self-edges dropped: `precedentsOf(i)` are the components
-      // i reads, `dependentsOf(i)` the components that read i.
-      val (precedentsOf, dependentsOf) =
-        comps.zipWithIndex.foldLeft((Map.empty[Int, Set[Int]], Map.empty[Int, Set[Int]])) {
-          case (acc, (c, i)) =>
-            c.members.foldLeft(acc) { case (acc2, u) =>
-              dependencies.getOrElse(u, Set.empty).foldLeft(acc2) { case ((pre, dep), v) =>
-                compOf.get(v) match
-                  case Some(j) if j != i =>
-                    (
-                      pre.updated(i, pre.getOrElse(i, Set.empty) + j),
-                      dep.updated(j, dep.getOrElse(j, Set.empty) + i)
-                    )
-                  case _ => (pre, dep)
-              }
-            }
+    val csr = QualifiedCsr.of(dependencies)
+    SccKernel
+      .condensation(csr.size, csr.size, csr.succOff, csr.succDst, csr.components)
+      .map((members, cyclic) => Scc(members.iterator.map(csr.nodes.qualified).toVector, cyclic))
+
+  /**
+   * #891: a workbook-level dependency map as dense ids and one CSR edge array, the input of
+   * [[SccKernel]].
+   *
+   * The nodes are the map's KEYS (the formula cells), numbered in grid order ([[NodeTable.of]]), so
+   * comparing ids compares [[QualifiedRef.gridKey]]s. An edge runs from each precedent to its
+   * reader; an edge to a cell that is not a key is dropped (a constant reads nothing, so it is a
+   * singleton component that can never join a cycle), and a key that reads itself is a self-loop
+   * bit rather than an edge.
+   */
+  private final class QualifiedCsr(
+    val nodes: NodeTable,
+    val succOff: IArray[Int],
+    val succDst: IArray[Int],
+    val selfLoops: scala.collection.immutable.BitSet
+  ):
+    def size: Int = nodes.formulaCount
+    lazy val components: CompactGraph.Components =
+      SccKernel.tarjan(size, size, succOff, succDst, selfLoops)
+
+  private object QualifiedCsr:
+    @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+    def of(dependencies: Map[QualifiedRef, Set[QualifiedRef]]): QualifiedCsr =
+      val nodes = NodeTable.of(dependencies.keySet)
+      val n = nodes.formulaCount
+      val src = new IntBuf(math.max(16, n))
+      val dst = new IntBuf(math.max(16, n))
+      val selfLoops = scala.collection.mutable.BitSet.empty
+      val outCount = new Array[Int](n + 1)
+      dependencies.foreach { (reader, reads) =>
+        val r = nodes.lookup(reader).getOrElse(-1)
+        reads.foreach { precedent =>
+          val p = if precedent == reader then r else nodes.lookup(precedent).getOrElse(-1)
+          if p >= 0 then
+            if p == r then selfLoops += r
+            else
+              src += p
+              dst += r
+              outCount(p + 1) += 1
         }
-      // Kahn over the condensation with a key-ordered frontier: the topological order is then a
-      // pure function of the graph's value, not of Map/Set iteration order (small Scala Maps and
-      // Sets are insertion-ordered, which is exactly where test fixtures live).
-      val byKey: Ordering[Int] = Ordering.by(i => (comps(i).key, i))
-      val emptyFrontier = scala.collection.immutable.TreeSet.empty[Int](using byKey)
-      val degree0 = comps.indices.map(i => i -> precedentsOf.getOrElse(i, Set.empty).size).toMap
-      val initial =
-        emptyFrontier ++ comps.indices.filter(i => precedentsOf.getOrElse(i, Set.empty).isEmpty)
-
-      @tailrec
-      def drain(
-        frontier: scala.collection.immutable.TreeSet[Int],
-        degree: Map[Int, Int],
-        acc: Vector[Int]
-      ): Vector[Int] =
-        frontier.headOption match
-          case None => acc
-          case Some(i) =>
-            val (nextDegree, newlyReady) =
-              dependentsOf.getOrElse(i, Set.empty).foldLeft((degree, emptyFrontier)) {
-                case ((d, ready), j) =>
-                  val remaining = d.getOrElse(j, 0) - 1
-                  (d.updated(j, remaining), if remaining == 0 then ready + j else ready)
-              }
-            drain((frontier - i) ++ newlyReady, nextDegree, acc :+ i)
-
-      drain(initial, degree0, Vector.empty).map(comps)
+      }
+      var k = 0
+      while k < n do
+        outCount(k + 1) += outCount(k)
+        k += 1
+      val succDst = new Array[Int](src.length)
+      val fill = java.util.Arrays.copyOf(outCount, n)
+      var e = 0
+      while e < src.length do
+        val p = src(e)
+        succDst(fill(p)) = dst(e)
+        fill(p) += 1
+        e += 1
+      new QualifiedCsr(
+        nodes,
+        IArray.unsafeFromArray(outCount),
+        IArray.unsafeFromArray(succDst),
+        selfLoops.toImmutable
+      )
 
   /**
    * GH-482: the order in which ONE cyclic component's members evaluate inside a Gauss–Seidel round
