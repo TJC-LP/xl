@@ -1970,8 +1970,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                   acc :+ (range, sheet)
                 }
               case (Right(acc), Right(expr)) =>
-                // Expression argument - collect ranges from AST
-                val exprRanges = TExpr.collectRanges(expr)
+                // Expression argument - collect ranges from AST. #755: a computed reference whose
+                // range is known before evaluation counts as that range, not as the range it is
+                // computed from (A2:INDEX(A:A,1048576) as A2:A1048576, not A:A), so the bound and
+                // the blank tail see the rows it reads
+                val exprRanges = TExpr.collectRanges(SumProductTail.writtenReferences(expr))
                 exprRanges
                   .foldLeft[Either[EvalError, List[(CellRange, com.tjclp.xl.sheets.Sheet)]]](
                     Right(acc)

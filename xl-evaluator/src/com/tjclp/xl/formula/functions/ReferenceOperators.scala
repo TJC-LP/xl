@@ -802,6 +802,24 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
       )
     case Right(expr) => expressionEnvelope(expr, shapeOf, at)
 
+  /**
+   * #755: the one static range a reference-returning call denotes before it is evaluated, for the
+   * formula at `at`: INDEX at positions that fold ([[indexEnvelope]], Excel's 0 the whole axis:
+   * `INDEX(A:A,0)` is `A:A`), and a `:` range whose operands are such (`A1:INDEX(A:A,1048576)` is
+   * `A1:A1048576`). None when only evaluation knows it (OFFSET, INDIRECT, XLOOKUP, a position read
+   * from a cell), or when it denotes several areas or none.
+   */
+  private[formula] def exactReference(
+    call: TExpr.Call[?],
+    at: Option[ARef]
+  ): Option[(Option[SheetName], CellRange)] =
+    expressionEnvelope(call, staticShape, at) match
+      case Envelope.Exact(Vector(leaf), _) => Some(leaf)
+      // a range's two operands are its corners: it reads their bounding range
+      case exact @ Envelope.Exact(_, _) if RangeOperatorCall.unapply(call).isDefined =>
+        asArea(exact).map((sheet, range, _) => (sheet, range))
+      case _ => None
+
   private def expressionEnvelope(
     expr: TExpr[?],
     shapeOf: ShapeOf,
