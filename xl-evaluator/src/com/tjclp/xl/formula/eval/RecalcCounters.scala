@@ -62,10 +62,10 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. Only the per-cell formula graph of targeted recalculation counts
-   * `RangeLookups` and `RangeLookupWork`. Every criteria call counts once as `CriteriaIndexed` or
-   * `CriteriaScan`; a call with no indexed criterion also counts once as `CriteriaWindowOnly` or
-   * `CriteriaNotIndexable`.
+   * What a pass counts. No recalculation counts `RangeLookups` or `RangeLookupWork` since #891:
+   * only the per-cell formula graph (`fromWorkbookFormulaGraph`, now a test oracle) does. Every
+   * criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed
+   * criterion also counts once as `CriteriaWindowOnly` or `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -87,9 +87,9 @@ private[formula] object RecalcCounters:
     case GraphWork
 
     /**
-     * Distinct (sheet, range) lookups the per-cell formula graph (targeted recalculation) resolved
-     * against its formula-cell index: one per memo miss, so every formula sharing a driver range
-     * costs one (GH-522). 0 for the compact graph.
+     * Distinct (sheet, range) lookups the per-cell formula graph resolved against its formula-cell
+     * index: one per memo miss, so every formula sharing a driver range costs one (GH-522). 0 for
+     * the compact graph.
      */
     case RangeLookups
 
