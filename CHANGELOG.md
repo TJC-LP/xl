@@ -152,8 +152,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. (`ARef` keys are fixed
   under Changed.)
 
-- **`xl audit` on real models: 214 s to 84.6 s, 169 s to 11.2 s, 113 s to 30.9 s** (#891,
-  native binary, macOS arm64, same findings and notes). Data-oriented rewrites, no caches:
+- **`xl audit` on real models: 206.7 s to 84.6 s, 228.6 s to 11.2 s, 92.0 s to 30.9 s** (#891;
+  the 0.26.0 release binary against a native build of this change, macOS arm64, one serial run
+  each, same findings and notes). Data-oriented rewrites, no caches:
   - the workbook SCC condensation (`qualifiedSccOrder`, `qualifiedCyclicNodes`) numbers the
     formula cells once in grid order and runs Tarjan and the key-minimum condensation over one
     CSR edge array, sharing the compact graph's kernel (`SccKernel`); it rebuilt two immutable
@@ -164,7 +165,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - a criteria range read cell by cell (SUMIFS and friends outside a recalculation pass) indexes
     by offset arithmetic instead of copying the range into a `Vector` of boxed refs per call;
   - a data table's cycle members parse once per table instead of once per sampled cell.
-  On the three books, JVM: 80.3 s to 25.6 s, 15.1 s to 3.9 s, 17.2 s to 7.2 s. What remains on
+  On the three books, JVM, from the `QualifiedRef` fix above: 82.3 s to 25.6 s, 14.5 s to 3.9 s,
+  17.0 s to 7.2 s. What remains on
   the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
   `--skip-data-tables` (under Added) audits it in 2.6 s.
 

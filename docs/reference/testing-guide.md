@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #891 audit-performance stack (on #893), 2026-11-18 recorded **10,180 cases**: 10,180 passed, 0 failed, 0 skipped.
+**Current Status**: the #891 audit-performance stack (on #893), 2026-11-18 recorded **10,180 cases**: 10,180 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -281,7 +281,7 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #891 audit-performance stack (on #893), 2026-11-18 (10,180 passed, 0 failed, 0 skipped). Counts include skipped cases.
+As of the #891 audit-performance stack (on #893), 2026-11-18 (10,180 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|

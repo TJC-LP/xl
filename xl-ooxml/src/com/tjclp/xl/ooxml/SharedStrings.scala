@@ -349,7 +349,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     // are written into every text cell, so a hash-ordered walk made the bytes a function of how
     // `ARef` hashes rather than of the workbook.
     val allEntries = sheets.iterator.flatMap { sheet =>
-      val cells = sheet.cells.values.toArray
+      val cells = sheet.cells.valuesIterator.filter { cell =>
+        cell.value match
+          case _: CellValue.Text | _: CellValue.RichText => true
+          case _ => false
+      }.toArray
       java.util.Arrays.sort(cells, SharedStrings.rowMajor)
       cells.iterator.flatMap { cell =>
         cell.value match
