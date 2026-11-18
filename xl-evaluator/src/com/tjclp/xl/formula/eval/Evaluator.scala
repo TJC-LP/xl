@@ -994,7 +994,7 @@ object Evaluator:
           case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
           case ArgValue.Range(TExpr.RangeLocation.Computed(inner)) => readsBindingAsRange(inner)
           case ArgValue.Expr(arg) => readsBindingAsRange(arg)
-          case ArgValue.Range(_) | ArgValue.Cells(_) => false
+          case ArgValue.Range(_) => false
         }
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
           _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |

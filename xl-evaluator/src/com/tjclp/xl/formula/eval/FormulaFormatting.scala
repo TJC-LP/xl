@@ -149,7 +149,6 @@ object FormulaFormatting:
               value match
                 case ArgValue.Expr(inner) => acc ++ loop(inner)
                 case ArgValue.Range(location) => acc ++ locationRefs(location)
-                case ArgValue.Cells(range) => acc ++ boundedCells(sheet, range)
             }
 
         // Binary operators: left before right

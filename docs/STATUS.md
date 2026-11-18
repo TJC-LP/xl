@@ -267,7 +267,7 @@
 - ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
 - ✅ `writeStream` / `writeStreamsSeq` – constant‑memory streaming write (fs2‑data‑xml)
 - ✅ `writeWorkbookStream` – lower-allocation SAX/StAX write for in-memory workbooks; preserves merges, comments, tables, row/column properties, and freeze panes
-- ✅ **`writeFast`** – SAX/StAX streaming write (opt-in via `ExcelIO.writeFast()` or `WriterConfig(backend = XmlBackend.SaxStax)`)
+- ✅ SAX/StAX write backend – opt-in via `WriterConfig(backend = XmlBackend.SaxStax)`
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
 **Output Configuration** (P6.7 Complete):

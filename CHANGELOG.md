@@ -34,6 +34,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: long-deprecated API is removed** (#891).
+  - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
+    0.2.0): use `put`, `insertAt` (which refuses a duplicate name, as `addSheet` did), `remove` and
+    `rename`.
+  - `Cell.comment`, `withComment` and `clearComment` (deprecated since 0.12.1) and the `Sheet.put`
+    shim that moved a cell comment into `sheet.comments`: `Cell` is `Cell(ref, value, styleId,
+    hyperlink)`; comments live in `sheet.comments` (`sheet.comment(ref, …)`).
+  - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
+  - The identity `Sheet.unsafe`.
+  - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`
+    takes `(mapExpr, mapRange)`, and `ArgPrinter.cellRange` is gone.
+  - `StructuralEditor`'s throwing facade: use the `*Checked` variants (`XLResult`); the unused
+    `Workbook` `insertRowsShifted`/`deleteRowsShifted`/`insertColumnsShifted`/`deleteColumnsShifted`
+    extensions now return `XLResult[Workbook]`.
+  - `writeFast`, `writeFastWith`, `writeStreamMaterialized` and `writeStreamMaterializedR` on
+    `Excel`/`ExcelIO`: use `write`/`writeWith` with a `WriterConfig`.
+
 - **An edit computes every formula that holds no value** (#891, Excel parity). Excel has no
   formula without a value (after any calculation every formula holds one, an error value
   included), so the after-edit pass every CLI write ends with now evaluates each uncached formula

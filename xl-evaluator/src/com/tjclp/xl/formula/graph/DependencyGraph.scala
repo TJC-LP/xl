@@ -32,15 +32,13 @@ object DependencyGraph:
   private def depsFromArgValues(
     values: List[ArgValue],
     exprDeps: TExpr[?] => Set[ARef],
-    rangeDeps: TExpr.RangeLocation => Set[ARef],
-    cellRangeDeps: CellRange => Set[ARef]
+    rangeDeps: TExpr.RangeLocation => Set[ARef]
   ): Set[ARef] =
     values.foldLeft(Set.empty[ARef]) { (acc, value) =>
       val next = value match
         case ArgValue.Expr(expr) => exprDeps(expr)
         case ArgValue.Range(TExpr.RangeLocation.Computed(expr)) => exprDeps(expr)
         case ArgValue.Range(range) => rangeDeps(range)
-        case ArgValue.Cells(range) => cellRangeDeps(range)
       // Preserve a memoized range Set when it is the first argument. Besides avoiding a needless
       // rebuild, this lets every one-range aggregate in a graph share the exact cached expansion.
       if acc.isEmpty then next else if next.isEmpty then acc else acc ++ next
@@ -82,7 +80,6 @@ object DependencyGraph:
           .exists {
             case ArgValue.Expr(e) => containsCellReferences(e)
             case ArgValue.Range(_) => true
-            case ArgValue.Cells(_) => true
           }
 
       // Binary operators - check both sides
@@ -164,7 +161,6 @@ object DependencyGraph:
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
             resolveName(name, scope)
           case ArgValue.Range(_) => false
-          case ArgValue.Cells(_) => false
         }
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
@@ -559,7 +555,6 @@ object DependencyGraph:
                 case TExpr.RangeLocation.Binding(_) => false
                 case TExpr.RangeLocation.Computed(e) => containsUnqualifiedCellReferences(e)
                 case TExpr.RangeLocation.Error(_, _) => false
-            case ArgValue.Cells(_) => true
           }
 
       // Binary operators - check both sides
@@ -659,8 +654,7 @@ object DependencyGraph:
             reader
           ),
           go(_, inner),
-          _.localCells,
-          _.cells.toSet
+          _.localCells
         )
 
       // Recursive cases (binary operators)
@@ -1449,7 +1443,6 @@ object DependencyGraph:
               case ArgValue.Range(_) if index == 1 && selected.isDefined =>
                 union(acc, selected.getOrElse(Set.empty))
               case ArgValue.Range(range) => union(acc, locCells(range))
-              case ArgValue.Cells(range) => union(acc, cellsFor(currentSheet, range))
           }
 
         // GH-193: LET — union of binding-value and body dependencies; BindingRef has none

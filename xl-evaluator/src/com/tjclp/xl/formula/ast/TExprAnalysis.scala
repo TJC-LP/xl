@@ -169,7 +169,6 @@ trait TExprAnalysis:
             // GH-394: a Name's target range is behind the workbook name table — statically unknown
             case ArgValue.Range(RangeLocation.Computed(e)) if rangeSlots => go(e)
             case ArgValue.Range(_) => Nil
-            case _ => Nil
           }
       // Binary operators - collect from operands (GH-680: a chain's left spine in one loop)
       case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
@@ -264,7 +263,7 @@ trait TExprAnalysis:
         calls(call) match
           case Some(replacement) => go(replacement)
           case None if call.spec.flags.selector =>
-            Call(call.spec, call.spec.argSpec.map(call.args)(go(_), identity, identity))
+            Call(call.spec, call.spec.argSpec.map(call.args)(go(_), identity))
           case None => transformLiftedSlots(call, f, calls)
       // Default: return unchanged (Lit, Ref, PolyRef, SheetRef, SheetPolyRef, etc.)
       case other => other

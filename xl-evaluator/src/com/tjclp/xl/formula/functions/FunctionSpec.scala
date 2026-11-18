@@ -127,7 +127,6 @@ enum LiftSlot derives CanEqual:
 final case class ArgPrinter(
   expr: TExpr[?] => String,
   location: TExpr.RangeLocation => String,
-  cellRange: CellRange => String,
   /**
    * GH-484: the argument separator to join rendered args with — the canonical human-facing ", " by
    * default; Excel's bare "," when printing the file form (FormulaPrinter.printFileForm).
@@ -354,7 +353,6 @@ sealed trait ArgValue
 object ArgValue:
   final case class Expr(value: TExpr[?]) extends ArgValue
   final case class Range(value: TExpr.RangeLocation) extends ArgValue
-  final case class Cells(value: CellRange) extends ArgValue
 
 /**
  * Describes how to parse, render, and transform a function's arguments.
@@ -390,15 +388,13 @@ trait ArgSpec[A]:
     args: A
   )(
     mapExpr: TExpr[?] => TExpr[?],
-    mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-    mapCells: CellRange => CellRange
+    mapRange: TExpr.RangeLocation => TExpr.RangeLocation
   ): A
 
   def render(args: A, printer: ArgPrinter): List[String] =
     toValues(args).map {
       case ArgValue.Expr(expr) => printer.expr(expr)
       case ArgValue.Range(location) => printer.location(location)
-      case ArgValue.Cells(range) => printer.cellRange(range)
     }
 
   /**
@@ -649,8 +645,7 @@ object ArgSpec:
         args: TExpr[A]
       )(
         mapExpr: TExpr[?] => TExpr[?],
-        mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-        mapCells: CellRange => CellRange
+        mapRange: TExpr.RangeLocation => TExpr.RangeLocation
       ): TExpr[A] =
         mapExpr(args).asInstanceOf[TExpr[A]]
 
@@ -691,7 +686,6 @@ object ArgSpec:
       case _: ArgValue.Range => true
       case ArgValue.Expr(expr) =>
         ReferenceOperators.isReferenceShape(expr) && referenceResult(expr)
-      case _ => false
 
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")
@@ -766,55 +760,9 @@ object ArgSpec:
       args: TExpr.RangeLocation
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): TExpr.RangeLocation =
       mapRange(args)
-
-  @deprecated(
-    "Use ArgSpec.rangeLocation (TExpr.RangeLocation) instead: range-typed argument slots " +
-      "resolve through Evaluator.resolveRangeLocation since GH-394, admitting sheet-qualified " +
-      "ranges and defined names. This local-literal-only spec has no remaining in-repo " +
-      "consumers and will be removed in the next breaking cycle.",
-    "0.18.0"
-  )
-  given cellRange: ArgSpec[CellRange] with
-    def describeParts: List[String] = List("range")
-
-    def parse(
-      args: List[TExpr[?]],
-      pos: Int,
-      fnName: String
-    ): Either[ParseError, (CellRange, List[TExpr[?]])] =
-      args match
-        case TExpr.RangeRef(range, _) :: tail =>
-          Right((range, tail))
-        // GH-353: this slot requires a LOCAL literal range — name the unsupported construct
-        // instead of the generic arity message
-        case (_: TExpr.ExternalRef | _: TExpr.ExternalRange) :: _ =>
-          Left(
-            ParseError.InvalidArguments(
-              fnName,
-              pos,
-              describe,
-              "an external-workbook reference (not supported in this argument; " +
-                "external workbooks are not loaded)"
-            )
-          )
-        case _ =>
-          Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
-
-    def toValues(args: CellRange): List[ArgValue] =
-      List(ArgValue.Cells(args))
-
-    def map(
-      args: CellRange
-    )(
-      mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
-    ): CellRange =
-      mapCells(args)
 
   given option[A](using inner: ArgSpec[A]): ArgSpec[Option[A]] with
     def describeParts: List[String] = List(s"optional ${inner.describe}")
@@ -867,10 +815,9 @@ object ArgSpec:
       args: Option[A]
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): Option[A] =
-      args.map(inner.map(_)(mapExpr, mapRange, mapCells))
+      args.map(inner.map(_)(mapExpr, mapRange))
 
   given list[A](using inner: ArgSpec[A]): ArgSpec[List[A]] with
     def describeParts: List[String] = List(s"${inner.describe}...")
@@ -917,10 +864,9 @@ object ArgSpec:
       args: List[A]
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): List[A] =
-      args.map(inner.map(_)(mapExpr, mapRange, mapCells))
+      args.map(inner.map(_)(mapExpr, mapRange))
 
   given emptyTuple: ArgSpec[EmptyTuple] with
     def describeParts: List[String] = Nil
@@ -938,8 +884,7 @@ object ArgSpec:
       args: EmptyTuple
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): EmptyTuple =
       args
 
@@ -978,11 +923,10 @@ object ArgSpec:
       args: H *: T
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): H *: T =
-      head.map(args.head)(mapExpr, mapRange, mapCells) *: tail
-        .map(args.tail)(mapExpr, mapRange, mapCells)
+      head.map(args.head)(mapExpr, mapRange) *: tail
+        .map(args.tail)(mapExpr, mapRange)
 
   /** Variadic numeric arg: either a range location or a numeric expression. */
   type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
@@ -1021,8 +965,7 @@ object ArgSpec:
       args: NumericArg
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): NumericArg =
       args match
         case Left(loc) => Left(mapRange(loc))
@@ -1069,8 +1012,7 @@ object ArgSpec:
       args: SumProductArg
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): SumProductArg =
       args match
         case Left(loc) => Left(mapRange(loc))

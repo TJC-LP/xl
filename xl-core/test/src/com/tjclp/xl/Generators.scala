@@ -97,9 +97,8 @@ object Generators:
       ref <- genARef
       value <- genCellValue
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
-      comment <- Gen.option(Gen.alphaNumStr)
       hyperlink <- Gen.option(Gen.alphaNumStr.map(s => s"https://example.com/$s"))
-    yield Cell(ref, value, styleId, comment, hyperlink)
+    yield Cell(ref, value, styleId, hyperlink)
 
   /** Generate column properties */
   val genColumnProperties: Gen[ColumnProperties] =
@@ -1103,7 +1102,7 @@ object Generators:
     yield
       val withCells = entries.foldLeft(Sheet(name)) {
         case (sheet, (ref, value, style, comment, hyperlink)) =>
-          val withCell = sheet.put(Cell(ref, value, None, None, hyperlink))
+          val withCell = sheet.put(Cell(ref, value, None, hyperlink))
           val styled = style.fold(withCell)(s => withCell.withCellStyle(ref, s))
           comment.fold(styled)(c => styled.comment(ref, c))
       }

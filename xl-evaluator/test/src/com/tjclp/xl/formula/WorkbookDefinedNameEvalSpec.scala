@@ -492,16 +492,3 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
     assert(result.isClean, s"expected clean recalc, got: ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "Calc", a1), Some(num(50))) // 20 + 30
   }
-
-  test("GH-411: deprecated ArgSpec.cellRange remains usable (published API, removal deferred)") {
-    // Zero in-repo consumers after the GH-394 rangeLocation migration; kept for source
-    // compatibility — deprecated with the migration hint, removed next breaking cycle.
-    import com.tjclp.xl.formula.ast.TExpr
-    import com.tjclp.xl.formula.functions.ArgSpec
-    @annotation.nowarn("cat=deprecation")
-    def spec: ArgSpec[CellRange] = ArgSpec.cellRange
-    CellRange.parse("A1:B2") match
-      case Right(r) =>
-        assertEquals(spec.parse(List(TExpr.RangeRef(r)), 0, "TEST").map(_._1), Right(r))
-      case Left(err) => fail(s"CellRange.parse(A1:B2) must parse, got $err")
-  }

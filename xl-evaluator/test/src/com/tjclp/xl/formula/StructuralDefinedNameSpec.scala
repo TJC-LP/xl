@@ -5,6 +5,7 @@ import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook, WorkbookMetadata}
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /**
@@ -30,7 +31,7 @@ class StructuralDefinedNameSpec extends FunSuite:
 
   test("a sheet-scoped name tracks an insert on its target sheet (the GH-473 repro)") {
     val wb = wbWith(DefinedName("Case", "Two!$B$2", localSheetId = Some(1)))
-    val r = StructuralEditor.insertRows(wb, Two, at = 0, count = 5)
+    val r = StructuralEditor.insertRowsChecked(wb, Two, at = 0, count = 5).unsafe
     assertEquals(formulas(r), Vector("Two!$B$7"))
     // scope is untouched — only the refersTo moved
     assertEquals(r.metadata.definedNames.map(_.localSheetId), Vector(Some(1)))
@@ -38,7 +39,7 @@ class StructuralDefinedNameSpec extends FunSuite:
 
   test("a workbook-scoped name tracks the edit too") {
     val wb = wbWith(DefinedName("Total", "Two!$A$1:$B$2"))
-    val r = StructuralEditor.insertRows(wb, Two, at = 0, count = 5)
+    val r = StructuralEditor.insertRowsChecked(wb, Two, at = 0, count = 5).unsafe
     assertEquals(formulas(r), Vector("Two!$A$6:$B$7"))
   }
 
@@ -64,24 +65,24 @@ class StructuralDefinedNameSpec extends FunSuite:
       DefinedName("Rate", "0.08"),
       DefinedName("Label", "\"two, please\"")
     )
-    val r = StructuralEditor.insertRows(wb, Two, at = 0, count = 5)
+    val r = StructuralEditor.insertRowsChecked(wb, Two, at = 0, count = 5).unsafe
     assertEquals(formulas(r), Vector("One!$B$2", "0.08", "\"two, please\""))
   }
 
   test("deleting the rows a name points at degrades its refersTo to #REF!") {
     val wb = wbWith(DefinedName("Case", "Two!$B$2", localSheetId = Some(1)))
-    val r = StructuralEditor.deleteRows(wb, Two, at = 1, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(wb, Two, at = 1, count = 1).unsafe
     assertEquals(formulas(r), Vector("#REF!"))
   }
 
   test("a multi-range refersTo shifts each top-level comma segment independently") {
     val wb = wbWith(DefinedName("Bands", "Two!$A$1:$B$2,Two!$D$10"))
-    val r = StructuralEditor.insertRows(wb, Two, at = 0, count = 5)
+    val r = StructuralEditor.insertRowsChecked(wb, Two, at = 0, count = 5).unsafe
     assertEquals(formulas(r), Vector("Two!$A$6:$B$7,Two!$D$15"))
   }
 
   test("column edits shift names on the edited axis") {
     val wb = wbWith(DefinedName("Case", "Two!$B$2", localSheetId = Some(1)))
-    val r = StructuralEditor.insertColumns(wb, Two, at = 0, count = 2)
+    val r = StructuralEditor.insertColumnsChecked(wb, Two, at = 0, count = 2).unsafe
     assertEquals(formulas(r), Vector("Two!$D$2"))
   }

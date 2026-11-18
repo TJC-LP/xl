@@ -2180,7 +2180,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                             RangeEdges.reachesEdge(r)
                           case ArgValue.Expr(TExpr.RangeRef(r, _)) => RangeEdges.reachesEdge(r)
                           case ArgValue.Expr(TExpr.SheetRange(_, r, _)) => RangeEdges.reachesEdge(r)
-                          case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
                           case _ => false
                         }
                       case _ => false
@@ -2216,7 +2215,6 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
                       case ArgValue.Range(TExpr.RangeLocation.CrossSheet(_, r, _)) =>
                         RangeEdges.reachesEdge(r)
                       case ArgValue.Range(_) => true
-                      case ArgValue.Cells(r) => RangeEdges.reachesEdge(r)
                       case _ => false
                     })
                 )

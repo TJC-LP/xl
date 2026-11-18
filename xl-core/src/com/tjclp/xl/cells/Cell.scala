@@ -5,7 +5,7 @@ import com.tjclp.xl.styles.units.StyleId
 
 object Cell:
   /** Create cell from reference and value */
-  def apply(ref: ARef, value: CellValue): Cell = Cell(ref, value, None, None, None)
+  def apply(ref: ARef, value: CellValue): Cell = Cell(ref, value, None, None)
 
   /** Create cell from A1 notation and value */
   def fromA1(a1: String, value: CellValue): Either[String, Cell] =
@@ -17,20 +17,13 @@ object Cell:
 /**
  * Cell with value and optional metadata.
  *
- * Note: cell comments live in the sheet-level store (`Sheet.comments`) — that is what the OOXML
- * writer serializes. The [[comment]] field here is deprecated: `Sheet.put(cell)` converts it into
- * `Sheet.comments` (as a plain-text comment) and clears the field, so it never silently vanishes on
- * write (GH-295).
+ * Cell comments are not part of the cell: they live in the sheet-level store (`Sheet.comments`,
+ * written by `Sheet.comment(ref, Comment...)`), which is what the OOXML writer serializes.
  */
 final case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
   styleId: Option[StyleId] = None,
-  @deprecated(
-    "use Sheet.comment/Sheet.comments — this field is not serialized; Sheet.put(cell) converts it into Sheet.comments and clears it",
-    "0.12.1"
-  )
-  comment: Option[String] = None,
   hyperlink: Option[String] = None
 ):
   /** Get cell column */
@@ -50,29 +43,6 @@ final case class Cell(
 
   /** Clear cell style */
   def clearStyle: Cell = copy(styleId = None)
-
-  /**
-   * Add comment to cell.
-   *
-   * Prefer `Sheet.comment(ref, Comment.plainText(text))`: the cell-level field is not serialized
-   * directly — `Sheet.put(cell)` converts it into the sheet-level comment store (GH-295).
-   */
-  @deprecated(
-    "use Sheet.comment(ref, Comment.plainText(text)) — Cell.comment is not serialized; Sheet.put(cell) converts it into Sheet.comments",
-    "0.12.1"
-  )
-  def withComment(text: String): Cell = copy(comment = Some(text))
-
-  /**
-   * Clear comment.
-   *
-   * Prefer `Sheet.removeComment(ref)`: sheet-level comments are the serialized store (GH-295).
-   */
-  @deprecated(
-    "use Sheet.removeComment(ref) — Cell.comment is not serialized; comments live in Sheet.comments",
-    "0.12.1"
-  )
-  def clearComment: Cell = copy(comment = None)
 
   /**
    * Add hyperlink to cell.

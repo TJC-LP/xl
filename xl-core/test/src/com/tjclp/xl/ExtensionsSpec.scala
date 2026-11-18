@@ -26,7 +26,7 @@ import munit.FunSuite
 class ExtensionsSpec extends FunSuite:
 
   // Test fixture
-  val baseSheet = Sheet("Test").unsafe
+  val baseSheet = Sheet("Test")
   val testStyle = CellStyle.default.bold
 
   // ========== String-Based put() - Unstyled (9 types) ==========

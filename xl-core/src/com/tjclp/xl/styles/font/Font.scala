@@ -19,9 +19,6 @@ final case class Font(
   def withBold(b: Boolean = true): Font = copy(bold = b)
   def withItalic(i: Boolean = true): Font = copy(italic = i)
   def withUnderline(u: Underline): Font = copy(underline = u)
-  @deprecated("Use withUnderline(u: Underline); true maps to Underline.Single", "0.18.0")
-  def withUnderline(u: Boolean = true): Font =
-    copy(underline = if u then Underline.Single else Underline.None)
   def withColor(c: Color): Font = copy(color = Some(c))
   def clearColor: Font = copy(color = None)
 

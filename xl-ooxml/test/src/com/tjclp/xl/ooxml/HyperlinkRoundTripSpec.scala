@@ -82,7 +82,7 @@ class HyperlinkRoundTripSpec extends FunSuite:
 
   test("GH-406: writer strips a leading '#' even when the field bypassed withHyperlink") {
     // Direct construction (copy/generators) skips the chokepoint; the location emit defends.
-    val cell = Cell(ref"A1", CellValue.Text("Go"), None, None, Some("#Sheet1!C3"))
+    val cell = Cell(ref"A1", CellValue.Text("Go"), None, Some("#Sheet1!C3"))
     val wb = Workbook(Sheet("Sheet1").put(cell))
     val out = Files.createTempFile("hl-hash-direct", ".xlsx")
     XlsxWriter.write(wb, out).fold(e => fail(s"write failed: $e"), identity)

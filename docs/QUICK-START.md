@@ -66,7 +66,6 @@ Save as `model.sc`, run with `scala-cli run model.sc`. Never combine this import
 
 ```scala
 import com.tjclp.xl.*            // Domain model + macros + DSL
-import com.tjclp.xl.unsafe.*     // Explicit opt-in for .unsafe
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -74,20 +73,16 @@ import java.nio.file.Path
 
 // Build a simple sheet (Sales) with two rows
 val sheet =
-  Sheet("Sales").unsafe
+  Sheet("Sales")
     .put(
       ref"A1" -> "Product",
       ref"B1" -> "Revenue",
       ref"A2" -> "Widget",
       ref"B2" -> 1000
     )
-    .unsafe
 
 // Create a workbook and add the sheet
-val workbook =
-  Workbook.empty
-    .flatMap(_.put(sheet))
-    .unsafe
+val workbook = Workbook.empty.put(sheet)
 
 // Write to file
 ExcelIO.instance[IO].write(workbook, Path.of("sales.xlsx")).unsafeRunSync()
@@ -156,7 +151,6 @@ val styledSheet =
 ```scala
 import com.tjclp.xl.*
 import com.tjclp.xl.dsl.*
-import com.tjclp.xl.unsafe.*
 
 val patch =
   (ref"A1" := "Product") ++
@@ -164,7 +158,7 @@ val patch =
   ref"A1".styled(headerStyle) ++
   ref"B1".styled(headerStyle)
 
-val styledSheet2 = sheet.put(patch).unsafe
+val styledSheet2 = sheet.put(patch)
 ```
 
 ## Performance Modes
@@ -173,23 +167,18 @@ val styledSheet2 = sheet.put(patch).unsafe
 ```scala
 // Use in-memory API (simple, full features)
 import com.tjclp.xl.*
-import com.tjclp.xl.unsafe.*
 import com.tjclp.xl.io.ExcelIO
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
 
 val sheet =
-  Sheet("Data").unsafe
+  Sheet("Data")
     .put(
       ref"A1" -> "Hello",
       ref"B1" -> 42
     )
-    .unsafe
 
-val workbook =
-  Workbook.empty
-    .flatMap(_.put(sheet))
-    .unsafe
+val workbook = Workbook.empty.put(sheet)
 
 ExcelIO.instance[IO].write(workbook, path).unsafeRunSync()
 ```
@@ -226,10 +215,9 @@ Stream.range(1, 1_000_001)
 ### Create Multi-Sheet Workbook
 ```scala
 import com.tjclp.xl.*
-import com.tjclp.xl.unsafe.*
 
-val sheet1 = Sheet("Sales").unsafe.put(ref"A1" -> "Sales Data").unsafe
-val sheet2 = Sheet("Inventory").unsafe.put(ref"A1" -> "Inventory").unsafe
+val sheet1 = Sheet("Sales").put(ref"A1" -> "Sales Data")
+val sheet2 = Sheet("Inventory").put(ref"A1" -> "Inventory")
 
 val workbook = Workbook(Vector(sheet1, sheet2))
 ```
@@ -262,10 +250,9 @@ println(html)  // <table>...</table> with inline CSS
 import com.tjclp.xl.*
 import com.tjclp.xl.formula.{FormulaParser, Evaluator}
 import com.tjclp.xl.formula.SheetEvaluator.*
-import com.tjclp.xl.unsafe.*
 
 // Build a sheet with data and formulas
-val sheet = Sheet("Finance").unsafe
+val sheet = Sheet("Finance")
   .put(
     ref"A1" -> "Revenue",
     ref"A2" -> BigDecimal("1000000"),
@@ -275,7 +262,6 @@ val sheet = Sheet("Finance").unsafe
     ref"C1" -> "Average",
     ref"C2" -> fx"=AVERAGE(A2:A3)"
   )
-  .unsafe
 
 // Evaluate individual formula
 val totalResult = sheet.evaluateFormula("=SUM(A2:A3)")
@@ -293,12 +279,11 @@ val allResults = Workbook(sheet).recalculate().evaluated(sheet.name)
 // )
 
 // Handle circular references safely
-val cyclicSheet = Sheet("Cyclic").unsafe
+val cyclicSheet = Sheet("Cyclic")
   .put(
     ref"A1" -> fx"=B1",
     ref"B1" -> fx"=A1"  // Circular reference!
   )
-  .unsafe
 
 // recalculate is total: each cycle member is reported as a per-cell error
 Workbook(cyclicSheet).recalculate().errors.foreach { e =>

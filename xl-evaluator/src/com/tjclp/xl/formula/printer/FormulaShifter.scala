@@ -106,10 +106,7 @@ object FormulaShifter:
       val shifted = shiftInternal(expr, colDelta, rowDelta, voidedLog)
       Shifted(shifted, voidedLog.result)
 
-  // Var: the deprecated bare-CellRange argument slot (ArgSpec.cellRange, no in-repo consumers) has
-  // no error form, so an off-grid range there voids the call through a local var exactly as
-  // shiftStructuralInternal flags a deleted one
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var"))
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @nowarn(
     "msg=Unreachable case"
   ) // PolyRef extends TExpr[Nothing], reachable via asInstanceOf casts
@@ -214,20 +211,8 @@ object FormulaShifter:
         Aggregate(aggregatorId, goLocation(location)).asInstanceOf[TExpr[A]]
 
       case call: Call[?] =>
-        var voided = false
-        val shifted =
-          call.spec.argSpec.map(call.args)(
-            expr => go(expr),
-            goLocation,
-            range =>
-              shiftRange(range, RangeForm.Cells, colDelta, rowDelta).getOrElse {
-                voided = true
-                voidedLog.record(rangeText(range, RangeForm.Cells))
-                range
-              }
-          )
-        if voided then refError.asInstanceOf[TExpr[A]]
-        else Call(call.spec, shifted).asInstanceOf[TExpr[A]]
+        Call(call.spec, call.spec.argSpec.map(call.args)(expr => go(expr), goLocation))
+          .asInstanceOf[TExpr[A]]
 
       // Date-to-serial converters - shift inner expression
       case DateToSerial(dateExpr) => DateToSerial(go(dateExpr)).asInstanceOf[TExpr[A]]
@@ -404,8 +389,7 @@ object FormulaShifter:
         var found = false
         call.spec.argSpec.map(call.args)(
           arg => { if go(arg) then found = true; arg },
-          loc => { if goLoc(loc) then found = true; loc },
-          range => range
+          loc => { if goLoc(loc) then found = true; loc }
         )
         found
       // GH-680: a chain's left spine in one loop, not one recursion per operator
@@ -466,8 +450,7 @@ object FormulaShifter:
         var found = false
         call.spec.argSpec.map(call.args)(
           arg => { if go(arg) then found = true; arg },
-          loc => { if goLoc(loc) then found = true; loc },
-          range => range
+          loc => { if goLoc(loc) then found = true; loc }
         )
         found
       // GH-680: a chain's left spine in one loop, not one recursion per operator
@@ -548,11 +531,7 @@ object FormulaShifter:
       case Aggregate(aggId, location) =>
         Aggregate(aggId, goLocation(location)).asInstanceOf[TExpr[A]]
       case call: Call[?] =>
-        val renamed = call.spec.argSpec.map(call.args)(
-          e => go(e),
-          goLocation,
-          range => range
-        )
+        val renamed = call.spec.argSpec.map(call.args)(e => go(e), goLocation)
         Call(call.spec, renamed).asInstanceOf[TExpr[A]]
       case DateToSerial(e) => DateToSerial(go(e)).asInstanceOf[TExpr[A]]
       case DateTimeToSerial(e) => DateTimeToSerial(go(e)).asInstanceOf[TExpr[A]]
@@ -723,9 +702,7 @@ object FormulaShifter:
       // GH-612: an error has no coordinates
       case RangeLocation.Error(_, _) => location
 
-  @SuppressWarnings(
-    Array("org.wartremover.warts.AsInstanceOf", "org.wartremover.warts.Var")
-  )
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @nowarn("msg=Unreachable case")
   private def shiftStructuralInternal[A](
     expr: TExpr[A],
@@ -816,23 +793,8 @@ object FormulaShifter:
       case Aggregate(aggId, location) =>
         Aggregate(aggId, goLocation(location)).asInstanceOf[TExpr[A]]
       case call: Call[?] =>
-        // The deprecated bare-CellRange slot has no error form: a deleted range there still voids
-        // the whole call (the pre-GH-629 behaviour, now confined to that slot)
-        var voided = false
-        val shifted = call.spec.argSpec.map(call.args)(
-          e => go(e),
-          goLocation,
-          range =>
-            if shiftLocal then
-              shiftCornersStructural(range, isRow, at, delta).getOrElse {
-                voided = true
-                voidedLog.record(rangeText(range, RangeForm.Cells))
-                range
-              }
-            else range
-        )
-        if voided then refError.asInstanceOf[TExpr[A]]
-        else Call(call.spec, shifted).asInstanceOf[TExpr[A]]
+        Call(call.spec, call.spec.argSpec.map(call.args)(e => go(e), goLocation))
+          .asInstanceOf[TExpr[A]]
       case DateToSerial(e) => DateToSerial(go(e)).asInstanceOf[TExpr[A]]
       case DateTimeToSerial(e) => DateTimeToSerial(go(e)).asInstanceOf[TExpr[A]]
       // GH-193: LET — a deleted ref in a binding value or the body is #REF! in place, like anywhere

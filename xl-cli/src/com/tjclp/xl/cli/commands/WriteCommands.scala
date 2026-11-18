@@ -2597,8 +2597,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited =
-        StructuralEditor.insertRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .insertRowsChecked(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2627,8 +2631,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited =
-        StructuralEditor.deleteRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .deleteRowsChecked(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2658,8 +2666,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited =
-        StructuralEditor.insertColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .insertColumnsChecked(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2689,8 +2701,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited =
-        StructuralEditor.deleteColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .deleteColumnsChecked(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,

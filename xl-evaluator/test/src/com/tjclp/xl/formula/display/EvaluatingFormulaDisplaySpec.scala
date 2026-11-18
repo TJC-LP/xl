@@ -24,7 +24,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 100)
       .put(ref"A2", 200)
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1+A2", sheet)
@@ -36,7 +35,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A1", 10)
       .put(ref"A2", 20)
       .put(ref"A3", 30)
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=SUM(A1:A3)", sheet)
@@ -47,7 +45,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 1)
       .put(ref"A2", 2)
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1/A2", sheet)
@@ -67,7 +64,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     val sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 100)
       .put(ref"A2", 0)
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     val result = summon[FormulaDisplayStrategy].format("=A1/A2", sheet)
@@ -86,7 +82,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A1", 100)
       .put(ref"A2", 200)
       .put(ref"B1", CellValue.Formula("=SUM(A1:A2)"))
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -103,7 +98,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A2", 200)
       .put(ref"B1", CellValue.Formula("=A1/A2"))
       .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -122,7 +116,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A2", 20)
       .put(ref"A3", 30)
       .put(ref"B1", CellValue.Formula("=AVERAGE(A1:A3)"))
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -139,7 +132,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", 500)
       .put(ref"B1", CellValue.Formula("=IF(A1>400, \"High\", \"Low\")"))
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -170,7 +162,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
       .put(ref"A2", 200)
       .put(ref"B1", CellValue.Formula("=A1+A2"))
       .put(ref"C1", "Total")
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
 
@@ -234,7 +225,6 @@ class EvaluatingFormulaDisplaySpec extends FunSuite:
         CellValue.Formula("='Other'!A1/'Other'!A2", Some(CellValue.Number(BigDecimal("0.5"))))
       )
       .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy = EvaluatingFormulaDisplay.evaluating
     assertEquals(sheet.displayCell(ref"B1").formatted, "50%")

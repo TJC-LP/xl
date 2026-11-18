@@ -63,7 +63,7 @@ class AfterEditLawSpec extends ScalaCheckSuite:
   private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
     wb.sheets.iterator.flatMap { s =>
       s.cells.iterator.collect {
-        case (ref, Cell(_, CellValue.Formula(_, None, kind), _, _, _))
+        case (ref, Cell(_, CellValue.Formula(_, None, kind), _, _))
             if !kind.isInstanceOf[com.tjclp.xl.cells.FormulaKind.DataTable] =>
           QualifiedRef(s.name, ref)
       }

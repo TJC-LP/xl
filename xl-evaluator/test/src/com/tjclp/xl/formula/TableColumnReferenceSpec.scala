@@ -9,6 +9,7 @@ import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
+import com.tjclp.xl.unsafe.*
 
 import munit.FunSuite
 
@@ -213,7 +214,7 @@ class TableColumnReferenceSpec extends FunSuite:
   test("GH-669: structural edits preserve table text, invalidate caches and follow moved rows") {
     val reader = Sheet("Reader").put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(999))))
     val wb = Workbook(reader, data)
-    val shifted = StructuralEditor.insertRows(wb, data.name, 3, 1)
+    val shifted = StructuralEditor.insertRowsChecked(wb, data.name, 3, 1).unsafe
     assertEquals(cached(shifted, "Reader", ref"A1"), None)
     assertEquals(cached(shifted.recalculate().workbook, "Reader", ref"A1"), Some(num(4)))
   }
@@ -421,7 +422,7 @@ class TableColumnReferenceSpec extends FunSuite:
     val wb = Workbook(reader, data).recalculate().workbook
     assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
     // 0-based 3 is row 4, inside the table's data rows B3:B5
-    val inserted = StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), 3, 1)
+    val inserted = StructuralEditor.insertRowsChecked(wb, SheetName.unsafe("Data"), 3, 1).unsafe
     val withValue = inserted.put(inserted(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 7))
     val dirty = withValue.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))

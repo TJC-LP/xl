@@ -21,7 +21,6 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single string value") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Hello")
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Hello"))
     assertEquals(sheet.getCellStyle(ref"A1"), None) // Strings don't get styling
@@ -30,7 +29,6 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single int value with auto-style") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> 42)
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal(42)))
     val style = sheet.getCellStyle(ref"A1")
@@ -40,7 +38,6 @@ class BatchUpdateSpec extends FunSuite:
   test("put: single BigDecimal with decimal format") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     val style = sheet.getCellStyle(ref"A1")
@@ -51,7 +48,6 @@ class BatchUpdateSpec extends FunSuite:
     val date = LocalDate.of(2025, 11, 10)
     val sheet = Sheet("Test")
       .put(ref"A1" -> date)
-      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.DateTime(datetime) => assertEquals(datetime.toLocalDate, date)
@@ -65,7 +61,6 @@ class BatchUpdateSpec extends FunSuite:
     val dt = LocalDateTime.of(2025, 11, 10, 14, 30)
     val sheet = Sheet("Test")
       .put(ref"A1" -> dt)
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.DateTime(dt))
     val style = sheet.getCellStyle(ref"A1")
@@ -81,7 +76,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"D1" -> LocalDate.of(2025, 11, 10),
         ref"E1" -> true
       )
-      .unsafe
 
     // Verify values
     assertEquals(sheet(ref"A1").value, CellValue.Text("Title"))
@@ -124,7 +118,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"A1" -> "Hello",
         ref"B1" -> 42
       )
-      .unsafe
 
     // Values should be the same (styles might differ due to auto-inference)
     assertEquals(batched(ref"A1").value, manual(ref"A1").value)
@@ -134,9 +127,7 @@ class BatchUpdateSpec extends FunSuite:
   test("put: overwrites existing cells") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Old")
-      .unsafe
       .put(ref"A1" -> "New")
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
@@ -164,7 +155,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"D1" -> true,
         ref"E1" -> BigDecimal("99.99")
       )
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("String"))
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
@@ -176,7 +166,6 @@ class BatchUpdateSpec extends FunSuite:
   test("put: writes single typed value with auto-inferred style") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("123.45")))
     assert(
@@ -215,7 +204,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"B1" -> BigDecimal("123.45"),
         ref"C1" -> "Text"
       )
-      .unsafe
 
     assertEquals(sheet.readTyped[Int](ref"A1"), Right(Some(42)))
     assertEquals(sheet.readTyped[BigDecimal](ref"B1"), Right(Some(BigDecimal("123.45"))))
@@ -229,7 +217,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"B1" -> BigDecimal("123.45"), // Adds decimal style
         ref"C1" -> LocalDate.of(2025, 11, 10) // Adds date style
       )
-      .unsafe
 
     // Should have: default + decimal + date = 3 styles
     assert(
@@ -244,7 +231,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"A1" -> BigDecimal("123.45"),
         ref"A2" -> BigDecimal("678.90") // Same type, should reuse style
       )
-      .unsafe
 
     // Both cells should have the same styleId
     assertEquals(
@@ -260,7 +246,6 @@ class BatchUpdateSpec extends FunSuite:
     val richText = "Bold".bold + " normal"
     val sheet = Sheet("Test")
       .put(ref"A1" -> richText)
-      .unsafe
 
     sheet(ref"A1").value match
       case CellValue.RichText(rt) =>
@@ -277,7 +262,6 @@ class BatchUpdateSpec extends FunSuite:
         ref"A2" -> richText,
         ref"A3" -> 42
       )
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Plain text"))
     assert(
