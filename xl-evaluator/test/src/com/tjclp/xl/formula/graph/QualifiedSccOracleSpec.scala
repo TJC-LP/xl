@@ -126,6 +126,46 @@ class QualifiedSccOracleSpec extends ScalaCheckSuite:
             drain((frontier - i) ++ newlyReady, nextDegree, acc :+ i)
       drain(initial, degree0, Vector.empty).map(comps)
 
+  private def oracleWithinComponentOrder(
+    members: Vector[QualifiedRef],
+    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
+  ): Vector[QualifiedRef] =
+    val byKey: Ordering[QualifiedRef] = QualifiedRef.gridOrdering
+    val memberSet = members.toSet
+    val precedentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      members.iterator.map { q =>
+        q -> dependencies.getOrElse(q, Set.empty).filter(p => p != q && memberSet.contains(p))
+      }.toMap
+    val dependentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
+      precedentsOf.iterator
+        .flatMap((u, ps) => ps.iterator.map(p => p -> u))
+        .foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (p, u)) =>
+          acc.updated(p, acc.getOrElse(p, Set.empty) + u)
+        }
+    val emptyFrontier = scala.collection.immutable.TreeSet.empty[QualifiedRef](using byKey)
+    val degree0: Map[QualifiedRef, Int] = precedentsOf.view.mapValues(_.size).toMap
+    val initialFrontier = emptyFrontier ++ members.filter(q => degree0.getOrElse(q, 0) == 0)
+    @tailrec
+    def drain(
+      frontier: scala.collection.immutable.TreeSet[QualifiedRef],
+      remaining: scala.collection.immutable.TreeSet[QualifiedRef],
+      degree: Map[QualifiedRef, Int],
+      acc: Vector[QualifiedRef]
+    ): Vector[QualifiedRef] =
+      frontier.headOption.orElse(remaining.headOption) match
+        case None => acc
+        case Some(node) =>
+          val stillRemaining = remaining - node
+          val (nextDegree, newlyReady) =
+            dependentsOf.getOrElse(node, Set.empty).foldLeft((degree, emptyFrontier)) {
+              case ((d, ready), dependent) =>
+                val left = d.getOrElse(dependent, 0) - 1
+                val readyNow = left == 0 && stillRemaining.contains(dependent)
+                (d.updated(dependent, left), if readyNow then ready + dependent else ready)
+            }
+          drain((frontier - node) ++ newlyReady, stillRemaining, nextDegree, acc :+ node)
+    drain(initialFrontier, emptyFrontier ++ members, degree0, Vector.empty)
+
   // ----- generators -----
 
   // Sheet names whose String order differs from their case-folded order, rows across the 9/10
@@ -173,6 +213,27 @@ class QualifiedSccOracleSpec extends ScalaCheckSuite:
   property("qualifiedCyclicNodes equals the hash-map Tarjan") {
     Prop.forAll(genAny) { deps =>
       Prop(DependencyGraph.qualifiedCyclicNodes(deps) == oracleCyclicNodes(deps))
+    }
+  }
+
+  property("withinComponentOrder equals the TreeSet Kahn-with-cut, on any member subset") {
+    Prop.forAll(genAny, Gen.choose(0, 1000)) { (deps, salt) =>
+      val keys = deps.keys.toVector
+      val rnd = new scala.util.Random(salt.toLong)
+      // a random subset (with a repeat) in a random order; components and arbitrary sets alike
+      val members = rnd.shuffle(keys.filter(_ => rnd.nextBoolean()) ++ keys.take(1))
+      val expected = oracleWithinComponentOrder(members, deps)
+      val actual = DependencyGraph.withinComponentOrder(members, deps)
+      Prop(actual == expected) :| s"expected $expected\nactual   $actual"
+    }
+  }
+
+  property("withinComponentOrder equals the oracle on every cyclic component") {
+    Prop.forAll(genAny) { deps =>
+      DependencyGraph.qualifiedSccOrder(deps).filter(_.cyclic).forall { c =>
+        DependencyGraph.withinComponentOrder(c.members, deps) ==
+          oracleWithinComponentOrder(c.members, deps)
+      }
     }
   }
 

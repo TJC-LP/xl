@@ -1948,50 +1948,73 @@ object DependencyGraph:
    * `dependencies` is the workbook graph (`u -> the cells u reads`); edges leaving the component
    * are ignored. Runs in O((V + E) log V).
    */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def withinComponentOrder(
     members: Vector[QualifiedRef],
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Vector[QualifiedRef] =
-    val byKey: Ordering[QualifiedRef] = QualifiedRef.gridOrdering
-    val memberSet = members.toSet
-    val precedentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
-      members.iterator.map { q =>
-        q -> dependencies.getOrElse(q, Set.empty).filter(p => p != q && memberSet.contains(p))
-      }.toMap
-    val dependentsOf: Map[QualifiedRef, Set[QualifiedRef]] =
-      precedentsOf.iterator
-        .flatMap((u, ps) => ps.iterator.map(p => p -> u))
-        .foldLeft(Map.empty[QualifiedRef, Set[QualifiedRef]]) { case (acc, (p, u)) =>
-          acc.updated(p, acc.getOrElse(p, Set.empty) + u)
-        }
-    val emptyFrontier = scala.collection.immutable.TreeSet.empty[QualifiedRef](using byKey)
-    val degree0: Map[QualifiedRef, Int] = precedentsOf.view.mapValues(_.size).toMap
-    val initialFrontier = emptyFrontier ++ members.filter(q => degree0.getOrElse(q, 0) == 0)
-
-    @tailrec
-    def drain(
-      frontier: scala.collection.immutable.TreeSet[QualifiedRef],
-      remaining: scala.collection.immutable.TreeSet[QualifiedRef],
-      degree: Map[QualifiedRef, Int],
-      acc: Vector[QualifiedRef]
-    ): Vector[QualifiedRef] =
+    // #891: members as grid-ordered ids (comparing ids compares gridKeys), member-to-member reads
+    // as one CSR array, the frontier an Int min-heap. The top-left REMAINING member only ever moves
+    // right: it is the first id not yet emitted, so a cursor that skips emitted ids finds it.
+    val nodes = NodeTable.of(members)
+    val n = nodes.formulaCount
+    val src = new IntBuf(math.max(16, n))
+    val dst = new IntBuf(math.max(16, n))
+    val outCount = new Array[Int](n + 1)
+    val degree = new Array[Int](n)
+    var u = 0
+    while u < n do
+      val reader = nodes.qualified(u)
+      dependencies.getOrElse(reader, Set.empty).foreach { precedent =>
+        if precedent != reader then
+          val p = nodes.lookup(precedent).getOrElse(-1)
+          if p >= 0 then
+            src += p
+            dst += u
+            outCount(p + 1) += 1
+            degree(u) += 1
+      }
+      u += 1
+    var k = 0
+    while k < n do
+      outCount(k + 1) += outCount(k)
+      k += 1
+    val succDst = new Array[Int](src.length)
+    val fill = java.util.Arrays.copyOf(outCount, n)
+    var e = 0
+    while e < src.length do
+      succDst(fill(src(e))) = dst(e)
+      fill(src(e)) += 1
+      e += 1
+    val emitted = new Array[Boolean](n)
+    val frontier = new IntMinHeap(n)
+    k = 0
+    while k < n do
+      if degree(k) == 0 then frontier.push(k)
+      k += 1
+    var cursor = 0
+    val out = Vector.newBuilder[QualifiedRef]
+    var count = 0
+    while count < n do
       // Kahn's next node or — the frontier dry with members remaining — the top-left remaining
       // member: the CUT, whose not-yet-emitted precedents become this round's back edges.
-      frontier.headOption.orElse(remaining.headOption) match
-        case None => acc
-        case Some(node) =>
-          val stillRemaining = remaining - node
-          val (nextDegree, newlyReady) =
-            dependentsOf.getOrElse(node, Set.empty).foldLeft((degree, emptyFrontier)) {
-              case ((d, ready), dependent) =>
-                val left = d.getOrElse(dependent, 0) - 1
-                // a dependent already emitted by a cut must not re-enter the frontier
-                val readyNow = left == 0 && stillRemaining.contains(dependent)
-                (d.updated(dependent, left), if readyNow then ready + dependent else ready)
-            }
-          drain((frontier - node) ++ newlyReady, stillRemaining, nextDegree, acc :+ node)
-
-    drain(initialFrontier, emptyFrontier ++ members, degree0, Vector.empty)
+      val node =
+        if frontier.nonEmpty then frontier.pop()
+        else
+          while emitted(cursor) do cursor += 1
+          cursor
+      emitted(node) = true
+      count += 1
+      out += nodes.qualified(node)
+      var d = outCount(node)
+      val end = outCount(node + 1)
+      while d < end do
+        val dependent = succDst(d)
+        degree(dependent) -= 1
+        // a dependent already emitted by a cut must not re-enter the frontier
+        if degree(dependent) == 0 && !emitted(dependent) then frontier.push(dependent)
+        d += 1
+    out.result()
 
   /**
    * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting
