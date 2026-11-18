@@ -832,9 +832,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     range: CellRange,
     ctx: EvalContext
   ) extends CriteriaColumn:
-    // GH-192: built only when the loop indexes it
-    private lazy val cells: Vector[ARef] = range.cells.toVector
-    def at(idx: Int): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, cells(idx), ctx)
+    // #891: the cell at an offset is arithmetic on the range's corner; copying the range into a
+    // Vector of boxed refs (once per call, so once per fixpoint round of a data-table what-if)
+    // cost as much as reading the cells
+    def at(idx: Int): Either[EvalError, CellValue] =
+      evalCellValueForMatch(sheet, cellAt(range, idx), ctx)
     def atRef(ref: ARef): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, ref, ctx)
     def sliced: Option[(ColumnSlice, Int)] = None
 
