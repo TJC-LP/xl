@@ -78,7 +78,9 @@ object StaleDataTable:
  * names whose bodies make one, #678 — conservatively even when another name chain exceeds
  * [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
- * caches are pinned) and the file's `calcPr`.
+ * caches are pinned) and the file's `calcPr`, and `staleDataTables` (#678; `dataTablesChecked` is
+ * false when the caller skipped that note, #891 — it re-evaluates each table's corner, which on a
+ * large circular model costs many recalculations).
  *
  * Every bucket is in workbook order — sheet position, then row, then column — so two runs on the
  * same file print the same report. Pure and total.
@@ -94,7 +96,8 @@ final case class WorkbookAudit(
   unresolvedReaders: Vector[QualifiedRef],
   calcPr: Option[CalcPr],
   iterativeCycles: Vector[Scc],
-  staleDataTables: Vector[StaleDataTable] = Vector.empty
+  staleDataTables: Vector[StaleDataTable] = Vector.empty,
+  dataTablesChecked: Boolean = true
 ) derives CanEqual:
 
   /** The number of findings: error cells, uncached and unparseable formulas, cycles, unresolved. */
@@ -161,7 +164,14 @@ object WorkbookAudit:
   def of(wb: Workbook): WorkbookAudit = of(wb, Clock.system)
 
   /** The audit, re-evaluating data-table corners (the stale-interior note) at `clock`. */
-  def of(wb: Workbook, clock: Clock): WorkbookAudit =
+  def of(wb: Workbook, clock: Clock): WorkbookAudit = of(wb, clock, checkDataTables = true)
+
+  /**
+   * #891: the audit with or without the stale-data-table note. Without it (`checkDataTables =
+   * false`) no corner is re-evaluated, `staleDataTables` is empty and `dataTablesChecked` says so;
+   * every other bucket is the same.
+   */
+  def of(wb: Workbook, clock: Clock, checkDataTables: Boolean): WorkbookAudit =
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val position: Map[SheetName, Int] =
       wb.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
@@ -196,16 +206,21 @@ object WorkbookAudit:
         DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,
       calcPr = wb.metadata.calcPr,
       iterativeCycles = if iterative then cyclic else Vector.empty,
-      staleDataTables = staleDataTablesOf(
-        wb,
-        clock,
-        graph.dependencies,
-        // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
-        scanned.iterator.collect {
-          case Finding.Volatile(q) => q
-          case Finding.MaybeVolatile(q) => q
-        }.toSet
-      )
+      staleDataTables =
+        if !checkDataTables then Vector.empty
+        else
+          staleDataTablesOf(
+            wb,
+            clock,
+            graph.dependencies,
+            // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
+            scanned.iterator.collect {
+              case Finding.Volatile(q) => q
+              case Finding.MaybeVolatile(q) => q
+            }.toSet
+          )
+      ,
+      dataTablesChecked = checkDataTables
     )
 
   /**
