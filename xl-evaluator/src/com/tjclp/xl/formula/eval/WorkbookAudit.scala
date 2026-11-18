@@ -180,15 +180,25 @@ object WorkbookAudit:
         (position.getOrElse(q.sheet, Int.MaxValue), q.ref.row.index0, q.ref.col.index0)
       )
 
+    // #891: one parse of each formula for the whole audit — the recalculation graph's build parses
+    // them, and the scan, the dependency index, the dynamic and unresolved-reader classifications
+    // all read those parses
+    val recalcGraph = RecalcGraph.build(wb, RecalcCounters.disabled)
+    val parses = recalcGraph.parses
     val viaName = volatileNames(wb)
     val scanned: Vector[Finding] = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.flatMap { (ref, cell) =>
-        classify(QualifiedRef(sheet.name, ref), cell.value, viaName(sheet.name, _, _))
+        classify(
+          QualifiedRef(sheet.name, ref),
+          cell.value,
+          viaName(sheet.name, _, _),
+          parses.parse(sheet.name, ref, _)
+        )
       }
     }.toVector
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
     val unparseableRefs = unparseable.iterator.map(_._1).toSet
-    val graph = QualifiedGraph.of(wb)
+    val graph = QualifiedGraph.of(wb, parses)
     // sccs come dependency-first; the report reads in workbook order like every other bucket
     val cyclic = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
     // With iterative calculation on, a circular model is the file's declared intent, not a finding
@@ -199,11 +209,15 @@ object WorkbookAudit:
       uncachedFormulas = scanned.collect { case Finding.Uncached(q) => q }.sorted,
       unparseable = unparseable.sortBy(_._1),
       volatile = scanned.collect { case Finding.Volatile(q) => q }.sorted,
-      dynamic = DependencyGraph.dynamicCells(wb).toVector.sorted,
+      dynamic = DependencyGraph.dynamicCells(wb, parses).toVector.sorted,
       cycles = if iterative then Vector.empty else cyclic,
       externalRefs = scanned.collect { case Finding.External(q) => q }.sorted,
-      unresolvedReaders =
-        DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,
+      unresolvedReaders = DependencyGraph
+        .unresolvedReaders(wb, parses)
+        .iterator
+        .filterNot(unparseableRefs)
+        .toVector
+        .sorted,
       calcPr = wb.metadata.calcPr,
       iterativeCycles = if iterative then cyclic else Vector.empty,
       staleDataTables =
@@ -340,13 +354,14 @@ object WorkbookAudit:
   private def classify(
     q: QualifiedRef,
     value: CellValue,
-    viaName: (Option[SheetName], String) => NameWalk.Reach
+    viaName: (Option[SheetName], String) => NameWalk.Reach,
+    parse: String => Either[ParseError, TExpr[?]]
   ): List[Finding] = value match
     case CellValue.Error(e) => List(Finding.ErrorValue(q, e))
     // A data-table record is a pinned value source: its cache is audited, its text never parsed
     case CellValue.Formula(_, cached, _: FormulaKind.DataTable) => cacheFindings(q, cached)
     case CellValue.Formula(text, cached, _) =>
-      val parsed = FormulaParser.parse(text) match
+      val parsed = parse(text) match
         case Left(err) => List(Finding.Unparseable(q, unparseableMessage(text, err)))
         case Right(expr) =>
           val volatile =

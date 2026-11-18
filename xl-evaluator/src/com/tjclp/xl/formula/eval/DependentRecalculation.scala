@@ -38,7 +38,7 @@ object DependentRecalculation:
     seeds: Set[QualifiedRef],
     dynamic: Set[QualifiedRef]
   ): Set[QualifiedRef] =
-    val reaches = ReferenceScan.reaches(wb, DependencyGraph.unresolvedReaders(wb))
+    val reaches = ReferenceScan.reaches(wb, DependencyGraph.unresolvedReaders(wb, graph.parses))
     graph.editCone(seeds, dynamic, reaches)
 
   /**

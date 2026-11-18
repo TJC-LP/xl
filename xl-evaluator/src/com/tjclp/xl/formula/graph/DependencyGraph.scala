@@ -313,7 +313,10 @@ object DependencyGraph:
    * verdict is the node's own, never one computed partway down another reader's path — and every
    * name costs one step however many readers and paths reach it.
    */
-  private[xl] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
+  private[xl] def unresolvedReaders(
+    workbook: Workbook,
+    parses: FormulaParses = FormulaParses.none
+  ): Set[QualifiedRef] =
     val positions =
       workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
     val resolve = NameWalk.resolver(workbook)
@@ -370,7 +373,10 @@ object DependencyGraph:
                 // Closed-workbook external caches are pinned by the explicit evaluation contract.
                 val external = text.contains('[') &&
                   com.tjclp.xl.formula.eval.SheetEvaluator.pinnedExternalCache(cell.value).isDefined
-                !external && parse(text).fold(true)(expressionUnknown(_, sheet.name))
+                !external && parses
+                  .parse(sheet.name, ref, text)
+                  .toOption
+                  .fold(true)(expressionUnknown(_, sheet.name))
               case _ => false
             ) =>
           QualifiedRef(sheet.name, ref)
@@ -1695,7 +1701,8 @@ object DependencyGraph:
    * build-local; only immutable maps, vectors, ranges, and sets escape.
    */
   private[xl] def fromWorkbookDependencyIndex(
-    workbook: com.tjclp.xl.workbooks.Workbook
+    workbook: com.tjclp.xl.workbooks.Workbook,
+    parses: FormulaParses = FormulaParses.none
   ): QualifiedDependencyIndex =
     val pointBuilders = scala.collection.mutable.HashMap.empty[
       QualifiedRef,
@@ -1713,7 +1720,7 @@ object DependencyGraph:
         cell.value match
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
           case CellValue.Formula(expression, _, _) =>
-            FormulaParser.parse(expression) match
+            parses.parse(sheet.name, cellRef, expression) match
               case scala.util.Left(_) => ()
               case scala.util.Right(expr) =>
                 val dependent = QualifiedRef(sheet.name, cellRef)
