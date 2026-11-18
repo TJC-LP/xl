@@ -39,7 +39,22 @@ object DependentRecalculation:
     dynamic: Set[QualifiedRef]
   ): Set[QualifiedRef] =
     val reaches = ReferenceScan.reaches(wb, DependencyGraph.unresolvedReaders(wb, graph.parses))
-    graph.editCone(seeds, dynamic, reaches)
+    graph.editCone(seeds ++ uncachedFormulas(wb), dynamic, reaches)
+
+  /**
+   * #891 (Excel parity): every formula that holds no value. Excel has no such cell (after any
+   * calculation every formula holds a value, an error being one), so the after-edit pass computes
+   * them with the edit, and what reads them, exactly as a full recalculation would: one that fails
+   * again withdraws its readers' caches instead of being read as empty. A book saved without caches
+   * therefore computes in full on its first edit, as Excel computes it on open.
+   */
+  private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
+    wb.sheets.iterator.flatMap { sheet =>
+      sheet.cells.iterator.collect {
+        case (ref, cell) if WorkbookEvaluator.isUncachedEvaluable(cell.value) =>
+          QualifiedRef(sheet.name, ref)
+      }
+    }.toSet
 
   /**
    * GH-504/GH-508: evaluate authored formulas as well as affected dependents and retain outcomes.

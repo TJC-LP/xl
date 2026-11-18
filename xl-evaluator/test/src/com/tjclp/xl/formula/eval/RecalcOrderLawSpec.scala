@@ -135,6 +135,10 @@ class RecalcOrderLawSpec extends ScalaCheckSuite:
     val errors = run(opts)(wb).errors.map(e => s"${e.sheet.value}!${e.ref.toA1}")
     // circular first, then blocked; each in (sheet name, row, column) order
     assertEquals(errors, Vector("B!A3", "b!A2", "b!A10", "B!B1", "b!C1"))
+    // #891: the uncached pass lists them the same way
+    val uncached = recalculateUncachedCounted(wb, opts, RecalcCounters.disabled).errors
+      .map(e => s"${e.sheet.value}!${e.ref.toA1}")
+    assertEquals(uncached, errors)
   }
 
   test("a seeded RAND draws in grid order whatever the cells' insertion order") {

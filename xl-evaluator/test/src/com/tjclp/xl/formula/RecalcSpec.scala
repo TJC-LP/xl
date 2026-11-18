@@ -392,12 +392,10 @@ class RecalcSpec extends FunSuite:
         "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE); " +
         "S!B2 #DIV/0! — Division by zero: 1 / 0; S!B3 #N/A; … and 2 more)"
     )
-    // the targeted paths carry the reasons too (an edit of A1 reaches B1, B4 and B5)
+    // the targeted paths carry the reasons too; #891: every formula of this uncached book holds no
+    // value, so the first edit computes them all, as Excel computes such a book on open
     val afterEdit = Workbook(sheet).recalculateAfterEdit(S, Set(ref"A1"), RecalcOptions())
-    assertEquals(
-      afterEdit.errorCells,
-      result.errorCells.filter(c => Set(ref"B1", ref"B4", ref"B5")(c.ref))
-    )
+    assertEquals(afterEdit.errorCells, result.errorCells)
     val uncached = Workbook(sheet).recalculateUncached(RecalcOptions())
     assertEquals(uncached.errorCells, result.errorCells)
     // more than MaxNamedErrorCells: errorCells carries the first ten, the summary names the first

@@ -70,6 +70,7 @@ class AfterEditLawSpec extends ScalaCheckSuite:
     }.toSet
 
   property("after an edit: the cone equals a full recalculation, the rest is untouched") {
+    // the cone includes every formula holding no value (Excel has none), so nothing is exempt
     Prop.forAll(CompactGraphGens.genWorkbook, genEdit) { (wb, edit) =>
       val settled = wb.recalculate(options).workbook
       val edited = applyEdit(settled, edit)
@@ -79,12 +80,6 @@ class AfterEditLawSpec extends ScalaCheckSuite:
       val full = cellsOf(edited.recalculate(options).workbook)
       val before = cellsOf(edited)
       val cone = DependentRecalculation.editCone(edited, Set(QualifiedRef(edit.sheet, edit.ref)))
-      // the gap the pass inherits (pinned below): a formula outside the cone that holds no cache
-      // failed on every earlier pass; a full recalculation fails it again and withdraws what reads
-      // it, the after-edit pass leaves it alone and reads it as empty
-      val graph = RecalcGraph.build(edited, RecalcCounters.disabled)
-      val stale = uncachedFormulas(edited) -- cone
-      val exempt = graph.dependents(stale, Set.empty)
       def at(cells: Map[SheetName, Map[ARef, Cell]], q: QualifiedRef) =
         cells.get(q.sheet).flatMap(_.get(q.ref))
       val all = (before.toVector ++ full.toVector)
@@ -92,7 +87,7 @@ class AfterEditLawSpec extends ScalaCheckSuite:
         .distinct
       val outside = all.filterNot(cone.contains).filter(q => at(after, q) != at(before, q))
       val inside = all
-        .filter(q => cone.contains(q) && !exempt.contains(q))
+        .filter(cone.contains)
         .filter(q => at(after, q) != at(full, q))
       def show(qs: Vector[QualifiedRef], other: Map[SheetName, Map[ARef, Cell]], label: String) =
         qs.map(q => s"$q: $label=${at(other, q).map(_.value)} after=${at(after, q).map(_.value)}")
@@ -105,12 +100,11 @@ class AfterEditLawSpec extends ScalaCheckSuite:
     }
   }
 
-  test("inherited gap: a lookup over an always-failing formula outside the cone keeps a value") {
-    // D1 fails on every pass (an unknown sheet), so a settled book holds it uncached; E1 looks up
-    // through the table D1 sits in. An edit to A2 (E1's key column) re-evaluates E1, which reads
-    // D1 as empty; a full recalculation fails D1 again and withdraws E1. Pinned as today's
-    // behaviour, not as the target: the decision whether after-edit should re-run such cells is
-    // open (#891 follow-up).
+  test("Excel parity: a lookup over an always-failing formula is withdrawn after an edit too") {
+    // B1 fails on every pass (an unknown sheet), so a settled book holds it uncached; E1 looks up
+    // through the table B1 sits in. Excel holds an error value in B1 and the lookup sees it; xl's
+    // after-edit pass computes every uncached formula with the edit (#891), so B1 fails again and
+    // E1 is withdrawn, exactly as a full recalculation has it.
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
       .put(ARef.from0(0, 1), CellValue.Number(BigDecimal(2)))
@@ -126,8 +120,8 @@ class AfterEditLawSpec extends ScalaCheckSuite:
     val full = edited.recalculate(options)
     def e1(r: RecalcResult) =
       r.workbook(sheet.name).toOption.flatMap(_.cells.get(ARef.from0(4, 0))).map(_.value)
-    assertEquals(e1(after), Some(CellValue.Formula("VLOOKUP(2,A1:B2,2,FALSE)", Some(n(7)))))
     assertEquals(e1(full), Some(CellValue.Formula("VLOOKUP(2,A1:B2,2,FALSE)", None)))
+    assertEquals(e1(after), e1(full))
   }
 
   private def n(i: Int): CellValue = CellValue.Number(BigDecimal(i))

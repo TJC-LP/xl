@@ -439,14 +439,17 @@ object WorkbookEvaluator:
         (core, graph.dependents(core, Set.empty))
       }
       val skipped = cyclicCore ++ blocked
-      val skippedErrors = (skipped & uncached).toVector
-        .sortBy(QualifiedRef.gridKey)
-        .map { q =>
-          val reason =
-            if cyclicCore.contains(q) then "Circular reference"
-            else "Blocked by an upstream circular reference"
-          CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
-        }
+      // #891: listed as the full pass lists them — circular cells, then the cells they block, each
+      // in grid order
+      def skippedError(q: QualifiedRef, reason: String): CellEvalError =
+        CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
+      val skippedErrors =
+        (cyclicCore & uncached).toVector
+          .sortBy(QualifiedRef.gridKey)
+          .map(skippedError(_, "Circular reference")) ++
+          ((blocked -- cyclicCore) & uncached).toVector
+            .sortBy(QualifiedRef.gridKey)
+            .map(skippedError(_, "Blocked by an upstream circular reference"))
       counters.time(RecalcCounters.Phase.Kahn)(graph.order(skipped)) match
         case Left(unordered) =>
           // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
@@ -525,7 +528,7 @@ object WorkbookEvaluator:
     s"Unresolvable order: $stuck"
 
   /** A formula cell with no cache that evaluation can compute (data-table records cannot). */
-  private def isUncachedEvaluable(value: CellValue): Boolean = value match
+  private[eval] def isUncachedEvaluable(value: CellValue): Boolean = value match
     case CellValue.Formula(_, None, _: FormulaKind.DataTable) => false
     case CellValue.Formula(_, None, _) => true
     case _ => false

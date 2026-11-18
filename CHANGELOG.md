@@ -34,6 +34,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **An edit computes every formula that holds no value** (#891, Excel parity). Excel has no
+  formula without a value (after any calculation every formula holds one, an error value
+  included), so the after-edit pass every CLI write ends with now evaluates each uncached formula
+  with the edit, and what reads it, exactly as a full recalculation would: a formula that fails
+  again withdraws its readers' caches instead of being read as empty. A book saved without caches
+  therefore computes in full on its first edit, as Excel computes it on open. The uncached pass
+  (`recalculateUncached`) now lists circular cells before the cells they block, as the full pass
+  does.
+
 - **Breaking: the sheet-level graph and evaluator are removed** (#891). Gone: the
   `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
   `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
