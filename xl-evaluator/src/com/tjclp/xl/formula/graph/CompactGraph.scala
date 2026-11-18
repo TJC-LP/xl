@@ -215,9 +215,10 @@ private[formula] final class CompactGraph private (
   /**
    * #891: every formula `seeds` (formula ids) read, directly or transitively, the seeds excluded
    * unless a cycle leads back to them — the upstream mirror of [[reach]]. A formula of `stop` is
-   * listed when reached but its own precedents are not walked (a data table's substituted input).
-   * Virtual nodes are walked through: a range node reads the segments and formulas that make it up,
-   * so a formula reached through a range is every formula inside the range.
+   * listed when reached but its own precedents are never walked, a seed's included (a data table's
+   * substituted input). Virtual nodes are walked through: a range node reads the segments and
+   * formulas that make it up, so a formula reached through a range is every formula inside the
+   * range.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def precedentClosure(seeds: BitSet, stop: BitSet): Reach =
@@ -239,7 +240,7 @@ private[formula] final class CompactGraph private (
     while head < tail do
       val u = queue(head)
       head += 1
-      if !(u < f && stop.contains(u) && !seeds.contains(u)) then
+      if !(u < f && stop.contains(u)) then
         var e = predOff(u)
         val end = predOff(u + 1)
         while e < end do

@@ -267,8 +267,7 @@ object DataTableSeeder:
 
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
     core: Set[QualifiedRef],
     dynamic: Set[QualifiedRef]
   )
@@ -297,13 +296,10 @@ object DataTableSeeder:
     // iterated and the acyclic paths. Lazy: a run that seeds nothing never reads the clock.
     lazy val pinnedClock: Clock = Clock.fixed(clock.today(), clock.now())
     lazy val cycles: CycleContext =
-      val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
-      CycleContext(
-        deps,
-        dependents,
-        DependencyGraph.qualifiedCyclicNodes(deps),
-        DependencyGraph.dynamicCells(wb)
-      )
+      // #891: the recalculation graph — the cycles `recalc` isolates, #504's precise lookup reads,
+      // case-insensitive sheet qualifiers — and its one parse of each formula
+      val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
+      CycleContext(graph, graph.cyclicCore, DependencyGraph.dynamicCells(wb, graph.parses))
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb.sheets.find(_.name == name) match
         case None => (accWb, warns)
@@ -373,7 +369,7 @@ object DataTableSeeder:
         // walk just because the book declares no cycle).
         // The substituted inputs are boundaries: their original formulas and ancestors are not read.
         val closure =
-          DependencyGraph.qualifiedTransitivePrecedents(ctx.deps -- inputQ, srcQ) ++ srcQ
+          ctx.graph.precedents(srcQ, inputQ) ++ srcQ
         val relevantCore = ctx.core.intersect(closure)
         val dynamic = ctx.dynamic.intersect(closure) -- inputQ
         if dynamic.nonEmpty then
@@ -472,25 +468,22 @@ object DataTableSeeder:
     // Source cells evaluate as expressions (never written back) and input cells carry the axis
     // value; both are excluded, as are the cycle members the Jacobi fixpoint owns.
     val precedents = closure -- srcQ -- inputQ -- core
-    val moved = DependencyGraph.qualifiedTransitiveDependents(ctx.dependents, inputQ ++ core)
+    val moved = ctx.graph.cellDependents(inputQ ++ core)
     val axisDependent = precedents.intersect(moved)
     // An input-INDEPENDENT precedent only needs re-deriving when it carries no cache: a cached one
     // reads through its cache (pinned-cache doctrine) and cannot move under the substitution.
     val uncached = (precedents -- axisDependent).filter(q => isUncachedFormula(wb, q))
     val members = axisDependent ++ uncached
-    val deps =
-      members.iterator.map(q => q -> ctx.deps.getOrElse(q, Set.empty).intersect(members)).toMap
-    val back =
-      members.iterator
-        .map(q => q -> ctx.dependents.getOrElse(q, Set.empty).intersect(members))
-        .toMap
-    // Defensive `Nil`: the induced subgraph is acyclic by construction (cycle members are excluded
-    // on the iterated lane, and the acyclic lane only reaches here with an acyclic closure).
-    val ordered = DependencyGraph.qualifiedTopologicalSort(deps, back).getOrElse(Nil)
+    // #891: the members' reads among themselves, ordered by Kahn's algorithm in grid order. The
+    // induced subgraph is acyclic by construction (cycle members are excluded on the iterated lane,
+    // and the acyclic lane only reaches here with an acyclic closure), so the within-component
+    // order makes no cut and is the canonical topological order of the members.
+    val ordered =
+      ctx.graph.withinComponentOrder(members.toVector.sortBy(QualifiedRef.gridKey)).toList
     val indexed = ordered.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx)))
     val downstreamOfCore =
       if core.isEmpty then Set.empty[QualifiedRef]
-      else DependencyGraph.qualifiedTransitiveDependents(ctx.dependents, core)
+      else ctx.graph.dependents(core, Set.empty)
     WhatIfCone(
       base = indexed.filter((q, _) => uncached.contains(q)),
       beforeCycle =
@@ -713,9 +706,7 @@ object DataTableSeeder:
       case Some(tableIdx) =>
         val inputQ = (Set(input1) ++ input2).map(r => QualifiedRef(sheet.name, r))
         val stripSet =
-          DependencyGraph
-            .qualifiedTransitiveDependents(ctx.dependents, inputQ ++ relevantCore)
-            .intersect(closure) -- relevantCore
+          ctx.graph.cellDependents(inputQ ++ relevantCore).intersect(closure) -- relevantCore
         val stripBySheet = stripSet.groupMap(_.sheet)(_.ref)
         val stripped: Vector[Sheet] = wb.sheets.map { s =>
           val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
@@ -775,7 +766,7 @@ object DataTableSeeder:
     val canonical: Vector[QualifiedRef] =
       (relevantCore -- inputQ).toVector.sortBy(QualifiedRef.gridKey)
     val sweep: Vector[QualifiedRef] = iterative.scheme match
-      case IterationScheme.GaussSeidel => DependencyGraph.withinComponentOrder(canonical, ctx.deps)
+      case IterationScheme.GaussSeidel => ctx.graph.withinComponentOrder(canonical)
       case IterationScheme.Jacobi => canonical
     val members: List[(QualifiedRef, Int, String)] =
       sweep.toList.flatMap { q =>

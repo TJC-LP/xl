@@ -54,6 +54,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its own cell (off its key and result columns) is no longer reported as circular while `recalc`
   evaluates it. `QualifiedGraph.sccs` (the declared-reads view behind `deps`) is unchanged.
 
+- **Data-table seeding reads the recalculation graph** (#891): `recalc --tables` and the audit's
+  stale-table note took their cycles, what-if cones and input dependents from a separate
+  used-range-bounded per-cell graph. That graph resolved a case-variant sheet qualifier
+  (`'MID'!A1` for sheet `Mid`) to no sheet, and an empty cell outside its sheet's used range had
+  no readers, so a cycle or a dependent could be missed. The seeder now asks the recalculation
+  graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
+  now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
+
 - **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
   `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
   anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision

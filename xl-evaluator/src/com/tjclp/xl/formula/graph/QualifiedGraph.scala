@@ -254,11 +254,8 @@ object QualifiedGraph:
    * cells, costing min(|range|, |cells|) — and the reverse side is that index itself. `rangeCells`
    * keeps the memo: every declared range, an empty one or one on a missing sheet as `Set.empty`.
    */
-  def of(wb: Workbook): QualifiedGraph = of(wb, FormulaParses.none)
-
-  /** [[of]] reusing `parses`, the formulas a recalculation graph of `wb` already parsed (#891). */
-  private[xl] def of(wb: Workbook, parses: FormulaParses): QualifiedGraph =
-    val index = DependencyGraph.fromWorkbookDependencyIndex(wb, parses)
+  def of(wb: Workbook): QualifiedGraph =
+    val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val cellsBySheet: Map[SheetName, Map[ARef, Cell]] =
       wb.sheets.reverseIterator.map(sheet => sheet.name -> sheet.cells).toMap

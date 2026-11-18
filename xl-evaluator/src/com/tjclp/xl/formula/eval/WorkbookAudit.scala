@@ -5,7 +5,7 @@ import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry}
-import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
+import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.sheets.Sheet
@@ -181,9 +181,9 @@ object WorkbookAudit:
         (position.getOrElse(q.sheet, Int.MaxValue), q.ref.row.index0, q.ref.col.index0)
       )
 
-    // #891: one parse of each formula for the whole audit — the recalculation graph's build parses
-    // them, and the scan, the dependency index, the dynamic and unresolved-reader classifications
-    // all read those parses
+    // #891: one graph and one parse of each formula for the whole audit — the recalculation
+    // graph's build parses them; the scan and the dynamic and unresolved-reader classifications
+    // read those parses, and the cycles and the data-table volatile cones come from the graph
     val recalcGraph = RecalcGraph.build(wb, RecalcCounters.disabled)
     val parses = recalcGraph.parses
     val viaName = volatileNames(wb)
@@ -199,7 +199,6 @@ object WorkbookAudit:
     }.toVector
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
     val unparseableRefs = unparseable.iterator.map(_._1).toSet
-    val graph = QualifiedGraph.of(wb, parses)
     // #891: the cycles a recalculation sees — the recalculation graph's components, with #504's
     // precise lookup reads — so `audit` never reports a cycle `recalc` does not have. They come
     // dependency-first; the report reads in workbook order like every other bucket
@@ -230,7 +229,7 @@ object WorkbookAudit:
           staleDataTablesOf(
             wb,
             clock,
-            graph.dependencies,
+            recalcGraph,
             // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
             scanned.iterator.collect {
               case Finding.Volatile(q) => q
@@ -256,12 +255,12 @@ object WorkbookAudit:
   private def staleDataTablesOf(
     wb: Workbook,
     clock: Clock,
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
     volatile: Set[QualifiedRef]
   ): Vector[StaleDataTable] =
     val tables = wb.sheets
       .flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
-      .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, deps, volatile) }
+      .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, graph, volatile) }
     if tables.isEmpty then Vector.empty
     else
       val seeded = DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator)
@@ -287,14 +286,14 @@ object WorkbookAudit:
   private def readsVolatile(
     sheet: SheetName,
     kind: FormulaKind.DataTable,
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
     volatile: Set[QualifiedRef]
   ): Boolean =
     volatile.nonEmpty && {
       val (sources, inputs) = DataTableSeeder.whatIfEnds(kind)
       val srcQ = sources.map(QualifiedRef(sheet, _))
       val inputQ = inputs.map(QualifiedRef(sheet, _))
-      val cone = DependencyGraph.qualifiedTransitivePrecedents(deps -- inputQ, srcQ) ++ srcQ
+      val cone = graph.precedents(srcQ, inputQ) ++ srcQ
       (cone -- inputQ).exists(volatile)
     }
 

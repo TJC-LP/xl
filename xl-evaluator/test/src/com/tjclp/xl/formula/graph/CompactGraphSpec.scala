@@ -123,7 +123,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
       frontier match
         case Nil => seen
         case q :: rest =>
-          val expand = !(stop.contains(q) && !seeds.contains(q))
+          val expand = !stop.contains(q)
           val next =
             if expand then deps.getOrElse(q, Set.empty).filter(deps.contains) else Set.empty
           val fresh = next -- seen

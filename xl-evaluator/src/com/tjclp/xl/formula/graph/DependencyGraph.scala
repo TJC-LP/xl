@@ -1701,8 +1701,7 @@ object DependencyGraph:
    * build-local; only immutable maps, vectors, ranges, and sets escape.
    */
   private[xl] def fromWorkbookDependencyIndex(
-    workbook: com.tjclp.xl.workbooks.Workbook,
-    parses: FormulaParses = FormulaParses.none
+    workbook: com.tjclp.xl.workbooks.Workbook
   ): QualifiedDependencyIndex =
     val pointBuilders = scala.collection.mutable.HashMap.empty[
       QualifiedRef,
@@ -1720,7 +1719,7 @@ object DependencyGraph:
         cell.value match
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
           case CellValue.Formula(expression, _, _) =>
-            parses.parse(sheet.name, cellRef, expression) match
+            FormulaParser.parse(expression) match
               case scala.util.Left(_) => ()
               case scala.util.Right(expr) =>
                 val dependent = QualifiedRef(sheet.name, cellRef)

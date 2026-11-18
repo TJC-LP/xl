@@ -66,6 +66,38 @@ private[eval] final class RecalcGraph private (graph: CompactGraph, counters: Re
       val candidates = (0 until table.formulaCount).iterator.filterNot(removedIds.contains)
       Left(Unordered(refs(candidates), refs(kahn.remaining)))
 
+  /**
+   * #891: every formula `seeds` read, directly or transitively — the seeds excluded unless a cycle
+   * leads back to them — never walking past a formula of `stop` (listed, never expanded, a seed's
+   * included).
+   */
+  def precedents(seeds: Set[QualifiedRef], stop: Set[QualifiedRef]): Set[QualifiedRef] =
+    if seeds.isEmpty then Set.empty
+    else
+      val closure = graph.precedentClosure(ids(seeds), ids(stop))
+      counters.add(RecalcCounters.Counter.GraphWork, closure.work)
+      refs(closure.formulas)
+
+  /**
+   * #891: every formula downstream of the cells `cells` (formulas or not): their readers, by a
+   * point reference or through a range that contains them, and everything those reach — the
+   * starting cells excluded.
+   */
+  def cellDependents(cells: Set[QualifiedRef]): Set[QualifiedRef] =
+    if cells.isEmpty then Set.empty
+    else
+      val roots = scala.collection.mutable.BitSet.empty
+      cells.foreach { q =>
+        val sheet = table.sheetOf(q.sheet)
+        if sheet >= 0 then
+          table.lookup(q).foreach(roots += _)
+          graph.foreachReaderOfCell(sheet, q.ref.row.index0, q.ref.col.index0)(roots += _)
+      }
+      val starts = ids(cells)
+      val reach = graph.reach(roots.toImmutable, BitSet.empty)
+      counters.add(RecalcCounters.Counter.GraphWork, reach.work)
+      refs((roots.toImmutable -- starts) ++ reach.formulas) -- cells
+
   /** Whether `q` is a formula node of the graph. */
   def isFormula(q: QualifiedRef): Boolean = table.lookup(q).isDefined
 
