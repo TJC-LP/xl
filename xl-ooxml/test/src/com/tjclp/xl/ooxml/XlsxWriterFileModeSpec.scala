@@ -1,7 +1,9 @@
 package com.tjclp.xl.ooxml
 
 import java.nio.file.{FileSystems, Files, Path}
-import java.nio.file.attribute.PosixFilePermissions
+import java.nio.file.attribute.{PosixFileAttributes, PosixFilePermissions}
+
+import scala.jdk.CollectionConverters.*
 
 import com.tjclp.xl.api.*
 import com.tjclp.xl.codec.CellCodec.given
@@ -68,4 +70,42 @@ class XlsxWriterFileModeSpec extends FunSuite:
     setMode(dest, "rw-------")
     assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
     assertEquals(mode(dest), "rw-------")
+  }
+
+  private def group(p: Path): String =
+    Files.readAttributes(p, classOf[PosixFileAttributes]).group.getName
+
+  /** Move `p` to another group the current user belongs to, if there is one. */
+  private def regroup(p: Path): Option[String] =
+    val proc = new ProcessBuilder("id", "-Gn").redirectErrorStream(true).start()
+    val names = new String(proc.getInputStream.readAllBytes()).trim.split("\\s+").toList
+    proc.waitFor(): Unit
+    val lookup = p.getFileSystem.getUserPrincipalLookupService
+    names.filter(n => n.nonEmpty && n != group(p)).find { name =>
+      try
+        Files.setAttribute(p, "posix:group", lookup.lookupPrincipalByGroupName(name))
+        true
+      catch case _: Exception => false
+    }
+
+  test("an overwritten output keeps its group with its mode (GH-868 review)") {
+    assume(posix, "POSIX permissions only")
+    val dir = Files.createTempDirectory("xl-gh868-group-")
+    val dest = dir.resolve("dest.xlsx")
+    Files.writeString(dest, "old")
+    setMode(dest, "rw-rw----")
+    val other = regroup(dest)
+    assume(other.isDefined, "needs a second group the user belongs to")
+    assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
+    assertEquals(Some(group(dest)), other)
+    assertEquals(mode(dest), "rw-rw----")
+  }
+
+  test("when the group cannot be carried over, the group bits are dropped (GH-868 review)") {
+    val shared = PosixFilePermissions.fromString("rw-rw-r--")
+    assertEquals(
+      PosixFilePermissions.toString(OutputFileMode.narrowed(shared, groupKept = false)),
+      "rw----r--"
+    )
+    assertEquals(OutputFileMode.narrowed(shared, groupKept = true).asScala, shared.asScala)
   }

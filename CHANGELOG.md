@@ -42,7 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ended up `0600` (`-rw-------`) whatever the umask. The staged file stays owner-only while it is
   written, then takes the right mode just before the rename.
   **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
-  umask `022`); a replaced output keeps its own mode, so a private (`0600`) file stays private.
+  umask `022`); a replaced output keeps its own mode and group, so a private (`0600`) file stays
+  private. Where the writer cannot give the output the original's group, the group bits are dropped
+  rather than granted to a different group.
 
 - **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
   (`scripts/remote-setup.sh`) now pre-fetches every build dependency
