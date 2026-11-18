@@ -212,7 +212,7 @@ class QualifiedSccOracleSpec extends ScalaCheckSuite:
 
   property("qualifiedCyclicNodes equals the hash-map Tarjan") {
     Prop.forAll(genAny) { deps =>
-      Prop(DependencyGraph.qualifiedCyclicNodes(deps) == oracleCyclicNodes(deps))
+      Prop(NaiveGraphs.qualifiedCyclicNodes(deps) == oracleCyclicNodes(deps))
     }
   }
 
@@ -248,5 +248,5 @@ class QualifiedSccOracleSpec extends ScalaCheckSuite:
     assertEquals(comps.size, 1)
     assert(comps.head.cyclic)
     assertEquals(comps.head.members, (0 until n).map(q).toVector)
-    assertEquals(DependencyGraph.qualifiedCyclicNodes(ring).size, n)
+    assertEquals(NaiveGraphs.qualifiedCyclicNodes(ring).size, n)
   }

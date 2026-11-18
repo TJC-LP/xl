@@ -277,7 +277,7 @@ object DataTableSeeder:
    *
    * The dependency graph derives at most once per run, lazily — only when a record group exists on
    * a scoped sheet. Reusing it across groups is sound: seeding writes only plain interior values
-   * and record caches, neither of which are graph nodes (`fromWorkbookBounded` excludes DataTable
+   * and record caches, neither of which are graph nodes (the recalculation graph excludes DataTable
    * kinds).
    */
   private def seedWorkbook(

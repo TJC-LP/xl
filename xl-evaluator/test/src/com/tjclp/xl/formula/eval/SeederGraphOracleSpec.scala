@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula.eval
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.graph.{CompactGraphGens, DependencyGraph}
@@ -11,9 +12,9 @@ import org.scalacheck.{Gen, Prop}
 /**
  * #891: the graph questions the data-table seeder asks, answered by the recalculation graph
  * ([[RecalcGraph]]), equal the answers of the used-range-bounded per-cell graph the seeder built
- * before (`DependencyGraph.fromWorkbookBounded`) on books without fixed-column lookups, the one
- * place #504's precise reads differ: the precedent formulas of a table's corner never walking past
- * its inputs, the formulas downstream of its inputs (constants or formulas), and the cyclic core.
+ * before (`NaiveGraphs.fromWorkbookBounded`) on books without fixed-column lookups, the one place
+ * #504's precise reads differ: the precedent formulas of a table's corner never walking past its
+ * inputs, the formulas downstream of its inputs (constants or formulas), and the cyclic core.
  */
 class SeederGraphOracleSpec extends ScalaCheckSuite:
 
@@ -76,19 +77,19 @@ class SeederGraphOracleSpec extends ScalaCheckSuite:
   property("precedents, dependents of cells and the cyclic core equal the bounded graph's") {
     Prop.forAll(genCase) { (generated, seeds, stop) =>
       val wb = canonicalQualifiers(generated)
-      val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
+      val (deps, dependents) = NaiveGraphs.fromWorkbookBounded(wb)
       val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
       val formulas = deps.keySet
       // the seeder takes the closure with its sources added (`closure ++ srcQ`): the new walk lists
       // a source a cycle leads back to, the old one never listed a starting cell
       val sources = seeds.filter(formulas.contains)
       val oldClosure =
-        DependencyGraph.qualifiedTransitivePrecedents(deps -- stop, seeds).intersect(formulas) ++
+        NaiveGraphs.qualifiedTransitivePrecedents(deps -- stop, seeds).intersect(formulas) ++
           sources
       val newClosure = graph.precedents(sources, stop) ++ sources
-      val oldMoved = DependencyGraph.qualifiedTransitiveDependents(dependents, stop)
+      val oldMoved = NaiveGraphs.qualifiedTransitiveDependents(dependents, stop)
       val newMoved = graph.cellDependents(stop)
-      val oldCore = DependencyGraph.qualifiedCyclicNodes(deps)
+      val oldCore = NaiveGraphs.qualifiedCyclicNodes(deps)
       Prop.all(
         Prop(newClosure == oldClosure) :|
           s"closure new-only ${newClosure -- oldClosure} old-only ${oldClosure -- newClosure}",
@@ -111,10 +112,10 @@ class SeederGraphOracleSpec extends ScalaCheckSuite:
         .put(ARef.from0(1, 0), CellValue.Formula("A1*2"))
     )
     val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
-    val (deps, _) = DependencyGraph.fromWorkbookBounded(wb)
+    val (deps, _) = NaiveGraphs.fromWorkbookBounded(wb)
     assertEquals(graph.cyclicCore.size, 2)
     // the bounded graph the seeder used before #891 missed the cycle
-    assertEquals(DependencyGraph.qualifiedCyclicNodes(deps), Set.empty[QualifiedRef])
+    assertEquals(NaiveGraphs.qualifiedCyclicNodes(deps), Set.empty[QualifiedRef])
   }
 
   test("an empty cell outside the used range still has its range readers") {
@@ -129,6 +130,6 @@ class SeederGraphOracleSpec extends ScalaCheckSuite:
     val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
     assertEquals(graph.cellDependents(Set(b1)), Set(QualifiedRef(b1.sheet, ARef.from0(0, 4))))
     // the bounded graph the seeder used before #891 saw no reader of B1
-    val (_, dependents) = DependencyGraph.fromWorkbookBounded(wb)
-    assertEquals(DependencyGraph.qualifiedTransitiveDependents(dependents, Set(b1)), Set.empty)
+    val (_, dependents) = NaiveGraphs.fromWorkbookBounded(wb)
+    assertEquals(NaiveGraphs.qualifiedTransitiveDependents(dependents, Set(b1)), Set.empty)
   }

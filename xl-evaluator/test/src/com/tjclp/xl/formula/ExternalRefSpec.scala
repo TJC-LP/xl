@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -188,7 +189,7 @@ class ExternalRefSpec extends ScalaCheckSuite:
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(d1, formula("=SUM([2]Book1!A1:A2)"))
       .put(e1, formula("=SUM(D1)+1"))
-    val (deps, _) = DependencyGraph.fromWorkbookBounded(Workbook(sheet))
+    val (deps, _) = NaiveGraphs.fromWorkbookBounded(Workbook(sheet))
     val qd1 = DependencyGraph.QualifiedRef(SheetName.unsafe("S"), d1)
     val qe1 = DependencyGraph.QualifiedRef(SheetName.unsafe("S"), e1)
     assertEquals(deps.get(qd1), Some(Set.empty[DependencyGraph.QualifiedRef]))

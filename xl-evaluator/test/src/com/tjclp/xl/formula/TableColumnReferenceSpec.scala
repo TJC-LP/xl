@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.StructuralEditor
@@ -169,7 +170,7 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(-1))))
     assertEquals(
       // the recalculation's bounded edges (QualifiedGraph lists only occupied cells: B4 is empty)
-      DependencyGraph
+      NaiveGraphs
         .fromWorkbookBounded(Workbook(sheet))
         ._1(DependencyGraph.QualifiedRef(sheet.name, ref"A1"))
         .map(_.ref),
@@ -290,8 +291,8 @@ class TableColumnReferenceSpec extends FunSuite:
         .put(ref"C7", 1)
         .put(cycleCell, CellValue.Formula("A1+1", Some(num(999))))
         .put(ref"A1", CellValue.Formula(s"""SUMIF($criteria,">0",Table1[Col])""", Some(num(1))))
-      val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
-      assertEquals(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty, expectedCycle)
+      val (graph, _) = NaiveGraphs.fromWorkbookFormulaGraph(Workbook(sheet))
+      assertEquals(NaiveGraphs.qualifiedCyclicNodes(graph).nonEmpty, expectedCycle)
       assertEquals(sheet.cyclicCells.nonEmpty, expectedCycle)
     }
 
@@ -300,8 +301,8 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"C5", CellValue.Formula("A1+1", Some(num(999))))
       .put(ref"A1", CellValue.Formula("""SUMIF(Table1[Col],">0",C3)""", Some(num(1))))
     assert(sheet.cyclicCells.nonEmpty)
-    val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
-    assert(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty)
+    val (graph, _) = NaiveGraphs.fromWorkbookFormulaGraph(Workbook(sheet))
+    assert(NaiveGraphs.qualifiedCyclicNodes(graph).nonEmpty)
   }
 
   test("GH-669: table scheduling prefilter ignores quotes, externals and excluded selectors") {

@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -40,7 +41,7 @@ class FormulaGraphPerfSpec extends FunSuite:
   ) =
     val counters = RecalcCounters.create()
     val started = System.nanoTime()
-    val (dependencies, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb, counters)
+    val (dependencies, dependents) = NaiveGraphs.fromWorkbookFormulaGraph(wb, counters)
     val elapsedMs = (System.nanoTime() - started) / 1000000L
     (dependencies, dependents, counters.snapshot, elapsedMs)
 
@@ -54,13 +55,13 @@ class FormulaGraphPerfSpec extends FunSuite:
       .put(ref"A1", formula("=SUM(Data!A:A)+Data!B3"))
     val wb = Workbook(data, summary)
 
-    val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
+    val (bounded, _) = NaiveGraphs.fromWorkbookBounded(wb)
     val formulaNodes = bounded.keySet
     val expected = bounded.view.mapValues(_ & formulaNodes).toMap
-    val (actual, actualReverse) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+    val (actual, actualReverse) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
 
     assertEquals(actual, expected)
-    assertEquals(actualReverse, DependencyGraph.reverseEdges(expected))
+    assertEquals(actualReverse, NaiveGraphs.reverseEdges(expected))
 
   test("constant driver ranges contribute no topology edges and expand once (GH-522)"):
     val driverRows = 5000
@@ -103,9 +104,9 @@ class FormulaGraphPerfSpec extends FunSuite:
       current.put(ARef.from0(10, i), formula(text))
     }
     val wb = Workbook(sheet)
-    val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
+    val (bounded, _) = NaiveGraphs.fromWorkbookBounded(wb)
     val expected = bounded.view.mapValues(_ & bounded.keySet).toMap
-    val (actual, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+    val (actual, _) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
     assertEquals(actual, expected)
     // the reader of B3:D9 depends on exactly the grid formulas inside it
     val inBox =
@@ -159,7 +160,7 @@ class FormulaGraphPerfSpec extends FunSuite:
       .put(ref"A1", number(1))
       .put(ref"A2", formula("=A1+1"))
       .put(ref"A3", formula("=SUM(A1:A2)"))
-    val (dependencies, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
+    val (dependencies, _) = NaiveGraphs.fromWorkbookFormulaGraph(Workbook(sheet))
     val qA2 = DependencyGraph.QualifiedRef(sheet.name, ref"A2")
     val qA3 = DependencyGraph.QualifiedRef(sheet.name, ref"A3")
 
@@ -174,7 +175,7 @@ class FormulaGraphPerfSpec extends FunSuite:
       .put(ref"B1", formula("=SUM(A1:A1000)"))
       .put(ref"B2", formula("=SUM($A$1:$A$1000)"))
 
-    val (graph, _) = DependencyGraph.fromWorkbookBounded(Workbook(sheet))
+    val (graph, _) = NaiveGraphs.fromWorkbookBounded(Workbook(sheet))
     val relative = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B1"))
     val anchored = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B2"))
 

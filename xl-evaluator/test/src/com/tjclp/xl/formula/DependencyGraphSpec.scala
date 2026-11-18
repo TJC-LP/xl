@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -296,8 +297,8 @@ class DependencyGraphSpec extends ScalaCheckSuite:
     forAll(sccGraphGen) { deps =>
       val comps = DependencyGraph.qualifiedSccOrder(deps)
       val fromComps = comps.filter(_.cyclic).flatMap(_.members).toSet
-      (fromComps == DependencyGraph.qualifiedCyclicNodes(deps)) :|
-        s"cyclic view mismatch: $fromComps vs ${DependencyGraph.qualifiedCyclicNodes(deps)}"
+      (fromComps == NaiveGraphs.qualifiedCyclicNodes(deps)) :|
+        s"cyclic view mismatch: $fromComps vs ${NaiveGraphs.qualifiedCyclicNodes(deps)}"
     }
   }
 

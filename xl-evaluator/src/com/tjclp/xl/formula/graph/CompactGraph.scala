@@ -31,11 +31,11 @@ import com.tjclp.xl.workbooks.Workbook
  * formula reaches a range node exactly when it lies inside the range, and a running-total column
  * costs O(rows log rows) edges instead of O(rows²).
  *
- * Reachability between formulas is the legacy per-cell graph's (`fromWorkbookFormulaGraph`): a
- * legacy edge `c → f` (formula `c` inside a range `f` reads) is the path `c → … → canonical segment
- * → range → f`, and every virtual path ends at a reader of a range that contains its start. Hence
- * the same cycles, the same transitive dependents and, with the min-heap order of [[kahn]], the
- * same lexicographically smallest topological order of the formulas.
+ * Reachability between formulas is the per-cell graph's (the `NaiveGraphs.fromWorkbookFormulaGraph`
+ * test oracle): a legacy edge `c → f` (formula `c` inside a range `f` reads) is the path `c → … →
+ * canonical segment → range → f`, and every virtual path ends at a reader of a range that contains
+ * its start. Hence the same cycles, the same transitive dependents and, with the min-heap order of
+ * [[kahn]], the same lexicographically smallest topological order of the formulas.
  *
  * Constant cells are not nodes. [[foreachReaderOfCell]] finds a cell's direct readers through the
  * point reads of constants and an [[IntervalIndex]] of the range nodes per column.

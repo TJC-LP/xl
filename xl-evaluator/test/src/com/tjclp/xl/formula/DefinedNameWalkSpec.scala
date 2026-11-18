@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import java.util.concurrent.atomic.AtomicReference
 
 import com.tjclp.xl.{*, given}
@@ -135,7 +136,7 @@ class DefinedNameWalkSpec extends FunSuite:
       assertEquals(graph.precedentsOf(a2), Set.empty[QualifiedRef])
       assertEquals(graph.precedentsOf(a1), Set.empty[QualifiedRef])
       assertEquals(graph.dependents(b1, 0), Vector(Vector(a3)))
-      val (edges, _) = DependencyGraph.fromWorkbookBounded(wb)
+      val (edges, _) = NaiveGraphs.fromWorkbookBounded(wb)
       assertEquals(edges.get(a3), Some(Set(b1)))
       assertEquals(edges.get(a1), Some(Set.empty[QualifiedRef]))
 
@@ -253,7 +254,7 @@ class DefinedNameWalkSpec extends FunSuite:
       assertEquals(DependencyGraph.unresolvedReaders(steady), Set.empty[QualifiedRef])
       assertEquals(DependencyGraph.dynamicCells(steady), Set.empty[QualifiedRef])
       assertEquals(QualifiedGraph.of(steady).precedentsOf(a1), Set(b1))
-      assertEquals(DependencyGraph.fromWorkbookBounded(steady)._1.get(a1), Some(Set(b1)))
+      assertEquals(NaiveGraphs.fromWorkbookBounded(steady)._1.get(a1), Some(Set(b1)))
       val reach = ReferenceScan.reach(steady, S, s"=${lvl(1)}+1")
       assertNotEquals(reach, ReferenceScan.Reach.Unbounded)
       assert(reach.touches(Map(S -> ReferenceScan.SheetCells.of(Set(at("B1"))))), reach)
@@ -285,7 +286,7 @@ class DefinedNameWalkSpec extends FunSuite:
     val (a1, b1) = (q(S, "A1"), q(S, "B1"))
     onSmallStack {
       assertEquals(QualifiedGraph.of(wb).precedentsOf(a1), Set(b1))
-      assertEquals(DependencyGraph.fromWorkbookBounded(wb)._1.get(a1), Some(Set(b1)))
+      assertEquals(NaiveGraphs.fromWorkbookBounded(wb)._1.get(a1), Some(Set(b1)))
       val audit = WorkbookAudit.of(wb)
       assertEquals(audit.dynamic, Vector(a1))
       assertEquals(audit.unresolvedReaders, Vector.empty)
@@ -349,7 +350,7 @@ class DefinedNameWalkSpec extends FunSuite:
       val graph = QualifiedGraph.of(wb)
       assertEquals(graph.precedentsOf(a1), Set(q(T, "B1")))
       assertEquals(graph.precedentsOf(a2), Set(q(T, "B1"), q(T, "B2")))
-      assertEquals(DependencyGraph.fromWorkbookBounded(wb)._1.get(a1), Some(Set(q(T, "B1"))))
+      assertEquals(NaiveGraphs.fromWorkbookBounded(wb)._1.get(a1), Some(Set(q(T, "B1"))))
 
       // the audit and dynamic classification see what T's definitions call
       val audit = WorkbookAudit.of(wb)

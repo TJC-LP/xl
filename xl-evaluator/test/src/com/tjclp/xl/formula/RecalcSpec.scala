@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.graph.NaiveGraphs
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
@@ -151,7 +152,7 @@ class RecalcSpec extends FunSuite:
       node(i) -> (if i + 1 < n then Set(node(i + 1)) else Set.empty[QualifiedRef])
     }.toMap
     assertEquals(
-      com.tjclp.xl.formula.graph.DependencyGraph.qualifiedCyclicNodes(deps),
+      com.tjclp.xl.formula.graph.NaiveGraphs.qualifiedCyclicNodes(deps),
       Set.empty[QualifiedRef]
     )
 
@@ -161,7 +162,7 @@ class RecalcSpec extends FunSuite:
     val deps = (0 until n).map { i =>
       node(i) -> Set(node((i + 1) % n)) // last points back to first
     }.toMap
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.qualifiedCyclicNodes(deps).size, n)
+    assertEquals(com.tjclp.xl.formula.graph.NaiveGraphs.qualifiedCyclicNodes(deps).size, n)
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000

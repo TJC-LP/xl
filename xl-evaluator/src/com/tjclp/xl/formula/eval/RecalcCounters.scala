@@ -63,8 +63,8 @@ private[formula] object RecalcCounters:
 
   /**
    * What a pass counts. No recalculation counts `RangeLookups` or `RangeLookupWork` since #891:
-   * only the per-cell formula graph (`fromWorkbookFormulaGraph`, now a test oracle) does. Every
-   * criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed
+   * only the per-cell formula graph (`NaiveGraphs.fromWorkbookFormulaGraph`, a test oracle) does.
+   * Every criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed
    * criterion also counts once as `CriteriaWindowOnly` or `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
