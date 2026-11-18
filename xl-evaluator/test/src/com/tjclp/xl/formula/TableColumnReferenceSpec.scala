@@ -4,6 +4,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
@@ -162,17 +163,21 @@ class TableColumnReferenceSpec extends FunSuite:
     assert(DependencyGraph.containsCellReferences(parsed))
   }
 
-  test("GH-669: sheet graph orders table formulas and detects a table self-cycle") {
+  test("GH-669: the graph orders table formulas and detects a table self-cycle") {
     val sheet = data
       .put(ref"B3", CellValue.Formula("C3+1", Some(num(99))))
       .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(-1))))
     assertEquals(
-      DependencyGraph.fromSheet(sheet).dependencies(ref"A1"),
+      // the recalculation's bounded edges (QualifiedGraph lists only occupied cells: B4 is empty)
+      DependencyGraph
+        .fromWorkbookBounded(Workbook(sheet))
+        ._1(DependencyGraph.QualifiedRef(sheet.name, ref"A1"))
+        .map(_.ref),
       Set(ref"B3", ref"B4", ref"B5")
     )
-    assertEquals(sheet.evaluateWithDependencyCheck().toOption.get(ref"A1"), num(14))
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(14))
     val cycle = data.put(ref"B3", CellValue.Formula("SUM(Table1[Col])"))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(cycle)).isLeft)
+    assert(cycle.cyclicCells.nonEmpty)
   }
 
   test("GH-669: workbook graph and dirty recalc refresh table precedents first") {
@@ -259,7 +264,7 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"C7", 1)
       .put(ref"B7", CellValue.Formula("C7+10", Some(num(999))))
       .put(ref"A1", CellValue.Formula("""SUMIF(C3:C7,">0",Table1[Col])""", Some(num(-1))))
-    assertEquals(sheet.evaluateWithDependencyCheck().toOption.get(ref"A1"), num(1015))
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(1015))
     val wb = Workbook(sheet).recalculate()
     assertEquals(cached(wb.workbook, "Data", ref"A1"), Some(num(1015)))
   }
@@ -270,9 +275,9 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"B7", CellValue.Formula("A1+1", Some(num(999))))
       .put(ref"A1", CellValue.Formula(formula, Some(num(1))))
     val explicit = cycle("""SUMIF(C3:C7,">0",B3:B5)""")
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(explicit)).isLeft)
+    assert(explicit.cyclicCells.nonEmpty)
     val structured = cycle("""SUMIF(C3:C7,">0",Table1[Col])""")
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(structured)).isLeft)
+    assert(structured.cyclicCells.nonEmpty)
   }
 
   for (criteria, cycleCell, expectedCycle) <- List(
@@ -287,17 +292,14 @@ class TableColumnReferenceSpec extends FunSuite:
         .put(ref"A1", CellValue.Formula(s"""SUMIF($criteria,">0",Table1[Col])""", Some(num(1))))
       val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
       assertEquals(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty, expectedCycle)
-      assertEquals(
-        DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft,
-        expectedCycle
-      )
+      assertEquals(sheet.cyclicCells.nonEmpty, expectedCycle)
     }
 
   test("GH-669: table criteria shape resizes a literal SUMIF target in both graphs") {
     val sheet = data
       .put(ref"C5", CellValue.Formula("A1+1", Some(num(999))))
       .put(ref"A1", CellValue.Formula("""SUMIF(Table1[Col],">0",C3)""", Some(num(1))))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft)
+    assert(sheet.cyclicCells.nonEmpty)
     val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
     assert(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty)
   }
@@ -326,7 +328,7 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"E4", CellValue.Formula("SUM(Table1[Col])"))
       .put(ref"E5", CellValue.Formula("COUNTIF(OFFSET(B3,0,0,3,1),\">0\")"))
     // only the genuinely computed OFFSET range stays dynamic
-    assertEquals(DependencyGraph.dynamicCells(readers), Set(ref"E5"))
+    assertEquals(readers.dynamicRefs, Set(ref"E5"))
     assertEquals(
       DependencyGraph.dynamicCells(Workbook(Sheet("Reader"), readers)).map(_.ref),
       Set(ref"E5")

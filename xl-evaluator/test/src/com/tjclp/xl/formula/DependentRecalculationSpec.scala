@@ -7,6 +7,7 @@ import com.tjclp.xl.*
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -28,17 +29,15 @@ class DependentRecalculationSpec extends FunSuite:
       s.put(ref, value)
     }
 
-  // ===== Transitive Dependents Tests (6 tests) =====
+  // ===== Transitive Dependents Tests (6 tests; #891: over QualifiedGraph.of) =====
 
   test("transitiveDependents: empty set returns empty") {
-    val graph = DependencyGraph(Map.empty, Map.empty)
-    assertEquals(DependencyGraph.transitiveDependents(graph, Set.empty), Set.empty[ARef])
+    assertEquals(emptySheet.dependentsClosure(Set.empty), Set.empty[ARef])
   }
 
   test("transitiveDependents: single node with no dependents") {
     val sheet = sheetWith(ref"A1" -> CellValue.Number(BigDecimal(10)))
-    val graph = DependencyGraph.fromSheet(sheet)
-    assertEquals(DependencyGraph.transitiveDependents(graph, Set(ref"A1")), Set.empty[ARef])
+    assertEquals(sheet.dependentsClosure(Set(ref"A1")), Set.empty[ARef])
   }
 
   test("transitiveDependents: direct dependent") {
@@ -47,8 +46,7 @@ class DependentRecalculationSpec extends FunSuite:
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1*2")
     )
-    val graph = DependencyGraph.fromSheet(sheet)
-    val result = DependencyGraph.transitiveDependents(graph, Set(ref"A1"))
+    val result = sheet.dependentsClosure(Set(ref"A1"))
     assertEquals(result, Set(ref"B1"))
   }
 
@@ -59,8 +57,7 @@ class DependentRecalculationSpec extends FunSuite:
       ref"B1" -> CellValue.Formula("=A1*2"),
       ref"C1" -> CellValue.Formula("=B1+5")
     )
-    val graph = DependencyGraph.fromSheet(sheet)
-    val result = DependencyGraph.transitiveDependents(graph, Set(ref"A1"))
+    val result = sheet.dependentsClosure(Set(ref"A1"))
     // When A1 changes, both B1 and C1 need recalculation
     assertEquals(result, Set(ref"B1", ref"C1"))
   }
@@ -74,8 +71,7 @@ class DependentRecalculationSpec extends FunSuite:
       ref"C1" -> CellValue.Formula("=A1*2"),
       ref"D1" -> CellValue.Formula("=B1+C1")
     )
-    val graph = DependencyGraph.fromSheet(sheet)
-    val result = DependencyGraph.transitiveDependents(graph, Set(ref"A1"))
+    val result = sheet.dependentsClosure(Set(ref"A1"))
     // When A1 changes, B1, C1, and D1 all need recalculation
     assertEquals(result, Set(ref"B1", ref"C1", ref"D1"))
   }
@@ -87,8 +83,7 @@ class DependentRecalculationSpec extends FunSuite:
       ref"B1" -> CellValue.Formula("=A1*2"),
       ref"B2" -> CellValue.Formula("=A2*3")
     )
-    val graph = DependencyGraph.fromSheet(sheet)
-    val result = DependencyGraph.transitiveDependents(graph, Set(ref"A1", ref"A2"))
+    val result = sheet.dependentsClosure(Set(ref"A1", ref"A2"))
     assertEquals(result, Set(ref"B1", ref"B2"))
   }
 
@@ -431,7 +426,10 @@ class DependentRecalculationSpec extends FunSuite:
     val probe = candidates.foldLeft(emptySheet) { (sheet, at) =>
       sheet.put(at, CellValue.Formula("=INDIRECT(\"D1\")"))
     }
-    val order = DependencyGraph.topologicalSort(DependencyGraph.fromSheet(probe)).toOption.get
+    val order = DependencyGraph
+      .qualifiedSccOrder(probe.qualifiedGraph.dependencies)
+      .flatMap(_.members)
+      .map(_.ref)
     val first = order.head
     val second = order(1)
     val firstExpr = s"=INDIRECT(\"${second.toA1}\")"

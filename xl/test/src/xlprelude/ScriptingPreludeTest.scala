@@ -151,7 +151,7 @@ class ScriptingPreludeTest extends FunSuite:
       case CellValue.Number(n) => n == BigDecimal(5)
       case _ => false
     })
-    assert(sheet.evaluateWithDependencyCheck().isRight)
+    assert(Workbook(sheet).recalculate().isClean)
     assert(FormulaParser.parse("=SUM(A1:A10)").isRight)
     val clock = Clock.system
     assert(clock != null || true)

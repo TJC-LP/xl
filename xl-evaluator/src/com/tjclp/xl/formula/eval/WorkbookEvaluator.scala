@@ -162,7 +162,7 @@ object WorkbookEvaluator:
      *
      * Dynamic references (GH-274): the static graph sees INDIRECT's *arguments*, not its resolved
      * *targets*. INDIRECT-bearing cells and their static dependents evaluate after all other
-     * formulas (stable evaluate-last partition, `DependencyGraph.deferDynamic`) with stale caches
+     * formulas (a stable evaluate-last partition of the canonical order) with stale caches
      * stripped, resolving not-yet-evaluated targets on demand under the depth-100 recursion guard —
      * so INDIRECT chains compute fresh values every recalculation. Dynamic cycles (INDIRECT
      * resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell
@@ -641,8 +641,7 @@ object WorkbookEvaluator:
       case Right(ordered) =>
         val evalOrder = ordered.order
         // GH-274/GH-301: dynamic-reference cells (INDIRECT/OFFSET) and their transitive static
-        // dependents evaluate last (stable partition — preserves topological validity per the
-        // deferDynamic lemma), with stale caches stripped so a dynamic read of a
+        // dependents evaluate last (a stable partition of a topological order stays topological), with stale caches stripped so a dynamic read of a
         // not-yet-evaluated bucket cell recursively evaluates fresh (re-entry-guarded, #829: a
         // read that closes on a cell being evaluated is its circular reference) instead of
         // trusting a previous generation's cache. The closure is workbook-level (GH-346): a

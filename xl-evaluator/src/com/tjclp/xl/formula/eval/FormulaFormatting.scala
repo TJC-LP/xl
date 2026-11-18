@@ -83,8 +83,8 @@ object FormulaFormatting:
    *
    * Order is load-bearing for the first-reference-wins rule, which is why this does not reuse
    * [[com.tjclp.xl.formula.graph.DependencyGraph.extractDependencies]] (Set-based, unordered, and
-   * intra-sheet only). Bounding mirrors `extractDependenciesBounded`: ranges are clipped to the
-   * target sheet's used range so full column/row references never materialize 1M+ cells.
+   * intra-sheet only). Ranges are clipped to the target sheet's used range so full column/row
+   * references never materialize 1M+ cells.
    */
   // nowarn: compiler incorrectly reports PolyRef as unreachable (same as DependencyGraph)
   @nowarn("msg=Unreachable case")

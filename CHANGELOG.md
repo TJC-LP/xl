@@ -34,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: the sheet-level graph and evaluator are removed** (#891). Gone: the
+  `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
+  `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
+  `cyclicNodes`, `topologicalSort`, `dynamicClosure`, `deferDynamic` and `dynamicCells(sheet)`;
+  the unused `fromWorkbook`, `detectCrossSheetCycles`, `qualifiedTopologicalSort` and
+  `extractDependenciesBounded`; and `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and
+  `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
+  Tarjan and Kahn engines that saw no other sheet. Use `Workbook(sheet).recalculate(...)` to
+  evaluate (cycles are reported per cell instead of failing the call), `QualifiedGraph.of(wb)` for
+  precedents, dependents and cycles (`.sccs.filter(_.cyclic)`), and
+  `sheet.evaluateForRangePerCell` for a window. `evaluateForRangePerCell` (what `view --eval`
+  renders) now takes its closure, cycles and order from the workbook's recalculation graph, so a
+  cycle that runs through another sheet is reported instead of evaluated against stale caches.
+
 - **Breaking: `sheet.recalculateDependents` and `wb.recalculateDependents(WithClock)` are
   removed** (#891). They were a second and third copy of targeted recalculation that ordered by a
   hash-seeded FIFO and dropped evaluation errors. Use `wb.recalculateAfterEdit(sheet, refs,

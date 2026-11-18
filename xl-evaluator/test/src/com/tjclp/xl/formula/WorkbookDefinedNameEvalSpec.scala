@@ -168,7 +168,7 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
   test("GH-384: dependency graph carries an edge from the name user to the name's target") {
     val other = Sheet(SheetName.unsafe("Other")).put(a1, formula("=IF(case=2, 10, 20)"))
     val wb = Workbook(model.put(b2, formula("=1+1")), other).withDefinedName("case", "Model!$B$2")
-    val graph = DependencyGraph.fromWorkbook(wb)
+    val (graph, _) = DependencyGraph.fromWorkbookBounded(wb)
     val edges = graph.getOrElse(QualifiedRef(SheetName.unsafe("Other"), a1), Set.empty)
     assert(
       edges.contains(QualifiedRef(SheetName.unsafe("Model"), b2)),

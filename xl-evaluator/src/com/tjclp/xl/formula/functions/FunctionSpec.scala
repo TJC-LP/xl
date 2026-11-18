@@ -34,7 +34,7 @@ final case class FunctionFlags(
    * GH-274: True for functions whose data dependencies are not statically knowable (e.g. INDIRECT,
    * which reads whatever cell its evaluated text names). The static dependency graph sees only the
    * function's *arguments*; cells bearing such calls are deferred to the end of recalculation order
-   * (`DependencyGraph.deferDynamic`) and treated as always-dirty by targeted recalculation
+   * (a stable evaluate-last partition) and treated as always-dirty by targeted recalculation
    * (`DependentRecalculation`).
    */
   dynamicDeps: Boolean = false,

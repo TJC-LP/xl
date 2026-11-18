@@ -250,7 +250,7 @@
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
 - ✅ **Function Library**: **108 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122); 0.11.2 added INDIRECT (GH-274), RAND/RANDBETWEEN via the seeded Rng capability (GH-115), and LET lexical bindings (GH-193) (dynamic text-to-reference resolution with deferred-bucket recalculation).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
-- ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
+- ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`QualifiedGraph.of(wb).sccs`)
 
 **Performance** (JMH Benchmarked - WI-15; figures captured on an earlier release, not re-validated for 0.12.x — treat as indicative):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
@@ -323,13 +323,13 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
   - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
   - **Random** (2): RAND, RANDBETWEEN
   - FunctionSpec registry: macro-collected specs with extensible registry
-  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
+  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateForRangePerCell(), wb.recalculate()
   - Clock trait for pure date/time functions (deterministic testing)
 - ✅ **Dependency Graph** (WI-09d): Circular reference detection + topological sort, 52 tests
   - Tarjan's SCC algorithm: O(V+E) cycle detection with early exit
   - Kahn's algorithm: O(V+E) topological sort for correct evaluation order
-  - Precedent/dependent queries: O(1) lookups via adjacency lists
-  - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
+  - Precedent/dependent queries: `QualifiedGraph.of(wb)` (cross-sheet, bounded ranges)
+  - Safe evaluation: `wb.recalculate()` — cycles isolated per cell (the sheet-level graph and `evaluateWithDependencyCheck` were removed in #891)
   - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are supported by the in-memory OOXML path and `writeWorkbookStream`. Pure row-stream generation (`writeStream` / `writeStreamsSeq`) has no merge API.
 - ✅ Hyperlinks serialized as of 0.10.0 (`Cell.hyperlink` → `<hyperlinks>` + worksheet relationships; populated on read).

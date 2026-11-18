@@ -14,6 +14,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.SheetName
+import com.tjclp.xl.formula.EvalAllSyntax.*
 
 /**
  * GH-344: laws for Excel error VALUES as first-class evaluation results.
@@ -145,7 +146,7 @@ class ErrorValueLawsSpec extends ScalaCheckSuite:
     val cyclic = Sheet("Test")
       .put(ref"A1", CellValue.Formula("=B1", None))
       .put(ref"B1", CellValue.Formula("=A1", None))
-    assert(cyclic.evaluateWithDependencyCheck().isLeft, "cycle must stay Left")
+    assert(cyclic.evalAll().isLeft, "cycle must stay Left")
   }
 
   // ===== L2: catchability =====

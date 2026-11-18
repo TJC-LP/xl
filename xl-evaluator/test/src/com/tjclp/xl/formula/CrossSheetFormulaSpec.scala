@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.{FunSuite, ScalaCheckSuite}
@@ -488,9 +489,9 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assertEquals(result, Right(CellValue.Number(BigDecimal(30))))
   }
 
-  // ===== evaluateWithDependencyCheck Cross-Sheet Tests =====
+  // ===== Whole-sheet evaluation with workbook context (#891: now recalculate) =====
 
-  test("evaluateWithDependencyCheck handles same-sheet formulas with workbook context") {
+  test("whole-sheet evaluation handles same-sheet formulas with workbook context") {
     // This tests that existing dependency checking still works when workbook is provided
     val sheet = sheetWith(
       "Main",
@@ -500,7 +501,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet)
 
-    val result = sheet.evaluateWithDependencyCheck(workbook = Some(wb))
+    val result = sheet.evalAll(workbook = Some(wb))
     assert(result.isRight, s"Expected Right but got: $result")
     result.foreach { results =>
       assertEquals(results.get(ref"B1"), Some(CellValue.Number(BigDecimal(15))))
@@ -508,7 +509,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck threads the refreshed sheet through self-qualified reads") {
+  test("whole-sheet evaluation threads the refreshed sheet through self-qualified reads") {
     val stale = CellValue.Number(BigDecimal(999))
     val sheet = sheetWith(
       "Main",
@@ -517,19 +518,19 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
       // refreshed snapshot rather than Main from the caller's original workbook.
       ref"B1" -> CellValue.Formula("=A1+Main!A1")
     )
-    val result = sheet.evaluateWithDependencyCheck(workbook = Some(workbookWith(sheet)))
+    val result = sheet.evalAll(workbook = Some(workbookWith(sheet)))
 
     assertEquals(result.map(_(ref"B1")), Right(CellValue.Number(BigDecimal(4))))
   }
 
-  test("evaluateWithDependencyCheck defers INDIRECT hidden behind a defined name") {
+  test("whole-sheet evaluation defers INDIRECT hidden behind a defined name") {
     val candidates = Vector(ref"A1", ref"B1")
     val probe = candidates.foldLeft(sheetWith("Main")) { (sheet, at) =>
       sheet.put(at, CellValue.Formula("=1+1"))
     }
     val (reader, target) =
-      DependencyGraph.topologicalSort(DependencyGraph.fromSheet(probe)) match
-        case Right(first :: second :: _) => (first, second)
+      QualifiedGraph.of(Workbook(probe)).sccs.flatMap(_.members).map(_.ref).toList match
+        case first :: second :: _ => (first, second)
         case other => fail(s"expected two acyclic formula nodes, got $other")
     val stale = CellValue.Number(BigDecimal(999))
     val sheet = sheetWith(
@@ -539,14 +540,14 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet).withDefinedName("DynamicName", s"INDIRECT(\"${target.toA1}\")")
 
-    val result = sheet.evaluateWithDependencyCheck(workbook = Some(wb))
+    val result = sheet.evalAll(workbook = Some(wb))
 
     assertEquals(result.map(_(reader)), Right(CellValue.Number(BigDecimal(2))))
   }
 
   // ===== Cross-Sheet Cycle Detection Tests =====
 
-  test("DependencyGraph.fromWorkbook: extracts cross-sheet dependencies") {
+  test("QualifiedGraph.of: extracts cross-sheet dependencies") {
     val sheet1 = sheetWith(
       "Sheet1",
       ref"A1" -> CellValue.Formula("=Sheet2!B1+10")
@@ -557,7 +558,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet1, sheet2)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
+    val graph = QualifiedGraph.of(wb).dependencies
 
     // Sheet1!A1 should depend on Sheet2!B1
     val sheet1A1 = DependencyGraph.QualifiedRef(SheetName.unsafe("Sheet1"), ref"A1")
@@ -567,7 +568,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     assert(graph(sheet1A1).contains(sheet2B1), "Sheet1!A1 should depend on Sheet2!B1")
   }
 
-  test("DependencyGraph.detectCrossSheetCycles: no cycle in valid workbook") {
+  test("QualifiedGraph.sccs: no cycle in valid workbook") {
     val sheet1 = sheetWith(
       "Sheet1",
       ref"A1" -> CellValue.Formula("=Sheet2!B1+10")
@@ -578,13 +579,12 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet1, sheet2)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
-    val result = DependencyGraph.detectCrossSheetCycles(graph)
+    val result = QualifiedGraph.of(wb).sccs.filter(_.cyclic)
 
-    assert(result.isRight, s"Expected no cycle but got: $result")
+    assert(result.isEmpty, s"Expected no cycle but got: $result")
   }
 
-  test("DependencyGraph.detectCrossSheetCycles: detects cross-sheet cycle") {
+  test("QualifiedGraph.sccs: detects cross-sheet cycle") {
     // Sheet1!A1 = Sheet2!B1, Sheet2!B1 = Sheet1!A1 → cycle
     val sheet1 = sheetWith(
       "Sheet1",
@@ -596,13 +596,12 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet1, sheet2)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
-    val result = DependencyGraph.detectCrossSheetCycles(graph)
+    val result = QualifiedGraph.of(wb).sccs.filter(_.cyclic)
 
-    assert(result.isLeft, s"Expected cycle error but got: $result")
+    assert(result.nonEmpty, s"Expected a cycle but got: $result")
   }
 
-  test("DependencyGraph.detectCrossSheetCycles: detects longer cross-sheet cycle") {
+  test("QualifiedGraph.sccs: detects longer cross-sheet cycle") {
     // Sheet1!A1 → Sheet2!B1 → Sheet3!C1 → Sheet1!A1
     val sheet1 = sheetWith(
       "Sheet1",
@@ -618,26 +617,24 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet1, sheet2, sheet3)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
-    val result = DependencyGraph.detectCrossSheetCycles(graph)
+    val result = QualifiedGraph.of(wb).sccs.filter(_.cyclic)
 
-    assert(result.isLeft, s"Expected cycle error but got: $result")
+    assert(result.nonEmpty, s"Expected a cycle but got: $result")
   }
 
-  test("DependencyGraph.detectCrossSheetCycles: detects self-reference") {
+  test("QualifiedGraph.sccs: detects self-reference") {
     val sheet1 = sheetWith(
       "Sheet1",
       ref"A1" -> CellValue.Formula("=Sheet1!A1")
     )
     val wb = workbookWith(sheet1)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
-    val result = DependencyGraph.detectCrossSheetCycles(graph)
+    val result = QualifiedGraph.of(wb).sccs.filter(_.cyclic)
 
-    assert(result.isLeft, s"Expected cycle error but got: $result")
+    assert(result.nonEmpty, s"Expected a cycle but got: $result")
   }
 
-  test("DependencyGraph.fromWorkbook: handles mixed same-sheet and cross-sheet deps") {
+  test("QualifiedGraph.of: handles mixed same-sheet and cross-sheet deps") {
     val sheet1 = sheetWith(
       "Sheet1",
       ref"A1" -> CellValue.Number(BigDecimal(10)),
@@ -649,7 +646,7 @@ class CrossSheetFormulaSpec extends ScalaCheckSuite:
     )
     val wb = workbookWith(sheet1, sheet2)
 
-    val graph = DependencyGraph.fromWorkbook(wb)
+    val graph = QualifiedGraph.of(wb).dependencies
 
     val sheet1A2 = DependencyGraph.QualifiedRef(SheetName.unsafe("Sheet1"), ref"A2")
     val sheet1A1 = DependencyGraph.QualifiedRef(SheetName.unsafe("Sheet1"), ref"A1")

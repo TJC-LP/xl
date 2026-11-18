@@ -2,6 +2,7 @@ package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
@@ -88,7 +89,7 @@ class ComputedRangeArgumentSpec extends FunSuite:
 
   test("GH-723: direct INDEX range slots are scheduled dynamically") {
     val s = data.put(ref"D1", CellValue.Formula("COUNTIF(INDEX(A1:A3,0),\">2\")", None))
-    assert(DependencyGraph.dynamicCells(s).contains(ref"D1"))
+    assert(s.dynamicRefs.contains(ref"D1"))
   }
 
   test("GH-723: computed slot traversals retain external references") {

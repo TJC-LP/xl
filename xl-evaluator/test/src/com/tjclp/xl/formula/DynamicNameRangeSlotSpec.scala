@@ -612,7 +612,7 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     val readers = scoped
       .put(sheet1.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
       .put(other.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph.fromWorkbook(readers)
+    val (graph, _) = com.tjclp.xl.formula.graph.DependencyGraph.fromWorkbookBounded(readers)
     def deps(sheet: SheetName) = graph.getOrElse(
       com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef(sheet, ref"H1"),
       Set.empty

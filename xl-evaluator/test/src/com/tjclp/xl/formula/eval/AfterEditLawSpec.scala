@@ -132,40 +132,6 @@ class AfterEditLawSpec extends ScalaCheckSuite:
 
   private def n(i: Int): CellValue = CellValue.Number(BigDecimal(i))
 
-  /** The book with every VLOOKUP/HLOOKUP formula replaced by a constant (#504's one difference). */
-  private def withoutLookups(wb: Workbook): Workbook =
-    wb.copy(sheets = wb.sheets.map { s =>
-      s.copy(cells = s.cells.view.mapValues { cell =>
-        cell.value match
-          case CellValue.Formula(text, _, _) if text.toUpperCase.contains("LOOKUP(") =>
-            cell.copy(value = CellValue.Number(BigDecimal(1)))
-          case _ => cell
-      }.toMap)
-    })
-
-  property("the compact-graph pass equals the per-cell pass it replaced (no fixed lookups)") {
-    Prop.forAll(CompactGraphGens.genWorkbook, genEdit, Gen.oneOf(true, false)) {
-      (generated, edit, settle) =>
-        val wb = withoutLookups(generated)
-        val start = if settle then wb.recalculate(options).workbook else wb
-        val edited = applyEdit(start, edit)
-        val now = DependentRecalculation.recalculateAfterEdit(
-          edited,
-          edit.sheet,
-          Set(edit.ref),
-          clock,
-          rng = Rng.seeded(5L)
-        )
-        val old = OldAfterEdit.oldRecalculateAfterEdit(edited, edit.sheet, Set(edit.ref), clock)
-        Prop.all(
-          Prop(now.workbook == old.workbook) :| s"workbook, edit $edit",
-          Prop(now.errors.toSet == old.errors.toSet) :|
-            s"errors, edit $edit\nnew-only ${now.errors.toSet -- old.errors.toSet}\nold-only ${old.errors.toSet -- now.errors.toSet}",
-          Prop(now.evaluated == old.evaluated) :| s"evaluated, edit $edit"
-        )
-    }
-  }
-
   test("#504: an edit inside a fixed-column VLOOKUP's table, off its strips, leaves it clean") {
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
@@ -180,16 +146,10 @@ class AfterEditLawSpec extends ScalaCheckSuite:
     )
     val result = edited.recalculateAfterEdit(sheet.name, Set(ARef.from0(1, 0)), options)
     assertEquals(result.evaluated.getOrElse(sheet.name, Map.empty), Map.empty)
-    // the per-cell pass's declared-range cone re-evaluated it, to the same value
-    val old = OldAfterEdit.oldRecalculateAfterEdit(edited, sheet.name, Set(ARef.from0(1, 0)), clock)
+    // and the cell keeps its settled value
     assertEquals(
-      old.evaluated.get(sheet.name).flatMap(_.get(ARef.from0(4, 0))),
-      Some(CellValue.Number(BigDecimal(100)))
-    )
-    // same cells; the per-cell pass also re-wrote the cell, marking the sheet modified
-    assertEquals(
-      result.workbook(sheet.name).map(_.cells),
-      old.workbook(sheet.name).map(_.cells)
+      result.workbook(sheet.name).toOption.flatMap(_.cells.get(ARef.from0(4, 0))).map(_.value),
+      Some(CellValue.Formula("VLOOKUP(1,A1:C1,3,FALSE)", Some(CellValue.Number(BigDecimal(100)))))
     )
   }
 

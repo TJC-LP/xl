@@ -198,12 +198,10 @@ test("Formula System - Evaluation with Dependency Check") {
     .put("B1", 200)
     .put("C1", fx"=A1+B1")
 
-  // Evaluate with cycle detection
-  sheet.evaluateWithDependencyCheck() match
-    case Right(results) =>
-      assert(results.nonEmpty, "Should have results")
-    case Left(error) =>
-      throw new AssertionError(s"Unexpected error: $error")
+  // Recalculate in dependency order (a cycle would be a per-cell error, never a throw)
+  val result = Workbook(sheet).recalculate()
+  if !result.isClean then throw new AssertionError(s"Unexpected errors: ${result.errors}")
+  assert(result.evaluated.getOrElse(sheet.name, Map.empty).nonEmpty, "Should have results")
 }
 
 test("Formula System - Dependency Analysis") {
@@ -212,10 +210,10 @@ test("Formula System - Dependency Analysis") {
     .put("B1", fx"=A1*2")
     .put("C1", fx"=B1+A1")
 
-  val graph = DependencyGraph.fromSheet(sheet)
-  val precedents = DependencyGraph.precedents(graph, ref"B1")
+  val graph = QualifiedGraph.of(Workbook(sheet))
+  val precedents = graph.precedentsOf(QualifiedRef(sheet.name, ref"B1"))
 
-  assert(precedents.contains(ref"A1"), "B1 should depend on A1")
+  assert(precedents.contains(QualifiedRef(sheet.name, ref"A1")), "B1 should depend on A1")
 }
 
 // ============================================================================

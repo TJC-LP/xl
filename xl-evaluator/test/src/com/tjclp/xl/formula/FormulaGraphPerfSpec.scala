@@ -166,7 +166,7 @@ class FormulaGraphPerfSpec extends FunSuite:
     assertEquals(dependencies(qA2), Set.empty)
     assertEquals(dependencies(qA3), Set(qA2))
 
-  test("sheet graph reuses one expansion across anchor spellings of the same range"):
+  test("bounded graph reuses one expansion across anchor spellings of the same range"):
     val sheet = (1 to 1000)
       .foldLeft(Sheet(SheetName.unsafe("S"))) { (current, row) =>
         current.put(ARef.from0(0, row - 1), number(row))
@@ -174,9 +174,9 @@ class FormulaGraphPerfSpec extends FunSuite:
       .put(ref"B1", formula("=SUM(A1:A1000)"))
       .put(ref"B2", formula("=SUM($A$1:$A$1000)"))
 
-    val graph = DependencyGraph.fromSheet(sheet)
-    val relative = graph.dependencies(ref"B1")
-    val anchored = graph.dependencies(ref"B2")
+    val (graph, _) = DependencyGraph.fromWorkbookBounded(Workbook(sheet))
+    val relative = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B1"))
+    val anchored = graph(DependencyGraph.QualifiedRef(sheet.name, ref"B2"))
 
     assertEquals(relative.size, 1000)
     assert(anchored eq relative, "anchor-only spelling differences must hit the same range cache")

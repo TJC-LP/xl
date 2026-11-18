@@ -137,20 +137,17 @@ FormulaParser.parse("=IF(A1>0, \"Positive\", \"Negative\")") // Right(TExpr.Call
 sheet.evaluateFormula("=SUM(A1:A10)") // XLResult[CellValue]
 sheet.evaluateCell(ref"B1") // Evaluates formula in B1 if present
 
-// Safe evaluation with circular reference detection
-sheet.evaluateWithDependencyCheck() match
-  case Right(results) => // All formulas evaluated in correct order
-  case Left(circularRef) => // Cycle detected: A1 → B1 → C1 → A1
+// Whole-workbook evaluation in dependency order; circular references are isolated per cell
+val result = Workbook(sheet).recalculate()
+result.evaluated(sheet.name) // All formulas evaluated in correct order
+result.errors                // cycle members ("Circular reference") and their blocked dependents
 
 // Cross-sheet formula evaluation (TJC-351)
 main.evaluateFormula("=Sales!A1+10", workbook = Some(wb)) // XLResult[CellValue]
 main.evaluateFormula("=SUM(Sales!A1:A10)", workbook = Some(wb)) // Cross-sheet SUM
 
 // Cross-sheet cycle detection
-val graph = DependencyGraph.fromWorkbook(workbook)
-DependencyGraph.detectCrossSheetCycles(graph) match
-  case Right(_) => // No cycles, safe to evaluate
-  case Left(err) => // Cross-sheet circular reference detected
+QualifiedGraph.of(workbook).sccs.filter(_.cyclic) // each cyclic component, across sheets
 ```
 
 **Capabilities**:
@@ -171,8 +168,8 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
   - Kahn's algorithm: O(V+E) topological sort
-  - Precedent/dependent queries: O(1) lookups
-  - Safe evaluation API: sheet.evaluateWithDependencyCheck()
+  - Precedent/dependent queries: `QualifiedGraph.of(wb)` (`precedentsOf`, `dependentsOf`, layered `precedents`/`dependents`)
+  - Safe evaluation API: `Workbook(sheet).recalculate()` (cycles isolated per cell; the sheet-level `evaluateWithDependencyCheck` was removed in #891)
   - Performance: 10k formula cells in <10ms
 - ✅ **Operators**: +, -, *, /, <, <=, >, >=, =, <>, &, AND, OR, NOT
 - ✅ **Scientific notation**: 1.5E10, 2.3E-7
@@ -182,7 +179,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
   - Range refs with aggregates: `=SUM(Sales!A1:A10)`, `=MIN(...)`, `=MAX(...)`, `=AVERAGE(...)`
   - VLOOKUP with cross-sheet tables: `=VLOOKUP(A1,Lookup!A1:B10,2,FALSE)` (TJC-352)
   - Arithmetic: `=Sales!A1 + Revenue!B1`
-  - Workbook-level cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
+  - Workbook-level cycle detection: `QualifiedGraph.of(wb).sccs` (`fromWorkbook`/`detectCrossSheetCycles` removed in #891)
 
 **Future Extensions** (Not Critical):
 - ⏳ Extended function library (300+ Excel functions) - WI-09e+
@@ -1024,7 +1021,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **What's implemented**:
 - 108 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, dynamic arrays, etc.)
 - Full dependency graph with cycle detection
-- Safe evaluation with `evaluateWithDependencyCheck()`
+- Safe evaluation with `Workbook(sheet).recalculate()` (cycles reported per cell)
 - Type coercion and error handling
 
 **What's planned for future**:

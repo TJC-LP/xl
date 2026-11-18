@@ -143,25 +143,25 @@ class RecalcSpec extends FunSuite:
   test("stack safety: 100k-deep dependency chain neither overflows nor reports cycles"):
     // Graph built directly (no parsing) — pins the iterative Tarjan engine. The recursive
     // strongConnect this replaces overflowed around ~10k frames, violating recalculate's
-    // totality promise on deep-but-legal generated models.
+    // totality promise on deep-but-legal generated models. (#891: on the qualified graph, the
+    // sheet-level one is gone.)
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      val node = ARef.from0(0, i)
-      val next = if i + 1 < n then Set(ARef.from0(0, i + 1)) else Set.empty[ARef]
-      node -> next
+      node(i) -> (if i + 1 < n then Set(node(i + 1)) else Set.empty[QualifiedRef])
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph), Set.empty[ARef])
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isRight)
+    assertEquals(
+      com.tjclp.xl.formula.graph.DependencyGraph.qualifiedCyclicNodes(deps),
+      Set.empty[QualifiedRef]
+    )
 
   test("stack safety: 100k-node cycle is fully collected without overflow"):
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      ARef.from0(0, i) -> Set(ARef.from0(0, (i + 1) % n)) // last points back to first
+      node(i) -> Set(node((i + 1) % n)) // last points back to first
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph).size, n)
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isLeft)
+    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.qualifiedCyclicNodes(deps).size, n)
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000

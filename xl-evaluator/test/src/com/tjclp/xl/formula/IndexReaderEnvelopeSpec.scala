@@ -39,8 +39,6 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
   /** The formula cells every graph finds cyclic, the same in each (a mismatch fails here). */
   private def cyclic(sheet: Sheet): Set[QualifiedRef] =
     val wb = Workbook(Vector(sheet))
-    val bySheet =
-      DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).fold(_ => true, _ => false)
     val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
     val (formulaGraph, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
     val legacy = DependencyGraph.qualifiedCyclicNodes(formulaGraph)
@@ -48,7 +46,6 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
     val compact = compactGraph.cyclicFormulas.iterator.map(compactGraph.nodes.qualified).toSet
     assertEquals(compact, legacy, "compact vs legacy")
     assertEquals(DependencyGraph.qualifiedCyclicNodes(bounded), legacy, "bounded vs legacy")
-    assertEquals(bySheet, legacy.nonEmpty, "sheet graph vs legacy")
     legacy
 
   private def recalc(sheet: Sheet): Map[ARef, CellValue] =
@@ -272,10 +269,8 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       val dynamic = DependencyGraph.containsDynamicReference(expr)
       val placed = grid.put(host, F(formula))
       val wb = Workbook(Vector(placed))
-      val sheetEdges = DependencyGraph.fromSheet(placed).dependencies.getOrElse(host, Set.empty)
       val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
       val qualified = bounded.getOrElse(QualifiedRef(name, host), Set.empty).map(_.ref)
-      assert(dynamic || read.subsetOf(sheetEdges), s"$formula at $host: sheet $sheetEdges")
       assert(dynamic || read.subsetOf(qualified), s"$formula at $host: workbook $qualified")
       // the value reads the CLI's cycle check takes hold them too (a dynamic range's are found at
       // run time)
@@ -285,7 +280,7 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       // a range of cells INDEX picks by position is static, with no edge outside what it reads
       if !formula.contains(",IF(") && !formula.contains("+") && !formula.contains("XLOOKUP") then
         assert(!dynamic, formula)
-        assertEquals(sheetEdges, read, s"$formula at $host")
+        assertEquals(qualified, read, s"$formula at $host")
       true
     }
   }

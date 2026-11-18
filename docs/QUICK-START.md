@@ -285,12 +285,12 @@ val totalResult = sheet.evaluateFormula("=SUM(A2:A3)")
 val cellResult = sheet.evaluateCell(ref"B2")
 // Right(CellValue.Number(2500000))
 
-// Evaluate all formulas in sheet (with dependency checking)
-val allResults = sheet.evaluateWithDependencyCheck()
-// Right(Map(
+// Evaluate all formulas in dependency order (whole-workbook recalculation)
+val allResults = Workbook(sheet).recalculate().evaluated(sheet.name)
+// Map(
 //   ARef(B2) -> CellValue.Number(2500000),
 //   ARef(C2) -> CellValue.Number(1250000)
-// ))
+// )
 
 // Handle circular references safely
 val cyclicSheet = Sheet("Cyclic").unsafe
@@ -300,11 +300,11 @@ val cyclicSheet = Sheet("Cyclic").unsafe
   )
   .unsafe
 
-cyclicSheet.evaluateWithDependencyCheck() match
-  case Left(error) =>
-    println(s"Cycle detected: ${error.message}")
-    // "Circular reference detected: A1 → B1 → A1"
-  case Right(_) => // Won't happen
+// recalculate is total: each cycle member is reported as a per-cell error
+Workbook(cyclicSheet).recalculate().errors.foreach { e =>
+  println(s"Cycle detected: ${e.render}")
+  // "Cyclic!A1: Formula error in '=B1': Circular reference"
+}
 ```
 
 **Available Functions** (108 total):

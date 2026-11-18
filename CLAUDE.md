@@ -386,7 +386,8 @@ sheet.style("B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
 ```scala
 // SheetEvaluator extension methods available from com.tjclp.xl.{*, given}
 sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
-sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
+Workbook(sheet).recalculate()               // RecalcResult: evaluated values + per-cell errors (cycles isolated)
+QualifiedGraph.of(wb).precedentsOf(QualifiedRef(sheetName, ref"B1")) // dependency questions
 ```
 
 **Functions**: the registry (`FunctionRegistry.all`, macro-collected from the `FunctionSpecs*` traits) plus `LET` (lexical bindings; a parser-level special form, not in the registry). The complete list with arity, argument slots and flags is generated from the code: `xl functions --json` or `docs/reference/generated/functions.md`. Do not maintain a count or a list by hand.

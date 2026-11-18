@@ -9,6 +9,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLException
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.ooxml.XlsxWriter
@@ -64,15 +65,15 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheet.evaluateCell(ref"F2"), Right(CellValue.Empty))
   }
 
-  test("DependencyGraph.fromSheet excludes dataTable cells; formulas read them as values") {
+  test("the formula graph excludes dataTable cells; formulas read them as values") {
     val kind = dtKind("F2:G2", "A1", "A2")
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", CellValue.dataTable(kind, Some(num(42))))
       .put(ref"B3", CellValue.Formula("F2+1"))
-    val graph = DependencyGraph.fromSheet(sheet)
-    assert(!graph.dependencies.contains(ref"F2"), "dataTable cell must not be a graph node")
-    assert(graph.dependencies.contains(ref"B3"))
+    val graph = sheet.qualifiedGraph
+    assert(!graph.formulas.exists(_.ref == ref"F2"), "dataTable cell must not be a graph node")
+    assert(graph.formulas.exists(_.ref == ref"B3"))
     // A formula over the interior reads the pinned cache like any value.
     assertEquals(sheet.evaluateFormula("=F2+1"), Right(num(43)))
   }
@@ -140,12 +141,12 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(updated(ref"F2").value, tableCell)
   }
 
-  test("evaluateWithDependencyCheck stays clean on a sheet carrying dataTable records") {
+  test("whole-sheet evaluation stays clean on a sheet carrying dataTable records") {
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42))))
       .put(ref"B1", CellValue.Formula("F2*2"))
-    sheet.evaluateWithDependencyCheck() match
+    sheet.evalAll() match
       case Right(values) => assertEquals(values.get(ref"B1"), Some(num(84)))
       case Left(err) => fail(s"dependency-checked eval failed: $err")
   }
