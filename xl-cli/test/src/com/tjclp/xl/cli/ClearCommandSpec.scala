@@ -434,6 +434,40 @@ class ClearCommandSpec extends FunSuite:
     assertEquals(all.mergedRanges, Set.empty[CellRange])
   }
 
+  test("GH-886 clear: a hyperlink goes with the contents; its cell keeps its formatting") {
+    // Excel's Clear Contents removes the hyperlink and keeps the underline font (checked in
+    // Excel for Mac 16.115); a hyperlink cell with no style is removed outright.
+    val link = CellStyle.default.withFont(Font.default.withColor(Color.Rgb(0xff0563c1)))
+    val b7 = ARef.from0(1, 6)
+    val c7 = ARef.from0(2, 6)
+    val sheet = template
+      .put(b7, CellValue.Text("Example link"))
+      .put(c7, CellValue.Text("Bare link"))
+      .withCellStyle(b7, link)
+    val linked = sheet.copy(cells =
+      sheet.cells
+        .updated(b7, sheet.cells(b7).withHyperlink("https://example.com/"))
+        .updated(c7, sheet.cells(c7).withHyperlink("https://example.com/"))
+    )
+    CellCommands
+      .clear(
+        Workbook(linked),
+        Some(linked),
+        "B7:C7",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
+      .unsafeRunSync()
+    val s = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+    assertEquals(s.cells.get(b7).map(_.value), Some(CellValue.Empty))
+    assertEquals(s.cells.get(b7).flatMap(_.hyperlink), None, "B7: hyperlink cleared")
+    assertEquals(s.getCellStyle(b7).flatMap(_.font.color), Some(Color.Rgb(0xff0563c1)))
+    assertEquals(s.cells.get(c7), None, "C7: an unstyled hyperlink cell is removed")
+  }
+
   test("GH-886 clear: an unstyled cell with no comment is still removed outright") {
     val a3 = ARef.from0(0, 2)
     assertEquals(template.cells.get(a3).map(_.value), Some(CellValue.Number(1)), "fixture: A3")

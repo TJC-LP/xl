@@ -355,9 +355,9 @@ private[xl] object DynamicArrayAuthoring:
    * cleared anchor takes its whole spill with it, inside the ranges or not. `spills` are the
    * sheet's ([[spillsOf]]); the ranges are matched as ranges, never expanded.
    *
-   * GH-886: like Excel's Clear Contents, an emptied cell keeps its style and hyperlink
-   * ([[clearValues]]); a cell with neither is removed. `keepFormatting = false` removes every
-   * emptied cell outright, for a clear that drops the formatting too (`clear --all`).
+   * GH-886: like Excel's Clear Contents, an emptied cell keeps its style but loses its hyperlink; a
+   * cell with no style is removed. `keepFormatting = false` removes every emptied cell outright,
+   * for a clear that drops the formatting too (`clear --all`).
    */
   def clearContents(
     sheet: Sheet,
@@ -381,7 +381,11 @@ private[xl] object DynamicArrayAuthoring:
     val keep = (r: ARef) => kept.exists(_.kept.exists(_.contains(r)))
     val emptied = (r: ARef) => targeted(r) && !keep(r)
     val result =
-      if keepFormatting then clearValues(released, released.cells.keySet.filter(emptied))
+      if keepFormatting then
+        released.copy(cells = released.cells.flatMap { (r, cell) =>
+          if !emptied(r) then Some(r -> cell)
+          else cell.styleId.map(_ => r -> cell.copy(value = CellValue.Empty, hyperlink = None))
+        })
       else released.copy(cells = released.cells.filterNot((r, _) => emptied(r)))
     ContentsCleared(result, cleared, kept)
 

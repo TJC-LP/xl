@@ -1377,8 +1377,8 @@ Clear cell contents, styles, or comments from a range.
 | `--comments` | flag | No | false | Clear comments only |
 
 **Behavior**:
-- **Default** (no flags): Clears cell contents only, like Excel's Clear Contents: values and
-  formulas go, while number formats, fonts, fills, borders, hyperlinks and merges stay (GH-886)
+- **Default** (no flags): Clears cell contents only, like Excel's Clear Contents: values,
+  formulas and hyperlinks go, while number formats, fonts, fills, borders and merges stay (GH-886)
 - **`--all`**: Clears everything (contents, styles, comments), removes the cells, and unmerges
   any merged region that overlaps the range
 - **`--styles`**: Clears formatting but keeps contents and comments

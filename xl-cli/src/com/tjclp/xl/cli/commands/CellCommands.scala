@@ -91,8 +91,8 @@ object CellCommands:
    * Clear cell contents, styles, or comments from range.
    *
    * Modes:
-   *   - Default (no flags): Clear contents only, as Excel's Clear Contents: values and formulas go;
-   *     number formats, fonts, fills, borders, hyperlinks and merges stay (GH-886)
+   *   - Default (no flags): Clear contents only, as Excel's Clear Contents: values, formulas and
+   *     hyperlinks go; number formats, fonts, fills, borders and merges stay (GH-886)
    *   - --all: Clear contents, styles, and comments; removes the cells and unmerges any merged
    *     region the range touches
    *   - --styles: Clear styles only (reset styleId to None)
