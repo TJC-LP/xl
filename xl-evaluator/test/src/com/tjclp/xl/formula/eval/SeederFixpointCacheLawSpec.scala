@@ -291,6 +291,36 @@ class SeederFixpointCacheLawSpec extends FunSuite:
     }
   }
 
+  test("#891: a cone formula that cannot be resolved keeps its criteria column unsliced") {
+    // as above, but E5 reads a sheet the workbook does not hold: no substitution resolves it, so
+    // it reaches every fixpoint uncached, and a slice of column E would read it as blank
+    val kind: FormulaKind.DataTable =
+      FormulaKind.DataTable(range("K10:K13"), dt2D = false, dtr = false, Some(a1("H1")), None)
+    val withE = (0 until 40).foldLeft(grid) { (acc, r) =>
+      acc.put(at(4, r), if r < 10 then CellValue.Formula(s"$$H$$1+B${r + 1}", None) else num(0))
+    }
+    val sheet = Vector(0, 3, 7, 9).zipWithIndex
+      .foldLeft(withE)((acc, v) => acc.put(at(9, 9 + v._2), num(v._1)))
+      .put(a1("E5"), CellValue.Formula("$H$1+'NoSuchSheet'!A1", None))
+      .put(a1("H1"), num(1))
+      .put(a1("G1"), CellValue.Formula("COUNTIF(E1:E40,\">10\")/100+G2*0.3"))
+      .put(a1("G2"), CellValue.Formula("SUMIFS(B1:B40,E1:E40,\"<=10\")/1000+G1*0.3"))
+      .put(a1("K9"), CellValue.Formula("G1+G2"))
+      .put(a1("K10"), CellValue.dataTable(kind, None))
+    settings.foreach { iterative =>
+      val run = assertLanesAgree(Workbook(sheet), kind.ref, iterative, iterative.scheme.toString)
+      // the members fail on the scan that evaluates E5, so nothing is seeded, and says so
+      assertEquals(seededValues(run.report, kind.ref), Vector.empty)
+      val skipped = run.report.warnings.collect { case w: SeedTableWarning.Skipped => w.cells }
+      val unresolved =
+        run.report.warnings.collect { case w: SeedTableWarning.ConeUnresolved => w.refs }
+      assertEquals(skipped, Vector(4))
+      assertEquals(unresolved.flatten.size, 1, unresolved.toString)
+      assertEquals(run.caches.size, 4)
+      assertEquals(sliced(run, a1("E1")), Vector.fill(4)(Option.empty[CellValue]))
+    }
+  }
+
   test("#891: a 2-D table substitutes both inputs, one of them inside a criteria column") {
     // row input H1 (top axis K9:L9), column input D3 (left axis J10:J12), source in the corner J9
     val kind: FormulaKind.DataTable =
