@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #891 CellStore (PR B, on #898), 2026-11-18 recorded **10,163 cases**: 10,163 passed, 0 failed (MUnit reported none ignored).
+**Current Status**: the #891 CellStore (PR B, on #898), 2026-11-19 recorded **10,305 cases**: 10,305 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -311,18 +311,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #891 CellStore (PR B, on #898), 2026-11-18 (10,163 passed, 0 failed, none ignored). Counts include skipped cases.
+As of the #891 CellStore (PR B, on #898), 2026-11-19 (10,305 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4374 |
-| xl-core | 1902 |
-| xl-ooxml | 1447 |
-| xl-cli | 2003 |
-| xl-cats-effect | 217 |
+| xl-evaluator | 4456 |
+| xl-core | 1917 |
+| xl-ooxml | 1478 |
+| xl-cli | 2014 |
+| xl-cats-effect | 220 |
 | xl-agent | 153 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 67 |
-| **Total** | **10,163** |
+| **Total** | **10,305** |
 
 
 ## Test Quality Metrics
