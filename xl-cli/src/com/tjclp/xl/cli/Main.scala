@@ -4003,8 +4003,13 @@ EXAMPLES:
         emit(Outcome.failed(verb, CliError.fromThrowable(failure)), mode, io)
       )
 
-  /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
+  /**
+   * Replace `target` atomically when supported, with the JDK-prescribed total fallback. The
+   * owner-only staging file first takes the mode `target` should have (GH-868): the umask's for a
+   * new output, the replaced file's own otherwise.
+   */
   private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =
+    val mode = IO.blocking(com.tjclp.xl.ooxml.OutputFileMode.prepare(source, target))
     val atomic =
       IO.blocking(
         Files.move(
@@ -4016,7 +4021,7 @@ EXAMPLES:
       ).void
     val fallback =
       IO.blocking(Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)).void
-    atomicMoveOrFallback(atomic, fallback)
+    mode *> atomicMoveOrFallback(atomic, fallback)
 
   /** Isolated for deterministic coverage of providers that reject `ATOMIC_MOVE`. */
   private[cli] def atomicMoveOrFallback(atomic: IO[Unit], fallback: IO[Unit]): IO[Unit] =

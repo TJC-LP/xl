@@ -36,6 +36,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
+  clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
+  the values and formulas and drops the cell's hyperlink, but keeps its number format, font,
+  fill and border, and leaves merged regions merged. A cell with no style is still removed.
+  `clear --all` is unchanged: it removes the cells and unmerges what the range touches;
+  `--styles` and `--comments` are unchanged. **Behaviour change:** after `clear B4:E5` over cells
+  formatted `#,##0_);\(#,##0\);\-\-_)` in blue Times New Roman, B4:E5 are empty and keep that
+  format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
+  merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
+  cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
+  last hyperlink still comes back on write until #895 is fixed). The library's
+  `Edit.Clear` / `Sheet.clearRange` keep their old rule for now (#890).
+
+- **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
+  and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming
+  transforms) staged its output in an owner-only temp file and renamed it into place, so the output
+  ended up `0600` (`-rw-------`) whatever the umask. The staged file stays owner-only while it is
+  written, then takes the right mode just before the rename.
+  **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
+  umask `022`). A replaced output keeps its mode and, where the writer may set it, its group, with
+  its group bits capped at its others bits: `0644` and `0600` stay as they are, a group-shared
+  `0664` becomes `0644` and `0660` becomes `0600`. The JVM cannot read POSIX ACLs (on a file with
+  one, the group bits are the ACL mask), so the cap is what guarantees no user or group gains access.
+  An extended ACL is not carried over: the users and groups it names lose that access.
+
 - **Relational numeric criteria match number cells only** (#798): `">n"`, `">=n"`, `"<n"` and
   `"<=n"` in COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS and MINIFS now match numbers and dates
   only, as desktop Excel does; numeric text and booleans no longer match. Equality (`"4"`, `"=4"`)
