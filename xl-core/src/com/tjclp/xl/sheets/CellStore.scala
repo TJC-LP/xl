@@ -402,33 +402,69 @@ object CellStore:
   private[sheets] def colOfKey(k: Long): Int = k.toInt ^ Int.MinValue
 
   /**
-   * Accumulates cells into a store. Linear when cells arrive in the store's row-major order (as a
-   * worksheet reader produces them); otherwise the cells are sorted once, stably, in [[result]]. A
-   * later cell replaces an earlier one at the same reference. [[result]] leaves the builder as it
-   * was, so it can keep accumulating.
+   * Accumulates cells into a store. A later cell replaces an earlier one at the same reference.
+   * [[result]] leaves the builder as it was, so it can keep accumulating.
+   *
+   * A cell that comes after every cell before it, in the store's row-major order, is streamed (a
+   * worksheet reader produces nothing else): the builder holds the cells of one slot group (32
+   * rows) in scratch arrays, turns the group into its final [[Block]] or rows when the next group
+   * begins, and keeps only the finished groups. So beyond the store being built it holds one group
+   * of cells, not a slot per cell, and a block's arrays are copied once, straight from the scratch.
+   *
+   * A cell that comes before the last streamed one is buffered instead (the tail). [[result]] sorts
+   * the tail once, stably, streams it into a store of its own and merges that over the streamed
+   * cells, the tail winning. That is last-write-wins: a tail cell sorts before the cell streamed
+   * last when it arrived, and every cell streamed since sorts after that one, so a streamed cell at
+   * a tail cell's reference can only have arrived earlier.
    */
   final class Builder private[CellStore] ():
-    private var keys = new Array[Long](16)
+    // ----- the streamed cells: finished groups, then the open group's scratch -----
+
+    /** The finished groups: `groupKeys(i)` is the group's row keys above their five low bits. */
+    private var groupKeys = new Array[Long](8)
+    private var groups = new Array[Entry](8)
+    private var groupCount = 0
+
+    /**
+     * The open group's cells in order. `links` is empty until a cell brings a hyperlink and grows
+     * to the scratch's size only when one does, so it may be shorter than the other three; it is
+     * read only where the meta word has its link bit.
+     */
+    private var cols = new Array[Int](16)
     private var metas = new Array[Long](16)
     private var values = new Array[CellValue](16)
-    private var links = new Array[String](16)
+    private var links = RowLeaf.NoLinks
     private var n = 0
-    private var sorted = true
+
+    /** The open group's rows: row `i` is `rowLows(i)` and starts at cell `rowStarts(i)`. */
+    private val rowLows = new Array[Int](32)
+    private val rowStarts = new Array[Int](32)
+    private var rowCount = 0
+    private var openGroup = 0L
+
+    /** Whether every cell of the open group lies in the 64-column chunk `openChunk`. */
+    private var oneChunk = true
+    private var openChunk = 0
+
+    /** The order key of the last streamed cell, meaningful once `any`. */
+    private var lastKey = 0L
+    private var any = false
+
+    // ----- the tail: the cells that arrived before the last streamed one, in arrival order -----
+
+    private var tailKeys = Array.emptyLongArray
+    private var tailMetas = Array.emptyLongArray
+    private var tailValues = Array.empty[CellValue]
+    private var tailLinks = RowLeaf.NoLinks
+    private var tailCount = 0
 
     def addOne(cell: Cell): this.type =
-      val k = orderKey(cell.ref.row.index0, cell.ref.col.index0)
-      val at =
-        if n > 0 && keys(n - 1) == k then
-          n - 1 // a repeat of the last ref: last write wins in place
-        else
-          if n > 0 && keys(n - 1) > k then sorted = false
-          if n == keys.length then grow()
-          n += 1
-          n - 1
-      keys(at) = k
-      metas(at) = Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined)
-      values(at) = cell.value
-      links(at) = cell.hyperlink.getOrElse("")
+      add(
+        orderKey(cell.ref.row.index0, cell.ref.col.index0),
+        Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined),
+        cell.value,
+        cell.hyperlink.getOrElse("")
+      )
       this
 
     def addAll(cells: IterableOnce[Cell]): this.type =
@@ -438,53 +474,153 @@ object CellStore:
 
     def +=(cell: Cell): this.type = addOne(cell)
 
-    def result(): CellStore =
-      if n == 0 then empty
-      else
-        // positions in store order, keeping only the last of each run of equal keys
-        val order = if sorted then Array.tabulate(n)(identity) else StableSort.order(keys, n)
-        val pick = new Array[Int](n)
-        var m = 0
-        var i = 0
-        while i < n do
-          if i + 1 >= n || keys(order(i + 1)) != keys(order(i)) then
-            pick(m) = order(i)
-            m += 1
-          i += 1
-        val cols = new Array[Int](m)
-        val ms = new Array[Long](m)
-        val vs = new Array[CellValue](m)
-        val ls = new Array[String](m)
-        i = 0
-        while i < m do
-          val p = pick(i)
-          cols(i) = colOfKey(keys(p))
-          ms(i) = metas(p)
-          vs(i) = values(p)
-          ls(i) = links(p)
-          i += 1
-        // one row per run of equal row indices
-        val rowKeys = new Array[Long](m)
-        val leaves = new Array[StoredRow](m)
-        var rows = 0
-        var from = 0
-        while from < m do
-          val row = rowOfKey(keys(pick(from)))
-          var until = from + 1
-          while until < m && rowOfKey(keys(pick(until))) == row do until += 1
-          rowKeys(rows) = Trie.key(row)
-          leaves(rows) = StoredRow.build(cols, ms, vs, ls, from, until)
-          rows += 1
-          from = until
-        val (root, h) = Trie.build(rowKeys, leaves, rows)
-        new CellStore(root, h)
+    /** One cell by its stored fields; `link` is read only when `meta` has the link bit. */
+    private def add(key: Long, meta: Long, value: CellValue, link: String): Unit =
+      if !any || key > lastKey then
+        val row = rowOfKey(key)
+        val col = colOfKey(key)
+        val group = Trie.key(row) >>> 5
+        if n > 0 && group != openGroup then closeGroup()
+        if n == 0 then
+          openGroup = group
+          oneChunk = true
+          openChunk = col >> 6
+          rowCount = 0
+        if n == 0 || rowOfKey(lastKey) != row then
+          rowLows(rowCount) = (Trie.key(row) & 31L).toInt
+          rowStarts(rowCount) = n
+          rowCount += 1
+        if (col >> 6) != openChunk then oneChunk = false
+        if n == cols.length then growGroup()
+        cols(n) = col
+        n += 1
+        setStreamed(n - 1, meta, value, link)
+        lastKey = key
+        any = true
+      else if key == lastKey then setStreamed(n - 1, meta, value, link) // last write wins in place
+      else addTail(key, meta, value, link)
 
-    private def grow(): Unit =
-      val cap = keys.length * 2
-      keys = java.util.Arrays.copyOf(keys, cap)
+    private def setStreamed(at: Int, meta: Long, value: CellValue, link: String): Unit =
+      metas(at) = meta
+      values(at) = value
+      if Meta.hasLink(meta) then
+        if links.length < metas.length then links = java.util.Arrays.copyOf(links, metas.length)
+        links(at) = link
+
+    private def growGroup(): Unit =
+      val cap = cols.length * 2
+      cols = java.util.Arrays.copyOf(cols, cap)
       metas = java.util.Arrays.copyOf(metas, cap)
       values = java.util.Arrays.copyOf(values, cap)
-      links = java.util.Arrays.copyOf(links, cap)
+
+    private def addTail(key: Long, meta: Long, value: CellValue, link: String): Unit =
+      val at =
+        if tailCount > 0 && tailKeys(tailCount - 1) == key then tailCount - 1
+        else
+          if tailCount == tailKeys.length then
+            val cap = math.max(16, tailCount * 2)
+            tailKeys = java.util.Arrays.copyOf(tailKeys, cap)
+            tailMetas = java.util.Arrays.copyOf(tailMetas, cap)
+            tailValues = java.util.Arrays.copyOf(tailValues, cap)
+          tailCount += 1
+          tailCount - 1
+      tailKeys(at) = key
+      tailMetas(at) = meta
+      tailValues(at) = value
+      if Meta.hasLink(meta) then
+        if tailLinks.length < tailKeys.length then
+          tailLinks = java.util.Arrays.copyOf(tailLinks, tailKeys.length)
+        tailLinks(at) = link
+
+    /** The open group becomes a finished one. */
+    private def closeGroup(): Unit =
+      if groupCount == groups.length then
+        groupKeys = java.util.Arrays.copyOf(groupKeys, groupCount * 2)
+        groups = java.util.Arrays.copyOf(groups, groupCount * 2)
+      groupKeys(groupCount) = openGroup
+      groups(groupCount) = openEntry()
+      groupCount += 1
+      n = 0
+
+    /**
+     * The open group (which holds a cell) in its canonical form, read from the scratch without
+     * changing it: a [[Block]] when its cells share one chunk and fit the cap (the rule of
+     * [[Group.of]]), its arrays copied from the scratch once; otherwise its rows.
+     */
+    private def openEntry(): Entry =
+      if oneChunk && n <= Group.MaxBlockCells then
+        var rowMask = 0
+        val rowMasks = new Array[Long](rowCount)
+        var anyLink = false
+        var r = 0
+        while r < rowCount do
+          rowMask |= 1 << rowLows(r)
+          val until = if r + 1 < rowCount then rowStarts(r + 1) else n
+          var mask = 0L
+          var p = rowStarts(r)
+          while p < until do
+            mask |= 1L << (cols(p) & 63)
+            if Meta.hasLink(metas(p)) then anyLink = true
+            p += 1
+          rowMasks(r) = mask
+          r += 1
+        val blockLinks =
+          if !anyLink then RowLeaf.NoLinks
+          else
+            val out = new Array[String](n)
+            var p = 0
+            while p < n do
+              out(p) = if Meta.hasLink(metas(p)) then links(p) else ""
+              p += 1
+            out
+        Group.make(
+          rowMask,
+          openChunk,
+          rowMasks,
+          java.util.Arrays.copyOf(metas, n),
+          java.util.Arrays.copyOf(values, n),
+          blockLinks
+        )
+      else
+        val leaves = new Array[StoredRow](rowCount)
+        var r = 0
+        while r < rowCount do
+          val until = if r + 1 < rowCount then rowStarts(r + 1) else n
+          leaves(r) = StoredRow.build(cols, metas, values, links, rowStarts(r), until)
+          r += 1
+        Group.of(rowLows, leaves, rowCount)
+
+    /** The store of the streamed cells. */
+    private def streamed(): CellStore =
+      if n == 0 then
+        if groupCount == 0 then empty
+        else
+          val (root, h) = Trie.buildGroups(groupKeys, groups, groupCount)
+          new CellStore(root, h)
+      else
+        // the open group goes last, in copies: the builder's own arrays stay as they are
+        val keys = java.util.Arrays.copyOf(groupKeys, groupCount + 1)
+        val entries = java.util.Arrays.copyOf(groups, groupCount + 1)
+        keys(groupCount) = openGroup
+        entries(groupCount) = openEntry()
+        val (root, h) = Trie.buildGroups(keys, entries, groupCount + 1)
+        new CellStore(root, h)
+
+    /** The store of the tail: sorted stably, the last of each run of equal references kept. */
+    private def tail(): CellStore =
+      val order = StableSort.order(tailKeys, tailCount)
+      val b = new Builder
+      var i = 0
+      while i < tailCount do
+        val p = order(i)
+        if i + 1 >= tailCount || tailKeys(order(i + 1)) != tailKeys(p) then
+          val meta = tailMetas(p)
+          b.add(tailKeys(p), meta, tailValues(p), if Meta.hasLink(meta) then tailLinks(p) else "")
+        i += 1
+      b.streamed()
+
+    def result(): CellStore =
+      if tailCount == 0 then streamed() else streamed().unionWith(tail(), valuesOnly = false)
   end Builder
 
   // ----- invariants (checked by the law spec) -----
