@@ -14,6 +14,12 @@ import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.fill.Fill
 import com.tjclp.xl.styles.color.Color
+import com.tjclp.xl.styles.border.{Border, BorderStyle}
+import com.tjclp.xl.styles.font.Font
+import com.tjclp.xl.styles.numfmt.NumFmt
+import com.tjclp.xl.sheets.styleSyntax.*
+import com.tjclp.xl.cli.helpers.BatchParser
+import com.tjclp.xl.cli.helpers.BatchParser.BatchOp
 
 /**
  * Integration tests for clear command functionality.
@@ -281,18 +287,17 @@ class ClearCommandSpec extends FunSuite:
 
   // ========== Merged Region Handling ==========
 
-  test("clear: default mode unmerges overlapping merged regions") {
+  test("clear: default mode keeps a merge it touches; only the values go (GH-886)") {
     val sheet = Sheet("Test")
       .put(ARef.from0(0, 0), CellValue.Text("Merged"))
       .put(ARef.from0(2, 0), CellValue.Text("C1"))
       .merge(CellRange(ARef.from0(0, 0), ARef.from0(1, 0))) // Merge A1:B1
     val wb = Workbook(sheet)
 
-    // Verify merge exists
     assertEquals(sheet.mergedRanges.size, 1)
 
-    // Clear A1 which overlaps with the merge
-    val result = CellCommands
+    // Clear A1, the merge's anchor: Excel's Clear Contents leaves A1:B1 merged
+    CellCommands
       .clear(
         wb,
         Some(sheet),
@@ -307,10 +312,168 @@ class ClearCommandSpec extends FunSuite:
 
     val imported = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
     val s = imported.sheets.head
-    // Merged region should be removed
-    assertEquals(s.mergedRanges.size, 0)
-    // Cell outside merge should remain
+    assertEquals(s.mergedRanges, Set(CellRange(ARef.from0(0, 0), ARef.from0(1, 0))))
+    assertEquals(
+      s.cells.get(ARef.from0(0, 0)).map(_.value).getOrElse(CellValue.Empty),
+      CellValue.Empty
+    )
     assertEquals(s.cells.get(ARef.from0(2, 0)).map(_.value), Some(CellValue.Text("C1")))
+  }
+
+  // ========== GH-886: a contents clear keeps formatting, as Excel's Clear Contents ==========
+
+  private val numStyle = CellStyle.default
+    .withNumFmt(NumFmt.Custom("#,##0_);\\(#,##0\\);\\-\\-_)"))
+    .withFont(Font.default.withName("Times New Roman").withColor(Color.Rgb(0xff0000ff)))
+    .withFill(Fill.Solid(Color.Rgb(0xffffff99)))
+    .withBorder(Border.all(BorderStyle.Thin))
+  private val titleStyle =
+    CellStyle.default.withFont(Font.default.withName("Georgia").withSize(16.0).withBold(true))
+  private val dataRange = CellRange.parse("B4:E5").fold(e => fail(e), identity)
+  private val titleRange = CellRange.parse("A1:F1").fold(e => fail(e), identity)
+
+  /**
+   * A formatted report: a merged bold title over A1:F1, styled numbers in B4:E5, and an unstyled
+   * note in A3.
+   */
+  private def template: Sheet =
+    val withValues = dataRange.cells.zipWithIndex.foldLeft(
+      Sheet("Summary")
+        .put(ARef.from0(0, 0), CellValue.Text("Quarterly report"))
+        .put(ARef.from0(0, 2), CellValue.Number(1))
+    ) { case (s, (r, i)) => s.put(r, CellValue.Number(BigDecimal(1000 * (i + 1)))) }
+    withValues
+      .withRangeStyle(dataRange, numStyle)
+      .withCellStyle(ARef.from0(0, 0), titleStyle)
+      .merge(titleRange)
+
+  private def assertFormattingKept(s: Sheet): Unit =
+    dataRange.cells.foreach { r =>
+      val cell = s.cells.get(r)
+      assert(cell.isDefined, s"${r.toA1}: the styled cell record should stay")
+      assertEquals(cell.map(_.value), Some(CellValue.Empty), s"${r.toA1}: value cleared")
+      val style = s.getCellStyle(r)
+      assertEquals(style.map(_.numFmt), Some(numStyle.numFmt), s"${r.toA1}: numFmt")
+      assertEquals(style.map(_.font.name), Some("Times New Roman"), s"${r.toA1}: font")
+      assertEquals(style.flatMap(_.font.color), Some(Color.Rgb(0xff0000ff)), s"${r.toA1}: colour")
+      assertEquals(style.map(_.fill), Some(numStyle.fill), s"${r.toA1}: fill")
+      assertEquals(style.map(_.border), Some(numStyle.border), s"${r.toA1}: border")
+    }
+
+  private def clearVerb(range: String, all: Boolean = false, stream: Boolean = false): Sheet =
+    val sheet = template
+    CellCommands
+      .clear(
+        Workbook(sheet),
+        Some(sheet),
+        range,
+        all = all,
+        styles = false,
+        comments = false,
+        outputPath,
+        config,
+        stream = stream
+      )
+      .unsafeRunSync()
+    ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+
+  test("GH-886 clear: a styled range keeps numFmt, font, fill and border") {
+    assertFormattingKept(clearVerb("B4:E5"))
+  }
+
+  test("GH-886 clear: clearing a merged title keeps the merge and the title's font") {
+    val s = clearVerb("A1")
+    assertEquals(s.mergedRanges, Set(titleRange))
+    assertEquals(s.cells.get(ARef.from0(0, 0)).map(_.value), Some(CellValue.Empty))
+    assertEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
+  }
+
+  test("GH-886 clear --stream: keeps formatting and the merge too") {
+    assertFormattingKept(clearVerb("B4:E5", stream = true))
+    assertEquals(clearVerb("A1", stream = true).mergedRanges, Set(titleRange))
+  }
+
+  test("GH-886 clear --all: still drops the cells, their formatting and the merge it touches") {
+    val data = clearVerb("B4:E5", all = true)
+    dataRange.cells.foreach(r => assertEquals(data.cells.get(r), None, r.toA1))
+    val title = clearVerb("A1", all = true)
+    assertEquals(title.mergedRanges, Set.empty[CellRange])
+    assertEquals(title.cells.get(ARef.from0(0, 0)), None)
+  }
+
+  test("GH-886 batch clear: keeps formatting and merges; all=true still resets both") {
+    val wb = Workbook(template)
+    val contents = BatchParser
+      .applyBatchOperations(
+        wb,
+        None,
+        Vector(
+          BatchOp.Clear("Summary!B4:E5", all = false, styles = false, comments = false),
+          BatchOp.Clear("Summary!A1", all = false, styles = false, comments = false)
+        )
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    assertFormattingKept(contents)
+    assertEquals(contents.mergedRanges, Set(titleRange))
+
+    val all = BatchParser
+      .applyBatchOperations(
+        wb,
+        None,
+        Vector(
+          BatchOp.Clear("Summary!B4:E5", all = true, styles = false, comments = false),
+          BatchOp.Clear("Summary!A1", all = true, styles = false, comments = false)
+        )
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    dataRange.cells.foreach(r => assertEquals(all.cells.get(r), None, r.toA1))
+    assertEquals(all.mergedRanges, Set.empty[CellRange])
+  }
+
+  test("GH-886 clear: a hyperlink goes with the contents; its cell keeps its formatting") {
+    // Excel's Clear Contents removes the hyperlink and keeps the underline font (checked in
+    // Excel for Mac 16.115); a hyperlink cell with no style is removed outright.
+    val link = CellStyle.default.withFont(Font.default.withColor(Color.Rgb(0xff0563c1)))
+    val b7 = ARef.from0(1, 6)
+    val c7 = ARef.from0(2, 6)
+    val sheet = template
+      .put(b7, CellValue.Text("Example link"))
+      .put(c7, CellValue.Text("Bare link"))
+      .withCellStyle(b7, link)
+    val linked = sheet.copy(cells =
+      sheet.cells
+        .updated(b7, sheet.cells(b7).withHyperlink("https://example.com/"))
+        .updated(c7, sheet.cells(c7).withHyperlink("https://example.com/"))
+    )
+    CellCommands
+      .clear(
+        Workbook(linked),
+        Some(linked),
+        "B7:C7",
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
+      .unsafeRunSync()
+    val s = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+    assertEquals(s.cells.get(b7).map(_.value), Some(CellValue.Empty))
+    assertEquals(s.cells.get(b7).flatMap(_.hyperlink), None, "B7: hyperlink cleared")
+    assertEquals(s.getCellStyle(b7).flatMap(_.font.color), Some(Color.Rgb(0xff0563c1)))
+    assertEquals(s.cells.get(c7), None, "C7: an unstyled hyperlink cell is removed")
+  }
+
+  test("GH-886 clear: an unstyled cell with no comment is still removed outright") {
+    val a3 = ARef.from0(0, 2)
+    assertEquals(template.cells.get(a3).map(_.value), Some(CellValue.Number(1)), "fixture: A3")
+    assertEquals(template.cells.get(a3).flatMap(_.styleId), None, "fixture: A3 unstyled")
+    val s = clearVerb("A3:A3")
+    assertEquals(s.cells.get(a3), None)
   }
 
   // ========== Combined Flags ==========

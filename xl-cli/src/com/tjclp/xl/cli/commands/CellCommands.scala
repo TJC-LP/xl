@@ -91,8 +91,10 @@ object CellCommands:
    * Clear cell contents, styles, or comments from range.
    *
    * Modes:
-   *   - Default (no flags): Clear contents only (remove cells from range)
-   *   - --all: Clear contents, styles, and comments
+   *   - Default (no flags): Clear contents only, as Excel's Clear Contents: values, formulas and
+   *     hyperlinks go; number formats, fonts, fills, borders and merges stay (GH-886)
+   *   - --all: Clear contents, styles, and comments; removes the cells and unmerges any merged
+   *     region the range touches
    *   - --styles: Clear styles only (reset styleId to None)
    *   - --comments: Clear comments only
    *
@@ -131,11 +133,14 @@ object CellCommands:
       // GH-714: clearing a dynamic anchor clears its whole spill, as in Excel; the cells of a live
       // spill whose anchor stays are left as they were (Excel keeps them) and the rest is cleared,
       // with SPILL_CELLS_SKIPPED. Styles and comments do not touch a spill: they clear everywhere.
+      // GH-886: a contents clear keeps each cell's formatting, as Excel's Clear Contents does;
+      // only --all drops the cell records.
       contents = Option.when(clearContents)(
         DynamicArrayAuthoring.clearContents(
           targetSheet,
           DynamicArrayAuthoring.spillsOf(targetSheet),
-          Vector(range)
+          Vector(range),
+          keepFormatting = !all
         )
       )
 
@@ -144,10 +149,10 @@ object CellCommands:
       sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
 
-      // Unmerge any merged regions that overlap with the cleared range
-      // This prevents leaving orphaned merge regions that reference cleared cells
+      // GH-886: a merge is formatting. A contents clear keeps it (Excel's Clear Contents does);
+      // --all unmerges every merged region the range touches, as before.
       sheet4 =
-        if clearContents then
+        if all then
           val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
           overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
         else sheet3
