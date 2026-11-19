@@ -300,7 +300,11 @@ object DataTableSeeder:
     lazy val cycles: CycleContext =
       // #891: the recalculation graph — the cycles `recalc` isolates, #504's precise lookup reads,
       // case-insensitive sheet qualifiers — and its one parse of each formula
-      val graph = built.getOrElse(RecalcGraph.build(wb, RecalcCounters.disabled))
+      // A graph handed in is recalculation's. It serves unless it narrowed a lookup on a selector
+      // this run substitutes; then the seeder builds its own, with those lookups whole.
+      val graph = built
+        .filterNot(_.narrowsOnWhatIfInput)
+        .getOrElse(RecalcGraph.build(wb, RecalcCounters.disabled, whatIfSafe = true))
       CycleContext(graph, graph.cyclicCore, DependencyGraph.dynamicCells(wb, graph.parses))
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb.sheets.find(_.name == name) match

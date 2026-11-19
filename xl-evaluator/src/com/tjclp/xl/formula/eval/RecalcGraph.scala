@@ -19,6 +19,9 @@ private[eval] final class RecalcGraph private (graph: CompactGraph, counters: Re
   /** #790: the formula parses the build made, for the pass's evaluation to reuse. */
   def parses: FormulaParses = graph.parses
 
+  /** [[CompactGraph.narrowsOnWhatIfInput]]: this graph is not safe for a what-if pass. */
+  def narrowsOnWhatIfInput: Boolean = graph.narrowsOnWhatIfInput
+
   private def ids(refs: IterableOnce[QualifiedRef]): BitSet =
     BitSet.fromSpecific(refs.iterator.flatMap(table.lookup))
 
@@ -184,5 +187,5 @@ private[eval] object RecalcGraph:
   final case class Unordered(candidates: Set[QualifiedRef], remaining: Set[QualifiedRef])
 
   /** The graph of `wb`; `counters` receive its size and its work. */
-  def build(wb: Workbook, counters: RecalcCounters): RecalcGraph =
-    new RecalcGraph(CompactGraph.build(wb, counters), counters)
+  def build(wb: Workbook, counters: RecalcCounters, whatIfSafe: Boolean = false): RecalcGraph =
+    new RecalcGraph(CompactGraph.build(wb, counters, whatIfSafe), counters)
