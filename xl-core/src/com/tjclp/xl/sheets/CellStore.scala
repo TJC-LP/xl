@@ -118,6 +118,32 @@ final class CellStore private (
   /** Every stored reference, row-major. */
   def refs: Iterator[ARef] = refsOf(CellCursor.all(this))
 
+  // ----- the `Map` this store replaced: its commonest reads, kept as deprecated forwarders -----
+  //
+  // Each is a view over the store (nothing is copied, no map or set is built) and goes row-major.
+
+  /** The stored references, as `Map.keys` gave them: a re-traversable view over [[refs]]. */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs", "0.27.0")
+  def keys: Iterable[ARef] = new CellStore.RefSet(this)
+
+  /**
+   * The stored references as a set, as `Map.keySet` gave them: a view whose `contains` is this
+   * store's and whose elements are [[refs]]. Like the map's key set it copies only when it is added
+   * to or removed from (`a.keySet ++ b.keySet` builds one ordinary set).
+   */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs (refs.toSet for a set)", "0.27.0")
+  def keySet: Set[ARef] = new CellStore.RefSet(this)
+
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs", "0.27.0")
+  def keysIterator: Iterator[ARef] = refs
+
+  /** The stored cells, as `Map.values` gave them: a re-traversable view over [[iterator]]. */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use iterator", "0.27.0")
+  def values: Iterable[Cell] = new CellStore.CellView(this)
+
+  @deprecated("Sheet.cells is a CellStore, not a Map: use iterator", "0.27.0")
+  def valuesIterator: Iterator[Cell] = iterator
+
   /**
    * The stored cells inside `range`, row-major. Only stored cells are visited, never the empty
    * positions between them. A range whose start lies after its end holds nothing.
@@ -401,6 +427,26 @@ object CellStore:
   @SerialVersionUID(1L)
   private final class Serialized(private val cells: Array[Cell]) extends Serializable:
     private def readResolve(): AnyRef = if cells.isEmpty then empty else from(cells)
+
+  /** The legacy `keys`/`keySet`: the store's references as a set, read through the store. */
+  private final class RefSet(store: CellStore) extends scala.collection.immutable.AbstractSet[ARef]:
+    def iterator: Iterator[ARef] = store.refs
+    def contains(ref: ARef): Boolean = store.contains(ref)
+    override def size: Int = store.size
+    override def knownSize: Int = store.size
+    override def isEmpty: Boolean = store.isEmpty
+    // growing or shrinking leaves the view for an ordinary set, as a map's key set does
+    def incl(ref: ARef): Set[ARef] =
+      if store.contains(ref) then this else Set.from(store.refs) + ref
+    def excl(ref: ARef): Set[ARef] =
+      if store.contains(ref) then Set.from(store.refs) - ref else this
+
+  /** The legacy `values`: the store's cells, re-traversable. */
+  private final class CellView(store: CellStore) extends scala.collection.AbstractIterable[Cell]:
+    def iterator: Iterator[Cell] = store.iterator
+    override def size: Int = store.size
+    override def knownSize: Int = store.size
+    override def isEmpty: Boolean = store.isEmpty
 
   private def normalized(root: Entry, height: Int): CellStore =
     val (r, h) = Trie.shrink(root, height)
