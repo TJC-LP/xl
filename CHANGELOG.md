@@ -144,6 +144,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`view --eval` computes the window's precedents on other sheets** (#891). The window
+  evaluation (`sheet.evaluateForRangePerCell`, `view --eval` and its rendered pictures) evaluated
+  the window's formulas and their precedents on the window's own sheet, and read every other
+  sheet's caches as they stood. With `S!F1 = A1*2`, `T!B1 = S!A1+S!F1` and `S!H1 = T!B1*10`, after
+  `put --no-recalc A1 5` it showed `H1 = 30` where `recalc` writes `150` (0.26.0 does the same).
+  The closure now follows precedents across sheets, in the canonical order, so the window shows
+  what a recalculation would put in its cells. Consequences: a precedent on another sheet that
+  cannot evaluate is listed in `RangeEvalResult.failures` under its own sheet (the `EVAL_FAILED`
+  warning names it there) and the window's cell that reads it is `blocked` and keeps the file's
+  value, where it used to be computed off that precedent's cache; a dynamic reader
+  (INDIRECT/OFFSET) among the precedents on another sheet has that sheet's formulas computed with
+  it. Unchanged: cycles report as before (members on the window's sheet are listed, a reader of a
+  cycle on another sheet is blocked), and what a dynamic reader reads on a sheet the closure never
+  reaches is still read from the file.
+
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
   the values and formulas and drops the cell's hyperlink, but keeps its number format, font,

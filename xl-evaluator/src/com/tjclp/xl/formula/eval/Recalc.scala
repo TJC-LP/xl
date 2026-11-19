@@ -43,10 +43,11 @@ final case class CellEvalError(
  *   error value such as #DIV/0! is a value, not a failure)
  * @param failures
  *   the formulas of the evaluation closure that could not evaluate — the range's own and the
- *   precedents outside it, cycle members inside the closure included — in row-major order
+ *   precedents outside it, on the range's sheet (in row-major order, cycle members included) and
+ *   then on other sheets (#891; each [[CellEvalError]] names its sheet)
  * @param blocked
- *   the formulas of the closure left unevaluated because a formula they depend on failed, in
- *   row-major order
+ *   the formulas of the closure on the range's sheet left unevaluated because a formula they depend
+ *   on failed, in row-major order
  */
 final case class RangeEvalResult(
   values: Map[ARef, CellValue],
