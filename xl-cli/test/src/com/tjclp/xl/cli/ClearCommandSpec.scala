@@ -10,6 +10,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.commands.CellCommands
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.ops.ClearWhat
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.fill.Fill
@@ -663,6 +664,34 @@ class ClearCommandSpec extends FunSuite:
       .unsafeRunSync()
     val s = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
     assertEquals(s.cells.get(b4), None)
+  }
+
+  // ========== GH-908: the CLI and the library share one keep-record rule ==========
+
+  test(
+    "GH-908 clear: the CLI verb and SheetEdits.clear give the same sheet over a styled row and column"
+  ) {
+    // B4 (styled column) and D6 (styled row) hold unstyled numbers, C5 has its own style and a
+    // hyperlink, F8 sits outside both bands: the whole range takes every branch of the rule
+    val c5 = ARef.from0(2, 4)
+    val ownStyle = CellStyle.default.withFont(Font.default.withBold(true))
+    val styled = banded.put(c5, CellValue.Text("Note")).withCellStyle(c5, ownStyle)
+    val sheet = styled.copy(cells =
+      styled.cells.updated(c5, styled.cells(c5).withHyperlink("https://example.com/notes"))
+    )
+    val range = CellRange.parse("A1:F8").toOption.get
+    val cli = BatchParser
+      .applyBatchOperations(
+        Workbook(sheet),
+        None,
+        Vector(BatchOp.Clear("Summary!A1:F8", all = false, styles = false, comments = false))
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    val library = sheet.clearRange(range, ClearWhat.contents)
+    assertEquals(cli.cells, library.cells)
+    assertEquals(library.cells.keySet, Set(b4, d6, c5))
   }
 
   // ========== Combined Flags ==========
