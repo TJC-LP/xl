@@ -50,8 +50,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Hyperlink("https://…")`, read the text with `.target`. Migration: `hyperlink = Some(url)`
     becomes `hyperlink = Some(Hyperlink(url))`, and `cell.hyperlink` reads become
     `cell.hyperlink.map(_.target)`; `cell.withHyperlink(url: String)` and `clearHyperlink` are
-    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). Written workbooks
-    and CLI output are byte-identical.
+    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). A file that
+    wildcard-imports the edit cases beside the library (`import Edit.*`) now sees two `Hyperlink`s
+    and must write `Edit.Hyperlink(at, target)`; that case keeps its `Option[String]` target.
+    Written workbooks and CLI output are byte-identical.
   - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
   - The identity `Sheet.unsafe`.
   - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`
