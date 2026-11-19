@@ -20,7 +20,7 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -1385,22 +1385,6 @@ object Evaluator:
     ): Either[EvalError, CellValue] =
       guard(sheet, at).fold(memoized(sheet, at, compute))(Left(_))
 
-    private val boxes =
-      new java.util.IdentityHashMap[
-        Sheet,
-        scala.collection.mutable.HashMap[CellRange, Option[CellRange]]
-      ]()
-
-    /**
-     * #750: the populated box of `range` on `sheet` ([[ArrayArithmetic.readRange]]), found once per
-     * pass: a formula that reads one whole column twice scans the sheet's keys once.
-     */
-    def populatedBox(sheet: Sheet, range: CellRange)(
-      compute: => Option[CellRange]
-    ): Option[CellRange] =
-      val forSheet = boxes.computeIfAbsent(sheet, _ => scala.collection.mutable.HashMap.empty)
-      forSheet.getOrElseUpdate(range, compute)
-
     /**
      * The guarded placement's error when `at` on `sheet` is it. Reads that evaluate an uncached
      * formula without this memo's lookup ([[evalCrossSheetFormula]], [[evalSpillFormula]]) ask too.
@@ -1609,16 +1593,8 @@ object Evaluator:
         case CellValue.Formula(_, None, _) => true
         case _ => false
 
-      val containsUncachedFormula =
-        if range.cellCount <= targetSheet.cells.size.toLong then
-          range.cells.exists(ref =>
-            targetSheet.cells.get(ref).exists(c => isUncachedFormula(c.value))
-          )
-        else
-          targetSheet.cells.iterator.exists { case cell @ Cell(ref, _, _, _) =>
-            range.contains(ref) && isUncachedFormula(cell.value)
-          }
-      !containsUncachedFormula
+      !targetSheet.cells.hasTag(CellStore.tagBit(CellStore.TagFormulaUncached)) ||
+      !targetSheet.cells.inRange(range).exists(c => isUncachedFormula(c.value))
 
   /** Generation-local logical key; anchors and transient immutable Sheet identities are absent. */
   private final case class AggregateMemoKey(

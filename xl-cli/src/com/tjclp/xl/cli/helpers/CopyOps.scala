@@ -181,9 +181,9 @@ object CopyOps:
     // record always pastes its cached constant (GH-430) and needs no evaluator phase.
     val liveFormulas: Vector[(ARef, String, Option[CellValue])] =
       sourceRange.cells.toVector.flatMap { src =>
-        sourceSheet.cells.get(src).map(_.value) match
-          case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => None
-          case Some(CellValue.Formula(expr, cached, _)) => Some((src, expr, cached))
+        sourceSheet.cells.valueAt(src) match
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+          case CellValue.Formula(expr, cached, _) => Some((src, expr, cached))
           case _ => None
       }
 
@@ -240,9 +240,9 @@ object CopyOps:
     @tailrec
     def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
       val nextSheet = refs.foldLeft(currentSheet) { (s, ref) =>
-        s.cells.get(ref).map(_.value) match
+        s.cells.valueAt(ref) match
           // the pasted record keeps its kind: a single-cell array formula stays one
-          case Some(formula: CellValue.Formula) =>
+          case formula: CellValue.Formula =>
             val cached =
               SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
             s.put(ref, formula.copy(cachedValue = cached))

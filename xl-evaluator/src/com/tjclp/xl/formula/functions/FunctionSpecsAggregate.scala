@@ -403,11 +403,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       .map((_, blanksTrimmed(agg, range, constrained)))
 
   /**
-   * Stream one already-constrained reference in row-major order. #736: when the range is larger
-   * than the sheet's records, reuse #750's populated box and skip its absent blank border. Small
-   * bounded windows keep the positional path (#747); positioned evaluations do too, because an
-   * absent cell can be their guarded placement. Formula/data-table records remain inside the box.
-   * Only COUNTBLANK observes the dropped Empty cells; its closed-form count preserves them.
+   * Stream one already-constrained reference in row-major order. #736: walk only #750's populated
+   * box (found from the store's cells inside the range, #891) and skip its absent blank border.
+   * Positioned evaluations keep the positional path, because an absent cell can be their guarded
+   * placement. Formula/data-table records remain inside the box. Only COUNTBLANK observes the
+   * dropped Empty cells; its closed-form count preserves them.
    */
   private def foldRawRange[A](
     agg: Aggregator[A],
@@ -417,13 +417,8 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     initial: A
   ): Either[EvalError, A] =
     val selected =
-      if range.cellCount <= targetSheet.cells.size.toLong ||
-        ctx.placementGuard.exists(_.positioned)
-      then range
-      else
-        ctx.passMemo
-          .populatedBox(targetSheet, range)(ArrayArithmetic.populatedBox(range, targetSheet))
-          .getOrElse(CellRange.empty)
+      if ctx.placementGuard.exists(_.positioned) then range
+      else ArrayArithmetic.populatedBox(range, targetSheet).getOrElse(CellRange.empty)
     val start =
       if agg.countsEmpty then
         agg.combineN(initial, aggregateCountUnit, range.cellCount - selected.cellCount)

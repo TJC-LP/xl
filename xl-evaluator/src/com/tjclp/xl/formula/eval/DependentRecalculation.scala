@@ -93,8 +93,8 @@ object DependentRecalculation:
       val skipped = cyclic ++ allBlocked.intersect(affected)
 
       def expression(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(text, _, _)) => text
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(text, _, _) => text
           case _ => q.ref.toA1
 
       val cycleErrors = skipped.toVector

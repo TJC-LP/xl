@@ -427,11 +427,10 @@ private[formula] final class PassCache(
       var i = 0
       var complete = true
       while complete && i < n do
-        sheet.cells.get(ARef.from0(col, r0 + i)).map(_.value) match
-          case scala.None => values(i) = CellValue.Empty
-          case Some(CellValue.Formula(_, scala.None, _)) => complete = false
-          case Some(CellValue.Formula(_, Some(cached), _)) => values(i) = cached
-          case Some(value) => values(i) = value
+        sheet.cells.valueAt(ARef.from0(col, r0 + i)) match
+          case CellValue.Formula(_, scala.None, _) => complete = false
+          case CellValue.Formula(_, Some(cached), _) => values(i) = cached
+          case value => values(i) = value
         i += 1
       if !complete then
         cachedCells.addAndGet(-n.toLong)

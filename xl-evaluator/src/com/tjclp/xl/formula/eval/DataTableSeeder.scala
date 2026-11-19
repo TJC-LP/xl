@@ -773,8 +773,8 @@ object DataTableSeeder:
     val members: List[(QualifiedRef, Int, String)] =
       sweep.toList.flatMap { q =>
         sheetIndex.get(q.sheet).map { idx =>
-          val expr = wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-            case Some(CellValue.Formula(e, _, _)) => e
+          val expr = wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+            case CellValue.Formula(e, _, _) => e
             case _ => q.ref.toA1
           (q, idx, expr)
         }
@@ -890,8 +890,8 @@ object DataTableSeeder:
     probes: Map[ARef, TExpr[?]]
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
-    sheet.cells.get(sourceRef).map(_.value) match
-      case Some(CellValue.Formula(expression, _, sourceKind)) =>
+    sheet.cells.valueAt(sourceRef) match
+      case CellValue.Formula(expression, _, sourceKind) =>
         val evaluator = sourceEvaluator(sourceKind)
         // (1) axis values evaluate against the group's base sheet, exactly like the acyclic path
         val overlays = overlayRefs.foldLeft(Option(Vector.empty[(ARef, CellValue)])) {
@@ -1009,8 +1009,8 @@ object DataTableSeeder:
     probes: Map[ARef, TExpr[?]]
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
-    sheet.cells.get(sourceRef).map(_.value) match
-      case Some(CellValue.Formula(expression, _, sourceKind)) =>
+    sheet.cells.valueAt(sourceRef) match
+      case CellValue.Formula(expression, _, sourceKind) =>
         val evaluator = sourceEvaluator(sourceKind)
         // Axis values evaluate against the group's base sheet, so results are order-independent.
         val overlays = overlayRefs.foldLeft(Option(prepared)) { case (acc, (inputRef, axisRef)) =>
@@ -1090,8 +1090,8 @@ object DataTableSeeder:
     kind: FormulaKind.DataTable
   ): Map[ARef, TExpr[?]] =
     sourceRefs(kind).iterator.flatMap { r =>
-      sheet.cells.get(r).map(_.value) match
-        case Some(CellValue.Formula(expression, _, _)) =>
+      sheet.cells.valueAt(r) match
+        case CellValue.Formula(expression, _, _) =>
           FormulaParser.parse(expression).toOption.filter(containsErrorGuard).map(expr => r -> expr)
         case _ => None
     }.toMap
@@ -1515,10 +1515,10 @@ object DataTableSeeder:
 
   /** Shape-preserving interior write shared by both paths (see the object scaladoc). */
   private def writeInterior(acc: Sheet, cellRef: ARef, value: CellValue): Sheet =
-    acc.cells.get(cellRef).map(_.value) match
-      case Some(record @ CellValue.Formula(_, _, _: FormulaKind.DataTable)) =>
+    acc.cells.valueAt(cellRef) match
+      case record @ CellValue.Formula(_, _, _: FormulaKind.DataTable) =>
         acc.put(cellRef, record.copy(cachedValue = Some(value))) // shape-preserving
-      case Some(_: CellValue.Formula) => acc // never overwrite a real formula
+      case _: CellValue.Formula => acc // never overwrite a real formula
       case _ => acc.put(cellRef, value)
 
   /**

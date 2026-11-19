@@ -178,11 +178,7 @@ object ArrayArithmetic:
         case RangeRead.Auto => area <= sheet.cells.size.toLong
       if positional then rangeToMatrixEval(range, readCell).map(ArrayResult(_))
       else
-        val found =
-          memo.fold(populatedBox(range, sheet))(
-            _.populatedBox(sheet, range)(populatedBox(range, sheet))
-          )
-        found match
+        populatedBox(range, sheet) match
           case None => Right(ArrayResult.constant(height, width, CellValue.Empty))
           case Some(box) =>
             val boxArea = box.height.toLong * box.width.toLong
@@ -213,17 +209,13 @@ object ArrayArithmetic:
    * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
    */
   private[formula] def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
-    val r0 = range.rowStart.index0
-    val r1 = range.rowEnd.index0
-    val c0 = range.colStart.index0
-    val c1 = range.colEnd.index0
-    sheet.cells.iterator
+    sheet.cells
+      .inRange(range)
       .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, cell) =>
         val at = cell.ref
         val r = at.row.index0
         val c = at.col.index0
-        if r < r0 || r > r1 || c < c0 || c > c1 then acc
-        else if !holdsValue(cell.value) then acc
+        if !holdsValue(cell.value) then acc
         else
           Some(acc.fold((r, r, c, c)) { case (top, bottom, left, right) =>
             (math.min(top, r), math.max(bottom, r), math.min(left, c), math.max(right, c))

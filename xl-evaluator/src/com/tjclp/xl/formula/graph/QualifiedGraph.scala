@@ -269,14 +269,7 @@ object QualifiedGraph:
       expansions.getOrElseUpdate(
         (sheet, range.start, range.end),
         cellsBySheet.get(sheet).fold(Set.empty[QualifiedRef]) { cells =>
-          val hits =
-            if range.cellCount <= cells.size.toLong then
-              range.cells.filter(ref => cells.get(ref).exists(holdsValue))
-            else
-              cells.iterator.collect {
-                case cell @ Cell(ref, _, _, _) if range.contains(ref) && holdsValue(cell) => ref
-              }
-          hits.map(ref => QualifiedRef(sheet, ref)).toSet
+          cells.inRange(range).filter(holdsValue).map(c => QualifiedRef(sheet, c.ref)).toSet
         }
       )
 

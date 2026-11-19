@@ -899,8 +899,8 @@ object SheetEvaluator:
    * Every other cell becomes the plain value, as before.
    */
   private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
-    sheet.cells.get(ref).map(_.value) match
-      case Some(f: CellValue.Formula) =>
+    sheet.cells.valueAt(ref) match
+      case f: CellValue.Formula =>
         value match
           // only an uncached record handed back by reference (`IFERROR(X1,0)` over an X1 not yet
           // evaluated; `cellResult` unwraps cached ones): the value is unknown, so the cell stays
@@ -914,8 +914,8 @@ object SheetEvaluator:
    * does unless the cell holds a formula record, whose cache alone it rewrites.
    */
   private[eval] def threadChangesStructure(sheet: Sheet, ref: ARef): Boolean =
-    sheet.cells.get(ref).map(_.value) match
-      case Some(_: CellValue.Formula) => false
+    sheet.cells.valueAt(ref) match
+      case _: CellValue.Formula => false
       case _ => true
 
   /**
@@ -930,11 +930,11 @@ object SheetEvaluator:
    */
   private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
     refs.foldLeft(sheet) { (s, r) =>
-      s.cells.get(r).map(_.value) match
+      s.cells.valueAt(r) match
         // GH-430: a DataTable cache is the sole source of truth. Graph analysis normally keeps
         // these records out of the dynamic bucket; keep this guard as structural safety.
-        case Some(CellValue.Formula(_, Some(_), _: FormulaKind.DataTable)) => s
-        case Some(f @ CellValue.Formula(_, Some(_), _)) =>
+        case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => s
+        case f @ CellValue.Formula(_, Some(_), _) =>
           s.put(r, f.copy(cachedValue = None))
         case _ => s
     }

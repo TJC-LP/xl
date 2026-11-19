@@ -594,8 +594,8 @@ object RecalcResult:
     parses: FormulaParses = FormulaParses.none
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
-      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expression, _, _)) => expression
+      wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(expression, _, _) => expression
         case _ => q.ref.toA1
 
     val failedRefs = failures.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
@@ -654,12 +654,12 @@ object RecalcResult:
       )
       evaluated.getOrElse(orig.name, Map.empty).foldLeft((cleared, invalidated)) {
         case ((s, changed), (ref, computed)) =>
-          s.cells.get(ref).map(_.value) match
+          s.cells.valueAt(ref) match
             // GH-430: a data-table cache is never rewritten by recalculation — pinned
             // evaluation echoes it, and an uncached record must stay uncached, not gain
             // a synthetic Some(Empty).
-            case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => (s, changed)
-            case Some(f @ CellValue.Formula(_, cached, _)) if !cached.contains(computed) =>
+            case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (s, changed)
+            case f @ CellValue.Formula(_, cached, _) if !cached.contains(computed) =>
               (s.put(ref, f.copy(cachedValue = Some(computed))), true)
             case _ => (s, changed)
       }

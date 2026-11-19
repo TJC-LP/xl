@@ -431,8 +431,8 @@ object WorkbookEvaluator:
       memo.passCache.foreach(_.useParses(graph.parses))
 
       def formulaText(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => expr
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(expr, _, _) => expr
           case _ => q.ref.toA1
 
       val (cyclicCore, blocked) = counters.time(RecalcCounters.Phase.Tarjan) {
@@ -589,8 +589,8 @@ object WorkbookEvaluator:
     generationMemo.passCache.foreach(_.useParses(graph.parses))
 
     def formulaText(q: QualifiedRef): String =
-      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expr, _, _)) => expr
+      wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(expr, _, _) => expr
         case _ => q.ref.toA1
 
     // GH-346: cycle isolation on the WORKBOOK-level graph — same-sheet and cross-sheet cycles
@@ -1219,8 +1219,8 @@ object WorkbookEvaluator:
     members: List[(QualifiedRef, Int, String)]
   ): Map[QualifiedRef, CellValue] =
     members.flatMap { (q, idx, _) =>
-      baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _)) => Some(q -> cached)
+      baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _) => Some(q -> cached)
         case _ => None
     }.toMap
 
@@ -1314,8 +1314,8 @@ object WorkbookEvaluator:
     val kinds: Map[QualifiedRef, FormulaKind] =
       members.map { (q, idx, _) =>
         val kind: FormulaKind =
-          baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-            case Some(CellValue.Formula(_, _, k)) => k
+          baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+            case CellValue.Formula(_, _, k) => k
             case _ => FormulaKind.Normal()
         q -> kind
       }.toMap

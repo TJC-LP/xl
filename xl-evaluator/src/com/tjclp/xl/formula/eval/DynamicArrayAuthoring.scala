@@ -446,8 +446,8 @@ private[xl] object DynamicArrayAuthoring:
    * legacy (CSE) extent is left alone: its cells are the user's to clear.
    */
   private def clearOwnSpill(sheet: Sheet, anchor: ARef): (Sheet, Set[ARef]) =
-    sheet.cells.get(anchor).map(_.value) match
-      case Some(CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula))
+    sheet.cells.valueAt(anchor) match
+      case CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
           if arr.isDynamicArray && arr.ref.start == anchor =>
         val children = arr.ref.cells
           .filter(_ != anchor)
