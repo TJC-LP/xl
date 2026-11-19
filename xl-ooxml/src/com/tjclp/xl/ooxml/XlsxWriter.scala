@@ -173,20 +173,16 @@ object XlsxWriter:
   private def withDates1904Normalized(workbook: Workbook): Workbook =
     if !workbook.metadata.date1904 then workbook
     else
+      // the store visits only the rows holding a DateTime and returns the sheet's own store when
+      // there is none (#891)
+      val dateTimes = CellStore.tagBit(CellStore.TagDateTime)
       val normalizedSheets = workbook.sheets.map { sheet =>
-        val hasDateTime = sheet.cells.iterator.exists(_.value match
-          case CellValue.DateTime(_) => true
-          case _ => false)
-        if !hasDateTime then sheet
-        else
-          val cells = CellStore.from(sheet.cells.iterator.map { cell =>
-            cell.value match
-              case CellValue.DateTime(dt) =>
-                val serial = CellValue.dateTimeToExcelSerial(dt, date1904 = true)
-                cell.copy(value = CellValue.Number(BigDecimal(serial)))
-              case _ => cell
-          })
-          sheet.copy(cells = cells)
+        val cells = sheet.cells.transformValues(dateTimes) {
+          case CellValue.DateTime(dt) =>
+            CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt, date1904 = true)))
+          case other => other
+        }
+        if cells eq sheet.cells then sheet else sheet.copy(cells = cells)
       }
       workbook.copy(sheets = normalizedSheets)
 

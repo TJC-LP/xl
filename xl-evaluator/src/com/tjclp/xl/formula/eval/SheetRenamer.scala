@@ -154,8 +154,7 @@ object SheetRenamer:
     def rewriteText(site: Site)(text: String): Refused[String] =
       FormulaOps.renameSheet(text, from, to).left.map(located(site, _))
     for
-      changedCells <- sheet.cells.iterator.toVector
-        .sortBy(cell => (cell.ref.row.index0, cell.ref.col.index0))
+      changedCells <- sheet.cells.iterator.toVector // row-major already
         .traverse(cell => rewriteCell(cell.ref, cell, rewriteText(Site.Cell(labelName, cell.ref))))
         .map(_.flatten)
       cfs <- sheet.conditionalFormats.traverse(

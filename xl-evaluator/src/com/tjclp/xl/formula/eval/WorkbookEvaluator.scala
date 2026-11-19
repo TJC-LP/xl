@@ -1372,6 +1372,9 @@ object WorkbookEvaluator:
             )
           }
 
+    // the members of each sheet, so a round overlays a sheet's members in one store rebuild (#891)
+    val membersBySheet = members.groupBy(_._2).toVector.sortBy(_._1)
+
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
       // Evaluation-local observation of the existing effect capability: all evaluators in this
@@ -1382,8 +1385,10 @@ object WorkbookEvaluator:
         def nextDouble(): Double =
           drewRandomness = true
           rng.nextDouble()
-      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, overlay(q, text, prev.get(q))))
+      val overlaid = membersBySheet.foldLeft(baseSheets) { case (sheets, (idx, onSheet)) =>
+        val refs = IArray.from(onSheet.map(_._1.ref))
+        val values = IArray.from(onSheet.map((q, _, text) => overlay(q, text, prev.get(q))))
+        sheets.updated(idx, sheets(idx).withValues(refs, values))
       }
       val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
         case IterationScheme.Jacobi =>

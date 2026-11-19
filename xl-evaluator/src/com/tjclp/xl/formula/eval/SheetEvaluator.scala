@@ -929,15 +929,19 @@ object SheetEvaluator:
    * overlays computed results on the original sheet.
    */
   private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
-    refs.foldLeft(sheet) { (s, r) =>
-      s.cells.valueAt(r) match
+    val at = IArray.newBuilder[ARef]
+    val stripped = IArray.newBuilder[CellValue]
+    refs.foreach { r =>
+      sheet.cells.valueAt(r) match
         // GH-430: a DataTable cache is the sole source of truth. Graph analysis normally keeps
         // these records out of the dynamic bucket; keep this guard as structural safety.
-        case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => s
+        case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => ()
         case f @ CellValue.Formula(_, Some(_), _) =>
-          s.put(r, f.copy(cachedValue = None))
-        case _ => s
+          at += r
+          stripped += f.copy(cachedValue = None)
+        case _ => ()
     }
+    sheet.withValues(at.result(), stripped.result())
 
   /**
    * Convert EvalError to XLError for integration.

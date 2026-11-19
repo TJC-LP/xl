@@ -652,17 +652,22 @@ object RecalcResult:
           case CellValue.Formula(_, Some(_), _) => true
           case _ => false
       )
-      evaluated.getOrElse(orig.name, Map.empty).foldLeft((cleared, invalidated)) {
-        case ((s, changed), (ref, computed)) =>
-          s.cells.valueAt(ref) match
-            // GH-430: a data-table cache is never rewritten by recalculation — pinned
-            // evaluation echoes it, and an uncached record must stay uncached, not gain
-            // a synthetic Some(Empty).
-            case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (s, changed)
-            case f @ CellValue.Formula(_, cached, _) if !cached.contains(computed) =>
-              (s.put(ref, f.copy(cachedValue = Some(computed))), true)
-            case _ => (s, changed)
+      // one store rebuild per sheet (#891): collect the rewritten records, then write them at once
+      val refs = IArray.newBuilder[ARef]
+      val values = IArray.newBuilder[CellValue]
+      evaluated.getOrElse(orig.name, Map.empty).foreach { (ref, computed) =>
+        cleared.cells.valueAt(ref) match
+          // GH-430: a data-table cache is never rewritten by recalculation — pinned
+          // evaluation echoes it, and an uncached record must stay uncached, not gain
+          // a synthetic Some(Empty).
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case f @ CellValue.Formula(_, cached, _) if !cached.contains(computed) =>
+            refs += ref
+            values += f.copy(cachedValue = Some(computed))
+          case _ => ()
       }
+      val rewritten = refs.result()
+      (cleared.withValues(rewritten, values.result()), invalidated || rewritten.nonEmpty)
     }
 
     // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write

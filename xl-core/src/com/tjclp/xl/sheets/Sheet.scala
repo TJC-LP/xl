@@ -206,9 +206,9 @@ final case class Sheet(
     def rebuild(ref: ARef, newIdx: Int): ARef =
       if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
 
-    val newCells = CellStore.from(cells.iterator.flatMap { cell =>
-      idx(axisOf(cell.ref)).map(ni => cell.copy(ref = rebuild(cell.ref, ni)))
-    })
+    // the store re-keys its rows (or each row's columns) in place of a rebuild (#891)
+    val (from, by) = if deleting then (at + count, -count) else (at, count)
+    val newCells = if rowAxis then cells.shiftRows(from, by) else cells.shiftCols(from, by)
     val newComments = comments.flatMap { case (ref, c) =>
       idx(axisOf(ref)).map(ni => rebuild(ref, ni) -> c)
     }
@@ -380,10 +380,15 @@ final case class Sheet(
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
   def put(ref: ARef, value: CellValue): Sheet =
-    val updatedCell = cells.get(ref) match
-      case Some(existing) => existing.withValue(value)
-      case None => Cell(ref, value)
-    put(updatedCell)
+    copy(cells = cells.updatedValue(ref, value))
+
+  /**
+   * This sheet with `values(i)` at `refs(i)`, as a fold of [[put]] over the pairs in order (a later
+   * pair wins at a shared reference), in one rebuild of the cell store (#891). Existing cells keep
+   * their style and hyperlink.
+   */
+  def withValues(refs: IArray[ARef], values: IArray[CellValue]): Sheet =
+    if refs.isEmpty then this else copy(cells = cells.withValues(refs, values))
 
   /**
    * Put a single value at reference.
