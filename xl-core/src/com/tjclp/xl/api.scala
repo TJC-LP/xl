@@ -42,6 +42,10 @@ object api:
   type SheetName = addressing.SheetName
   val SheetName: addressing.SheetName.type = addressing.SheetName
 
+  // Cell hyperlink target: opaque over String, same alias + singleton val treatment
+  type Hyperlink = cells.Hyperlink
+  val Hyperlink: cells.Hyperlink.type = cells.Hyperlink
+
   // Rich text types
   export richtext.{TextRun, RichText}
 

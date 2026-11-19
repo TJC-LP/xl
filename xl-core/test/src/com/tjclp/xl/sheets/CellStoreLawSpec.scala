@@ -5,7 +5,7 @@ import java.time.LocalDateTime
 import scala.collection.immutable.SortedMap
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind, Hyperlink}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.sheets.store.CellCursor
 import com.tjclp.xl.styles.units.StyleId
@@ -392,10 +392,11 @@ class CellStoreLawSpec extends ScalaCheckSuite:
 
   test("updatedValue keeps style and link; on an absent ref it stores a plain (even Empty) cell") {
     val ref = ARef.from0(3, 4)
-    val s = CellStore.of(Cell(ref, CellValue.Text("a"), Some(StyleId(Int.MinValue)), Some("")))
+    val s =
+      CellStore.of(Cell(ref, CellValue.Text("a"), Some(StyleId(Int.MinValue)), Some(Hyperlink(""))))
     assertEquals(
       s.updatedValue(ref, CellValue.Bool(true)).get(ref),
-      Some(Cell(ref, CellValue.Bool(true), Some(StyleId(Int.MinValue)), Some("")))
+      Some(Cell(ref, CellValue.Bool(true), Some(StyleId(Int.MinValue)), Some(Hyperlink(""))))
     )
     assertEquals(
       CellStore.empty.updatedValue(ref, CellValue.Empty).get(ref),
@@ -427,7 +428,7 @@ class CellStoreLawSpec extends ScalaCheckSuite:
   test("toString is row-major and readable") {
     val s = CellStore.of(
       Cell(ARef.from0(1, 0), CellValue.Text("b"), Some(StyleId(2))),
-      Cell(ARef.from0(0, 0), CellValue.Text("a"), None, Some("https://x")),
+      Cell(ARef.from0(0, 0), CellValue.Text("a"), None, Some(Hyperlink("https://x"))),
       Cell(ARef.from0(0, -1), CellValue.Empty)
     )
     assertEquals(
@@ -541,9 +542,9 @@ object CellStoreLawSpec:
     1 -> Gen.oneOf(0, 1, -1, Int.MinValue, Int.MaxValue, 0x7fff).map(i => Some(StyleId(i)))
   )
 
-  val genLink: Gen[Option[String]] = Gen.frequency(
+  val genLink: Gen[Option[Hyperlink]] = Gen.frequency(
     4 -> Gen.const(None),
-    1 -> Gen.oneOf("", "https://example.com/x", "Sheet1!A1").map(Some(_))
+    1 -> Gen.oneOf("", "https://example.com/x", "Sheet1!A1").map(l => Some(Hyperlink(l)))
   )
 
   val genCell: Gen[Cell] =
@@ -632,7 +633,7 @@ object CellStoreLawSpec:
       ref <- genBlockRef
       v <- genBlockValue
       s <- Gen.frequency(5 -> Gen.const(None), 1 -> Gen.const(Some(StyleId(1))))
-      l <- Gen.frequency(9 -> Gen.const(None), 1 -> Gen.const(Some("Sheet1!A1")))
+      l <- Gen.frequency(9 -> Gen.const(None), 1 -> Gen.const(Some(Hyperlink("Sheet1!A1"))))
     yield Cell(ref, v, s, l)
 
   /** Every cell of the first `rows` rows over `cols` columns, each valued or style-only Empty. */

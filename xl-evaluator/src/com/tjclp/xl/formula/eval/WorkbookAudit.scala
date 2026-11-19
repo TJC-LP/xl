@@ -273,13 +273,26 @@ object WorkbookAudit:
     counters: RecalcCounters,
     volatile: Set[QualifiedRef]
   ): Vector[StaleDataTable] =
-    val tables = wb.sheets
-      .flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
-      .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, graph, volatile) }
+    val declared = wb.sheets.flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
+    // The recalculation graph may have narrowed a lookup on a selector a table substitutes. The
+    // what-if pass reads such a lookup whole, so the exemption asks the graph that pass uses: a
+    // volatile strip only another selector value reaches is in the table's cone all the same.
+    lazy val whatIf =
+      if graph.narrowsOnWhatIfInput then
+        counters.time(RecalcCounters.Phase.GraphBuild)(
+          RecalcGraph.build(wb, counters, whatIfSafe = true)
+        )
+      else graph
+    val tables =
+      if declared.isEmpty then declared
+      else
+        declared.filterNot { case (sheet, (_, kind)) =>
+          readsVolatile(sheet.name, kind, whatIf, volatile)
+        }
     if tables.isEmpty then Vector.empty
     else
       val seeded =
-        DataTableSeeder.seedSample(wb, clock, sampleOf(_).iterator, graph, counters)
+        DataTableSeeder.seedSample(wb, clock, sampleOf(_).iterator, whatIf, counters)
       val after = seeded.sheets.iterator.map(s => s.name -> s).toMap
       tables.flatMap { case (sheet, (interior, _)) =>
         val sampled = sampleOf(interior)

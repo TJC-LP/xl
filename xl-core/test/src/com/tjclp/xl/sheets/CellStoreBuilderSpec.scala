@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.sheets.store.{Band, Group}
 import com.tjclp.xl.styles.units.StyleId
 import munit.ScalaCheckSuite
@@ -131,7 +131,7 @@ class CellStoreBuilderSpec extends ScalaCheckSuite:
 
   test("a repeat of the last reference replaces it in place, across every seam") {
     val a = number(31, 5)
-    val b = Cell(a.ref, CellValue.Text("again"), Some(StyleId(2)), Some("l"))
+    val b = Cell(a.ref, CellValue.Text("again"), Some(StyleId(2)), Some(Hyperlink("l")))
     val c = Cell(a.ref, CellValue.Empty)
     assertSeam(List(a, b))
     assertSeam(List(a, b, c, number(32, 0), number(32, 0).withValue(CellValue.Bool(true))))
@@ -263,7 +263,10 @@ object CellStoreBuilderSpec:
         5 -> Gen.const(None),
         1 -> Gen.choose(-1, 2).map(i => Some(StyleId(i)))
       )
-      link <- Gen.frequency(9 -> Gen.const(None), 1 -> Gen.oneOf("a", "b").map(Some(_)))
+      link <- Gen.frequency(
+        9 -> Gen.const(None),
+        1 -> Gen.oneOf("a", "b").map(l => Some(Hyperlink(l)))
+      )
     yield Cell(ARef.from0(col, row), value, style, link)
 
   /** A wide row's worth of cells, so some rows are banded. */

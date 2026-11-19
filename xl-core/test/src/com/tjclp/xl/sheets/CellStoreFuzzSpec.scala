@@ -3,7 +3,7 @@ package com.tjclp.xl.sheets
 import scala.util.Random
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.styles.units.StyleId
 
 /**
@@ -64,7 +64,7 @@ class CellStoreFuzzSpec extends munit.FunSuite:
         ref(),
         value(),
         if rnd.nextInt(4) == 0 then Some(StyleId(rnd.nextInt(3) - 1)) else None,
-        if rnd.nextInt(6) == 0 then Some("l" + rnd.nextInt(2)) else None
+        if rnd.nextInt(6) == 0 then Some(Hyperlink("l" + rnd.nextInt(2))) else None
       )
     var o = Map.empty[(Int, Int), Cell]
     var s = CellStore.empty

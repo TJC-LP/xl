@@ -204,7 +204,7 @@ class SheetStyleSpec extends FunSuite:
     )
     assertEquals(
       sheet(ref"A1").hyperlink,
-      Some("https://example.com"),
+      Some(Hyperlink("https://example.com")),
       "Hyperlink should be preserved"
     )
     assertEquals(sheet(ref"A1").value, CellValue.Text("Updated Link"), "Value should be updated")
@@ -239,7 +239,7 @@ class SheetStyleSpec extends FunSuite:
       )
     val updated = sheet.put(ref"A1", "New")
 
-    assertEquals(updated(ref"A1").hyperlink, Some("https://example.com"))
+    assertEquals(updated(ref"A1").hyperlink, Some(Hyperlink("https://example.com")))
   }
 
   // ========== GH-295: comments live only in Sheet.comments ==========

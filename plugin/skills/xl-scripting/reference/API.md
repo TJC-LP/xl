@@ -10,7 +10,8 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `CellRange` | Inclusive rectangular range, auto-normalized. `ref"A1:B10"` |
 | `RefType` | Cell \| Range \| QualifiedCell \| QualifiedRange — what runtime `ref"$s"` parses to |
 | `SheetName` | Validated sheet name (≤31 chars, no `:\/?*[]`). `SheetName("Q1")` → `Either` |
-| `Cell` | `(ref, value, styleId, ...)` |
+| `Cell` | `(ref, value, styleId, hyperlink)` — `hyperlink: Option[Hyperlink]` (not a `String`: `Cell(ref, v, None, Some("text"))` does not compile); set with `cell.withHyperlink("https://…")`, read with `cell.hyperlink.map(_.target)` |
+| `Hyperlink` | opaque link target: `Hyperlink("https://…")`, `.target: String` |
 | `CellValue` | enum: `Text`, `Number(BigDecimal)`, `Bool`, `DateTime`, `Formula(expr, cached)`, `RichText`, `Error`, `Empty` |
 | `Sheet` | Immutable sheet: `cells: CellStore`, name, merges, comments, col/row properties |
 | `Workbook` | `sheets: Vector[Sheet]` + metadata |
@@ -107,6 +108,7 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.putTable(at, records, name)` | `XLResult[RowsPlaced]` | `putRowsWithHeader` + an Excel table named after `name`, its columns after `RowCodec.headers`; `name` = display name, letters/digits/`_`, unique on the sheet; no records → header + one blank data row (0.21.0) |
 | `TableSpec.create(name, displayName, range, columns: Vector[TableColumn], showTotalsRow = …)` / `TableColumn(id, name, totalsRowLabel = None, totalsRowFunction = None)` / `TotalsRowFunction.{Sum, Min, Max, Average, Count, CountNums, StdDev, Var, Custom(formula)}` | `XLResult[TableSpec]` | 0.23.0: a totals row survives a write (`totalsRowCount`, per-column label/function, autoFilter over header + data rows, as Excel writes it); column names must be unique case-insensitively (`Rev`/`rev` is `InvalidTableColumns`), and `putTable` enables the autoFilter ([#595](https://github.com/TJC-LP/xl/issues/595)) |
 | `sheet.comment(ref, Comment.plainText("note", Some("author")))` | `Sheet` | |
+| `sheet.put(sheet(ref).withHyperlink("https://example.com"))` | `Sheet` | Cell hyperlink (`"#Sheet1!A1"` or `"Sheet1!A1"` for an internal link); `clearHyperlink` removes it; `sheet(ref).hyperlink.map(_.target)` reads it |
 | `sheet.toHtml(ref"A1:B10")` | `String` | inline-CSS HTML table (conditional formatting NOT painted: pass an overlay) |
 | `sheet.conditionalFormatOverlay(range)` | `CfOverlay` | the sheet's conditional formatting evaluated over `range` as Excel paints it: cell-value, formula, text, top/bottom N, colour scales, 2007 data bars; precedence and Stop If True honoured; no workbook (no cross-sheet refs), system clock ([#497](https://github.com/TJC-LP/xl/issues/497)) |
 | `sheet.toSvg(range, overlay)` / `sheet.toHtml(range, overlay)` | `String` | the render with the overlay painted (fills, fonts, strike, borders, number formats, data bars); the full forms take every option: `toSvg(range, includeStyles, theme, showLabels, showGridlines, overlay)`, `toHtml(range, includeStyles, includeComments, theme, applyPrintScale, showLabels, overlay)`; `CfOverlay.empty` renders byte-identically to the CF-blind call (#497) |

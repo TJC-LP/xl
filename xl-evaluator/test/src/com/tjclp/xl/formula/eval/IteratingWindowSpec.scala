@@ -115,3 +115,63 @@ class IteratingWindowSpec extends FunSuite:
     assertEquals(shown.blocked, Vector(at("D1")))
     assertEquals(shown.values.keySet, Set(at("A1"), at("B1"), at("E1")))
   }
+
+  // ---- every member cached: the cycle is pinned, a source of saved values and nothing else ----
+
+  private def cached(t: String, v: Int): CellValue = stale(t, v)
+
+  test("a cached cycle with a dynamic member keeps every member's saved value") {
+    // B1 is downstream of the INDIRECT in A1: the dynamic bucket stripped its cache without
+    // scheduling it, so C1 read B1's formula (5) instead of the value the file holds (99)
+    val wb = iterating(
+      Workbook(
+        sheet(
+          "S",
+          "D1" -> n(5),
+          "A1" -> cached("INDIRECT(\"D1\")+B1*0", 99),
+          "B1" -> cached("A1*0+5", 99),
+          "C1" -> f("B1+0")
+        )
+      )
+    )
+    val shown = wb.sheets(0).evaluateForRangePerCell(range, clock, Some(wb))
+    assert(shown.isClean, shown.summary)
+    assertEquals(shown.values, Map(at("C1") -> n(99)))
+  }
+
+  test("a failure behind a cached cycle does not block what reads the cycle") {
+    // C1 reads B1's saved 7; E1, which only feeds the cycle, cannot evaluate. C1 was listed as
+    // computed and as blocked at once.
+    val wb = iterating(
+      Workbook(
+        sheet(
+          "S",
+          "E1" -> f("Missing!A1+1"),
+          "A1" -> cached("B1*0+E1", 1),
+          "B1" -> cached("A1*0+7", 7),
+          "C1" -> f("B1+0")
+        )
+      )
+    )
+    val shown = wb.sheets(0).evaluateForRangePerCell(range, clock, Some(wb))
+    assertEquals(shown.values.get(at("C1")), Some(n(7)))
+    assertEquals(shown.blocked, Vector.empty)
+    assert(!shown.values.keySet.exists(shown.blocked.contains), shown.toString)
+  }
+
+  test("no cell of a window is both computed and blocked or failed (iterating stale shapes)") {
+    val shapes = Vector(
+      Vector("E1" -> f("Missing!A1+1"), "A1" -> cached("B1*0+E1", 1), "B1" -> cached("A1*0+7", 7)),
+      Vector("E1" -> f("Missing!A1+1"), "A1" -> f("B1*0+E1"), "B1" -> cached("A1*0+7", 7)),
+      Vector("D1" -> n(5), "A1" -> cached("INDIRECT(\"D1\")+B1*0", 9), "B1" -> cached("A1+1", 3))
+    )
+    shapes.foreach { cells =>
+      val wb = iterating(
+        Workbook(sheet("S", (cells ++ Vector("C1" -> f("B1+0"), "F1" -> f("C1+E1"))): _*))
+      )
+      val shown = wb.sheets(0).evaluateForRangePerCell(range, clock, Some(wb))
+      val unevaluated =
+        shown.blocked.toSet ++ shown.failures.filter(_.sheet.value == "S").map(_.ref)
+      assertEquals(shown.values.keySet & unevaluated, Set.empty[ARef], shown.toString)
+    }
+  }

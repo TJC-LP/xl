@@ -3,7 +3,7 @@ package com.tjclp.xl.sheets
 import scala.util.hashing.MurmurHash3
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.sheets.store.{
   Band,
   BandedRow,
@@ -88,7 +88,12 @@ final class CellStore private (
     else
       val m = c.meta(p)
       Some(
-        Cell(ref, c.values(p), Meta.style(m), if Meta.hasLink(m) then Some(c.links(p)) else None)
+        Cell(
+          ref,
+          c.values(p),
+          Meta.style(m),
+          if Meta.hasLink(m) then Some(Hyperlink(c.links(p))) else None
+        )
       )
 
   /** The value at `ref`, Empty when no cell is stored there. Allocates nothing. */
@@ -102,10 +107,10 @@ final class CellStore private (
     val p = posIn(c, ref)
     if p < 0 then None else Meta.style(c.meta(p))
 
-  def hyperlinkAt(ref: ARef): Option[String] =
+  def hyperlinkAt(ref: ARef): Option[Hyperlink] =
     val c = cellsAt(ref)
     val p = posIn(c, ref)
-    if p < 0 || !Meta.hasLink(c.meta(p)) then None else Some(c.links(p))
+    if p < 0 || !Meta.hasLink(c.meta(p)) then None else Some(Hyperlink(c.links(p)))
 
   /** Every stored cell, row-major (see the class notes for the order off the grid). */
   def iterator: Iterator[Cell] = cellsOf(CellCursor.all(this))
@@ -158,7 +163,7 @@ final class CellStore private (
   /** This store with `cell` stored at `cell.ref`, replacing whatever was there. */
   def updated(cell: Cell): CellStore =
     val meta = Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined)
-    val link = cell.hyperlink.getOrElse("")
+    val link = cell.hyperlink.fold("")(_.target)
     modifyRow(
       cell.ref.row.index0,
       row => StoredRow.set(row, cell.ref.col.index0, meta, cell.value, link)
@@ -463,7 +468,7 @@ object CellStore:
         orderKey(cell.ref.row.index0, cell.ref.col.index0),
         Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined),
         cell.value,
-        cell.hyperlink.getOrElse("")
+        cell.hyperlink.fold("")(_.target)
       )
       this
 
