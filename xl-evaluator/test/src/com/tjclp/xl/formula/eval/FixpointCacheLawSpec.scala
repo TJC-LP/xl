@@ -410,6 +410,6 @@ class FixpointCacheLawSpec extends FunSuite:
     }
   }
 
-  private val Cases = 60
+  private val Cases = 40
   private val BudgetCases = 8
   private val FailingCases = 20

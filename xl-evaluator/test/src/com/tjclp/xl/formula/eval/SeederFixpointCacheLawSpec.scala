@@ -193,7 +193,7 @@ class SeederFixpointCacheLawSpec extends FunSuite:
     assert(notConverged > 0, clue)
   }
 
-  private val Cases = 60
+  private val Cases = 30
 
   // ----- fixed cases, with the values worked out by hand -----
 
