@@ -448,11 +448,27 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): XLResult[CellOutcome] =
+    evaluateCellOutcomeParsing(sheet, ref, evaluator, clock, workbook)(
+      parseCounted(_, _, sheet.name, Some(ref))
+    )
+
+  /**
+   * #891: [[evaluateCellOutcome]] with the cell's parse supplied by the caller: `parse` receives
+   * the formula text and the cell's evaluator, at most once. Data-table seeding evaluates the same
+   * cone once per interior cell and hands in the parse its graph build already made.
+   */
+  private[eval] def evaluateCellOutcomeParsing(
+    sheet: Sheet,
+    ref: ARef,
+    evaluator: => Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  )(parse: (String, Evaluator) => XLResult[TExpr[?]]): XLResult[CellOutcome] =
     sheet(ref).value match
       case value @ CellValue.Formula(expr, _, kind) =>
         // #790: one parse of the cell serves both the pin check and the evaluation
         lazy val cellEvaluator = evaluator
-        lazy val parsedCell = parseCounted(expr, cellEvaluator, sheet.name, Some(ref))
+        lazy val parsedCell = parse(expr, cellEvaluator)
         pinnedCache(value, _ => parsedCell) match
           // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
           case Some(cached) => scala.util.Right(CellOutcome(cached, None))

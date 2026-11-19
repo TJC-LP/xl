@@ -111,6 +111,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
   now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
 
+- **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
+  --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
+  writes to an iterating book built a second one for the edit's dirty cone; each now hands the
+  recalculation's graph to its second consumer (as does `recalculate` with `seedTables`). Data-table
+  seeding, and the audit's stale-table check with it, parsed the corner and every formula of the
+  what-if cone again for each interior cell; they read the graph's parses now. Results are
+  unchanged. A table whose corner is a VLOOKUP/HLOOKUP selected by the table's own input still
+  costs seeding a second graph (the recalculation graph narrows that lookup).
+
 - **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
   `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
   anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision

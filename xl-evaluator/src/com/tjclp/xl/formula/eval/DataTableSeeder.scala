@@ -6,9 +6,8 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -227,11 +226,37 @@ object DataTableSeeder:
       clock: Clock,
       iterative: Option[IterativeCalc]
     ): XLResult[DataTableSeedReport] =
-      val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells)
-      Right(DataTableSeedReport(seeded, warnings))
+      Right(seedReport(wb, clock, iterative, None, RecalcCounters.disabled))
+
+  /**
+   * #891: [[seedDataTablesReport]] with an enabled [[RecalcCounters]], for the parse-count laws:
+   * the same run, the same report.
+   */
+  private[formula] def seedDataTablesReportCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    counters: RecalcCounters
+  ): DataTableSeedReport =
+    seedReport(wb, clock, iterative, None, counters)
+
+  /**
+   * #891: the whole-book seeding report over a recalculation graph the caller already holds
+   * (`built`): the graph of `wb`, or of a book that differs from `wb` only in cached values, as a
+   * recalculation's result differs from its input. See [[seedWorkbook]] for when it is set aside.
+   */
+  private[eval] def seedReport(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    built: Option[RecalcGraph],
+    counters: RecalcCounters
+  ): DataTableSeedReport =
+    val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells, built, counters)
+    DataTableSeedReport(seeded, warnings)
 
   /** The book's own iterative-calculation declaration, if any. */
-  private def declaredIterative(wb: Workbook): Option[IterativeCalc] =
+  private[eval] def declaredIterative(wb: Workbook): Option[IterativeCalc] =
     wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
 
   /** Seeding computes every interior cell (the public entry points). */
@@ -262,15 +287,48 @@ object DataTableSeeder:
     wb: Workbook,
     clock: Clock,
     pick: CellRange => Iterator[ARef],
-    graph: RecalcGraph
+    graph: RecalcGraph,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): Workbook =
-    seedWorkbook(wb, None, clock, declaredIterative(wb), pick, Some(graph))._1
+    seedWorkbook(wb, None, clock, declaredIterative(wb), pick, Some(graph), counters)._1
+
+  /**
+   * #891: the parses a seeding run evaluates with. A what-if pass evaluates the same source formula
+   * and the same cone once per interior cell; each of those formulas is a node of the run's graph,
+   * whose build parsed it. [[at]] answers with that parse while the cell still holds the text the
+   * build read, and otherwise parses, counting the parse: a formula the build could not parse, or a
+   * cell that is no formula node.
+   */
+  private final class SeedParses(built: FormulaParses, counters: RecalcCounters):
+    def at(sheet: SheetName, ref: ARef, text: String): XLResult[TExpr[?]] =
+      built.get(sheet, ref, text) match
+        case Some(expr) => Right(expr)
+        case None =>
+          counters.increment(RecalcCounters.Counter.FormulaParses)
+          counters.time(RecalcCounters.Phase.Parse)(SheetEvaluator.parseFormula(text))
+
+    /**
+     * `sheet.evaluateCell(ref, clock, workbook)` (a plain evaluator, no memo: seeding keeps its
+     * one-shot evaluation profile) reading the cell's parse from [[at]].
+     */
+    def evaluateCell(
+      sheet: Sheet,
+      ref: ARef,
+      clock: Clock,
+      workbook: Workbook
+    ): XLResult[CellValue] =
+      SheetEvaluator
+        .evaluateCellOutcomeParsing(sheet, ref, Evaluator.instance, clock, Some(workbook))(
+          (text, _) => at(sheet.name, ref, text)
+        )
+        .map(_.value)
 
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
     graph: RecalcGraph,
     core: Set[QualifiedRef],
-    dynamic: Set[QualifiedRef]
+    dynamic: Set[QualifiedRef],
+    parses: SeedParses
   )
 
   /**
@@ -287,7 +345,8 @@ object DataTableSeeder:
     clock: Clock,
     iterative: Option[IterativeCalc],
     pick: CellRange => Iterator[ARef],
-    built: Option[RecalcGraph] = None
+    built: Option[RecalcGraph] = None,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): (Workbook, Vector[SeedTableWarning]) =
     val targets: Vector[SheetName] = scope match
       case Some((name, _)) => Vector(name)
@@ -304,8 +363,17 @@ object DataTableSeeder:
       // this run substitutes; then the seeder builds its own, with those lookups whole.
       val graph = built
         .filterNot(_.narrowsOnWhatIfInput)
-        .getOrElse(RecalcGraph.build(wb, RecalcCounters.disabled, whatIfSafe = true))
-      CycleContext(graph, graph.cyclicCore, DependencyGraph.dynamicCells(wb, graph.parses))
+        .getOrElse(
+          counters.time(RecalcCounters.Phase.GraphBuild)(
+            RecalcGraph.build(wb, counters, whatIfSafe = true)
+          )
+        )
+      CycleContext(
+        graph,
+        graph.cyclicCore,
+        DependencyGraph.dynamicCells(wb, graph.parses),
+        new SeedParses(graph.parses, counters)
+      )
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb.sheets.find(_.name == name) match
         case None => (accWb, warns)
@@ -524,11 +592,12 @@ object DataTableSeeder:
     wb: Workbook,
     sheets: Vector[Sheet],
     cone: List[(QualifiedRef, Int)],
-    clock: Clock
+    clock: Clock,
+    parses: SeedParses
   ): ConeResolution =
     cone.foldLeft(ConeResolution(sheets, Set.empty)) { case (acc, (q, idx)) =>
       val temp = wb.copy(sheets = acc.sheets)
-      SheetEvaluator.evaluateCell(acc.sheets(idx))(q.ref, clock, Some(temp)) match
+      parses.evaluateCell(acc.sheets(idx), q.ref, clock, temp) match
         case Right(value) =>
           acc.copy(sheets = acc.sheets.updated(idx, acc.sheets(idx).put(q.ref, value)))
         case Left(_) => acc.copy(unresolved = acc.unresolved + q)
@@ -582,9 +651,9 @@ object DataTableSeeder:
         val coneBudget = coneBudgetExceeded(sheet.name, interior, cone)
         if coneBudget.nonEmpty then (sheet, coneBudget)
         else
-          val probes = guardProbes(sheet, kind)
+          val probes = guardProbes(sheet, kind, ctx.parses)
           // Input-independent uncached precedents are the same for every combination.
-          val prepared = resolveCone(wb, wb.sheets, cone.base, clock)
+          val prepared = resolveCone(wb, wb.sheets, cone.base, clock, ctx.parses)
           val (seeded, skipped, guarded, guardName, unresolved, failure) =
             pick(interior).foldLeft(
               (sheet, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
@@ -600,7 +669,8 @@ object DataTableSeeder:
                 prepared.sheets,
                 tableIdx,
                 cone,
-                probes
+                probes,
+                ctx.parses
               ) match
                 case None => (acc, skips + 1, fired, named, unres, firstFailure)
                 case Some(outcome) =>
@@ -738,7 +808,7 @@ object DataTableSeeder:
             inputQ,
             sheetIndex,
             tableIdx,
-            resolveCone(wb, stripped, cone.base, clock),
+            resolveCone(wb, stripped, cone.base, clock, ctx.parses),
             cone,
             pick
           )
@@ -783,17 +853,17 @@ object DataTableSeeder:
           (q, idx, expr)
         }
       }
-    // #891: the members' formulas are the same for every interior cell, so they parse once per
-    // table here rather than once per sampled cell inside each fixpoint
+    // #891: the members' formulas are the same for every interior cell, so each distinct text is
+    // resolved once per table here rather than once per sampled cell inside each fixpoint: to the
+    // graph build's parse of the first member holding it
     val memberParses: Map[String, XLResult[TExpr[?]]] =
-      members.iterator
-        .map(_._3)
-        .distinct
-        .map(text => text -> SheetEvaluator.parseFormula(text))
+      members
+        .distinctBy(_._3)
+        .map((q, _, text) => text -> ctx.parses.at(q.sheet, q.ref, text))
         .toMap
-    val parseMember: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
-      memberParses.getOrElse(text, SheetEvaluator.parseFormula(text))
-    val probes = guardProbes(sheet, kind)
+    val parseMember: (QualifiedRef, String) => XLResult[TExpr[?]] = (q, text) =>
+      memberParses.getOrElse(text, ctx.parses.at(q.sheet, q.ref, text))
+    val probes = guardProbes(sheet, kind, ctx.parses)
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
     // cells and source formulas all read the same instant.
@@ -815,7 +885,8 @@ object DataTableSeeder:
           members,
           parseMember,
           cone,
-          probes
+          probes,
+          ctx.parses
         )
         computed match
           case None => (acc, fails, skips + 1, fired, named, unres, firstFailure)
@@ -891,7 +962,8 @@ object DataTableSeeder:
     members: List[(QualifiedRef, Int, String)],
     parseMember: (QualifiedRef, String) => XLResult[TExpr[?]],
     cone: WhatIfCone,
-    probes: Map[ARef, TExpr[?]]
+    probes: Map[ARef, TExpr[?]],
+    parses: SeedParses
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
@@ -901,8 +973,8 @@ object DataTableSeeder:
         val overlays = overlayRefs.foldLeft(Option(Vector.empty[(ARef, CellValue)])) {
           case (acc, (inputRef, axisRef)) =>
             acc.flatMap { vs =>
-              SheetEvaluator
-                .evaluateCell(sheet)(axisRef, clock, Some(wb))
+              parses
+                .evaluateCell(sheet, axisRef, clock, wb)
                 .toOption
                 .map(axisValue => vs :+ (inputRef -> axisValue))
             }
@@ -914,7 +986,7 @@ object DataTableSeeder:
           val overlaid = axisValues.foldLeft(prepared) { case (sheets, (inputRef, v)) =>
             sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, v))
           }
-          val upstream = resolveCone(wb, overlaid, cone.beforeCycle, clock)
+          val upstream = resolveCone(wb, overlaid, cone.beforeCycle, clock, parses)
           // (3) fixpoint the relevant cycle members under this axis combination.
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
@@ -960,11 +1032,11 @@ object DataTableSeeder:
             Some(folded match
               case Left(error) => CellOutcome(Left(error), converged, None, upstream.unresolved)
               case Right(sheets) =>
-                val resolved = resolveCone(wb, sheets, cone.afterCycle, clock)
+                val resolved = resolveCone(wb, sheets, cone.afterCycle, clock, parses)
                 val tempWb = wb.copy(sheets = resolved.sheets)
                 val tempSheet = resolved.sheets(tableIdx)
                 val value =
-                  evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef)
+                  evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef, parses)
                 val guard =
                   if value.isRight then
                     firedGuard(
@@ -1010,7 +1082,8 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     cone: WhatIfCone,
-    probes: Map[ARef, TExpr[?]]
+    probes: Map[ARef, TExpr[?]],
+    parses: SeedParses
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.get(sourceRef).map(_.value) match
@@ -1019,8 +1092,8 @@ object DataTableSeeder:
         // Axis values evaluate against the group's base sheet, so results are order-independent.
         val overlays = overlayRefs.foldLeft(Option(prepared)) { case (acc, (inputRef, axisRef)) =>
           acc.flatMap { sheets =>
-            SheetEvaluator
-              .evaluateCell(sheet)(axisRef, clock, Some(wb))
+            parses
+              .evaluateCell(sheet, axisRef, clock, wb)
               .toOption
               .map(axisValue => sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, axisValue)))
           }
@@ -1029,10 +1102,12 @@ object DataTableSeeder:
           // GH-493/GH-494: re-derive the cone under THIS substitution before the source formula
           // reads it — a cached intermediate would otherwise answer with its base value and an
           // uncached one would vanish from any range argument.
-          val resolved = resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock)
+          val resolved =
+            resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock, parses)
           val tempWb = wb.copy(sheets = resolved.sheets)
           val tempSheet = resolved.sheets(tableIdx)
-          val value = evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef)
+          val value =
+            evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef, parses)
           val guard =
             if value.isRight then
               firedGuard(probes.get(sourceRef), tempSheet, tempWb, evaluator, clock, sourceRef)
@@ -1067,10 +1142,11 @@ object DataTableSeeder:
     expression: String,
     evaluator: Evaluator,
     clock: Clock,
-    sourceRef: ARef
+    sourceRef: ARef,
+    parses: SeedParses
   ): XLResult[CellValue] =
-    SheetEvaluator
-      .parseFormula(expression)
+    parses
+      .at(tempSheet.name, sourceRef, expression)
       .flatMap(expr =>
         SheetEvaluator.evaluateParsedWith(
           tempSheet,
@@ -1091,12 +1167,13 @@ object DataTableSeeder:
    */
   private def guardProbes(
     sheet: Sheet,
-    kind: FormulaKind.DataTable
+    kind: FormulaKind.DataTable,
+    parses: SeedParses
   ): Map[ARef, TExpr[?]] =
     sourceRefs(kind).iterator.flatMap { r =>
       sheet.cells.get(r).map(_.value) match
         case Some(CellValue.Formula(expression, _, _)) =>
-          FormulaParser.parse(expression).toOption.filter(containsErrorGuard).map(expr => r -> expr)
+          parses.at(sheet.name, r, expression).toOption.filter(containsErrorGuard).map(r -> _)
         case _ => None
     }.toMap
 
