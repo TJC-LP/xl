@@ -521,6 +521,7 @@ private[formula] object CompactGraph:
             record,
             Some(wb),
             preciseLookups = true,
+            whatIfInputs = nodes.whatIfInputs,
             canonicalSheet = canonicalSheet,
             nameRanges = nameRanges,
             parseName = parseName,
