@@ -1854,11 +1854,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
 
   /**
    * #750: beside a [[SparseArray]], each raw range argument read the way array mode reads a range
-   * ([[readRangeArray]]) when it has more positions than its sheet has cells: through its populated
-   * box, so it becomes a [[SparseArray]] too. A range no larger than its sheet is kept (the shape,
-   * shared by every argument, then bounds the walk by the sheet), and so is every argument when
-   * none is sparse: each range is already bounded to the used area, and the walk is the one it has
-   * always been.
+   * ([[readRangeArray]]) when array mode would read it through its populated box
+   * ([[ArrayArithmetic.readsPositionally]] says no: it has more positions than its sheet has cells,
+   * or most of it lies past the sheet's extent), so it becomes a [[SparseArray]] too. A range array
+   * mode reads position by position is kept (the shape, shared by every argument, then bounds the
+   * walk by the sheet), and so is every argument when none is sparse: each range is already bounded
+   * to the used area, and the walk is the one it has always been.
    */
   private def sparseRanges(
     arrays: List[ResolvedArray],
@@ -1869,7 +1870,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       arrays.foldLeft[Either[EvalError, List[ResolvedArray]]](Right(List.empty)) {
         case (Left(err), _) => Left(err)
         case (Right(acc), RangeArray(sheet, range))
-            if range.height.toLong * range.width.toLong > sheet.cells.size.toLong =>
+            if !ArrayArithmetic.readsPositionally(range, sheet) =>
           readRangeArray(range, sheet, ctx).flatMap(sumProductArray).map(acc :+ _)
         case (Right(acc), other) => Right(acc :+ other)
       }

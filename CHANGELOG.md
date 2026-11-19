@@ -328,6 +328,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
   `--skip-data-tables` (under Added) audits it in 2.6 s.
 
+- **Building a `CellStore` from sorted cells streams it 32 rows at a time** (#891): the builder
+  kept several arrays with a slot per cell and held them all while assembling the store, so
+  loading a numeric workbook peaked higher than on the `Map` although the finished store is a
+  seventh of the size. A cell that sorts after the last one now goes straight into its row
+  group, and only finished groups are kept; a cell out of order is buffered, sorted and merged
+  at the end (last write still wins). A 2M-cell build in 8 columns allocates 13.8 bytes a cell
+  where it allocated 133, and a 1M x 8 numeric workbook loads in a 5,120 MiB heap where the
+  `Map` needed 5,696. The built store is unchanged.
+
+- **Array mode reads a range that lies mostly past the data through its populated box** (#891):
+  a range was read position by position whenever it had no more positions than the sheet had
+  cells, which on a sheet of more than 1,048,576 cells sent a whole column down that path (a
+  million reads for a column whose data ends at row 60,000). The rule now also asks that at
+  least half of the range lie inside the sheet's extent, which the store answers from its
+  summaries. SUMPRODUCT's choice for a raw range beside a sparse argument uses the same rule.
+  Values are unchanged.
+
 - **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
   `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
   its first argument, and an array constant was spelled out cell by cell. The call is now printed

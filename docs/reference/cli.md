@@ -117,8 +117,9 @@ xl batch --schema                                  # JSON Schema of the batch do
 > (`xl -Xmx64g -f big.xlsx --max-size 0 audit`; the JAR takes the JVM's own `java -Xmx64g -jar
 > xl.jar …`). `--max-size` below 0 is a usage error (exit 2), not "unlimited". An in-memory load
 > needs many times its uncompressed XML.
-> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric or
-> short-text cells need 16–20× their worksheet XML (346 MB of sheet XML loads in 6 GB, not in 5);
+> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric cells
+> need 16–18× their worksheet XML (324 MB of sheet XML loads in 5 GB, not in 4.9), and short-text
+> cells needed 16× when last measured, before the cell store;
 > the wide text rows of the 0.21.0 dogfood book needed 33–41× (1.09 GB of sheet XML, 36–45 GB of
 > heap); long text costs only 2–3× the bytes of `sharedStrings.xml` (380 MB of mostly strings loads
 > in 1.75 GB). Large files belong to `--stream`. When `--max-size` is lifted, the load is sized from
