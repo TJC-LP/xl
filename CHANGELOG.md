@@ -95,13 +95,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
   `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
   `cyclicNodes`, `topologicalSort`, `dynamicClosure`, `deferDynamic` and `dynamicCells(sheet)`;
-  the unused `fromWorkbook`, `detectCrossSheetCycles`, `qualifiedTopologicalSort` and
-  `extractDependenciesBounded`; and `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and
-  `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
+  the unused `fromWorkbook`, `fromWorkbookBounded`, `detectCrossSheetCycles`,
+  `qualifiedCyclicNodes`, `qualifiedTransitiveDependents`, `qualifiedTransitivePrecedents`,
+  `qualifiedTopologicalSort` and `extractDependenciesBounded`; and
+  `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
   Tarjan and Kahn engines that saw no other sheet. Use `Workbook(sheet).recalculate(...)` to
   evaluate (cycles are reported per cell instead of failing the call), `QualifiedGraph.of(wb)` for
   precedents, dependents and cycles (`.sccs.filter(_.cyclic)`), and
-  `sheet.evaluateForRangePerCell` for a window. `evaluateForRangePerCell` (what `view --eval`
+  `sheet.evaluateForRangePerCell` for a window. `sccs` follows declared reads, so a
+  VLOOKUP/HLOOKUP that sits inside its own table shows there as a self-cycle although
+  recalculation (and Excel, verified) computes it; the errors of `recalculate` and `xl audit` are
+  the authority on real cycles. `evaluateForRangePerCell` (what `view --eval`
   renders) now takes its closure, cycles and order from the workbook's recalculation graph, so a
   cycle that runs through another sheet is reported instead of evaluated against stale caches.
 
@@ -133,6 +137,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
   now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
 
+- **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
+  --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
+  writes to an iterating book built a second one for the edit's dirty cone; each now hands the
+  recalculation's graph to its second consumer (as does `recalculate` with `seedTables`). Data-table
+  seeding, and the audit's stale-table check with it, parsed the corner and every formula of the
+  what-if cone again for each interior cell; they read the graph's parses now. Results are
+  unchanged. A table whose corner is a VLOOKUP/HLOOKUP selected by the table's own input still
+  costs seeding a second graph (the recalculation graph narrows that lookup).
+
 - **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
   `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
   anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision
@@ -156,6 +169,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no faster default gives the same result.
 
 ### Fixed
+
+- **`view --eval` computes the window's precedents on other sheets** (#891). The window
+  evaluation (`sheet.evaluateForRangePerCell`, `view --eval` and its rendered pictures) evaluated
+  the window's formulas and their precedents on the window's own sheet, and read every other
+  sheet's caches as they stood. With `S!F1 = A1*2`, `T!B1 = S!A1+S!F1` and `S!H1 = T!B1*10`, after
+  `put --no-recalc A1 5` it showed `H1 = 30` where `recalc` writes `150` (0.26.0 does the same).
+  The closure now follows precedents across sheets, in the canonical order, so the window shows
+  what a recalculation would put in its cells. Consequences: a precedent on another sheet that
+  cannot evaluate is listed in `RangeEvalResult.failures` under its own sheet (the `EVAL_FAILED`
+  warning names it there) and the window's cell that reads it is `blocked` and keeps the file's
+  value, where it used to be computed off that precedent's cache; a dynamic reader
+  (INDIRECT/OFFSET) among the precedents on another sheet has that sheet's formulas computed with
+  it. Unchanged: cycles report as before (members on the window's sheet are listed, a reader of a
+  cycle on another sheet is blocked), and what a dynamic reader reads on a sheet the closure never
+  reaches is still read from the file.
+  The evaluation is now a recalculation pass over the closure (the graph's parses, column slices,
+  the criteria index), so a window costs what recalculating its closure costs: a summary cell over
+  a whole model takes about as long as `recalc`, where it used to return at once with whatever
+  the caches held. On a 40,000-formula SUMIF model: 0.2-0.4 s and a stale value before, about 6 s
+  and the recalculated value now (`recalc`: 5-7 s); a window whose closure is a few cells is
+  unchanged.
 
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties

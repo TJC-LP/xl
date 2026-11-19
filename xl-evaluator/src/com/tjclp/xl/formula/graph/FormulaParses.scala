@@ -2,6 +2,7 @@ package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.eval.RecalcCounters
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 
@@ -22,7 +23,20 @@ private[formula] trait FormulaParses:
    * `text` at `ref` on `sheet` parsed: the build's parse when [[get]] has one, else a new parse.
    */
   def parse(sheet: SheetName, ref: ARef, text: String): Either[ParseError, TExpr[?]] =
-    get(sheet, ref, text).fold(FormulaParser.parse(text))(Right(_))
+    parse(sheet, ref, text, RecalcCounters.disabled)
+
+  /** [[parse]], counting a new parse in `counters` (#891). */
+  def parse(
+    sheet: SheetName,
+    ref: ARef,
+    text: String,
+    counters: RecalcCounters
+  ): Either[ParseError, TExpr[?]] =
+    get(sheet, ref, text) match
+      case Some(expr) => Right(expr)
+      case None =>
+        counters.increment(RecalcCounters.Counter.FormulaParses)
+        counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(text))
 
 private[formula] object FormulaParses:
 

@@ -166,13 +166,14 @@ object SheetEvaluator:
      * Evaluate the formulas of a range cell by cell — the total counterpart of
      * [[evaluateForRange]], and what `xl view --eval` renders.
      *
-     * The same formulas evaluate (the range's formulas plus their transitive formula precedents, or
-     * every formula when the sheet has dynamic references), in dependency order, but a formula that
-     * cannot evaluate no longer fails the range: it is listed in [[RangeEvalResult.failures]] and
-     * the formulas depending on it are listed in [[RangeEvalResult.blocked]], never evaluated (no
-     * stale cache is mixed into a live value). A cycle fails its members — and blocks their
-     * dependents — only when it lies inside that closure; a cycle elsewhere on the sheet no longer
-     * affects the range. Never throws.
+     * The same formulas evaluate (the range's formulas plus their transitive formula precedents, on
+     * this sheet and, through `workbook`, on every other (#891: other sheets' caches are no longer
+     * read as they stand); every formula of the sheet when it has dynamic references), in
+     * dependency order, but a formula that cannot evaluate no longer fails the range: it is listed
+     * in [[RangeEvalResult.failures]] and the formulas depending on it are listed in
+     * [[RangeEvalResult.blocked]], never evaluated (no stale cache is mixed into a live value). A
+     * cycle fails its members — and blocks their dependents — only when it lies inside that
+     * closure; a cycle elsewhere on the sheet no longer affects the range. Never throws.
      *
      * Note: explicit overloads instead of default parameters — extension methods with default
      * arguments crash the compiler when merged through the formulaExports wildcard export.
@@ -294,20 +295,32 @@ object SheetEvaluator:
   /**
    * The per-cell evaluation of the formulas in `ranges` behind [[evaluateForRangePerCell]] (one
    * range) and `view --eval`'s pictures ([[LiveRender]]: the window and the cells its conditional
-   * formatting reads). The targets are the range's formulas and the formulas of `sheet` they read,
-   * directly or transitively (every formula of the sheet when it holds a dynamic reference); other
-   * sheets are read as they are. Cycle members inside the targets fail as circular and block their
-   * dependents; the rest evaluates in the canonical order against a threaded sheet. A failure
-   * blocks its transitive dependents, and every failed or blocked cell loses its cache on the
-   * threaded sheet, so a dynamic reader (INDIRECT, invisible to the static graph) re-derives it and
-   * fails too instead of reading a stale value. Only failures and blocked cells in the range's
-   * static closure are reported: with dynamic references every formula is a target, but one that
+   * formatting reads). The targets are the range's formulas and every formula they read, directly
+   * or transitively, on `sheet` and on every other sheet of the workbook (#891: other sheets'
+   * caches used to be read as they stood, so a window showed values a recalculation would not).
+   * Cycle members inside the targets fail as circular and block their dependents; the rest
+   * evaluates in the canonical order against the threaded sheets. A failure blocks its transitive
+   * dependents, and every failed or blocked cell loses its cache on its threaded sheet, so a
+   * dynamic reader (INDIRECT, invisible to the static graph) re-derives it and fails too instead of
+   * reading a stale value.
+   *
+   * Dynamic references: when `sheet` holds one, every formula of `sheet` is a target (GH-274), and
+   * so is every formula of another sheet that has a dynamic reader among the targets, each with its
+   * precedents. What such a reader reads on a sheet the targets never reach is read as it stands.
+   *
+   * Reported: the values of the range's own formulas; the failures of the range's static closure,
+   * `sheet`'s first and in row-major order, then other sheets' in grid order; and the blocked cells
+   * of that closure on `sheet`. With dynamic references more formulas are targets, but one that
    * feeds the range only through a dynamic read makes that reader — in the closure — fail on its
-   * own, so an unrelated failure elsewhere stays silent.
+   * own, so an unrelated failure elsewhere stays silent. A cycle's members are listed when they lie
+   * on `sheet`; a reader of a cycle that lies wholly on another sheet is blocked.
    *
    * #891: the graph questions go to the workbook's recalculation graph (cross-sheet cycles, defined
    * names, #504's precise lookups); the sheet-level graph and its hash-map Tarjan and Kahn are
-   * gone.
+   * gone. The evaluation is a recalculation pass over the targets: it reads the graph build's
+   * parses and the pass's caches (column slices, the criteria index, aggregates), so a window whose
+   * closure is a whole model costs what recalculating that model costs, not a scan of every
+   * criteria range per formula.
    */
   private[eval] def evaluateForRangesPerCell(
     sheet: Sheet,
@@ -315,16 +328,35 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): RangeEvalResult =
+    evaluateForRangesPerCellWithMemo(sheet, ranges, clock, workbook, new Evaluator.AggregateMemo)
+
+  /**
+   * [[evaluateForRangesPerCell]] with the pass's aggregate memo supplied by the caller: the parity
+   * laws run one window with the per-pass caches on and off, and read the memo's counters.
+   */
+  private[formula] def evaluateForRangesPerCellWithMemo(
+    sheet: Sheet,
+    ranges: Vector[CellRange],
+    clock: Clock,
+    workbook: Option[Workbook],
+    memo: Evaluator.AggregateMemo
+  ): RangeEvalResult =
     // a small range is a handful of point lookups: many of them (a formula rule's reads at every
     // cell of a render window) never make the scan below quadratic
     val (small, large) = ranges.partition(r => r.width.toLong * r.height <= 256L)
     val points = small.iterator.flatMap(_.cells).toSet
     def covered(ref: ARef): Boolean = points.contains(ref) || large.exists(_.contains(ref))
     val book = workbook.fold(Workbook(sheet))(_.put(sheet))
-    lazy val graph = RecalcGraph.build(book, RecalcCounters.disabled)
+    val counters = memo.counters
+    lazy val graph =
+      counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(book, counters))
     def at(ref: ARef): QualifiedRef = QualifiedRef(sheet.name, ref)
-    def onSheet(qs: IterableOnce[QualifiedRef]): Set[ARef] =
-      qs.iterator.filter(_.sheet == sheet.name).map(_.ref).toSet
+    def formulasOf(target: Sheet): Iterator[QualifiedRef] =
+      target.cells.iterator
+        .collect {
+          case cell if isFormula(cell.value) => QualifiedRef(target.name, cell.ref)
+        }
+        .filter(graph.isFormula)
     val rangeFormulaCells = sheet.cells.iterator.collect {
       case cell @ Cell(ref, _, _, _)
           if isFormula(cell.value) && covered(ref) && graph.isFormula(at(ref)) =>
@@ -332,26 +364,34 @@ object SheetEvaluator:
     }.toSet
     if rangeFormulaCells.isEmpty then RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
     else
-      val closure =
-        rangeFormulaCells ++ onSheet(graph.precedents(rangeFormulaCells.map(at), Set.empty))
-      // GH-274: when the sheet has dynamic references (INDIRECT), widen to EVERY formula of the
-      // sheet — dynamic targets are invisible to the static walk, so correctness requires the whole
-      // sheet computed in order (correctness over narrowness; results still report only the range)
-      val dynamic = onSheet(DependencyGraph.dynamicCells(book, graph.parses))
-      val targets =
-        if dynamic.isEmpty then closure
+      val window = rangeFormulaCells.map(at)
+      // the static closure, on this sheet and every other
+      val closure = window ++ graph.precedents(window, Set.empty)
+      val dynamic = DependencyGraph.dynamicCells(book, graph.parses)
+      val sheetsByName = book.sheets.iterator.map(s => s.name -> s).toMap
+      // GH-274: a dynamic reader's targets are invisible to the static walk, so correctness needs
+      // every formula of its sheet computed in order (correctness over narrowness; results still
+      // report only the range). `sheet` widens when it holds any dynamic reference, as it always
+      // has; another sheet when one of its dynamic readers is a target. Each widening brings the
+      // new formulas' precedents, which may reach a dynamic reader on a further sheet.
+      @annotation.tailrec
+      def widen(targets: Set[QualifiedRef], widened: Set[SheetName]): Set[QualifiedRef] =
+        val wanting = (dynamic.iterator.collect {
+          case q if q.sheet == sheet.name || targets.contains(q) => q.sheet
+        }.toSet) -- widened
+        if wanting.isEmpty then targets
         else
-          sheet.cells.iterator.collect {
-            case cell @ Cell(ref, _, _, _) if isFormula(cell.value) && graph.isFormula(at(ref)) =>
-              ref
-          }.toSet
-      def dependentsOf(refs: Set[ARef]): Set[ARef] =
-        (onSheet(graph.dependents(refs.map(at), Set.empty)) & targets) -- refs
-      def formulaText(ref: ARef): String = sheet.cells.valueAt(ref) match
-        case CellValue.Formula(expression, _, _) => expression
-        case _ => ref.toA1
-      def failure(ref: ARef, reason: String): CellEvalError =
-        CellEvalError(sheet.name, ref, XLError.FormulaError(formulaText(ref), reason))
+          val added = wanting.iterator.flatMap(sheetsByName.get).flatMap(formulasOf).toSet
+          widen(targets ++ added ++ graph.precedents(added, Set.empty), widened ++ wanting)
+      val targets = if dynamic.isEmpty then closure else widen(closure, Set.empty)
+      def dependentsOf(refs: Set[QualifiedRef]): Set[QualifiedRef] =
+        (graph.dependents(refs, Set.empty) & targets) -- refs
+      def formulaText(q: QualifiedRef): String =
+        sheetsByName.get(q.sheet).flatMap(_.cells.get(q.ref)).map(_.value) match
+          case Some(CellValue.Formula(expression, _, _)) => expression
+          case _ => q.ref.toA1
+      def failure(q: QualifiedRef, reason: String): CellEvalError =
+        CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
 
       val core = graph.cyclicCore
       // #891 (Excel parity): a book whose calcPr iterates holds converged values in its cycles, and
@@ -359,69 +399,110 @@ object SheetEvaluator:
       // their caches and everything downstream evaluates off them. Otherwise a cycle fails its
       // members and blocks what reads them.
       val iterating = book.metadata.calcPr.exists(_.iterativeCalculation)
-      val cyclic = if iterating then Set.empty[ARef] else onSheet(core) & targets
-      // every target downstream of any cycle of the book, on this sheet or another: the canonical
-      // order below leaves them all out
+      val cyclic = if iterating then Set.empty[QualifiedRef] else core & targets
+      // every target downstream of any cycle of the book: the canonical order below leaves them
+      // all out
       val coreBlocked =
         if iterating then Set.empty[QualifiedRef] else graph.dependents(core, Set.empty)
-      val cycleBlocked = (onSheet(coreBlocked) & targets) -- cyclic
-      val live =
-        targets -- cyclic -- cycleBlocked -- (if iterating then onSheet(core) else Set.empty)
+      val cycleBlocked = (coreBlocked & targets) -- cyclic
+      val live = targets -- cyclic -- cycleBlocked -- (if iterating then core else Set.empty)
 
-      type State = (Sheet, Map[ARef, CellValue], Vector[CellEvalError], Set[ARef])
+      val positions = book.sheets.iterator.zipWithIndex.map((s, i) => s.name -> i).toMap
+      def stripped(sheets: Vector[Sheet], refs: Set[QualifiedRef]): Vector[Sheet] =
+        refs.groupMap(_.sheet)(_.ref).foldLeft(sheets) { case (acc, (name, cells)) =>
+          positions.get(name).fold(acc)(i => acc.updated(i, stripFormulaCaches(acc(i), cells)))
+        }
+
+      type State = (Vector[Sheet], Map[ARef, CellValue], Vector[CellEvalError], Set[QualifiedRef])
       val start: State =
         (
-          stripFormulaCaches(sheet, cyclic ++ cycleBlocked),
+          stripped(book.sheets, cyclic ++ cycleBlocked),
           Map.empty,
-          cyclic.toVector.map(failure(_, "Circular reference")),
+          // a cycle's members are listed on the range's own sheet (as before #891)
+          cyclic.toVector.filter(_.sheet == sheet.name).map(failure(_, "Circular reference")),
           cycleBlocked
         )
-      val evaluator = Evaluator.spillTrackingInstance(Rng.system, readsSpills(sheet, workbook))
+      // GH-695: record spill anchors' arrays only for a book that has `x#` readers
+      if readsSpills(sheet, workbook) then memo.trackSpills()
+      // #790: evaluation reuses the build's parse of each formula
+      memo.passCache.foreach(_.useParses(graph.parses))
       val (_, values, failures, blocked) = graph.order(core ++ coreBlocked) match
         // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
         case scala.util.Left(unordered) =>
-          val (_, reported, failed, blockedSoFar) = start
+          val (sheets, reported, failed, blockedSoFar) = start
           val residual = live.toVector.map(
             failure(_, s"Unresolvable order: ${unordered.remaining.size} formulas left")
           )
-          (sheet, reported, failed ++ residual, blockedSoFar)
+          (sheets, reported, failed ++ residual, blockedSoFar)
         case scala.util.Right(sorted) =>
-          val (tempSheet, reported, failed, blockedSoFar) = start
-          val order = sorted.order.iterator.filter(_.sheet == sheet.name).map(_.ref).filter(live)
+          val (startSheets, reported, failed, blockedSoFar) = start
+          val ordered = sorted.order.filter(live)
           // GH-274: dynamic cells and their static dependents evaluate last, caches stripped
           val bucket =
-            if dynamic.isEmpty then Set.empty[ARef] else (dynamic & live) ++ dependentsOf(dynamic)
-          val ordered = order.toList
+            if dynamic.isEmpty then Set.empty[QualifiedRef]
+            else (dynamic & live) ++ dependentsOf(dynamic)
           val evalOrder = ordered.filterNot(bucket) ++ ordered.filter(bucket)
-          val initial = stripFormulaCaches(tempSheet, bucket)
+          val initial = stripped(startSheets, bucket)
+          // #767: one slot per target in evaluation order. Formulas outside the targets keep the
+          // caches the file holds, which this pass never changes; the stripped cells (the dynamic
+          // bucket, cycle members and the cells behind them) refuse every slice over them. A cell
+          // a failure strips later holds no cache when a slice over it is built, and is refused.
+          val slots = evalOrder.iterator.zipWithIndex.toMap
+          memo.passCache.foreach(_.begin(Readiness.build(slots, bucket ++ cyclic ++ cycleBlocked)))
+          def evaluatorFor(q: QualifiedRef): Evaluator =
+            Evaluator.recalculationInstance(
+              Rng.system,
+              memo,
+              WorkbookEvaluator.callerPosition(slots, bucket, q),
+              Some((q.sheet, q.ref))
+            )
           evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
-            case (state @ (_, _, _, blockedNow), ref) if blockedNow(ref) => state
-            case ((current, results, failedNow, blockedNow), ref) =>
-              evaluateCellWithEvaluator(
-                current,
-                ref,
-                evaluator,
-                clock,
-                workbook.map(_.put(current))
-              ) match
-                case scala.util.Right(value) =>
-                  val next =
-                    if rangeFormulaCells.contains(ref) then results + (ref -> value) else results
-                  (threadComputed(current, ref, value), next, failedNow, blockedNow)
-                case scala.util.Left(error) =>
-                  val newlyBlocked = dependentsOf(Set(ref)) -- blockedNow
-                  (
-                    stripFormulaCaches(current, newlyBlocked + ref),
-                    results,
-                    failedNow :+ CellEvalError(sheet.name, ref, error),
-                    blockedNow ++ newlyBlocked
-                  )
+            case (state @ (_, _, _, blockedNow), q) if blockedNow(q) => state
+            case (state @ (sheets, results, failedNow, blockedNow), q) =>
+              positions.get(q.sheet) match
+                case None => state
+                case Some(position) =>
+                  val evaluated = counters.time(RecalcCounters.Phase.Eval) {
+                    evaluateCellWithEvaluator(
+                      sheets(position),
+                      q.ref,
+                      evaluatorFor(q),
+                      clock,
+                      workbook.map(_ => book.copy(sheets = sheets))
+                    )
+                  }
+                  evaluated match
+                    case scala.util.Right(value) =>
+                      if threadChangesStructure(sheets(position), q.ref) then
+                        memo.passCache.foreach(_.structureChanged(q.sheet))
+                      val next =
+                        if q.sheet == sheet.name && rangeFormulaCells.contains(q.ref) then
+                          results + (q.ref -> value)
+                        else results
+                      val threaded = threadComputed(sheets(position), q.ref, value)
+                      (sheets.updated(position, threaded), next, failedNow, blockedNow)
+                    case scala.util.Left(error) =>
+                      val newlyBlocked = dependentsOf(Set(q)) -- blockedNow
+                      (
+                        stripped(sheets, newlyBlocked + q),
+                        results,
+                        failedNow :+ CellEvalError(q.sheet, q.ref, error),
+                        blockedNow ++ newlyBlocked
+                      )
           }
       def rowMajor(ref: ARef): (Int, Int) = (ref.row.index0, ref.col.index0)
+      val (here, elsewhere) = failures
+        .filter(failed => closure(QualifiedRef(failed.sheet, failed.ref)))
+        .partition(_.sheet == sheet.name)
       RangeEvalResult(
         values,
-        failures.filter(failed => closure(failed.ref)).sortBy(failed => rowMajor(failed.ref)),
-        blocked.filter(closure).toVector.sortBy(rowMajor)
+        here.sortBy(failed => rowMajor(failed.ref)) ++
+          elsewhere.sortBy(failed => QualifiedRef.gridKey(QualifiedRef(failed.sheet, failed.ref))),
+        blocked.iterator
+          .filter(q => q.sheet == sheet.name && closure(q))
+          .map(_.ref)
+          .toVector
+          .sortBy(rowMajor)
       )
 
   /**
@@ -451,11 +532,27 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): XLResult[CellOutcome] =
+    evaluateCellOutcomeParsing(sheet, ref, evaluator, clock, workbook)(
+      parseCounted(_, _, sheet.name, Some(ref))
+    )
+
+  /**
+   * #891: [[evaluateCellOutcome]] with the cell's parse supplied by the caller: `parse` receives
+   * the formula text and the cell's evaluator, at most once. Data-table seeding evaluates the same
+   * cone once per interior cell and hands in the parse its graph build already made.
+   */
+  private[eval] def evaluateCellOutcomeParsing(
+    sheet: Sheet,
+    ref: ARef,
+    evaluator: => Evaluator,
+    clock: Clock,
+    workbook: Option[Workbook]
+  )(parse: (String, Evaluator) => XLResult[TExpr[?]]): XLResult[CellOutcome] =
     sheet.cells.valueAt(ref) match
       case value @ CellValue.Formula(expr, _, kind) =>
         // #790: one parse of the cell serves both the pin check and the evaluation
         lazy val cellEvaluator = evaluator
-        lazy val parsedCell = parseCounted(expr, cellEvaluator, sheet.name, Some(ref))
+        lazy val parsedCell = parse(expr, cellEvaluator)
         pinnedCache(value, _ => parsedCell) match
           // GH-353/GH-430: pinned-cache semantics — the Excel-written cache IS the value
           case Some(cached) => scala.util.Right(CellOutcome(cached, None))
