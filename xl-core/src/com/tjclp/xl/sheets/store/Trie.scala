@@ -6,10 +6,10 @@ package com.tjclp.xl.sheets.store
  * A row key is the row index read as an unsigned 32-bit number, held in a `Long`. A trie of height
  * `h` (1 to 7) consumes five key bits per level, the root at shift `5 * (h - 1)`. The entries at
  * shift 0 are slot groups (see [[Group]]): a [[Block]] when the group's cells share one 64-column
- * chunk, otherwise a [[Node]] of [[RowLeaf]]s. Height is minimal: `h` is the fewest levels that
- * cover the largest key, so a root taller than one level always has a child in a slot other than 0.
- * Height 0 is the empty trie, whose root is [[Node.Empty]]. Lookups are index arithmetic on the key
- * bits; nothing is hashed.
+ * chunk, otherwise a [[Node]] of rows ([[StoredRow]]s). Height is minimal: `h` is the fewest levels
+ * that cover the largest key, so a root taller than one level always has a child in a slot other
+ * than 0. Height 0 is the empty trie, whose root is [[Node.Empty]]. Lookups are index arithmetic on
+ * the key bits; nothing is hashed.
  */
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -33,10 +33,11 @@ private[xl] object Trie:
   def slotIndex(bitmap: Int, slot: Int): Int = Integer.bitCount(bitmap & ((1 << slot) - 1))
 
   /**
-   * The entry holding row `key`'s cells: its [[RowLeaf]] or the [[Block]] of its group (then
-   * `find(key, col)` locates a cell). [[RowLeaf.Empty]] when the row cannot be present.
+   * The arrays holding the cell at (`key`, `col`), if it is stored: the row's [[RowLeaf]] (the leaf
+   * of `col`'s band when the row is banded) or the [[Block]] of its group; `find(key, col)` then
+   * locates the cell. [[RowLeaf.Empty]] when the row or the band cannot be present.
    */
-  def lookup(root: Entry, height: Int, key: Long): Cells =
+  def lookup(root: Entry, height: Int, key: Long, col: Int): Cells =
     if height == 0 || !covers(height, key) then RowLeaf.Empty
     else
       var e = root
@@ -45,15 +46,18 @@ private[xl] object Trie:
       var searching = true
       while searching do
         e match
-          case c: Cells =>
-            result = c
-            searching = false
           case node: Node =>
             val bit = 1 << ((key >>> shift) & 31L).toInt
             if (node.bitmap & bit) == 0 then searching = false
             else
               e = node.children(Integer.bitCount(node.bitmap & (bit - 1)))
               shift -= 5
+          case row: BandedRow =>
+            result = row.bandOf(col)
+            searching = false
+          case c: Cells =>
+            result = c
+            searching = false
       result
 
   /** `root` (of height `from`) wrapped in slot-0 nodes up to height `to`. */
@@ -105,14 +109,15 @@ private[xl] object Trie:
    * the row is absent; returning an empty leaf removes the row). Returns `e` itself when `f`
    * returns its argument. The key must be covered by the entry.
    */
-  def modify(e: Entry, shift: Int, key: Long, f: RowLeaf => RowLeaf): Entry = e match
+  def modify(e: Entry, shift: Int, key: Long, f: StoredRow => StoredRow): Entry = e match
     case b: Block =>
       val low = (key & 31L).toInt
       val present = (b.rowMask & (1 << low)) != 0
       val old = if present then Group.rowLeaf(b, b.rowIndex(low)) else RowLeaf.Empty
       val next = f(old)
       if next eq old then b else Group.withRow(b, low, old, next)
-    case leaf: RowLeaf => f(leaf) // not reached: leaves sit under shift-0 nodes
+    case leaf: RowLeaf => f(leaf) // not reached: rows sit under shift-0 nodes
+    case row: BandedRow => f(row) // not reached: rows sit under shift-0 nodes
     case node: Node =>
       val slot = ((key >>> shift) & 31L).toInt
       val bit = 1 << slot
@@ -122,6 +127,7 @@ private[xl] object Trie:
           val child = node.children(i)
           val updated: Entry = child match
             case leaf: RowLeaf => f(leaf)
+            case row: BandedRow => f(row)
             case other => modify(other, shift - 5, key, f)
           if updated eq child then node
           else if updated.count == 0 then
@@ -149,7 +155,7 @@ private[xl] object Trie:
     lo: Long,
     hi: Long,
     skip: Entry => Boolean,
-    f: RowLeaf => RowLeaf
+    f: StoredRow => StoredRow
   ): Entry =
     if e.count == 0 || skip(e) then e
     else if shift == 0 then
@@ -236,9 +242,11 @@ private[xl] object Trie:
           else if childHi >= lo && (!valuedOnly || child.valued > 0) then
             child match
               case _: RowLeaf => found = childLo
+              case _: BandedRow => found = childLo
               case other => found = firstKey(other, shift - 5, childLo, lo, hi, valuedOnly)
           i += 1
       case _: RowLeaf => ()
+      case _: BandedRow => ()
     found
 
   /** The largest key in `[lo, hi]` under `e` holding a (valued) cell, or -1. */
@@ -268,16 +276,18 @@ private[xl] object Trie:
           else if childLo <= hi && (!valuedOnly || child.valued > 0) then
             child match
               case _: RowLeaf => found = childLo
+              case _: BandedRow => found = childLo
               case other => found = lastKey(other, shift - 5, childLo, lo, hi, valuedOnly)
           i -= 1
       case _: RowLeaf => ()
+      case _: BandedRow => ()
     found
 
   /**
    * The trie holding `leaves(i)` at `keys(i)` for `i < n`; keys strictly ascending, leaves
    * non-empty. Returns the root and its (minimal) height.
    */
-  def build(keys: Array[Long], leaves: Array[RowLeaf], n: Int): (Entry, Int) =
+  def build(keys: Array[Long], leaves: Array[StoredRow], n: Int): (Entry, Int) =
     if n == 0 then (Node.Empty, 0)
     else
       val h = heightFor(keys(n - 1))
@@ -285,7 +295,7 @@ private[xl] object Trie:
 
   private def buildEntry(
     keys: Array[Long],
-    leaves: Array[RowLeaf],
+    leaves: Array[StoredRow],
     from: Int,
     until: Int,
     shift: Int
@@ -293,7 +303,7 @@ private[xl] object Trie:
     if shift == 0 then
       val n = until - from
       val lows = new Array[Int](n)
-      val ls = new Array[RowLeaf](n)
+      val ls = new Array[StoredRow](n)
       var i = 0
       while i < n do
         lows(i) = (keys(from + i) & 31L).toInt
@@ -317,7 +327,7 @@ private[xl] object Trie:
 
   /**
    * The union of two entries at the same `shift`; on a row both hold, the rows merge through
-   * [[RowLeaf.merge]] (`b` wins, or with `valuesOnly` `b`'s values over `a`'s styles and links).
+   * [[StoredRow.merge]] (`b` wins, or with `valuesOnly` `b`'s values over `a`'s styles and links).
    * Above shift 0, returns `a` itself when the union adds nothing to it.
    */
   def union(a: Entry, b: Entry, shift: Int, valuesOnly: Boolean): Entry =
@@ -327,7 +337,7 @@ private[xl] object Trie:
       val (la, va, na) = Group.explode(a)
       val (lb, vb, nb) = Group.explode(b)
       val lows = new Array[Int](na + nb)
-      val leaves = new Array[RowLeaf](na + nb)
+      val leaves = new Array[StoredRow](na + nb)
       var i = 0
       var j = 0
       var k = 0
@@ -337,7 +347,7 @@ private[xl] object Trie:
         else if i >= na || lb(j) < la(i) then
           lows(k) = lb(j); leaves(k) = vb(j); j += 1
         else
-          lows(k) = la(i); leaves(k) = RowLeaf.merge(va(i), vb(j), valuesOnly); i += 1; j += 1
+          lows(k) = la(i); leaves(k) = StoredRow.merge(va(i), vb(j), valuesOnly); i += 1; j += 1
         k += 1
       Group.of(lows, leaves, k)
     else
@@ -371,9 +381,9 @@ private[xl] object Trie:
         case _ => a // not reached: only nodes sit above shift 0
 
   /**
-   * Calls `f(key, leaf)` for every row under `e`, in ascending key order (block rows are copied).
+   * Calls `f(key, row)` for every row under `e`, in ascending key order (block rows are copied).
    */
-  def foreachRow(e: Entry, shift: Int, prefix: Long, f: (Long, RowLeaf) => Unit): Unit =
+  def foreachRow(e: Entry, shift: Int, prefix: Long, f: (Long, StoredRow) => Unit): Unit =
     if shift == 0 then
       val (lows, leaves, n) = Group.explode(e)
       var i = 0
@@ -416,6 +426,10 @@ private[xl] object Trie:
         case la: RowLeaf =>
           b match
             case lb: RowLeaf => RowLeaf.same(la, lb)
+            case _ => false
+        case ra: BandedRow =>
+          b match
+            case rb: BandedRow => BandedRow.same(ra, rb)
             case _ => false
 
 /**

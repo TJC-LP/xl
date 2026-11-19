@@ -5,6 +5,8 @@ import scala.util.hashing.MurmurHash3
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.sheets.store.{
+  Band,
+  BandedRow,
   CellCursor,
   Entry,
   Meta,
@@ -15,6 +17,7 @@ import com.tjclp.xl.sheets.store.{
   RowLeaf,
   Shift,
   StableSort,
+  StoredRow,
   Trie,
   WideRow
 }
@@ -27,11 +30,12 @@ import com.tjclp.xl.styles.units.StyleId
  * '''Layout.''' A bitmap trie keyed by the row index read as an unsigned 32-bit number, five bits
  * per level, so a lookup is a few shifts and popcounts with no hashing. Cells live in parallel
  * arrays (a metadata word with the value tag, style and link flags; the value; the hyperlink)
- * indexed by 64-column bitmaps: one set per row, or, for a narrow group of 32 rows that shares one
- * 64-column chunk (tall narrow data), one set for the whole group. Every trie node carries
- * summaries (cell count, valued count, column bounds, a value-tag mask), so `size`, `usedRange`,
- * `extent` and `hasTag` read them instead of scanning. Updates copy one row (or one narrow group)
- * and the path above it; the rest is shared with the previous store.
+ * indexed by 64-column bitmaps: one set per row (one per band of [[Band.Width]] columns when a row
+ * spans several), or, for a narrow group of 32 rows that shares one 64-column chunk (tall narrow
+ * data), one set for the whole group. Every trie node carries summaries (cell count, valued count,
+ * column bounds, a value-tag mask), so `size`, `usedRange`, `extent` and `hasTag` read them instead
+ * of scanning. Updates copy one row band (or one narrow group) and the path above it; the rest is
+ * shared with the previous store.
  *
  * '''Order.''' [[iterator]], [[refs]], [[inRange]] and `toString` go row-major: rows ascending as
  * unsigned 32-bit numbers, then columns ascending as signed `Int`s. On Excel's grid that is the
@@ -67,7 +71,8 @@ final class CellStore private (
   def isEmpty: Boolean = root.count == 0
   def nonEmpty: Boolean = root.count != 0
 
-  private def cellsAt(ref: ARef): Cells = Trie.lookup(root, height, Trie.key(ref.row.index0))
+  private def cellsAt(ref: ARef): Cells =
+    Trie.lookup(root, height, Trie.key(ref.row.index0), ref.col.index0)
 
   /** The array position of `ref`'s cell within `c`, or -1. */
   private def posIn(c: Cells, ref: ARef): Int =
@@ -143,7 +148,7 @@ final class CellStore private (
 
   // ----- writes -----
 
-  private def modifyRow(row: Int, f: RowLeaf => RowLeaf): CellStore =
+  private def modifyRow(row: Int, f: StoredRow => StoredRow): CellStore =
     val key = Trie.key(row)
     val h = math.max(height, Trie.heightFor(key))
     val grown = Trie.grow(root, height, h)
@@ -156,7 +161,7 @@ final class CellStore private (
     val link = cell.hyperlink.getOrElse("")
     modifyRow(
       cell.ref.row.index0,
-      leaf => RowLeaf.set(leaf, cell.ref.col.index0, meta, cell.value, link)
+      row => StoredRow.set(row, cell.ref.col.index0, meta, cell.value, link)
     )
 
   /**
@@ -164,19 +169,19 @@ final class CellStore private (
    * becomes a plain cell (even when `value` is Empty), as [[Sheet.put]] does.
    */
   def updatedValue(ref: ARef, value: CellValue): CellStore =
-    modifyRow(ref.row.index0, leaf => RowLeaf.setValue(leaf, ref.col.index0, value))
+    modifyRow(ref.row.index0, row => StoredRow.setValue(row, ref.col.index0, value))
 
   /** This store without a cell at `ref`; `this` when there is none. */
   def removed(ref: ARef): CellStore =
     val col = ref.col.index0
-    modifyRow(ref.row.index0, leaf => RowLeaf.remove(leaf, col))
+    modifyRow(ref.row.index0, row => StoredRow.remove(row, col))
 
   /** This store without the cells inside `range`; `this` when there are none. */
   def removedIn(range: CellRange): CellStore =
     val c0 = range.start.col.index0
     val c1 = range.end.col.index0
     val skip = (e: Entry) => e.count == 0 || e.maxCol < c0 || e.minCol > c1
-    val drop = (leaf: RowLeaf) => RowLeaf.retain(leaf, c => c < c0 || c > c1)
+    val drop = (row: StoredRow) => StoredRow.retain(row, c => c < c0 || c > c1)
     if c0 > c1 then this
     else mapRowSpans(range.start.row.index0, range.end.row.index0, skip, drop)
 
@@ -222,21 +227,21 @@ final class CellStore private (
     if (root.tagMask & tagMask) == 0 then this
     else
       val skip = (e: Entry) => (e.tagMask & tagMask) == 0
-      mapRowSpans(Int.MinValue, Int.MaxValue, skip, leaf => RowLeaf.mapValues(leaf, tagMask, f))
+      mapRowSpans(Int.MinValue, Int.MaxValue, skip, row => StoredRow.mapValues(row, tagMask, f))
 
   /**
    * This store with its rows moved as a row insert or delete moves them: a row at or after `at`
    * moves by `by`. With `by < 0` the rows `[at + by, at)` are deleted first, so a delete of `n`
    * rows starting at `r` is `shiftRows(r + n, -n)` and an insert of `n` rows at `r` is
    * `shiftRows(r, n)`. A row whose destination leaves the `Int` range is dropped (on Excel's grid
-   * this never happens), so no two rows can land on one index. Leaves are re-keyed, not rebuilt.
+   * this never happens), so no two rows can land on one index. Rows are re-keyed, not rebuilt.
    */
   def shiftRows(at: Int, by: Int): CellStore =
     if by == 0 || isEmpty then this
     else
       val n = rowCount
       val keys = new Array[Long](n)
-      val leaves = new Array[RowLeaf](n)
+      val leaves = new Array[StoredRow](n)
       var k = 0
       Trie.foreachRow(
         root,
@@ -251,7 +256,7 @@ final class CellStore private (
       )
       val order = StableSort.order(keys, k)
       val sortedKeys = new Array[Long](k)
-      val sortedLeaves = new Array[RowLeaf](k)
+      val sortedLeaves = new Array[StoredRow](k)
       var i = 0
       while i < k do
         sortedKeys(i) = keys(order(i))
@@ -270,7 +275,7 @@ final class CellStore private (
     else
       val first = if by > 0 then at.toLong else at.toLong + by
       val skip = (e: Entry) => e.count == 0 || e.maxCol.toLong < first
-      mapRowSpans(Int.MinValue, Int.MaxValue, skip, leaf => RowLeaf.shift(leaf, at, by))
+      mapRowSpans(Int.MinValue, Int.MaxValue, skip, row => StoredRow.shift(row, at, by))
 
   // ----- internals -----
 
@@ -280,12 +285,12 @@ final class CellStore private (
     Trie.foreachRow(root, 5 * (height - 1), 0L, (_, _) => n += 1)
     n
 
-  /** `f` over the leaves of rows `rowFrom..rowTo` (signed, inclusive). */
+  /** `f` over the rows `rowFrom..rowTo` (signed, inclusive). */
   private def mapRowSpans(
     rowFrom: Int,
     rowTo: Int,
     skip: Entry => Boolean,
-    f: RowLeaf => RowLeaf
+    f: StoredRow => StoredRow
   ): CellStore =
     if isEmpty || rowFrom > rowTo then this
     else
@@ -458,9 +463,9 @@ object CellStore:
           vs(i) = values(p)
           ls(i) = links(p)
           i += 1
-        // one leaf per run of equal rows
+        // one row per run of equal row indices
         val rowKeys = new Array[Long](m)
-        val leaves = new Array[RowLeaf](m)
+        val leaves = new Array[StoredRow](m)
         var rows = 0
         var from = 0
         while from < m do
@@ -468,7 +473,7 @@ object CellStore:
           var until = from + 1
           while until < m && rowOfKey(keys(pick(until))) == row do until += 1
           rowKeys(rows) = Trie.key(row)
-          leaves(rows) = RowLeaf.build(cols, ms, vs, ls, from, until)
+          leaves(rows) = StoredRow.build(cols, ms, vs, ls, from, until)
           rows += 1
           from = until
         val (root, h) = Trie.build(rowKeys, leaves, rows)
@@ -499,6 +504,7 @@ object CellStore:
     case n: Node => checkNode(n, shift, prefix)
     case b: Block => if shift != 0 then Left("block above shift 0") else checkBlock(b, prefix)
     case l: RowLeaf => Left(s"leaf outside a shift-0 node at $prefix")
+    case r: BandedRow => Left(s"banded row outside a shift-0 node at $prefix")
 
   private def checkNode(node: Node, shift: Int, prefix: Long): Either[String, Unit] =
     if node.children.length != Integer.bitCount(node.bitmap) then Left("children size != popcount")
@@ -523,6 +529,8 @@ object CellStore:
         err = child match
           case l: RowLeaf =>
             if shift != 0 then Left("leaf above shift 0") else checkLeaf(l, childLo)
+          case r: BandedRow =>
+            if shift != 0 then Left("banded row above shift 0") else checkBanded(r, childLo)
           case other =>
             if shift == 0 then Left("group below shift 0")
             else checkEntry(other, shift - 5, childLo)
@@ -589,12 +597,58 @@ object CellStore:
       l match
         case _: WideRow if l.chunkCount < 2 => err = Left("one-chunk WideRow")
         case _ => ()
+      // the band rule, restated independently of StoredRow: a leaf's columns share one band
+      if (l.cols(0) >> Band.Shift) != (l.cols(n - 1) >> Band.Shift) then
+        err = Left(s"leaf at $key spans several bands")
       // summaries recomputed from scratch
       val again = RowLeaf.build(l.cols, l.meta, l.values, l.links, 0, n)
       if again.valued != l.valued || again.minCol != l.minCol || again.maxCol != l.maxCol ||
         again.vMinCol != l.vMinCol || again.vMaxCol != l.vMaxCol || again.tagMask != l.tagMask
       then err = Left("leaf summary mismatch")
       err
+
+  /**
+   * A banded row: two or more bands, ids strictly ascending, each band a valid non-empty leaf whose
+   * columns all lie in its band, and summaries equal to the ones recomputed from the bands.
+   */
+  private def checkBanded(r: BandedRow, key: Long): Either[String, Unit] =
+    val n = r.bands.length
+    if n < 2 then Left(s"banded row at $key with fewer than two bands")
+    else if r.ids.length != n then Left("band ids and bands differ in length")
+    else
+      var err: Either[String, Unit] = Right(())
+      var count = 0
+      var valued = 0
+      var minCol = Int.MaxValue
+      var maxCol = Int.MinValue
+      var vMin = Int.MaxValue
+      var vMax = Int.MinValue
+      var tags = 0
+      var i = 0
+      while err.isRight && i < n do
+        val band = r.bands(i)
+        if i > 0 && r.ids(i) <= r.ids(i - 1) then err = Left("band ids not ascending")
+        else if band.count == 0 then err = Left(s"empty band ${r.ids(i)} at $key")
+        else
+          err = checkLeaf(band, key)
+          val cols = band.cols
+          if (cols(0) >> Band.Shift) != r.ids(i) || (cols(cols.length - 1) >> Band.Shift) != r.ids(
+              i
+            )
+          then err = Left(s"band ${r.ids(i)} at $key holds a column of another band")
+          count += band.count
+          valued += band.valued
+          minCol = math.min(minCol, band.minCol)
+          maxCol = math.max(maxCol, band.maxCol)
+          vMin = math.min(vMin, band.vMinCol)
+          vMax = math.max(vMax, band.vMaxCol)
+          tags |= band.tagMask
+        i += 1
+      if err.isLeft then err
+      else if count != r.count || valued != r.valued || minCol != r.minCol || maxCol != r.maxCol ||
+        vMin != r.vMinCol || vMax != r.vMaxCol || tags != r.tagMask
+      then Left(s"banded row summary mismatch at $key")
+      else Right(())
 
   private def checkBlock(b: Block, prefix: Long): Either[String, Unit] =
     val rows = b.rows
