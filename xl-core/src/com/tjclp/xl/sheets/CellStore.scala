@@ -51,13 +51,18 @@ import com.tjclp.xl.styles.units.StyleId
  *
  * Every reference is accepted, including ones off Excel's grid (negative, or beyond row 1,048,576
  * or column XFD); nothing here fails or throws.
+ *
+ * '''Serialization.''' Java-serializable, as the `Map` it replaced was: the stream holds the cells
+ * in order, not the trie, and reading it rebuilds the store through [[CellStore.Builder]], so a
+ * deserialized store is the canonical one (equal to the one written, same layout). The form is this
+ * version's: nothing is promised across versions.
  */
 // Local loops over the trie's arrays (the house style for flat-array code, see SccKernel).
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
 final class CellStore private (
   private[xl] val root: Entry,
   private[xl] val height: Int
-):
+) extends Serializable:
   import CellStore.*
 
   // ----- reads -----
@@ -307,6 +312,13 @@ final class CellStore private (
   /** Every structural invariant, or a description of the first one broken (for the law specs). */
   private[xl] def checkInvariants: Either[String, Unit] = CellStore.check(this)
 
+  /**
+   * Java serialization writes this store's cells (`CellStore.Serialized`) in its place, the
+   * serialization-proxy pattern: the trie's nodes are never written, so none of them needs a serial
+   * form, and no stream can produce a store the builder would not.
+   */
+  private def writeReplace(): AnyRef = new CellStore.Serialized(iterator.toArray)
+
   override def equals(that: Any): Boolean = that match
     case other: CellStore =>
       (this eq other) || (height == other.height && Trie.same(root, other.root))
@@ -381,6 +393,14 @@ object CellStore:
   def from(cells: IterableOnce[Cell]): CellStore = newBuilder.addAll(cells).result()
 
   def newBuilder: Builder = new Builder
+
+  /**
+   * A store's serial form: its cells, row-major. `readResolve` rebuilds the store from them, so the
+   * empty store reads back as [[empty]] itself and any other as the builder lays it out.
+   */
+  @SerialVersionUID(1L)
+  private final class Serialized(private val cells: Array[Cell]) extends Serializable:
+    private def readResolve(): AnyRef = if cells.isEmpty then empty else from(cells)
 
   private def normalized(root: Entry, height: Int): CellStore =
     val (r, h) = Trie.shrink(root, height)
