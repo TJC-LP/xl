@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{ArrayMode, CellValue, Comment, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, Cell, CellValue, Comment, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
@@ -424,7 +424,7 @@ class SheetEditsSpec extends FunSuite:
 
   // ========== clear ==========
 
-  test("clearRange: contents unmerge overlapping regions; styles and comments clear alone") {
+  test("clearRange: styles and comments clear alone; all removes the cells and unmerges") {
     val s = Sheet(name)
       .put(a1("A1"), num(1))
       .put(a1("C3"), num(3))
@@ -432,10 +432,6 @@ class SheetEditsSpec extends FunSuite:
       .comment(a1("A1"), Comment.plainText("note", None))
       .merge(rng("A1:B2"))
       .merge(rng("D1:E1"))
-    val contents = s.clearRange(rng("A1:A1"), ClearWhat.contents)
-    assert(!contents.contains(a1("A1")))
-    assertEquals(contents.mergedRanges.toSet, Set(rng("D1:E1")))
-    assertEquals(contents.getComment(a1("A1")).map(_.text.toPlainText), Some("note"))
     val styles = s.clearRange(rng("A1:C3"), ClearWhat.styles)
     assertEquals(styles(a1("A1")).value, num(1))
     assertEquals(styles(a1("A1")).styleId, None)
@@ -446,6 +442,69 @@ class SheetEditsSpec extends FunSuite:
     val all = s.clearRange(rng("A1:C3"), ClearWhat.all)
     assert(all.cells.isEmpty && all.comments.isEmpty)
     assertEquals(all.mergedRanges.toSet, Set(rng("D1:E1")))
+  }
+
+  test("GH-890: a contents clear keeps formatting and merges, like Excel's Clear Contents") {
+    val s = Sheet(name)
+      .put(a1("A1"), num(1))
+      .put(a1("C3"), num(3))
+      .put(Cell(a1("B3"), CellValue.Text("site"), hyperlink = Some("https://example.com")))
+      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      .withCellStyle(a1("B3"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      .comment(a1("A1"), Comment.plainText("note", None))
+      .merge(rng("A1:B2"))
+      .merge(rng("D1:E1"))
+    val percent = s(a1("A1")).styleId
+    val out = s.clearRange(rng("A1:C3"), ClearWhat.contents)
+    // A styled cell stays as an empty cell with its style; its hyperlink goes, as in Excel
+    assertEquals(out.cells.get(a1("A1")), Some(Cell(a1("A1"), CellValue.Empty, percent)))
+    assertEquals(out.cells.get(a1("B3")), Some(Cell(a1("B3"), CellValue.Empty, percent)))
+    // An unstyled cell is removed
+    assertEquals(out.cells.get(a1("C3")), None)
+    // Merges and comments stay
+    assertEquals(out.mergedRanges.toSet, Set(rng("A1:B2"), rng("D1:E1")))
+    assertEquals(out.getComment(a1("A1")).map(_.text.toPlainText), Some("note"))
+  }
+
+  test("GH-890: the issue's repro: Percent kept and A1:B1 still merged") {
+    val s = Sheet(name)
+      .put(a1("A1"), num(1))
+      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      .merge(rng("A1:B1"))
+    val out = s.clearRange(rng("A1:A1"), ClearWhat.contents)
+    assertEquals(out(a1("A1")).value, CellValue.Empty)
+    assertEquals(out.getCellStyle(a1("A1")).map(_.numFmt), Some(NumFmt.Percent))
+    assertEquals(out.mergedRanges.toSet, Set(rng("A1:B1")))
+  }
+
+  test("GH-890/GH-897: an unstyled cell in a styled row or column keeps an empty record") {
+    val styled = Sheet(name).withCellStyle(a1("Z9"), CellStyle.default.withNumFmt(NumFmt.Percent))
+    val pct = styled(a1("Z9")).styleId
+    val s = styled
+      .remove(a1("Z9"))
+      .setRowProperties(Row.from1(2), RowProperties(styleId = pct))
+      .setColumnProperties(Column.from0(2), ColumnProperties(styleId = pct))
+      .put(a1("A1"), num(1))
+      .put(Cell(a1("A2"), num(2), hyperlink = Some("https://example.com")))
+      .put(a1("C1"), num(3))
+    val out = s.clearRange(rng("A1:C2"), ClearWhat.contents)
+    // A record with no style stops A2 and C1 taking their row's or column's Percent format
+    assertEquals(out.cells.get(a1("A2")), Some(Cell(a1("A2"), CellValue.Empty)))
+    assertEquals(out.cells.get(a1("C1")), Some(Cell(a1("C1"), CellValue.Empty)))
+    assertEquals(out.cells.get(a1("A1")), None)
+  }
+
+  test("GH-890: contents with styles drops the cells and unmerges, as Clear All does") {
+    val s = Sheet(name)
+      .put(a1("A1"), num(1))
+      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      .comment(a1("A1"), Comment.plainText("note", None))
+      .merge(rng("A1:B1"))
+    val out =
+      s.clearRange(rng("A1:A1"), ClearWhat(contents = true, styles = true, comments = false))
+    assertEquals(out.cells.get(a1("A1")), None)
+    assert(out.mergedRanges.isEmpty)
+    assertEquals(out.getComment(a1("A1")).map(_.text.toPlainText), Some("note"))
   }
 
   // ========== auto-fit ==========
