@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Removing a sheet's last hyperlink sticks in the saved file** (#895): on a sheet read from a
+  file, removing its only cell hyperlink (batch `{"op":"hyperlink","ref":"B7"}` with no target,
+  a contents `clear`, or `Cell.clearHyperlink`) used to write the source's `<hyperlinks>` element
+  and its relationship back, so the link returned on the next read. The writer now treats cell
+  hyperlinks as model-driven on every write: with none left it writes no `<hyperlinks>` and drops
+  the source's hyperlink relationships. A range hyperlink (`ref="D2:E3"`), which xl reads as
+  preserved XML rather than onto a cell, still rides through with its relationship.
+  **Behaviour change:** a removed last hyperlink no longer reappears after a save.
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
   the range touches, as `--all` already did, and reset the formatting of each whole merge they

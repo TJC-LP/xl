@@ -363,6 +363,29 @@ private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
     HyperlinkEntry(c.ref, target, isExternalHyperlink(target), relIdByRef.getOrElse(c.ref, ""))
   }
 
+/**
+ * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own — the
+ * `<hyperlink>` children whose `ref` is not a single cell (a range such as `B7:C8`, which Excel
+ * writes for a link over a multi-cell selection). The reader puts every single-cell link on its
+ * `Cell.hyperlink`, so those children are the model's to write or drop; a range link has no cell to
+ * live on and rides through as preserved XML. None when nothing unmodeled is left.
+ */
+private[ooxml] def unmodeledHyperlinksElem(preserved: Elem): Option[Elem] =
+  val kept = preserved.child.collect {
+    case e: Elem if e.label == "hyperlink" && ARef.parse(e \@ "ref").isLeft => e
+  }
+  Option.when(kept.nonEmpty)(preserved.copy(child = kept))
+
+/** The r:ids of the external links in a `<hyperlinks>` element (for the rels they still need). */
+private[ooxml] def hyperlinkRelIds(hyperlinks: Elem): Set[String] =
+  (hyperlinks \ "hyperlink").iterator.flatMap {
+    case e: Elem =>
+      e.attributes.collectFirst {
+        case a: PrefixedAttribute if a.key == "id" => a.value.text
+      }
+    case _ => None
+  }.toSet
+
 /** Build a `<hyperlinks>` element from collected entries (GH-235), or None if empty. */
 private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Elem] =
   if entries.isEmpty then None

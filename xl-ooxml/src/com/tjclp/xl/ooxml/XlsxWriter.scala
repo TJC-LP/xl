@@ -25,7 +25,7 @@ import com.tjclp.xl.styles.{Border, Color, Fill}
 import com.tjclp.xl.tables.TableSpec
 import com.tjclp.xl.ooxml.chart.{ChartCaches, OoxmlChart}
 import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
-import com.tjclp.xl.ooxml.worksheet.collectHyperlinks
+import com.tjclp.xl.ooxml.worksheet.{collectHyperlinks, hyperlinkRelIds, unmodeledHyperlinksElem}
 
 // Re-export writer config types for backward compatibility
 export writer.{
@@ -590,7 +590,8 @@ object XlsxWriter:
     drawingRelAdd: Option[Relationship],
     commentPath: String,
     vmlPath: String,
-    sameRelsPath: Boolean
+    sameRelsPath: Boolean,
+    keptHyperlinkRelIds: Set[String]
   ): SheetRelsPlan =
     val sortedTableIds = tableIds.sorted
     def tableRel(id: String, tableId: Long): Relationship =
@@ -629,8 +630,15 @@ object XlsxWriter:
         )
         val preservedVmlRelId =
           source.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing).map(_.id)
+        // GH-895: once the model has no hyperlinks left, a source hyperlink rel is stale unless a
+        // preserved range link (unmodeledHyperlinksElem) still points at it; stale ones force the
+        // merge that drops them, so a removed last link does not ship its rel.
+        def isStaleHyperlinkRel(rel: Relationship): Boolean =
+          rel.`type` == XmlUtil.relTypeHyperlink && !keptHyperlinkRelIds.contains(rel.id)
+        val staleHyperlinkRels = hlRels.isEmpty && source.relationships.exists(isStaleHyperlinkRel)
         val needsMerge = hlRels.nonEmpty || drawingRelAdd.isDefined || needsCommentRels ||
-          staleCommentRels || !sameRelsPath || staleTableRels || matched.exists(_._2.isEmpty)
+          staleCommentRels || staleHyperlinkRels || !sameRelsPath || staleTableRels ||
+          matched.exists(_._2.isEmpty)
         if !needsMerge then SheetRelsPlan(None, matchedTableRelIds, preservedVmlRelId)
         else
           // Drop the source's hyperlink rels (regenerated from the model), the comment/VML rels
@@ -638,7 +646,7 @@ object XlsxWriter:
           // and every table rel not matched by an emitted part; keep everything else
           // (printerSettings, customProperty, drawings, ...).
           val kept = source.relationships.filterNot(rel =>
-            rel.`type` == XmlUtil.relTypeHyperlink ||
+            isStaleHyperlinkRel(rel) ||
               (rel.`type` == XmlUtil.relTypeTable && !matchedRelIds.contains(rel.id)) ||
               (staleCommentRels &&
                 (rel.`type` == XmlUtil.relTypeComments ||
@@ -2937,7 +2945,15 @@ object XlsxWriter:
             drawingRelAdd,
             commentPath,
             vmlPath,
-            sameRelsPath = sourceRelsPathOpt.contains(relsPath)
+            sameRelsPath = sourceRelsPathOpt.contains(relsPath),
+            // GH-895: the rels of the range links that ride through when no cell links are left
+            keptHyperlinkRelIds =
+              if hlRels.nonEmpty then Set.empty
+              else
+                preservedMetadata
+                  .flatMap(_.preservedKnown.get("hyperlinks"))
+                  .flatMap(unmodeledHyperlinksElem)
+                  .fold(Set.empty[String])(hyperlinkRelIds)
           )
           val legacyDrawingRelId = relsPlan.legacyDrawingRelId.getOrElse("rId2")
 
