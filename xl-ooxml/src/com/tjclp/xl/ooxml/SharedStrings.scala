@@ -1,7 +1,7 @@
 package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.api.{Sheet, Workbook}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.richtext.RichText
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.styles.font.Underline
@@ -314,7 +314,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
   // row-major: the order a generated table numbers its first references in (#891)
-  private val rowMajor: java.util.Comparator[com.tjclp.xl.cells.Cell] = (x, y) =>
+  private val rowMajor: java.util.Comparator[Cell] = (x, y) =>
     val byRow = Integer.compare(x.ref.row.index0, y.ref.row.index0)
     if byRow != 0 then byRow else Integer.compare(x.ref.col.index0, y.ref.col.index0)
 
@@ -346,26 +346,53 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * sheets it regenerates, since a sheet copied verbatim keeps its own inline strings (GH-768).
    */
   def fromSheets(sheets: Iterable[Sheet], escapeFormulas: Boolean): SharedStrings =
-    // #891: each sheet's cells row-major, never in `sheet.cells`' hash order. The table's indices
-    // are written into every text cell, so a hash-ordered walk made the bytes a function of how
-    // `ARef` hashes rather than of the workbook.
-    val allEntries = sheets.iterator.flatMap { sheet =>
-      val cells = sheet.cells.iterator.filter { cell =>
-        cell.value match
-          case _: CellValue.Text | _: CellValue.RichText => true
-          case _ => false
-      }.toArray
-      java.util.Arrays.sort(cells, SharedStrings.rowMajor)
-      cells.iterator.flatMap { cell =>
-        cell.value match
-          case com.tjclp.xl.cells.CellValue.Text(s) =>
-            val safeText = if escapeFormulas then CellValue.escape(s) else s
-            Iterator.single(Left(safeText): SSTEntry)
-          case com.tjclp.xl.cells.CellValue.RichText(rt) => Iterator.single(Right(rt): SSTEntry)
-          case _ => Iterator.empty
-      }
-    }
-    fromEntries(allEntries.to(Iterable), None)
+    // #891: each sheet's cells row-major, never in hash order. The table's indices are written
+    // into every text cell, so the order of the walk is part of the written bytes. The entries
+    // are streamed into the table: nothing is held per occurrence, only per distinct string.
+    dedupe(
+      sheets.iterator.flatMap(sheet => entriesOf(rowMajorCells(sheet), escapeFormulas)),
+      None
+    )
+
+  /**
+   * Whether `sheet.cells` iterates in the table's row-major order ([[rowMajor]]: rows, then
+   * columns, both as signed `Int`s). The store goes by rows as unsigned numbers, then signed
+   * columns, so the two agree exactly when no stored row is negative, which the store's extent (its
+   * signed minimum row, read from the trie's summaries) answers without a scan. Rows past Excel's
+   * grid and columns off it either way keep the same order in both.
+   */
+  private[ooxml] def storeIsRowMajor(sheet: Sheet): Boolean =
+    sheet.cells.extent.forall(_.rowStart.index0 >= 0)
+
+  /**
+   * A sheet's cells in the table's order: the store's own iteration when [[storeIsRowMajor]] (no
+   * copy, no sort), else its text cells sorted ([[sortedTextCells]]). A negative row is off the
+   * grid and only `ARef.shift` mints one, but the writer does emit such a sheet, so its table keeps
+   * the numbering it has always had.
+   */
+  private[ooxml] def rowMajorCells(sheet: Sheet): Iterator[Cell] =
+    if storeIsRowMajor(sheet) then sheet.cells.iterator else sortedTextCells(sheet).iterator
+
+  /** The text and rich-text cells of a sheet, copied and sorted row-major (signed). */
+  private[ooxml] def sortedTextCells(sheet: Sheet): Array[Cell] =
+    val cells = sheet.cells.iterator.filter { cell =>
+      cell.value match
+        case _: CellValue.Text | _: CellValue.RichText => true
+        case _ => false
+    }.toArray
+    java.util.Arrays.sort(cells, SharedStrings.rowMajor)
+    cells
+
+  /**
+   * The table entry of each text and rich-text cell, in the order given, one cell at a time: a cell
+   * is read from `cells` only when the entry before it has been taken.
+   */
+  private[ooxml] def entriesOf(cells: Iterator[Cell], escapeFormulas: Boolean): Iterator[SSTEntry] =
+    cells.collect(cell =>
+      cell.value match
+        case CellValue.Text(s) => Left(if escapeFormulas then CellValue.escape(s) else s)
+        case CellValue.RichText(rt) => Right(rt)
+    )
 
   /**
    * Create SharedStrings from SST entries with deduplication.
@@ -373,8 +400,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * Plain entries deduplicate by EXACT string (GH-289); RichText entries by full run structure
    * (GH-303) — a structural `SSTEntry` seen-set keeps the two kinds from ever colliding.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
   def fromEntries(entries: Iterable[SSTEntry], totalCount: Option[Int] = None): SharedStrings =
+    dedupe(entries.iterator, totalCount)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private def dedupe(entries: Iterator[SSTEntry], totalCount: Option[Int]): SharedStrings =
     import scala.collection.mutable
     val seen = mutable.LinkedHashSet.empty[SSTEntry]
     val entryVec = Vector.newBuilder[SSTEntry]
