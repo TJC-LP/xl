@@ -184,8 +184,9 @@ property("get-set") {
 
 ## Golden File Tests
 
-The golden corpus that exists pins the CLI's output, not workbook bytes: see "CLI contract
-goldens" below. A curated `.xlsx` corpus with normalized XML diffs remains future work (P11).
+Two things are pinned: the CLI's output ("CLI contract goldens" below) and the bytes the writer
+emits for the fixture corpus ("Written-part digests" after it). A curated `.xlsx` corpus with
+normalized XML diffs remains future work (P11).
 
 ## CLI contract goldens
 
@@ -216,6 +217,35 @@ fails with a unified diff in the assertion message.
 diff, decide whether the change is intended, and only then re-record — and add a CHANGELOG line
 under `## [Unreleased]` saying what agents now see differently. Re-recording to turn a red build
 green without that line is how a contract drifts unnoticed.
+
+## Written-part digests
+
+`WrittenPartDigestSpec` (`com.tjclp.xl.ooxml`) reads every workbook under
+`xl-ooxml/test/resources/fixtures/`, drops its source context so that every part is regenerated
+from the domain model instead of copied through, writes it with each XML backend (`ScalaXml`,
+`SaxStax`) under each shared-string policy (`Auto`, `Always`) and compares the SHA-256 of every
+worksheet part, `xl/sharedStrings.xml` and `xl/styles.xml` with
+`xl-ooxml/test/resources/written-part-digests.txt` (one
+`<fixture> <backend>/<sstPolicy> <part> <sha256>` line per part).
+
+It exists for order (#891): those parts are emitted by walking a sheet's cells, so a change to the
+order cells are stored or iterated in that reaches the output changes the bytes and fails here. A
+read-back comparison cannot see that, because it finds the same cells whatever their order in the
+XML. Any other change to what the writer emits fails here as well.
+
+```bash
+./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.WrittenPartDigestSpec                      # verify
+XL_UPDATE_DIGESTS=1 ./mill xl-ooxml.test.testOnly com.tjclp.xl.ooxml.WrittenPartDigestSpec  # (re)record
+```
+
+The fixtures are listed from the directory and checked against `TestFixtures`, so a new fixture
+fails until it is classified there and its digests are recorded. `malformed-workbook.xlsx` is
+skipped: it does not parse, on purpose. The LibreOffice (`-lo`) files are included: regenerating
+them is not byte-stable, but reading and writing the committed files is.
+
+**Review discipline**, as for the goldens: a digest diff means files written by this build differ
+from files written by the last one. Unzip a before and an after, read the XML diff, and re-record
+only when the change is intended, with a CHANGELOG line saying what changed in the output.
 
 ## Test Execution
 

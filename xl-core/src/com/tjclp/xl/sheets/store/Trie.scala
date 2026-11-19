@@ -326,6 +326,40 @@ private[xl] object Trie:
       Node.of(bitmap, java.util.Arrays.copyOf(tmp, k))
 
   /**
+   * The trie holding the slot group `groups(i)` (a canonical shift-0 entry, non-empty) under the
+   * group key `groupKeys(i)` (its rows' keys above their five low bits) for `i < n`; group keys
+   * strictly ascending. Returns the root and its (minimal) height, as [[build]] does from rows.
+   */
+  def buildGroups(groupKeys: Array[Long], groups: Array[Entry], n: Int): (Entry, Int) =
+    if n == 0 then (Node.Empty, 0)
+    else
+      val h = heightFor(groupKeys(n - 1) << 5)
+      if h == 1 then (groups(0), 1)
+      else (buildAbove(groupKeys, groups, 0, n, 5 * (h - 1)), h)
+
+  /** The node at `shift` (5 or more) over the groups `from until until`, which share its prefix. */
+  private def buildAbove(
+    groupKeys: Array[Long],
+    groups: Array[Entry],
+    from: Int,
+    until: Int,
+    shift: Int
+  ): Entry =
+    val tmp = new Array[Entry](32)
+    var bitmap = 0
+    var k = 0
+    var i = from
+    while i < until do
+      val slot = ((groupKeys(i) >>> (shift - 5)) & 31L).toInt
+      var j = i + 1
+      while j < until && ((groupKeys(j) >>> (shift - 5)) & 31L).toInt == slot do j += 1
+      tmp(k) = if shift == 5 then groups(i) else buildAbove(groupKeys, groups, i, j, shift - 5)
+      bitmap |= 1 << slot
+      k += 1
+      i = j
+    Node.of(bitmap, java.util.Arrays.copyOf(tmp, k))
+
+  /**
    * The union of two entries at the same `shift`; on a row both hold, the rows merge through
    * [[StoredRow.merge]] (`b` wins, or with `valuesOnly` `b`'s values over `a`'s styles and links).
    * Above shift 0, returns `a` itself when the union adds nothing to it.
