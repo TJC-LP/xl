@@ -348,6 +348,37 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(seededInterior(wb), selectorExpected)
   }
 
+  test("#891: a selector held in a table input still narrows the lookup for recalculation") {
+    // Excel (checked): B1 sits inside its own table and reads C1 through K1 = 3; that is not a
+    // circular reference, and the table over K1 computes. Only seeding reads the lookup whole.
+    val kind: FormulaKind.DataTable = colKind("F10:F11", "K1")
+    val sheet: Sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"C1", num(7))
+      .put(ref"K1", num(3))
+      .put(ref"B1", CellValue.Formula("VLOOKUP(1,A1:C1,K1,FALSE)"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(3))
+      .put(ref"E11", num(1))
+      .put(ref"F10", CellValue.dataTable(kind, None))
+    val recalculated = Workbook(sheet).recalculate()
+    assertEquals(recalculated.errors, Vector.empty)
+    assertEquals(interiorNum(sheetNamed(recalculated.workbook, "S"), ref"B1"), Some(BigDecimal(7)))
+    val seeded = recalculated.workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+    // Seeding reads the lookup whole, so it sees B1 inside B1's own table and refuses the table
+    // with a warning. Excel computes it (9 and 1 after C1 := 9): a known gap, never a wrong value.
+    assert(
+      seeded.warnings.exists {
+        case _: SeedTableWarning.CircularNotIterated => true
+        case _ => false
+      },
+      seeded.warnings.toString
+    )
+    assertEquals(interiorNum(sheetNamed(seeded.workbook, "S"), ref"F10"), None)
+  }
+
   test("#891: an HLOOKUP whose row selector is a table input seeds every selected row") {
     val wb = selectorTable(
       "HLOOKUP(2,A10:B13,K1,FALSE)",

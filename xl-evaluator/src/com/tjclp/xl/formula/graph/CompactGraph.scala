@@ -59,7 +59,13 @@ private[formula] final class CompactGraph private (
   wideIndex: Map[Int, IntervalIndex],
   constKeys: IArray[Long],
   constReaders: IArray[Int],
-  val parses: FormulaParses
+  val parses: FormulaParses,
+  /**
+   * A VLOOKUP/HLOOKUP was narrowed to the strip picked by a selector cell that a data table
+   * substitutes. Right for recalculation (the cell holds that value); a what-if pass over that
+   * input needs the graph built `whatIfSafe`.
+   */
+  val narrowsOnWhatIfInput: Boolean
 ):
   import CompactGraph.*
 
@@ -460,8 +466,24 @@ private[formula] object CompactGraph:
    * the node and edge counts.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  def build(wb: Workbook, counters: RecalcCounters = RecalcCounters.disabled): CompactGraph =
+  def build(
+    wb: Workbook,
+    counters: RecalcCounters = RecalcCounters.disabled,
+    whatIfSafe: Boolean = false
+  ): CompactGraph =
     val (nodes, texts) = NodeTable.build(wb)
+    // `whatIfSafe`: a lookup whose selector is a data-table input keeps its whole range, so the
+    // graph orders and closes over every strip a substitution can select. Otherwise the lookup is
+    // narrowed as recalculation reads it, and the graph says that it was.
+    var narrowed = false
+    val whatIfSelector: Option[QualifiedRef => Boolean] =
+      if nodes.whatIfInputs.isEmpty then None
+      else if whatIfSafe then Some(nodes.whatIfInputs.contains)
+      else
+        Some { q =>
+          if nodes.whatIfInputs.contains(q) then narrowed = true
+          false
+        }
     val f = nodes.formulaCount
 
     // ---- 1. reads of every formula -----------------------------------------------------------
@@ -521,7 +543,7 @@ private[formula] object CompactGraph:
             record,
             Some(wb),
             preciseLookups = true,
-            whatIfInputs = nodes.whatIfInputs,
+            whatIfSelector = whatIfSelector,
             canonicalSheet = canonicalSheet,
             nameRanges = nameRanges,
             parseName = parseName,
@@ -728,7 +750,8 @@ private[formula] object CompactGraph:
       wide.iterator.map((k, t) => k -> index(t)).toMap,
       IArray.unsafeFromArray(constKeys.toArray),
       IArray.unsafeFromArray(constReaders.toArray),
-      FormulaParses.of(nodes, texts, IArray.unsafeFromArray(parsed))
+      FormulaParses.of(nodes, texts, IArray.unsafeFromArray(parsed)),
+      narrowed
     )
 
   /** First index of `sorted` whose element is at least `x`. */
