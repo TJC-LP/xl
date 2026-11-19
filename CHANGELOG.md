@@ -171,6 +171,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   "Circular reference … read again while its own evaluation is in progress", or compute it from
   its precedents' stale caches.
 
+- **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
+  and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
+  the range touches, as `--all` already did, and reset the formatting of each whole merge they
+  unmerge (Excel widens a selection to the merges it touches), so `clear B1 --styles` on a merged
+  A1:F1 also resets A1. A contents clear (no flags) and `--comments` still keep merges. **Behaviour change:** on a sheet where A1:F1 is a merged title "Sample Co" in
+  Georgia 16 bold, `clear A1 --styles` leaves A1 holding "Sample Co" with default formatting and
+  A1:F1 no longer merged (was still merged).
+
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
   the values and formulas and drops the cell's hyperlink, but keeps its number format, font,
@@ -181,8 +189,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
   merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
   cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
-  last hyperlink still comes back on write until #895 is fixed). The library's
-  `Edit.Clear` / `Sheet.clearRange` keep their old rule for now (#890).
+  last hyperlink still comes back on write until #895 is fixed). The library follows the same
+  rule since #890.
+
+- **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
+  ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
+  CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
+  style is removed, and merged regions stay merged. One difference from the CLI for now: an
+  unstyled cell in a row or column with a default style keeps an empty record, so it does not
+  take that row's or column's format. The CLI still removes it until #897 is fixed there. A clear with `styles` as well as `contents`
+  (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
+  comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
+  `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars
+  `Remove`/`RemoveRange` to a contents-and-styles clear. **Behaviour change:**
+  `sheet.clearRange(A1:A1, ClearWhat.contents)` on a Percent-formatted A1 inside a merged A1:B1
+  leaves A1 empty with its Percent format and A1:B1 merged (was: A1 removed, A1:B1 unmerged).
+
+- **A contents `clear` no longer gives an unstyled cell its row's or column's format** (#897):
+  a cell with no style of its own that sits in a row or column with a default style
+  (`<row s= customFormat="1">` or `<col style=>`) used to lose its record on a contents clear,
+  so it took on that row's or column's format. It now keeps an empty record with no style, so it
+  stays on the default format, as Excel's Clear Contents leaves it. So do the spill cells of a
+  dynamic-array anchor the clear removes. Cells outside a styled row or column are still
+  removed, and `clear --all` still removes the record. **Behaviour change:**
+  with column B styled with a yellow fill and an unstyled `5` in B4, `clear B4` leaves B4 empty
+  with no fill (was: empty with column B's yellow fill).
 
 - **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
   and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming

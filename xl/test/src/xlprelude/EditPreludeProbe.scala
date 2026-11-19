@@ -59,7 +59,12 @@ class EditPreludeProbe extends FunSuite:
       sheet(ref"D1").styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt),
       Some(NumFmt.Percent)
     )
-    assert(!sheet.contains(ref"D2"))
+    // GH-890: a contents clear empties D2 but keeps its Percent format, like Excel's Clear Contents
+    assertEquals(sheet(ref"D2").value, CellValue.Empty)
+    assertEquals(
+      sheet(ref"D2").styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt),
+      Some(NumFmt.Percent)
+    )
     assertEquals(sheet.getRowProperties(Row.from1(1)).outlineLevel, Some(1))
     assertEquals(sheet.getColumnProperties(Column.from0(0)).width, Some(20.0))
 

@@ -586,12 +586,27 @@ private[xl] object EditInterpreter:
     case Edit.Clear(at, what) if !what.comments && !what.isEmpty =>
       val range = at.range
       val contents =
-        if what.contents then
+        if what.contents && what.styles then
           Patch.RemoveRange(range) +: existing.mergedRanges
             .filter(_.intersects(range))
             .toVector
             .sortBy(_.toA1)
             .map(Patch.Unmerge.apply)
+        else if what.contents then
+          // GH-890 Clear Contents: remove each cell, then restore a kept one as an empty record
+          // (its style alone, no hyperlink); merges stay.
+          existing.cells.values
+            .filter(c => range.contains(c.ref))
+            .toVector
+            .sortBy(_.ref.toA1)
+            .flatMap { c =>
+              val restore = c.styleId match
+                case Some(id) => Vector(Patch.SetStyle(c.ref, id))
+                case None if SheetEdits.keepsRecordWhenCleared(existing, c) =>
+                  Vector(Patch.Put(c.ref, CellValue.Empty))
+                case None => Vector.empty
+              Patch.Remove(c.ref) +: restore
+            }
         else Vector.empty
       // Styles clear only what contents left behind: after a removal nothing in range remains.
       val styles =

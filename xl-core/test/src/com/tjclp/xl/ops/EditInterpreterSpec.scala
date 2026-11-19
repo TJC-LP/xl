@@ -363,7 +363,7 @@ class EditInterpreterSpec extends FunSuite:
     assert(!EditSchema.specOf(Edit.Sort(area("A1:C2"), key, hasHeader = false)).idempotent)
   }
 
-  test("clear: contents unmerge overlaps; styles and comments clear independently") {
+  test("clear: all unmerges overlaps; styles and comments clear independently") {
     val all = sheetAfter(Workbook(baseData), Edit.Clear(area("A1:F6"), ClearWhat.all))
     assert(all.cells.isEmpty)
     assert(all.comments.isEmpty)
@@ -378,6 +378,18 @@ class EditInterpreterSpec extends FunSuite:
       failure(Workbook(baseData), Edit.Clear(area("A1"), ClearWhat(false, false, false))).root,
       XLError.InvalidArgument("clear", "nothing to clear (contents, styles or comments)")
     )
+  }
+
+  test("GH-890: a contents clear keeps each cell's style and every merge") {
+    val currency = baseData(a1("A1")).styleId
+    assert(currency.isDefined, "fixture: A1 carries a Currency style")
+    val out = sheetAfter(Workbook(baseData), Edit.Clear(area("A1:F6"), ClearWhat.contents))
+    assertEquals(out(a1("A1")).value, CellValue.Empty)
+    assertEquals(out(a1("A1")).styleId, currency)
+    // Unstyled cells go; the comment and the E5:F6 merge stay
+    assertEquals(out.cells.keySet, Set(a1("A1")))
+    assertEquals(out.mergedRanges, baseData.mergedRanges)
+    assertEquals(out.comments, baseData.comments)
   }
 
   // ========== style & layout ==========
