@@ -317,7 +317,10 @@ object SheetEvaluator:
    *
    * #891: the graph questions go to the workbook's recalculation graph (cross-sheet cycles, defined
    * names, #504's precise lookups); the sheet-level graph and its hash-map Tarjan and Kahn are
-   * gone.
+   * gone. The evaluation is a recalculation pass over the targets: it reads the graph build's
+   * parses and the pass's caches (column slices, the criteria index, aggregates), so a window whose
+   * closure is a whole model costs what recalculating that model costs, not a scan of every
+   * criteria range per formula.
    */
   private[eval] def evaluateForRangesPerCell(
     sheet: Sheet,
@@ -325,13 +328,28 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): RangeEvalResult =
+    evaluateForRangesPerCellWithMemo(sheet, ranges, clock, workbook, new Evaluator.AggregateMemo)
+
+  /**
+   * [[evaluateForRangesPerCell]] with the pass's aggregate memo supplied by the caller: the parity
+   * laws run one window with the per-pass caches on and off, and read the memo's counters.
+   */
+  private[formula] def evaluateForRangesPerCellWithMemo(
+    sheet: Sheet,
+    ranges: Vector[CellRange],
+    clock: Clock,
+    workbook: Option[Workbook],
+    memo: Evaluator.AggregateMemo
+  ): RangeEvalResult =
     // a small range is a handful of point lookups: many of them (a formula rule's reads at every
     // cell of a render window) never make the scan below quadratic
     val (small, large) = ranges.partition(r => r.width.toLong * r.height <= 256L)
     val points = small.iterator.flatMap(_.cells).toSet
     def covered(ref: ARef): Boolean = points.contains(ref) || large.exists(_.contains(ref))
     val book = workbook.fold(Workbook(sheet))(_.put(sheet))
-    lazy val graph = RecalcGraph.build(book, RecalcCounters.disabled)
+    val counters = memo.counters
+    lazy val graph =
+      counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(book, counters))
     def at(ref: ARef): QualifiedRef = QualifiedRef(sheet.name, ref)
     def formulasOf(target: Sheet): Iterator[QualifiedRef] =
       target.cells.iterator
@@ -402,7 +420,10 @@ object SheetEvaluator:
           cyclic.toVector.filter(_.sheet == sheet.name).map(failure(_, "Circular reference")),
           cycleBlocked
         )
-      val evaluator = Evaluator.spillTrackingInstance(Rng.system, readsSpills(sheet, workbook))
+      // GH-695: record spill anchors' arrays only for a book that has `x#` readers
+      if readsSpills(sheet, workbook) then memo.trackSpills()
+      // #790: evaluation reuses the build's parse of each formula
+      memo.passCache.foreach(_.useParses(graph.parses))
       val (_, values, failures, blocked) = graph.order(core ++ coreBlocked) match
         // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
         case scala.util.Left(unordered) =>
@@ -420,20 +441,38 @@ object SheetEvaluator:
             else (dynamic & live) ++ dependentsOf(dynamic)
           val evalOrder = ordered.filterNot(bucket) ++ ordered.filter(bucket)
           val initial = stripped(startSheets, bucket)
+          // #767: one slot per target in evaluation order. Formulas outside the targets keep the
+          // caches the file holds, which this pass never changes; the stripped cells (the dynamic
+          // bucket, cycle members and the cells behind them) refuse every slice over them. A cell
+          // a failure strips later holds no cache when a slice over it is built, and is refused.
+          val slots = evalOrder.iterator.zipWithIndex.toMap
+          memo.passCache.foreach(_.begin(Readiness.build(slots, bucket ++ cyclic ++ cycleBlocked)))
+          def evaluatorFor(q: QualifiedRef): Evaluator =
+            Evaluator.recalculationInstance(
+              Rng.system,
+              memo,
+              WorkbookEvaluator.callerPosition(slots, bucket, q),
+              Some((q.sheet, q.ref))
+            )
           evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
             case (state @ (_, _, _, blockedNow), q) if blockedNow(q) => state
             case (state @ (sheets, results, failedNow, blockedNow), q) =>
               positions.get(q.sheet) match
                 case None => state
                 case Some(position) =>
-                  evaluateCellWithEvaluator(
-                    sheets(position),
-                    q.ref,
-                    evaluator,
-                    clock,
-                    workbook.map(_ => book.copy(sheets = sheets))
-                  ) match
+                  val evaluated = counters.time(RecalcCounters.Phase.Eval) {
+                    evaluateCellWithEvaluator(
+                      sheets(position),
+                      q.ref,
+                      evaluatorFor(q),
+                      clock,
+                      workbook.map(_ => book.copy(sheets = sheets))
+                    )
+                  }
+                  evaluated match
                     case scala.util.Right(value) =>
+                      if threadChangesStructure(sheets(position), q.ref) then
+                        memo.passCache.foreach(_.structureChanged(q.sheet))
                       val next =
                         if q.sheet == sheet.name && rangeFormulaCells.contains(q.ref) then
                           results + (q.ref -> value)

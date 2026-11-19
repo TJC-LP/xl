@@ -320,6 +320,69 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
+  // ---------- #891: the window evaluation (`view --eval`) is a pass over its closure ----------
+
+  /** Every formula cell of the stale book's sheets, as one window per sheet. */
+  private val windows: Vector[(Int, CellRange)] =
+    Vector(0 -> s"F1:H$Last", 1 -> "B1:D30").map { (sheet, a1) =>
+      sheet -> CellRange.parse(a1).fold(e => fail(e.toString), identity)
+    }
+
+  private def window(wb: Workbook, sheet: Int, range: CellRange, memo: Evaluator.AggregateMemo) =
+    SheetEvaluator.evaluateForRangesPerCellWithMemo(
+      wb.sheets(sheet),
+      Vector(range),
+      clock,
+      Some(wb),
+      memo
+    )
+
+  property("stale-cache law: a window evaluated with the caches on equals off and uncached") {
+    Prop.forAll(genStaleBook) { book =>
+      Prop.all(windows.map { (sheet, range) =>
+        val on = window(book.workbook, sheet, range, cachesOn())
+        val off = window(book.workbook, sheet, range, cachesOff())
+        // no column cache and no aggregate memo: every formula evaluated on its own
+        val bare =
+          window(book.workbook, sheet, range, new Evaluator.AggregateMemo(cachesAggregates = false))
+        def shown(result: RangeEvalResult) =
+          (result.values.toVector.sortBy(_._1.toA1).map((ref, v) => ref.toA1 -> render(v)), result)
+        Prop.all(
+          Prop(shown(on) == shown(off)) :| s"sheet $sheet on/off\n$on\n$off",
+          Prop(shown(on) == shown(bare)) :| s"sheet $sheet on/bare\n$on\n$bare"
+        )
+      }*)
+    }
+  }
+
+  property("a clean window over the stale book shows what a full recalculation computes") {
+    // the other sheet's caches are stale too: the window computes its precedents there (#891)
+    Prop.forAll(genStaleBook) { book =>
+      val full = recalculateWithMemo(book.workbook, sequential(), cachesOff())
+      Prop.all(windows.map { (sheet, range) =>
+        val result = window(book.workbook, sheet, range, cachesOn())
+        val name = book.workbook.sheets(sheet).name
+        val expected =
+          full.evaluated.getOrElse(name, Map.empty).filter((ref, _) => range.contains(ref))
+        Prop(!result.isClean || result.values == expected) :|
+          s"sheet $sheet\nwindow ${result.values}\nrecalc $expected"
+      }*)
+    }
+  }
+
+  property("the window law is not vacuous: clean windows, slices built, each formula parsed once") {
+    Prop.forAll(genStaleBook) { book =>
+      val counters = RecalcCounters.create()
+      val result = window(book.workbook, 1, windows(1)._2, cachesOn(counters))
+      val snap = counters.snapshot
+      Prop.all(
+        Prop(book.cyclic || result.isClean) :| s"an acyclic book fails: ${result.summary}",
+        Prop(book.cyclic || snap(Counter.SlicesBuilt) > 0L) :| s"no slice built: ${snap.render}",
+        Prop(snap(Counter.FormulaParses) == snap(Counter.GraphNodes)) :| snap.render
+      )
+    }
+  }
+
   property("the stale-cache law is not vacuous: its acyclic books build slices") {
     // a cycle through F blocks every reader of F, so only acyclic books must slice
     Prop.forAll(genStaleBook) { book =>

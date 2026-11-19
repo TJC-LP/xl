@@ -158,6 +158,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it. Unchanged: cycles report as before (members on the window's sheet are listed, a reader of a
   cycle on another sheet is blocked), and what a dynamic reader reads on a sheet the closure never
   reaches is still read from the file.
+  The evaluation is now a recalculation pass over the closure (the graph's parses, column slices,
+  the criteria index), so a window costs what recalculating its closure costs: a summary cell over
+  a whole model takes about as long as `recalc`, where it used to return at once with whatever
+  the caches held. On a 40,000-formula SUMIF model: 0.2-0.4 s and a stale value before, about 6 s
+  and the recalculated value now (`recalc`: 5-7 s); a window whose closure is a few cells is
+  unchanged.
 
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
