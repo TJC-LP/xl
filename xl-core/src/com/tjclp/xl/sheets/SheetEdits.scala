@@ -466,8 +466,9 @@ private[xl] object SheetEdits:
    * loses its hyperlink, a cell with no style is removed (unless its row or column has a default
    * style, GH-897), and merges stay. A clear that drops the styles as well (`ClearWhat.all`)
    * removes the cell records and unmerges every merged region overlapping the range, as Clear All
-   * does. The CLI's `clear` verb follows the same rule (`DynamicArrayAuthoring.clearContents`,
-   * GH-886).
+   * does. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`, GH-886) follows the same
+   * rule, except that it removes an unstyled cell in a styled row or column until GH-897 lands
+   * there too.
    */
   def clear(sheet: Sheet, range: CellRange, what: ClearWhat): Sheet =
     val dropCells = what.contents && what.styles
