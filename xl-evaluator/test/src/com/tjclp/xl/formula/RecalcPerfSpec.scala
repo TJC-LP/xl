@@ -394,7 +394,9 @@ class RecalcPerfSpec extends FunSuite:
       measured.resolvedReference(distant, CellRange(ref"A1", ref"A100000")),
       Right(BigDecimal(6))
     )
-    assertEquals(measured.reads, 98) // the populated box still includes its internal blank gap
+    // #891: the fold meets the two stored cells; it read the 98 positions of their box, blank
+    // gap included, while it went through the populated box
+    assertEquals(measured.reads, 2)
     val small = new MeasuredSum
     assertEquals(
       small.resolvedReference(template, CellRange(ref"A2", ref"A5")),

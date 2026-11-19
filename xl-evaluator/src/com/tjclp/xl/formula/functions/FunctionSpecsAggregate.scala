@@ -268,17 +268,24 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       case Some(guard) =>
         guard.check(targetSheet, at) match
           case Some(error) => Left(error)
-          case None => triageRecord(agg, targetSheet, at, ctx, acc)
-      case None => triageRecord(agg, targetSheet, at, ctx, acc)
+          case None => triageRecord(agg, targetSheet, at, targetSheet.cells.valueAt(at), ctx, acc)
+      case None => triageRecord(agg, targetSheet, at, targetSheet.cells.valueAt(at), ctx, acc)
 
+  /**
+   * One cell of a reference, folded by the aggregate's rule. `cellValue` is the record stored at
+   * `at` (Empty when none is), handed in by the caller that already holds it: the fold over the
+   * store's cells has it from its walk. The counts decide on it alone; a numeric fold resolves the
+   * cell through [[rangeCellReader]], as a reference to it would (one read per cell folded, the
+   * count the GH-736 pins measure).
+   */
   private def triageRecord[A](
     agg: Aggregator[A],
     targetSheet: com.tjclp.xl.sheets.Sheet,
     at: ARef,
+    cellValue: CellValue,
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
-    val cellValue = targetSheet(at).value
     if agg.countsNonEmpty then
       // COUNTA mode: count any non-empty cell
       cellValue match
@@ -403,11 +410,11 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
       .map((_, blanksTrimmed(agg, range, constrained)))
 
   /**
-   * Stream one already-constrained reference in row-major order. #736: walk only #750's populated
-   * box (found from the store's cells inside the range, #891) and skip its absent blank border.
-   * Positioned evaluations keep the positional path, because an absent cell can be their guarded
-   * placement. Formula/data-table records remain inside the box. Only COUNTBLANK observes the
-   * dropped Empty cells; its closed-form count preserves them.
+   * Fold one already-constrained reference, row-major. #891: the cells the store holds inside the
+   * range are folded straight from its walk ([[foldStoredCells]]), one pass however sparse or dense
+   * the range is; every position without a record is blank and is never visited (#736, #750). A
+   * positioned evaluation reads every position instead ([[aggregateReadsPositions]]): an absent
+   * cell can be its guarded placement.
    */
   private def foldRawRange[A](
     agg: Aggregator[A],
@@ -416,18 +423,61 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     initial: A
   ): Either[EvalError, A] =
-    val selected =
-      if ctx.placementGuard.exists(_.positioned) then range
-      else ArrayArithmetic.populatedBox(range, targetSheet).getOrElse(CellRange.empty)
-    val start =
-      if agg.countsEmpty then
-        agg.combineN(initial, aggregateCountUnit, range.cellCount - selected.cellCount)
-      else initial
-    selected.cells.foldLeft[Either[EvalError, A]](Right(start)) {
-      case (Left(err), _) => Left(err)
-      case (Right(current), cellRef) =>
-        triageCellForAggregate(agg, targetSheet, cellRef, ctx, current)
-    }
+    val positions = aggregateReadsPositions(
+      ctx.placementGuard.exists(_.positioned),
+      ctx.memo.fold(ArrayArithmetic.RangeRead.Auto)(_.rangeRead)
+    )
+    if positions then
+      range.cells.foldLeft[Either[EvalError, A]](Right(initial)) {
+        case (Left(err), _) => Left(err)
+        case (Right(current), cellRef) =>
+          triageCellForAggregate(agg, targetSheet, cellRef, ctx, current)
+      }
+    else foldStoredCells(agg, targetSheet, range, ctx, initial)
+
+  /**
+   * Whether an aggregate reads every position of a range rather than the cells stored in it: a
+   * positioned evaluation always (its placement guard checks each position read), and a pass whose
+   * range read is forced `Dense` (the laws that compare the two folds). Both folds give the same
+   * value: a position without a record reads as Empty, which adds nothing to a numeric fold or to
+   * COUNTA and one to COUNTBLANK, as [[foldStoredCells]] counts it.
+   */
+  private[formula] def aggregateReadsPositions(
+    positioned: Boolean,
+    read: ArrayArithmetic.RangeRead
+  ): Boolean =
+    positioned || (read match
+      case ArrayArithmetic.RangeRead.Dense => true
+      case ArrayArithmetic.RangeRead.Sparse | ArrayArithmetic.RangeRead.Auto => false)
+
+  /**
+   * The fold over the store's cells inside `range`, in the store's row-major order (the order the
+   * positions are read in, so the first error met is the same one): one walk, and one read per
+   * record met. COUNTBLANK also counts the positions that hold no record, in closed form: the
+   * range's cell count less the records met (a style-only record is met, and counted as the blank
+   * it is).
+   */
+  private def foldStoredCells[A](
+    agg: Aggregator[A],
+    targetSheet: com.tjclp.xl.sheets.Sheet,
+    range: CellRange,
+    ctx: EvalContext,
+    initial: A
+  ): Either[EvalError, A] =
+    val cells = targetSheet.cells.inRange(range)
+    @scala.annotation.tailrec
+    def loop(acc: A, stored: Long): Either[EvalError, A] =
+      if !cells.hasNext then
+        Right(
+          if agg.countsEmpty then agg.combineN(acc, aggregateCountUnit, range.cellCount - stored)
+          else acc
+        )
+      else
+        val cell = cells.next()
+        triageRecord(agg, targetSheet, cell.ref, cell.value, ctx, acc) match
+          case Right(next) => loop(next, stored + 1L)
+          case Left(err) => Left(err)
+    loop(initial, 0L)
 
   /**
    * GH-630: a direct argument that evaluated to an Excel error VALUE (the literal `#REF!`, `1/0`, a

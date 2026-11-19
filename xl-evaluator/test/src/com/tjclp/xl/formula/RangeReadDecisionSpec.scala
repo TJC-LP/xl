@@ -11,6 +11,7 @@ import com.tjclp.xl.formula.eval.{
   Evaluator,
   SheetEvaluator
 }
+import com.tjclp.xl.formula.functions.FunctionSpecs
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.styles.units.StyleId
@@ -172,6 +173,109 @@ class RangeReadDecisionSpec extends FunSuite:
     assert(!productRead)
   }
 
+  test("an aggregate folds the cells stored in a range, or every position when positioned") {
+    // SUM, COUNT and the rest over one range argument: no rule by size any more. The fold walks
+    // the store's cells inside the range once, whatever the range and the sheet are, so there is
+    // no box to find first and no edge between two reads; only a positioned evaluation (its
+    // placement can be an absent cell) and the laws' forced read go position by position
+    val Auto = ArrayArithmetic.RangeRead.Auto
+    assert(!FunctionSpecs.aggregateReadsPositions(positioned = false, Auto))
+    assert(!FunctionSpecs.aggregateReadsPositions(positioned = false, Sparse))
+    assert(FunctionSpecs.aggregateReadsPositions(positioned = false, Dense))
+    assert(FunctionSpecs.aggregateReadsPositions(positioned = true, Auto))
+    assert(FunctionSpecs.aggregateReadsPositions(positioned = true, Sparse))
+    assert(FunctionSpecs.aggregateReadsPositions(positioned = true, Dense))
+  }
+
+  test("a bounded range of billions of positions over a few cells costs the cells") {
+    // B1:XFC1048576 over cells at its opposite corners: the used range is as large, so clipping
+    // to it saves nothing, and the populated box the fold used to read is the range. 17 billion
+    // positions, four records. The fold meets the four (the timeout is the backstop: position
+    // by position this does not end)
+    val sheet = sheetOf(
+      List(
+        number(0, 1),
+        number(1048575, 16382),
+        Cell(ARef.from0(700, 500000), CellValue.Text("t")),
+        Cell(ARef.from0(9, 9), CellValue.Empty, Some(StyleId(1))),
+        number(5, 0) // outside the range
+      )
+    )
+    val range = "B1:XFC1048576"
+    val positions = BigDecimal(16382L * 1048576L)
+    assertEquals(evalAuto(sheet, s"=SUM($range)"), Right(BigDecimal(1L + 1048575L * 20 + 16382)))
+    assertEquals(evalAuto(sheet, s"=COUNT($range)"), Right(BigDecimal(2)))
+    assertEquals(evalAuto(sheet, s"=COUNTA($range)"), Right(BigDecimal(3)))
+    // every position but the three values is blank, the formatted one included
+    assertEquals(evalAuto(sheet, s"=COUNTBLANK($range)"), Right(positions - 3))
+    assertEquals(evalAuto(sheet, s"=MAX($range)"), Right(BigDecimal(1048575L * 20 + 16382)))
+  }
+
+  test("an aggregate over the stored cells is the aggregate over every position") {
+    val ranges = List(
+      "A1:A199",
+      "A1:A200",
+      "A1:A1000",
+      "V1:V8",
+      "V1:V9",
+      "V1:V300",
+      "V1:V400",
+      "A1:A400",
+      "S90:U100",
+      "T92:U100",
+      "A1:T100",
+      "A1:U100",
+      "A2:A50",
+      "B60:B70",
+      "E1:H300",
+      "A90:V140",
+      "A:A",
+      "100:100"
+    )
+    for
+      (label, sheet) <- List("table" -> table, "ragged" -> ragged)
+      range <- ranges
+      template <- aggregates
+    do
+      val formula = template.replace("$R", range)
+      val auto = evalAuto(sheet, formula)
+      // the fold over the stored cells against the fold over every position
+      assertEquals(auto, evalWith(Dense, sheet, formula), s"$label: $formula against positional")
+      assertEquals(auto, evalWith(Sparse, sheet, formula), s"$label: $formula, forced sparse")
+    // the values themselves, in and past the data: rows 1..100 hold r*20
+    assertEquals(evalAuto(table, "=SUM(A1:A199)"), Right(BigDecimal(99000)))
+    assertEquals(evalAuto(table, "=SUM(A1:A200)"), Right(BigDecimal(99000)))
+    assertEquals(evalAuto(table, "=COUNTBLANK(A1:A199)"), Right(BigDecimal(99)))
+    assertEquals(evalAuto(table, "=COUNTBLANK(A1:A200)"), Right(BigDecimal(100)))
+    assertEquals(evalAuto(table, "=COUNTBLANK(V1:V9)"), Right(BigDecimal(9)))
+    assertEquals(evalAuto(table, "=COUNTA(A1:A200)"), Right(BigDecimal(100)))
+  }
+
+  test("a positioned aggregate reads its placement inside a range") {
+    // a positioned fold reads every position, so its guard sees the placement wherever it is
+    def placedAt(at: ARef, formula: String) =
+      val sheet = SheetEvaluator.placed(table, at, formula)
+      val book = Workbook(sheet)
+      val placement = SheetEvaluator.placement(formula, book, sheet.name, at)
+      val result: Any = placement.evaluator.withArrayResults
+        .eval(parsed(formula), sheet, Clock.system, Some(book), Some(at))
+      (result, placement.wasRead)
+    for
+      formula <- List("=SUM(A1:A1000)", "=COUNT(A1:A1000)", "=COUNTBLANK(A1:A1000)")
+      at <- List(ARef.from0(0, 499), ARef.from0(0, 599), ARef.from0(0, 49), ARef.from0(0, 999))
+    do
+      val (result, wasRead) = placedAt(at, formula)
+      assert(wasRead, s"$formula at ${at.toA1}: the placement was not read")
+      assertEquals(result, Left(EvalError.CircularRef(List(at))), s"$formula at ${at.toA1}")
+    // a placement outside the range leaves the values as they are unplaced
+    val (sum, sumRead) = placedAt(ARef.from0(25, 4), "=SUM(A1:A1000)")
+    assertEquals(sum, Right(BigDecimal(99000)))
+    assert(!sumRead)
+    val (blank, blankRead) = placedAt(ARef.from0(25, 4), "=COUNTBLANK(A1:A1000)")
+    assertEquals(blank, Right(BigDecimal(900)))
+    assert(!blankRead)
+  }
+
   test("the read chosen shows in the array's box, not in its values") {
     def box(sheet: Sheet, formula: String): (Int, Int, Int, Int) =
       evalAuto(sheet, formula) match
@@ -267,6 +371,20 @@ object RangeReadDecisionSpec:
     "=TRANSPOSE($R)",
     "=INDEX($R*1,1,1)",
     "=ROWS($R*1)"
+  )
+
+  /** Each aggregate over one raw range: the numeric folds, the three counts, and two ranges. */
+  private val aggregates: List[String] = List(
+    "=SUM($R)",
+    "=COUNT($R)",
+    "=COUNTA($R)",
+    "=COUNTBLANK($R)",
+    "=AVERAGE($R)",
+    "=MAX($R)",
+    "=MIN($R)",
+    "=SUM($R,$R)",
+    "=COUNTBLANK($R)+COUNTA($R)",
+    "=IFERROR(SUM($R),\"e\")"
   )
 
   private def parsed(formula: String) =
