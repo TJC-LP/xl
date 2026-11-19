@@ -1,10 +1,12 @@
 package com.tjclp.xl.formula.eval
 
+import scala.collection.immutable.TreeSet
+
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
-import com.tjclp.xl.formula.graph.CompactGraphGens
+import com.tjclp.xl.formula.graph.{CompactGraphGens, NaiveGraphs}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -16,7 +18,9 @@ import org.scalacheck.{Gen, Prop}
  * the same whatever order its cells were inserted in (sequential with a seeded RAND, whose draws
  * follow evaluation order, and iterative under both schemes); a parallel pass equals the sequential
  * one; error vectors list in grid order. (Until #891 these laws compared the compact graph against
- * a second, per-cell engine, which is gone.)
+ * a second, per-cell engine, which is gone.) One law is independent of the pass's own graph: on
+ * acyclic books, `recalculate` equals a fold that evaluates one formula at a time in the order a
+ * `TreeSet` Kahn gives over the test-side per-cell dependency maps.
  */
 class RecalcOrderLawSpec extends ScalaCheckSuite:
 
@@ -109,6 +113,202 @@ class RecalcOrderLawSpec extends ScalaCheckSuite:
       )
       same(run(opts)(wb), run(opts)(shuffled(wb, seed)), s"$scheme")
     }
+  }
+
+  // ---- the order, against an independent fold --------------------------------------------------
+
+  /**
+   * A random acyclic three-sheet book of `rows` rows by four columns. Every slot draws a rank; a
+   * formula reads constants, empty cells and formulas of a lower rank only, so the book has no
+   * cycle and its dependency order is unrelated to its grid order. Formulas read single cells (on
+   * their own sheet or another), small ranges and whole columns where every formula inside ranks
+   * lower, and most draw RAND, so the order of evaluation shows in the values. Arithmetic is
+   * addition, doubling, SUM and COUNT over numbers: no formula fails. `cache` is what every formula
+   * holds before the pass.
+   */
+  private def dagBook(seed: Long, rows: Int, cache: Option[CellValue]): Workbook =
+    val rnd = new scala.util.Random(seed)
+    val names = CompactGraphGens.sheetNames
+    val cols = Vector("A", "B", "C", "D")
+    val slots = for s <- names; r <- 1 to rows; c <- cols.indices yield (s, c, r)
+    val rank = rnd.shuffle(slots).zipWithIndex.toMap
+    // 0: empty, 1: a constant, 2: a formula
+    val kind = slots.map(slot => slot -> Vector(0, 1, 1, 2, 2, 2)(rnd.nextInt(6))).toMap
+    def a1(slot: (String, Int, Int)): String = s"${cols(slot._2)}${slot._3}"
+    def written(reader: (String, Int, Int), sheet: String, ref: String): String =
+      if sheet == reader._1 && rnd.nextBoolean() then ref else s"'$sheet'!$ref"
+    def formula(reader: (String, Int, Int)): String =
+      def readable(slot: (String, Int, Int)): Boolean =
+        slot != reader && (kind(slot) != 2 || rank(slot) < rank(reader))
+      val points = slots.filter(readable)
+      def point: String =
+        if points.isEmpty then "1"
+        else
+          val slot = points(rnd.nextInt(points.size))
+          written(reader, slot._1, a1(slot))
+      def range: String =
+        val sheet = names(rnd.nextInt(names.size))
+        val (c0, r0) = (rnd.nextInt(cols.size), 1 + rnd.nextInt(rows))
+        val whole = rnd.nextInt(6) == 0
+        val (c1, r1) =
+          if whole then (c0, rows)
+          else (math.min(cols.size - 1, c0 + rnd.nextInt(2)), math.min(rows, r0 + rnd.nextInt(3)))
+        val top = if whole then 1 else r0
+        val inside = for c <- c0 to c1; r <- top to r1 yield (sheet, c, r)
+        if !inside.forall(readable) then point
+        else
+          val text =
+            if whole then s"${cols(c0)}:${cols(c0)}" else s"${cols(c0)}$r0:${cols(c1)}$r1"
+          val call = if rnd.nextInt(4) == 0 then "COUNT" else "SUM"
+          s"$call(${written(reader, sheet, text)})"
+      def term: String = rnd.nextInt(8) match
+        case 0 | 1 | 2 => point
+        case 3 | 4 => range
+        case 5 => s"$point*2"
+        case 6 => "RAND()"
+        case _ => "RANDBETWEEN(1,9)"
+      (Vector.fill(1 + rnd.nextInt(3))(term) ++ Option.when(rnd.nextInt(3) > 0)("RAND()"))
+        .mkString("+")
+    // texts are drawn slot by slot in grid order, so one seed gives one book
+    val cells = slots.flatMap { slot =>
+      val ref = ARef.from0(slot._2, slot._3 - 1)
+      kind(slot) match
+        case 0 => None
+        case 1 => Some(slot._1 -> Cell(ref, CellValue.Number(BigDecimal(rnd.nextInt(10)))))
+        case _ => Some(slot._1 -> Cell(ref, CellValue.Formula(formula(slot), cache)))
+    }
+    Workbook(names.map { name =>
+      Sheet(SheetName.unsafe(name), cells = cells.collect { case (`name`, c) => c.ref -> c }.toMap)
+    })
+
+  /** Grid order, written out here: sheet name as plain text, then row, then column. */
+  private val gridOrder: Ordering[QualifiedRef] =
+    Ordering.by(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+
+  /**
+   * The lexicographically smallest topological order in grid order: Kahn's algorithm over the
+   * per-cell dependency maps of the test-side [[NaiveGraphs]], its ready set a `TreeSet`. None when
+   * a cycle leaves formulas unordered.
+   */
+  private def kahnInGridOrder(wb: Workbook): Option[Vector[QualifiedRef]] =
+    val (reads, readers) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
+    @scala.annotation.tailrec
+    def go(
+      ready: TreeSet[QualifiedRef],
+      waiting: Map[QualifiedRef, Int],
+      done: Vector[QualifiedRef]
+    ): Vector[QualifiedRef] =
+      ready.headOption match
+        case None => done
+        case Some(next) =>
+          val (nowReady, stillWaiting) =
+            readers.getOrElse(next, Set.empty).foldLeft((ready - next, waiting)) {
+              case ((r, w), reader) =>
+                val left = w.getOrElse(reader, 0) - 1
+                (if left == 0 then r + reader else r, w.updated(reader, left))
+            }
+          go(nowReady, stillWaiting, done :+ next)
+    val waiting = reads.map((q, read) => q -> read.size)
+    val start = TreeSet.from(waiting.iterator.collect { case (q, 0) => q })(using gridOrder)
+    val order = go(start, waiting, Vector.empty)
+    Option.when(order.size == reads.size)(order)
+
+  /**
+   * The oracle: evaluate the formulas one at a time in `order`, each against the book as the ones
+   * before it left it, and write its value back as its cache before the next. One seeded Rng serves
+   * every formula, so a draw's position in the sequence is the formula's position in the order.
+   * Left: a formula that failed.
+   */
+  private def foldInOrder(
+    wb: Workbook,
+    order: Vector[QualifiedRef],
+    rng: Rng
+  ): Either[String, Workbook] =
+    val evaluator = Evaluator.instance(rng)
+    order.foldLeft[Either[String, Workbook]](Right(wb)) { (acc, q) =>
+      for
+        book <- acc
+        sheet <- book(q.sheet).left.map(_.message)
+        outcome <- SheetEvaluator
+          .evaluateCellOutcome(sheet, q.ref, evaluator, clock, Some(book))
+          .left
+          .map(e => s"$q: ${e.message}")
+        text <- sheet.cells.get(q.ref).map(_.value) match
+          case Some(formula: CellValue.Formula) => Right(formula)
+          case other => Left(s"$q holds $other")
+      yield book.put(sheet.put(q.ref, text.copy(cachedValue = Some(outcome.value))))
+    }
+
+  private def cellValues(wb: Workbook): Map[QualifiedRef, CellValue] =
+    wb.sheets.iterator
+      .flatMap(s => s.cells.iterator.map((ref, cell) => QualifiedRef(s.name, ref) -> cell.value))
+      .toMap
+
+  /** The stale value every formula of a "cached" starting book holds. */
+  private val stale: Option[CellValue] = Some(CellValue.Number(BigDecimal(-777)))
+
+  property("recalculate equals a one-at-a-time fold in TreeSet-Kahn grid order") {
+    Prop.forAll(Gen.choose(0L, Long.MaxValue), Gen.choose(3, 9), Gen.oneOf(None, stale)) {
+      (seed, rows, cache) =>
+        val wb = dagBook(seed, rows, cache)
+        def opts = RecalcOptions(clock = clock, rng = Rng.seeded(7L), iterative = IterativeMode.Off)
+        val result = run(opts)(wb)
+        val order = kahnInGridOrder(wb)
+        val folded =
+          order.toRight("the book has a cycle").flatMap(foldInOrder(wb, _, Rng.seeded(7L)))
+        val formulas = order.fold(0)(_.size)
+        Prop.all(
+          Prop(result.errors.isEmpty) :| s"errors ${result.errors}",
+          Prop(folded.map(cellValues) == Right(cellValues(result.workbook))) :|
+            s"seed $seed rows $rows cache $cache\nfold ${folded.map(cellValues)}\npass ${cellValues(result.workbook)}",
+          Prop(result.evaluated.valuesIterator.map(_.size).sum == formulas) :| "evaluated count"
+        )
+    }
+  }
+
+  property("the uncached pass over a book with no caches equals the same fold") {
+    Prop.forAll(Gen.choose(0L, Long.MaxValue), Gen.choose(3, 9)) { (seed, rows) =>
+      val wb = dagBook(seed, rows, None)
+      def opts = RecalcOptions(clock = clock, rng = Rng.seeded(7L), iterative = IterativeMode.Off)
+      val result = recalculateUncachedCounted(wb, opts, RecalcCounters.disabled)
+      val folded = kahnInGridOrder(wb)
+        .toRight("the book has a cycle")
+        .flatMap(foldInOrder(wb, _, Rng.seeded(7L)))
+      Prop(folded.map(cellValues) == Right(cellValues(result.workbook))) :| s"seed $seed rows $rows"
+    }
+  }
+
+  test("the fold law's books: several sheets, RAND readers, and an order that is not grid order") {
+    val books = (1L to 40L).map(dagBook(_, 6, None))
+    val orders = books.flatMap(kahnInGridOrder)
+    assertEquals(orders.size, books.size, "every generated book is acyclic")
+    // the dependency order differs from plain grid order in most books, and crosses sheets
+    assert(orders.count(o => o != o.sorted(using gridOrder)) >= 30, orders.map(_.size).toString)
+    assert(orders.forall(_.map(_.sheet).distinct.size == 3))
+    val texts = books.flatMap(_.sheets.flatMap(_.cells.valuesIterator.map(_.value))).collect {
+      case CellValue.Formula(text, _, _) => text
+    }
+    assert(texts.count(_.contains("RAND")) > texts.size / 2)
+    assert(texts.exists(_.contains("'!")) && texts.exists(_.contains("SUM(")))
+    // a different order of the same formulas gives different values: the law can fail
+    val wb = books.head
+    val order = orders.head
+    val inGridOrder = foldInOrder(wb, order.sorted(using gridOrder), Rng.seeded(7L))
+    assertNotEquals(
+      inGridOrder.map(cellValues),
+      foldInOrder(wb, order, Rng.seeded(7L)).map(cellValues)
+    )
+  }
+
+  test("the fold's grid order is the order the pass lists errors in") {
+    val listed = Vector("b" -> "A10", "b" -> "A2", "B" -> "A3").map { (s, a1) =>
+      QualifiedRef(SheetName.unsafe(s), ARef.parse(a1).getOrElse(ARef.from0(0, 0)))
+    }
+    assertEquals(
+      listed.sorted(using gridOrder).map(q => s"${q.sheet.value}!${q.ref.toA1}"),
+      Vector("B!A3", "b!A2", "b!A10")
+    )
+    assertEquals(listed.sorted(using gridOrder), listed.sortBy(QualifiedRef.gridKey))
   }
 
   // ---- the canonical order, observed --------------------------------------------------------
