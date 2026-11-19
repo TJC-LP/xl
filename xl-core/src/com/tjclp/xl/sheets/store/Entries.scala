@@ -328,11 +328,18 @@ private[xl] final class WideRow(
  * keep their order) holds the row's cells in `Width` consecutive columns: [[Band.Chunks]] of a
  * leaf's 64-column chunks. A write to a row copies one band, so its cost is bounded by `Width`
  * cells however wide the row is.
+ *
+ * A row is split into bands only when it holds more than `FlatMax` cells: a sparse row keeps the
+ * one leaf it always had, whose writes copy at most `FlatMax` cells, instead of paying a leaf's
+ * overhead (about 100 bytes) for every band its few cells touch.
  */
 private[xl] object Band:
   final val Shift = 8
   final val Width = 1 << Shift
   final val Chunks = Width >> 6
+
+  /** The most cells a row spanning several bands holds as a single leaf. */
+  final val FlatMax = 64
 
   /** The band of a column. */
   def of(col: Int): Int = col >> Shift
@@ -340,8 +347,9 @@ private[xl] object Band:
 /**
  * A row whose cells span several column bands (#891): one [[RowLeaf]] per populated band, sorted by
  * band id. `ids(i)` is the band of `bands(i)`, whose cells all lie in that band; there are at least
- * two bands and none is empty. A row whose cells share one band is a bare [[RowLeaf]], never a
- * one-band `BandedRow`, so a row's form is a function of its columns alone.
+ * two bands, none is empty, and together they hold more than [[Band.FlatMax]] cells. A row whose
+ * cells share one band, or number [[Band.FlatMax]] or fewer, is a bare [[RowLeaf]], never a
+ * `BandedRow`, so a row's form is a function of its columns alone.
  *
  * A single-cell write or removal copies the band it touches and the `bands` array (`ids` is shared
  * unless a band is added or dropped): a bounded number of cells however wide the row is. Band ids

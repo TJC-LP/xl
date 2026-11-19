@@ -3,17 +3,20 @@ package com.tjclp.xl.sheets.store
 import com.tjclp.xl.cells.CellValue
 
 /**
- * One row's cells as the trie holds them (#891): a [[RowLeaf]] when the row's columns share one
- * column band (see [[Band]]), otherwise a [[BandedRow]] of one leaf per populated band. The form is
- * a function of the row's columns alone, so equal rows have equal shapes whatever their history.
+ * One row's cells as the trie holds them (#891): a [[BandedRow]] of one leaf per populated band
+ * when the row's columns span more than one column band (see [[Band]]) and it holds more than
+ * [[Band.FlatMax]] cells; otherwise a single [[RowLeaf]]. The form is a function of the row's
+ * columns alone, so equal rows have equal shapes whatever their history.
  */
 private[xl] type StoredRow = RowLeaf | BandedRow
 
 /**
- * The row operations of the store, over either form. Every result is canonical: a row that comes to
- * span a second band becomes banded, and a banded row left with one band becomes that band's leaf.
- * A single-cell write or removal copies one band (at most [[Band.Width]] cells) and, in a banded
- * row, the array of band references.
+ * The row operations of the store, over either form. Every result is canonical: a leaf that comes
+ * to hold more than [[Band.FlatMax]] cells over two or more bands becomes banded, and a banded row
+ * left with one band, or with [[Band.FlatMax]] cells or fewer, becomes a leaf again. A single-cell
+ * write or removal copies one band (at most [[Band.Width]] cells) and, in a banded row, the array
+ * of band references; in a leaf spanning bands it copies at most [[Band.FlatMax]] cells. Converting
+ * between the forms costs at most a band and a leaf of that size.
  */
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -33,59 +36,105 @@ private[xl] object StoredRow:
     until: Int
   ): StoredRow =
     if until <= from then RowLeaf.Empty
-    else if Band.of(cols(from)) == Band.of(cols(until - 1)) then
+    else if until - from <= Band.FlatMax || Band.of(cols(from)) == Band.of(cols(until - 1)) then
       RowLeaf.build(cols, meta, values, links, from, until)
+    else split(cols, meta, values, links, from, until)
+
+  /**
+   * One leaf per band of cells `from until until`, which must span two bands or more. The result is
+   * canonical only when it holds more than [[Band.FlatMax]] cells; callers check.
+   */
+  private def split(
+    cols: Array[Int],
+    meta: Array[Long],
+    values: Array[CellValue],
+    links: Array[String],
+    from: Int,
+    until: Int
+  ): BandedRow =
+    var n = 1
+    var i = from + 1
+    while i < until do
+      if Band.of(cols(i)) != Band.of(cols(i - 1)) then n += 1
+      i += 1
+    val ids = new Array[Int](n)
+    val bands = new Array[RowLeaf](n)
+    var b = 0
+    var k = from
+    while k < until do
+      val id = Band.of(cols(k))
+      var end = k + 1
+      while end < until && Band.of(cols(end)) == id do end += 1
+      ids(b) = id
+      bands(b) = RowLeaf.build(cols, meta, values, links, k, end)
+      b += 1
+      k = end
+    BandedRow.of(ids, bands)
+
+  /** Whether a leaf's columns lie in one band (an empty leaf's do). */
+  private def oneBand(leaf: RowLeaf): Boolean =
+    leaf.count == 0 || Band.of(leaf.minCol) == Band.of(leaf.maxCol)
+
+  /** The bands of a leaf as a banded row would hold them: (ids, leaves). */
+  private def bandsOf(leaf: RowLeaf): (Array[Int], Array[RowLeaf]) =
+    if oneBand(leaf) then (Array(Band.of(leaf.minCol)), Array(leaf))
     else
-      var n = 1
-      var i = from + 1
-      while i < until do
-        if Band.of(cols(i)) != Band.of(cols(i - 1)) then n += 1
-        i += 1
-      val ids = new Array[Int](n)
-      val bands = new Array[RowLeaf](n)
-      var b = 0
-      var k = from
-      while k < until do
-        val id = Band.of(cols(k))
-        var end = k + 1
-        while end < until && Band.of(cols(end)) == id do end += 1
-        ids(b) = id
-        bands(b) = RowLeaf.build(cols, meta, values, links, k, end)
-        b += 1
-        k = end
-      BandedRow.of(ids, bands)
+      val row = split(leaf.cols, leaf.meta, leaf.values, leaf.links, 0, leaf.count)
+      (row.ids, row.bands)
 
   /** The canonical row of bands `ids(i) -> bands(i)` for `i < n` (ids ascending, none empty). */
   private def of(ids: Array[Int], bands: Array[RowLeaf], n: Int): StoredRow =
     if n == 0 then RowLeaf.Empty
     else if n == 1 then bands(0)
-    else if n == ids.length then BandedRow.of(ids, bands)
-    else BandedRow.of(java.util.Arrays.copyOf(ids, n), java.util.Arrays.copyOf(bands, n))
+    else
+      var count = 0
+      var i = 0
+      while i < n do
+        count += bands(i).count
+        i += 1
+      if count <= Band.FlatMax then flatten(bands, n, count)
+      else if n == ids.length then BandedRow.of(ids, bands)
+      else BandedRow.of(java.util.Arrays.copyOf(ids, n), java.util.Arrays.copyOf(bands, n))
 
-  /** The canonical row of a leaf's cells: the leaf itself unless its columns span two bands. */
+  /** The canonical row of a leaf's cells: banded when they are many and span two bands. */
   private def ofLeaf(leaf: RowLeaf): StoredRow =
-    if leaf.count == 0 || Band.of(leaf.minCol) == Band.of(leaf.maxCol) then leaf
-    else build(leaf.cols, leaf.meta, leaf.values, leaf.links, 0, leaf.count)
+    if leaf.count <= Band.FlatMax || oneBand(leaf) then leaf
+    else split(leaf.cols, leaf.meta, leaf.values, leaf.links, 0, leaf.count)
 
-  /** The row of two non-empty leaves in different bands. */
-  private def pair(a: RowLeaf, b: RowLeaf): BandedRow =
-    val ia = Band.of(a.minCol)
-    val ib = Band.of(b.minCol)
-    if ia < ib then BandedRow.of(Array(ia, ib), Array(a, b))
-    else BandedRow.of(Array(ib, ia), Array(b, a))
+  /** The canonical row of a banded row's cells: one leaf when they have become few. */
+  private def ofBanded(row: BandedRow): StoredRow =
+    if row.count <= Band.FlatMax then flatten(row.bands, row.bands.length, row.count) else row
+
+  /** The cells of the first `n` of `bands` (`count` in all), in band order, as one leaf. */
+  private def flatten(bands: Array[RowLeaf], n: Int, count: Int): RowLeaf =
+    val cols = new Array[Int](count)
+    val m = new Array[Long](count)
+    val v = new Array[CellValue](count)
+    val l = new Array[String](count)
+    var k = 0
+    var j = 0
+    while j < n do
+      val band = bands(j)
+      val bandCols = band.cols
+      System.arraycopy(bandCols, 0, cols, k, band.count)
+      System.arraycopy(band.meta, 0, m, k, band.count)
+      System.arraycopy(band.values, 0, v, k, band.count)
+      var i = 0
+      while i < band.count do
+        l(k + i) = band.linkAt(i)
+        i += 1
+      k += band.count
+      j += 1
+    RowLeaf.build(cols, m, v, l, 0, count)
 
   /**
-   * `row` with `f` applied to the leaf of `col`'s band (`f` sees [[RowLeaf.Empty]] when the row has
-   * no cell in that band, and may return an empty leaf to drop the band). `row` itself when `f`
-   * returns its argument.
+   * `row` with `f` applied to the leaf holding `col`'s cells: the row's leaf, or in a banded row
+   * the leaf of `col`'s band (`f` sees [[RowLeaf.Empty]] when the row has no cell in that band, and
+   * may return an empty leaf to drop the band). `row` itself when `f` returns its argument.
    */
   private inline def modifyBand(row: StoredRow, col: Int)(inline f: RowLeaf => RowLeaf): StoredRow =
     row match
-      case leaf: RowLeaf =>
-        if leaf.count == 0 || Band.of(leaf.minCol) == Band.of(col) then f(leaf)
-        else
-          val made = f(RowLeaf.Empty)
-          if made.count == 0 then leaf else pair(leaf, made)
+      case leaf: RowLeaf => ofLeaf(f(leaf))
       case b: BandedRow =>
         val id = Band.of(col)
         val i = b.indexFrom(id)
@@ -94,12 +143,12 @@ private[xl] object StoredRow:
           val next = f(old)
           if next eq old then b
           else if next.count == 0 then withoutBand(b, i)
-          else BandedRow.replaced(b, i, next)
+          else ofBanded(BandedRow.replaced(b, i, next))
         else
           val made = f(RowLeaf.Empty)
           if made.count == 0 then b else BandedRow.inserted(b, i, id, made)
 
-  /** `row` without band `i`: the other band's leaf when only one is left. */
+  /** `row` without band `i`: one leaf when one band, or few cells, are left. */
   private def withoutBand(row: BandedRow, i: Int): StoredRow =
     val n = row.ids.length
     if n == 2 then row.bands(1 - i)
@@ -110,7 +159,7 @@ private[xl] object StoredRow:
       System.arraycopy(row.bands, 0, bands, 0, i)
       System.arraycopy(row.ids, i + 1, ids, i, n - 1 - i)
       System.arraycopy(row.bands, i + 1, bands, i, n - 1 - i)
-      BandedRow.of(ids, bands)
+      of(ids, bands, n - 1)
 
   /** `row` with the cell at `col` set to (`meta`, `value`, `link`), added if absent. */
   def set(row: StoredRow, col: Int, meta: Long, value: CellValue, link: String): StoredRow =
@@ -202,15 +251,15 @@ private[xl] object StoredRow:
       a match
         case la: RowLeaf =>
           b match
-            case lb: RowLeaf =>
-              if Band.of(la.minCol) == Band.of(lb.minCol) then RowLeaf.merge(la, lb, valuesOnly)
-              else pair(la, lb)
+            case lb: RowLeaf => ofLeaf(RowLeaf.merge(la, lb, valuesOnly))
             case bb: BandedRow =>
-              mergeBands(Array(Band.of(la.minCol)), Array(la), bb.ids, bb.bands, valuesOnly)
+              val (ids, bands) = bandsOf(la)
+              mergeBands(ids, bands, bb.ids, bb.bands, valuesOnly)
         case ba: BandedRow =>
           b match
             case lb: RowLeaf =>
-              mergeBands(ba.ids, ba.bands, Array(Band.of(lb.minCol)), Array(lb), valuesOnly)
+              val (ids, bands) = bandsOf(lb)
+              mergeBands(ba.ids, ba.bands, ids, bands, valuesOnly)
             case bb: BandedRow => mergeBands(ba.ids, ba.bands, bb.ids, bb.bands, valuesOnly)
 
   private def mergeBands(

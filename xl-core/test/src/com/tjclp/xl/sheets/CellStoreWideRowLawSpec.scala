@@ -18,6 +18,9 @@ import org.scalacheck.Prop.*
  * the `Int` range. Writes and removals create and destroy bands, take a band's extreme valued
  * column or last tag away, collapse a banded row back to a single leaf and to nothing, and shift
  * columns across band edges.
+ *
+ * A row is banded only above [[Band.FlatMax]] cells, so a second domain sits on that count: rows
+ * spanning several bands that hover one cell either side of it and cross it by every write path.
  */
 class CellStoreWideRowLawSpec extends ScalaCheckSuite:
   import CellStoreLawSpec.{Op, genBlockValue, genFn, genTagMask}
@@ -42,7 +45,7 @@ class CellStoreWideRowLawSpec extends ScalaCheckSuite:
 
   property("a few cells per band: bands come and go with every write and removal") {
     forAll(
-      Gen.choose(0, 40).flatMap(Gen.listOfN(_, genSparseCell)),
+      Gen.choose(0, 160).flatMap(Gen.listOfN(_, genSparseCell)),
       Gen.choose(30, 80).flatMap(Gen.listOfN(_, genSparseOp)),
       Gen.listOfN(4, genSparseRef),
       Gen.listOfN(3, genWideRange)
@@ -131,13 +134,98 @@ class CellStoreWideRowLawSpec extends ScalaCheckSuite:
     }
   }
 
+  property("rows hovering at the cell-count threshold convert both ways, by every write path") {
+    forAll(
+      genThresholdStart,
+      Gen.choose(40, 80).flatMap(Gen.listOfN(_, genThresholdOp)),
+      Gen.listOfN(4, genThresholdRef),
+      Gen.listOfN(3, genWideRange)
+    )(laws.sequenceAgrees)
+  }
+
+  property("crossing the threshold by one cell changes the form and nothing else") {
+    forAll(Gen.oneOf(T - 1, T, T + 1), Gen.choose(0L, Long.MaxValue)) { (n, seed) =>
+      val rnd = new scala.util.Random(seed)
+      // n cells over three bands, then single-cell writes and removals walking the count
+      // n -> T + 2 -> T - 2 -> n in a random column order
+      val pool = rnd.shuffle(thresholdCols ++ toggleCols)
+      def cell(c: Int) = Cell(ARef.from0(c, 0), CellValue.Number(BigDecimal(c)), Some(StyleId(1)))
+      val start = pool.take(n)
+      val up = pool.slice(n, T + 2)
+      val down = rnd.shuffle(start ++ up).take(4)
+      val steps: List[(String, CellStore => CellStore, Set[Int] => Set[Int])] =
+        up.map(c => (s"put $c", (s: CellStore) => s.updated(cell(c)), (cs: Set[Int]) => cs + c)) ++
+          down.map(c =>
+            (s"remove $c", (s: CellStore) => s.removed(ARef.from0(c, 0)), (cs: Set[Int]) => cs - c)
+          ) ++
+          down.map(c =>
+            (
+              s"putValue $c",
+              (s: CellStore) => s.updatedValue(ARef.from0(c, 0), CellValue.Text("v")),
+              (cs: Set[Int]) => cs + c
+            )
+          )
+      val s0 = CellStore.from(start.map(cell))
+      val (_, _, props) =
+        steps.foldLeft((s0, start.toSet, List(formOk(s0, start.toSet, "start")))) {
+          case ((s, cols, acc), (label, f, g)) =>
+            val next = f(s)
+            val nextCols = g(cols)
+            (next, nextCols, formOk(next, nextCols, label) :: acc)
+        }
+      Prop.all(props*)
+    }
+  }
+
+  property("removedIn, putAll and withValues land on the right form at the threshold") {
+    forAll(Gen.choose(T - 2, T + 3), Gen.choose(0, 5), Gen.choose(0L, Long.MaxValue)) {
+      (n, k, seed) =>
+        val rnd = new scala.util.Random(seed)
+        val pool = rnd.shuffle(thresholdCols ++ toggleCols)
+        def cell(c: Int) = Cell(ARef.from0(c, 0), CellValue.Number(BigDecimal(c)))
+        val have = pool.take(n)
+        val extra = pool.slice(n, n + k)
+        val s = CellStore.from(have.map(cell))
+        val put = s.putAll(extra.map(cell))
+        val vals = s.withValues(
+          IArray.from(extra.map(c => ARef.from0(c, 0))),
+          IArray.from(extra.map(_ => CellValue.Empty: CellValue))
+        )
+        val sorted = (have ++ extra).sorted
+        val cut = sorted.drop(k).headOption.getOrElse(0)
+        val range = CellRange(ARef.from0(Int.MinValue, 0), ARef.from0(cut, 0))
+        val removed = put.removedIn(range)
+        val emptied = put.transformValues(CellStore.AllTags)(_ => CellValue.Empty)
+        formOk(s, have.toSet, "start") &&
+        formOk(put, sorted.toSet, s"putAll of $k") &&
+        formOk(vals, sorted.toSet, s"withValues of $k") &&
+        formOk(removed, sorted.filter(_ > cut).toSet, s"removedIn up to $cut") &&
+        formOk(emptied, sorted.toSet, "transform to Empty keeps the count and the form") &&
+        (emptied.valuedCount == 0) :| "emptied" &&
+        (formsOf(emptied) == formsOf(put)) :| "transformValues does not convert"
+    }
+  }
+
+  property("shiftCols moving a row into one band collapses it, and moving it out re-bands it") {
+    forAll(Gen.choose(T - 2, T + 40), Gen.choose(1, T - 3)) { (n, before) =>
+      // n consecutive columns with `before` of them below the edge of band 1
+      val cells = (0 until n).map { i =>
+        Cell(ARef.from0(W - before + i, 0), CellValue.Number(BigDecimal(i)), None)
+      }.toList
+      val cols = cells.map(_.ref.col.index0).toSet
+      val s = CellStore.from(cells)
+      val in = s.shiftCols(W - before, before) // every column moves up into band 1
+      val out = in.shiftCols(W, -before) // and back: the vacated window is empty
+      formOk(s, cols, "start") &&
+      formOk(in, cols.map(_ + before), "shifted into one band") &&
+      (formsOf(in) == List(1)) :| "one leaf" &&
+      formOk(out, cols, "shifted back") &&
+      (out == s && out.hashCode == s.hashCode) :| "round trip"
+    }
+  }
+
   test("a row is banded exactly when its columns span two bands, whatever its history") {
-    def rows(e: Entry): List[Either[RowLeaf, BandedRow]] = e match
-      case l: RowLeaf => List(Left(l))
-      case r: BandedRow => List(Right(r))
-      case n: Node => n.children.toList.flatMap(rows)
-      case _ => Nil
-    def bandsOf(s: CellStore): List[Int] = rows(s.root).map(_.fold(_ => 1, _.bands.length))
+    def bandsOf(s: CellStore): List[Int] = formsOf(s)
     def cell(col: Int) = Cell(ARef.from0(col, 0), CellValue.Number(BigDecimal(col)))
     // 20 rows over the block cap, so every row is its own entry
     val filler = for r <- 1 until 20; c <- 0 until 20 yield Cell(ARef.from0(c, r), CellValue.Empty)
@@ -150,8 +238,23 @@ class CellStoreWideRowLawSpec extends ScalaCheckSuite:
     val negative = oneBand.updatedValue(ARef.from0(-1, 0), CellValue.Text("n"))
     assertEquals(bandsOf(negative).take(1), List(2), "column -1 is band -1, not band 0")
     assertEquals(negative.removedIn(CellRange(ARef.from0(0, 0), ARef.from0(W - 1, 0))).size, 381)
-    val sparse = CellStore.from(filler ++ List(cell(Int.MinValue), cell(0), cell(Int.MaxValue)))
-    assertEquals(bandsOf(sparse).take(1), List(3), "bands at the ends of the Int range")
+    val ends = List(cell(Int.MinValue), cell(0), cell(Int.MaxValue))
+    val sparse = CellStore.from(filler ++ ends)
+    assertEquals(bandsOf(sparse).take(1), List(1), "a few cells over three bands stay one leaf")
+    val few = (1 to T - 3).map(i => cell(i * 3))
+    val atMax = CellStore.from(filler ++ ends ++ few)
+    assertEquals(atMax.size - filler.size, T)
+    assertEquals(bandsOf(atMax).take(1), List(1), "exactly FlatMax cells over bands: one leaf")
+    val over = atMax.updated(cell(1))
+    assertEquals(bandsOf(over).take(1), List(3), "one more: bands at the ends of the Int range")
+    assertEquals(over.removed(ARef.from0(1, 0)), atMax)
+    assertEquals(bandsOf(over.removed(ARef.from0(0, 0))).take(1), List(1), "and back to a leaf")
+    val overEmpty = over.transformValues(CellStore.AllTags)(_ => CellValue.Empty)
+    assertEquals(
+      bandsOf(overEmpty).take(1),
+      List(3),
+      "emptying values keeps the cells, so the form"
+    )
     val wide = CellStore.from(filler ++ (0 until 16384).map(cell))
     assertEquals(bandsOf(wide).take(1), List(16384 / W))
     // emptying all but one band, by any route, leaves that band's leaf
@@ -304,12 +407,97 @@ object CellStoreWideRowLawSpec:
     1 -> (for at <- Gen.oneOf(0, 1, 2); by <- Gen.oneOf(1, -1, 32) yield Op.ShiftRows(at, by))
   )
 
+  // ----- the cell-count threshold: rows over three bands, one cell either side of FlatMax -----
+
+  /** The most cells a row spanning several bands holds as one leaf. */
+  val T: Int = Band.FlatMax
+
+  /** `T - 2` columns spread evenly over bands 0 to 2. */
+  val thresholdCols: List[Int] =
+    val step = (2 * W + W / 2) / T + 1
+    List.tabulate(T - 2)(i => 5 + i * step)
+
+  /**
+   * Columns outside [[thresholdCols]] that writes and removals toggle, so the count moves between
+   * `T - 2` and `T + 4`: inside each populated band, either side of a band edge, in a band of their
+   * own above the row and in a negative band below it.
+   */
+  val toggleCols: List[Int] = List(-3, 6, W - 1, W, 2 * W + 2, 4 * W + 7)
+
+  /** The number of leaves each row of `s` is stored as (1 for a row that is a single leaf). */
+  def formsOf(s: CellStore): List[Int] =
+    def rows(e: Entry): List[Int] = e match
+      case _: RowLeaf => List(1)
+      case r: BandedRow => List(r.bands.length)
+      case n: Node => n.children.toList.flatMap(rows)
+      case _ => List(1) // a block's rows are single leaves; these domains build one row per group
+    rows(s.root)
+
+  /**
+   * A one-row store holding exactly `cols` has the form the rule gives it, the invariants hold, and
+   * it equals the store built from those columns' cells in one go.
+   */
+  def formOk(s: CellStore, cols: Set[Int], label: String): Prop =
+    val bands = cols.map(_ >> Band.Shift).size
+    val want = if cols.isEmpty then Nil else List(if cols.size > T && bands > 1 then bands else 1)
+    val rebuilt = CellStore.from(s.iterator.toList.reverse)
+    (s.checkInvariants == Right(())) :| s"$label: invariants ${s.checkInvariants}" &&
+    (s.refs.map(_.col.index0).toSet == cols && s.size == cols.size) :| s"$label: columns" &&
+    (formsOf(s) == want) :| s"$label: ${cols.size} cells stored as ${formsOf(s)}, want $want" &&
+    (s == rebuilt && s.hashCode == rebuilt.hashCode) :| s"$label: canonical"
+
+  val genThresholdRef: Gen[ARef] = Gen
+    .frequency(8 -> Gen.oneOf(toggleCols), 2 -> Gen.oneOf(thresholdCols), 1 -> Gen.oneOf(edgeCols))
+    .map(c => ARef.from0(c, 0))
+
+  private val genToggleRef: Gen[ARef] = Gen.oneOf(toggleCols).map(c => ARef.from0(c, 0))
+
+  val genThresholdCell: Gen[Cell] =
+    for ref <- genToggleRef; v <- genBlockValue; s <- genStyle; l <- genLink
+    yield Cell(ref, v, s, l)
+
+  /** Every base column and a random half of the toggles: `T - 2` to `T + 4` cells. */
+  val genThresholdStart: Gen[List[Cell]] =
+    for
+      on <- Gen.listOfN(toggleCols.size, Gen.oneOf(true, false))
+      values <- Gen.listOfN(T + 4, genBlockValue)
+    yield
+      val cols = (thresholdCols ++ toggleCols.zip(on).collect { case (c, true) => c }).sorted
+      cols.zip(values).map((c, v) => Cell(ARef.from0(c, 0), v))
+
+  val genThresholdOp: Gen[Op] = Gen.frequency(
+    6 -> genThresholdCell.map(Op.Update.apply),
+    3 -> (for r <- genToggleRef; v <- genBlockValue yield Op.UpdateValue(r, v)),
+    8 -> genToggleRef.map(Op.Remove.apply),
+    1 -> (for r <- genThresholdRef; v <- genBlockValue yield Op.UpdateValue(r, v)),
+    1 -> Gen.oneOf(thresholdCols).map(c => Op.Remove(ARef.from0(c, 0))),
+    2 -> (for a <- Gen.oneOf(toggleCols); b <- Gen.oneOf(0, 1, W)
+    yield Op.RemoveIn(CellRange(ARef.from0(a, 0), ARef.from0(a + b, 0)))),
+    2 -> Gen.choose(1, 4).flatMap(Gen.listOfN(_, genThresholdCell)).map(Op.PutAll.apply),
+    2 -> Gen
+      .choose(1, 4)
+      .flatMap(Gen.listOfN(_, genToggleRef.flatMap(r => genBlockValue.map(r -> _))))
+      .map(Op.WithValues.apply),
+    1 -> (for m <- genTagMask; f <- genFn yield Op.Transform(m, f._2)),
+    1 -> (for at <- Gen.oneOf(edgeCols); by <- Gen.oneOf(1, -1, 2, -2) yield Op.ShiftCols(at, by))
+  )
+
   // ----- a few cells per band: every column an edge column, two rows of one slot group -----
+
+  /**
+   * Fourteen columns in each band around zero: about as many cells as the threshold when half are
+   * set.
+   */
+  val sparseCols: Vector[Int] =
+    (for
+      k <- bandIds
+      d <- Vector(-2, -1, 0, 1, 2, 31, 63, 64, 65, 127, 128, 129, 191, 192)
+    yield k * W + d).distinct
 
   val genSparseRef: Gen[ARef] =
     for
       r <- Gen.frequency(5 -> Gen.const(0), 1 -> Gen.const(1))
-      c <- Gen.frequency(12 -> Gen.oneOf(edgeCols), 1 -> Gen.oneOf(farCols))
+      c <- Gen.frequency(12 -> Gen.oneOf(sparseCols), 1 -> Gen.oneOf(farCols))
     yield ARef.from0(c, r)
 
   val genSparseCell: Gen[Cell] =

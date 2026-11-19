@@ -31,11 +31,11 @@ import com.tjclp.xl.styles.units.StyleId
  * per level, so a lookup is a few shifts and popcounts with no hashing. Cells live in parallel
  * arrays (a metadata word with the value tag, style and link flags; the value; the hyperlink)
  * indexed by 64-column bitmaps: one set per row (one per band of [[Band.Width]] columns when a row
- * spans several), or, for a narrow group of 32 rows that shares one 64-column chunk (tall narrow
- * data), one set for the whole group. Every trie node carries summaries (cell count, valued count,
- * column bounds, a value-tag mask), so `size`, `usedRange`, `extent` and `hasTag` read them instead
- * of scanning. Updates copy one row band (or one narrow group) and the path above it; the rest is
- * shared with the previous store.
+ * of more than [[Band.FlatMax]] cells spans several), or, for a narrow group of 32 rows that shares
+ * one 64-column chunk (tall narrow data), one set for the whole group. Every trie node carries
+ * summaries (cell count, valued count, column bounds, a value-tag mask), so `size`, `usedRange`,
+ * `extent` and `hasTag` read them instead of scanning. Updates copy one row band (or one narrow
+ * group) and the path above it; the rest is shared with the previous store.
  *
  * '''Order.''' [[iterator]], [[refs]], [[inRange]] and `toString` go row-major: rows ascending as
  * unsigned 32-bit numbers, then columns ascending as signed `Int`s. On Excel's grid that is the
@@ -598,8 +598,9 @@ object CellStore:
         case _: WideRow if l.chunkCount < 2 => err = Left("one-chunk WideRow")
         case _ => ()
       // the band rule, restated independently of StoredRow: a leaf's columns share one band
-      if (l.cols(0) >> Band.Shift) != (l.cols(n - 1) >> Band.Shift) then
-        err = Left(s"leaf at $key spans several bands")
+      // unless it holds no more than Band.FlatMax cells
+      if n > Band.FlatMax && (l.cols(0) >> Band.Shift) != (l.cols(n - 1) >> Band.Shift) then
+        err = Left(s"leaf of $n cells at $key spans several bands")
       // summaries recomputed from scratch
       val again = RowLeaf.build(l.cols, l.meta, l.values, l.links, 0, n)
       if again.valued != l.valued || again.minCol != l.minCol || again.maxCol != l.maxCol ||
@@ -608,12 +609,14 @@ object CellStore:
       err
 
   /**
-   * A banded row: two or more bands, ids strictly ascending, each band a valid non-empty leaf whose
-   * columns all lie in its band, and summaries equal to the ones recomputed from the bands.
+   * A banded row: two or more bands, more than `Band.FlatMax` cells, ids strictly ascending, each
+   * band a valid non-empty leaf whose columns all lie in its band, and summaries equal to the ones
+   * recomputed from the bands.
    */
   private def checkBanded(r: BandedRow, key: Long): Either[String, Unit] =
     val n = r.bands.length
     if n < 2 then Left(s"banded row at $key with fewer than two bands")
+    else if r.count <= Band.FlatMax then Left(s"banded row at $key holds only ${r.count} cells")
     else if r.ids.length != n then Left("band ids and bands differ in length")
     else
       var err: Either[String, Unit] = Right(())
