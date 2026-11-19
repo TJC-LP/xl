@@ -95,7 +95,8 @@ object CellCommands:
    *     hyperlinks go; number formats, fonts, fills, borders and merges stay (GH-886)
    *   - --all: Clear contents, styles, and comments; removes the cells and unmerges any merged
    *     region the range touches
-   *   - --styles: Clear styles only (reset styleId to None)
+   *   - --styles: Clear styles only (reset styleId to None) and unmerge any merged region the range
+   *     touches, as Excel's Clear Formats (GH-894)
    *   - --comments: Clear comments only
    *
    * Flags can be combined (e.g., --styles --comments clears both).
@@ -146,15 +147,21 @@ object CellCommands:
 
       // Apply clearing operations
       sheet1 = contents.fold(targetSheet)(_.sheet)
-      sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
+      // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it (Excel's
+      // Clear Contents does); --styles and --all unmerge every merged region the range touches,
+      // as Excel's Clear Formats and Clear All do, and reset the styles of the whole merge (Excel
+      // expands a selection to the merges it touches), so no unmerged cell keeps the old format.
+      overlappingMerges = sheet1.mergedRanges.filter(_.intersects(range)).toVector
+      sheet2 =
+        if clearStyles then
+          // A merge inside the range is already covered; only those crossing its edge need a pass
+          val crossing =
+            overlappingMerges.filterNot(m => range.contains(m.start) && range.contains(m.end))
+          (range +: crossing).foldLeft(sheet1)((s, r) => s.clearStylesInRange(r))
+        else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
-
-      // GH-886: a merge is formatting. A contents clear keeps it (Excel's Clear Contents does);
-      // --all unmerges every merged region the range touches, as before.
       sheet4 =
-        if all then
-          val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
-          overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
+        if clearStyles then overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
         else sheet3
 
       updatedWb = wb.put(sheet4)

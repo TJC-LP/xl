@@ -360,7 +360,13 @@ class ClearCommandSpec extends FunSuite:
       assertEquals(style.map(_.border), Some(numStyle.border), s"${r.toA1}: border")
     }
 
-  private def clearVerb(range: String, all: Boolean = false, stream: Boolean = false): Sheet =
+  private def clearVerb(
+    range: String,
+    all: Boolean = false,
+    stream: Boolean = false,
+    styles: Boolean = false,
+    comments: Boolean = false
+  ): Sheet =
     val sheet = template
     CellCommands
       .clear(
@@ -368,8 +374,8 @@ class ClearCommandSpec extends FunSuite:
         Some(sheet),
         range,
         all = all,
-        styles = false,
-        comments = false,
+        styles = styles,
+        comments = comments,
         outputPath,
         config,
         stream = stream
@@ -434,6 +440,70 @@ class ClearCommandSpec extends FunSuite:
     assertEquals(all.mergedRanges, Set.empty[CellRange])
   }
 
+  // ========== GH-894: --styles is Excel's Clear Formats, which unmerges ==========
+
+  test("GH-894 clear --styles: unmerges the merge it touches and keeps the value") {
+    val s = clearVerb("A1", styles = true)
+    assertEquals(s.mergedRanges, Set.empty[CellRange])
+    assertEquals(
+      s.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Text("Quarterly report"))
+    )
+    assertNotEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
+  }
+
+  test("GH-894 clear --styles: a range that only overlaps the merge unmerges it and resets A1") {
+    Vector("B1", "C1:D2").foreach { r =>
+      val s = clearVerb(r, styles = true)
+      assertEquals(s.mergedRanges, Set.empty[CellRange], r)
+      assertNotEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"), r)
+      assertEquals(
+        s.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Text("Quarterly report")),
+        r
+      )
+    }
+  }
+
+  test("GH-894 clear --styles --stream: unmerges too") {
+    assertEquals(clearVerb("A1", styles = true, stream = true).mergedRanges, Set.empty[CellRange])
+  }
+
+  test("GH-894 clear --comments: keeps the merge (comments are not formatting)") {
+    assertEquals(clearVerb("A1", comments = true).mergedRanges, Set(titleRange))
+  }
+
+  test("GH-894 batch clear styles=true: unmerges; comments=true keeps the merge") {
+    def run(styles: Boolean, comments: Boolean): Sheet =
+      BatchParser
+        .applyBatchOperations(
+          Workbook(template),
+          None,
+          Vector(BatchOp.Clear("Summary!A1", all = false, styles = styles, comments = comments))
+        )
+        .unsafeRunSync()
+        .sheets
+        .head
+    val styled = run(styles = true, comments = false)
+    assertEquals(styled.mergedRanges, Set.empty[CellRange])
+    assertEquals(
+      styled.cells.get(ARef.from0(0, 0)).map(_.value),
+      Some(CellValue.Text("Quarterly report"))
+    )
+    assertEquals(run(styles = false, comments = true).mergedRanges, Set(titleRange))
+    val partial = BatchParser
+      .applyBatchOperations(
+        Workbook(template),
+        None,
+        Vector(BatchOp.Clear("Summary!C1", all = false, styles = true, comments = false))
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    assertEquals(partial.mergedRanges, Set.empty[CellRange])
+    assertNotEquals(partial.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
+  }
+
   test("GH-886 clear: a hyperlink goes with the contents; its cell keeps its formatting") {
     // Excel's Clear Contents removes the hyperlink and keeps the underline font (checked in
     // Excel for Mac 16.115); a hyperlink cell with no style is removed outright.
@@ -474,6 +544,125 @@ class ClearCommandSpec extends FunSuite:
     assertEquals(template.cells.get(a3).flatMap(_.styleId), None, "fixture: A3 unstyled")
     val s = clearVerb("A3:A3")
     assertEquals(s.cells.get(a3), None)
+  }
+
+  // ========== GH-897: an unstyled cell in a styled row or column keeps the default format ==========
+
+  private val b4 = ARef.from0(1, 3)
+  private val d6 = ARef.from0(3, 5)
+  private val f8 = ARef.from0(5, 7)
+  private val bandStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffffff00)))
+
+  /**
+   * Column B and row 6 carry a default style (a yellow fill); B4 and D6 hold numbers with no `s` of
+   * their own, so they show the default format (xf 0). F8 is outside both.
+   */
+  private def banded: Sheet =
+    Sheet("Summary")
+      .withColumnStyle(b4.col, bandStyle)
+      .withRowStyle(d6.row, bandStyle)
+      .put(b4, CellValue.Number(5))
+      .put(d6, CellValue.Number(7))
+      .put(f8, CellValue.Number(9))
+
+  private def sheetXml: String =
+    val zf = new java.util.zip.ZipFile(outputPath.toFile)
+    try
+      new String(
+        zf.getInputStream(zf.getEntry("xl/worksheets/sheet1.xml")).readAllBytes(),
+        java.nio.charset.StandardCharsets.UTF_8
+      )
+    finally zf.close()
+
+  /** The cell keeps a record with no style of its own, so it stays on xf 0, not the band's. */
+  private def assertPinnedToDefault(s: Sheet, xml: String, r: ARef): Unit =
+    val record = s"""<c r="${r.toA1}"[^>]*>""".r.findFirstIn(xml)
+    assert(record.isDefined, s"${r.toA1}: the emptied cell needs a record to stay on xf 0: $xml")
+    assert(
+      record.forall(rec => !rec.contains(" s=") || rec.contains(""" s="0"""")),
+      s"${r.toA1}: the record must not carry the band's style: $record"
+    )
+    assertEquals(s.cells.get(r).map(_.value), Some(CellValue.Empty), s"${r.toA1}: value cleared")
+    assertEquals(
+      s.cells
+        .get(r)
+        .flatMap(_.styleId)
+        .flatMap(s.styleRegistry.get)
+        .filterNot(_ == CellStyle.default),
+      None,
+      s"${r.toA1}: no style of its own"
+    )
+
+  private def clearBanded(range: String, stream: Boolean = false): Sheet =
+    val sheet = banded
+    CellCommands
+      .clear(
+        Workbook(sheet),
+        Some(sheet),
+        range,
+        all = false,
+        styles = false,
+        comments = false,
+        outputPath,
+        config,
+        stream = stream
+      )
+      .unsafeRunSync()
+    ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+
+  test("GH-897 clear: an unstyled cell in a styled column keeps the default format") {
+    val s = clearBanded("B4")
+    assertPinnedToDefault(s, sheetXml, b4)
+  }
+
+  test("GH-897 clear: an unstyled cell in a styled row keeps the default format") {
+    val s = clearBanded("D6")
+    assertPinnedToDefault(s, sheetXml, d6)
+  }
+
+  test("GH-897 clear --stream: an unstyled cell in a styled row or column keeps the default") {
+    val s = clearBanded("B4:D6", stream = true)
+    val xml = sheetXml
+    assertPinnedToDefault(s, xml, b4)
+    assertPinnedToDefault(s, xml, d6)
+  }
+
+  test("GH-897 batch clear: an unstyled cell in a styled column keeps the default format") {
+    val s = BatchParser
+      .applyBatchOperations(
+        Workbook(banded),
+        None,
+        Vector(BatchOp.Clear("Summary!B4", all = false, styles = false, comments = false))
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    assertEquals(s.cells.get(b4).map(_.value), Some(CellValue.Empty))
+    assertEquals(s.cells.get(b4).flatMap(_.styleId), None)
+  }
+
+  test("GH-897 clear: an unstyled cell outside any styled row or column is still removed") {
+    val s = clearBanded("F8")
+    assertEquals(s.cells.get(f8), None)
+    assert(!sheetXml.contains("""<c r="F8""""), "F8: no record left")
+  }
+
+  test("GH-897 clear --all: drops the record, so the cell shows the column's style") {
+    val sheet = banded
+    CellCommands
+      .clear(
+        Workbook(sheet),
+        Some(sheet),
+        "B4",
+        all = true,
+        styles = false,
+        comments = false,
+        outputPath,
+        config
+      )
+      .unsafeRunSync()
+    val s = ExcelIO.instance[IO].read(outputPath).unsafeRunSync().sheets.head
+    assertEquals(s.cells.get(b4), None)
   }
 
   // ========== Combined Flags ==========
