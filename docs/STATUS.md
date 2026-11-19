@@ -285,14 +285,14 @@
 
 ### Test Coverage
 
-**10,312 test cases** (the #891 CellStore (PR B, on #898), 2026-11-19): 10,312 passed, 0 failed, none ignored. Counts include skipped cases.
+**10,335 test cases** (the #891 CellStore (PR B, on #898), 2026-11-19): 10,335 passed, 0 failed, none ignored. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4463 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1917 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-evaluator | 4467 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1925 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1478 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 2014 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 2025 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 220 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
 | xl (prelude) | 67 | external-consumer probes (`xl/test/src/xlprelude/`) |
