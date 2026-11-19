@@ -12,8 +12,11 @@ import munit.FunSuite
  * #891: one iterative fixpoint shares a column slice and equality index per criteria range that
  * holds no member ([[Evaluator.AggregateMemo.fixpointCache]]). Law: every outcome equals the
  * fixpoint's outcome with the cache switched off, under both schemes, whether a criteria range
- * holds no member (sliced), a member (scanned: it changes during the fixpoint) or an uncached
- * formula outside the fixpoint (scanned: the read evaluates it).
+ * holds no member (columns A and B: sliced), a member (column C: scanned, it changes during the
+ * fixpoint) or an uncached formula outside the fixpoint (column D, the criteria range of C5:
+ * scanned, the read evaluates it). Only criteria ranges are sliced: C3 reads column D as a sum
+ * range, which no slice serves. `FixpointCacheLawSpec` states the same law over generated
+ * fixpoints.
  */
 class FixpointSliceSpec extends FunSuite:
 
@@ -33,12 +36,14 @@ class FixpointSliceSpec extends FunSuite:
       .put(at(3, r), formula(s"=B${r + 1}*2"))
   }
 
-  // The cycle: C1..C4 read each other through criteria calls over each kind of column.
+  // The cycle: C1..C5 read each other through criteria calls over each kind of column.
   private val memberFormulas = Vector(
     at(2, 0) -> "=SUMIFS(B1:B40,A1:A40,\"x\")/100+C2*0.5",
     at(2, 1) -> "=COUNTIFS(A1:A40,\"y\",B1:B40,\">10\")+C3*0.25",
     at(2, 2) -> "=SUMIF(C1:C40,\">0\")*0.1+SUMIFS(D1:D40,A1:A40,\"z\")/1000",
-    at(2, 3) -> "=AVERAGEIFS(B1:B40,A1:A40,\"x\",B1:B40,\"<30\")+C1*0.1"
+    at(2, 3) -> "=AVERAGEIFS(B1:B40,A1:A40,\"x\",B1:B40,\"<30\")+C1*0.1",
+    // criteria over the uncached formulas of column D (B*2: 2..80)
+    at(2, 4) -> "=COUNTIF(D1:D40,\">40\")/10+SUMIFS(B1:B40,D1:D40,\"<=20\")/100+C4*0.1"
   )
 
   private val sheet: Sheet =
@@ -93,4 +98,33 @@ class FixpointSliceSpec extends FunSuite:
     assert(answer(1).isInstanceOf[PassCache.SliceAnswer.Use], answer(1).toString)
     assertEquals(answer(2), PassCache.SliceAnswer.Refused)
     assertEquals(answer(3), PassCache.SliceAnswer.Refused)
+  }
+
+  test("#891: the law's fixpoint slices A and B and nothing of C or D, whose calls then scan") {
+    // the law above covers the refusals only if the fixpoint really asks for them
+    List(IterationScheme.Jacobi, IterationScheme.GaussSeidel).foreach { scheme =>
+      val counters = RecalcCounters.create()
+      val cache = new PassCache(Evaluator.AggregateMemo.FixpointLimits, counters)
+      cache.begin(Readiness.fixpoint(members.map(_._1)))
+      val wb = Workbook(sheet)
+      val outcome = WorkbookEvaluator.jacobiFixpoint(
+        wb,
+        wb.sheets,
+        members,
+        IterativeCalc(100, BigDecimal("1E-12"), scheme = scheme),
+        Clock.system,
+        Rng.system,
+        (rng, _) =>
+          Evaluator.recalculationInstance(
+            rng,
+            new Evaluator.AggregateMemo(counters = counters, shared = Some(cache))
+          ),
+        Map.empty
+      )
+      assertEquals(outcome, run(scheme, columnCache = false))
+      assertEquals(cache.builtSlices.map(_.col).sorted, Vector(0, 1))
+      // C3's SUMIF over column C and C5's two calls over column D, every round
+      val snap = counters.snapshot
+      assert(snap(RecalcCounters.Counter.ScanFallbacks) >= 3L * outcome.rounds, snap.render)
+    }
   }
