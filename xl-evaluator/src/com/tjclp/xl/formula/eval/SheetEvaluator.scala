@@ -313,7 +313,9 @@ object SheetEvaluator:
    * of that closure on `sheet`. With dynamic references more formulas are targets, but one that
    * feeds the range only through a dynamic read makes that reader — in the closure — fail on its
    * own, so an unrelated failure elsewhere stays silent. A cycle's members are listed when they lie
-   * on `sheet`; a reader of a cycle that lies wholly on another sheet is blocked.
+   * on `sheet`; a reader of a cycle that lies wholly on another sheet is blocked. In a book whose
+   * calcPr iterates, cycle members keep their caches and are not failures; when one of them holds
+   * no cache, the result is projected from an iterative `recalculate` of the book.
    *
    * #891: the graph questions go to the workbook's recalculation graph (cross-sheet cycles, defined
    * names, #504's precise lookups); the sheet-level graph and its hash-map Tarjan and Kahn are
@@ -397,111 +399,159 @@ object SheetEvaluator:
       // their caches and everything downstream evaluates off them. Otherwise a cycle fails its
       // members and blocks what reads them.
       val iterating = book.metadata.calcPr.exists(_.iterativeCalculation)
-      val cyclic = if iterating then Set.empty[QualifiedRef] else core & targets
-      // every target downstream of any cycle of the book: the canonical order below leaves them
-      // all out
-      val coreBlocked =
-        if iterating then Set.empty[QualifiedRef] else graph.dependents(core, Set.empty)
-      val cycleBlocked = (coreBlocked & targets) -- cyclic
-      val live = targets -- cyclic -- cycleBlocked -- (if iterating then core else Set.empty)
+      def ordered: RangeEvalResult =
+        val cyclic = if iterating then Set.empty[QualifiedRef] else core & targets
+        // every target downstream of any cycle of the book: the canonical order below leaves them
+        // all out
+        val coreBlocked =
+          if iterating then Set.empty[QualifiedRef] else graph.dependents(core, Set.empty)
+        val cycleBlocked = (coreBlocked & targets) -- cyclic
+        val live = targets -- cyclic -- cycleBlocked -- (if iterating then core else Set.empty)
 
-      val positions = book.sheets.iterator.zipWithIndex.map((s, i) => s.name -> i).toMap
-      def stripped(sheets: Vector[Sheet], refs: Set[QualifiedRef]): Vector[Sheet] =
-        refs.groupMap(_.sheet)(_.ref).foldLeft(sheets) { case (acc, (name, cells)) =>
-          positions.get(name).fold(acc)(i => acc.updated(i, stripFormulaCaches(acc(i), cells)))
-        }
-
-      type State = (Vector[Sheet], Map[ARef, CellValue], Vector[CellEvalError], Set[QualifiedRef])
-      val start: State =
-        (
-          stripped(book.sheets, cyclic ++ cycleBlocked),
-          Map.empty,
-          // a cycle's members are listed on the range's own sheet (as before #891)
-          cyclic.toVector.filter(_.sheet == sheet.name).map(failure(_, "Circular reference")),
-          cycleBlocked
-        )
-      // GH-695: record spill anchors' arrays only for a book that has `x#` readers
-      if readsSpills(sheet, workbook) then memo.trackSpills()
-      // #790: evaluation reuses the build's parse of each formula
-      memo.passCache.foreach(_.useParses(graph.parses))
-      val (_, values, failures, blocked) = graph.order(core ++ coreBlocked) match
-        // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
-        case scala.util.Left(unordered) =>
-          val (sheets, reported, failed, blockedSoFar) = start
-          val residual = live.toVector.map(
-            failure(_, s"Unresolvable order: ${unordered.remaining.size} formulas left")
-          )
-          (sheets, reported, failed ++ residual, blockedSoFar)
-        case scala.util.Right(sorted) =>
-          val (startSheets, reported, failed, blockedSoFar) = start
-          val ordered = sorted.order.filter(live)
-          // GH-274: dynamic cells and their static dependents evaluate last, caches stripped
-          val bucket =
-            if dynamic.isEmpty then Set.empty[QualifiedRef]
-            else (dynamic & live) ++ dependentsOf(dynamic)
-          val evalOrder = ordered.filterNot(bucket) ++ ordered.filter(bucket)
-          val initial = stripped(startSheets, bucket)
-          // #767: one slot per target in evaluation order. Formulas outside the targets keep the
-          // caches the file holds, which this pass never changes; the stripped cells (the dynamic
-          // bucket, cycle members and the cells behind them) refuse every slice over them. A cell
-          // a failure strips later holds no cache when a slice over it is built, and is refused.
-          val slots = evalOrder.iterator.zipWithIndex.toMap
-          memo.passCache.foreach(_.begin(Readiness.build(slots, bucket ++ cyclic ++ cycleBlocked)))
-          def evaluatorFor(q: QualifiedRef): Evaluator =
-            Evaluator.recalculationInstance(
-              Rng.system,
-              memo,
-              WorkbookEvaluator.callerPosition(slots, bucket, q),
-              Some((q.sheet, q.ref))
-            )
-          evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
-            case (state @ (_, _, _, blockedNow), q) if blockedNow(q) => state
-            case (state @ (sheets, results, failedNow, blockedNow), q) =>
-              positions.get(q.sheet) match
-                case None => state
-                case Some(position) =>
-                  val evaluated = counters.time(RecalcCounters.Phase.Eval) {
-                    evaluateCellWithEvaluator(
-                      sheets(position),
-                      q.ref,
-                      evaluatorFor(q),
-                      clock,
-                      workbook.map(_ => book.copy(sheets = sheets))
-                    )
-                  }
-                  evaluated match
-                    case scala.util.Right(value) =>
-                      if threadChangesStructure(sheets(position), q.ref) then
-                        memo.passCache.foreach(_.structureChanged(q.sheet))
-                      val next =
-                        if q.sheet == sheet.name && rangeFormulaCells.contains(q.ref) then
-                          results + (q.ref -> value)
-                        else results
-                      val threaded = threadComputed(sheets(position), q.ref, value)
-                      (sheets.updated(position, threaded), next, failedNow, blockedNow)
-                    case scala.util.Left(error) =>
-                      val newlyBlocked = dependentsOf(Set(q)) -- blockedNow
-                      (
-                        stripped(sheets, newlyBlocked + q),
-                        results,
-                        failedNow :+ CellEvalError(q.sheet, q.ref, error),
-                        blockedNow ++ newlyBlocked
-                      )
+        val positions = book.sheets.iterator.zipWithIndex.map((s, i) => s.name -> i).toMap
+        def stripped(sheets: Vector[Sheet], refs: Set[QualifiedRef]): Vector[Sheet] =
+          refs.groupMap(_.sheet)(_.ref).foldLeft(sheets) { case (acc, (name, cells)) =>
+            positions.get(name).fold(acc)(i => acc.updated(i, stripFormulaCaches(acc(i), cells)))
           }
+
+        type State = (Vector[Sheet], Map[ARef, CellValue], Vector[CellEvalError], Set[QualifiedRef])
+        val start: State =
+          (
+            stripped(book.sheets, cyclic ++ cycleBlocked),
+            Map.empty,
+            // a cycle's members are listed on the range's own sheet (as before #891)
+            cyclic.toVector.filter(_.sheet == sheet.name).map(failure(_, "Circular reference")),
+            cycleBlocked
+          )
+        // GH-695: record spill anchors' arrays only for a book that has `x#` readers
+        if readsSpills(sheet, workbook) then memo.trackSpills()
+        // #790: evaluation reuses the build's parse of each formula
+        memo.passCache.foreach(_.useParses(graph.parses))
+        val (_, values, failures, blocked) = graph.order(core ++ coreBlocked) match
+          // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
+          case scala.util.Left(unordered) =>
+            val (sheets, reported, failed, blockedSoFar) = start
+            val residual = live.toVector.map(
+              failure(_, s"Unresolvable order: ${unordered.remaining.size} formulas left")
+            )
+            (sheets, reported, failed ++ residual, blockedSoFar)
+          case scala.util.Right(sorted) =>
+            val (startSheets, reported, failed, blockedSoFar) = start
+            val ordered = sorted.order.filter(live)
+            // GH-274: dynamic cells and their static dependents evaluate last, caches stripped
+            val bucket =
+              if dynamic.isEmpty then Set.empty[QualifiedRef]
+              else (dynamic & live) ++ dependentsOf(dynamic)
+            val evalOrder = ordered.filterNot(bucket) ++ ordered.filter(bucket)
+            val initial = stripped(startSheets, bucket)
+            // #767: one slot per target in evaluation order. Formulas outside the targets keep the
+            // caches the file holds, which this pass never changes; the stripped cells (the dynamic
+            // bucket, cycle members and the cells behind them) refuse every slice over them. A cell
+            // a failure strips later holds no cache when a slice over it is built, and is refused.
+            val slots = evalOrder.iterator.zipWithIndex.toMap
+            memo.passCache.foreach(
+              _.begin(Readiness.build(slots, bucket ++ cyclic ++ cycleBlocked))
+            )
+            def evaluatorFor(q: QualifiedRef): Evaluator =
+              Evaluator.recalculationInstance(
+                Rng.system,
+                memo,
+                WorkbookEvaluator.callerPosition(slots, bucket, q),
+                Some((q.sheet, q.ref))
+              )
+            evalOrder.foldLeft[State]((initial, reported, failed, blockedSoFar)) {
+              case (state @ (_, _, _, blockedNow), q) if blockedNow(q) => state
+              case (state @ (sheets, results, failedNow, blockedNow), q) =>
+                positions.get(q.sheet) match
+                  case None => state
+                  case Some(position) =>
+                    val evaluated = counters.time(RecalcCounters.Phase.Eval) {
+                      evaluateCellWithEvaluator(
+                        sheets(position),
+                        q.ref,
+                        evaluatorFor(q),
+                        clock,
+                        workbook.map(_ => book.copy(sheets = sheets))
+                      )
+                    }
+                    evaluated match
+                      case scala.util.Right(value) =>
+                        if threadChangesStructure(sheets(position), q.ref) then
+                          memo.passCache.foreach(_.structureChanged(q.sheet))
+                        val next =
+                          if q.sheet == sheet.name && rangeFormulaCells.contains(q.ref) then
+                            results + (q.ref -> value)
+                          else results
+                        val threaded = threadComputed(sheets(position), q.ref, value)
+                        (sheets.updated(position, threaded), next, failedNow, blockedNow)
+                      case scala.util.Left(error) =>
+                        val newlyBlocked = dependentsOf(Set(q)) -- blockedNow
+                        (
+                          stripped(sheets, newlyBlocked + q),
+                          results,
+                          failedNow :+ CellEvalError(q.sheet, q.ref, error),
+                          blockedNow ++ newlyBlocked
+                        )
+            }
+        RangeEvalResult(
+          values,
+          sortedFailures(
+            failures.filter(failed => closure(QualifiedRef(failed.sheet, failed.ref)))
+          ),
+          blocked.iterator
+            .filter(q => q.sheet == sheet.name && closure(q))
+            .map(_.ref)
+            .toVector
+            .sortBy(rowMajor)
+        )
+      // An iterating book's members keep their caches only if they all hold one. A member without
+      // (a library-authored or `--no-recalc` book; Excel never writes one) would be evaluated on
+      // demand by its first reader, ahead of its own precedents' slots and off their stale caches,
+      // and an aggregate computed that early would be kept for the pass. Such a book is iterated:
+      // the window shows what `recalculate` computes, at the cost of one recalculation.
+      def holdsNoCache(q: QualifiedRef): Boolean =
+        sheetsByName.get(q.sheet).flatMap(_.cells.get(q.ref)).map(_.value) match
+          case Some(CellValue.Formula(_, None, _)) => true
+          case _ => false
+      def iterated(calc: IterativeCalc): RangeEvalResult =
+        val full = WorkbookEvaluator.recalculate(book)(clock, calc)
+        val errored = full.errors.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
+        // a cell behind another's failure is blocked, as in the ordered pass; a cycle's members
+        // fail together and are each a failure
+        val blockedCells = (errored & closure).filter { q =>
+          val upstream = graph.precedents(Set(q), Set.empty) & errored
+          (if core(q) then upstream -- core else upstream - q).nonEmpty
+        }
+        val computed = full.evaluated.getOrElse(sheet.name, Map.empty)
+        val after = full.workbook.sheets.find(_.name == sheet.name)
+        def shown(ref: ARef): Option[CellValue] =
+          computed
+            .get(ref)
+            .orElse(after.flatMap(_.cells.get(ref)).map(_.value).collect {
+              case CellValue.Formula(_, Some(cached), _) => cached
+            })
+        RangeEvalResult(
+          rangeFormulaCells.iterator
+            .filterNot(ref => errored(at(ref)))
+            .flatMap(ref => shown(ref).map(ref -> _))
+            .toMap,
+          sortedFailures(
+            full.errors.filter { e =>
+              val q = QualifiedRef(e.sheet, e.ref)
+              closure(q) && !blockedCells(q)
+            }
+          ),
+          blockedCells.iterator.filter(_.sheet == sheet.name).map(_.ref).toVector.sortBy(rowMajor)
+        )
       def rowMajor(ref: ARef): (Int, Int) = (ref.row.index0, ref.col.index0)
-      val (here, elsewhere) = failures
-        .filter(failed => closure(QualifiedRef(failed.sheet, failed.ref)))
-        .partition(_.sheet == sheet.name)
-      RangeEvalResult(
-        values,
+      // `sheet`'s failures first and in row-major order, then other sheets' in grid order
+      def sortedFailures(failures: Vector[CellEvalError]): Vector[CellEvalError] =
+        val (here, elsewhere) = failures.partition(_.sheet == sheet.name)
         here.sortBy(failed => rowMajor(failed.ref)) ++
-          elsewhere.sortBy(failed => QualifiedRef.gridKey(QualifiedRef(failed.sheet, failed.ref))),
-        blocked.iterator
-          .filter(q => q.sheet == sheet.name && closure(q))
-          .map(_.ref)
-          .toVector
-          .sortBy(rowMajor)
-      )
+          elsewhere.sortBy(failed => QualifiedRef.gridKey(QualifiedRef(failed.sheet, failed.ref)))
+      val unsettled =
+        book.metadata.calcPr.filter(_.iterativeCalculation && core.exists(holdsNoCache))
+      unsettled.map(IterativeCalc.fromCalcPr).fold(ordered)(iterated)
 
   /**
    * Internal cell-evaluation boundary for WorkbookEvaluator.

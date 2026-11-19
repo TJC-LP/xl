@@ -164,6 +164,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the caches held. On a 40,000-formula SUMIF model: 0.2-0.4 s and a stale value before, about 6 s
   and the recalculated value now (`recalc`: 5-7 s); a window whose closure is a few cells is
   unchanged.
+  In a book whose `calcPr` iterates, cycle members keep the converged values the file holds, as
+  Excel shows them. When a member holds no value at all (a library-authored or `--no-recalc`
+  book; Excel never writes one) there is nothing converged to show, so the window is taken from
+  an iterative recalculation of the book and costs one: the window used to fail such a cell with
+  "Circular reference … read again while its own evaluation is in progress", or compute it from
+  its precedents' stale caches.
 
 - **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
   clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
