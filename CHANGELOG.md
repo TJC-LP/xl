@@ -54,8 +54,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
   merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
   cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
-  last hyperlink still comes back on write until #895 is fixed). The library's
-  `Edit.Clear` / `Sheet.clearRange` keep their old rule for now (#890).
+  last hyperlink still comes back on write until #895 is fixed). The library follows the same
+  rule since #890.
+
+- **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
+  ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
+  CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
+  style is removed, and merged regions stay merged. One difference from the CLI for now: an
+  unstyled cell in a row or column with a default style keeps an empty record, so it does not
+  take that row's or column's format. The CLI still removes it until #897 is fixed there. A clear with `styles` as well as `contents`
+  (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
+  comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
+  `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars
+  `Remove`/`RemoveRange` to a contents-and-styles clear. **Behaviour change:**
+  `sheet.clearRange(A1:A1, ClearWhat.contents)` on a Percent-formatted A1 inside a merged A1:B1
+  leaves A1 empty with its Percent format and A1:B1 merged (was: A1 removed, A1:B1 unmerged).
 
 - **A contents `clear` no longer gives an unstyled cell its row's or column's format** (#897):
   a cell with no style of its own that sits in a row or column with a default style
