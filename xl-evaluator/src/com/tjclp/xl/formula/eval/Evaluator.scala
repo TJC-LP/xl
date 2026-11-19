@@ -209,7 +209,7 @@ object Evaluator:
     )
 
   private[formula] def mayReadSpills(sheet: Sheet): Boolean =
-    sheet.cells.valuesIterator.exists(_.value match
+    sheet.cells.iterator.exists(_.value match
       case CellValue.Formula(text, _, _) => mayReadSpills(text)
       case _ => false)
 
@@ -1615,7 +1615,7 @@ object Evaluator:
             targetSheet.cells.get(ref).exists(c => isUncachedFormula(c.value))
           )
         else
-          targetSheet.cells.iterator.exists { case (ref, cell) =>
+          targetSheet.cells.iterator.exists { case cell @ Cell(ref, _, _, _) =>
             range.contains(ref) && isUncachedFormula(cell.value)
           }
       !containsUncachedFormula

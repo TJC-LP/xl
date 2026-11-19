@@ -349,7 +349,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
     // are written into every text cell, so a hash-ordered walk made the bytes a function of how
     // `ARef` hashes rather than of the workbook.
     val allEntries = sheets.iterator.flatMap { sheet =>
-      val cells = sheet.cells.valuesIterator.filter { cell =>
+      val cells = sheet.cells.iterator.filter { cell =>
         cell.value match
           case _: CellValue.Text | _: CellValue.RichText => true
           case _ => false
@@ -394,7 +394,7 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    */
   def shouldUseSST(wb: Workbook): Boolean =
     val textCells = wb.sheets.flatMap { sheet =>
-      sheet.cells.values.flatMap { cell =>
+      sheet.cells.iterator.flatMap { cell =>
         cell.value match
           case com.tjclp.xl.cells.CellValue.Text(s) => Some(s)
           case _ => None

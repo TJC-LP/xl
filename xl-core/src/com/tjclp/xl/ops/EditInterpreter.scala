@@ -596,7 +596,7 @@ private[xl] object EditInterpreter:
       // Styles clear only what contents left behind: after a removal nothing in range remains.
       val styles =
         if what.styles && !what.contents then
-          existing.cells.keys
+          existing.cells.refs
             .filter(range.contains)
             .toVector
             .sortBy(_.toA1)

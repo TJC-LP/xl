@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
@@ -326,7 +326,9 @@ object SheetEvaluator:
     def onSheet(qs: IterableOnce[QualifiedRef]): Set[ARef] =
       qs.iterator.filter(_.sheet == sheet.name).map(_.ref).toSet
     val rangeFormulaCells = sheet.cells.iterator.collect {
-      case (ref, cell) if isFormula(cell.value) && covered(ref) && graph.isFormula(at(ref)) => ref
+      case cell @ Cell(ref, _, _, _)
+          if isFormula(cell.value) && covered(ref) && graph.isFormula(at(ref)) =>
+        ref
     }.toSet
     if rangeFormulaCells.isEmpty then RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
     else
@@ -340,7 +342,8 @@ object SheetEvaluator:
         if dynamic.isEmpty then closure
         else
           sheet.cells.iterator.collect {
-            case (ref, cell) if isFormula(cell.value) && graph.isFormula(at(ref)) => ref
+            case cell @ Cell(ref, _, _, _) if isFormula(cell.value) && graph.isFormula(at(ref)) =>
+              ref
           }.toSet
       def dependentsOf(refs: Set[ARef]): Set[ARef] =
         (onSheet(graph.dependents(refs.map(at), Set.empty)) & targets) -- refs

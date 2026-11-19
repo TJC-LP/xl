@@ -13,7 +13,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -417,7 +417,8 @@ object WorkbookEvaluator:
     val counters = memo.counters
     val uncached: Set[QualifiedRef] = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if isUncachedEvaluable(cell.value) => QualifiedRef(sheet.name, ref)
+        case cell @ Cell(ref, _, _, _) if isUncachedEvaluable(cell.value) =>
+          QualifiedRef(sheet.name, ref)
       }
     }.toSet
     if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty)

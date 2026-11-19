@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.formula.graph.CompactGraphGens
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.{Gen, Prop}
@@ -56,14 +56,14 @@ class AfterEditLawSpec extends ScalaCheckSuite:
       wb.put(next)
     }
 
-  private def cellsOf(wb: Workbook): Map[SheetName, Map[ARef, Cell]] =
+  private def cellsOf(wb: Workbook): Map[SheetName, CellStore] =
     wb.sheets.iterator.map(s => s.name -> s.cells).toMap
 
   /** Formula cells holding no cache (a data-table record's is its own). */
   private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
     wb.sheets.iterator.flatMap { s =>
       s.cells.iterator.collect {
-        case (ref, Cell(_, CellValue.Formula(_, None, kind), _, _))
+        case Cell(ref, CellValue.Formula(_, None, kind), _, _)
             if !kind.isInstanceOf[com.tjclp.xl.cells.FormulaKind.DataTable] =>
           QualifiedRef(s.name, ref)
       }
@@ -80,16 +80,16 @@ class AfterEditLawSpec extends ScalaCheckSuite:
       val full = cellsOf(edited.recalculate(options).workbook)
       val before = cellsOf(edited)
       val cone = DependentRecalculation.editCone(edited, Set(QualifiedRef(edit.sheet, edit.ref)))
-      def at(cells: Map[SheetName, Map[ARef, Cell]], q: QualifiedRef) =
+      def at(cells: Map[SheetName, CellStore], q: QualifiedRef) =
         cells.get(q.sheet).flatMap(_.get(q.ref))
       val all = (before.toVector ++ full.toVector)
-        .flatMap((name, cells) => cells.keysIterator.map(QualifiedRef(name, _)))
+        .flatMap((name, cells) => cells.refs.map(QualifiedRef(name, _)))
         .distinct
       val outside = all.filterNot(cone.contains).filter(q => at(after, q) != at(before, q))
       val inside = all
         .filter(cone.contains)
         .filter(q => at(after, q) != at(full, q))
-      def show(qs: Vector[QualifiedRef], other: Map[SheetName, Map[ARef, Cell]], label: String) =
+      def show(qs: Vector[QualifiedRef], other: Map[SheetName, CellStore], label: String) =
         qs.map(q => s"$q: $label=${at(other, q).map(_.value)} after=${at(after, q).map(_.value)}")
       Prop.all(
         Prop(outside.isEmpty) :| s"edit $edit, outside the cone\n${show(outside, before, "before")

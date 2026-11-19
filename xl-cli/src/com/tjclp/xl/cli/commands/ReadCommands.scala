@@ -813,7 +813,7 @@ object ReadCommands:
       val qualifying = mutable.HashMap.empty[String, mutable.ArrayBuffer[(Int, ARef, String)]]
       val naming = mutable.ArrayBuffer.empty[(Int, ARef, String)]
       sheets.indices.foreach { at =>
-        sheets(at).cells.foreach { (ref, cell) =>
+        sheets(at).cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
           cell.value match
             // GH-430: a data table's cells are pinned value sources
             case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
@@ -848,7 +848,7 @@ object ReadCommands:
           val read = readerOn(at).readRanges(expr, Some(ref)).toVector
           if read.nonEmpty then readers.register(idOf((at, ref)), read)
         }
-      sheets(target).cells.foreach { (ref, cell) =>
+      sheets(target).cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
         cell.value match
           // GH-430: a data table's cells are pinned value sources
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()

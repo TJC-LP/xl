@@ -6,7 +6,7 @@ import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -292,7 +292,7 @@ private[xl] object DynamicArrayAuthoring:
    * writes to one sheet (a batch) computes this once and keeps it current instead of rescanning.
    */
   def spillsOf(sheet: Sheet): Vector[Spill] =
-    sheet.cells.valuesIterator
+    sheet.cells.iterator
       .flatMap(cell =>
         cell.value match
           case CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula)
@@ -374,7 +374,8 @@ private[xl] object DynamicArrayAuthoring:
         Option.when(parts.nonEmpty)(KeptSpill(s.anchor, s.formula, s.extent, parts))
       )
     val keep = (r: ARef) => kept.exists(_.kept.exists(_.contains(r)))
-    val remaining = released.cells.filterNot((r, _) => targeted(r) && !keep(r))
+    val remaining =
+      CellStore.from(released.cells.iterator.filterNot(c => targeted(c.ref) && !keep(c.ref)))
     ContentsCleared(released.copy(cells = remaining), cleared, kept)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
@@ -466,7 +467,7 @@ private[xl] object DynamicArrayAuthoring:
     val cells = refs.foldLeft(sheet.cells) { (acc, r) =>
       acc.get(r) match
         case Some(cell) if cell.styleId.isDefined || cell.hyperlink.isDefined =>
-          acc.updated(r, cell.withValue(CellValue.Empty))
+          acc.updated(cell.withValue(CellValue.Empty))
         case Some(_) => acc.removed(r)
         case None => acc
     }
@@ -491,7 +492,7 @@ private[xl] object DynamicArrayAuthoring:
       .filter(r => sheet.cells.get(r).exists(_.value != CellValue.Empty))
       .toVector
     lazy val merges = sheet.mergedRanges.filter(_.intersects(extent)).toVector.sortBy(rowMajor)
-    lazy val arrays = sheet.cells.valuesIterator
+    lazy val arrays = sheet.cells.iterator
       .filterNot(cell => replaced(cell.ref))
       .flatMap(cell =>
         cell.value match

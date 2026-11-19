@@ -1556,7 +1556,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
   // Helper: Convert Sheet to RowData stream
   private def streamSheet(sheet: Sheet): Stream[F, RowData] =
-    val rowMap = sheet.cells.values
+    val rowMap = sheet.cells.iterator.toVector
       .groupBy(_.ref.row.index1) // Group by 1-based row
       .view
       .mapValues { cells =>

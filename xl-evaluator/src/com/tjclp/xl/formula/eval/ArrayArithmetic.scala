@@ -218,7 +218,8 @@ object ArrayArithmetic:
     val c0 = range.colStart.index0
     val c1 = range.colEnd.index0
     sheet.cells.iterator
-      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { case (acc, (at, cell)) =>
+      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, cell) =>
+        val at = cell.ref
         val r = at.row.index0
         val c = at.col.index0
         if r < r0 || r > r1 || c < c0 || c > c1 then acc

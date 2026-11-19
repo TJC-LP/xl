@@ -21,7 +21,7 @@ object styleSyntax:
       val cell = sheet(ref).withStyle(styleId)
       sheet.copy(
         styleRegistry = newRegistry,
-        cells = sheet.cells.updated(ref, cell)
+        cells = sheet.cells.updated(cell)
       )
 
     /** Apply a CellStyle to all cells in a range. */
@@ -29,8 +29,8 @@ object styleSyntax:
     def withRangeStyle(range: CellRange, style: CellStyle): Sheet =
       val (newRegistry, styleId) = sheet.styleRegistry.register(style)
       val updatedCells = range.cells.foldLeft(sheet.cells) { (cells, ref) =>
-        val cell = cells.getOrElse(ref, Cell.empty(ref)).withStyle(styleId)
-        cells.updated(ref, cell)
+        val cell = cells.get(ref).getOrElse(Cell.empty(ref)).withStyle(styleId)
+        cells.updated(cell)
       }
       sheet.copy(
         styleRegistry = newRegistry,

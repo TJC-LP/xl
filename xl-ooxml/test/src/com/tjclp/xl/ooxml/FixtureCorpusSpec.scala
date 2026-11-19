@@ -31,7 +31,7 @@ class FixtureCorpusSpec extends FunSuite:
     test(s"corpus: $fixture parses via in-memory XlsxReader") {
       val wb = load(fixture)
       assert(wb.sheets.nonEmpty, s"$fixture produced an empty workbook")
-      val nonEmptyCells = wb.sheets.map(_.cells.count(_._2.value != CellValue.Empty)).sum
+      val nonEmptyCells = wb.sheets.map(_.cells.iterator.count(_.value != CellValue.Empty)).sum
       assert(nonEmptyCells > 0, s"$fixture produced no non-empty cells")
     }
   }
@@ -246,12 +246,12 @@ class FixtureCorpusSpec extends FunSuite:
         .fold(err => fail(s"$fixture re-read failed: ${err.message}"), identity)
       original.sheets.zip(reread.sheets).foreach { (before, after) =>
         assertEquals(after.name, before.name, s"$fixture sheet name drifted")
-        val beforeValues = before.cells.collect {
-          case (ref, cell) if cell.value != CellValue.Empty => ref -> cell.value
-        }
-        val afterValues = after.cells.collect {
-          case (ref, cell) if cell.value != CellValue.Empty => ref -> cell.value
-        }
+        val beforeValues = before.cells.iterator.collect {
+          case cell @ Cell(ref, _, _, _) if cell.value != CellValue.Empty => ref -> cell.value
+        }.toMap
+        val afterValues = after.cells.iterator.collect {
+          case cell @ Cell(ref, _, _, _) if cell.value != CellValue.Empty => ref -> cell.value
+        }.toMap
         assertEquals(
           afterValues,
           beforeValues,

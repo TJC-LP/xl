@@ -172,8 +172,8 @@ class SourceParitySpec extends FunSuite with ScalaCheckSuite:
 
   private def queries(wb: Workbook, sheet: Sheet): Vector[(Option[String], ReadQuery)] =
     val name = Some(sheet.name.value)
-    val someText = sheet.cells.values.map(_.value).collectFirst { case CellValue.Text(s) => s }
-    val refs = sheet.cells.keys.toVector.sortBy(r => (r.row.index0, r.col.index0)).take(4)
+    val someText = sheet.cells.iterator.map(_.value).collectFirst { case CellValue.Text(s) => s }
+    val refs = sheet.cells.refs.toVector.sortBy(r => (r.row.index0, r.col.index0)).take(4)
     val commented = sheet.comments.keys.toVector.sortBy(r => (r.row.index0, r.col.index0))
     val views = Vector(
       ReadTestKit.view(None),

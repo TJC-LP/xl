@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.graph.{CompactGraphGens, DependencyGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.sheets.CellStore
 import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.{Gen, Prop}
@@ -23,12 +24,12 @@ class SeederGraphOracleSpec extends ScalaCheckSuite:
 
   private def withoutLookups(wb: Workbook): Workbook =
     wb.copy(sheets = wb.sheets.map { s =>
-      s.copy(cells = s.cells.view.mapValues { cell =>
+      s.copy(cells = CellStore.from(s.cells.iterator.map { cell =>
         cell.value match
           case CellValue.Formula(text, _, _) if text.toUpperCase.contains("LOOKUP(") =>
             cell.copy(value = CellValue.Number(BigDecimal(1)))
           case _ => cell
-      }.toMap)
+      }))
     })
 
   private val genCell: Gen[QualifiedRef] =
@@ -63,12 +64,12 @@ class SeederGraphOracleSpec extends ScalaCheckSuite:
           )
       )
     wb.copy(sheets = wb.sheets.map { s =>
-      s.copy(cells = s.cells.view.mapValues { cell =>
+      s.copy(cells = CellStore.from(s.cells.iterator.map { cell =>
         cell.value match
           case CellValue.Formula(text, cached, kind) =>
             cell.copy(value = CellValue.Formula(fix(text), cached, kind))
           case _ => cell
-      }.toMap)
+      }))
     })
 
   private def inUsed(wb: Workbook, q: QualifiedRef): Boolean =

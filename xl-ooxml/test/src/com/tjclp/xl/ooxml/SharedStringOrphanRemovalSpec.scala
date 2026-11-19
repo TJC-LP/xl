@@ -490,10 +490,11 @@ class SharedStringOrphanRemovalSpec extends ScalaCheckSuite:
     read(bytes)(SheetName.unsafe(sheet))
       .fold(e => fail(e.message), identity)
       .cells
+      .iterator
       .toVector
-      .flatMap { (r, cell) =>
+      .flatMap { cell =>
         cell.value match
-          case CellValue.Text(s) => Some(r.toA1 -> s)
+          case CellValue.Text(s) => Some(cell.ref.toA1 -> s)
           case _ => None
       }
       .toMap

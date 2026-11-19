@@ -14,7 +14,7 @@ import java.nio.charset.StandardCharsets
 import scala.collection.immutable.{ArraySeq, BitSet}
 import scala.collection.mutable
 import scala.util.{Failure, Success, Try, Using}
-import com.tjclp.xl.api.{Sheet, Workbook, CellValue}
+import com.tjclp.xl.api.{CellStore, Sheet, Workbook, CellValue}
 import com.tjclp.xl.cells.{ArrayMode, FormulaKind}
 import com.tjclp.xl.drawings.ImageFormat
 import com.tjclp.xl.error.{XLError, XLResult}
@@ -174,18 +174,18 @@ object XlsxWriter:
     if !workbook.metadata.date1904 then workbook
     else
       val normalizedSheets = workbook.sheets.map { sheet =>
-        val hasDateTime = sheet.cells.values.exists(_.value match
+        val hasDateTime = sheet.cells.iterator.exists(_.value match
           case CellValue.DateTime(_) => true
           case _ => false)
         if !hasDateTime then sheet
         else
-          val cells = sheet.cells.map { case (ref, cell) =>
+          val cells = CellStore.from(sheet.cells.iterator.map { cell =>
             cell.value match
               case CellValue.DateTime(dt) =>
                 val serial = CellValue.dateTimeToExcelSerial(dt, date1904 = true)
-                ref -> cell.copy(value = CellValue.Number(BigDecimal(serial)))
-              case _ => ref -> cell
-          }
+                cell.copy(value = CellValue.Number(BigDecimal(serial)))
+              case _ => cell
+          })
           sheet.copy(cells = cells)
       }
       workbook.copy(sheets = normalizedSheets)
@@ -256,7 +256,7 @@ object XlsxWriter:
   private def dynamicVariants(workbook: Workbook, sheets: Set[Int]): Set[ArrayMode.Dynamic] =
     sheets.iterator
       .flatMap(workbook.sheets.lift)
-      .flatMap(_.cells.valuesIterator)
+      .flatMap(_.cells.iterator)
       .map(_.value)
       .collect {
         case CellValue.Formula(_, _, FormulaKind.ArrayFormula(_, _, _, d: ArrayMode.Dynamic)) => d
@@ -1998,7 +1998,7 @@ object XlsxWriter:
     def textCellEntries(idxs: Vector[Int]): Vector[SSTEntry] =
       idxs.flatMap { idx =>
         workbook.sheets.lift(idx).toList.flatMap { sheet =>
-          sheet.cells.toVector.sortBy(_._1.toA1).flatMap { case (_, cell) =>
+          sheet.cells.iterator.toVector.sortBy(_.ref.toA1).flatMap { cell =>
             cell.value match
               case CellValue.Text(str) => Some(Left(str))
               case CellValue.RichText(rt) => Some(Right(rt))
@@ -2189,7 +2189,7 @@ object XlsxWriter:
           val copiedCount = scans.map(_.fold(_ => 0, _.count)).sum
           if appendBlocked(ctx, regen) then
             val cellEntries: Iterator[SSTEntry] =
-              workbook.sheets.iterator.flatMap(_.cells.valuesIterator).flatMap { cell =>
+              workbook.sheets.iterator.flatMap(_.cells.iterator).flatMap { cell =>
                 cell.value match
                   case CellValue.Text(str) => Some(Left(CellValue.escape(str)))
                   case CellValue.RichText(rt) => Some(Right(rt))
@@ -2252,7 +2252,7 @@ object XlsxWriter:
       val writtenEntries: Vector[SSTEntry] =
         written.iterator
           .flatMap(workbook.sheets.lift)
-          .flatMap(_.cells.valuesIterator)
+          .flatMap(_.cells.iterator)
           .flatMap { cell =>
             cell.value match
               case CellValue.Text(str) => Some(Left(str))
@@ -2404,7 +2404,7 @@ object XlsxWriter:
         styleIndex.fills.exists(fillHasTheme) ||
         styleIndex.borders.exists(borderHasTheme) ||
         cfPlan.mergedDxfs.exists(dxfs => (dxfs \\ "_").exists(_.attribute("theme").isDefined)) ||
-        workbook.sheets.exists(_.cells.valuesIterator.exists(_.value match
+        workbook.sheets.exists(_.cells.iterator.exists(_.value match
           case CellValue.RichText(rt) =>
             rt.runs.exists(_.font.exists(_.color.exists(isThemeColor)))
           case _ => false))

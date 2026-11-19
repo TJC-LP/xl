@@ -187,7 +187,7 @@ object Patch:
           val cell = cellsAcc2.get(ref) match
             case Some(existing) => existing.withValue(value)
             case None => Cell(ref, value)
-          cellsAcc2.updated(ref, cell)
+          cellsAcc2.updated(cell)
         }
       }
       sheet.copy(cells = newCells)

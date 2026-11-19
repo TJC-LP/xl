@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.workbooks.Workbook
 
@@ -81,7 +81,7 @@ private[formula] object NodeTable:
     val entries = Array.newBuilder[Entry]
     wb.sheets.foreach { sheet =>
       val s = sheetIndex.getOrElse(sheet.name, -1)
-      sheet.cells.foreach { case (ref, cell) =>
+      sheet.cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
         cell.value match
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
           case CellValue.Formula(text, _, _) =>

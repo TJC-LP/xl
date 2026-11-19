@@ -350,7 +350,7 @@ private[ooxml] def isExternalHyperlink(target: String): Boolean =
  * so the two agree without explicit plumbing (GH-235).
  */
 private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
-  val sorted = sheet.cells.values.toSeq
+  val sorted = sheet.cells.iterator.toSeq
     .filter(_.hyperlink.isDefined)
     .sortBy(c => (c.ref.row.index0, c.ref.col.index0))
   val relIdByRef = sorted

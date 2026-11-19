@@ -226,7 +226,7 @@ class FormulaRecordEvalSpec extends FunSuite:
       StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 1, count = 2).unsafe
     val s2 = sheetNamed(out, "S")
     assert(!s2.contains(ref"F2"), "the record cell rode the deleted band out")
-    val survivors = s2.cells.values.toVector.collect {
+    val survivors = s2.cells.iterator.toVector.collect {
       case c if isRecord(c.value) => c.ref.toA1
     }
     assertEquals(survivors, Vector.empty[String])

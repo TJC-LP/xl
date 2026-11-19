@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import java.time.LocalDateTime
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.RecalcCounters.Counter
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
@@ -81,9 +81,9 @@ class PassCacheLawSpec extends ScalaCheckSuite:
 
   private def cells(wb: Workbook): Vector[String] =
     wb.sheets.flatMap { sheet =>
-      sheet.cells.toVector
-        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
-        .map((ref, cell) => s"${sheet.name.value}!${ref.toA1}=${render(cell.value)}")
+      sheet.cells.iterator.toVector
+        .sortBy(cell => (cell.ref.row.index0, cell.ref.col.index0))
+        .map(cell => s"${sheet.name.value}!${cell.ref.toA1}=${render(cell.value)}")
     }
 
   private def exactlySame(on: RecalcResult, off: RecalcResult, label: String): Prop =
@@ -451,7 +451,7 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       .update(
         out,
         s =>
-          s.cells.foldLeft(s) { case (acc, (ref, cell)) =>
+          s.cells.iterator.foldLeft(s) { case (acc, cell @ Cell(ref, _, _, _)) =>
             cell.value match
               case f: CellValue.Formula => acc.put(ref, f.copy(cachedValue = None))
               case _ => acc
@@ -781,7 +781,7 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       val counters = RecalcCounters.create()
       recalculateUncachedWithMemo(book, sequential(), cachesOn(counters))
       val hasUncachedInData = book.sheets.exists(s =>
-        s.name != out && s.cells.valuesIterator.exists(_.value match
+        s.name != out && s.cells.iterator.exists(_.value match
           case CellValue.Formula(_, None, _) => true
           case _ => false)
       )

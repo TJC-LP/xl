@@ -6,7 +6,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.formula.graph.CompactGraphGens
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.{Gen, Prop}
@@ -36,11 +36,15 @@ class RecalcOrderLawSpec extends ScalaCheckSuite:
       Prop(a.cycles == b.cycles) :| s"$label cycles"
     )
 
-  /** The same workbook with every sheet's cells inserted in a seeded shuffled order. */
+  /**
+   * The same workbook with every sheet's cells inserted in a seeded shuffled order. (A `CellStore`
+   * is canonical whatever the insertion order, so since #891 this pins that the shuffle is
+   * invisible all the way through recalculation.)
+   */
   private def shuffled(wb: Workbook, seed: Long): Workbook =
     val rnd = new scala.util.Random(seed)
     wb.copy(sheets = wb.sheets.map { s =>
-      s.copy(cells = rnd.shuffle(s.cells.toVector).foldLeft(Map.empty[ARef, Cell])(_ + _))
+      s.copy(cells = CellStore.from(rnd.shuffle(s.cells.iterator.toVector)))
     })
 
   /** The random graph books plus a few seeded RAND readers, so evaluation order is observable. */
@@ -116,10 +120,9 @@ class RecalcOrderLawSpec extends ScalaCheckSuite:
   private def sheet(name: String, cells: (String, CellValue)*): Sheet =
     Sheet(
       SheetName.unsafe(name),
-      cells = cells.map { (a1, v) =>
-        val ref = ARef.parse(a1).getOrElse(ARef.from0(0, 0))
-        ref -> Cell(ref, v)
-      }.toMap
+      cells = CellStore.from(cells.map { (a1, v) =>
+        Cell(ARef.parse(a1).getOrElse(ARef.from0(0, 0)), v)
+      })
     )
 
   private def fx(text: String): CellValue = CellValue.Formula(text)

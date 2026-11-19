@@ -34,6 +34,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a
+  persistent row-radix trie whose rows keep their cells in parallel arrays (value, style and
+  hyperlink side by side), so a cell costs roughly 12-17 bytes of overhead instead of about 60,
+  a lookup is a few shifts with no hashing, and every node carries summaries: `usedRange` reads
+  them in O(height) instead of scanning every cell. It is keyed by each cell's own `ref`, has
+  value equality (equal cells at equal references, however the store was built) and iterates
+  row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
+  change. Migrating:
+  - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
+    macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
+  - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
+    `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
+    traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+  - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
+    `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
+    `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
+    `removedIn(range)`.
+  - `Optics.sheetCells` is a `Lens[Sheet, CellStore]`. `CellStore` is exported from
+    `com.tjclp.xl.{*, given}` and the scripting prelude.
+
 - **Breaking: long-deprecated API is removed** (#891).
   - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
     0.2.0): use `put`, `insertAt` (which refuses a duplicate name, as `addSheet` did), `remove` and

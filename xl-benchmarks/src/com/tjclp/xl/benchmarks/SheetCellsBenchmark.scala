@@ -17,8 +17,8 @@ import scala.util.Random
  * Written so it compiles and runs unchanged before and after `Sheet.cells` moves from
  * `Map[ARef, Cell]` to `CellStore`: every operation goes through `sheet(ref)`, `sheet.put`,
  * `sheet.cells.get`, `sheet.cells.size`, `sheet.usedRange`, `sheet.getRange` and `==`. The one
- * exception is full iteration, which calls `sheet.cells.valuesIterator` today and becomes
- * `sheet.cells.iterator` at the swap (the only line that changes).
+ * exception is full iteration, which called `sheet.cells.valuesIterator` on the Map and calls
+ * `sheet.cells.iterator` since the swap (the only line that changed).
  *
  * Shapes (`shape`), each holding `size` cells:
  *   - `dense20`: rows of 20 contiguous columns (a typical table)
@@ -145,10 +145,10 @@ class SheetCellsBenchmark {
       i += 1
   }
 
-  /** Full iteration. At the swap `valuesIterator` becomes `iterator`; nothing else changes. */
+  /** Full iteration (`valuesIterator` on the Map before the swap; nothing else changed). */
   @Benchmark
   def iterateAll(): Int = {
-    val it = sheet.cells.valuesIterator
+    val it = sheet.cells.iterator
     var n = 0
     while it.hasNext do if it.next().nonEmpty then n += 1
     n

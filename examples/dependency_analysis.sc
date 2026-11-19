@@ -196,7 +196,7 @@ println(s"  D1 dependents: ${cells(graph1.dependentsOf(at(complexSheet, ref"D1")
 println()
 
 // Find cells with most (transitive) dependents (potential bottlenecks)
-val dependentCounts = complexSheet.cells.keys.toSeq.map { ref =>
+val dependentCounts = complexSheet.cells.refs.toSeq.map { ref =>
   ref.toA1 -> graph1.dependents(at(complexSheet, ref), 0).flatten.size
 }
 val mostImpactful = dependentCounts.sortBy((a1, count) => (-count, a1)).take(3)

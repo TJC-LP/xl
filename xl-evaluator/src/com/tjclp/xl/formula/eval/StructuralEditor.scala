@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import scala.annotation.tailrec
 
 import com.tjclp.xl.workbooks.Workbook
-import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
+import com.tjclp.xl.sheets.{CellStore, DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
@@ -274,7 +274,7 @@ object StructuralEditor:
 
   /** Every data-table record on the sheet, deduplicated by ref, in row-major ref order. */
   private def recordKinds(sheet: Sheet): Vector[FormulaKind.DataTable] =
-    sheet.cells.values.toVector
+    sheet.cells.iterator.toVector
       .flatMap { cell =>
         cell.value match
           case CellValue.Formula(_, _, dt: FormulaKind.DataTable) => Vector(dt)
@@ -484,7 +484,7 @@ object StructuralEditor:
     // GH-509: CarryForward keeps a cache wherever the blind closure does not withdraw it.
     def carriedForward(ref: ARef, f: CellValue.Formula): Option[CellValue] =
       if stale(preEditRef(ref)) then None else f.cachedValue
-    val updatedCells = sheet.cells.map { case (ref, cell) =>
+    val updatedCells = sheet.cells.iterator.map { case cell @ Cell(ref, _, _, _) =>
       cell.value match
         // GH-430: a data-table record's payload (ref/r1/r2) is LOCAL sheet geometry — it moves
         // only when this sheet is the edited one; its TABLE(...) text is derived, never parsed.
@@ -583,7 +583,7 @@ object StructuralEditor:
         case _ => (ref, cell)
     }
     sheet.copy(
-      cells = updatedCells,
+      cells = CellStore.from(updatedCells.map(_._2)),
       conditionalFormats =
         rewriteCfFormulas(sheet.conditionalFormats, shiftLocal, editedSheet, isRow, at, delta),
       dataValidations =

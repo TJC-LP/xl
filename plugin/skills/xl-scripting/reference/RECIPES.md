@@ -21,7 +21,7 @@ val files = Files.list(dir).iterator.asScala.filter(_.toString.endsWith(".xlsx")
 files.foreach { path =>
   Excel.modify(path.toString) { wb =>
     wb.sheets.foldLeft(wb) { (acc, sheet) =>
-      val bumped = sheet.cells.keys
+      val bumped = sheet.cells.refs
         .filter(r => r.col.index0 == 2 && r.row.index0 > 0) // column C, skip header
         .foldLeft(Patch.empty) { (p, r) =>
           sheet.readTypedOpt[BigDecimal](r) match
@@ -122,7 +122,7 @@ val files = Files.list(Paths.get("monthly")).iterator.asScala
 val (combined, _) = files.foldLeft((Sheet("Combined").put(ref"A1", "Source"), 1)) {
   case ((acc, nextRow), path) =>
     val src = Excel.read(path.toString).sheets.headOption.getOrElse(sys.exit(1))
-    val dataRefs = src.cells.keys.filter(_.row.index0 > 0).toList // skip per-file header
+    val dataRefs = src.cells.refs.filter(_.row.index0 > 0).toList // skip per-file header
     val byRow = dataRefs.groupBy(_.row.index0).toList.sortBy(_._1)
     byRow.zipWithIndex.foldLeft((acc, nextRow)) { case ((s, row), ((_, refs), i)) =>
       val tagged = refs.foldLeft(
@@ -184,9 +184,9 @@ val after = Excel.read("after.xlsx")
 
 val sheetNames = (before.sheets.map(_.name) ++ after.sheets.map(_.name)).distinct
 val diffs = sheetNames.flatMap { name =>
-  val b = before.sheets.find(_.name == name).map(_.cells).getOrElse(Map.empty)
-  val a = after.sheets.find(_.name == name).map(_.cells).getOrElse(Map.empty)
-  (b.keySet ++ a.keySet).toList.sortBy(r => (r.row.index0, r.col.index0)).flatMap { ref =>
+  val b = before.sheets.find(_.name == name).map(_.cells).getOrElse(CellStore.empty)
+  val a = after.sheets.find(_.name == name).map(_.cells).getOrElse(CellStore.empty)
+  (b.refs.toSet ++ a.refs.toSet).toList.sortBy(r => (r.row.index0, r.col.index0)).flatMap { ref =>
     val left = b.get(ref).map(_.value)
     val right = a.get(ref).map(_.value)
     if left == right then None

@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import java.util.regex.Pattern
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -606,7 +606,7 @@ object RecalcResult:
       else
         val pinned = wb.sheets.iterator.flatMap { sheet =>
           sheet.cells.iterator.collect {
-            case (ref, cell)
+            case cell @ Cell(ref, _, _, _)
                 if SheetEvaluator
                   .pinnedCache(cell.value, parses.parse(sheet.name, ref, _))
                   .isDefined =>

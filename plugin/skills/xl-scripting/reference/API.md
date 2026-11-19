@@ -12,7 +12,7 @@ Everything below is in scope after `import com.tjclp.xl.scripting.{*, given}`.
 | `SheetName` | Validated sheet name (≤31 chars, no `:\/?*[]`). `SheetName("Q1")` → `Either` |
 | `Cell` | `(ref, value, styleId, ...)` |
 | `CellValue` | enum: `Text`, `Number(BigDecimal)`, `Bool`, `DateTime`, `Formula(expr, cached)`, `RichText`, `Error`, `Empty` |
-| `Sheet` | Immutable sheet: `cells: Map[ARef, Cell]`, name, merges, comments, col/row properties |
+| `Sheet` | Immutable sheet: `cells: CellStore`, name, merges, comments, col/row properties |
 | `Workbook` | `sheets: Vector[Sheet]` + metadata |
 | `Patch` | Composable change set (monoid): `Put`, `SetCellStyle`, `SetRangeStyle`, `Merge`, `MergeBorder`, `SetComment`, `SetConditionalFormat`, `Remove`, `Batch`, ... |
 | `CellStyle` | font, fill, border, numFmt, alignment (incl. `textRotation`) |
@@ -93,7 +93,7 @@ RefType.parse("Sales!C2:E9").map(_.col)  // Right(C) — runtime ref's (starting
 | `sheet.put(patch)` | `Sheet` | apply a composed Patch |
 | `sheet.style(ref"A1:D1", style)` | `Sheet` | merges into existing style |
 | `sheet.cell("A1")` / `sheet.range("A1:B3")` | `Option[Cell]` / `Iterable[Cell]` | safe lookups |
-| `sheet.cells` | `Map[ARef, Cell]` | |
+| `sheet.cells` | `CellStore` | persistent cell store (since #891, not a `Map`): `get(ref)`, `contains`, `size`, `iterator` (cells, row-major), `refs`, `inRange(range)`, `usedRange`; build with `CellStore.of(cells*)` / `CellStore.from(cells)` / `CellStore.empty`, edit with `updated(cell)` / `removed(ref)` / `putAll(cells)` |
 | `sheet.readTyped[A](ref)` | `Either[CodecError, Option[A]]` | distinguish mismatch from empty; since 0.20.0 (GH-477) a formula cell decodes as its cached value and only an uncached formula is a `TypeMismatch`; on ≤0.19.3 every formula cell is a `TypeMismatch` |
 | `sheet.readTypedOr[A](ref, default)` | `A` | total; 0.20.0: cached formula → its value, uncached → default (≤0.19.3: any formula → default) |
 | `sheet.readTypedOpt[A](ref)` | `Option[A]` | total, flat; 0.20.0: cached formula → `Some`, uncached → `None` (≤0.19.3: any formula → `None`) |

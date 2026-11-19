@@ -328,7 +328,7 @@ object DataTableSeeder:
    * row-major-first cell (deterministic under any Map iteration order).
    */
   private def recordGroups(sheet: Sheet): Vector[(CellRange, FormulaKind.DataTable)] =
-    sheet.cells.values.toVector
+    sheet.cells.iterator.toVector
       .flatMap { cell =>
         cell.value match
           case CellValue.Formula(_, _, dt: FormulaKind.DataTable) => Vector((cell, dt))

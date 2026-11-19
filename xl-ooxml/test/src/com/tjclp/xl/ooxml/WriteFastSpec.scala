@@ -93,8 +93,12 @@ class WriteFastSpec extends FunSuite:
       case (Right(fwb), Right(dwb)) =>
         val fastSheet = fwb.sheets.head
         val defaultSheet = dwb.sheets.head
-        assertEquals(fastSheet.cells.keySet, defaultSheet.cells.keySet, "Cell refs mismatch")
-        fastSheet.cells.foreach { case (cellRef, cell) =>
+        assertEquals(
+          fastSheet.cells.refs.toSet,
+          defaultSheet.cells.refs.toSet,
+          "Cell refs mismatch"
+        )
+        fastSheet.cells.iterator.foreach { case cell @ Cell(cellRef, _, _, _) =>
           assertEquals(cell.value, defaultSheet(cellRef).value, s"Mismatch at $cellRef")
         }
       case _ => fail("Both reads should succeed")

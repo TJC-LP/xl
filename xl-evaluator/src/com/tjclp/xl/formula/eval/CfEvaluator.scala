@@ -645,7 +645,7 @@ object CfEvaluator:
           None,
           None
         )
-      val readings = sheet.cells.keysIterator
+      val readings = sheet.cells.refs
         .filter(block.covers)
         .toVector
         .sortBy(ref => (ref.row.index0, ref.col.index0))

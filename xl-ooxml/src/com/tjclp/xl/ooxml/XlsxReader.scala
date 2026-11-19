@@ -2,7 +2,7 @@ package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
-import com.tjclp.xl.api.{Sheet, Workbook}
+import com.tjclp.xl.api.{CellStore, Sheet, Workbook}
 import com.tjclp.xl.sheets.{
   ColumnProperties,
   FreezePane,
@@ -1198,10 +1198,9 @@ object XlsxReader:
   ): XLResult[Sheet] =
     val (preRegisteredRegistry, styleMapping) = buildStyleRegistry(styles)
 
-    // Optimization: Use builder pattern instead of nested foldLeft with Map.updated()
-    // Old approach: O(n log n) with 50k cells = ~580k operations
-    // New approach: O(n) with 50k cells = 50k operations (10x faster)
-    val builder = Map.newBuilder[ARef, Cell]
+    // One builder pass in parse order (#891): linear when the worksheet lists its cells row-major,
+    // as Excel writes them; otherwise the builder sorts once. A repeated ref keeps the last cell.
+    val builder = CellStore.newBuilder
     for
       row <- ooxmlSheet.rows
       ooxmlCell <- row.cells
@@ -1217,7 +1216,7 @@ object XlsxReader:
         case other => other
       val styleIdOpt = ooxmlCell.styleIndex.flatMap(styleMapping.get)
       val cell = Cell(ooxmlCell.ref, value, styleIdOpt)
-      builder += (cell.ref -> cell)
+      builder += cell
 
     val cellsMap = builder.result()
 
@@ -1236,8 +1235,8 @@ object XlsxReader:
             val target = rid.flatMap(hyperlinkRels.get).orElse(loc)
             (ARef.parse(refStr).toOption, target) match
               case (Some(ref), Some(t)) =>
-                val base = m.getOrElse(ref, Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
-                m.updated(ref, base.withHyperlink(t))
+                val base = m.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
+                m.updated(base.withHyperlink(t))
               case _ => m
           case (m, _) => m
         }

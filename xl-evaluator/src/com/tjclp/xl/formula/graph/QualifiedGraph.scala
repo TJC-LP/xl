@@ -5,6 +5,7 @@ import scala.annotation.tailrec
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
+import com.tjclp.xl.sheets.CellStore
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -257,7 +258,7 @@ object QualifiedGraph:
   def of(wb: Workbook): QualifiedGraph =
     val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
-    val cellsBySheet: Map[SheetName, Map[ARef, Cell]] =
+    val cellsBySheet: Map[SheetName, CellStore] =
       wb.sheets.reverseIterator.map(sheet => sheet.name -> sheet.cells).toMap
     val expansions =
       scala.collection.mutable.HashMap.empty[(SheetName, ARef, ARef), Set[QualifiedRef]]
@@ -273,7 +274,7 @@ object QualifiedGraph:
               range.cells.filter(ref => cells.get(ref).exists(holdsValue))
             else
               cells.iterator.collect {
-                case (ref, cell) if range.contains(ref) && holdsValue(cell) => ref
+                case cell @ Cell(ref, _, _, _) if range.contains(ref) && holdsValue(cell) => ref
               }
           hits.map(ref => QualifiedRef(sheet, ref)).toSet
         }
@@ -300,7 +301,7 @@ object QualifiedGraph:
     }
     val dependencies = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if isFormulaNode(cell.value) =>
+        case cell @ Cell(ref, _, _, _) if isFormulaNode(cell.value) =>
           val q = QualifiedRef(sheet.name, ref)
           q -> union(points.getOrElse(q, Set.empty), viaRanges.getOrElse(q, Set.empty))
       }
