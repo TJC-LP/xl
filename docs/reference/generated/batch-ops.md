@@ -27,7 +27,7 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | `comment` | — | no | no | yes | `comment` | 0.9.6 | Add or replace a cell comment. |
 | `remove-comment` | — | no | no | yes | `remove-comment` | 0.9.6 | Remove a cell's comment. |
 | `hyperlink` | — | no | no | yes | — | 0.10.0 | Set or clear a cell hyperlink. |
-| `clear` | — | no | yes | yes | `clear` | 0.9.6 | Clear a range: contents by default (unmerging overlaps), or styles/comments/all. |
+| `clear` | — | no | yes | yes | `clear` | 0.9.6 | Clear a range: contents by default (formatting and merges kept), or styles/comments/all. |
 | `col-hide` | — | yes | no | yes | `col` | 0.9.6 | Hide a column. |
 | `col-show` | — | yes | no | yes | `col` | 0.9.6 | Show a hidden column. |
 | `row-hide` | — | yes | no | yes | `row` | 0.9.6 | Hide a row. |
@@ -232,7 +232,7 @@ Set or clear a cell hyperlink.
 
 ### `clear`
 
-Clear a range: contents by default (unmerging overlaps), or styles/comments/all.
+Clear a range: contents by default (formatting and merges kept), or styles/comments/all.
 
 ```json
 {"op":"clear","range":"A1:B10","all":true}

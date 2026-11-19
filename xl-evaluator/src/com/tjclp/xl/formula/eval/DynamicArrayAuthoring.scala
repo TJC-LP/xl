@@ -349,16 +349,21 @@ private[xl] object DynamicArrayAuthoring:
 
   /**
    * A contents clear of `ranges` on `sheet`, applied to its dynamic arrays as Excel 365 applies it:
-   * every cell of the ranges is removed, except the cells of a live spill whose anchor the clear
+   * every cell of the ranges is emptied, except the cells of a live spill whose anchor the clear
    * leaves in place — Excel keeps a spill's cells while its anchor stays, so clearing them changes
    * nothing, and the rest of the clear still happens ([[KeptSpill]], for the caller to report). A
    * cleared anchor takes its whole spill with it, inside the ranges or not. `spills` are the
    * sheet's ([[spillsOf]]); the ranges are matched as ranges, never expanded.
+   *
+   * GH-886: like Excel's Clear Contents, an emptied cell keeps its style but loses its hyperlink; a
+   * cell with no style is removed. `keepFormatting = false` removes every emptied cell outright,
+   * for a clear that drops the formatting too (`clear --all`).
    */
   def clearContents(
     sheet: Sheet,
     spills: Vector[Spill],
-    ranges: Vector[CellRange]
+    ranges: Vector[CellRange],
+    keepFormatting: Boolean = true
   ): ContentsCleared =
     val targeted = (r: ARef) => ranges.exists(_.contains(r))
     val (released, cleared) = spills
@@ -374,8 +379,14 @@ private[xl] object DynamicArrayAuthoring:
         Option.when(parts.nonEmpty)(KeptSpill(s.anchor, s.formula, s.extent, parts))
       )
     val keep = (r: ARef) => kept.exists(_.kept.exists(_.contains(r)))
+    val emptied = (r: ARef) => targeted(r) && !keep(r)
     val remaining =
-      CellStore.from(released.cells.iterator.filterNot(c => targeted(c.ref) && !keep(c.ref)))
+      if keepFormatting then
+        CellStore.from(released.cells.iterator.flatMap { cell =>
+          if !emptied(cell.ref) then Some(cell)
+          else cell.styleId.map(_ => cell.copy(value = CellValue.Empty, hyperlink = None))
+        })
+      else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
     ContentsCleared(released.copy(cells = remaining), cleared, kept)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
