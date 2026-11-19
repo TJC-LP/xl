@@ -10,7 +10,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
-/** GH-747: lookups and returned references share the aggregate pass's used-range memo. */
+/** GH-747: whole-axis lookups and returned references bound to the sheet's used range. */
 class WholeAxisUsedRangeSpec extends FunSuite:
   private val data = SheetName.unsafe("Data")
   private val out = SheetName.unsafe("Out")

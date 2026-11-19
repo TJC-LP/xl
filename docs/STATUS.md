@@ -285,17 +285,17 @@
 
 ### Test Coverage
 
-**10,130 test cases** (the #891 purge (PR A, on #896), 2026-11-18): 10,130 passed, 0 failed, none ignored. Counts include skipped cases.
+**10,143 test cases** (the #891 CellStore (PR B, on #898), 2026-11-18): 10,143 passed, 0 failed, none ignored. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4382 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1875 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1446 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1978 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-evaluator | 4369 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1887 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1447 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 2003 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 217 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 66 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 67 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 
