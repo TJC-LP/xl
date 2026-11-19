@@ -216,6 +216,7 @@ object XlsxWriter:
 
     try
       val report = unifiedWrite(workbook, sourceContext, OutputPath(tempPath), config)
+      OutputFileMode.prepare(tempPath, destPath) // GH-868: umask mode, or the replaced file's
       try
         Files.move(
           tempPath,

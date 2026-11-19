@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ooxml.OutputFileMode
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 import fs2.Stream
@@ -498,14 +499,15 @@ object Excel:
       writeResult <- excel.write(modified, tempFile).attempt
       _ <- writeResult match
         case scala.util.Right(_) =>
-          Sync[IO].delay(
+          Sync[IO].delay {
+            OutputFileMode.prepare(tempFile, targetPath) // GH-868: keep the file's mode
             Files.move(
               tempFile,
               targetPath,
               StandardCopyOption.REPLACE_EXISTING,
               StandardCopyOption.ATOMIC_MOVE
             )
-          )
+          }
         case scala.util.Left(err) =>
           Sync[IO].delay(Files.deleteIfExists(tempFile)) >>
             IO.raiseError(err)

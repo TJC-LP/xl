@@ -313,6 +313,11 @@ object SharedStrings extends XmlReadable[SharedStrings]:
   def normalize(s: String): String =
     Normalizer.normalize(s, Normalizer.Form.NFC)
 
+  // row-major: the order a generated table numbers its first references in (#891)
+  private val rowMajor: java.util.Comparator[com.tjclp.xl.cells.Cell] = (x, y) =>
+    val byRow = Integer.compare(x.ref.row.index0, y.ref.row.index0)
+    if byRow != 0 then byRow else Integer.compare(x.ref.col.index0, y.ref.col.index0)
+
   /**
    * Build SharedStrings table from workbook text and rich text cells
    *
@@ -333,10 +338,6 @@ object SharedStrings extends XmlReadable[SharedStrings]:
    * @return
    *   SharedStrings with deduplicated entries and total count
    */
-  private val rowMajor: java.util.Comparator[com.tjclp.xl.cells.Cell] = (x, y) =>
-    val byRow = Integer.compare(x.ref.row.index0, y.ref.row.index0)
-    if byRow != 0 then byRow else Integer.compare(x.ref.col.index0, y.ref.col.index0)
-
   def fromWorkbook(wb: Workbook, escapeFormulas: Boolean = false): SharedStrings =
     fromSheets(wb.sheets, escapeFormulas)
 

@@ -1381,12 +1381,14 @@ Clear cell contents, styles, or comments from a range.
 | `--comments` | flag | No | false | Clear comments only |
 
 **Behavior**:
-- **Default** (no flags): Clears cell contents only
-- **`--all`**: Clears everything (contents, styles, comments)
+- **Default** (no flags): Clears cell contents only, like Excel's Clear Contents: values,
+  formulas and hyperlinks go, while number formats, fonts, fills, borders and merges stay (GH-886)
+- **`--all`**: Clears everything (contents, styles, comments), removes the cells, and unmerges
+  any merged region that overlaps the range
 - **`--styles`**: Clears formatting but keeps contents and comments
 - **`--comments`**: Clears comments but keeps contents and styles
 - Flags can be combined: `--styles --comments` clears both
-- Merged regions overlapping the cleared range are automatically unmerged
+- Only `--all` unmerges; use `unmerge` to unmerge without clearing
 - Dynamic arrays (GH-714): clearing an anchor clears its whole spill; the cells of a spill whose
   anchor lies outside the range keep their values, as in Excel, while the rest of the range is
   cleared, with a `SPILL_CELLS_SKIPPED` warning naming the anchor and the ranges kept
