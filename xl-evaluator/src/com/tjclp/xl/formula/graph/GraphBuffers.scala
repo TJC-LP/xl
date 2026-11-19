@@ -14,6 +14,9 @@ private[graph] final class IntBuf(initial: Int = 16):
   def apply(i: Int): Int = data(i)
   def clear(): Unit = n = 0
 
+  /** Cells of the backing array, whatever `length` is. */
+  def capacity: Int = data.length
+
   def +=(x: Int): Unit =
     if n == data.length then data = java.util.Arrays.copyOf(data, data.length * 2)
     data(n) = x
@@ -102,6 +105,10 @@ private[graph] final class StampSet(expected: Int):
   private var keys = StampSet.empty(mask + 1)
   private var stamps = new Array[Int](mask + 1)
   private var used = 0
+  private var cells = 2L * (mask + 1)
+
+  /** Array cells this set has allocated since it was made, the tables it outgrew included. */
+  def allocated: Long = cells
 
   /** Stamp `node` with `stamp`; false when it already carried that stamp. `node` is >= 0. */
   def mark(node: Int, stamp: Int): Boolean =
@@ -125,6 +132,7 @@ private[graph] final class StampSet(expected: Int):
     mask = mask * 2 + 1
     keys = StampSet.empty(mask + 1)
     stamps = new Array[Int](mask + 1)
+    cells += 2L * (mask + 1)
     var i = 0
     while i < oldKeys.length do
       val k = oldKeys(i)
