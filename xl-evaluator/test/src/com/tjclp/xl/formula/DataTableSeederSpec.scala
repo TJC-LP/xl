@@ -379,6 +379,30 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(interiorNum(sheetNamed(seeded.workbook, "S"), ref"F10"), None)
   }
 
+  test("#891: the audit re-derives a selector table as seeding does (no stale note)") {
+    // the audit hands seeding the recalculation graph, which narrowed the lookup on K1: seeding
+    // must set that graph aside, or the correct caches below are reported stale
+    val wb = selectorTable(
+      "VLOOKUP(2,A10:D11,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "J1*1",
+      "C10" -> "J1*10",
+      "D10" -> "J1*100",
+      "A11" -> "2",
+      "B11" -> "J1*2",
+      "C11" -> "J1*20",
+      "D11" -> "J1*200"
+    )
+    val seeded = wb
+      .recalculate()
+      .workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+      .workbook
+    val audit = com.tjclp.xl.formula.eval.WorkbookAudit.of(seeded)
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
   test("#891: an HLOOKUP whose row selector is a table input seeds every selected row") {
     val wb = selectorTable(
       "HLOOKUP(2,A10:B13,K1,FALSE)",
