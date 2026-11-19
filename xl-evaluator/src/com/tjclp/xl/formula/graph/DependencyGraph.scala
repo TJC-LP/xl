@@ -1169,7 +1169,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
-    whatIfInputs: Set[QualifiedRef] = Set.empty,
+    whatIfSelector: Option[QualifiedRef => Boolean] = None,
     canonicalSheet: SheetName => SheetName = identity,
     nameRanges: NameRanges = NameRanges.empty,
     parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption,
@@ -1192,7 +1192,7 @@ object DependencyGraph:
         cellsFor,
         workbook,
         preciseLookups,
-        whatIfInputs,
+        whatIfSelector,
         canonicalSheet,
         nameRanges,
         if depth == 0 then reader else None
@@ -1271,7 +1271,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
     workbook: Option[Workbook],
     preciseLookups: Boolean,
-    whatIfInputs: Set[QualifiedRef],
+    whatIfSelector: Option[QualifiedRef => Boolean],
     canonicalSheet: SheetName => SheetName,
     nameRanges: NameRanges,
     reader: Option[ARef]
@@ -1317,9 +1317,10 @@ object DependencyGraph:
         case n: BigDecimal if n.isValidInt => Some(n.toInt)
         case _ => None
       def cell(sheet: SheetName, ref: ARef): Option[Int] =
-        // a data table substitutes its input cells, so a selector read from one is not fixed:
-        // the what-if pass would select a strip this graph never ordered or recomputed
-        if whatIfInputs.nonEmpty && whatIfInputs.contains(QualifiedRef(sheet, ref)) then None
+        // `whatIfSelector` answers for a selector cell a data table substitutes: true when the
+        // caller's graph must not fold it (the what-if pass would select a strip the graph never
+        // ordered or recomputed)
+        if whatIfSelector.exists(_(QualifiedRef(sheet, ref))) then None
         else
           workbook.flatMap(_(sheet).toOption).flatMap { target =>
             target(ref).value match
