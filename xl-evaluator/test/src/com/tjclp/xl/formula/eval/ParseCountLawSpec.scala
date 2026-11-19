@@ -28,6 +28,10 @@ import org.scalacheck.Prop
  *
  * Defined-name bodies are not formula cells: each consumer parses the bodies it reads once
  * (`NameParses` counts the evaluation's).
+ *
+ * What the counter cannot see: a parse made by an evaluator built without the pass's memo (an
+ * uncached cell evaluated on demand outside the pass) is not a `FormulaParses` parse. "Once" in the
+ * laws below means once at the counted sites.
  */
 class ParseCountLawSpec extends ScalaCheckSuite:
 

@@ -364,8 +364,34 @@ class PassCacheLawSpec extends ScalaCheckSuite:
         val name = book.workbook.sheets(sheet).name
         val expected =
           full.evaluated.getOrElse(name, Map.empty).filter((ref, _) => range.contains(ref))
-        Prop(!result.isClean || result.values == expected) :|
+        // every value a window shows is the recalculation's, clean or not; a clean one shows all
+        Prop(result.values.forall((ref, value) => expected.get(ref).contains(value))) :|
+          s"sheet $sheet shown\nwindow ${result.values}\nrecalc $expected" &&
+          Prop(!result.isClean || result.values == expected) :|
           s"sheet $sheet\nwindow ${result.values}\nrecalc $expected"
+      }*)
+    }
+  }
+
+  property("an iterating stale book's window shows what the iterative recalculation computes") {
+    // the cyclic books hold an uncached member (Out!D2) beside stale caches everywhere: a window
+    // that evaluated the member on demand read those caches (review of #891)
+    val calcPr = com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true)
+    Prop.forAll(genStaleBook) { book =>
+      val wb =
+        book.workbook.copy(metadata = book.workbook.metadata.copy(calcPr = Some(calcPr)))
+      val full = WorkbookEvaluator.recalculate(wb)(clock, IterativeCalc.fromCalcPr(calcPr))
+      val failed = full.errors.iterator.map(e => (e.sheet, e.ref)).toSet
+      Prop.all(windows.map { (sheet, range) =>
+        val name = wb.sheets(sheet).name
+        val expected = full.evaluated
+          .getOrElse(name, Map.empty)
+          .filter((ref, _) => range.contains(ref) && !failed((name, ref)))
+        val on = window(wb, sheet, range, cachesOn())
+        val bare = window(wb, sheet, range, new Evaluator.AggregateMemo(cachesAggregates = false))
+        Prop(on == bare) :| s"sheet $sheet on/bare\n$on\n$bare" &&
+        Prop(on.values == expected) :|
+          s"sheet $sheet cyclic ${book.cyclic}\nwindow ${on.values}\nrecalc $expected"
       }*)
     }
   }
