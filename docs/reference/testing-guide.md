@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #891 purge (PR A, on #896), 2026-11-19 recorded **10,237 cases**: 10,237 passed, 0 failed (MUnit reported none ignored).
+**Current Status**: the #891 purge (PR A, on #896), 2026-11-19 recorded **10,260 cases**: 10,260 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #891 purge (PR A, on #896), 2026-11-19 (10,237 passed, 0 failed, none ignored). Counts include skipped cases.
+As of the #891 purge (PR A, on #896), 2026-11-19 (10,260 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4454 |
-| xl-core | 1876 |
+| xl-evaluator | 4458 |
+| xl-core | 1884 |
 | xl-ooxml | 1454 |
-| xl-cli | 2014 |
+| xl-cli | 2025 |
 | xl-cats-effect | 220 |
 | xl-agent | 153 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **10,237** |
+| **Total** | **10,260** |
 
 
 ## Test Quality Metrics
