@@ -147,16 +147,18 @@ object CellCommands:
 
       // Apply clearing operations
       sheet1 = contents.fold(targetSheet)(_.sheet)
-      sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
-      sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
-
       // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it (Excel's
       // Clear Contents does); --styles and --all unmerge every merged region the range touches,
-      // as Excel's Clear Formats and Clear All do.
-      sheet4 =
+      // as Excel's Clear Formats and Clear All do, and reset the styles of the whole merge (Excel
+      // expands a selection to the merges it touches), so no unmerged cell keeps the old format.
+      overlappingMerges = sheet1.mergedRanges.filter(_.intersects(range)).toVector
+      sheet2 =
         if clearStyles then
-          val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
-          overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
+          (range +: overlappingMerges).foldLeft(sheet1)((s, r) => s.clearStylesInRange(r))
+        else sheet1
+      sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
+      sheet4 =
+        if clearStyles then overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
         else sheet3
 
       updatedWb = wb.put(sheet4)

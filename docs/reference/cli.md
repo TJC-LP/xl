@@ -1382,7 +1382,8 @@ Clear cell contents, styles, or comments from a range.
 - **`--all`**: Clears everything (contents, styles, comments), removes the cells, and unmerges
   any merged region that overlaps the range
 - **`--styles`**: Clears formatting but keeps contents and comments; like Excel's Clear Formats,
-  it also unmerges any merged region that overlaps the range (GH-894)
+  it also unmerges any merged region that overlaps the range and resets that whole region's
+  formatting (GH-894)
 - **`--comments`**: Clears comments but keeps contents and styles
 - Flags can be combined: `--styles --comments` clears both
 - Only `--all` and `--styles` unmerge; use `unmerge` to unmerge without clearing

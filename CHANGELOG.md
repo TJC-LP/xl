@@ -38,8 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
-  the range touches, as `--all` already did. A contents clear (no flags) and `--comments` still
-  keep merges. **Behaviour change:** on a sheet where A1:F1 is a merged title "Sample Co" in
+  the range touches, as `--all` already did, and reset the formatting of each whole merge they
+  unmerge (Excel widens a selection to the merges it touches), so `clear B1 --styles` on a merged
+  A1:F1 also resets A1. A contents clear (no flags) and `--comments` still keep merges. **Behaviour change:** on a sheet where A1:F1 is a merged title "Sample Co" in
   Georgia 16 bold, `clear A1 --styles` leaves A1 holding "Sample Co" with default formatting and
   A1:F1 no longer merged (was still merged).
 

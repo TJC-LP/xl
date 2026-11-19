@@ -2344,16 +2344,16 @@ object BatchParser:
         val clearStyles = all || stylesFlag
         val clearComments = all || commentsFlag
 
-        val s1 = contents.fold(sheet)(_.sheet)
-        val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
-        val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
-
         // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it; a
-        // styles clear (`styles` or `all`) unmerges, as Excel's Clear Formats does.
-        if clearStyles then
-          val overlapping = s3.mergedRanges.filter(_.intersects(range))
-          overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
-        else s3
+        // styles clear (`styles` or `all`) unmerges every merge the range touches, as Excel's
+        // Clear Formats does, and resets the styles of each whole merge it unmerges.
+        val s1 = contents.fold(sheet)(_.sheet)
+        val overlapping = s1.mergedRanges.filter(_.intersects(range)).toVector
+        val s2 =
+          if clearStyles then (range +: overlapping).foldLeft(s1)((s, r) => s.clearStylesInRange(r))
+          else s1
+        val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
+        if clearStyles then overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr)) else s3
       }
     yield (result, contents.fold(Vector.empty)(_.kept).map(sheetName -> _))
 

@@ -452,8 +452,17 @@ class ClearCommandSpec extends FunSuite:
     assertNotEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
   }
 
-  test("GH-894 clear --styles: a range that only overlaps the merge unmerges it too") {
-    assertEquals(clearVerb("C1:D2", styles = true).mergedRanges, Set.empty[CellRange])
+  test("GH-894 clear --styles: a range that only overlaps the merge unmerges it and resets A1") {
+    Vector("B1", "C1:D2").foreach { r =>
+      val s = clearVerb(r, styles = true)
+      assertEquals(s.mergedRanges, Set.empty[CellRange], r)
+      assertNotEquals(s.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"), r)
+      assertEquals(
+        s.cells.get(ARef.from0(0, 0)).map(_.value),
+        Some(CellValue.Text("Quarterly report")),
+        r
+      )
+    }
   }
 
   test("GH-894 clear --styles --stream: unmerges too") {
@@ -482,6 +491,17 @@ class ClearCommandSpec extends FunSuite:
       Some(CellValue.Text("Quarterly report"))
     )
     assertEquals(run(styles = false, comments = true).mergedRanges, Set(titleRange))
+    val partial = BatchParser
+      .applyBatchOperations(
+        Workbook(template),
+        None,
+        Vector(BatchOp.Clear("Summary!C1", all = false, styles = true, comments = false))
+      )
+      .unsafeRunSync()
+      .sheets
+      .head
+    assertEquals(partial.mergedRanges, Set.empty[CellRange])
+    assertNotEquals(partial.getCellStyle(ARef.from0(0, 0)).map(_.font.name), Some("Georgia"))
   }
 
   test("GH-886 clear: a hyperlink goes with the contents; its cell keeps its formatting") {
