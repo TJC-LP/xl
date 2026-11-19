@@ -284,7 +284,7 @@ class OpticsSpec extends FunSuite:
       ref = ref"A1",
       value = CellValue.Text("test"),
       styleId = Some(StyleId(3)),
-      hyperlink = Some("https://example.com")
+      hyperlink = Some(Hyperlink("https://example.com"))
     )
     val sheet = emptySheet
       .put(originalCell)
@@ -303,7 +303,7 @@ class OpticsSpec extends FunSuite:
       updated.getComment(ref"A1"),
       Some(com.tjclp.xl.cells.Comment.plainText("Note"))
     )
-    assertEquals(cell.hyperlink, Some("https://example.com"))
+    assertEquals(cell.hyperlink, Some(Hyperlink("https://example.com")))
   }
 
   test("focus DSL works with pattern matching") {

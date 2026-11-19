@@ -137,7 +137,7 @@ class FixtureCorpusSpec extends FunSuite:
     val sheet = sheetOf(load("comments-hyperlinks.xlsx"), "Notes", "comments-hyperlinks.xlsx")
     assertEquals(
       sheet(ref"B1").hyperlink,
-      Some("https://example.com/xl-fixtures"),
+      Some(Hyperlink("https://example.com/xl-fixtures")),
       "external hyperlink target"
     )
     assertEquals(sheet(ref"B1").value, CellValue.Text("example link"))

@@ -169,7 +169,7 @@ final case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
   styleId: Option[StyleId] = None,
-  hyperlink: Option[String] = None
+  hyperlink: Option[Hyperlink] = None // opaque over String: Hyperlink(target), .target
 )
 
 final case class Sheet(
@@ -253,7 +253,7 @@ object RichText:
 Run formatting is carried entirely by `Option[Font]` (the old per-run `bold`/`italic`/`color` flags were folded into `Font`); `rawRPrXml` preserves run properties the `Font` model doesn't represent (vertAlign, underline styles, …) so round-trips are lossless. RichText is stored losslessly (including whitespace) via SharedStrings in `xl-ooxml` and supported in streaming write paths as inline strings.
 
 ## Comments & Hyperlinks
-- Cells carry a lightweight `hyperlink: Option[String]`.
+- Cells carry a lightweight `hyperlink: Option[Hyperlink]`. `Hyperlink` is an opaque type over the target `String` (`Hyperlink(target)`, `.target`): a distinct type so that a positional `Some("text")` in `Cell`'s fourth parameter, the slot the removed `Cell.comment` held, does not compile into a link (#891). `cell.withHyperlink(url: String)` is the usual way to set one (it strips a leading `#`).
 - Comments live only on the sheet: `comments: Map[ARef, Comment]` (written with `sheet.comment(ref, Comment...)`), the store the OOXML comment parts serialize.
 
 ## Complexity Notes
