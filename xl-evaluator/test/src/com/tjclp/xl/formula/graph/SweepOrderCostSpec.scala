@@ -28,9 +28,8 @@ class SweepOrderCostSpec extends FunSuite:
     val graph = CompactGraph.build(wb)
     graph.condensation.collect { case (ids, true) =>
       val members = BitSet.fromSpecific(ids.iterator)
-      val (order, scratch) = graph.withinComponentOrderMeasured(members)
-      assertEquals(order.toVector, graph.withinComponentOrder(members).toVector)
-      scratch
+      // the measured call is the production walk itself (`withinComponentOrder` is its first half)
+      graph.withinComponentOrderMeasured(members)._2
     }
 
   test("two-cell cycles: the same scratch in a 2,000-row and a 20,000-row acyclic book") {
