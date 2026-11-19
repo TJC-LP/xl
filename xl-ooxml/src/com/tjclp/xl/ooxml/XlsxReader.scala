@@ -1225,8 +1225,9 @@ object XlsxReader:
     val cellsWithHyperlinks = ooxmlSheet.preservedKnown.get("hyperlinks") match
       case None => cellsMap
       case Some(hls) =>
-        (hls \ "hyperlink").foldLeft(cellsMap) {
-          case (m, e: Elem) =>
+        // one merge into the store (#891); a later element for one cell wins, as a fold would
+        val linked = (hls \ "hyperlink").iterator.flatMap {
+          case e: Elem =>
             val refStr = e \@ "ref"
             val rid = e.attributes.collectFirst {
               case a: PrefixedAttribute if a.key == "id" => a.value.text
@@ -1235,11 +1236,13 @@ object XlsxReader:
             val target = rid.flatMap(hyperlinkRels.get).orElse(loc)
             (ARef.parse(refStr).toOption, target) match
               case (Some(ref), Some(t)) =>
-                val base = m.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
-                m.updated(base.withHyperlink(t))
-              case _ => m
-          case (m, _) => m
+                val base =
+                  cellsMap.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
+                Some(base.withHyperlink(t))
+              case _ => None
+          case _ => None
         }
+        if linked.hasNext then cellsMap.putAll(linked) else cellsMap
 
     // Parse column properties from <cols> element
     val columnProperties = ooxmlSheet.cols match

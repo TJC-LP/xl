@@ -28,10 +28,10 @@ object styleSyntax:
     @annotation.targetName("withRangeStyleExt")
     def withRangeStyle(range: CellRange, style: CellStyle): Sheet =
       val (newRegistry, styleId) = sheet.styleRegistry.register(style)
-      val updatedCells = range.cells.foldLeft(sheet.cells) { (cells, ref) =>
-        val cell = cells.get(ref).getOrElse(Cell.empty(ref)).withStyle(styleId)
-        cells.updated(cell)
-      }
+      // one merge into the store (#891): a write per cell copies its row each time
+      val updatedCells = sheet.cells.putAll(
+        range.cells.map(ref => sheet.cells.get(ref).getOrElse(Cell.empty(ref)).withStyle(styleId))
+      )
       sheet.copy(
         styleRegistry = newRegistry,
         cells = updatedCells
