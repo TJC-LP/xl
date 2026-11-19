@@ -53,8 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a cell with no style of its own that sits in a row or column with a default style
   (`<row s= customFormat="1">` or `<col style=>`) used to lose its record on a contents clear,
   so it took on that row's or column's format. It now keeps an empty record with no style, so it
-  stays on the default format, as Excel's Clear Contents leaves it. Cells outside a styled row
-  or column are still removed, and `clear --all` still removes the record. **Behaviour change:**
+  stays on the default format, as Excel's Clear Contents leaves it. So do the spill cells of a
+  dynamic-array anchor the clear removes. Cells outside a styled row or column are still
+  removed, and `clear --all` still removes the record. **Behaviour change:**
   with column B styled with a yellow fill and an unstyled `5` in B4, `clear B4` leaves B4 empty
   with no fill (was: empty with column B's yellow fill).
 

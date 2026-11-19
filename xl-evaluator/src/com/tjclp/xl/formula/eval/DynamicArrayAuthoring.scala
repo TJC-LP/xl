@@ -358,8 +358,9 @@ private[xl] object DynamicArrayAuthoring:
    * GH-886: like Excel's Clear Contents, an emptied cell keeps its style but loses its hyperlink; a
    * cell with no style is removed, unless its row or column has a default style (GH-897): a cell
    * with no record takes that row's or column's style, so the emptied cell keeps its record, with
-   * no style of its own, and stays on the default format. `keepFormatting = false` removes every
-   * emptied cell outright, for a clear that drops the formatting too (`clear --all`).
+   * no style of its own, and stays on the default format; so does a released spill cell there.
+   * `keepFormatting = false` removes every emptied cell outright, for a clear that drops the
+   * formatting too (`clear --all`).
    */
   def clearContents(
     sheet: Sheet,
@@ -384,13 +385,18 @@ private[xl] object DynamicArrayAuthoring:
     val emptied = (r: ARef) => targeted(r) && !keep(r)
     val result =
       if keepFormatting then
+        // GH-897: a released spill cell that `clearValues` dropped (no style, no hyperlink) gets
+        // a bare record too when its row or column is styled, inside the ranges or not
+        val pinned = cleared.iterator
+          .filter(r => !released.cells.contains(r) && inStyledBand(sheet, r))
+          .flatMap(r => sheet.cells.get(r).map(c => r -> c.copy(value = CellValue.Empty)))
         released.copy(cells = released.cells.flatMap { (r, cell) =>
           if !emptied(r) then Some(r -> cell)
           else
             Option.when(cell.styleId.isDefined || inStyledBand(sheet, r))(
               r -> cell.copy(value = CellValue.Empty, hyperlink = None)
             )
-        })
+        } ++ pinned)
       else released.copy(cells = released.cells.filterNot((r, _) => emptied(r)))
     ContentsCleared(result, cleared, kept)
 
