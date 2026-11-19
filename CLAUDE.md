@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,260)
+./mill __.test             # Run all tests (10,276)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -426,12 +426,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,260 test cases** (the #891 purge (PR A, on #896), 2026-11-19; 10,260 passed, none ignored) by module: xl-evaluator (4458), xl-core (1884), xl-ooxml (1454), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,276 test cases** (the #891 purge (PR A, on #896), 2026-11-19; 10,276 passed, none ignored) by module: xl-evaluator (4463), xl-core (1890), xl-ooxml (1454), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (71). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,260 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,276 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
