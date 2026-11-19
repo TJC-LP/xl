@@ -173,6 +173,18 @@ object WorkbookAudit:
    * every other bucket is the same.
    */
   def of(wb: Workbook, clock: Clock, checkDataTables: Boolean): WorkbookAudit =
+    of(wb, clock, checkDataTables, RecalcCounters.disabled)
+
+  /**
+   * #891: the audit with an enabled [[RecalcCounters]], for the parse-count laws: the same audit,
+   * with the graph build's and the data-table check's work added to `counters`.
+   */
+  private[formula] def of(
+    wb: Workbook,
+    clock: Clock,
+    checkDataTables: Boolean,
+    counters: RecalcCounters
+  ): WorkbookAudit =
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val position: Map[SheetName, Int] =
       wb.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
@@ -184,7 +196,8 @@ object WorkbookAudit:
     // #891: one graph and one parse of each formula for the whole audit — the recalculation
     // graph's build parses them; the scan and the dynamic and unresolved-reader classifications
     // read those parses, and the cycles and the data-table volatile cones come from the graph
-    val recalcGraph = RecalcGraph.build(wb, RecalcCounters.disabled)
+    val recalcGraph =
+      counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(wb, counters))
     val parses = recalcGraph.parses
     val viaName = volatileNames(wb)
     val scanned: Vector[Finding] = wb.sheets.iterator.flatMap { sheet =>
@@ -193,7 +206,7 @@ object WorkbookAudit:
           QualifiedRef(sheet.name, ref),
           cell.value,
           viaName(sheet.name, _, _),
-          parses.parse(sheet.name, ref, _)
+          parses.parse(sheet.name, ref, _, counters)
         )
       }
     }.toVector
@@ -230,6 +243,7 @@ object WorkbookAudit:
             wb,
             clock,
             recalcGraph,
+            counters,
             // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
             scanned.iterator.collect {
               case Finding.Volatile(q) => q
@@ -256,6 +270,7 @@ object WorkbookAudit:
     wb: Workbook,
     clock: Clock,
     graph: RecalcGraph,
+    counters: RecalcCounters,
     volatile: Set[QualifiedRef]
   ): Vector[StaleDataTable] =
     val tables = wb.sheets
@@ -264,7 +279,7 @@ object WorkbookAudit:
     if tables.isEmpty then Vector.empty
     else
       val seeded =
-        DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator, graph)
+        DataTableSeeder.seedSample(wb, clock, sampleOf(_).iterator, graph, counters)
       val after = seeded.sheets.iterator.map(s => s.name -> s).toMap
       tables.flatMap { case (sheet, (interior, _)) =>
         val sampled = sampleOf(interior)

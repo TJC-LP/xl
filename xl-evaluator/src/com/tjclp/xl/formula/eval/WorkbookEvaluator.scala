@@ -376,6 +376,9 @@ object WorkbookEvaluator:
     memo: Evaluator.AggregateMemo
   ): RecalcResult =
     val iterative = resolveIterative(wb, options)
+    // #891: with table seeding the pass and the seeder share one graph (and its one parse of each
+    // formula); built here, since only this caller knows a second consumer follows
+    val shared = Option.when(options.seedTables)(buildGraph(wb, memo.counters))
     val base = iterative match
       case Some(calc) =>
         recalculateImpl(
@@ -383,23 +386,103 @@ object WorkbookEvaluator:
           options.clock,
           Some(options.rng),
           Some(calc),
-          generationMemo = memo
+          generationMemo = memo,
+          built = shared
         )
       case None if options.parallelism > 1 =>
-        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo)
+        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo, shared)
       case None =>
         recalculateImpl(
           wb,
           options.clock,
           Some(options.rng),
           None,
-          generationMemo = memo
+          generationMemo = memo,
+          built = shared
         )
     if !options.seedTables then base
     else
-      DataTableSeeder
-        .seedDataTablesReport(base.workbook)(options.clock, iterative)
-        .fold(_ => base, report => base.copy(workbook = report.workbook))
+      val report =
+        DataTableSeeder.seedReport(base.workbook, options.clock, iterative, shared, memo.counters)
+      base.copy(workbook = report.workbook)
+
+  /** The recalculation graph of `wb`, timed and counted as a pass's graph build. */
+  private def buildGraph(wb: Workbook, counters: RecalcCounters): RecalcGraph =
+    counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(wb, counters))
+
+  /**
+   * #891: `recalc --tables` in one call: a full recalculation of `wb` (iterative when `iterative`
+   * is given, else over `parallelism` waves when above 1; system randomness, as the CLI's
+   * `recalculate(clock)` / `recalculateParallel` / `recalculate(clock, iterative)`), then
+   * `seedDataTablesReport` on its result at the same clock, with the book's own `<calcPr>` deciding
+   * the seeder's iteration. The two steps share one recalculation graph, so each formula is parsed
+   * once for both; run back to back through the public methods they each built one. The graph of
+   * `wb` serves the recalculated book because the two differ in cached values only: the graph reads
+   * formula texts, defined names, sheets and constant cells, none of which a recalculation writes.
+   */
+  private[xl] def recalculateThenSeedTables(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    parallelism: Int
+  ): (RecalcResult, DataTableSeedReport) =
+    recalculateThenSeedTablesCounted(wb, clock, iterative, parallelism, RecalcCounters.disabled)
+
+  /** [[recalculateThenSeedTables]] with `counters`, for the parse-count laws. */
+  private[formula] def recalculateThenSeedTablesCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    parallelism: Int,
+    counters: RecalcCounters
+  ): (RecalcResult, DataTableSeedReport) =
+    val memo = new Evaluator.AggregateMemo(counters = counters)
+    val graph = buildGraph(wb, counters)
+    val result = recalculateImpl(
+      wb,
+      clock,
+      None,
+      iterative,
+      if iterative.isDefined then 1 else parallelism,
+      memo,
+      Some(graph)
+    )
+    val report = DataTableSeeder.seedReport(
+      result.workbook,
+      clock,
+      DataTableSeeder.declaredIterative(result.workbook),
+      Some(graph),
+      counters
+    )
+    (result, report)
+
+  /**
+   * #891: a full recalculation of `wb` and the dirty cone of an edit to `seeds` on it
+   * ([[DependentRecalculation.editCone]]) from one recalculation graph: what a `batch`, a name edit
+   * and a write to an iterating book do, which built the graph once for each. Both questions are
+   * asked of `wb` itself, the book the graph was built on.
+   */
+  private[xl] def recalculateWithEditCone(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    seeds: Set[QualifiedRef]
+  ): (RecalcResult, Set[QualifiedRef]) =
+    recalculateWithEditConeCounted(wb, clock, iterative, seeds, RecalcCounters.disabled)
+
+  /** [[recalculateWithEditCone]] with `counters`, for the parse-count laws. */
+  private[formula] def recalculateWithEditConeCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    seeds: Set[QualifiedRef],
+    counters: RecalcCounters
+  ): (RecalcResult, Set[QualifiedRef]) =
+    val memo = new Evaluator.AggregateMemo(counters = counters)
+    val graph = buildGraph(wb, counters)
+    val result =
+      recalculateImpl(wb, clock, None, iterative, generationMemo = memo, built = Some(graph))
+    (result, DependentRecalculation.editConeOn(wb, graph, seeds))
 
   /** The iterative settings `options` resolve to for `wb` — None when cycles must isolate. */
   private def resolveIterative(wb: Workbook, options: RecalcOptions): Option[IterativeCalc] =
@@ -554,7 +637,8 @@ object WorkbookEvaluator:
     rngOpt: Option[Rng],
     iterativeOpt: Option[IterativeCalc],
     parallelism: Int = 1,
-    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
+    generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo,
+    built: Option[RecalcGraph] = None
   ): RecalcResult =
     // One recalculate call is one volatile calculation generation. The lazy snapshot preserves
     // the old no-volatile fast path (the supplied clock is never touched), while ensuring an
@@ -581,10 +665,10 @@ object WorkbookEvaluator:
     // Whole-book ordering needs only formula-to-formula reachability. Constant cells are read
     // during evaluation but can never participate in a cycle or constrain formula order. #767:
     // the compact graph keeps one node per distinct range and per formula-column segment, so its
-    // size is O((formulas + ranges) log rows), never O(formulas × range size).
-    val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
-      RecalcGraph.build(wb, counters)
-    )
+    // size is O((formulas + ranges) log rows), never O(formulas × range size). #891: a caller
+    // with a second consumer for the graph builds it (from this `wb`, with these counters) and
+    // hands it in as `built`.
+    val graph = built.getOrElse(buildGraph(wb, counters))
     // #790: evaluation reuses the build's parse of each formula
     generationMemo.passCache.foreach(_.useParses(graph.parses))
 

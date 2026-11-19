@@ -28,9 +28,16 @@ object DependentRecalculation:
    */
   private[xl] def editCone(wb: Workbook, seeds: Set[QualifiedRef]): Set[QualifiedRef] =
     if seeds.isEmpty then Set.empty
-    else
-      val graph = RecalcGraph.build(wb, RecalcCounters.disabled)
-      coneOf(wb, graph, seeds, DependencyGraph.dynamicCells(wb, graph.parses))
+    else editConeOn(wb, RecalcGraph.build(wb, RecalcCounters.disabled), seeds)
+
+  /** [[editCone]] over `graph`, the recalculation graph already built from `wb` (#891). */
+  private[eval] def editConeOn(
+    wb: Workbook,
+    graph: RecalcGraph,
+    seeds: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    if seeds.isEmpty then Set.empty
+    else coneOf(wb, graph, seeds, DependencyGraph.dynamicCells(wb, graph.parses))
 
   private def coneOf(
     wb: Workbook,
