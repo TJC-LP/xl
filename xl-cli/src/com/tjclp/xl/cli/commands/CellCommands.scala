@@ -154,7 +154,10 @@ object CellCommands:
       overlappingMerges = sheet1.mergedRanges.filter(_.intersects(range)).toVector
       sheet2 =
         if clearStyles then
-          (range +: overlappingMerges).foldLeft(sheet1)((s, r) => s.clearStylesInRange(r))
+          // A merge inside the range is already covered; only those crossing its edge need a pass
+          val crossing =
+            overlappingMerges.filterNot(m => range.contains(m.start) && range.contains(m.end))
+          (range +: crossing).foldLeft(sheet1)((s, r) => s.clearStylesInRange(r))
         else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
       sheet4 =

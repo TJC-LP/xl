@@ -2350,7 +2350,11 @@ object BatchParser:
         val s1 = contents.fold(sheet)(_.sheet)
         val overlapping = s1.mergedRanges.filter(_.intersects(range)).toVector
         val s2 =
-          if clearStyles then (range +: overlapping).foldLeft(s1)((s, r) => s.clearStylesInRange(r))
+          if clearStyles then
+            // A merge inside the range is already covered; only those crossing its edge need a pass
+            val crossing =
+              overlapping.filterNot(m => range.contains(m.start) && range.contains(m.end))
+            (range +: crossing).foldLeft(s1)((s, r) => s.clearStylesInRange(r))
           else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
         if clearStyles then overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr)) else s3
