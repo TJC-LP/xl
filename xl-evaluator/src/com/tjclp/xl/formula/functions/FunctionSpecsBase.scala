@@ -608,7 +608,7 @@ trait FunctionSpecsBase:
       if i >= stored then Right(CellValue.Empty)
       else
         val ref = at(i)
-        sheet(ref).value match
+        sheet.cells.valueAt(ref) match
           case CellValue.Formula(_, None, _) =>
             lookupCellValue(read(ref))
           case CellValue.Formula(_, Some(cached), _) => Right(cached)

@@ -278,7 +278,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     ctx: EvalContext,
     acc: A
   ): Either[EvalError, A] =
-    val cellValue = targetSheet(at).value
+    val cellValue = targetSheet.cells.valueAt(at)
     if agg.countsNonEmpty then
       // COUNTA mode: count any non-empty cell
       cellValue match
@@ -830,9 +830,10 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     // #891: the cell at an offset is arithmetic on the range's corner; copying the range into a
     // Vector of boxed refs (once per call, so once per fixpoint round of a data-table what-if)
     // cost as much as reading the cells
-    def at(idx: Int): Either[EvalError, CellValue] =
-      evalCellValueForMatch(sheet, cellAt(range, idx), ctx)
-    def atRef(ref: ARef): Either[EvalError, CellValue] = evalCellValueForMatch(sheet, ref, ctx)
+    // one reader per call: building it per cell cost a closure and eight context reads a row
+    private val read = rangeCellReader(sheet, ctx)
+    def at(idx: Int): Either[EvalError, CellValue] = read(cellAt(range, idx))
+    def atRef(ref: ARef): Either[EvalError, CellValue] = read(ref)
     def sliced: Option[(ColumnSlice, Int)] = None
 
   /**

@@ -999,8 +999,7 @@ object WorkbookEvaluator:
           // at round end, so a range touching members is fixed for the round and its aggregate may
           // be shared by the members that read it; never across rounds, where the same range
           // changes. Under Gauss–Seidel members change mid-round, so the engine asks for a fresh
-          // evaluator per member evaluation instead. #767: these memos carry no per-pass cache
-          // (no slices inside a fixpoint), so a round allocates none.
+          // evaluator per member evaluation instead. The engine picks each region's memo (#891).
           val outcome =
             jacobiFixpoint(
               wb,
@@ -1009,11 +1008,7 @@ object WorkbookEvaluator:
               iterative,
               pinnedClock,
               rngOpt.getOrElse(Rng.system),
-              rng =>
-                Evaluator.recalculationInstance(
-                  rng,
-                  new Evaluator.AggregateMemo(columnCache = false)
-                ),
+              Evaluator.recalculationInstance(_, _),
               seed,
               // #790: a member reuses the graph build's parse of its formula
               (q, text) =>
@@ -1267,11 +1262,13 @@ object WorkbookEvaluator:
    *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
    *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
    *     `seed(q)`; that is decided once, not re-derived per round.
-   *   - `roundEvaluator` is called once per Jacobi round: a FRESH aggregate memo is sound within a
-   *     round (every member is overlaid cached, results apply at round end, so a range over members
-   *     is fixed for the round) and unsound across rounds (the same range changes). A Gauss–Seidel
-   *     sweep changes the overlay mid-round, so it calls the factory once per member evaluation.
-   *     Every factory call receives the round's tracked `Rng`, preserving one underlying sequence.
+   *   - `roundEvaluator` is called once per Jacobi round with a FRESH aggregate memo: sound within
+   *     a round (every member is overlaid cached, results apply at round end, so a range over
+   *     members is fixed for the round) and unsound across rounds (the same range changes). A
+   *     Gauss–Seidel sweep changes the overlay mid-round, so it calls the factory once per member
+   *     evaluation. #891: every region's memo shares one [[Evaluator.AggregateMemo.fixpointCache]],
+   *     so criteria ranges that hold no member are copied and indexed once per fixpoint. Every
+   *     factory call receives the round's tracked `Rng`, preserving one underlying sequence.
    *   - A round that reproduces the previous one EXACTLY without converging can stop only if it
    *     consumed no randomness. RAND can be rounded and RANDBETWEEN can repeat, so equal cell
    *     values do not prove a random round will replay. Tracking draws at the existing `Rng`
@@ -1294,10 +1291,11 @@ object WorkbookEvaluator:
     iterative: IterativeCalc,
     pinnedClock: Clock,
     rng: Rng,
-    roundEvaluator: Rng => Evaluator,
+    roundEvaluator: (Rng, Evaluator.AggregateMemo) => Evaluator,
     seedValues: Map[QualifiedRef, CellValue],
     parse: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
-      SheetEvaluator.parseFormula(text)
+      SheetEvaluator.parseFormula(text),
+    columnCache: Boolean = true
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
@@ -1372,6 +1370,14 @@ object WorkbookEvaluator:
             )
           }
 
+    // #891: the slices and equality indexes every region of this fixpoint shares (parity tests
+    // switch them off with `columnCache`)
+    val cells = Option.when(columnCache)(Evaluator.AggregateMemo.fixpointCache(members.map(_._1)))
+    def regionMemo(): Evaluator.AggregateMemo =
+      cells.fold(new Evaluator.AggregateMemo(columnCache = false))(
+        Evaluator.AggregateMemo.inFixpoint
+      )
+
     // the members of each sheet, so a round overlays a sheet's members in one store rebuild (#891)
     val membersBySheet = members.groupBy(_._2).toVector.sortBy(_._1)
 
@@ -1394,7 +1400,7 @@ object WorkbookEvaluator:
         case IterationScheme.Jacobi =>
           // Every member reads the round's FIXED overlay: one evaluator (one memo) per round.
           val tempWb = wb.copy(sheets = overlaid)
-          val evaluator = roundEvaluator(roundRng)
+          val evaluator = roundEvaluator(roundRng, regionMemo())
           members.map { (q, idx, text) =>
             q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
           }.toMap
@@ -1413,7 +1419,7 @@ object WorkbookEvaluator:
                     text,
                     sheets,
                     wb.copy(sheets = sheets),
-                    roundEvaluator(roundRng)
+                    roundEvaluator(roundRng, regionMemo())
                   )
                 val published = result match
                   case Right(value) =>

@@ -425,7 +425,7 @@ object ReadCommands:
         case None => IO.unit
       allDeps = closure.reached
       formulaDeps = allDeps.filter(ref =>
-        tempSheet(ref).value match
+        tempSheet.cells.valueAt(ref) match
           case _: CellValue.Formula => true
           case _ => false
       )
@@ -514,7 +514,7 @@ object ReadCommands:
       else
         val (nextEdges, nextFormulas, next) =
           visit.foldLeft((edges, formulas, Set.empty[ARef])) { case ((e, f, n), ref) =>
-            sheet(ref).value match
+            sheet.cells.valueAt(ref) match
               case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (e, f, n)
               case CellValue.Formula(text, _, _) =>
                 FormulaParser.parse(text) match

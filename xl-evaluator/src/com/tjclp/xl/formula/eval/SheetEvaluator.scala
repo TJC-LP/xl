@@ -347,7 +347,7 @@ object SheetEvaluator:
           }.toSet
       def dependentsOf(refs: Set[ARef]): Set[ARef] =
         (onSheet(graph.dependents(refs.map(at), Set.empty)) & targets) -- refs
-      def formulaText(ref: ARef): String = sheet(ref).value match
+      def formulaText(ref: ARef): String = sheet.cells.valueAt(ref) match
         case CellValue.Formula(expression, _, _) => expression
         case _ => ref.toA1
       def failure(ref: ARef, reason: String): CellEvalError =
@@ -451,7 +451,7 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   ): XLResult[CellOutcome] =
-    sheet(ref).value match
+    sheet.cells.valueAt(ref) match
       case value @ CellValue.Formula(expr, _, kind) =>
         // #790: one parse of the cell serves both the pin check and the evaluation
         lazy val cellEvaluator = evaluator

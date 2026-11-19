@@ -915,8 +915,9 @@ object DataTableSeeder:
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
           // already makes above. `recalculate`'s warm start is deliberately not inherited here.
-          // The plain `Evaluator.instance` is exactly what the public `evaluateCell` path used
-          // (system rng, no memo): seeding keeps its one-shot evaluation profile.
+          // #891: each round evaluates with the same per-region memo `recalculate`'s fixpoint uses
+          // (a Jacobi round's criteria calls share one slice and index per criteria range): the
+          // memo lives one region, so the cold seeding argument is unaffected.
           val outcome =
             WorkbookEvaluator.jacobiFixpoint(
               wb,
@@ -925,7 +926,7 @@ object DataTableSeeder:
               iterative,
               clock,
               Rng.system,
-              rng => Evaluator.instance(rng),
+              Evaluator.recalculationInstance(_, _),
               Map.empty,
               parseMember
             )
