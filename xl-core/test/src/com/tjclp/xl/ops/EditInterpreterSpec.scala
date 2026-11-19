@@ -392,6 +392,19 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(out.comments, baseData.comments)
   }
 
+  test("GH-909: a styles clear unmerges every merge it touches, like Excel's Clear Formats") {
+    val merged = baseData.mergedRanges
+    assertEquals(merged.size, 1, "fixture: baseData merges E5:F6")
+    // Partly overlapping (F6:G7), wholly inside (A1:H8) and wholly covering (E5 alone)
+    for range <- Seq("F6:G7", "A1:H8", "E5") do
+      val out = sheetAfter(Workbook(baseData), Edit.Clear(area(range), ClearWhat.styles))
+      assert(out.mergedRanges.isEmpty, s"$range still merged: ${out.mergedRanges}")
+      assertEquals(out.comments, baseData.comments)
+    // A contents clear still keeps it
+    val kept = sheetAfter(Workbook(baseData), Edit.Clear(area("E5"), ClearWhat.contents))
+    assertEquals(kept.mergedRanges, merged)
+  }
+
   // ========== style & layout ==========
 
   test("style merges onto existing styles or replaces them") {

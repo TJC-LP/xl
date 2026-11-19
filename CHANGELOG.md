@@ -36,6 +36,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The library's styles clear unmerges too, like Excel's Clear Formats** (#909):
+  `Sheet.clearRange(range, ClearWhat.styles)` and `Edit.Clear(at, ClearWhat.styles)` now unmerge
+  every merged region the range touches (inside it, partly overlapping it, or wholly covering it)
+  and reset the styles of each whole merge, as the CLI's `clear --styles` does since #894. A clear
+  with contents and styles (`ClearWhat.all`) also resets the styles of a merge's cells outside the
+  range, as the CLI's `--all` does. Contents-only and comments-only clears still keep merges.
+  `Edit.lower` adds a `ClearStyle` per crossing-merge cell and an `Unmerge` per touched merge, and
+  `Patch.toEdits` no longer desugars `ClearStyle` on a merged cell (it has no exact `Edit`).
+  **Behaviour change:** with B2:D2 merged and bold, `sheet.clearRange(C2:C2, ClearWhat.styles)`
+  leaves B2:D2 unmerged and all three cells on the default style (was: B2:D2 still merged, only
+  C2 reset). The CLI still has its own copy of this rule; pointing it at the library is a
+  follow-up.
+
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
   the range touches, as `--all` already did, and reset the formatting of each whole merge they
