@@ -194,7 +194,10 @@ final case class Sheet(
    * are remapped (dropped cells removed), row/column properties shifted, merged ranges and freeze
    * panes split/clamped/dropped, all on the active axis only.
    */
-  private def shiftAxis(rowAxis: Boolean, at: Int, count: Int, deleting: Boolean): Sheet =
+  private def shiftAxis(rowAxis: Boolean, at: Int, requested: Int, deleting: Boolean): Sheet =
+    // `at + count` must stay an Int: a count past the end of the axis removes or moves no more
+    // than one that reaches it
+    val count = math.min(requested, Int.MaxValue - math.max(at, 0))
     // Index transform on the active axis. None = the index was deleted.
     def idx(i: Int): Option[Int] =
       if !deleting then Some(if i >= at then i + count else i)

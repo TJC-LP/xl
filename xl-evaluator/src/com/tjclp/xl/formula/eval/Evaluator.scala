@@ -1616,12 +1616,18 @@ object Evaluator:
         entries = entries.size
       )
 
+    // a data-table record carries its own tag whether or not it holds a cache
+    private val UncachedTags: Int =
+      CellStore.tagBit(CellStore.TagFormulaUncached) | CellStore.tagBit(
+        CellStore.TagFormulaDataTable
+      )
+
     private def cacheable(targetSheet: Sheet, range: CellRange): Boolean =
       def isUncachedFormula(value: CellValue): Boolean = value match
         case CellValue.Formula(_, None, _) => true
         case _ => false
 
-      !targetSheet.cells.hasTag(CellStore.tagBit(CellStore.TagFormulaUncached)) ||
+      !targetSheet.cells.hasTag(UncachedTags) ||
       !targetSheet.cells.inRange(range).exists(c => isUncachedFormula(c.value))
 
   /** Generation-local logical key; anchors and transient immutable Sheet identities are absent. */

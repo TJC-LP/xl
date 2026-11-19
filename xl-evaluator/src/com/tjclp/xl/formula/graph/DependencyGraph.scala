@@ -1169,6 +1169,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
+    whatIfInputs: Set[QualifiedRef] = Set.empty,
     canonicalSheet: SheetName => SheetName = identity,
     nameRanges: NameRanges = NameRanges.empty,
     parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption,
@@ -1191,6 +1192,7 @@ object DependencyGraph:
         cellsFor,
         workbook,
         preciseLookups,
+        whatIfInputs,
         canonicalSheet,
         nameRanges,
         if depth == 0 then reader else None
@@ -1269,6 +1271,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
     workbook: Option[Workbook],
     preciseLookups: Boolean,
+    whatIfInputs: Set[QualifiedRef],
     canonicalSheet: SheetName => SheetName,
     nameRanges: NameRanges,
     reader: Option[ARef]
@@ -1314,11 +1317,15 @@ object DependencyGraph:
         case n: BigDecimal if n.isValidInt => Some(n.toInt)
         case _ => None
       def cell(sheet: SheetName, ref: ARef): Option[Int] =
-        workbook.flatMap(_(sheet).toOption).flatMap { target =>
-          target(ref).value match
-            case CellValue.Number(n) => number(n)
-            case _ => None // a cached formula may change during this generation
-        }
+        // a data table substitutes its input cells, so a selector read from one is not fixed:
+        // the what-if pass would select a strip this graph never ordered or recomputed
+        if whatIfInputs.nonEmpty && whatIfInputs.contains(QualifiedRef(sheet, ref)) then None
+        else
+          workbook.flatMap(_(sheet).toOption).flatMap { target =>
+            target(ref).value match
+              case CellValue.Number(n) => number(n)
+              case _ => None // a cached formula may change during this generation
+          }
       expr match
         case TExpr.Lit(value) => number(value)
         case TExpr.ToInt(inner) => fixedIndex(inner)
