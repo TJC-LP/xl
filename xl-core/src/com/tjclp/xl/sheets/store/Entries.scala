@@ -60,8 +60,9 @@ private[xl] object Meta:
     (meta & ~TagBits) | (tagOf(value).toLong << TagShift)
 
 /**
- * A trie entry: an inner [[Node]] or a [[RowLeaf]]. Every entry carries the summaries of the cells
- * below it. They are invariants, set when the entry is built and never changed:
+ * A trie entry: an inner [[Node]], a [[Block]], or a row (a [[RowLeaf]] or a [[BandedRow]] of
+ * them). Every entry carries the summaries of the cells below it. They are invariants, set when the
+ * entry is built and never changed:
  *
  *   - `count` cells stored, `valued` of them holding a non-Empty value
  *   - `minCol`/`maxCol` over all stored cells (meaningful only when `count > 0`)
@@ -84,9 +85,9 @@ private[xl] sealed abstract class Entry(
 /**
  * An inner trie node. `children` holds one entry per set bit of `bitmap`, in slot order; slot `s`
  * of a node at `shift` covers row keys whose bits `shift+4..shift` equal `s`. A node at shift 0
- * holds [[RowLeaf]]s; a node at shift 5 holds shift-0 groups ([[Node]]s or [[Block]]s); every other
- * node holds nodes. No child is ever empty. A shift-0 node exists only when its rows cannot form a
- * [[Block]] (they span more than one 64-column chunk between them).
+ * holds rows ([[StoredRow]]s); a node at shift 5 holds shift-0 groups ([[Node]]s or [[Block]]s);
+ * every other node holds nodes. No child is ever empty. A shift-0 node exists only when its rows
+ * cannot form a [[Block]] (they span more than one 64-column chunk between them).
  */
 private[xl] final class Node private (
   val bitmap: Int,
@@ -280,7 +281,9 @@ private[xl] final class NarrowRow(
 
 /**
  * A row spanning several chunks. `index` interleaves one pair per chunk, sorted by chunk:
- * `index(2i)` is the chunk's mask and `index(2i+1)` is `(chunk << 32) | base`.
+ * `index(2i)` is the chunk's mask and `index(2i+1)` is `(chunk << 32) | base`. A dense row holds
+ * consecutive chunks, so [[rank]] first looks for a chunk that many places after the first one and
+ * bisects the index only when it is not there.
  */
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -312,12 +315,221 @@ private[xl] final class WideRow(
 
   def rank(col: Int): Int =
     val c = col >> 6
-    val i = chunkFrom(c)
+    val guess = c - chunkAt(0)
+    val i = if guess >= 0 && guess < chunkCount && chunkAt(guess) == c then guess else chunkFrom(c)
     if i >= chunkCount || chunkAt(i) != c then -1
     else
       val m = maskAt(i)
       val bit = 1L << (col & 63)
       if (m & bit) == 0L then -1 else baseAt(i) + java.lang.Long.bitCount(m & (bit - 1))
+
+/**
+ * The column bands of a row (#891). Band `col >> Shift` (an arithmetic shift, so negative columns
+ * keep their order) holds the row's cells in `Width` consecutive columns: [[Band.Chunks]] of a
+ * leaf's 64-column chunks. A write to a row copies one band, so its cost is bounded by `Width`
+ * cells however wide the row is.
+ *
+ * A row is split into bands only when it holds more than `FlatMax` cells: a sparse row keeps the
+ * one leaf it always had, whose writes copy at most `FlatMax` cells, instead of paying a leaf's
+ * overhead (about 100 bytes) for every band its few cells touch.
+ */
+private[xl] object Band:
+  final val Shift = 8
+  final val Width = 1 << Shift
+  final val Chunks = Width >> 6
+
+  /** The most cells a row spanning several bands holds as a single leaf. */
+  final val FlatMax = 64
+
+  /** The band of a column. */
+  def of(col: Int): Int = col >> Shift
+
+/**
+ * A row whose cells span several column bands (#891): one [[RowLeaf]] per populated band, sorted by
+ * band id. `ids(i)` is the band of `bands(i)`, whose cells all lie in that band; there are at least
+ * two bands, none is empty, and together they hold more than [[Band.FlatMax]] cells. A row whose
+ * cells share one band, or number [[Band.FlatMax]] or fewer, is a bare [[RowLeaf]], never a
+ * `BandedRow`, so a row's form is a function of its columns alone.
+ *
+ * A single-cell write or removal copies the band it touches and the `bands` array (`ids` is shared
+ * unless a band is added or dropped): a bounded number of cells however wide the row is. Band ids
+ * are arbitrary `Int`s (columns off the grid are legal), so the index is a sorted array searched by
+ * bisection rather than a bitmap.
+ */
+private[xl] final class BandedRow private (
+  val ids: Array[Int],
+  val bands: Array[RowLeaf],
+  count: Int,
+  valued: Int,
+  minCol: Int,
+  maxCol: Int,
+  vMinCol: Int,
+  vMaxCol: Int,
+  tagMask: Int
+) extends Entry(count, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask):
+
+  /**
+   * The index of the first band numbered `id` or later (`ids.length` when there is none). A dense
+   * row holds consecutive bands, so band `id` is first sought `id - ids(0)` places in; the sorted
+   * index is bisected only when it is not there.
+   */
+  def indexFrom(id: Int): Int =
+    val guess = id - ids(0)
+    if guess >= 0 && guess < ids.length && ids(guess) == id then guess
+    else BandedRow.indexFrom(ids, id)
+
+  /**
+   * The band holding column `col`'s cells; [[RowLeaf.Empty]] when the row has none there. Tries the
+   * consecutive-bands position first, as [[indexFrom]] does, checking the band's own columns so a
+   * hit reads nothing but the leaf it returns.
+   */
+  def bandOf(col: Int): RowLeaf =
+    val id = col >> Band.Shift
+    val guess = id - (minCol >> Band.Shift)
+    val hit = if guess >= 0 && guess < bands.length then bands(guess) else RowLeaf.Empty
+    if hit.count > 0 && (hit.minCol >> Band.Shift) == id then hit
+    else
+      val i = BandedRow.indexFrom(ids, id)
+      if i < ids.length && ids(i) == id then bands(i) else RowLeaf.Empty
+
+// Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
+// loops behind pure signatures; nothing mutable escapes.
+@SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+private[xl] object BandedRow:
+
+  /** The index of the first of the sorted `ids` that is `id` or later (`ids.length` if none). */
+  def indexFrom(ids: Array[Int], id: Int): Int =
+    var lo = 0
+    var hi = ids.length
+    while lo < hi do
+      val mid = (lo + hi) >>> 1
+      if ids(mid) < id then lo = mid + 1 else hi = mid
+    lo
+
+  /**
+   * The row of these bands (two or more, ids strictly ascending, none empty; the arrays are owned
+   * by the row from now on), its summaries computed from the bands'.
+   */
+  def of(ids: Array[Int], bands: Array[RowLeaf]): BandedRow =
+    var count = 0
+    var valued = 0
+    var i = 0
+    while i < bands.length do
+      count += bands(i).count
+      valued += bands(i).valued
+      i += 1
+    new BandedRow(
+      ids,
+      bands,
+      count,
+      valued,
+      bands(0).minCol,
+      bands(bands.length - 1).maxCol,
+      vMinOf(bands),
+      vMaxOf(bands),
+      tagsOf(bands)
+    )
+
+  /** The least valued column over the bands; `Int.MaxValue` when none holds a value. */
+  private def vMinOf(bands: Array[RowLeaf]): Int =
+    var v = Int.MaxValue
+    var i = 0
+    while i < bands.length do
+      if bands(i).vMinCol < v then v = bands(i).vMinCol
+      i += 1
+    v
+
+  /** The greatest valued column over the bands; `Int.MinValue` when none holds a value. */
+  private def vMaxOf(bands: Array[RowLeaf]): Int =
+    var v = Int.MinValue
+    var i = 0
+    while i < bands.length do
+      if bands(i).vMaxCol > v then v = bands(i).vMaxCol
+      i += 1
+    v
+
+  private def tagsOf(bands: Array[RowLeaf]): Int =
+    var t = 0
+    var i = 0
+    while i < bands.length do
+      t |= bands(i).tagMask
+      i += 1
+    t
+
+  /**
+   * `row` with band `i` replaced by `band` (non-empty, the same band id). The summaries are derived
+   * from the row's and the two bands' in constant time; the other bands are rescanned only when the
+   * old band may have held the row's only instance of a valued extreme or of a tag (as
+   * [[Group.withRow]] does for a block's rows).
+   */
+  def replaced(row: BandedRow, i: Int, band: RowLeaf): BandedRow =
+    val old = row.bands(i)
+    val bands = row.bands.clone()
+    bands(i) = band
+    val valued = row.valued - old.valued + band.valued
+    val tagMask =
+      if (old.tagMask & ~band.tagMask) == 0 then row.tagMask | band.tagMask else tagsOf(bands)
+    val minOk = old.valued == 0 || old.vMinCol > row.vMinCol ||
+      (band.valued > 0 && band.vMinCol <= old.vMinCol)
+    val maxOk = old.valued == 0 || old.vMaxCol < row.vMaxCol ||
+      (band.valued > 0 && band.vMaxCol >= old.vMaxCol)
+    val vMin =
+      if valued == 0 then Int.MaxValue
+      else if minOk then math.min(row.vMinCol, band.vMinCol)
+      else vMinOf(bands)
+    val vMax =
+      if valued == 0 then Int.MinValue
+      else if maxOk then math.max(row.vMaxCol, band.vMaxCol)
+      else vMaxOf(bands)
+    new BandedRow(
+      row.ids,
+      bands,
+      row.count - old.count + band.count,
+      valued,
+      if i == 0 then band.minCol else row.minCol,
+      if i == bands.length - 1 then band.maxCol else row.maxCol,
+      vMin,
+      vMax,
+      tagMask
+    )
+
+  /**
+   * `row` with `band` (non-empty) added as band `id` at index `i`, where the row has none. A new
+   * band can only extend the summaries.
+   */
+  def inserted(row: BandedRow, i: Int, id: Int, band: RowLeaf): BandedRow =
+    val n = row.ids.length
+    val ids = new Array[Int](n + 1)
+    val bands = new Array[RowLeaf](n + 1)
+    System.arraycopy(row.ids, 0, ids, 0, i)
+    System.arraycopy(row.bands, 0, bands, 0, i)
+    ids(i) = id
+    bands(i) = band
+    System.arraycopy(row.ids, i, ids, i + 1, n - i)
+    System.arraycopy(row.bands, i, bands, i + 1, n - i)
+    new BandedRow(
+      ids,
+      bands,
+      row.count + band.count,
+      row.valued + band.valued,
+      math.min(row.minCol, band.minCol),
+      math.max(row.maxCol, band.maxCol),
+      math.min(row.vMinCol, band.vMinCol),
+      math.max(row.vMaxCol, band.vMaxCol),
+      row.tagMask | band.tagMask
+    )
+
+  /** Structural equality of two banded rows. */
+  def same(a: BandedRow, b: BandedRow): Boolean =
+    if a eq b then true
+    else if a.count != b.count || !java.util.Arrays.equals(a.ids, b.ids) then false
+    else
+      var ok = true
+      var i = 0
+      while ok && i < a.bands.length do
+        ok = RowLeaf.same(a.bands(i), b.bands(i))
+        i += 1
+      ok
 
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -515,7 +727,7 @@ private[xl] object RowLeaf:
    * them.
    */
   private def insert(leaf: RowLeaf, col: Int, meta: Long, value: CellValue, link: String): RowLeaf =
-    if leaf.count == 0 then build(Array(col), Array(meta), Array(value), Array(link), 0, 1)
+    if leaf.count == 0 then single(col, meta, value, link)
     else
       val n = leaf.count
       val c = col >> 6
@@ -607,6 +819,53 @@ private[xl] object RowLeaf:
         tagMask
       )
     else new WideRow(index, meta, values, links, valued, minCol, maxCol, vMinCol, vMaxCol, tagMask)
+
+  /** The leaf of one cell. */
+  def single(col: Int, meta: Long, value: CellValue, link: String): RowLeaf =
+    build(Array(col), Array(meta), Array(value), Array(link), 0, 1)
+
+  /**
+   * `leaf` without its cell at `col`, as [[remove]] gives it, by splicing: each array is allocated
+   * once at its final size and the chunk index is patched (the chunk's mask loses the bit, a chunk
+   * left empty is dropped, later bases move down by one). The bands of a [[BandedRow]] are removed
+   * from this way, so a removal there costs one copy of the band.
+   */
+  def removeCell(leaf: RowLeaf, col: Int): RowLeaf =
+    val p = leaf.rank(col)
+    if p < 0 then leaf
+    else if leaf.count == 1 then Empty
+    else
+      val n = leaf.count
+      val bit = 1L << (col & 63)
+      val chunks = leaf.chunkCount
+      val i = leaf.chunkFrom(col >> 6)
+      val emptied = leaf.maskAt(i) == bit
+      val index = new Array[Long](2 * (if emptied then chunks - 1 else chunks))
+      var j = 0
+      var k = 0
+      while k < chunks do
+        if !(emptied && k == i) then
+          val mask = if k == i then leaf.maskAt(k) & ~bit else leaf.maskAt(k)
+          val base = if k > i then leaf.baseAt(k) - 1 else leaf.baseAt(k)
+          index(2 * j) = mask
+          index(2 * j + 1) = (leaf.chunkAt(k).toLong << 32) | base.toLong
+          j += 1
+        k += 1
+      val m = new Array[Long](n - 1)
+      val v = new Array[CellValue](n - 1)
+      System.arraycopy(leaf.meta, 0, m, 0, p)
+      System.arraycopy(leaf.values, 0, v, 0, p)
+      System.arraycopy(leaf.meta, p + 1, m, p, n - 1 - p)
+      System.arraycopy(leaf.values, p + 1, v, p, n - 1 - p)
+      // links stay canonical: dropped when the removed cell held the leaf's last one
+      val l =
+        if leaf.links.length == 0 || (Meta.hasLink(leaf.meta(p)) && !hasAnyLink(m)) then NoLinks
+        else
+          val out = new Array[String](n - 1)
+          System.arraycopy(leaf.links, 0, out, 0, p)
+          System.arraycopy(leaf.links, p + 1, out, p, n - 1 - p)
+          out
+      fromIndex(index, m, v, l)
 
   /** `leaf` without its cell at `col` ([[Empty]] when that was the last one). */
   def remove(leaf: RowLeaf, col: Int): RowLeaf =

@@ -17,7 +17,8 @@ import com.tjclp.xl.styles.units.StyleId
  *
  * The accessors describe the cell the last successful `next()` stopped on. The cursor is mutable
  * and belongs to one thread; the store it walks is immutable and is not affected. Finding the next
- * row costs O(trie height); every cell after that within a row costs a few bit operations.
+ * row costs O(trie height); every cell after that within a row costs a few bit operations (plus a
+ * step to the next band's leaf every [[Band.Width]] columns of a row that spans several bands).
  */
 // A cursor is mutable by design (one per walk, never shared); its state is vars and its walk loops.
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
@@ -33,16 +34,22 @@ private[xl] final class CellCursor private (
 ):
   private val chunkLo = colLo >> 6
   private val chunkHi = colHi >> 6
+  private val bandLo = Band.of(colLo)
+  private val bandHi = Band.of(colHi)
   private val emptyWindow = colLo > colHi
 
   /** 0: walking `[lo1, hi1]`; 1: walking `[lo2, hi2]`; 2: done. */
   private var span = if emptyWindow || height == 0 then 2 else 0
   private var nextKey = lo1
 
-  // The current row: a leaf, or row `blockRow` (key bits `blockLow`) of a block. `cells` holds
-  // the arrays either way.
+  // The current row: a leaf, band `bandIdx` of a banded row (then `leaf` is that band's leaf), or
+  // row `blockRow` (key bits `blockLow`) of a block. `cells` holds the arrays in every case.
   private var cells: Cells = RowLeaf.Empty
   private var leaf: RowLeaf = RowLeaf.Empty
+  private var inBands = false
+  private var bandIds: Array[Int] = Array.emptyIntArray
+  private var bandLeaves: Array[RowLeaf] = CellCursor.NoBands
+  private var bandIdx = 0
   private var block: Block = Group.Placeholder
   private var inBlock = false
   private var blockRow = 0
@@ -73,6 +80,7 @@ private[xl] final class CellCursor private (
       else if rowActive && !inBlock && chunkIdx + 1 < leaf.chunkCount &&
         leaf.chunkAt(chunkIdx + 1) <= chunkHi
       then loadChunk(chunkIdx + 1)
+      else if rowActive && inBands && nextBand() then () // a chunk of a later band is loaded
       else if !advanceRow() then going = false
     result
 
@@ -114,13 +122,34 @@ private[xl] final class CellCursor private (
       else
         loadChunk(0)
         true
+    else if inBands then
+      bandIdx = BandedRow.indexFrom(bandIds, bandLo) - 1
+      nextBand()
     else if leaf.maxCol < colLo || leaf.minCol > colHi then false
-    else
-      val i = leaf.chunkFrom(chunkLo)
-      if i < leaf.chunkCount && leaf.chunkAt(i) <= chunkHi then
-        loadChunk(i)
-        true
-      else false
+    else enterLeaf()
+
+  /** Loads the current leaf's first chunk inside the column window; false when it has none. */
+  private def enterLeaf(): Boolean =
+    val i = leaf.chunkFrom(chunkLo)
+    if i < leaf.chunkCount && leaf.chunkAt(i) <= chunkHi then
+      loadChunk(i)
+      true
+    else false
+
+  /**
+   * Moves to the first band after `bandIdx` that has a chunk inside the column window and loads
+   * that chunk; false when the row has no such band.
+   */
+  private def nextBand(): Boolean =
+    var found = false
+    var j = bandIdx + 1
+    while !found && j < bandIds.length && bandIds(j) <= bandHi do
+      bandIdx = j
+      leaf = bandLeaves(j)
+      cells = leaf
+      found = enterLeaf()
+      j += 1
+    found
 
   private def advanceRow(): Boolean =
     pending = 0L
@@ -163,6 +192,7 @@ private[xl] final class CellCursor private (
         block = b
         cells = b
         inBlock = true
+        inBands = false
         blockLow = low
         blockRow = b.rowIndex(low)
         rowKey = prefix + low
@@ -171,6 +201,14 @@ private[xl] final class CellCursor private (
       leaf = l
       cells = l
       inBlock = false
+      inBands = false
+      rowKey = prefix
+      true
+    case r: BandedRow =>
+      bandIds = r.ids
+      bandLeaves = r.bands
+      inBlock = false
+      inBands = true
       rowKey = prefix
       true
     case node: Node =>
@@ -186,6 +224,7 @@ private[xl] final class CellCursor private (
 
 private[xl] object CellCursor:
   private val U = Trie.UnsignedMask
+  private val NoBands: Array[RowLeaf] = Array.empty[RowLeaf]
 
   /** Every stored cell. */
   def all(store: CellStore): CellCursor =

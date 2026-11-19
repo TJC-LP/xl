@@ -141,20 +141,40 @@ class CellStoreLawSpec extends ScalaCheckSuite:
 
   // ----- laws -----
 
-  property("every operation sequence agrees with the SortedMap oracle, step by step") {
-    forAll(genStart, Gen.listOf(genOp), Gen.listOfN(4, genRef), Gen.listOfN(2, genRange)) {
-      (start, ops, probes, ranges) =>
-        val s0 = CellStore.from(start)
-        val o0 = oracleOf(start)
-        val (_, _, props) = ops.foldLeft((s0, o0, List(agrees(s0, o0, probes, ranges)))) {
-          case ((s, o, acc), op) =>
-            val s2 = applyStore(s, op)
-            val o2 = applyOracle(o, op)
-            val persistent = (s.iterator.toList == o.values.toList) :| s"persistence after $op"
-            (s2, o2, (agrees(s2, o2, probes, ranges) :| s"after $op") :: persistent :: acc)
-        }
-        Prop.all(props*)
+  def sequenceAgrees(
+    start: List[Cell],
+    ops: List[Op],
+    probes: List[ARef],
+    ranges: List[CellRange]
+  ): Prop =
+    val s0 = CellStore.from(start)
+    val o0 = oracleOf(start)
+    val (_, _, props) = ops.foldLeft((s0, o0, List(agrees(s0, o0, probes, ranges)))) {
+      case ((s, o, acc), op) =>
+        val s2 = applyStore(s, op)
+        val o2 = applyOracle(o, op)
+        val persistent = (s.iterator.toList == o.values.toList) :| s"persistence after $op"
+        (s2, o2, (agrees(s2, o2, probes, ranges) :| s"after $op") :: persistent :: acc)
     }
+    Prop.all(props*)
+
+  property("every operation sequence agrees with the SortedMap oracle, step by step") {
+    forAll(genStart, Gen.listOf(genOp), Gen.listOfN(4, genRef), Gen.listOfN(2, genRange))(
+      sequenceAgrees
+    )
+  }
+
+  // The wide pools above rarely keep a slot group inside one chunk, so they seldom build a block
+  // and almost never take a block's extreme valued column or last cell of a tag away. A block
+  // keeps its summaries (valued bounds, tag mask) by shortcut on such writes; this domain is one
+  // dense block and its neighbour, written and emptied cell by cell.
+  property("a dense block agrees with the oracle under cell-by-cell writes and removals") {
+    forAll(
+      genBlockStart,
+      Gen.choose(20, 60).flatMap(Gen.listOfN(_, genBlockOp)),
+      Gen.listOfN(4, genBlockRef),
+      Gen.listOfN(2, genBlockRange)
+    )(sequenceAgrees)
   }
 
   property("from / newBuilder equal a fold of updated: sorted, unsorted and with duplicates") {
@@ -282,10 +302,11 @@ class CellStoreLawSpec extends ScalaCheckSuite:
   }
 
   test("tall narrow data and narrow tables are stored as 32-row blocks") {
-    import com.tjclp.xl.sheets.store.{Block, Entry, Node, RowLeaf}
+    import com.tjclp.xl.sheets.store.{BandedRow, Block, Entry, Node, RowLeaf}
     def shapes(e: Entry): (Int, Int) = e match
       case b: Block => (1, 0)
       case l: RowLeaf => (0, 1)
+      case r: BandedRow => (0, 1)
       case n: Node => n.children.map(shapes).foldLeft((0, 0))((a, b) => (a._1 + b._1, a._2 + b._2))
     val column =
       CellStore.from((0 until 1000).map(r => Cell(ARef.from0(0, r), CellValue.Number(r))))
@@ -591,6 +612,51 @@ object CellStoreLawSpec:
 
   val genFn: Gen[(String, CellValue => CellValue)] =
     Gen.oneOf("inc" -> inc, "empty" -> toEmpty, "text" -> toText, "uncache" -> uncache)
+
+  // ----- one dense block: rows 0..35 (one full slot group and the start of the next), 8 columns -----
+
+  val genBlockRef: Gen[ARef] =
+    for r <- Gen.choose(0, 35); c <- Gen.choose(0, 7) yield ARef.from0(c, r)
+
+  val genBlockRange: Gen[CellRange] =
+    for a <- genBlockRef; b <- genBlockRef yield CellRange(a, b)
+
+  /** Mostly Empty, so valued bounds and tag bits come and go; every tag still appears. */
+  val genBlockValue: Gen[CellValue] = Gen.frequency(
+    6 -> Gen.const(CellValue.Empty),
+    6 -> genValue
+  )
+
+  val genBlockCell: Gen[Cell] =
+    for
+      ref <- genBlockRef
+      v <- genBlockValue
+      s <- Gen.frequency(5 -> Gen.const(None), 1 -> Gen.const(Some(StyleId(1))))
+      l <- Gen.frequency(9 -> Gen.const(None), 1 -> Gen.const(Some("Sheet1!A1")))
+    yield Cell(ref, v, s, l)
+
+  /** Every cell of the first `rows` rows over `cols` columns, each valued or style-only Empty. */
+  val genBlockStart: Gen[List[Cell]] =
+    for
+      rows <- Gen.choose(1, 34)
+      cols <- Gen.choose(1, 8)
+      cells <- Gen.sequence[List[Cell], Cell](
+        for r <- 0 until rows; c <- 0 until cols
+        yield genBlockValue.map(v => Cell(ARef.from0(c, r), v, Some(StyleId(1)), None))
+      )
+    yield cells
+
+  val genBlockOp: Gen[Op] = Gen.frequency(
+    5 -> genBlockCell.map(Op.Update.apply),
+    5 -> (for r <- genBlockRef; v <- genBlockValue yield Op.UpdateValue(r, v)),
+    5 -> genBlockRef.map(Op.Remove.apply),
+    1 -> genBlockRange.map(Op.RemoveIn.apply),
+    1 -> Gen.listOfN(6, genBlockCell).map(Op.PutAll.apply),
+    1 -> Gen
+      .listOfN(6, genBlockRef.flatMap(r => genBlockValue.map(r -> _)))
+      .map(Op.WithValues.apply),
+    1 -> (for m <- genTagMask; f <- genFn yield Op.Transform(m, f._2))
+  )
 
   val genIndex: Gen[Int] = Gen.oneOf(genRow, genCol, Gen.choose(-5, 70))
   val genBy: Gen[Int] =

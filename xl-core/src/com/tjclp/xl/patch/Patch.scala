@@ -181,16 +181,14 @@ object Patch:
       sheet.removeRange(range)
 
     case PutArray(origin, values) =>
-      val newCells = values.zipWithIndex.foldLeft(sheet.cells) { case (cellsAcc, (row, rowIdx)) =>
-        row.zipWithIndex.foldLeft(cellsAcc) { case (cellsAcc2, (value, colIdx)) =>
+      // the array's references are distinct, so each reads the sheet as it was; one merge (#891)
+      val written = values.iterator.zipWithIndex.flatMap { case (row, rowIdx) =>
+        row.iterator.zipWithIndex.map { case (value, colIdx) =>
           val ref = origin.shift(colIdx, rowIdx)
-          val cell = cellsAcc2.get(ref) match
-            case Some(existing) => existing.withValue(value)
-            case None => Cell(ref, value)
-          cellsAcc2.updated(cell)
+          sheet.cells.get(ref).fold(Cell(ref, value))(_.withValue(value))
         }
       }
-      sheet.copy(cells = newCells)
+      sheet.copy(cells = sheet.cells.putAll(written))
 
     case SetComment(ref, cmt) =>
       sheet.comment(ref, cmt)

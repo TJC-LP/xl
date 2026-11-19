@@ -5,8 +5,8 @@ import com.tjclp.xl.cells.CellValue
 /**
  * Shift-0 slot groups (#891): the up-to-32 rows under one trie slot at shift 5, stored either as a
  * [[Block]] (when every cell of the group sits in one 64-column chunk) or as a shift-0 [[Node]] of
- * [[RowLeaf]]s (otherwise). The form is a function of the content, so equal groups have equal
- * shapes. Rows are addressed by `low`, the row key's five low bits.
+ * rows ([[StoredRow]]s) otherwise. The form is a function of the content, so equal groups have
+ * equal shapes. Rows are addressed by `low`, the row key's five low bits.
  */
 // Flat-array loops over the trie (house style, as in SccKernel/LongIntMap): local vars and while
 // loops behind pure signatures; nothing mutable escapes.
@@ -29,7 +29,7 @@ private[xl] object Group:
   /**
    * The canonical group of rows `lows(i) -> leaves(i)` (`i < n`, lows ascending, leaves non-empty).
    */
-  def of(lows: Array[Int], leaves: Array[RowLeaf], n: Int): Entry =
+  def of(lows: Array[Int], leaves: Array[StoredRow], n: Int): Entry =
     if n == 0 then Node.Empty
     else if blockable(leaves, n) then blockOf(lows, leaves, n)
     else
@@ -63,7 +63,7 @@ private[xl] object Group:
     ok
 
   /** Whether these rows all lie in one common 64-column chunk and fit in a block. */
-  private def blockable(leaves: Array[RowLeaf], n: Int): Boolean =
+  private def blockable(leaves: Array[StoredRow], n: Int): Boolean =
     var ok = true
     var chunk = 0
     var total = 0
@@ -74,12 +74,14 @@ private[xl] object Group:
       leaves(i) match
         case r: NarrowRow =>
           if i == 0 then chunk = r.chunk else ok = ok && r.chunk == chunk
-        case _: WideRow => ok = false
+        case _ => ok = false
       i += 1
     ok
 
-  private def blockOf(lows: Array[Int], leaves: Array[RowLeaf], n: Int): Block =
+  /** The block of these rows, which [[blockable]] has found to be narrow rows over one chunk. */
+  private def blockOf(lows: Array[Int], leaves: Array[StoredRow], n: Int): Block =
     var rowMask = 0
+    var chunk = 0
     var total = 0
     var anyLink = false
     var i = 0
@@ -87,8 +89,12 @@ private[xl] object Group:
     while i < n do
       rowMask |= 1 << lows(i)
       total += leaves(i).count
-      rowMasks(i) = leaves(i).maskAt(0)
-      if leaves(i).links.length > 0 then anyLink = true
+      leaves(i) match
+        case l: NarrowRow =>
+          chunk = l.chunk
+          rowMasks(i) = l.mask
+          if l.links.length > 0 then anyLink = true
+        case _ => () // unreachable: a block's rows are narrow
       i += 1
     val meta = new Array[Long](total)
     val values = new Array[CellValue](total)
@@ -96,17 +102,19 @@ private[xl] object Group:
     var p = 0
     i = 0
     while i < n do
-      val l = leaves(i)
-      System.arraycopy(l.meta, 0, meta, p, l.count)
-      System.arraycopy(l.values, 0, values, p, l.count)
-      if anyLink then
-        var q = 0
-        while q < l.count do
-          links(p + q) = l.linkAt(q)
-          q += 1
-      p += l.count
+      leaves(i) match
+        case l: NarrowRow =>
+          System.arraycopy(l.meta, 0, meta, p, l.count)
+          System.arraycopy(l.values, 0, values, p, l.count)
+          if anyLink then
+            var q = 0
+            while q < l.count do
+              links(p + q) = l.linkAt(q)
+              q += 1
+          p += l.count
+        case _ => () // unreachable: a block's rows are narrow
       i += 1
-    make(rowMask, leaves(0).chunkAt(0), rowMasks, meta, values, links)
+    make(rowMask, chunk, rowMasks, meta, values, links)
 
   /**
    * The block with these rows (`rowMasks` one per present row of `rowMask`, all non-zero), its
@@ -249,11 +257,11 @@ private[xl] object Group:
     found
 
   /** A shift-0 group's rows as (lows, leaves, n); a block's rows are copied out. */
-  def explode(e: Entry): (Array[Int], Array[RowLeaf], Int) = e match
+  def explode(e: Entry): (Array[Int], Array[StoredRow], Int) = e match
     case b: Block =>
       val n = b.rows
       val lows = new Array[Int](n)
-      val leaves = new Array[RowLeaf](n)
+      val leaves = new Array[StoredRow](n)
       var bm = b.rowMask
       var i = 0
       while i < n do
@@ -265,7 +273,7 @@ private[xl] object Group:
     case node: Node =>
       val n = node.children.length
       val lows = new Array[Int](n)
-      val leaves = new Array[RowLeaf](n)
+      val leaves = new Array[StoredRow](n)
       var bm = node.bitmap
       var i = 0
       while i < n do
@@ -273,10 +281,24 @@ private[xl] object Group:
         bm &= bm - 1
         node.children(i) match
           case l: RowLeaf => leaves(i) = l
-          case _ => () // unreachable: a shift-0 node holds leaves
+          case r: BandedRow => leaves(i) = r
+          case _ => () // unreachable: a shift-0 node holds rows
         i += 1
       (lows, leaves, n)
-    case l: RowLeaf => (Array(0), Array(l), if l.count == 0 then 0 else 1)
+    case l: RowLeaf => (Array(0), Array[StoredRow](l), if l.count == 0 then 0 else 1)
+    case r: BandedRow => (Array(0), Array[StoredRow](r), 1)
+
+  /**
+   * `b` with row `low` (currently `old`, empty when absent) replaced by `row` (an empty leaf
+   * removes the row). A row that has come to span several bands cannot stay in a block, so the
+   * group is rebuilt as a node.
+   */
+  def withRow(b: Block, low: Int, old: RowLeaf, row: StoredRow): Entry = row match
+    case leaf: RowLeaf => withLeaf(b, low, old, leaf)
+    case banded: BandedRow =>
+      val (lows, leaves, n) = explode(b)
+      val (l2, v2, n2) = replaceRow(lows, leaves, n, low, banded)
+      of(l2, v2, n2)
 
   /**
    * `b` with row `low` (currently `old`, empty when absent) replaced by `leaf` (an empty leaf
@@ -285,7 +307,7 @@ private[xl] object Group:
    * Splices the block's arrays directly when the result is still a block; otherwise rebuilds the
    * group as a node.
    */
-  def withRow(b: Block, low: Int, old: RowLeaf, leaf: RowLeaf): Entry =
+  private def withLeaf(b: Block, low: Int, old: RowLeaf, leaf: RowLeaf): Entry =
     val bit = 1 << low
     val present = (b.rowMask & bit) != 0
     val others = b.rowMask & ~bit
@@ -366,16 +388,16 @@ private[xl] object Group:
   /** (lows, leaves) with row `low` set to `leaf` (removed when empty). */
   def replaceRow(
     lows: Array[Int],
-    leaves: Array[RowLeaf],
+    leaves: Array[StoredRow],
     n: Int,
     low: Int,
-    leaf: RowLeaf
-  ): (Array[Int], Array[RowLeaf], Int) =
+    leaf: StoredRow
+  ): (Array[Int], Array[StoredRow], Int) =
     val outLows = new Array[Int](n + 1)
-    val outLeaves = new Array[RowLeaf](n + 1)
+    val outLeaves = new Array[StoredRow](n + 1)
     var k = 0
     var inserted = false
-    def put(l: Int, leaf: RowLeaf): Unit =
+    def put(l: Int, leaf: StoredRow): Unit =
       outLows(k) = l
       outLeaves(k) = leaf
       k += 1
