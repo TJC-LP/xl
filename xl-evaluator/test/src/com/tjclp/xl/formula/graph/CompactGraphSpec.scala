@@ -209,6 +209,24 @@ class CompactGraphSpec extends ScalaCheckSuite:
     }
   }
 
+  property("#891: the id-based sweep order equals the Map form over memberPrecedents") {
+    Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
+      val f = fixture(wb)
+      val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
+      val subsets: Vector[Vector[QualifiedRef]] =
+        Vector(all, all.zipWithIndex.collect { case (q, i) if i % 2 == 0 => q }) ++
+          DependencyGraph.qualifiedSccOrder(f.deps).map(_.members)
+      Prop.all(subsets.map { members =>
+        val ids = f.ids(members)
+        val reads = f.graph.memberPrecedents(ids)
+        val deps = reads.map((reader, read) => f.ref(reader) -> f.refs(read))
+        val expected = DependencyGraph.withinComponentOrder(members, deps)
+        val actual = f.graph.withinComponentOrder(ids).toVector.map(f.ref)
+        Prop(actual == expected) :| s"$actual vs $expected"
+      }*)
+    }
+  }
+
   property("member reads: direct legacy reads among any member set, one component or many") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val f = fixture(wb)

@@ -1012,14 +1012,11 @@ object DependencyGraph:
     dependencies: Map[QualifiedRef, Set[QualifiedRef]]
   ): Vector[QualifiedRef] =
     // #891: members as grid-ordered ids (comparing ids compares gridKeys), member-to-member reads
-    // as one CSR array, the frontier an Int min-heap. The top-left REMAINING member only ever moves
-    // right: it is the first id not yet emitted, so a cursor that skips emitted ids finds it.
+    // as edge lists, ordered by the shared kernel
     val nodes = NodeTable.of(members)
     val n = nodes.formulaCount
     val src = new IntBuf(math.max(16, n))
     val dst = new IntBuf(math.max(16, n))
-    val outCount = new Array[Int](n + 1)
-    val degree = new Array[Int](n)
     var u = 0
     while u < n do
       val reader = nodes.qualified(u)
@@ -1029,17 +1026,35 @@ object DependencyGraph:
           if p >= 0 then
             src += p
             dst += u
-            outCount(p + 1) += 1
-            degree(u) += 1
       }
       u += 1
+    val order = cutKahn(n, src, dst)
+    Vector.tabulate(n)(i => nodes.qualified(order(i)))
+
+  /**
+   * #891: [[withinComponentOrder]]'s Kahn-with-cut over `n` grid-ordered local ids and the distinct
+   * member-to-member edges `src(e) -> dst(e)` (precedent to reader, no self-edges): the min-heap
+   * frontier, and the top-left remaining id when it runs dry. Returns the local ids in order.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private[graph] def cutKahn(n: Int, src: IntBuf, dst: IntBuf): Array[Int] =
+    // member-to-member reads as one CSR array, the frontier an Int min-heap. The top-left
+    // REMAINING member only ever moves right: it is the first id not yet emitted, so a cursor that
+    // skips emitted ids finds it.
+    val outCount = new Array[Int](n + 1)
+    val degree = new Array[Int](n)
+    var e = 0
+    while e < src.length do
+      outCount(src(e) + 1) += 1
+      degree(dst(e)) += 1
+      e += 1
     var k = 0
     while k < n do
       outCount(k + 1) += outCount(k)
       k += 1
     val succDst = new Array[Int](src.length)
     val fill = java.util.Arrays.copyOf(outCount, n)
-    var e = 0
+    e = 0
     while e < src.length do
       succDst(fill(src(e))) = dst(e)
       fill(src(e)) += 1
@@ -1051,7 +1066,7 @@ object DependencyGraph:
       if degree(k) == 0 then frontier.push(k)
       k += 1
     var cursor = 0
-    val out = Vector.newBuilder[QualifiedRef]
+    val out = new Array[Int](n)
     var count = 0
     while count < n do
       // Kahn's next node or — the frontier dry with members remaining — the top-left remaining
@@ -1062,8 +1077,8 @@ object DependencyGraph:
           while emitted(cursor) do cursor += 1
           cursor
       emitted(node) = true
+      out(count) = node
       count += 1
-      out += nodes.qualified(node)
       var d = outCount(node)
       val end = outCount(node + 1)
       while d < end do
@@ -1072,7 +1087,7 @@ object DependencyGraph:
         // a dependent already emitted by a cut must not re-enter the frontier
         if degree(dependent) == 0 && !emitted(dependent) then frontier.push(dependent)
         d += 1
-    out.result()
+    out
 
   /** Unbounded range expansion — the original `fromWorkbook` semantics. */
   private val unboundedQualifiedCells: (SheetName, CellRange) => Set[QualifiedRef] =
