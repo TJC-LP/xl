@@ -365,10 +365,32 @@ object SheetEvaluator:
     if rangeFormulaCells.isEmpty then RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
     else
       val window = rangeFormulaCells.map(at)
-      // the static closure, on this sheet and every other
-      val closure = window ++ graph.precedents(window, Set.empty)
-      val dynamic = DependencyGraph.dynamicCells(book, graph.parses)
       val sheetsByName = book.sheets.iterator.map(s => s.name -> s).toMap
+      val core = graph.cyclicCore
+      // #891 (Excel parity): a book whose calcPr iterates holds converged values in its cycles, and
+      // Excel shows them. Its cycle members are neither failures nor re-evaluated here: they keep
+      // their caches and everything downstream evaluates off them. Otherwise a cycle fails its
+      // members and blocks what reads them.
+      val iterating = book.metadata.calcPr.exists(_.iterativeCalculation)
+      // That holds only if every member holds a cache. A member without (a library-authored or
+      // `--no-recalc` book; Excel never writes one) would be evaluated on demand by its first
+      // reader, ahead of its own precedents' slots and off their stale caches, and an aggregate
+      // computed that early would be kept for the pass. Such a book is iterated: the window shows
+      // what `recalculate` computes, at the cost of one recalculation.
+      def holdsNoCache(q: QualifiedRef): Boolean =
+        sheetsByName.get(q.sheet).flatMap(_.cells.get(q.ref)).map(_.value) match
+          case Some(CellValue.Formula(_, None, _)) => true
+          case _ => false
+      val unsettled =
+        book.metadata.calcPr.filter(_.iterativeCalculation && core.exists(holdsNoCache))
+      // The cached members of an iterating book are pinned: sources of the values the file holds
+      // and nothing else. No walk passes through one (what feeds a cycle is not a precedent of
+      // what reads it, and a failure behind a cycle blocks nothing in front of it), none is
+      // stripped, and one that reads dynamically is not a dynamic reader of this pass.
+      val pinned = if iterating && unsettled.isEmpty then core else Set.empty[QualifiedRef]
+      // the static closure, on this sheet and every other
+      val closure = window ++ graph.precedents(window, pinned)
+      val dynamic = DependencyGraph.dynamicCells(book, graph.parses) -- pinned
       // GH-274: a dynamic reader's targets are invisible to the static walk, so correctness needs
       // every formula of its sheet computed in order (correctness over narrowness; results still
       // report only the range). `sheet` widens when it holds any dynamic reference, as it always
@@ -382,10 +404,10 @@ object SheetEvaluator:
         if wanting.isEmpty then targets
         else
           val added = wanting.iterator.flatMap(sheetsByName.get).flatMap(formulasOf).toSet
-          widen(targets ++ added ++ graph.precedents(added, Set.empty), widened ++ wanting)
+          widen(targets ++ added ++ graph.precedents(added, pinned), widened ++ wanting)
       val targets = if dynamic.isEmpty then closure else widen(closure, Set.empty)
       def dependentsOf(refs: Set[QualifiedRef]): Set[QualifiedRef] =
-        (graph.dependents(refs, Set.empty) & targets) -- refs
+        (graph.dependents(refs -- pinned, pinned) & targets) -- refs -- pinned
       def formulaText(q: QualifiedRef): String =
         sheetsByName.get(q.sheet).flatMap(_.cells.get(q.ref)).map(_.value) match
           case Some(CellValue.Formula(expression, _, _)) => expression
@@ -393,12 +415,6 @@ object SheetEvaluator:
       def failure(q: QualifiedRef, reason: String): CellEvalError =
         CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
 
-      val core = graph.cyclicCore
-      // #891 (Excel parity): a book whose calcPr iterates holds converged values in its cycles, and
-      // Excel shows them. Its cycle members are neither failures nor re-evaluated here: they keep
-      // their caches and everything downstream evaluates off them. Otherwise a cycle fails its
-      // members and blocks what reads them.
-      val iterating = book.metadata.calcPr.exists(_.iterativeCalculation)
       def ordered: RangeEvalResult =
         val cyclic = if iterating then Set.empty[QualifiedRef] else core & targets
         // every target downstream of any cycle of the book: the canonical order below leaves them
@@ -504,15 +520,6 @@ object SheetEvaluator:
             .toVector
             .sortBy(rowMajor)
         )
-      // An iterating book's members keep their caches only if they all hold one. A member without
-      // (a library-authored or `--no-recalc` book; Excel never writes one) would be evaluated on
-      // demand by its first reader, ahead of its own precedents' slots and off their stale caches,
-      // and an aggregate computed that early would be kept for the pass. Such a book is iterated:
-      // the window shows what `recalculate` computes, at the cost of one recalculation.
-      def holdsNoCache(q: QualifiedRef): Boolean =
-        sheetsByName.get(q.sheet).flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(_, None, _)) => true
-          case _ => false
       def iterated(calc: IterativeCalc): RangeEvalResult =
         val full = WorkbookEvaluator.recalculate(book)(clock, calc)
         val errored = full.errors.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
@@ -549,8 +556,6 @@ object SheetEvaluator:
         val (here, elsewhere) = failures.partition(_.sheet == sheet.name)
         here.sortBy(failed => rowMajor(failed.ref)) ++
           elsewhere.sortBy(failed => QualifiedRef.gridKey(QualifiedRef(failed.sheet, failed.ref)))
-      val unsettled =
-        book.metadata.calcPr.filter(_.iterativeCalculation && core.exists(holdsNoCache))
       unsettled.map(IterativeCalc.fromCalcPr).fold(ordered)(iterated)
 
   /**

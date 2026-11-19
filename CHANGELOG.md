@@ -110,6 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no readers, so a cycle or a dependent could be missed. The seeder now asks the recalculation
   graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
   now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
+  The audit's volatility exemption asks the same graph the what-if pass uses: a table whose
+  lookup column is chosen by one of its own inputs is exempt when any column that input can
+  select draws RAND()/NOW() in the table's cone, not only the column selected today.
 
 - **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
   --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
@@ -170,6 +173,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an iterative recalculation of the book and costs one: the window used to fail such a cell with
   "Circular reference … read again while its own evaluation is in progress", or compute it from
   its precedents' stale caches.
+  When every member holds a value, the cycle is a source of those values and nothing else: a
+  formula that only feeds the cycle is not evaluated for the window, a failure behind the cycle
+  does not block a cell that reads it, and a member that reads through INDIRECT keeps its value
+  (a member downstream of one lost its cache and was recomputed once, out of the cycle).
 
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region

@@ -396,6 +396,52 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
+  property("no window cell is both shown and unevaluated, iterating or not, cached cycle or not") {
+    // review of #891: a cached cycle's member was stripped by the dynamic bucket, and a failure
+    // behind a cached cycle blocked a cell that had already been computed off the cycle's caches
+    val calcPr = com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true)
+    Prop.forAll(
+      genStaleBook,
+      Gen.oneOf(true, false),
+      Gen.oneOf(true, false),
+      Gen.oneOf(true, false)
+    ) { (book, iterate, cacheMember, breakFeeder) =>
+      val base = book.workbook
+      val out0 = base.sheets(1)
+      // the cyclic books' one uncached member, given a (stale) cache
+      val out1 = out0.cells.get(at("D2")).map(_.value) match
+        case Some(CellValue.Formula(text, None, kind)) if cacheMember =>
+          out0.put(at("D2"), CellValue.Formula(text, Some(num(-5)), kind))
+        case _ => out0
+      // a formula that cannot evaluate, feeding the helper column the cycle runs through
+      val data0 = base.sheets(0)
+      val broken =
+        if breakFeeder then data0.put(at("A2"), CellValue.Formula("Missing!Z9+1", None))
+        else data0
+      // a probe that reads one cycle member (Data!G2, cached -1) and nothing else
+      val data1 = broken.put(at("H1"), CellValue.Formula("G2+0", None))
+      val edited = base.put(data1).put(out1)
+      val wb =
+        if iterate then edited.copy(metadata = edited.metadata.copy(calcPr = Some(calcPr)))
+        else edited
+      Prop.all(windows.map { (sheet, range) =>
+        val shown = window(wb, sheet, range, cachesOn())
+        val name = wb.sheets(sheet).name
+        val unevaluated =
+          shown.blocked.toSet ++ shown.failures.filter(_.sheet == name).map(_.ref)
+        val clue =
+          s"sheet $sheet iterate $iterate cached $cacheMember broken $breakFeeder\n$shown"
+        // a fully cached cycle is pinned: its reader shows the member's saved value whatever
+        // fails behind the cycle and whatever reads dynamically inside it
+        val pinnedProbe =
+          sheet != 0 || !(book.cyclic && iterate && cacheMember) ||
+            shown.values.get(at("H1")).contains(num(-1))
+        Prop((shown.values.keySet & unevaluated).isEmpty) :| clue &&
+        Prop(pinnedProbe) :| s"probe H1\n$clue"
+      }*)
+    }
+  }
+
   property("the window law is not vacuous: clean windows, slices built, each formula parsed once") {
     Prop.forAll(genStaleBook) { book =>
       val counters = RecalcCounters.create()

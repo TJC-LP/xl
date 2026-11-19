@@ -403,6 +403,32 @@ class DataTableSeederSpec extends FunSuite:
     assertEquals(audit.staleDataTables, Vector.empty)
   }
 
+  test("#891: a volatile strip the selector can reach exempts the table from the stale note") {
+    // K1 = 2 picks column B today, so the narrowed recalculation graph does not see RAND() in
+    // column C; the table substitutes K1 = 3 and draws it (the draw depends on the other input,
+    // so the what-if pass re-evaluates it). The exemption must ask the graph the
+    // what-if pass uses, or a freshly seeded table is reported stale on every run.
+    val wb = selectorTable(
+      "VLOOKUP(2,A10:D11,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "J1*1",
+      "C10" -> "J1*RAND()",
+      "D10" -> "J1*100",
+      "A11" -> "2",
+      "B11" -> "J1*2",
+      "C11" -> "J1*RAND()",
+      "D11" -> "J1*200"
+    )
+    val seeded = wb
+      .recalculate()
+      .workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+      .workbook
+    val audit = com.tjclp.xl.formula.eval.WorkbookAudit.of(seeded)
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
   test("#891: an HLOOKUP whose row selector is a table input seeds every selected row") {
     val wb = selectorTable(
       "HLOOKUP(2,A10:B13,K1,FALSE)",
