@@ -273,9 +273,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its first argument, and an array constant was spelled out cell by cell. The call is now printed
   on the error path alone; messages and results are unchanged.
 
-- **`xl audit` on a model with data tables over a circular block: 20.8 s to 9.7 s** (#891; JVM,
-  median of three serial runs against the change before it, same output; the other two real
-  workbooks and every `recalc` are within noise). An iterative fixpoint (a circular block under
+- **`xl audit` on a model with data tables over a circular block takes half the time** (#891;
+  JVM, median of three serial runs against the change before it, same output: 20.8 s to 9.7 s on
+  a quiet machine, 22.0 s to 10.9 s re-measured at the final commit on a busy one; the other two
+  real workbooks are within noise). An iterative fixpoint (a circular block under
   recalculation, and each interior cell of a data table whose corner reads one) evaluated its
   criteria calls with nothing shared, so every SUMIFS, COUNTIFS, SUMIF and AVERAGEIFS re-read
   its ranges row by row: 219 million row tests for one audit, over two 200-row ranges.
