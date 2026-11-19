@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `dataTableCheck` (`"checked"` or `"skipped"`), and text mode prints `Stale data tables: not
   checked` when skipped. The note is never a finding, so `clean` and `findings` do not move.
   `WorkbookAudit.of(wb, clock, checkDataTables)` and `WorkbookAudit.dataTablesChecked` are the
-  library side.
+  library side. `dataTablesChecked` is a new field of the `WorkbookAudit` case class: it
+  defaults to `true`, takes part in equality, and changes the shapes of `copy` and `unapply`.
 
 - **Qualified table-column references** (part of #669): plain references such as
   `SUM(Table1[Col])` and `COUNTIF(Table1[Col],1)` evaluate as data-row references, including
