@@ -69,13 +69,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
   `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
   `cyclicNodes`, `topologicalSort`, `dynamicClosure`, `deferDynamic` and `dynamicCells(sheet)`;
-  the unused `fromWorkbook`, `detectCrossSheetCycles`, `qualifiedTopologicalSort` and
-  `extractDependenciesBounded`; and `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and
-  `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
+  the unused `fromWorkbook`, `fromWorkbookBounded`, `detectCrossSheetCycles`,
+  `qualifiedCyclicNodes`, `qualifiedTransitiveDependents`, `qualifiedTransitivePrecedents`,
+  `qualifiedTopologicalSort` and `extractDependenciesBounded`; and
+  `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
   Tarjan and Kahn engines that saw no other sheet. Use `Workbook(sheet).recalculate(...)` to
   evaluate (cycles are reported per cell instead of failing the call), `QualifiedGraph.of(wb)` for
   precedents, dependents and cycles (`.sccs.filter(_.cyclic)`), and
-  `sheet.evaluateForRangePerCell` for a window. `evaluateForRangePerCell` (what `view --eval`
+  `sheet.evaluateForRangePerCell` for a window. `sccs` follows declared reads, so a
+  VLOOKUP/HLOOKUP that sits inside its own table shows there as a self-cycle although
+  recalculation (and Excel, verified) computes it; the errors of `recalculate` and `xl audit` are
+  the authority on real cycles. `evaluateForRangePerCell` (what `view --eval`
   renders) now takes its closure, cycles and order from the workbook's recalculation graph, so a
   cycle that runs through another sheet is reported instead of evaluated against stale caches.
 
