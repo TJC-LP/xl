@@ -268,7 +268,7 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 A performance regression is pinned by a work counter or a structural count, never by wall time:
 `__.test` runs on a shared 4-core CI runner beside several other test JVMs, where a 2 s build can
 take 6 s, so a wall-clock threshold can only flake (#843). The counters are `RecalcCounters`
-(`RangeLookups` and `RangeLookupWork` for the formula graph's range index, `UsedRangeScans`,
+(`RangeLookups` and `RangeLookupWork` for the formula graph's range index,
 `GraphEdges`, `MatcherCalls`, ...), read through `RecalcCounters.create()` with
 `WorkbookEvaluator.recalculateCounted` or `DependencyGraph.fromWorkbookFormulaGraph(wb, counters)`;
 structural counts are reports such as `ImplicitIntersection.Report` and `ReadCommands.UncacheTrace`.

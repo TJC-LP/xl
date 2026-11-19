@@ -91,7 +91,6 @@ class RecalcCountersSpec extends FunSuite:
     // COUNTIF 5 rows; COUNTIFS 5 rows on the first pair, then the 3 rows that passed it;
     // SUMIF 5; COUNTIF(Data!A:A) 5 rows after the used-range bound
     assertEquals(snap(Counter.MatcherCalls), 5L + 8L + 5L + 5L)
-    assertEquals(snap(Counter.UsedRangeScans), 1L)
     // SUMIF resolves `rng` as its range and as its (absent, defaulted) sum range: the pass parses
     // the name's body once and answers the second resolution from its cache (#767)
     assertEquals(snap(Counter.NameParses), 1L)

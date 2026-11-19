@@ -441,7 +441,6 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       // F2:F301 (the whole column bounds to the same rows); F2:F100 is below the threshold
       assertEquals(snap(Counter.SlicesBuilt), 1L)
       assertEquals(snap(Counter.ScanFallbacks), 0L)
-      assertEquals(snap(Counter.UsedRangeScans), 1L)
     }
   }
 
@@ -488,26 +487,13 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
-  test("used-range scans: at most one per sheet and structural generation") {
-    val counters = RecalcCounters.create()
-    recalculateWithMemo(wrongCaches, sequential(), cachesOn(counters))
-    assert(counters.snapshot(Counter.UsedRangeScans) <= wrongCaches.sheets.size.toLong)
-  }
-
-  test("a structural change re-scans the used range; a formula cache write does not") {
-    val cache = new PassCache(eager, RecalcCounters.disabled)
+  test("a formula cache write leaves the populated cells alone; a value write may change them") {
     val sheet = Sheet(data).put(at("A1"), num(1)).put(at("A3"), CellValue.Formula("A1"))
-    // inactive: every call scans
-    assertEquals(cache.usedRange(sheet).map(_.toA1), Some("A1:A3"))
-    cache.begin(Readiness.build(Map.empty, Set.empty))
-    assertEquals(cache.usedRange(sheet).map(_.toA1), Some("A1:A3"))
-    val grown = sheet.put(at("B9"), num(2))
-    // same generation: the recorded range stands (a pass never grows a sheet without saying so)
-    assertEquals(cache.usedRange(grown).map(_.toA1), Some("A1:A3"))
     assert(SheetEvaluator.threadChangesStructure(sheet, at("B9")))
     assert(!SheetEvaluator.threadChangesStructure(sheet, at("A3")))
-    cache.structureChanged(data)
-    assertEquals(cache.usedRange(grown).map(_.toA1), Some("A1:B9"))
+    // the store's bounds are its own summaries: always those of the sheet at hand (#891)
+    assertEquals(sheet.usedRange.map(_.toA1), Some("A1:A3"))
+    assertEquals(sheet.put(at("B9"), num(2)).usedRange.map(_.toA1), Some("A1:B9"))
   }
 
   test("running windows build one slice per column, never one per window") {

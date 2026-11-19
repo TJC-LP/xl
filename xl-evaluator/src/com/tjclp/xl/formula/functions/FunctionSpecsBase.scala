@@ -279,15 +279,11 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
-   * Sheet bounds shared by references, lookups and aggregates (#747). The pass scans once per sheet
-   * and structural generation; outside an active pass bounds are read from this snapshot.
+   * Sheet bounds shared by references, lookups and aggregates (#747): the cell store's summaries
+   * answer them without a scan (#891).
    */
   protected def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
-    ctx.aggregateMemo.flatMap(_.passCache) match
-      case Some(passCache) => passCache.usedRange(sheet)
-      case None =>
-        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
-        sheet.usedRange
+    sheet.usedRange
 
   /**
    * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the

@@ -61,7 +61,6 @@ class RecalcPerfGatesSpec extends FunSuite:
     Counter.MatcherCalls -> 1478L,
     Counter.SlicesBuilt -> 8L,
     Counter.ScanFallbacks -> 0L,
-    Counter.UsedRangeScans -> 1L,
     Counter.NameParses -> 15L,
     // #790: one parse per formula, made by the graph build and reused by evaluation
     Counter.FormulaParses -> 1600L
@@ -134,7 +133,6 @@ class RecalcPerfGatesSpec extends FunSuite:
     // the whole-column ranges are all on Loads, whose populated cells never change during the
     // pass: one scan (before the per-pass cache, one per range per call: 34 per Summary row x 8
     // rows + 64 per Rate History row x 24 rows = 1,808)
-    assertEquals(run.counters(Counter.UsedRangeScans), 1L)
     assertEquals(run.counters(Counter.CriteriaIndexed), 400L)
     assertEquals(run.counters(Counter.ScanFallbacks), 0L)
   }

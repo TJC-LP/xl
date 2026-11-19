@@ -53,6 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `removedIn(range)`.
   - `Optics.sheetCells` is a `Lens[Sheet, CellStore]`. `CellStore` is exported from
     `com.tjclp.xl.{*, given}` and the scripting prelude.
+  - `Sheet.withValues(refs, values)` writes many values in one store rebuild. Row and column
+    inserts and deletes re-key the store instead of rebuilding it.
+  - `RecalcCounters.Counter.UsedRangeScans` is removed with the per-pass used-range memo it
+    counted: the store's summaries answer `usedRange` without a scan.
 
 - **Breaking: long-deprecated API is removed** (#891).
   - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
