@@ -460,16 +460,50 @@ private[xl] object SheetEdits:
   // ===== Clear =====
 
   /**
-   * Clear contents, styles and/or comments in `range`. Clearing contents also unmerges every merged
-   * region overlapping the range, so no merge is left describing cleared cells.
+   * Clear contents, styles and/or comments in `range`.
+   *
+   * GH-890: a contents-only clear is Excel's Clear Contents: each emptied cell keeps its style but
+   * loses its hyperlink, a cell with no style is removed (unless its row or column has a default
+   * style, GH-897), and merges stay. A clear that drops the styles as well (`ClearWhat.all`)
+   * removes the cell records and unmerges every merged region overlapping the range, as Clear All
+   * does. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`, GH-886) follows the same
+   * rule, except that it removes an unstyled cell in a styled row or column until GH-897 lands
+   * there too.
    */
   def clear(sheet: Sheet, range: CellRange, what: ClearWhat): Sheet =
-    val s1 = if what.contents then sheet.removeRange(range) else sheet
-    val s2 = if what.styles then s1.clearStylesInRange(range) else s1
+    val dropCells = what.contents && what.styles
+    val s1 =
+      if dropCells then sheet.removeRange(range)
+      else if what.contents then clearContentsKeepingStyles(sheet, range)
+      else sheet
+    val s2 = if what.styles && !dropCells then s1.clearStylesInRange(range) else s1
     val s3 = if what.comments then s2.clearCommentsInRange(range) else s2
-    if what.contents then
+    if dropCells then
       s3.mergedRanges.filter(_.intersects(range)).foldLeft(s3)((s, mr) => s.unmerge(mr))
     else s3
+
+  /**
+   * Clear Contents: a cell in `range` that keeps a record is emptied and loses its hyperlink; any
+   * other is removed. A cell keeps its record when it has a style, or when its row or column has a
+   * default style ([[keepsRecordWhenCleared]]).
+   */
+  private def clearContentsKeepingStyles(sheet: Sheet, range: CellRange): Sheet =
+    // the store walks the range and merges the kept records back once (#891)
+    val kept = sheet.cells
+      .inRange(range)
+      .filter(keepsRecordWhenCleared(sheet, _))
+      .map(_.copy(value = CellValue.Empty, hyperlink = None))
+      .toVector
+    sheet.copy(cells = sheet.cells.removedIn(range).putAll(kept))
+
+  /**
+   * Whether a contents clear keeps `cell` as an empty record: it has a style, or its row or column
+   * has a default style (GH-897), which a cell with no record would take instead of its own.
+   */
+  private[xl] def keepsRecordWhenCleared(sheet: Sheet, cell: Cell): Boolean =
+    cell.styleId.isDefined ||
+      sheet.rowProperties.get(cell.ref.row).exists(_.styleId.isDefined) ||
+      sheet.columnProperties.get(cell.ref.col).exists(_.styleId.isDefined)
 
   // ===== Column auto-fit (GH-156) =====
 

@@ -356,8 +356,11 @@ private[xl] object DynamicArrayAuthoring:
    * sheet's ([[spillsOf]]); the ranges are matched as ranges, never expanded.
    *
    * GH-886: like Excel's Clear Contents, an emptied cell keeps its style but loses its hyperlink; a
-   * cell with no style is removed. `keepFormatting = false` removes every emptied cell outright,
-   * for a clear that drops the formatting too (`clear --all`).
+   * cell with no style is removed, unless its row or column has a default style (GH-897): a cell
+   * with no record takes that row's or column's style, so the emptied cell keeps its record, with
+   * no style of its own, and stays on the default format; so does a released spill cell there.
+   * `keepFormatting = false` removes every emptied cell outright, for a clear that drops the
+   * formatting too (`clear --all`).
    */
   def clearContents(
     sheet: Sheet,
@@ -382,12 +385,28 @@ private[xl] object DynamicArrayAuthoring:
     val emptied = (r: ARef) => targeted(r) && !keep(r)
     val remaining =
       if keepFormatting then
+        // GH-897: a released spill cell that `clearValues` dropped (no style, no hyperlink) gets
+        // a bare record too when its row or column is styled, inside the ranges or not
+        val pinned = cleared.iterator
+          .filter(r => !released.cells.contains(r) && inStyledBand(sheet, r))
+          .flatMap(r => sheet.cells.get(r).map(_.copy(value = CellValue.Empty)))
         CellStore.from(released.cells.iterator.flatMap { cell =>
           if !emptied(cell.ref) then Some(cell)
-          else cell.styleId.map(_ => cell.copy(value = CellValue.Empty, hyperlink = None))
-        })
+          else
+            Option.when(cell.styleId.isDefined || inStyledBand(sheet, cell.ref))(
+              cell.copy(value = CellValue.Empty, hyperlink = None)
+            )
+        } ++ pinned)
       else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
     ContentsCleared(released.copy(cells = remaining), cleared, kept)
+
+  /**
+   * Whether `r`'s row or column carries a default style (`<row s= customFormat="1">` or `<col
+   * style=>`), which a cell with no record of its own would show.
+   */
+  private def inStyledBand(sheet: Sheet, r: ARef): Boolean =
+    sheet.rowProperties.get(r.row).exists(_.styleId.isDefined) ||
+      sheet.columnProperties.get(r.col).exists(_.styleId.isDefined)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
   private def overlap(a: CellRange, b: CellRange): Option[CellRange] =

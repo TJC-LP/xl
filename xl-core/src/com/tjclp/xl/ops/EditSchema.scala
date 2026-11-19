@@ -282,7 +282,7 @@ object EditSchema:
       opt("styles", Bool, "Clear styles only"),
       opt("comments", Bool, "Clear comments only")
     ),
-    "Clear a range: contents by default (unmerging overlaps), or styles/comments/all.",
+    "Clear a range: contents by default (formatting and merges kept), or styles/comments/all.",
     since = "0.9.6",
     batchOp = Some("clear"),
     cliVerb = Some("clear"),
