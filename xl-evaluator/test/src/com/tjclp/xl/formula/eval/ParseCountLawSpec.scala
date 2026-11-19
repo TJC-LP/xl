@@ -289,6 +289,77 @@ class ParseCountLawSpec extends ScalaCheckSuite:
     }
   }
 
+  /**
+   * A two-input table over G5:I6 whose row input `K1` is the column selector of the corner's lookup
+   * into A10:D11 (every cell of which moves with the column input `J1`), unseeded.
+   */
+  private def selectorBook(corner: String): Workbook =
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      CellRange.parse("G5:I6").fold(fail(_), identity),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(r("K1")),
+      r2 = Some(r("J1"))
+    )
+    val cells = Seq(
+      "A10" -> n(1),
+      "B10" -> f("J1*1"),
+      "C10" -> f("J1*10"),
+      "D10" -> f("J1*100"),
+      "A11" -> n(2),
+      "B11" -> f("J1*2"),
+      "C11" -> f("J1*20"),
+      "D11" -> f("J1*200"),
+      "J1" -> n(5),
+      "K1" -> n(2),
+      "F4" -> f(corner),
+      "G4" -> n(2),
+      "H4" -> n(3),
+      "I4" -> n(4),
+      "F5" -> n(1),
+      "F6" -> n(3),
+      "G5" -> (CellValue.dataTable(kind, None): CellValue)
+    )
+    Workbook(cells.foldLeft(Sheet(s))((sheet, kv) => sheet.put(r(kv._1), kv._2)))
+
+  test("a table whose input selects the corner's lookup strip seeds the same over a shared graph") {
+    // Excel: interior(row j, column k) is the lookup's column k of row 2 at J1 = j
+    val expected = Vector(2, 20, 200, 6, 60, 600).map(v => Some(n(v)))
+    Vector("VLOOKUP(2,A10:D11,K1,FALSE)", "VLOOKUP(2,A10:D11,K1+0,FALSE)", "INDEX(A10:D11,2,K1)")
+      .foreach { corner =>
+        val book = selectorBook(corner)
+        val (result, report) = recalculateThenSeedTables(book, clock, None, 1)
+        assertEquals(report.warnings, Vector.empty, corner)
+        assertEquals(interior(report, "G5", "H5", "I5", "G6", "H6", "I6"), expected, corner)
+        val apart = book.recalculate(clock)
+        assertEquals(result, apart, corner)
+        assertEquals(Right(report), apart.workbook.seedDataTablesReport(clock, None), corner)
+        assertEquals(
+          recalculateCounted(
+            book,
+            options.copy(seedTables = true),
+            RecalcCounters.disabled
+          ).workbook,
+          report.workbook,
+          corner
+        )
+      }
+  }
+
+  test("the generated books of the sharing property do seed tables") {
+    val books = (1 to 60).flatMap { i =>
+      CompactGraphGens.genWorkbook(
+        org.scalacheck.Gen.Parameters.default,
+        org.scalacheck.rng.Seed(i.toLong)
+      )
+    }
+    val seededTables = books.count { wb =>
+      val settledBook = wb.recalculate(clock).workbook
+      settledBook.seedDataTablesReport(clock, None).exists(_.workbook != settledBook)
+    }
+    assert(seededTables >= 30, s"$seededTables of ${books.size} books changed under seeding")
+  }
+
   test("sharing the graph changes nothing on the table books, iterating ones included") {
     val iterating = tableBook(10, 3).copy(metadata =
       tableBook(10, 3).metadata.copy(calcPr = Some(CalcPr(iterativeCalculation = true)))
