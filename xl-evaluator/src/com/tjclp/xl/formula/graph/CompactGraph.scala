@@ -425,25 +425,20 @@ private[formula] final class CompactGraph private (
    * #891: [[DependencyGraph.withinComponentOrder]] over formula ids, with the reads among `members`
    * taken from this graph exactly as [[memberPrecedents]] takes them (walking only `members`'
    * component when they share one). Formula ids are in grid order, so the members ascending are the
-   * kernel's local ids; one stamp array replaces a visited set per member. Returns formula ids.
+   * kernel's local ids; one stamp set replaces a visited set per member. Returns formula ids.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def withinComponentOrder(members: BitSet): Array[Int] =
     val ids = members.toArray
     val n = ids.length
-    val local = new Array[Int](formulaCount)
-    java.util.Arrays.fill(local, -1)
     var i = 0
-    while i < n do
-      local(ids(i)) = i
-      i += 1
     val compOf = components.compOf
     val memberComps = members.iterator.map(compOf(_)).distinct.take(2).toVector
     val only = memberComps match
       case Vector(c) => c
       case _ => -1
-    val seenBy = new Array[Int](nodeCount)
-    java.util.Arrays.fill(seenBy, -1)
+    // scratch sized to the component: a book of many small cycles orders each for its own cost
+    val seen = new StampSet(n)
     val pending = new IntBuf(16)
     val src = new IntBuf(math.max(16, n))
     val dst = new IntBuf(math.max(16, n))
@@ -456,11 +451,11 @@ private[formula] final class CompactGraph private (
       while head < pending.length do
         val s = pending(head)
         head += 1
-        if seenBy(s) != u then
-          seenBy(s) = u
+        if seen.mark(s, u) then
           if s < formulaCount then
-            val reader = local(s)
-            if s != u && reader >= 0 then
+            // `ids` ascends, so a member's position in it is its local id
+            val reader = if s == u then -1 else java.util.Arrays.binarySearch(ids, s)
+            if reader >= 0 then
               src += i
               dst += reader
           else foreachSucc(s)(v => if only < 0 || compOf(v) == only then pending += v)

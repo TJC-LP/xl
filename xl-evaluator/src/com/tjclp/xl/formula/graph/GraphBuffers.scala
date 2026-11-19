@@ -89,3 +89,58 @@ private[graph] final class IntMinHeap(capacity: Int):
         heap(i) = t
         i = smallest
     top
+
+/**
+ * #891: the nodes a walk has reached, each with the stamp of the walk that reached it last — a
+ * visited set for many short walks over a few nodes of a large graph. Open addressing on the node
+ * id, so its size follows the nodes touched, not the graph: a stamp array over every node costs a
+ * graph-sized allocation per use.
+ */
+@SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+private[graph] final class StampSet(expected: Int):
+  private var mask = Integer.highestOneBit(math.max(8, expected) * 2 - 1) * 2 - 1
+  private var keys = StampSet.empty(mask + 1)
+  private var stamps = new Array[Int](mask + 1)
+  private var used = 0
+
+  /** Stamp `node` with `stamp`; false when it already carried that stamp. `node` is >= 0. */
+  def mark(node: Int, stamp: Int): Boolean =
+    var h = StampSet.mix(node) & mask
+    while keys(h) >= 0 && keys(h) != node do h = (h + 1) & mask
+    if keys(h) == node then
+      if stamps(h) == stamp then false
+      else
+        stamps(h) = stamp
+        true
+    else
+      keys(h) = node
+      stamps(h) = stamp
+      used += 1
+      if used * 2 > mask then grow()
+      true
+
+  private def grow(): Unit =
+    val oldKeys = keys
+    val oldStamps = stamps
+    mask = mask * 2 + 1
+    keys = StampSet.empty(mask + 1)
+    stamps = new Array[Int](mask + 1)
+    var i = 0
+    while i < oldKeys.length do
+      val k = oldKeys(i)
+      if k >= 0 then
+        var h = StampSet.mix(k) & mask
+        while keys(h) >= 0 do h = (h + 1) & mask
+        keys(h) = k
+        stamps(h) = oldStamps(i)
+      i += 1
+
+private[graph] object StampSet:
+  private def empty(size: Int): Array[Int] =
+    val a = new Array[Int](size)
+    java.util.Arrays.fill(a, -1)
+    a
+
+  private def mix(x: Int): Int =
+    val h = x * 0x9e3779b9
+    h ^ (h >>> 16)
