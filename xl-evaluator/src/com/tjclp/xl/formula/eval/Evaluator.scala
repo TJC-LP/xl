@@ -1511,7 +1511,8 @@ object Evaluator:
     /** One region of a fixpoint: fresh aggregate results over the fixpoint's shared cache. */
     def inFixpoint(cache: PassCache): AggregateMemo = new AggregateMemo(shared = Some(cache))
 
-    private val FixpointLimits: PassCache.Limits =
+    /** What a fixpoint's cache may hold; law specs derive their tighter budgets from it. */
+    private[formula] val FixpointLimits: PassCache.Limits =
       PassCache.DefaultLimits.copy(minSliceRows = 16)
 
   private[formula] final class AggregateMemo(

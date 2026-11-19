@@ -446,6 +446,15 @@ private[formula] final class PassCache(
         counters.increment(RecalcCounters.Counter.SlicesBuilt)
         Some(slice)
 
+  /**
+   * The slices built so far, in no particular order. Test-only: law specs read it to check which
+   * rows a pass copied; evaluation never does.
+   */
+  def builtSlices: Vector[ColumnSlice] =
+    val all = Vector.newBuilder[ColumnSlice]
+    covering.forEach((_, built) => all ++= built)
+    all.result()
+
   // ----- equality indexes and candidates -----
 
   private val indexes = new ConcurrentHashMap[ColumnSlice.Id, IndexEntry]()
