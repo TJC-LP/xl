@@ -38,7 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persistent row-radix trie whose rows keep their cells in parallel arrays (value, style and
   hyperlink side by side), so a cell costs roughly 12-17 bytes of overhead instead of about 60,
   a lookup is a few shifts with no hashing, and every node carries summaries: `usedRange` reads
-  them in O(height) instead of scanning every cell. It is keyed by each cell's own `ref`, has
+  them in O(height) instead of scanning every cell. A row of more than 64 cells that spans
+  several 256-column bands keeps one leaf per band, so a single-cell write copies at most 256
+  cells however wide the row is. It is keyed by each cell's own `ref`, has
   value equality (equal cells at equal references, however the store was built) and iterates
   row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
   change. Migrating:

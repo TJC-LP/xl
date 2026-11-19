@@ -302,10 +302,11 @@ class CellStoreLawSpec extends ScalaCheckSuite:
   }
 
   test("tall narrow data and narrow tables are stored as 32-row blocks") {
-    import com.tjclp.xl.sheets.store.{Block, Entry, Node, RowLeaf}
+    import com.tjclp.xl.sheets.store.{BandedRow, Block, Entry, Node, RowLeaf}
     def shapes(e: Entry): (Int, Int) = e match
       case b: Block => (1, 0)
       case l: RowLeaf => (0, 1)
+      case r: BandedRow => (0, 1)
       case n: Node => n.children.map(shapes).foldLeft((0, 0))((a, b) => (a._1 + b._1, a._2 + b._2))
     val column =
       CellStore.from((0 until 1000).map(r => Cell(ARef.from0(0, r), CellValue.Number(r))))
