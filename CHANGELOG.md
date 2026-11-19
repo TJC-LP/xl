@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Cell.comment`, `withComment` and `clearComment` (deprecated since 0.12.1) and the `Sheet.put`
     shim that moved a cell comment into `sheet.comments`: `Cell` is `Cell(ref, value, styleId,
     hyperlink)`; comments live in `sheet.comments` (`sheet.comment(ref, …)`).
+  - `Cell.hyperlink` is an `Option[Hyperlink]`, no longer an `Option[String]`. The comment was
+    `Cell`'s fourth parameter, so `Cell(ref, value, None, Some("review note"))` (a comment until
+    now, compiled with a deprecation warning) would otherwise still compile and silently write a
+    hyperlink; it is now a type error. `Hyperlink` is an opaque type over the target string,
+    exported from `com.tjclp.xl.{*, given}` and the scripting prelude: build one with
+    `Hyperlink("https://…")`, read the text with `.target`. Migration: `hyperlink = Some(url)`
+    becomes `hyperlink = Some(Hyperlink(url))`, and `cell.hyperlink` reads become
+    `cell.hyperlink.map(_.target)`; `cell.withHyperlink(url: String)` and `clearHyperlink` are
+    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). Written workbooks
+    and CLI output are byte-identical.
   - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
   - The identity `Sheet.unsafe`.
   - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`

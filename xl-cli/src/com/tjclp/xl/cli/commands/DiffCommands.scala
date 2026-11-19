@@ -371,7 +371,7 @@ object DiffCommands:
     a.text.toPlainText == b.text.toPlainText && a.author == b.author
 
   private def hyperlinks(sheet: Sheet): Map[ARef, String] =
-    sheet.cells.flatMap((ref, cell) => cell.hyperlink.map(ref -> _))
+    sheet.cells.flatMap((ref, cell) => cell.hyperlink.map(h => ref -> h.target))
 
   // ==========================================================================
   // Sheet structure
