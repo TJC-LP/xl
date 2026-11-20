@@ -6,7 +6,7 @@ import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cli.commands.ImportCommands
 import com.tjclp.xl.cli.contract.{CliHarness, TestFixtures}
 import com.tjclp.xl.io.ExcelIO
@@ -162,9 +162,9 @@ class ImportCsvSpec extends CatsEffectSuite:
   private def cellsOf(path: String, sheetName: String) =
     ExcelIO.instance[IO].read(Path.of(path)).map { wb =>
       wb.sheets.find(_.name.value == sheetName).fold(Map.empty) { sheet =>
-        sheet.cells.map { (ref, cell) =>
+        sheet.cells.iterator.map { case cell @ Cell(ref, _, _, _) =>
           ref -> (cell.value, cell.styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt))
-        }
+        }.toMap
       }
     }
 

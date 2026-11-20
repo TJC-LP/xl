@@ -1265,7 +1265,7 @@ class BatchRecalcSpec extends FunSuite:
   test(
     "GH-509 review: --no-recalc delete-rows withdraws every reader of the deleted band, transitively"
   ) {
-    // The review's LibreOffice reproduction (LibreOfficeOracleSpec opens the file itself): A1=5,
+    // The original LibreOffice review reproduction (the oracle now uses an INDEX variant): A1=5,
     // A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10 cached 20, C1=B1+B2 cached 35, then delete row
     // 2. B1 becomes SUM(A1:A1) (truth 5) and C1 becomes B1+#REF! (truth #REF!): both read the
     // removed band — B1 through a range the band shortens, C1 through a deleted cell and through
@@ -1312,6 +1312,37 @@ class BatchRecalcSpec extends FunSuite:
     assert(summary.contains(markerLine), s"summary: $summary")
     assertFullCalcOnLoad(out, written)
     Files.deleteIfExists(out)
+
+    // The external oracle's INDEX fixture must also pin formula/cache state on CI without LO.
+    val indexWb = Workbook(
+      Sheet("Data")
+        .put(ref"A1" -> 5, ref"A2" -> 10)
+        .put(ref"B1", CellValue.Formula("SUM(A1:A2)", Some(CellValue.Number(15))))
+        .put(ref"B2", CellValue.Formula("ROW()*10", Some(CellValue.Number(20))))
+        .put(ref"C1", CellValue.Formula("B1+INDEX(B1:B2,2)", Some(CellValue.Number(35))))
+    )
+    List(false, true).foreach { noRecalc =>
+      val indexOut = tempXlsx()
+      try
+        WriteCommands
+          .deleteRows(
+            indexWb,
+            indexWb.sheets.headOption,
+            2,
+            1,
+            indexOut,
+            config,
+            false,
+            WritePolicy(noRecalc = noRecalc)
+          )
+          .unsafeRunSync()
+        val cached = if noRecalc then None else Some(CellValue.Error(CellError.Ref))
+        assertEquals(
+          formulaOn(readBack(indexOut), "Data", ref"C1"),
+          CellValue.Formula("B1+INDEX(B1:B1,2)", cached)
+        )
+      finally Files.deleteIfExists(indexOut)
+    }
   }
 
   /** The formula cell at `at` on `sheet`, failing when the cell is absent or not a formula. */
@@ -2314,9 +2345,10 @@ class BatchRecalcSpec extends FunSuite:
         .put(ref"B1", CellValue.Formula("C1+B2"))
         .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
         // This independent self-referencing oscillator exhausts the 20-round budget under any
-        // sweep; it lies outside the cone.
-        .put(ref"D1", CellValue.Formula("1-D1"))
-        .put(ref"D2", CellValue.Formula("D1*2"))
+        // sweep; it lies outside the cone. It holds values (#891: a formula holding none joins
+        // every edit's cone, as Excel computes every formula)
+        .put(ref"D1", CellValue.Formula("1-D1", Some(CellValue.Number(BigDecimal("0.5")))))
+        .put(ref"D2", CellValue.Formula("D1*2", Some(CellValue.Number(BigDecimal(1)))))
     ).withCalcPr(
       com.tjclp.xl.workbooks.CalcPr(
         iterativeCalculation = true,

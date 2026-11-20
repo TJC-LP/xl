@@ -5,9 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.25.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.26.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.25.0 or later.
+statement in this skill assumes 0.26.0 or later.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +15,7 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Environment
 
-- `xl --version` must print `0.25.0` or later. Not installed, or older: follow
+- `xl --version` must print `0.26.0` or later. Not installed, or older: follow
   [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
   JAR fallback, the rasterizer for image export).
 - A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where
@@ -96,7 +96,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Task | Verb | Notes |
 |------|------|-------|
 | Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
-| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI |
+| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI; `--skip-data-tables` drops the slow stale-data-table note |
 | Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all`, `--expand`; a range precedent is ONE node (`Data!A:A  range, 9357 occupied cells (12 formulas)`), `--expand` lists its cells |
 | One cell: value, style, comment, direct deps | `cell <ref>` | `Dependencies` lists a range as one entry (`B1:B3`, `Data!A:A`) |
 | Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
@@ -210,8 +210,8 @@ edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
 `png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
 what is available (the native binary needs one external tool: `pip install cairosvg` or
-`apt install librsvg2-bin`; the chain tries them in that order and falls through to the next on a
-failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
+`apt install librsvg2-bin` — `brew install librsvg` on macOS; the chain tries them in that order
+and falls through to the next on a failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
 librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/TJC-LP/xl/issues/664));
 on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
 (ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`

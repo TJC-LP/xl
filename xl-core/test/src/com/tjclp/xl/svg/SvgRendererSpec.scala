@@ -37,7 +37,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -57,7 +56,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -76,7 +74,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -191,7 +188,6 @@ class SvgRendererSpec extends FunSuite:
     val indentStyle = CellStyle.default.withAlign(Align(indent = 1))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Indented")
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -204,7 +200,6 @@ class SvgRendererSpec extends FunSuite:
     val indentStyle = CellStyle.default.withAlign(Align(indent = 1))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Indented")
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
 
     val svg = sheet.toSvg(ref"A1:A1", showLabels = true)
@@ -220,7 +215,6 @@ class SvgRendererSpec extends FunSuite:
     val noIndent = CellStyle.default.withAlign(Align(indent = 0))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Normal")
-      .unsafe
       .withCellStyle(ref"A1", noIndent)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -233,7 +227,6 @@ class SvgRendererSpec extends FunSuite:
     val largeIndent = CellStyle.default.withAlign(Align(indent = 3))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Indented")
-      .unsafe
       .withCellStyle(ref"A1", largeIndent)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -246,7 +239,6 @@ class SvgRendererSpec extends FunSuite:
     val centerIndent = CellStyle.default.withAlign(Align(horizontal = HAlign.Center, indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Centered")
-      .unsafe
       .withCellStyle(ref"A1", centerIndent)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
 
@@ -260,7 +252,6 @@ class SvgRendererSpec extends FunSuite:
     val rightIndent = CellStyle.default.withAlign(Align(horizontal = HAlign.Right, indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Right")
-      .unsafe
       .withCellStyle(ref"A1", rightIndent)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 85px
 
@@ -278,7 +269,6 @@ class SvgRendererSpec extends FunSuite:
     val topStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Top))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "TopText")
-      .unsafe
       .withCellStyle(ref"A1", topStyle)
       .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
 
@@ -298,7 +288,6 @@ class SvgRendererSpec extends FunSuite:
     val bottomStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Bottom))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "BottomText")
-      .unsafe
       .withCellStyle(ref"A1", bottomStyle)
       .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
 
@@ -317,7 +306,6 @@ class SvgRendererSpec extends FunSuite:
     val middleStyle = CellStyle.default.withAlign(Align(vertical = VAlign.Middle))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "MiddleText")
-      .unsafe
       .withCellStyle(ref"A1", middleStyle)
       .setRowProperties(Row.from0(0), RowProperties(height = Some(45.0))) // 60px
 
@@ -402,7 +390,6 @@ class SvgRendererSpec extends FunSuite:
     val centerStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Center))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "CenterMerged")
-      .unsafe
       .withCellStyle(ref"A1", centerStyle)
       .merge(range)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0))) // 75px
@@ -440,7 +427,6 @@ class SvgRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a long sentence that should wrap")
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0))) // ~61px, narrow
 
@@ -468,7 +454,6 @@ class SvgRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "First Second Third Fourth Fifth")
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(
         Column.from0(0),
@@ -498,7 +483,6 @@ class SvgRendererSpec extends FunSuite:
     val topWrapStyle = CellStyle.default.withAlign(Align(wrapText = true, vertical = VAlign.Top))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Line one Line two")
-      .unsafe
       .withCellStyle(ref"A1", topWrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(6.0)))
       .setRowProperties(Row.from0(0), RowProperties(height = Some(80.0)))
@@ -520,7 +504,6 @@ class SvgRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Hi")
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(10.0)))
 
@@ -552,7 +535,6 @@ class SvgRendererSpec extends FunSuite:
     val largeFont = CellStyle.default.withFont(Font(sizePt = 14.0))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Large")
-      .unsafe
       .withCellStyle(ref"A1", largeFont)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -567,7 +549,6 @@ class SvgRendererSpec extends FunSuite:
     val smallFont = CellStyle.default.withFont(Font(sizePt = 9.0))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Small")
-      .unsafe
       .withCellStyle(ref"A1", smallFont)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -580,7 +561,6 @@ class SvgRendererSpec extends FunSuite:
     val timesFont = CellStyle.default.withFont(Font(name = "Times New Roman"))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Serif")
-      .unsafe
       .withCellStyle(ref"A1", timesFont)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -609,7 +589,6 @@ class SvgRendererSpec extends FunSuite:
     val arialFont = CellStyle.default.withFont(Font(name = "Arial"))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Sans")
-      .unsafe
       .withCellStyle(ref"A1", arialFont)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -657,7 +636,6 @@ class SvgRendererSpec extends FunSuite:
     val underlined = CellStyle.default.withFont(Font(bold = true, underline = Underline.Single))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "I. Valuation Analysis")
-      .unsafe
       .withCellStyle(ref"A1", underlined)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -673,7 +651,6 @@ class SvgRendererSpec extends FunSuite:
     val plain = CellStyle.default.withFont(Font(bold = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Plain")
-      .unsafe
       .withCellStyle(ref"A1", plain)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -730,7 +707,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Underlined")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -748,7 +724,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Medium border")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -763,7 +738,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Thick border")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -778,7 +752,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Dashed")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -794,7 +767,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Dotted")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -810,7 +782,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Double")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -832,7 +803,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Boxed")
-      .unsafe
       .withCellStyle(ref"A1", allBorders)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -852,7 +822,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Blue border")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1", theme = ThemePalette.office)
@@ -883,7 +852,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", borderStyle)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -911,7 +879,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Pattern")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -930,7 +897,6 @@ class SvgRendererSpec extends FunSuite:
     val fgOnly = Fill.Pattern(Some(Color.fromRgb(128, 128, 128)), None, PatternType.MediumGray)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Hatched")
-      .unsafe
       .withCellStyle(ref"A1", CellStyle.default.withFill(fgOnly))
     val svg = sheet.toSvg(ref"A1:A1")
     assert(svg.contains("""fill="#FFFFFF""""), s"automatic background must render white: $svg")
@@ -949,7 +915,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Blue Pattern")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -972,7 +937,6 @@ class SvgRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Solid Red")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val svg = sheet.toSvg(ref"A1:A1")
@@ -1171,7 +1135,6 @@ class SvgRendererSpec extends FunSuite:
     val style = CellStyle.default.withFill(Fill.Solid(Color.fromRgb(200, 200, 200)))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Styled")
-      .unsafe
       .withCellStyle(ref"A1", style)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(15.0)))
       .setRowProperties(Row.from0(0), RowProperties(height = Some(30.0)))
@@ -1213,7 +1176,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "L", ref"B1" -> "R")
-      .unsafe
       .withCellStyle(ref"A1", thickRight)
       .withCellStyle(ref"B1", thinLeft)
 
@@ -1244,7 +1206,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "L", ref"B1" -> "R")
-      .unsafe
       .withCellStyle(ref"A1", thinRedRight)
       .withCellStyle(ref"B1", thinBlueLeft)
 
@@ -1272,7 +1233,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Up", ref"A2" -> "Down")
-      .unsafe
       .withCellStyle(ref"A1", thinBottom)
       .withCellStyle(ref"A2", mediumTop)
 
@@ -1375,7 +1335,6 @@ class SvgRendererSpec extends FunSuite:
     val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 987654321.0)
-      .unsafe
       .withCellStyle(ref"A1", rightStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
@@ -1401,7 +1360,6 @@ class SvgRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
@@ -1480,6 +1438,43 @@ class SvgRendererSpec extends FunSuite:
       s"""<clipPath id="clip-$a1"><rect x="(-?\\d+)" y="-?\\d+" width="(\\d+)"""".r
     re.findFirstMatchIn(svg).map(m => (m.group(1).toInt, m.group(2).toInt))
 
+  test("GH-505: only near-clipped right-aligned text declares the measured SVG advance") {
+    val value = "1234567.9"
+    val measured = RenderUtils.measureTextWidth(value, None)
+    List(0, 1, 3, RenderUtils.CellPaddingX, 20).foreach { slack =>
+      val pixels = measured + slack
+      val sheet = Sheet("Test")
+        .put(ref"A1", CellValue.Number(BigDecimal(value)))
+        .setColumnProperties(Column.from0(0), ColumnProperties(width = Some((pixels - 5) / 8.0)))
+      val svg = sheet.toSvg(ref"A1:A1")
+      assertEquals(
+        svg.contains(s"""textLength="$measured" lengthAdjust="spacingAndGlyphs"""),
+        slack < RenderUtils.CellPaddingX + 2,
+        svg
+      )
+      val (x, anchor, text) = svgTextUnderClip(svg, "A1").getOrElse(fail(svg))
+      assertEquals(text, value)
+      assertEquals(anchor, "end")
+      assert(x - measured >= 0, svg)
+      assert(x <= pixels, svg)
+    }
+  }
+
+  test("GH-505: overflowing, left-aligned, wrapped and rich text retain natural advances") {
+    val right = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
+    val long = "123456789012345678901234567890"
+    val base = Sheet("Test").put(ref"A1" -> long)
+    val sheets = List(
+      Sheet("Test").put(ref"A1" -> "short"),
+      base.withCellStyle(ref"A1", right),
+      base,
+      base
+        .withCellStyle(ref"A1", right.withAlign(Align(horizontal = HAlign.Right, wrapText = true))),
+      Sheet("Test").put(ref"A1", CellValue.RichText(RichText.plain("123")))
+    )
+    sheets.foreach { sheet => assert(!sheet.toSvg(ref"A1:A1").contains("textLength=")) }
+  }
+
   test("toSvg: right-anchored number never crosses the left edge of its clip (GH-459)") {
     // Fractional widths are the norm in real xlsx files (8.7109375, 9.140625). At 9.25 the
     // formatted number measures inside the (clipWidth - CellPaddingX, clipWidth] band: it
@@ -1512,7 +1507,6 @@ class SvgRendererSpec extends FunSuite:
     val style = CellStyle.default.withNumFmt(NumFmt.Currency)
     val sheet = Sheet("Test")
       .put(ref"A1" -> -1234.56)
-      .unsafe
       .withCellStyle(ref"A1", style)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.25)))
@@ -1570,7 +1564,6 @@ class SvgRendererSpec extends FunSuite:
     val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
     val sheet = Sheet("Test")
       .put(ref"A1" -> long)
-      .unsafe
       .withCellStyle(ref"A1", rightStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(5.0))) // 45px
@@ -1630,7 +1623,6 @@ class SvgRendererSpec extends FunSuite:
     val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", leftStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.0))) // 77px
@@ -1657,7 +1649,6 @@ class SvgRendererSpec extends FunSuite:
       CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
@@ -1681,7 +1672,6 @@ class SvgRendererSpec extends FunSuite:
     val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 42.0)
-      .unsafe
       .withCellStyle(ref"A1", leftStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
@@ -1802,7 +1792,6 @@ class SvgRendererSpec extends FunSuite:
       val textFmt = CellStyle.default.withNumFmt(fmt)
       val sheet = Sheet("Test")
         .put(ref"A1" -> 1234567.9)
-        .unsafe
         .withCellStyle(ref"A1", textFmt)
         .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
 
@@ -1825,7 +1814,6 @@ class SvgRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", acct)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
 
@@ -1848,7 +1836,6 @@ class SvgRendererSpec extends FunSuite:
     val (colWidth, colPx) = columnBetween("0.12", "0.123456789", leftDecimal.font)
     val sheet = Sheet("Test")
       .put(ref"A1" -> 0.123456789)
-      .unsafe
       .withCellStyle(ref"A1", leftDecimal)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1867,7 +1854,6 @@ class SvgRendererSpec extends FunSuite:
     val (colWidth, colPx) = columnBetween("1234.5", "$1,234.50", leftCurrency.font)
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234.5)
-      .unsafe
       .withCellStyle(ref"A1", leftCurrency)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1890,7 +1876,6 @@ class SvgRendererSpec extends FunSuite:
     val (colWidth, colPx) = columnBetween("Div0", "#DIV/0!", left.font)
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Error(CellError.Div0))
-      .unsafe
       .withCellStyle(ref"A1", left)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1913,7 +1898,6 @@ class SvgRendererSpec extends FunSuite:
       .put(ref"A1" -> 1234567.9)
       .put(ref"A2" -> 1234567.9)
       .put(ref"A3" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", left)
       .withCellStyle(ref"A2", center)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px

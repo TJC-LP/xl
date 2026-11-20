@@ -45,6 +45,9 @@ object CriteriaRangeResize:
     def unresolved(location: TExpr.RangeLocation): Boolean = location match
       case named: TExpr.RangeLocation.Name => nameIsComputed(named)
       case TExpr.RangeLocation.Binding(_) => true
+      // GH-669: both graphs resolve a table column's shape and target from table metadata
+      case TExpr.RangeLocation.Computed(TableColumnReferences.Ref(_)) => false
+      case TExpr.RangeLocation.Computed(_) => true
       case _ => false
 
     resizingFunctions.contains(name) && (values match
@@ -151,11 +154,16 @@ object CriteriaRangeResize:
             text,
             skipWhile(text, from + 1, c => c.isLetterOrDigit || "/_!?".contains(c))
           )
-        // a range's second corner (A1:B2, A:C, 1:3) is never a name, as the parser reads it
-        // today. GH-713's range operator (`A1:myName`, `myName:B3`) will make both corners
-        // possible names: this arm, and the `:` look-ahead in isName, must accept them then
+        // a range's second corner, read whole as the parser reads it (ReferenceChars.isRangeEnd,
+        // #841): a cell, column, row or `$`-anchored token (A1:B2, A:C, 1:3, A1:$B$2) is never a
+        // name; any other token may be one (`A1:B2_x` is the range operator over A1 and the name
+        // B2_x, GH-713). A corner that is itself a chain's left operand stays excluded by isName.
         case ':' =>
-          hasNameShapedToken(text, skipWhile(text, from + 1, c => c.isLetterOrDigit || c == '$'))
+          val end = skipWhile(text, from + 1, isIdentPart)
+          val token = text.substring(from + 1, end)
+          val corner =
+            token.isEmpty || token.contains('$') || CellRange.parse(s"$token:$token").isRight
+          (!corner && isName(token, text, end)) || hasNameShapedToken(text, end)
         // a number (1, 2.5, 1E5): never a name
         case c if c.isDigit || c == '.' =>
           hasNameShapedToken(text, skipWhile(text, from, isIdentPart))
@@ -199,7 +207,7 @@ object CriteriaRangeResize:
       case TExpr.RangeLocation.External(index, name, range, _) =>
         TExpr.RangeLocation.External(index, name, resize(range, shape), RangeForm.Cells)
       case other @ (TExpr.RangeLocation.Name(_, _) | TExpr.RangeLocation.Binding(_) |
-          TExpr.RangeLocation.Error(_, _)) =>
+          TExpr.RangeLocation.Computed(_) | TExpr.RangeLocation.Error(_, _)) =>
         other
 
   /**

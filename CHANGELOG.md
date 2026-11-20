@@ -7,6 +7,193 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`xl audit --skip-data-tables`** (#891): leaves out the stale-data-table note, which
+  re-evaluates each data table's corner at sampled inputs and on a large circular model costs one
+  fixpoint over the whole cyclic core per sampled cell. The JSON report now always carries
+  `dataTableCheck` (`"checked"` or `"skipped"`), and text mode prints `Stale data tables: not
+  checked` when skipped. The note is never a finding, so `clean` and `findings` do not move.
+  `WorkbookAudit.of(wb, clock, checkDataTables)` and `WorkbookAudit.dataTablesChecked` are the
+  library side. `dataTablesChecked` is a new field of the `WorkbookAudit` case class: it
+  defaults to `true`, takes part in equality, and changes the shapes of `copy` and `unapply`.
+
+- **Qualified table-column references** (part of #669): plain references such as
+  `SUM(Table1[Col])` and `COUNTIF(Table1[Col],1)` evaluate as data-row references, including
+  workbook table lookup, dependency ordering and formula copy/structural-edit support.
+  Row-relative references, special selectors and escaped/nested column syntax remain
+  unsupported.
+
+- **Computed references in range argument slots** (part of #723): OFFSET, INDIRECT, INDEX,
+  XLOOKUP and computed `:` ranges can feed range-consuming functions directly. Preserve
+  reference errors, resolved SUMIF/AVERAGEIF resize geometry, structural edits and dynamic
+  recalculation. Array-taking argument expansion remains separate.
+
+- **Breaking: `TExpr.RangeLocation` gains a `Computed(expression)` case** (#723): added at
+  the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
+  arm, and fails to compile under `-Werror` until it has one.
+
+### Changed
+
+- **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a
+  persistent row-radix trie whose rows keep their cells in parallel arrays (value, style and
+  hyperlink side by side), so a cell costs roughly 12-17 bytes of overhead instead of about 60,
+  a lookup is a few shifts with no hashing, and every node carries summaries: `usedRange` reads
+  them in O(height) instead of scanning every cell. A row of more than 64 cells that spans
+  several 256-column bands keeps one leaf per band, so a single-cell write copies at most 256
+  cells however wide the row is. It is keyed by each cell's own `ref`, has
+  value equality (equal cells at equal references, however the store was built) and iterates
+  row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
+  change. Single-cell writes are slower than on the `Map` (about 1.5× on 20-column rows, about 3×
+  on 500-column rows: a `put` copies the row's leaf, or its 256-column band); bulk writes
+  (`putAll`, `Sheet.withValues`, the builder) are not: see "Sheet cell storage" in
+  `docs/reference/performance-guide.md`. Java-serialized `ARef`s and sheets are not portable
+  across this version: the `ARef` packing changed and the store has its own serial form (its
+  cells, rebuilt through the builder on reading). Migrating:
+  - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
+    macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
+  - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
+    `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
+    traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+    The five `Map` names (`keys`, `keySet`, `keysIterator`, `values`, `valuesIterator`) remain as
+    deprecated forwarders (since 0.27.0) so such code compiles with a warning: views over the
+    store, row-major, nothing copied. No other `Map` method is kept (`map`, `filter`, `foreach`,
+    `toMap`, `(ref, cell)` tuples: go through `iterator`). A script that must compile against
+    both 0.26.0 and this version can read through `sheet.cellsSorted`/`rowsSorted` and
+    `cells.get(ref)`, which did not change.
+  - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
+    `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
+    `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
+    `removedIn(range)`.
+  - `Optics.sheetCells` is a `Lens[Sheet, CellStore]`. `CellStore` is exported from
+    `com.tjclp.xl.{*, given}` and the scripting prelude.
+  - `Sheet.withValues(refs, values)` writes many values in one store rebuild. Row and column
+    inserts and deletes re-key the store instead of rebuilding it.
+  - `RecalcCounters.Counter.UsedRangeScans` is removed with the per-pass used-range memo it
+    counted: the store's summaries answer `usedRange` without a scan.
+
+- **Breaking: long-deprecated API is removed** (#891).
+  - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
+    0.2.0): use `put`, `insertAt` (which refuses a duplicate name, as `addSheet` did), `remove` and
+    `rename`.
+  - `Cell.comment`, `withComment` and `clearComment` (deprecated since 0.12.1) and the `Sheet.put`
+    shim that moved a cell comment into `sheet.comments`: `Cell` is `Cell(ref, value, styleId,
+    hyperlink)`; comments live in `sheet.comments` (`sheet.comment(ref, …)`).
+  - `Cell.hyperlink` is an `Option[Hyperlink]`, no longer an `Option[String]`. The comment was
+    `Cell`'s fourth parameter, so `Cell(ref, value, None, Some("review note"))` (a comment until
+    now, compiled with a deprecation warning) would otherwise still compile and silently write a
+    hyperlink; it is now a type error. `Hyperlink` is an opaque type over the target string,
+    exported from `com.tjclp.xl.{*, given}` and the scripting prelude: build one with
+    `Hyperlink("https://…")`, read the text with `.target`. Migration: `hyperlink = Some(url)`
+    becomes `hyperlink = Some(Hyperlink(url))`, and `cell.hyperlink` reads become
+    `cell.hyperlink.map(_.target)`; `cell.withHyperlink(url: String)` and `clearHyperlink` are
+    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). A file that
+    wildcard-imports the edit cases beside the library (`import Edit.*`) now sees two `Hyperlink`s
+    and must write `Edit.Hyperlink(at, target)`; that case keeps its `Option[String]` target.
+    Written workbooks and CLI output are byte-identical.
+  - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
+  - The identity `Sheet.unsafe`.
+  - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`
+    takes `(mapExpr, mapRange)`, and `ArgPrinter.cellRange` is gone.
+  - `StructuralEditor`'s throwing facade: use the `*Checked` variants (`XLResult`); the unused
+    `Workbook` `insertRowsShifted`/`deleteRowsShifted`/`insertColumnsShifted`/`deleteColumnsShifted`
+    extensions now return `XLResult[Workbook]`.
+  - `writeFast`, `writeFastWith`, `writeStreamMaterialized` and `writeStreamMaterializedR` on
+    `Excel`/`ExcelIO`: use `write`/`writeWith` with a `WriterConfig`.
+
+- **An edit computes every formula that holds no value** (#891, Excel parity). Excel has no
+  formula without a value (after any calculation every formula holds one, an error value
+  included), so the after-edit pass every CLI write ends with now evaluates each uncached formula
+  with the edit, and what reads it, exactly as a full recalculation would: a formula that fails
+  again withdraws its readers' caches instead of being read as empty. A book saved without caches
+  therefore computes in full on its first edit, as Excel computes it on open. A formula xl cannot
+  evaluate (an unsupported function, a closed external workbook) holds no value after a
+  recalculation, so every later write re-evaluates it and lists it in the summary: **`--strict`
+  now fails any write to such a book**, where it used to pass when the edit did not reach the
+  formula (2 of 60 real books; the written bytes are unchanged). The uncached pass
+  (`recalculateUncached`) now lists circular cells before the cells they block, as the full pass
+  does.
+
+- **Breaking: the sheet-level graph and evaluator are removed** (#891). Gone: the
+  `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
+  `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
+  `cyclicNodes`, `topologicalSort`, `dynamicClosure`, `deferDynamic` and `dynamicCells(sheet)`;
+  the unused `fromWorkbook`, `fromWorkbookBounded`, `detectCrossSheetCycles`,
+  `qualifiedCyclicNodes`, `qualifiedTransitiveDependents`, `qualifiedTransitivePrecedents`,
+  `qualifiedTopologicalSort` and `extractDependenciesBounded`; and
+  `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
+  Tarjan and Kahn engines that saw no other sheet. Use `Workbook(sheet).recalculate(...)` to
+  evaluate (cycles are reported per cell instead of failing the call), `QualifiedGraph.of(wb)` for
+  precedents, dependents and cycles (`.sccs.filter(_.cyclic)`), and
+  `sheet.evaluateForRangePerCell` for a window. `sccs` follows declared reads, so a
+  VLOOKUP/HLOOKUP that sits inside its own table shows there as a self-cycle although
+  recalculation (and Excel, verified) computes it; the errors of `recalculate` and `xl audit` are
+  the authority on real cycles. `evaluateForRangePerCell` (what `view --eval`
+  renders) now takes its closure, cycles and order from the workbook's recalculation graph, so a
+  cycle that runs through another sheet is reported instead of evaluated against stale caches.
+
+- **Breaking: `sheet.recalculateDependents` and `wb.recalculateDependents(WithClock)` are
+  removed** (#891). They were a second and third copy of targeted recalculation that ordered by a
+  hash-seeded FIFO and dropped evaluation errors. Use `wb.recalculateAfterEdit(sheet, refs,
+  options)`: it evaluates the edited formulas too, reports and withdraws cycle members and the
+  formulas a failure blocks, and draws `options.rng` (previously ignored there) in the canonical
+  order a full recalculation uses.
+
+- **Targeted recalculation runs on the compact graph in canonical order** (#891). The after-edit
+  pass (every CLI write, `copy` included) orders its cone with the graph a full recalculation
+  uses, so seeded RAND draws match a full pass; the cone uses the same precise lookup reads (#504):
+  an edit inside a fixed-column VLOOKUP/HLOOKUP table but off its key and result columns no longer
+  re-evaluates the lookup. A batch `copy` now refreshes through the same pass, so a pasted formula
+  that fails is reported. The internal `RecalcEngine.Legacy` (the per-cell graph kept as a rollback
+  for #767) is gone.
+
+- **`audit`'s cycles are the ones `recalc` isolates** (#891): they come from the recalculation
+  graph, with #504's precise lookup reads, so a fixed-column VLOOKUP/HLOOKUP whose table contains
+  its own cell (off its key and result columns) is no longer reported as circular while `recalc`
+  evaluates it. `QualifiedGraph.sccs` (the declared-reads view behind `deps`) is unchanged.
+
+- **Data-table seeding reads the recalculation graph** (#891): `recalc --tables` and the audit's
+  stale-table note took their cycles, what-if cones and input dependents from a separate
+  used-range-bounded per-cell graph. That graph resolved a case-variant sheet qualifier
+  (`'MID'!A1` for sheet `Mid`) to no sheet, and an empty cell outside its sheet's used range had
+  no readers, so a cycle or a dependent could be missed. The seeder now asks the recalculation
+  graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
+  now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
+  The audit's volatility exemption asks the same graph the what-if pass uses: a table whose
+  lookup column is chosen by one of its own inputs is exempt when any column that input can
+  select draws RAND()/NOW() in the table's cone, not only the column selected today.
+
+- **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
+  --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
+  writes to an iterating book built a second one for the edit's dirty cone; each now hands the
+  recalculation's graph to its second consumer (as does `recalculate` with `seedTables`). Data-table
+  seeding, and the audit's stale-table check with it, parsed the corner and every formula of the
+  what-if cone again for each interior cell; they read the graph's parses now. Results are
+  unchanged. A table whose corner is a VLOOKUP/HLOOKUP selected by the table's own input still
+  costs seeding a second graph (the recalculation graph narrows that lookup).
+
+- **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
+  `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
+  anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision
+  buckets of up to min(rows, columns) boxed keys. The hash is now distinct for every cell of the
+  grid below row 2^18; the packing is still a bijection on all `Int` pairs (off-grid refs from
+  `shift` decode unchanged) and in-grid values still order row-major. Code that decoded the raw
+  `Long` by hand (the only in-repo case was `FormulaPrinter`) must use `ref.row` and `ref.col`.
+  The iteration order of `Map[ARef, _]` and `Set[ARef]` changes with it.
+
+- **A generated shared-string table is numbered in row-major first-reference order** (#891): it
+  followed `sheet.cells`' hash order, so the indices written into text cells depended on how
+  `ARef` hashes. Files written with a freshly generated table now number their strings
+  differently from 0.26.0 (same strings, same cells); a preserved table is unchanged.
+
+- **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
+  sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
+  `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
+  it makes up to 17,179,869,184 `combine` calls for a whole-sheet argument (`A:XFD*1`). Every
+  built-in aggregator overrides it in closed form; a downstream one should too (SUM's is
+  `acc + value * n`). The default is unchanged: `combine` alone cannot merge two accumulators, so
+  no faster default gives the same result.
+
 ### Fixed
 
 - **A sheet name matches its sheet ignoring case, as in Excel** (#752): `Workbook.apply(SheetName)`
@@ -19,7 +206,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and such a cell is no longer treated as an always-dirty reader;
   - the library: `wb.update`, `upsert`, `remove`, `delete`, `rename`, `setSheetState`, the scope of
     `withDefinedName` / `removeDefinedName`, the Edit algebra's sheet targets (`wb.edit`,
-    `wb.editIn`), `recalculateDependents`, `seedDataTables(sheetName)`, `Excel.readSheet`, and the
+    `wb.editIn`), `recalculateAfterEdit`, `seedDataTables(sheetName)`, `Excel.readSheet`, and the
     streaming readers `ExcelIO.readSheetStream`, `readSheetStreamRange` and `streamCellDetails`;
   - the CLI: `-s`, a verb's qualified ref, the sheet verbs' arguments (`remove-sheet`,
     `rename-sheet`, `move-sheet`, `copy-sheet`, `add-sheet --after/--before`, `sheets hide|show`),
@@ -32,7 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `DATA` on such a book now attaches to `DATA`, not the first tab equal to it ignoring case.
   **Behaviour change:** these lookups were `SheetNotFound` (a formula's value was an evaluation
   error, `xl -s data` and a batch op naming `data` were `SHEET_NOT_FOUND`, exit 3, and
-  `recalculateDependents(SheetName("data"), refs)` refreshed nothing); they now resolve to the
+  `recalculateAfterEdit(SheetName("data"), refs, options)` refreshed nothing); they now resolve to the
   `Data` sheet. **Behaviour change:** a batch op whose `sheet` key and ref qualifier differ only by
   case (`"sheet": "Data"`, `"ref": "data!A1"`) was `BATCH_OP_INVALID`; it is now one sheet.
   On a book with case-only twin tabs, a `sheet` key and qualifier that land on different tabs
@@ -40,6 +227,735 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `seedDataTables` with an unknown sheet now lists the workbook's sheets in
   `SheetNotFound.available`, as `Workbook.apply` does. `Excel.readSheet` with a string no tab could
   carry is `SheetNotFound`, as before. `wb.put(sheet)` still adds or replaces by exact name.
+
+- **The library's styles clear unmerges too, like Excel's Clear Formats** (#909):
+  `Sheet.clearRange(range, ClearWhat.styles)` and `Edit.Clear(at, ClearWhat.styles)` now unmerge
+  every merged region the range touches (inside it, partly overlapping it, or wholly covering it)
+  and reset the styles of each whole merge, as the CLI's `clear --styles` does since #894. A clear
+  with contents and styles (`ClearWhat.all`) also resets the styles of a merge's cells outside the
+  range, as the CLI's `--all` does. Contents-only and comments-only clears still keep merges.
+  `Edit.lower` adds a `ClearStyle` per crossing-merge cell and an `Unmerge` per touched merge, and
+  `Patch.toEdits` no longer desugars `ClearStyle` on a merged cell (it has no exact `Edit`).
+  **Behaviour change:** with B2:D2 merged and bold, `sheet.clearRange(C2:C2, ClearWhat.styles)`
+  leaves B2:D2 unmerged and all three cells on the default style (was: B2:D2 still merged, only
+  C2 reset). The CLI still has its own copy of this rule; pointing it at the library is a
+  follow-up.
+
+- **`view --eval` computes the window's precedents on other sheets** (#891). The window
+  evaluation (`sheet.evaluateForRangePerCell`, `view --eval` and its rendered pictures) evaluated
+  the window's formulas and their precedents on the window's own sheet, and read every other
+  sheet's caches as they stood. With `S!F1 = A1*2`, `T!B1 = S!A1+S!F1` and `S!H1 = T!B1*10`, after
+  `put --no-recalc A1 5` it showed `H1 = 30` where `recalc` writes `150` (0.26.0 does the same).
+  The closure now follows precedents across sheets, in the canonical order, so the window shows
+  what a recalculation would put in its cells. Consequences: a precedent on another sheet that
+  cannot evaluate is listed in `RangeEvalResult.failures` under its own sheet (the `EVAL_FAILED`
+  warning names it there) and the window's cell that reads it is `blocked` and keeps the file's
+  value, where it used to be computed off that precedent's cache; a dynamic reader
+  (INDIRECT/OFFSET) among the precedents on another sheet has that sheet's formulas computed with
+  it. Unchanged: cycles report as before (members on the window's sheet are listed, a reader of a
+  cycle on another sheet is blocked), and what a dynamic reader reads on a sheet the closure never
+  reaches is still read from the file.
+  The evaluation is now a recalculation pass over the closure (the graph's parses, column slices,
+  the criteria index), so a window costs what recalculating its closure costs: a summary cell over
+  a whole model takes about as long as `recalc`, where it used to return at once with whatever
+  the caches held. On a 40,000-formula SUMIF model: 0.2-0.4 s and a stale value before, about 6 s
+  and the recalculated value now (`recalc`: 5-7 s); a window whose closure is a few cells is
+  unchanged.
+  In a book whose `calcPr` iterates, cycle members keep the converged values the file holds, as
+  Excel shows them. When a member holds no value at all (a library-authored or `--no-recalc`
+  book; Excel never writes one) there is nothing converged to show, so the window is taken from
+  an iterative recalculation of the book and costs one: the window used to fail such a cell with
+  "Circular reference … read again while its own evaluation is in progress", or compute it from
+  its precedents' stale caches.
+  When every member holds a value, the cycle is a source of those values and nothing else: a
+  formula that only feeds the cycle is not evaluated for the window, a failure behind the cycle
+  does not block a cell that reads it, and a member that reads through INDIRECT keeps its value
+  (a member downstream of one lost its cache and was recomputed once, out of the cycle).
+
+- **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
+  and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
+  the range touches, as `--all` already did, and reset the formatting of each whole merge they
+  unmerge (Excel widens a selection to the merges it touches), so `clear B1 --styles` on a merged
+  A1:F1 also resets A1. A contents clear (no flags) and `--comments` still keep merges. **Behaviour change:** on a sheet where A1:F1 is a merged title "Sample Co" in
+  Georgia 16 bold, `clear A1 --styles` leaves A1 holding "Sample Co" with default formatting and
+  A1:F1 no longer merged (was still merged).
+
+- **`clear` keeps formatting and merges, like Excel's Clear Contents** (#886): a contents
+  clear (`clear <range>` with no flags, the batch `clear` op and `--stream clear`) now empties
+  the values and formulas and drops the cell's hyperlink, but keeps its number format, font,
+  fill and border, and leaves merged regions merged. A cell with no style is still removed.
+  `clear --all` is unchanged: it removes the cells and unmerges what the range touches;
+  `--styles` and `--comments` are unchanged. **Behaviour change:** after `clear B4:E5` over cells
+  formatted `#,##0_);\(#,##0\);\-\-_)` in blue Times New Roman, B4:E5 are empty and keep that
+  format (was General, Calibri, no border). **Behaviour change:** `clear A1` on the anchor of a
+  merged A1:F1 leaves A1:F1 merged (was unmerged); use `unmerge` or `clear --all` to unmerge. A
+  cleared hyperlink cell keeps its underline font but not its link, as in Excel (a sheet's
+  last hyperlink still comes back on write until #895 is fixed). The library follows the same
+  rule since #890.
+
+- **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
+  ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
+  CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
+  style is removed, and merged regions stay merged. An unstyled cell in a row or column with a
+  default style keeps an empty record, so it does not take that row's or column's format, as in
+  the CLI since #897; both share one rule since #908. A clear with `styles` as well as `contents`
+  (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
+  comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
+  `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars
+  `Remove`/`RemoveRange` to a contents-and-styles clear. **Behaviour change:**
+  `sheet.clearRange(A1:A1, ClearWhat.contents)` on a Percent-formatted A1 inside a merged A1:B1
+  leaves A1 empty with its Percent format and A1:B1 merged (was: A1 removed, A1:B1 unmerged).
+
+- **A contents `clear` no longer gives an unstyled cell its row's or column's format** (#897):
+  a cell with no style of its own that sits in a row or column with a default style
+  (`<row s= customFormat="1">` or `<col style=>`) used to lose its record on a contents clear,
+  so it took on that row's or column's format. It now keeps an empty record with no style, so it
+  stays on the default format, as Excel's Clear Contents leaves it. So do the spill cells of a
+  dynamic-array anchor the clear removes. Cells outside a styled row or column are still
+  removed, and `clear --all` still removes the record. **Behaviour change:**
+  with column B styled with a yellow fill and an unstyled `5` in B4, `clear B4` leaves B4 empty
+  with no fill (was: empty with column B's yellow fill).
+
+- **Written workbooks honour the umask again** (#868): every atomic write (`put`/`putf`/`batch`
+  and other verbs with `-o` or `-i`, `Excel.modify`, surgical `XlsxWriter` writes and the streaming
+  transforms) staged its output in an owner-only temp file and renamed it into place, so the output
+  ended up `0600` (`-rw-------`) whatever the umask. The staged file stays owner-only while it is
+  written, then takes the right mode just before the rename.
+  **Behaviour change:** a new output gets the mode any new file gets in its directory (`0644` under
+  umask `022`). A replaced output keeps its mode and, where the writer may set it, its group, with
+  its group bits capped at its others bits: `0644` and `0600` stay as they are, a group-shared
+  `0664` becomes `0644` and `0660` becomes `0600`. The JVM cannot read POSIX ACLs (on a file with
+  one, the group bits are the ACL mask), so the cap is what guarantees no user or group gains access.
+  An extended ACL is not carried over: the users and groups it names lose that access.
+
+- **Relational numeric criteria match number cells only** (#798): `">n"`, `">=n"`, `"<n"` and
+  `"<=n"` in COUNTIF(S), SUMIF(S), AVERAGEIF(S), MAXIFS and MINIFS now match numbers and dates
+  only, as desktop Excel does; numeric text and booleans no longer match. Equality (`"4"`, `"=4"`)
+  still matches the text `"4"`, and `"<>n"` is unchanged (#731). **Behaviour change:** with the text
+  `"4"` beside the numbers 4, 5 and 45, `=SUMIF(A1:A14,">=4",B1:B14)` on #798's grid is 8216 (was
+  9240), Excel's value. **Behaviour change:** a TRUE or FALSE cell no longer counts as 1 or 0
+  for a relational criterion: `=COUNTIF(A1:A3,"<4")` over 4, TRUE, 5 is 0 (was 1).
+
+- **Cloud sessions build despite Maven Central rate limits**: the SessionStart hook
+  (`scripts/remote-setup.sh`) now pre-fetches every build dependency
+  (`./mill --no-daemon __.prepareOffline`) and retries it, the JDK and the scala-cli bootstrap with
+  backoff. Maven Central intermittently answers a sandbox's parallel downloads with HTTP 429, which
+  coursier never retries, so the first `./mill` or `make install-jar` of a session failed with
+  `Failed to download ….pom`. Opt out with `XL_REMOTE_PREFETCH=false`.
+
+- **SUMPRODUCT counts the blank rows of a whole column INDEX or `:` computes** (#755): a computed
+  reference whose range is known before evaluation — INDEX at literal positions (`INDEX(A:A,0)`,
+  `INDEX(A:B,0,2)`, `INDEX(A2:A1048576,0)`) and a `:` range of such operands
+  (`A1:INDEX(A:A,1048576)`, `A2:INDEX(A:A,1048576)`) — is bounded and adds back the blank rows past
+  the used range as its written range does. **Behaviour change:** with data in rows 1-3 and A2
+  blank, `SUMPRODUCT(--(INDEX(A:A,0)=""))` and `SUMPRODUCT(--(A1:INDEX(A:A,1048576)=""))` were 1
+  and are now 1048574, Excel's value (#755's report); `SUMPRODUCT(--(A2:INDEX(A:A,1048576)=""))`
+  was 1 and is now 1048574, as the written `A2:A1048576` gives. **Behaviour change:** with only A2
+  and B2 filled, `SUMPRODUCT(--(A2:A1048576="")*INDEX(B2:B1048576,0))` was B2 × 1048574 and is
+  now 0, the blank rows reading INDEX's range as blank. Products with a value column over the data
+  rows are unchanged. OFFSET, INDIRECT, XLOOKUP, an INDEX position read from a cell or from ROW()
+  or COLUMN(), and a LET-bound computed reference keep the trimmed sum; see LIMITATIONS.
+
+- **RasterSubprocessSpec CI timeout** (#877): the forced-ImageMagick race case started three
+  interpreted (`-Xint`) JVMs in a row and overran munit's 30 s per-test limit on loaded CI
+  runners. Its three attempts now run in one interpreted JVM (a test-only `CliRepeatProbe`), with
+  the same assertions on each; the case takes about a third of the time (6.7–8.5 s → 2.1–3.4 s
+  in an alternating local A/B). Tests only; no behaviour change.
+
+- **The stdin race case tests the failed write again** (#879): since the pipe-thread stdin write
+  (#703), the forced-ImageMagick case's `-Xint` JVM almost never lost the race it was written for
+  (0 of 36 instrumented attempts; about 1 in 600 early-exit probes measured in-process), so it no
+  longer covered the failed write. `PipedBackendSpec` now drives that branch deterministically,
+  with an input larger than any pipe buffer sent to a child that closes stdin: a probe is false
+  even on exit 0 with output, and a conversion keeps the child's own failure rather than a raw
+  `IOException`. The end-to-end case runs once in an ordinary JVM, and `CliRepeatProbe` (#877) is
+  removed. Tests only; no behaviour change.
+
+- **SUMPRODUCT lines up a range that reaches the sheet's edge from below row 1** (#746): `A2:A1048576` now takes the same used extent as INDEX or XLOOKUP over the same rows, keeping its own start, in SUMPRODUCT and in the criteria functions (COUNTIF(S), SUMIF(S), AVERAGEIF(S)) that share its bounds; the blank rows it drops are added back as for whole columns, and where they cannot be (ROW over the range, a whole column in a range slot beside it) SUMPRODUCT reads every row as before. A range of more than one row that stops short of the edge turns the trimming off along that axis, so same-height ranges a row apart stay paired.
+  **Behaviour change:** with A2:A4 = 1,2,3 and B2:B4 = 10,20,30, `=SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))` is 140 (was `#N/A`) and `=SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))` is 140 (was `#VALUE!`), as in Excel; `=SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))` sums the shared rows (was `#N/A`). Ranges of different heights stay `#VALUE!`/`#N/A` (`SUMPRODUCT(A2:A1048576,B:B)`).
+  **Behaviour change:** a whole column beside INDEX over an edge range one row shorter, `=SUMPRODUCT(A:A*INDEX(B2:B1048576,0))`, is `#N/A` as in Excel (1,048,576 rows against 1,048,575); it was a sum when the sheet's data started at row 2, because the whole column was trimmed at the top to the same rows.
+
+- **`IO_READ` names where a relative path resolved** (#870): when the input was given as a relative
+  path, the message adds `(resolved to <absolute path> from working directory <dir>)`, in text and
+  in the `--json` envelope's `error.message`, so a run from the wrong directory says where xl looked.
+  `error.location.file` keeps the path as given; absolute paths are unchanged. A `.` segment is
+  dropped from the resolved path (`./model.xlsx` reads as `<dir>/model.xlsx`); `..` is kept, since
+  through a symlinked directory collapsing it would name a different file. On Windows a relative
+  path that carries a root (`\model.xlsx`) keeps its drive; one on another drive (`D:model.xlsx`)
+  gets no suffix, since xl cannot tell that drive's working directory.
+  **Behaviour change:** `xl -f model.xlsx cell A1` with no such file now reports
+  `No such file: model.xlsx (resolved to /work/model.xlsx from working directory /work)`.
+
+- **macOS install hint for rasterizers** (#866): on macOS, `RASTERIZER_UNAVAILABLE` and the
+  `xl rasterizers` warning list `brew install librsvg` (rsvg-convert) first and
+  `brew install imagemagick` for the ImageMagick opt-in, in place of the apt commands; a forced
+  `--rasterizer rsvg-convert` or `imagemagick` that is missing names the same brew command. Other
+  platforms are unchanged.
+  **Behaviour change:** on macOS, the "Install one of:" list opens with
+  `rsvg-convert: brew install librsvg`.
+
+- **No fallback warning on a successful raster export** (#867): a PNG/PDF/JPEG/WebP export that
+  passes over backends that are not installed, or cannot write the format, no longer prints
+  `Warning: Batik, cairosvg unavailable, using rsvg-convert`; the `Exported: …` line already names
+  the backend used. A backend that is installed but fails before a later one succeeds is still
+  reported: `Warning: <reason>; using <backend>`, on one line. When every backend fails,
+  `RASTERIZER_UNAVAILABLE` still lists all of them, each by its own one-line message (no longer
+  `cairosvg (cairosvg conversion failed …)`).
+  **Behaviour change:** `xl … --format png` on a machine with only rsvg-convert prints just the
+  `Exported:` line.
+
+- **Reference producer scalar inputs** (#723): reject unsupported multi-element arrays before
+  INDIRECT/OFFSET and other reference producers can collapse them into one cached reference result.
+  Preserve singleton inputs, supported element lifting, plain-cell intersection and genuine errors.
+
+- **Computed reference argument admission** (#723): INDEX over known value arrays, scalars or
+  arithmetic remains unsupported in reference-only slots. Value-producing names and LET bindings
+  report unsupported evaluation instead of caching a fabricated #VALUE! result.
+  Reference-producing INDEX and its standalone value form remain supported.
+
+### Performance
+
+- **`QualifiedRef` hashes the row and the column as separate words** (#891): the derived hash
+  mixed the cell as a `Long`, whose hash is `row ^ column`, so every cell on an anti-diagonal of a
+  sheet collided (512 distinct hashes for a 500 x 64 sheet) and hash sets and maps of qualified
+  cells scanned buckets of up to min(rows, columns) entries. `xl audit` on three real workbooks,
+  JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. (`ARef` keys are fixed
+  under Changed.)
+
+- **`xl audit` on real models: 206.7 s to 84.6 s, 228.6 s to 11.2 s, 92.0 s to 30.9 s** (#891;
+  the 0.26.0 release binary against a native build of this change, macOS arm64, one serial run
+  each, same findings and notes). Data-oriented rewrites, no caches:
+  - the workbook SCC condensation (`qualifiedSccOrder`, `qualifiedCyclicNodes`) numbers the
+    formula cells once in grid order and runs Tarjan and the key-minimum condensation over one
+    CSR edge array, sharing the compact graph's kernel (`SccKernel`); it rebuilt two immutable
+    `Map[Int, Set[Int]]` per edge;
+  - `withinComponentOrder` (the Gauss–Seidel sweep) runs on the same ids with an `Int` heap and a
+    cursor for the cut instead of immutable `TreeSet`s;
+  - the `ARef` hash fix above;
+  - a criteria range read cell by cell (SUMIFS and friends outside a recalculation pass) indexes
+    by offset arithmetic instead of copying the range into a `Vector` of boxed refs per call;
+  - a data table's cycle members parse once per table instead of once per sampled cell.
+  On the three books, JVM, from the `QualifiedRef` fix above: 82.3 s to 25.6 s, 14.5 s to 3.9 s,
+  17.0 s to 7.2 s. What remains on
+  the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
+  `--skip-data-tables` (under Added) audits it in 2.6 s.
+
+- **Building a `CellStore` from sorted cells streams it 32 rows at a time** (#891): the builder
+  kept several arrays with a slot per cell and held them all while assembling the store, so
+  loading a numeric workbook peaked higher than on the `Map` although the finished store is a
+  seventh of the size. A cell that sorts after the last one now goes straight into its row
+  group, and only finished groups are kept; a cell out of order is buffered, sorted and merged
+  at the end (last write still wins). A 2M-cell build in 8 columns allocates 13.8 bytes a cell
+  where it allocated 133, and a 1M x 8 numeric workbook loads in a 5,120 MiB heap where the
+  `Map` needed 5,696. The built store is unchanged.
+
+- **Array mode reads a range that lies mostly past the data through its populated box** (#891):
+  a range was read position by position whenever it had no more positions than the sheet had
+  cells, which on a sheet of more than 1,048,576 cells sent a whole column down that path (a
+  million reads for a column whose data ends at row 60,000). The rule now also asks that at
+  least half of the range lie inside the sheet's extent, which the store answers from its
+  summaries. SUMPRODUCT's choice for a raw range beside a sparse argument uses the same rule.
+  Values are unchanged.
+
+- **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
+  `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
+  its first argument, and an array constant was spelled out cell by cell. The call is now printed
+  on the error path alone; messages and results are unchanged.
+
+- **`xl audit` on a model with data tables over a circular block takes half the time** (#891;
+  JVM, median of three serial runs against the change before it, same output: 20.8 s to 9.7 s on
+  a quiet machine, 22.0 s to 10.9 s re-measured at the final commit on a busy one; the other two
+  real workbooks are within noise). An iterative fixpoint (a circular block under
+  recalculation, and each interior cell of a data table whose corner reads one) evaluated its
+  criteria calls with nothing shared, so every SUMIFS, COUNTIFS, SUMIF and AVERAGEIFS re-read
+  its ranges row by row: 219 million row tests for one audit, over two 200-row ranges.
+  - Within one fixpoint only its member cells change, so the fixpoint keeps one set of criteria
+    columns and their equality indexes for all its rounds. A column window that holds a member
+    or a formula without a value is never kept. Aggregate results are still never shared between
+    rounds or between member evaluations.
+  - The order a cycle's members are swept in is computed on formula ids (`CompactGraph`), with
+    scratch sized to the cycle, not through a map of qualified references per member.
+
+## [0.26.0] - 2026-11-12
+
+Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards
+match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error
+cells, MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP share one exact test, rich text is
+text, and COUNTBLANK counts empty text. A cycle closing through a reference computed at run time is
+a circular reference with the same error on every run (#828, #829), and a running total through
+`INDEX(…, ROW()-1)` is no longer one (#743, #745). Each formula is parsed once per recalculation
+(#790), ROW and COLUMN position arrays are lazy (#735), and reference aggregates skip absent
+blank borders (#736). Many entries are behaviour changes, each marked; two are **Breaking** (`IfArgs`, #723, and
+`TExpr.RangeLocation.Binding`, noted late from 0.24.0) and two are binary changes
+(`LightMetadata.preservedSheets`, #788; `StreamingTransform.WorksheetMetadata.clearContents`, #738).
+
+New: `SLN`, `SYD`, `ISNONTEXT`, two-argument `IF`, array fallbacks in `IFERROR`/`IFNA`, preserved
+macro and chart sheets in `xl sheets` and a `macro-sheet` lint finding.
+
+Security (#833–#839): a checksummed dependency lock, a dependency age policy with a compatible
+refresh of published dependencies, workflow actions and pre-commit hooks pinned to verified
+commits, release jobs without shared caches, verified launcher and release downloads, and agent
+credentials read only from the environment or a local `.env`. Releases now attach `SHA256SUMS`,
+which the documented CLI installer checks.
+
+### Added
+
+- **Add SLN and SYD depreciation** (part of #684): numeric inputs use the existing financial
+  functions' Double arithmetic. SYD rejects nonpositive life/period and periods beyond life,
+  while retaining fractional periods, verified against desktop Excel 16.114.3.
+
+- `ISNONTEXT` (#775): TRUE for a number, logical, error or blank cell, FALSE for text, empty text
+  and rich text.
+
+- **Two-argument IF** (#723, part a): `IF(test, value_if_true)` parses, and a false test gives the
+  logical FALSE; the test is coerced as in the three-argument form. Over an array test the
+  unmatched elements are FALSE, which SUM, COUNT and MAX skip and COUNTA counts. An empty third
+  argument is unchanged: `IF(FALSE,5,)` is 0. **Behaviour change:** `IF(FALSE,5)` was a parse
+  error ("expected 3 arguments") and is now FALSE; a workbook cell holding one now recalculates.
+
+- **IFERROR and IFNA preserve array fallbacks** (#754): in array contexts a scalar error selects
+  the whole fallback, and an array primary selects fallback elements with row/column broadcasting.
+  Fallbacks stay lazy, and a successful scalar stays scalar. SUMPRODUCT applies its shared
+  whole-column bounds to fallback arguments too.
+  **Behaviour change:** `SUMPRODUCT(IFERROR(1/0,{10,20}))` returns 30 instead of 10;
+  with A5:A7 = 1,2,3, `SUMPRODUCT((A:A>0)*IFERROR(1/0,ROW(A:A)))` returns 18 instead of 15
+  (the bounded A1:A10 form returns 18 instead of 3). IFNA follows the same Excel array rule;
+  the issue reports #N/A from LibreOffice 24.2 for the whole-column IFNA case. A fresh
+  LibreOfficeDev 26.8 alpha check with correctly prefixed `_xlfn.IFNA` storage matches Excel.
+
+- `xl sheets` exposes preserved macro, international macro, chart and dialog sheets with kind,
+  name and visibility in a separate read-only section (`preservedSheets` in JSON), in quick,
+  streaming and stats modes. Worksheet indices and `-s` resolution remain worksheet-only.
+  `Excel.readMetadata` exposes the same read-only metadata (#788). **Binary change:**
+  `LightMetadata` gains a defaulted `preservedSheets` field.
+
+- `xl lint` reports one `macro-sheet` finding (severity `info`) per Excel 4.0 macro sheet, including
+  hidden state and any `Auto_Open` / `_xlnm.Auto_Open` name scoped to or directly referencing it.
+  Behaviour change: presence now makes JSON `clean` false; info alone exits 0, or 1 under
+  `--strict`. International-macro structural scanning remains the separate #791 / PR #794 fix.
+
+### Changed
+
+- **Breaking: `FunctionSpecs.ifFn`'s `IfArgs` is `(TExpr[Boolean], TExpr[Any],
+  Option[TExpr[Any]])`** (#723): value_if_false is optional. Code that builds or matches an IF
+  call's arguments directly needs `Some(ifFalse)`; `TExpr.cond` is unchanged.
+
+- **Breaking (0.24.0, noted late): `TExpr.RangeLocation` gains a `Binding(name)` case** (#710,
+  #753): released in 0.24.0 without the prefix. A downstream exhaustive match on `RangeLocation`
+  needs the new arm, and fails to compile under `-Werror` until it has one.
+
+- **Criteria and match_mode 2 lookups follow desktop Excel** (#774, #773, #780, #731). Checked
+  against desktop Excel for Mac on one synthetic workbook. Each change below affects SUMIF(S),
+  COUNTIF(S), AVERAGEIF(S), MINIFS and MAXIFS unless it names XMATCH/XLOOKUP.
+  - XMATCH and XLOOKUP with match_mode 2 read the lookup value with the `~` escape grammar,
+    wildcard or not. **Behaviour change:** `XMATCH("~*",r,2)` and `XMATCH("a~~b",r,2)` found
+    nothing (`#N/A`); they now find the cell holding `*` and the cell holding `a~b`. `~` before
+    any character drops: `XMATCH("~4",r,2)` finds the text `4`.
+  - `"=op"` reads `op` like the bare operand. **Behaviour change:** `COUNTIF(r,"=a*")` counted only
+    the text `a*`; it now counts every text starting with `a`, as `"a*"` does. A bare `"="` now
+    matches truly empty cells only: it counted a formula's empty text (`=""`) too, and the
+    criterion `""` still does.
+  - In an operand with a `*` or `?`, `~` escapes any character. **Behaviour change:**
+    `SUMIF(r,"a~b*",s)` matched the text `a~bc` and not `abc`; it now matches `abc` and `ab`.
+  - Wildcards match text cells only (Text, rich text and a formula's text). **Behaviour change:**
+    `COUNTIF(r,"*")` counted numbers and booleans, and `"4*"` matched the number 45; neither does
+    now. `"<>*"` now counts every cell that is not text, errors included. The same holds for
+    XMATCH/XLOOKUP match_mode 2: `XMATCH("4*",r,2)` skips the number 4 and `XMATCH("t*",r,2)` no
+    longer finds TRUE.
+  - `"<>n"` matches every cell but a number equal to `n`. **Behaviour change:**
+    `COUNTIF(A1:A14,"<>4")` counted only the numbers other than 4 and the booleans (TRUE read as
+    1); it now counts blanks, text (the text `4` included) and errors too, so `COUNTIF(A:A,"<>4")`
+    counts the blank rows.
+  - Every `<>` criterion counts error cells. **Behaviour change:** `"<>abc"`, `"<>TRUE"`, `"<>a*"`
+    and a bare `"<>"` left error cells out; they now count them. A bare `"<>"` also counts a
+    formula's empty text, which it left out.
+  - **Behaviour change:** because `<>` criteria now match error cells, a SUMIF, SUMIFS,
+    AVERAGEIF, MAXIFS or MINIFS whose sum, average or max range holds an error in a matched row
+    returns that error. With A1:A4 = 4, 5, `=NA()`, "x", `SUMIF(A1:A4,"<>4")` returned 5 and now
+    returns `#N/A`, as in Excel; `SUMIF(A1:A4,"<>#N/A")` still returns 9.
+  - **Behaviour change:** a match_mode 2 lookup value that spells `#NAME?` is a text pattern whose
+    `?` is a wildcard, as in Excel. With M1:M2 = "#NAMEX", "#NAME?", `XMATCH("#NAME?",M1:M2,2)`
+    returned 2 and now returns 1; `XMATCH("#NAME~?",M1:M2,2)` returns 2.
+  - A number with an extreme exponent no longer stalls or fails a criteria call: a wildcard
+    criterion tested a number like `1E+999999999` by writing it out in full (a billion digits), and
+    one like `100E+2147483647` threw. UNIQUE, VLOOKUP/HLOOKUP text keys and `xl audit` write such
+    numbers in scientific notation.
+
+- **One exact lookup test for MATCH, XMATCH, XLOOKUP, VLOOKUP and HLOOKUP; rich text is text**
+  (#724, #775, #693). Checked against desktop Excel for Mac on one synthetic workbook.
+  - Exact VLOOKUP and HLOOKUP match by the key's own type, as MATCH and XLOOKUP do.
+    **Behaviour change:** `VLOOKUP("10",t,2,FALSE)` returned the row of the number 10 and now
+    returns the row of the text `10`; `VLOOKUP(1,t,2,FALSE)` returned the row of TRUE and
+    `VLOOKUP("1",t,2,FALSE)` the row of the number 1; they now return the row of the number 1 and
+    of the text `1`.
+  - MATCH type 0 and exact VLOOKUP/HLOOKUP apply wildcards to a text lookup value, reading `~x` as
+    `x`. **Behaviour change:** `MATCH("a*",r,0)`, `VLOOKUP("1?",t,2,FALSE)` and
+    `MATCH("~a~bc",r,0)` were `#N/A`; they now find the first text starting with `a`, the text
+    `10` and the text `abc`. XMATCH and XLOOKUP still apply wildcards only in match_mode 2.
+  - A `~` with nothing after it drops from a lookup value that takes wildcards (MATCH type 0, exact
+    VLOOKUP/HLOOKUP, match_mode 2). **Behaviour change:** `MATCH("a~",r,0)` and
+    `XMATCH("a~",r,2)` found the text `a~` and now find the text `a`.
+  - **Behaviour change:** MATCH, VLOOKUP and HLOOKUP read a blank lookup value as the number 0.
+    `MATCH(A6,r,0)` over a blank A6 was `#N/A` and now finds the 0 key.
+  - **Behaviour change:** MATCH over a range with more than one row and more than one column is
+    `#N/A` in every match_type. `MATCH("fig",G1:I5,0)` returned the row-major position (4) and now
+    returns `#N/A`.
+  - A rich-text key matches its plain text in every exact lookup. **Behaviour change:**
+    `MATCH("kiwi",r,0)`, `XLOOKUP("kiwi",…)` and `VLOOKUP("kiwi",…,FALSE)` missed a rich-text
+    `kiwi` (`#N/A`) and now find it.
+  - **Behaviour change:** `ISTEXT` of a rich-text cell was FALSE and is now TRUE. UNIQUE reads rich
+    text as its plain text (rich `kiwi`, `kiwi` and `KIWI` were two rows and are now one), and SORT
+    places rich text among the text instead of after it.
+
+- **COUNTBLANK counts empty text and takes a reference only** (#731). Checked against desktop
+  Excel for Mac on one synthetic workbook.
+  - COUNTBLANK counts a cell holding text of length 0: the constant `""`, a formula whose value is
+    `""` (cached or not) and rich text with no characters. **Behaviour change:** with A2 and A13
+    blank and A3 = `""`, A4 = `=""`, A11 = `=IF(1,"","x")`, `COUNTBLANK(A1:A14)` returned 2 and
+    now returns 5; `COUNTBLANK(C:C)` over a column holding only `""` cells returned 1048574 and now
+    returns 1048576. The same holds for a reference that IF, CHOOSE, INDEX, OFFSET, INDIRECT, LET
+    or XLOOKUP returns, for an intersection and for a spill reference (`D1#`), which counts the
+    spill's cells that hold `""` (a blank element spills as 0). COUNTA still counts `""` cells.
+  - **Behaviour change:** COUNTBLANK of an array or a value is `#VALUE!`, as Excel computes it in
+    a single cell. `COUNTBLANK(IF({TRUE,FALSE},A1:A3,B1:B3))` returned 1 and now returns
+    `#VALUE!`; `COUNTBLANK(IF(TRUE,5,6))` and `COUNTBLANK(5)` returned 0 and now return
+    `#VALUE!`, and so does `COUNTBLANK((A1:A2)*1)`. Excel refuses to load the last two.
+  - **Behaviour change:** an argument that evaluates to an error value is that error, as in Excel:
+    `COUNTBLANK(INDIRECT("zzz"))` and `COUNTBLANK(OFFSET(A1,-1,0))` returned 0 and now return
+    `#REF!`.
+  - An uncached formula in COUNTBLANK's range is evaluated to see whether its value is `""`, as
+    COUNTIF does. A formula xl cannot evaluate there (an unknown function, a cross-sheet reference
+    without a workbook) is not blank and the rest of the range is still counted; an uncached data
+    table is not blank and is not evaluated. A COUNTBLANK whose range holds its own uncached
+    formula is now a circular reference when evaluated alone, as the matching COUNTIF already was.
+
+- **INDEX over a scalar or any other value** (#725, #753): INDEX's first argument may be a value,
+  indexed as an array, a scalar as a 1x1 one. Index 1, 0 or omitted gives the value with its type
+  (`INDEX("",1)` is text, `INDEX(TRUE,1,1)` TRUE); out of bounds or area_num 2 is `#REF!`; a
+  negative or text index, or area_num 0, is `#VALUE!`; an array row_num spreads
+  (`SUM(INDEX(5,{1,1}))` is 10). The value is evaluated as an array, outside SUMPRODUCT's shared
+  extent (`INDEX(A1:A3*2,2)`). A call returning a reference there (OFFSET, INDIRECT, IF, CHOOSE,
+  XLOOKUP) is still a parse error (#723). **Behaviour change:** `INDEX(5,1)`, `INDEX(1+2,1)` and
+  `INDEX(SUM(A1:A3),1)` were parse errors and are now the value; `INDEX(konst,1)` with a name
+  `konst = 5`, and `LET(x,5,INDEX(x,1))`, were `#VALUE!` and are now 5. A name bound to an array,
+  constant or computed, is indexed too: `INDEX(arrThree,2)` with `arrThree = {1,2,3}` was
+  `#VALUE!` and is now 2.
+
+- **Behaviour change: invalid date serials return `#NUM!`** (#726). YEAR/MONTH/DAY and
+  other date slots now return `#NUM!` for serials outside 0..2958465, through literals,
+  references, numeric text, computed values, LET and lifted arrays. Previously they returned
+  `#VALUE!`; ERROR.TYPE now reports 6 instead of 3. IFERROR still catches the error.
+
+- **Behaviour change: numeric text in scalar slots and arithmetic uses bounded ASCII syntax** (#726). Full-width
+  digits (such as `ABS("５")`) and overflow/underflow text (`ABS("1e400")`, `"1e-400"`)
+  now return `#VALUE!`, instead of unrestricted BigDecimal values. Nonzero text must fit
+  Excel's normal double range; signs, decimal points, scientific notation and surrounding
+  whitespace remain accepted. Extreme exponents are refused before BigDecimal construction
+  or scaling, including in ROUND. Zero text is canonicalised to avoid retaining extreme
+  scales. Currency, locale and date/time text coercions are unchanged.
+
+- Run the 120k-definedNames native XML-security smoke gate before release (#485): a focused
+  PR/main-push workflow and a nightly Linux GraalVM build share the release smoke script.
+  Parser security settings and finite entity-size limits are unchanged.
+
+- **Reference aggregates skip absent blank borders** (#736): SUM and the other reference folds
+  reuse the populated box for ranges larger than their sheet's stored records. COUNTBLANK retains
+  the missing-blank count. Small bounded windows and positioned evaluation guards keep their
+  positional reads; declared array shapes and internal blank gaps are unchanged.
+
+- **Lazy ROW/COLUMN positions** (#735): array-mode position sequences retain their shape without
+  allocating a numeric cell and row vector per position. Aggregates stream the values;
+  known-pure dense arithmetic/comparisons and SUMPRODUCT read through a private lazy box.
+  Derived lazy reads have a fixed work budget; larger expression trees store an intermediate
+  result so repeated LET operands cannot compound recomputation. Printing/spilling still materializes cells. Public constructors, Fill Vector payloads,
+  callback execution, logical dense/sparse geometry and existing whole-axis bounds are unchanged.
+
+### Fixed
+
+- **Dynamic cycles are circular references, deterministically** (#828, #829): a cycle closing
+  through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), a range reaching an
+  uncached cell, `x#`) is invisible to the dependency graph, and its evaluation ran until either
+  the recursion-depth guard or the thread's stack gave out, whichever came first on the JIT tier
+  at hand, so recalculating the same workbook twice could report different errors and, through
+  lookups, different values. It is now caught at the first re-entry into a cell whose evaluation
+  is in progress (an in-progress marker in the per-pass memo, and a guard on the cell a pass is
+  evaluating), before any recursion, so the result is the same on every run and stack; the depth
+  and stack guards remain as backstops for acyclic chains deeper than their limit.
+  Behaviour change: such a cell failed with
+  `Evaluation failed: Cross-sheet formula recursion depth exceeded (max: 100). Possible circular reference.`
+  or, depending on JIT warmth, `Evaluation failed: Evaluation exhausted the stack at A1: …`; it
+  now fails with `Circular reference through S!A1: the cell is read again while its own evaluation
+  is in progress`, beside the static cycle's `Circular reference`. A spill reaching its own anchor
+  names the spill (`through S!A1#`). Lookups treat it as they treated the depth guard: a cyclic key
+  is a non-match, a cyclic result cell is `#VALUE!`. `xl eval --at` keeps its
+  `Circular reference detected` for a read of the placement. `xl recalc` summaries, `--strict`
+  failures and `view --eval` advisories show the new text.
+
+- **A defined name that begins like a cell reference is read whole after a range's `:`** (#841,
+  GH-713): the lexical-range reader took only letters, digits, `$` and `!` after the `:`, so a name
+  such as `B2_x`, `C3.Total`, `D5\y` or `UK9\f` was cut at its cell-shaped prefix, the prefix
+  accepted as the range's end, and the rest refused as text after the expression. The reader now
+  takes every name character (ECMA-376 §18.17.2: letters, digits, `_`, `.`, `\`), as the first
+  token and a sheet-qualified end already did; a token that is not a cell, column or row is the
+  range operator's right operand, as `A1:Start` was. Found by the weekly Law Fuzz run.
+  Behaviour change: `=A1:B2_x` was `Unexpected character '_' at position 5: unexpected characters
+  after expression` and is now the range operator over A1 and the name `B2_x` (`=SUM(A1:b6\8_.T)`
+  likewise). The `:` printer writes such a tree as `A1:B2_x` where it grouped the name
+  (`A1:(B2_x)`); both spellings re-parse to the same tree. A refused end is named whole:
+  `=A1:My_Sheet!B2` was `Invalid cell reference 'A1:My'` and is now
+  `Invalid cell reference 'A1:My_Sheet!B2'`. `A1:B2`, `A:A`, `1:$3`, `$A$1:$B$2`, `A1:INDEX(…)`,
+  `A1:B2!`, `Sheet1!A1:B2` and `A1:Sheet2!B2` are unchanged.
+
+- **ROWS and COLUMNS of an error are that error** (#725): an argument that evaluates to an error
+  value is the result, as in Excel: an OFFSET off the top, left or bottom edge, a name or LET name
+  computing one, an INDIRECT to a missing sheet, `NA()`. A reference to a cell holding an error is
+  still a reference (`ROWS(A6)` is 1), also through a LET (`ROWS(LET(x,A6,x))` is 1), and an
+  array keeps its shape whatever it holds, written, named or LET-bound (`ROWS({1,#N/A;2,3})` is 2,
+  `ROWS({#N/A})` and `ROWS(arrNA)` with `arrNA = {#N/A}` are 1). A LET in a reference position
+  binds references in an array context as it does in a plain cell. **Behaviour change:**
+  `ROWS(OFFSET(A1,-1,0,10,1))` and `ROWS(dynRef)` with `dynRef = OFFSET(Sheet1!$A$1,-1,0,10,1)`
+  were 1 and are now `#REF!`;
+  `ROWS(NA())` and `ROWS(INDEX({#N/A},1))` were 1 and are now `#N/A`.
+
+- **`x#` on a formula that does not spill is that one cell, as in Excel** (#803). Checked against
+  desktop Excel for Mac 16.114 on one synthetic workbook. **Behaviour change:** with C1 `=5`,
+  `ROWS(C1#)` and `SUM(C1#)` were `#REF!`; they are now 1 and 5. A formula whose value is an error
+  is one error cell: with G1 `=1/0`, `COUNTBLANK(G1#)` was `#DIV/0!` and is now 0, and `ROWS(G1#)`
+  is 1. A constant, a blank and a cell inside another formula's spill stay `#REF!`.
+
+- **Reject oversized stored formulas** (part of #693): CLI-authored formula text must fit the
+  8,192-character limit after storage-prefix expansion. Report input and expanded storage lengths,
+  retain per-cell context, and validate after resolving the target and selecting the write mode.
+
+- **`--stream putf` over a range drags the formula** (#789): one formula over a range was written
+  unchanged into every cell, so every row after the first computed the first row's result. It is now
+  dragged from the range's top-left cell with `$` anchoring, as the in-memory `putf` and the batch
+  `putf … from` stream arm do, and a reference dragged off the grid raises the `OFF_GRID_REF`
+  warning. The streamed formula is not evaluated, so no cached value and no automatic date format is
+  written.
+  Behaviour change: `xl --stream putf A2:A5 "=B2*C2"` wrote `=B2*C2` in A2:A5; it now writes `=B2*C2`,
+  `=B3*C3`, `=B4*C4` and `=B5*C5`.
+  Behaviour change: the `--stream putf` summary lines changed. One formula over a range printed
+  `Filled <range> with formula (streaming, no dragging)` and now prints `Applied formula to N cells
+  in <range> (streaming, with anchor-aware dragging)`. One formula to one cell printed
+  `Put formula → <cell> (streaming, no dragging)` and now prints `Put formula → <cell> (streaming)`.
+  Several formulas printed `Put N formulas to <range> (streaming, no dragging)` and now print
+  `Put N formulas to <range> (streaming, explicit, no dragging)`, matching the in-memory verb.
+
+- **`eval --with` drops the cache of a reader whose references are computed at run time** (#763):
+  a cached formula that reads an overridden cell through OFFSET or INDIRECT, directly or through a
+  defined name (`dyn = OFFSET(Data!$B$1,0,0,2,1)`), kept its cached value, because the stale-reader
+  search saw only the static arguments (`Data!$B$1`). Every formula recalculation treats as dynamic
+  is now stale under any override, and its readers with it.
+  Behaviour change: with Data!B1 = 10, B2 = 1 and Other!A1 = `SUM(dyn)` cached as 11,
+  `-s Data eval "=Other!A1" --with B2=0` was 11 and is now 10.
+
+- **`evala --at` validates its anchor** (#727): an invalid or sheet-qualified `--at` silently fell
+  back to the Z1000 anchor. It now follows the sheet rule `eval --at` follows.
+  Behaviour change: `evala "=B1:B3*2" --at ZZZZ9` showed `Spill Range: Z1000:Z1002` with exit 0
+  and is now `INVALID_REFERENCE` (exit 3); `--at Other!C2` showed Z1000:Z1002 on the `-s` sheet
+  and now evaluates on Other, anchored at C2 (`C2:C4`); a range `--at` is `INVALID_REFERENCE`,
+  and so is an anchored ref (`--at $C$2`, which also fell back to Z1000), as for `eval --at` and
+  every other ref argument: write `C2`.
+
+- **Behaviour change:** `sort` refuses data rows intersecting a multi-cell dynamic-array spill,
+  including its anchor, instead of moving cells with an inconsistent array extent. An excluded
+  header and disjoint spills remain allowed (#738).
+
+- **Behaviour change:** streamed `put`, `putf` and batch content writes reject writes inside a
+  live dynamic spill and clear the old spill when overwriting its anchor, keeping styles.
+  Previously those paths left orphaned cached constants or wrote into live spills. Batch writes
+  apply the rule in operation order; style-only writes retain array and cell metadata (#738).
+
+- **Binary change:** `StreamingTransform.WorksheetMetadata` gains a defaulted `clearContents`
+  range field for spill cleanup. Recompile callers and update positional pattern matches (#738).
+
+- **Streaming dynamic-array round trips** (#749): all row writers emit `cm` on dynamic anchors
+  and generate their XLDAPR metadata through the existing append-only metadata planner. Legacy
+  arrays remain legacy; package transforms keep existing metadata bytes and indices, and replacing
+  an anchor still removes its `cm`/`vm` markers. Ordinary row-writer output stays byte-identical.
+  **Behaviour change:** `writeStream`, `writeStreamStyled` and `writeStreamsSeq` now consume their
+  input once into temporary worksheet files before assembling the ZIP, as the auto-detect variants
+  already do. They use O(worksheet XML) temporary disk space (configurable with `withSpillDir`),
+  and the destination is written after input consumption. Row memory remains bounded.
+
+- **The shared-string `count` follows every sheet a write regenerates** (#784): the writer
+  recounted only modified and new sheets, but a write can regenerate a sheet it did not modify
+  (adding a sheet regenerates them all). When regenerating changed that sheet's number of `t="s"`
+  cells, for example a `t="s"` index past the table's end written as `#REF!` (`t="e"`), the
+  `count` attribute (ECMA-376 Part 1, §18.4.9) kept the old total. Every sheet written from the
+  model is now recounted.
+  Behaviour change: in that case `xl/sharedStrings.xml` `count` was the source total (for example
+  `4`); it is now the number of `t="s"` cells in the written package (`3`).
+  Behaviour change: an inline string (`t="inlineStr"`) in a sheet the write regenerates without
+  modifying it (for example any sheet when a sheet is added) used to stay inline, and
+  `xl/sharedStrings.xml` was not given its text; it is now appended to the shared-string table and
+  the cell is written as a `t="s"` reference (a table of Alpha, Beta, Gamma with `count="3"` becomes
+  Alpha, Beta, Gamma, Zeta with `count="4"` `uniqueCount="4"`). The cell reads as the same text.
+
+- **`xl lint` accepts international macro sheets** (#791): a `<sheet>` whose relationship is
+  `xlIntlMacrosheet` was reported as `wrong-rel-type` ("expected worksheet"), its part was not
+  scanned, and a shared string referenced only from it was reported as `shared-string-orphan`. The
+  part is now checked like a plain macro sheet (CT_Macrosheet child order, relationships, bounds,
+  shared-string indices).
+  Behaviour change: such a workbook used to get a `wrong-rel-type` finding on `xl/workbook.xml`
+  and possibly a `shared-string-orphan` finding; it now gets neither.
+
+- **Tight right-aligned SVG text keeps both ends** (#505): near-clipped, fitting, unwrapped
+  right-aligned text declares its measured SVG advance for Batik. The adjustment is restricted
+  to less than padding plus two pixels of slack; roomy cells retain natural backend glyph layout.
+
+### Performance
+
+- **Each formula is parsed once per recalculation** (#790): `recalculate`, parallel waves,
+  iterative passes and `recalculateUncached` (so `Excel.writeChecked`) parsed every formula while
+  building the dependency graph and again when evaluating it. A cached formula whose text contains
+  `[` (a closed-workbook reference such as `[1]Sheet!A1`, or a `[` in a string) was parsed a third
+  time to decide whether its cache is pinned, and each member of a cycle under iterative calculation
+  was parsed again by the fixpoint. Cell evaluation, that pin check, iterative fixpoints, the scan
+  for dynamic (`INDIRECT`/`OFFSET`) cells and the pin check of a pass with failures now reuse the
+  graph build's parse of a cell while the cell still holds the text it was parsed from; a formula
+  whose text differs, or that the build could not parse, is parsed again. On the 187,699-formula
+  synthetic book (`LoadsBookMain shape=Real`) a pass makes 187,699 formula parses, one per formula.
+  The pass holds those parses until it ends. Results are unchanged: a property test compares every
+  cell, exact `BigDecimal` scale included, and every error with the reuse on and off, in sequential,
+  parallel and iterative passes. The data-table seeder's what-if fixpoints still parse their cycle
+  members themselves.
+
+- **A running total through `INDEX(…, ROW()-1)` is no longer a circular reference** (#743, #745).
+  INDEX at a position written with literals, `ROW()` and `COLUMN()` (combined with `+`, `-` and
+  `*`) now depends only on the cells it selects for the formula that holds it, in every dependency
+  graph: the sheet and workbook graphs, the compact recalculation graph, the edit cone and the
+  `eval --with`/`--at` checks. A position that does not fold this way (one that reads a cell, a
+  fraction, a row outside the array) keeps the whole array as before, and so does INDEX inside a
+  defined name (`prev` = `INDEX($B:$B,ROW()-1)`, read through `SUM(B1:prev)`) or under a `:`
+  operand that is not a fixed reference (`B1:CHOOSE(1,INDEX(B:B,ROW()-1))`): both are still
+  reported as circular references, where Excel computes them. The formula-only graph that
+  whole-book recalculation and every CLI write build now finds the formula cells in a range by
+  column and row instead of scanning every formula once per distinct range, so a column of
+  running totals that each read their own `B1:B{r}` builds in linear time. Internally, each
+  reference-computing function now declares where its result lies (an envelope hook on its spec)
+  rather than the graph matching INDEX and XLOOKUP by identity.
+  - **Behaviour change:** `=SUM(B1:INDEX(B:B,ROW()-1))` in B5 was reported as a circular
+    reference; it now evaluates to `SUM(B1:B4)`. `=SUM(B1:INDEX(B:B,ROW()))`,
+    which reads its own cell, is still circular.
+  - **Behaviour change:** an edit to a cell inside INDEX's array but outside its folded selection
+    (B6 for `=INDEX(B:B,ROW()-1)` in B5) used to mark the formula dirty; it no longer does.
+
+- **A criteria window whose matching rows are numeric text is sized exactly** (#842):
+  `CriteriaCandidates.compute` counted a row once per posting list it sits in — text `"1"` holds
+  the keys Text("1") and Num(1), and a lookup for `"1"` reads both — so a window with few such rows
+  could be counted past half its size, refused candidates, and scanned. The selection is now
+  counted distinctly by a bounded merge over the posting lists that stops once it passes n/2; a
+  one-list lookup is still counted by binary search. Results are unchanged: the index is a filter,
+  and a refused call tested every row with the same matcher.
+
+- Whole-column and whole-row lookups and returned references reuse the recalculation pass's
+  existing used-range memo (#747). MATCH, XMATCH, XLOOKUP, VLOOKUP, HLOOKUP, LOOKUP, INDEX,
+  INDIRECT, OFFSET, aggregates and logical range reads share one scan per sheet and structural
+  generation, including empty sheets. Bounded references skip the scan; formula results and
+  clipping geometry are unchanged.
+
+### Security
+
+- **fs2-io 3.11.0 → 3.12.2, cats-effect 3.5.7 → 3.6.3 in `xl-cats-effect`** (GHSA-rrw2-px9j-qffj,
+  CVSS 5.3): the TLS half-shutdown spin loop in `fs2.io.net.tls` is fixed in 3.12.2. xl opens no
+  sockets, so no xl code path was reachable; the bump removes the flagged artifact from the
+  published POM and aligns `xl-cats-effect` with the cats-effect line `xl-cli` already uses.
+
+- **Dependency age policy and compatible refresh** (#839): CI checks direct Maven dependency age,
+  records justified pins, and prepares Renovate updates while retaining Scala 3.9 LTS. Published
+  modules now depend on newer compatible versions, which users resolve transitively:
+  cats-effect 3.6.3 → 3.7.1, fs2-core/fs2-io 3.12.2 → 3.14.0 and fs2-data-xml/fs2-data-xml-scala
+  1.11.1 → 1.14.1 (`xl-cats-effect`); scala-xml 2.3.0 → 2.5.0 (`xl-ooxml`); cats-core 2.12.0 →
+  2.13.0 (`xl-core`, `xl-evaluator`) and cats-laws 2.12.0 → 2.13.0 (`xl-core`).
+
+- Include the benchmark JMH core and inherited bytecode generator in dependency-age checks and Renovate updates.
+
+- **Dependency integrity gate** (#833): record resolved Maven artifacts and their SHA-256
+  checksums in `deps.lock.json`; CI rejects dependency or checksum drift. This captures the
+  existing resolution without upgrading libraries. See `docs/reference/dependency-lock.md`.
+
+- **Agent credential discovery** (#838): load API keys from the process environment or local
+  working-directory/module `.env` files only; never search parent or legacy example directories.
+
+- **Verified launcher and release downloads** (#837): check committed Mill/Coursier SHA-256
+  digests before execution, publish release checksums, and verify native CLI downloads before installation.
+  Preserve session setup after verification failures, honor trusted platform tools, and provide
+  pinned current-release and Linux Scala CLI installers with isolated shell settings.
+
+- **Installer follow-up** (#837): check the documented CLI version during release preparation, require manifests for future releases, and isolate setup-owned Coursier files from user-installed tools.
+
+- **Installer test fixtures** (#837): derive release asset names and version-drift probes from the selected version and platform; exercise two future release bumps.
+
+- **Release cache isolation** (#836): release jobs no longer restore or save shared
+  Actions caches before building, signing, or publishing artifacts. CI guards this boundary.
+
+- **Workflow guard follow-up** (#836): ignore comments and shell scalar text while retaining checks on release cache actions and inputs.
+
+- **Immutable workflow actions** (#834): pin existing action versions to verified upstream
+  commits and reject mutable workflow references in CI.
+
+- **Action pin guard** (#834): reject YAML node properties, aliases and explicit keys that could hide mutable actions; allow harmless empty and scalar option mappings.
+
+- **Workflow guard follow-up** (#834): reject implicit flow-sequence action maps and encoded option keys, and respect block-scalar key indentation.
+
+- Enforce an explicit block-style action-pin grammar so unknown YAML structures fail closed; preserve scalar/comment content and document supported workflow forms.
+
+- Require matching quotes and ASCII separators around pinned action references; reject suffixes that YAML would retain in a mutable ref.
+
+- **Immutable pre-commit hooks** (#835): retain pre-commit-hooks v4.5.0 at its verified
+  commit and reject mutable or missing remote hook revisions in CI.
+
+### Testing
+
+- **Performance gates are counters, not clocks** (#843): `FormulaGraphPerfSpec`'s #743 gate missed
+  its 5 s budget in about a third of CI runs, where `./mill -i __.test` shares a 4-core runner among
+  several test JVMs, and nine more tests carried wall-clock budgets with the same failure mode (five
+  of them equal to MUnit's 30 s default timeout, so they never decided anything). The formula-graph
+  build now counts its range lookups and index work (`RecalcCounters.RangeLookups`,
+  `RangeLookupWork`); the #743 and GH-522 gates pin those counts at 2,000 and 8,000 rows; the #692
+  lookup gate pins `UsedRangeScans`; the GH-714 drag pins `ImplicitIntersection.Report`; the GH-715
+  stale-reader walk pins its containment checks (`ReadCommands.UncacheTrace`); every other
+  wall-clock assert in `__.test` is a diagnostic clue (`RecalcPerfSpec`, `StylePerformanceSpec`,
+  `EvaluationTotalitySpec`, ...), with `munitTimeout` overrides where a fixture is large.
+  `LintOracleSpec` proves a real overflow at the stack boundary (recursing to the overflow, then
+  calling the oracle while unwinding) instead of hoping a 64 KB stack hint, below the JVM's minimum,
+  overflows on the JIT tier at hand; it warms the oracle on the normal stack first, and its
+  small-stack threads are daemons joined with a bound.
+
+- `FormulaGrammarSpec`'s keyword-`NOT` arm writes `NOT(e)` when the operand opens with `(`:
+  `NOT (A1,B2):C3` is a two-argument call to the parser (GH-653: `NOT (` is the call), so the
+  generator wrote an unparsable formula (law-fuzz seed `ixtuskxBKlWtxyQgxJQlGS5jvQmQybdX-J8aerf723H=`).
+  `CriteriaIndexSpec`'s candidate property is total for a window of no rows (a shrunk `n`) and
+  checks the listing decision both ways.
+
+- `PassCacheLawSpec`'s generated books always hold a criteria reader whose window excludes the
+  dynamic row (#828): a reader covering that row is a member of the deferred bucket, which the pass
+  never slices, and each generated window avoided it with probability about 0.24, so about one
+  book in 2,500 could build no slice and the "not vacuous" property failed about once in a hundred
+  runs. The suite now takes the law-fuzz seed plumbing (`XL_ROUNDTRIP_RANDOM_SEED`,
+  `-Dxl.roundtrip.seed`), so a printed seed replays.
+
+- `RasterSubprocessSpec` removes `JAVA_TOOL_OPTIONS`, `_JAVA_OPTIONS` and `JDK_JAVA_OPTIONS` from
+  the forked JVM's environment, so the JVM's `Picked up …` notice no longer leads the stderr the
+  cases assert on (#728).
+
+- Add ScalaCheck laws for dynamic-name resize discovery and array-mode LET reference-binding
+  neutrality, including Unicode identifiers, quoted sheets, literals, colon name corners and
+  unrelated SUMPRODUCT/array bindings (#748).
+
+- **Reliable CLI oracle regressions** (follow-up to #509 and #681): the structural-cache
+  LibreOffice fixture computes its `#REF!` through `INDEX`, avoiding an inline error-literal
+  incompatibility in LibreOfficeDev 26.8 while retaining exact error and cache assertions. The
+  small-stack lint test permits safe completion after JVM warm-up and checks the real lint path
+  while unwinding actual stack exhaustion, without guessing a frame limit. Both 256 KiB and 1 MiB
+  stacks are covered; injected overflow coverage still requires a lint finding. Internal
+  formula/cache assertions run even when LibreOffice is unavailable.
+
+- **Finite computed-reference regression budgets** (#736): pin 200 reader calls for both array
+  materialization and SUM over 10k/100k declared templates; preserve INDEX/XLOOKUP/colon shapes,
+  blank padding, arithmetic alignment, spill output, first errors and formula precedents.
 
 ## [0.25.0] - 2026-10-19
 

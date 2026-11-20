@@ -129,7 +129,7 @@ class WorkbookModificationSpec extends FunSuite:
     assertEquals(renamed.sheets.map(_.name.value), Vector("S", "Data"))
   }
 
-  test("insertAt and addSheet refuse a name already used in any case") {
+  test("insertAt refuses a name already used in any case") {
     val wb = Workbook(Vector(Sheet(SheetName.unsafe("Data"))))
     assertEquals(
       wb.insertAt(1, Sheet(SheetName.unsafe("data"))),
@@ -140,9 +140,11 @@ class WorkbookModificationSpec extends FunSuite:
       Left(XLError.DuplicateSheet("DATA")): XLResult[Workbook]
     )
     assert(wb.insertAt(1, Sheet(SheetName.unsafe("Notes"))).isRight)
-    @annotation.nowarn("cat=deprecation")
-    val added = wb.addSheet(Sheet(SheetName.unsafe("data")))
-    assertEquals(added, Left(XLError.DuplicateSheet("data")): XLResult[Workbook])
+    // Appending (index == sheetCount) refuses a case-folded duplicate too.
+    assertEquals(
+      wb.insertAt(wb.sheetCount, Sheet(SheetName.unsafe("dAtA"))),
+      Left(XLError.DuplicateSheet("dAtA")): XLResult[Workbook]
+    )
   }
 
   test("put marks sheet as modified when replacing existing sheet") {

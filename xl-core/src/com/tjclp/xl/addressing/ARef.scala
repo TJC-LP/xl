@@ -1,10 +1,17 @@
 package com.tjclp.xl.addressing
 
 /**
- * Absolute cell reference with 64-bit packed representation. Upper 32 bits: row index Lower 32
- * bits: column index
+ * Absolute cell reference packed into one `Long`: the upper 32 bits hold the 0-based row, the lower
+ * 32 bits the 0-based column XOR the row shifted left by 14 (#891).
  *
- * This allows efficient storage and comparison.
+ * The XOR is for hashing. A `Long` hashes as `high ^ low`; with the plain `row << 32 | col` packing
+ * that is `row ^ col`, so every cell on an anti-diagonal of a sheet shares one hash and a
+ * `Map[ARef, _]` (every sheet's cells) scans buckets of up to min(rows, columns) keys. With the row
+ * folded into the low word the hash is `row ^ (row << 14) ^ col`, which is distinct for every cell
+ * of Excel's grid below row 2^18 and nearly so above. For a column inside the grid (`col < 2^14`)
+ * the low word is `row << 14 | col`, so the packed values still order row-major. The packing is a
+ * bijection on all `Int` pairs: [[ARef.shift]] can mint cells off the grid (a negative column, row
+ * 0) and they decode unchanged.
  */
 opaque type ARef = Long
 
@@ -14,7 +21,8 @@ object ARef:
 
   /** Create cell reference from column and row */
   def apply(col: Column, row: Row): ARef =
-    (rowIndex(row).toLong << 32) | (colIndex(col).toLong & 0xffffffffL)
+    val r = rowIndex(row)
+    (r.toLong << 32) | ((colIndex(col) ^ (r << 14)).toLong & 0xffffffffL)
 
   /** Create cell reference from 0-based indices */
   def from0(colIndex: Int, rowIndex: Int): ARef =
@@ -44,7 +52,7 @@ object ARef:
 
   extension (ref: ARef)
     /** Extract column */
-    def col: Column = Column.from0((ref & 0xffffffffL).toInt)
+    def col: Column = Column.from0(ref.toInt ^ ((ref >> 32).toInt << 14))
 
     /** Extract row */
     def row: Row = Row.from0((ref >> 32).toInt)

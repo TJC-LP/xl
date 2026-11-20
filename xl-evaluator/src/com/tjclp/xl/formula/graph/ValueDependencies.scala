@@ -3,7 +3,12 @@ package com.tjclp.xl.formula.graph
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.eval.{Evaluator, NameWalk}
-import com.tjclp.xl.formula.functions.{ArgValue, CriteriaRangeResize, ReferenceOperators}
+import com.tjclp.xl.formula.functions.{
+  ArgValue,
+  CriteriaRangeResize,
+  ReferenceOperators,
+  TableColumnReferences
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
@@ -49,7 +54,9 @@ private[xl] object ValueDependencies:
     ReferenceOperators.UnionName -> ((_, _) => true),
     ReferenceOperators.IntersectionName -> ((_, _) => true),
     // GH-713: `:` between computed references reads its operands as references
-    ReferenceOperators.RangeName -> ((_, _) => true)
+    ReferenceOperators.RangeName -> ((_, _) => true),
+    // Metadata identifiers pass no expression arguments through their reference.
+    TableColumnReferences.Name -> ((_, _) => false)
   )
 
   /**
@@ -81,19 +88,26 @@ private[xl] object ValueDependencies:
     home: Option[SheetName],
     localReads: Boolean = true,
     names: Option[Names] = None,
-    current: Option[SheetName] = None
+    current: Option[SheetName] = None,
+    // A caller can supply table metadata while retaining guarded runtime resolution of names.
+    resolveDefinedNames: Boolean = true
   ):
     private val expanded = scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
 
-    def reads(expr: TExpr[?]): Set[ARef] =
-      readRanges(expr).foldLeft(Set.empty[ARef])((acc, r) => acc ++ expand(r))
+    /**
+     * The cells `expr` reads. `at`, #743: the cell the formula sits in, when known — INDEX at a
+     * position written with ROW() or COLUMN() then reads the cells it selects, not its whole array.
+     */
+    def reads(expr: TExpr[?], at: Option[ARef] = None): Set[ARef] =
+      readRanges(expr, at).foldLeft(Set.empty[ARef])((acc, r) => acc ++ expand(r))
 
     /**
      * [[reads]] as the ranges read, never expanded: each range bounded by `bounds`, a single cell
      * as its one-cell range (unbounded, as [[reads]] has it). For an index that must not pay for
      * every cell of every range (`--with`'s stale-reader search over running totals).
      */
-    def readRanges(expr: TExpr[?]): Set[CellRange] = loop(expr, false, Map.empty)
+    def readRanges(expr: TExpr[?], at: Option[ARef] = None): Set[CellRange] =
+      loop(expr, false, Map.empty, at)
 
     private def expand(range: CellRange): Set[ARef] =
       if range.start == range.end then Set(range.start)
@@ -105,17 +119,22 @@ private[xl] object ValueDependencies:
     private def local(sheet: SheetName): Boolean =
       home.exists(_.value.equalsIgnoreCase(sheet.value))
 
-    private def loop(e: TExpr[?], referenceOnly: Boolean, env: Map[String, Bound]): Set[CellRange] =
-      def value(child: TExpr[?]): Set[CellRange] = loop(child, false, env)
+    private def loop(
+      e: TExpr[?],
+      referenceOnly: Boolean,
+      env: Map[String, Bound],
+      at: Option[ARef]
+    ): Set[CellRange] =
+      def value(child: TExpr[?]): Set[CellRange] = loop(child, false, env, at)
       def binding(name: String): Set[CellRange] =
-        env.get(name).fold(Set.empty[CellRange])(b => loop(b.expr, referenceOnly, b.env))
+        env.get(name).fold(Set.empty[CellRange])(b => loop(b.expr, referenceOnly, b.env, at))
       def cell(at: ARef): Set[CellRange] =
         if referenceOnly then Set.empty else Set(CellRange(at, at))
       def range(r: CellRange): Set[CellRange] = if referenceOnly then Set.empty else cells(r)
       // a defined name's reads: what its definition reads on `home`, resolved from `current`
       def resolved(qualifier: Option[SheetName], name: String): Set[CellRange] =
         (names, home, current.orElse(home)) match
-          case (Some(resolver), Some(target), Some(from)) =>
+          case (Some(resolver), Some(target), Some(from)) if resolveDefinedNames =>
             resolver.reads(qualifier, name, from, target, bounds)
           case _ => Set.empty
       // a defined name read as a value
@@ -124,21 +143,30 @@ private[xl] object ValueDependencies:
       // the range a defined name in a range slot names, resolved from `current`, when it names one
       def namedRange(location: TExpr.RangeLocation): Option[(SheetName, CellRange)] =
         (location, names, current.orElse(home)) match
-          case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from)) =>
+          case (TExpr.RangeLocation.Name(name, scope), Some(resolver), Some(from))
+              if resolveDefinedNames =>
             resolver.range(scope, name, from)
+          case (
+                TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)),
+                Some(resolver),
+                Some(from)
+              ) =>
+            resolver.tableRange(column, from)
           case _ => None
       // an unqualified reference reads the formula's own sheet: `home` unless it sits elsewhere
       def localCell(at: ARef): Set[CellRange] = if localReads then cell(at) else Set.empty
       def localRange(r: CellRange): Set[CellRange] = if localReads then range(r) else Set.empty
-      def arg(a: ArgValue, addressOnly: Boolean): Set[CellRange] = a match
-        case ArgValue.Expr(child) => loop(child, addressOnly, env)
+      def arg(a: ArgValue, addressOnly: Boolean, reader: Option[ARef]): Set[CellRange] = a match
+        case ArgValue.Expr(child) => loop(child, addressOnly, env, reader)
+        case ArgValue.Range(TExpr.RangeLocation.Computed(child)) =>
+          loop(child, addressOnly, env, reader)
         case ArgValue.Range(location) =>
           // Non-static lexical locations print as their declared identifier. This also covers
           // range-slot bindings without confusing qualified names, cell addresses or errors with
           // legal LET names. Follow the binding in its defining scope and the consumer's mode.
           val bound = if location.staticRange.isEmpty then env.get(location.toA1) else None
           bound match
-            case Some(b) => loop(b.expr, addressOnly, b.env)
+            case Some(b) => loop(b.expr, addressOnly, b.env, reader)
             case None if addressOnly => Set.empty
             case None =>
               location match
@@ -148,7 +176,6 @@ private[xl] object ValueDependencies:
                 // a name read as a value does
                 case TExpr.RangeLocation.Name(name, scope) => resolved(scope, name)
                 case _ => Set.empty
-        case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 
       // Exhaustive, no wildcard: a new TExpr case is a compiler warning here, never a silent
       // structural fallback that would lose referenceOnly and own-sheet qualified reads.
@@ -164,7 +191,7 @@ private[xl] object ValueDependencies:
         case TExpr.SheetPolyRef(sheet, at, _) => if local(sheet) then cell(at) else Set.empty
         case TExpr.RangeRef(r, _) => localRange(r)
         case TExpr.SheetRange(sheet, r, _) => if local(sheet) then range(r) else Set.empty
-        case TExpr.Coerced(inner, _) => loop(inner, referenceOnly, env)
+        case TExpr.Coerced(inner, _) => loop(inner, referenceOnly, env, at)
         case TExpr.ToInt(inner) => value(inner)
         case TExpr.UnaryPlus(inner) => value(inner)
         case TExpr.Percent(inner) => value(inner)
@@ -177,19 +204,30 @@ private[xl] object ValueDependencies:
             case ((scope, reads), (name, definition)) =>
               (
                 scope.updated(name, Bound(definition, scope)),
-                reads ++ loop(definition, referenceDefinition(definition), scope)
+                reads ++ loop(definition, referenceDefinition(definition), scope, at)
               )
           }
           // Plain-cell LET stores a reference without reading its values. Eager scalar bindings
           // and reference selectors still evaluate, even if the body does not use the binding.
-          bindingReads ++ loop(body, referenceOnly, scoped)
-        case TExpr.Aggregate(_, location) => arg(ArgValue.Range(location), false)
+          bindingReads ++ loop(body, referenceOnly, scoped, at)
+        case TExpr.Aggregate(_, location) => arg(ArgValue.Range(location), false, at)
+        case TableColumnReferences.Ref(column) =>
+          if referenceOnly then Set.empty
+          else
+            (names, current.orElse(home)) match
+              case (Some(resolver), Some(from)) =>
+                resolver
+                  .tableRange(column, from)
+                  .filter((sheet, _) => local(sheet))
+                  .fold(Set.empty[CellRange])((_, r) => cells(r))
+              case _ => Set.empty // without workbook metadata, the runtime placement guard decides
         case call: TExpr.Call[?] =>
           val name = call.spec.name
           // GH-761: SUMIF and AVERAGEIF size their third argument to their first, a defined name
           // in either slot as the range it names, as evaluation and DependencyGraph size it (#733)
-          val args = ReferenceOperators.dependencyValues(
-            name,
+          // #743: INDEX at a position folded for the reader reads its selected cells alone
+          val args = ReferenceOperators.callDependencyValues(
+            call,
             CriteriaRangeResize.resizedArgs(
               name,
               call.spec.argSpec.toValues(call.args),
@@ -198,8 +236,10 @@ private[xl] object ValueDependencies:
                 namedRange(location).fold(location)((sheet, range) =>
                   TExpr.RangeLocation.CrossSheet(sheet, range)
                 )
-            )
+            ),
+            at = at
           )
+          val inner = ReferenceOperators.operandReader(call, ReferenceOperators.staticShape, at)
           val passes = if referenceOnly then referencePassing.get(name) else None
           args.zipWithIndex.foldLeft(Set.empty[CellRange]) { case (acc, (a, index)) =>
             // CELL's reference is address-only because every info type `cellFn` supports
@@ -210,7 +250,7 @@ private[xl] object ValueDependencies:
             // revisited.
             val addressOnly = inspectors.contains(name) || (name == "CELL" && index == 1) ||
               passes.exists(_(index, args.size))
-            acc ++ arg(a, addressOnly)
+            acc ++ arg(a, addressOnly, inner)
           }
         // defined names: their targets live in workbook metadata ([[Names]] when given)
         case TExpr.NameRef(name) => named(None, name)
@@ -266,12 +306,36 @@ private[xl] object ValueDependencies:
         }
       )
 
-    /** Whether `wb` defines any name: without one, no formula reads through a name. */
-    def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty
+    def tableRange(
+      column: TableColumnReferences.Column,
+      current: SheetName
+    ): Option[(SheetName, CellRange)] =
+      wb(current).toOption.flatMap { sheet =>
+        TableColumnReferences
+          .resolve(column, sheet, Some(wb))
+          .toOption
+          .map(ref => (ref.sheet.name, ref.range))
+      }
+
+    /** Names and tables can both hide cross-sheet reads from the CLI's lexical candidate index. */
+    def nonEmpty: Boolean = wb.metadata.definedNames.nonEmpty || wb.sheets.exists(_.tables.nonEmpty)
 
     /** The lower-cased names `wb` defines, for a text prefilter. */
     lazy val keys: Set[String] =
       wb.metadata.definedNames.iterator.map(_.name.toLowerCase(java.util.Locale.ROOT)).toSet
+
+    private lazy val tableKeys: Set[String] =
+      wb.sheets.iterator
+        .flatMap(_.tables.valuesIterator.map(_.displayName))
+        .map(DependencyGraph.resolutionKey)
+        .toSet
+
+    /**
+     * Preserve the existing defined-name prefilter; table candidates use the resolver's relation.
+     */
+    def containsToken(token: String): Boolean =
+      keys.contains(token.toLowerCase(java.util.Locale.ROOT)) ||
+        tableKeys.contains(DependencyGraph.resolutionKey(token))
 
     def reads(
       qualifier: Option[SheetName],

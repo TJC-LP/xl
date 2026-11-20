@@ -228,9 +228,16 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(!matches(cell, Compare(CompareOp.Neq, BigDecimal(50))))
   }
 
-  test("matches: comparison with text containing number") {
+  test("matches: comparison skips text containing a number (#798)") {
     val cell = CellValue.Text("150")
-    assert(matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
+    assert(!matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
+    assert(!matches(cell, Compare(CompareOp.Lte, BigDecimal(200))))
+  }
+
+  test("matches: comparison reads a formula's cached number, not its numeric text (#798)") {
+    val crit = Compare(CompareOp.Gte, BigDecimal(4))
+    assert(matches(CellValue.Formula("2+2", Some(CellValue.Number(BigDecimal(4)))), crit))
+    assert(!matches(CellValue.Formula("\"4\"", Some(CellValue.Text("4"))), crit))
   }
 
   test("matches: comparison with non-numeric text fails") {
@@ -238,11 +245,12 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(!matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
   }
 
-  test("matches: comparison with boolean (TRUE=1, FALSE=0)") {
+  test("matches: comparison skips booleans (#798)") {
     val trueCell = CellValue.Bool(true)
     val falseCell = CellValue.Bool(false)
-    assert(matches(trueCell, Compare(CompareOp.Gt, BigDecimal(0))))
-    assert(!matches(falseCell, Compare(CompareOp.Gt, BigDecimal(0))))
+    assert(!matches(trueCell, Compare(CompareOp.Gt, BigDecimal(0))))
+    assert(!matches(falseCell, Compare(CompareOp.Gte, BigDecimal(0))))
+    assert(!matches(trueCell, Compare(CompareOp.Lt, BigDecimal(4))))
   }
 
   test("matches: comparison with empty cell fails") {
@@ -296,9 +304,11 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(CellValue.Text("banana"), crit))
   }
 
-  test("matches: errors and uncached formulas never match text comparison (GH-466)") {
+  test("matches: errors match <>x, uncached formulas never match it (GH-466, #731)") {
     val crit = parseValue("<>x")
-    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    // desktop Excel counts error cells under every <> criterion
+    assert(matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), crit))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.Value), parseValue(">x")))
     assert(!matches(CellValue.Formula("=A1", None), crit))
     assert(matches(CellValue.Formula("=A1", Some(CellValue.Text("y"))), crit))
     assert(!matches(CellValue.Formula("=A1", Some(CellValue.Text("x"))), crit))
@@ -347,17 +357,14 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(matches(cell, Wildcard("test~~value")))
   }
 
-  test("matches: wildcard on number cell") {
-    val cell = CellValue.Number(BigDecimal(12345))
-    assert(matches(cell, Wildcard("123*")))
-    assert(matches(cell, Wildcard("*45")))
-    assert(matches(cell, Wildcard("1234?")))
-  }
-
-  test("matches: wildcard on boolean cell") {
-    val cell = CellValue.Bool(true)
-    assert(matches(cell, Wildcard("TR*")))
-    assert(matches(cell, Wildcard("*UE")))
+  test("#780: a wildcard never matches a number or boolean cell") {
+    // desktop Excel: COUNTIF(r,"*") counts text cells only
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("123*")))
+    assert(!matches(CellValue.Number(BigDecimal(12345)), Wildcard("*")))
+    assert(!matches(CellValue.Bool(true), Wildcard("TR*")))
+    assert(!matches(CellValue.Error(com.tjclp.xl.cells.CellError.NA), Wildcard("*")))
+    assert(matches(CellValue.Text("12345"), Wildcard("123*")))
+    assert(matches(CellValue.Formula("\"\"", Some(CellValue.Text(""))), Wildcard("*")))
   }
 
   test("matches: wildcard on empty cell fails") {

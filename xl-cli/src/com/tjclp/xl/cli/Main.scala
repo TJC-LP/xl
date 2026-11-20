@@ -8,6 +8,7 @@ import java.nio.file.{
   Files,
   NoSuchFileException,
   Path,
+  Paths,
   StandardCopyOption
 }
 
@@ -45,8 +46,10 @@ import com.tjclp.xl.ooxml.lint.{LintSeverity, WorkbookLint}
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
+  HostOs,
   ImageMagick,
   NativeImage,
+  RasterInstall,
   RasterizerChain,
   Resvg,
   RsvgConvert
@@ -258,7 +261,7 @@ object Main extends IOApp:
     Opts
       .flag(
         "strict",
-        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on hygiene findings too (default: repair findings only)."
+        "Writes: exit 1 on formula evaluation errors, non-convergence, or data-table seed warnings, including formulas authored by put/putf/fill/copy (default: advisory, exit 0); a strict failure writes nothing: -o is neither created nor replaced, -i leaves the input unchanged. lint: exit 1 on info/hygiene findings too (default: repair findings only)."
       )
       .orFalse
 
@@ -733,7 +736,9 @@ EXAMPLES:
 
 Lints the RAW ZIP PARTS (never the parsed model — a full load would repair
 the very structure being checked). Flags what Excel repairs loudly but every
-lenient reader accepts silently:
+lenient reader accepts silently, plus preserved macro-sheet presence:
+  - Excel 4.0 macro / international macro sheets, with name, visibility and
+    Auto_Open / _xlnm.Auto_Open names scoped to or referencing them [info]
   - Child-element order in xl/workbook.xml (CT_Workbook) and each worksheet
     (CT_Worksheet) vs the ECMA-376 schema sequence
   - r:id references (sheet, externalReference, pivotCache, drawing,
@@ -791,7 +796,7 @@ USAGE:
   xl lint report.xlsx
   xl -f report.xlsx lint                     # Equivalent flag form
   xl lint report.xlsx --format json          # Stable machine-readable schema
-  xl lint report.xlsx --strict               # Hygiene findings fail the gate too
+  xl lint report.xlsx --strict               # Info/hygiene findings fail the gate too
 
 FINDING CATEGORIES:
   child-order | unresolved-rel-id | wrong-rel-type | missing-part |
@@ -799,17 +804,18 @@ FINDING CATEGORIES:
   data-table-unseeded | formula-leading-equals | formula-unparseable |
   external-ref-dangling | defined-name-invalid | calc-chain-stale |
   xlfn-missing | empty-inline-str | mc-ignorable-undeclared |
-  dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
+  macro-sheet | dxf-id-out-of-range | unreferenced-part | shared-string-orphan |
   autofilter-name-mismatch | anchorarray-qualifier-corrupt
 
 SEVERITY (every finding carries one; --format json: "severity"):
   repair  = Excel repairs or refuses the file, or a reader misreads a value
+  info    = preserved macro-sheet presence; not a repair or a malware verdict
   hygiene = the file is valid and opens intact; dead weight or a privacy
             hazard the package still carries (unreferenced-part, the orphan
             half of shared-string-orphan, autofilter-name-mismatch)
 
 EXIT CODES:
-  0 = no repair findings (hygiene findings, if any, are still listed)
+  0 = no repair findings (info/hygiene findings, if any, are still listed)
   1 = repair findings reported — or, with --strict, any finding at all
   2 = usage (no file, or a file given both ways)
   3 = error (unreadable file, missing/malformed core part, ...)
@@ -1150,18 +1156,32 @@ bucket; -s restricts the cell buckets to one sheet.
 Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
 book with the report kept, so a CI lane can gate on it.
 
+The stale-data-table note re-evaluates each data table's corner at sampled inputs; on a large
+circular model that costs many recalculations. --skip-data-tables leaves it out, and the report
+says it was not checked (JSON data.dataTableCheck: "skipped"). It is a note, never a finding, so
+skipping it never changes clean or findings.
+
 USAGE:
   xl -f model.xlsx audit
   xl -f model.xlsx -s Summary audit
   xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+  xl -f model.xlsx audit --fail-on-findings --skip-data-tables   # a fast gate on a data-table model
 """
 
   private val failOnFindingsOpt: Opts[Boolean] =
     Opts.flag("fail-on-findings", "Exit 1 (AUDIT_FINDINGS) when the audit has findings").orFalse
 
+  private val skipDataTablesOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "skip-data-tables",
+        "Leave out the stale-data-table note (no data-table corner is re-evaluated)"
+      )
+      .orFalse
+
   val auditCmd: Opts[CliCommand] =
     Opts.subcommand("audit", auditHelp) {
-      failOnFindingsOpt.map(CliCommand.Audit.apply)
+      (failOnFindingsOpt, skipDataTablesOpt).mapN(CliCommand.Audit.apply)
     }
 
   private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
@@ -1262,7 +1282,10 @@ USAGE:
 
   private val atOpt =
     Opts
-      .option[String]("at", "Cell the displayed result is anchored at (nothing is written)")
+      .option[String](
+        "at",
+        "Cell the displayed result is anchored at; Sheet!A1 names the sheet (nothing is written)"
+      )
       .orNone
 
   val evalArrayCmd: Opts[CliCommand] =
@@ -2194,6 +2217,9 @@ EXAMPLES:
    * its rows arrive ([[emitStreamed]]).
    */
   private[cli] def emit(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
+    withResolvedInput(outcome).flatMap(emitResolved(_, mode, io))
+
+  private def emitResolved(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
     outcome.payload match
       case Some(Payload.Streamed(_)) => emitStreamed(outcome, mode, io)
       case _ =>
@@ -2243,8 +2269,23 @@ EXAMPLES:
 
   /** The stderr of an outcome whose stdout is already written, then its exit code. */
   private def report(outcome: Outcome, mode: OutputMode, io: CliIO): IO[ExitCode] =
-    val stderr = Render.stderr(mode)(outcome)
-    (if stderr.isEmpty then IO.unit else io.err(stderr)).as(outcome.exitCode)
+    withResolvedInput(outcome).flatMap { resolved =>
+      val stderr = Render.stderr(mode)(resolved)
+      (if stderr.isEmpty then IO.unit else io.err(stderr)).as(resolved.exitCode)
+    }
+
+  /**
+   * GH-870: the one seam every failure leaves through, so each `IO_READ` site — the missing-file
+   * diagnostic, the reader's own message, lint's, the streaming reader's and writer's — names the
+   * absolute path of a relative input and the working directory it resolved against
+   * ([[CliError.resolvingInputPath]]).
+   */
+  private def withResolvedInput(outcome: Outcome): IO[Outcome] =
+    outcome.error match
+      case Some(error) if error.code == ErrorCode.IO_READ =>
+        IO.delay(Paths.get("").toAbsolutePath)
+          .map(cwd => outcome.copy(error = Some(CliError.resolvingInputPath(error, cwd))))
+      case _ => IO.pure(outcome)
 
   /**
    * An `ExcelIO` whose reader warnings land in `warnings` as `READER_WARNING`s and whose in-memory
@@ -2456,7 +2497,9 @@ EXAMPLES:
       val anyAvailable = rows.exists(_.status == "available")
       val payload = mode match
         case OutputMode.Text =>
-          Payload.text(renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage))
+          Payload.text(
+            renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage, HostOs.isMacOS)
+          )
         case OutputMode.Json =>
           Payload.Json(
             ujson.Obj(
@@ -2501,7 +2544,8 @@ EXAMPLES:
           resvgAvail = resvgAvail,
           imageMagickAvail = imageMagickAvail,
           imageMagickDiag = imageMagickDiag,
-          nativeImage = NativeImage.inNativeImage
+          nativeImage = NativeImage.inNativeImage,
+          macOS = HostOs.isMacOS
         )
     }
 
@@ -2518,7 +2562,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean = HostOs.isMacOS
   ): (String, Boolean) =
     val rows = rasterizerRows(
       batikAvail,
@@ -2527,10 +2572,11 @@ EXAMPLES:
       resvgAvail,
       imageMagickAvail,
       imageMagickDiag,
-      nativeImage
+      nativeImage,
+      macOS
     )
     val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
-    (renderRasterizerText(rows, anyAvailable, nativeImage), anyAvailable)
+    (renderRasterizerText(rows, anyAvailable, nativeImage, macOS), anyAvailable)
 
   /** The rows of the table, in display order. */
   private def rasterizerRows(
@@ -2540,7 +2586,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): Vector[RasterizerRow] =
     // Batik - the default backend; "unavailable" when AWT not present (native image)
     val batikStatus = if batikAvail then "available" else "unavailable"
@@ -2555,7 +2602,7 @@ EXAMPLES:
 
     // rsvg-convert
     val rsvgStatus = if rsvgAvail then "available" else "missing"
-    val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+    val rsvgNote = if rsvgAvail then RasterInstall.rsvgConvertPackage(macOS) else "Not in PATH"
 
     // resvg
     val resvgStatus = if resvgAvail then "available" else "missing"
@@ -2585,7 +2632,8 @@ EXAMPLES:
   private def renderRasterizerText(
     rows: Vector[RasterizerRow],
     anyAvailable: Boolean,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): String =
     val sb = new StringBuilder
     sb.append("SVG Rasterizer Status\n")
@@ -2605,12 +2653,16 @@ EXAMPLES:
         sb.append("This is the native binary: the bundled Batik backend needs AWT and can\n")
         sb.append("never work here - install one of the external tools below.\n")
       sb.append("\nInstall one of:\n")
+      // GH-866: on macOS one brew command gives a working backend, so it leads
+      val rsvg = f"  ${RasterInstall.rsvgConvertCommand(macOS)}%-30s # rsvg-convert, fast\n"
+      if macOS then sb.append(rsvg)
       sb.append("  pip install cairosvg           # Python, most portable\n")
-      sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+      if !macOS then sb.append(rsvg)
       sb.append(
         "  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases\n"
       )
-      sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
+      val imageMagick = f"${RasterInstall.imageMagick(macOS)}%-30s"
+      sb.append(s"  $imageMagick # then pass --rasterizer imagemagick\n")
 
     sb.toString
 
@@ -2797,8 +2849,8 @@ EXAMPLES:
         Left("lint requires a file: xl lint <file> (or xl -f <file> lint)")
 
   /**
-   * Run the lint command with its exit codes: 0 = no repair findings (hygiene findings are listed,
-   * and a `LINT_HYGIENE` warning says how many), 1 = repair findings — or, under `--strict`, any
+   * Run the lint command with its exit codes: 0 = no repair findings (info/hygiene are listed;
+   * `LINT_HYGIENE` counts hygiene findings), 1 = repair findings — or, under `--strict`, any
    * finding (a result, not a failure), 3 = error reported on stderr — an unreadable input (missing
    * file, not a zip, missing/malformed core part) as `IO_READ`, the same code every other verb
    * gives that condition. Opens the zip directly — NOT ExcelIO.read — because a full parse would
@@ -2833,6 +2885,7 @@ EXAMPLES:
           case _ => Payload.text(output)
         val gating = LintCommands.gating(findings, strict)
         val hygiene = findings.count(_.severity == LintSeverity.Hygiene)
+        val info = findings.count(_.severity == LintSeverity.Info)
         val outcome =
           if gating.isEmpty then
             val warnings =
@@ -2848,7 +2901,9 @@ EXAMPLES:
             Outcome.ok("lint", payload, warnings)
           else
             val tiers =
-              if hygiene == 0 then ""
+              if info > 0 then
+                s" (${findings.size - hygiene - info} repair, $hygiene hygiene, $info info)"
+              else if hygiene == 0 then ""
               else s" (${findings.size - hygiene} repair, $hygiene hygiene)"
             Outcome.signal(
               "lint",
@@ -2936,10 +2991,13 @@ EXAMPLES:
           case (true, OutputMode.Text) =>
             readWorkbook(excel, filePath, readerConfig)
               .flatMap(WorkbookCommands.sheets)
+              .flatMap(WorkbookCommands.withPreservedSheets(filePath, _))
               .map(Payload.text)
           case (true, OutputMode.Json) =>
             readWorkbook(excel, filePath, readerConfig)
-              .map(wb => Payload.Json(WorkbookCommands.sheetsData(wb)))
+              .map(WorkbookCommands.sheetsData)
+              .flatMap(WorkbookCommands.withPreservedSheetsData(filePath, _))
+              .map(Payload.Json(_))
           case (false, OutputMode.Text) =>
             classifyRead(filePath)(WorkbookCommands.sheetsQuick(filePath)).map(Payload.text)
           case (false, OutputMode.Json) =>
@@ -3022,11 +3080,11 @@ EXAMPLES:
 
       // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
       // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
-      case CliCommand.Audit(failOnFindings) =>
+      case CliCommand.Audit(failOnFindings, skipDataTables) =>
         for
           wb <- readWorkbook(excel, filePath, readerConfig)
           sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode, skipDataTables)
         yield payload
 
       case CliCommand.Deps(refStr, direction, depth, expand) =>
@@ -3309,7 +3367,14 @@ EXAMPLES:
           case None =>
             IO.raiseError(outputRequired("--output is required for putf command"))
           case Some(outputPath) =>
-            StreamingWriteCommands.putFormula(filePath, outputPath, sheetNameOpt, refStr, formulas)
+            StreamingWriteCommands.putFormula(
+              filePath,
+              outputPath,
+              sheetNameOpt,
+              refStr,
+              formulas,
+              warn
+            )
 
     // `--dry-run` never reaches here: `execute` answers it before any dispatch
     case CliCommand.Batch(source, _, _) =>
@@ -3768,7 +3833,7 @@ EXAMPLES:
     // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
     case CliCommand.Describe(_) =>
       IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
-    case CliCommand.Audit(_) =>
+    case CliCommand.Audit(_, _) =>
       IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
     case CliCommand.Deps(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
@@ -3952,8 +4017,13 @@ EXAMPLES:
         emit(Outcome.failed(verb, CliError.fromThrowable(failure)), mode, io)
       )
 
-  /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
+  /**
+   * Replace `target` atomically when supported, with the JDK-prescribed total fallback. The
+   * owner-only staging file first takes the mode `target` should have (GH-868): the umask's for a
+   * new output, the replaced file's own otherwise.
+   */
   private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =
+    val mode = IO.blocking(com.tjclp.xl.ooxml.OutputFileMode.prepare(source, target))
     val atomic =
       IO.blocking(
         Files.move(
@@ -3965,7 +4035,7 @@ EXAMPLES:
       ).void
     val fallback =
       IO.blocking(Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)).void
-    atomicMoveOrFallback(atomic, fallback)
+    mode *> atomicMoveOrFallback(atomic, fallback)
 
   /** Isolated for deterministic coverage of providers that reject `ATOMIC_MOVE`. */
   private[cli] def atomicMoveOrFallback(atomic: IO[Unit], fallback: IO[Unit]): IO[Unit] =

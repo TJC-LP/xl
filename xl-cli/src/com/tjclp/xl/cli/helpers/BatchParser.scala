@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.{CellValue, Comment}
 import com.tjclp.xl.cli.CliIO
 import com.tjclp.xl.cli.batch.{FormatHint, OpRegistry, OpSpec, ScopedOp}
-import com.tjclp.xl.cli.commands.SheetCommands
+import com.tjclp.xl.cli.commands.{SheetCommands, WriteCommands}
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
@@ -451,6 +451,9 @@ object BatchParser:
             // `--dry-run` refuses the same text the write would
             def parseable(formula: String, slot: Option[String]): String =
               val fullFormula = s"=${CellValue.canonicalFormulaText(formula)}"
+              ValueParser.storedFormulaLengthError(formula).foreach { error =>
+                throw unparseableFormula(idx, slot, error, fullFormula)
+              }
               FormulaParser.parse(fullFormula) match
                 case Right(_) => formula
                 case Left(e) => throw unparseableFormula(idx, slot, e, fullFormula)
@@ -748,15 +751,15 @@ object BatchParser:
     error: ParseError,
     fullFormula: String
   ): CliException =
-    val heading = s"Object ${idx + 1} (putf)${slot.fold("")(" " + _)}: the formula does not parse"
-    val diagnostic = FormulaEcho.diagnostic(error, fullFormula)
+    val prefix = s"Object ${idx + 1} (putf)${slot.fold("")(" " + _)}: "
+    val diagnostic = WriteCommands.unparseableFormula(error, fullFormula, prefix)
     val candidates = error match
       case ParseError.UnknownFunction(_, _, suggestions) => suggestions.toVector
       case _ => Vector.empty
     CliException(
       CliError(
         ErrorCode.BATCH_OP_INVALID,
-        s"$heading\n$diagnostic",
+        diagnostic,
         candidates = candidates,
         location = at(idx)
       )
@@ -2322,7 +2325,9 @@ object BatchParser:
    * A `clear` of contents, styles and/or comments, as the clear verb does it: GH-714 — a contents
    * clear takes a cleared anchor's whole spill and leaves the cells of a live spill whose anchor
    * stays as they were, returned for the `SPILL_CELLS_SKIPPED` warning
-   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`).
+   * ([[DynamicArrayAuthoring.clearContents]], against `spillsOn`). GH-886 — a contents clear keeps
+   * formatting and merges; `all` drops the cells and unmerges what the range touches. GH-894 —
+   * `styles` unmerges what the range touches too, as Excel's Clear Formats does.
    */
   private def applyClear(
     wb: Workbook,
@@ -2340,22 +2345,30 @@ object BatchParser:
       contents = Option
         .when(clearContents)(
           sheetNamed(wb, sheetName)
-            .map(s => DynamicArrayAuthoring.clearContents(s, spillsOn(sheetName), Vector(range)))
+            .map(s =>
+              DynamicArrayAuthoring
+                .clearContents(s, spillsOn(sheetName), Vector(range), keepFormatting = !all)
+            )
         )
         .flatten
       result <- updateSheet(wb, sheetName) { sheet =>
         val clearStyles = all || stylesFlag
         val clearComments = all || commentsFlag
 
+        // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it; a
+        // styles clear (`styles` or `all`) unmerges every merge the range touches, as Excel's
+        // Clear Formats does, and resets the styles of each whole merge it unmerges.
         val s1 = contents.fold(sheet)(_.sheet)
-        val s2 = if clearStyles then s1.clearStylesInRange(range) else s1
+        val overlapping = s1.mergedRanges.filter(_.intersects(range)).toVector
+        val s2 =
+          if clearStyles then
+            // A merge inside the range is already covered; only those crossing its edge need a pass
+            val crossing =
+              overlapping.filterNot(m => range.contains(m.start) && range.contains(m.end))
+            (range +: crossing).foldLeft(s1)((s, r) => s.clearStylesInRange(r))
+          else s1
         val s3 = if clearComments then s2.clearCommentsInRange(range) else s2
-
-        // Unmerge overlapping regions when clearing contents
-        if clearContents then
-          val overlapping = s3.mergedRanges.filter(_.intersects(range))
-          overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr))
-        else s3
+        if clearStyles then overlapping.foldLeft(s3)((s, mr) => s.unmerge(mr)) else s3
       }
     yield (result, contents.fold(Vector.empty)(_.kept).map(sheetName -> _))
 

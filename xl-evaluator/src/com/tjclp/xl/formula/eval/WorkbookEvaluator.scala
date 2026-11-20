@@ -5,7 +5,7 @@ import java.util.concurrent.{ExecutionException, Executors, Future, ThreadFactor
 
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.functions.{FunctionSpec, FunctionSpecs}
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.eval.SheetEvaluator.CellOutcome
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -13,7 +13,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -162,13 +162,13 @@ object WorkbookEvaluator:
      *
      * Dynamic references (GH-274): the static graph sees INDIRECT's *arguments*, not its resolved
      * *targets*. INDIRECT-bearing cells and their static dependents evaluate after all other
-     * formulas (stable evaluate-last partition, `DependencyGraph.deferDynamic`) with stale caches
+     * formulas (a stable evaluate-last partition of the canonical order) with stale caches
      * stripped, resolving not-yet-evaluated targets on demand under the depth-100 recursion guard —
      * so INDIRECT chains compute fresh values every recalculation. Dynamic cycles (INDIRECT
      * resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell
      * recursion-guard errors while the rest of the workbook still evaluates. Because `recalculate`
      * is always full-workbook, Excel's "volatile" marking is moot here; the targeted
-     * `recalculateDependents` treats dynamic cells as always dirty instead.
+     * `recalculateAfterEdit` treats dynamic cells as always dirty instead.
      */
     def recalculate(clock: Clock = Clock.system): RecalcResult =
       recalculateImpl(wb, clock, None, None)
@@ -276,9 +276,10 @@ object WorkbookEvaluator:
      * The public form of the after-edit seam (ADR-017 §2.8): recalculate the formulas an edit of
      * `modified` on `sheet` can have affected — the edited cells themselves when they are formulas,
      * their transitive dependents, every dynamic (INDIRECT/OFFSET) reader and every reader the
-     * graph cannot resolve whose formula text can name a dirty cell (`DependencyGraph.editCone`,
-     * GH-606) — leaving every other cache byte-identical and never touching the clock for an
-     * unaffected volatile cell (GH-504/GH-508). Wraps
+     * graph cannot resolve whose formula text can name a dirty cell
+     * (`DependentRecalculation.editCone`, GH-606) — leaving every other cache byte-identical and
+     * never touching the clock for an unaffected volatile cell (GH-504/GH-508). The cone evaluates
+     * in the canonical order, drawing `options.rng` as a full recalculation would (#891). Wraps
      * `DependentRecalculation.recalculateAfterEdit`; it never re-derives the cone.
      *
      * When the resolved [[IterativeMode]] iterates (a `<calcPr iterate>` book under the default
@@ -293,7 +294,14 @@ object WorkbookEvaluator:
       options: RecalcOptions
     ): RecalcResult =
       if resolveIterative(wb, options).isDefined then recalculate(options)
-      else DependentRecalculation.recalculateAfterEdit(wb, sheet, modified, options.clock)
+      else
+        DependentRecalculation.recalculateAfterEdit(
+          wb,
+          sheet,
+          modified,
+          options.clock,
+          rng = options.rng
+        )
 
     /**
      * Compute ONLY the formula cells that have no cached value (`Formula(_, None, _)`), in
@@ -323,19 +331,17 @@ object WorkbookEvaluator:
   private[formula] def recalculateCounted(
     wb: Workbook,
     options: RecalcOptions,
-    counters: RecalcCounters,
-    engine: RecalcEngine = RecalcEngine.Compact
+    counters: RecalcCounters
   ): RecalcResult =
-    recalculateOptionsImpl(wb, options, new Evaluator.AggregateMemo(counters = counters), engine)
+    recalculateOptionsImpl(wb, options, new Evaluator.AggregateMemo(counters = counters))
 
   /** `wb.recalculateUncached(options)` (what `Excel.writeChecked` runs) with `counters`. */
   private[formula] def recalculateUncachedCounted(
     wb: Workbook,
     options: RecalcOptions,
-    counters: RecalcCounters,
-    engine: RecalcEngine = RecalcEngine.Compact
+    counters: RecalcCounters
   ): RecalcResult =
-    recalculateUncachedImpl(wb, options, new Evaluator.AggregateMemo(counters = counters), engine)
+    recalculateUncachedImpl(wb, options, new Evaluator.AggregateMemo(counters = counters))
 
   /**
    * `wb.recalculate(options)` with the generation's aggregate memo supplied by the caller: the #767
@@ -367,10 +373,12 @@ object WorkbookEvaluator:
   private def recalculateOptionsImpl(
     wb: Workbook,
     options: RecalcOptions,
-    memo: Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    memo: Evaluator.AggregateMemo
   ): RecalcResult =
     val iterative = resolveIterative(wb, options)
+    // #891: with table seeding the pass and the seeder share one graph (and its one parse of each
+    // formula); built here, since only this caller knows a second consumer follows
+    val shared = Option.when(options.seedTables)(buildGraph(wb, memo.counters))
     val base = iterative match
       case Some(calc) =>
         recalculateImpl(
@@ -379,10 +387,10 @@ object WorkbookEvaluator:
           Some(options.rng),
           Some(calc),
           generationMemo = memo,
-          engine = engine
+          built = shared
         )
       case None if options.parallelism > 1 =>
-        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo, engine)
+        recalculateImpl(wb, options.clock, None, None, options.parallelism, memo, shared)
       case None =>
         recalculateImpl(
           wb,
@@ -390,13 +398,91 @@ object WorkbookEvaluator:
           Some(options.rng),
           None,
           generationMemo = memo,
-          engine = engine
+          built = shared
         )
     if !options.seedTables then base
     else
-      DataTableSeeder
-        .seedDataTablesReport(base.workbook)(options.clock, iterative)
-        .fold(_ => base, report => base.copy(workbook = report.workbook))
+      val report =
+        DataTableSeeder.seedReport(base.workbook, options.clock, iterative, shared, memo.counters)
+      base.copy(workbook = report.workbook)
+
+  /** The recalculation graph of `wb`, timed and counted as a pass's graph build. */
+  private def buildGraph(wb: Workbook, counters: RecalcCounters): RecalcGraph =
+    counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(wb, counters))
+
+  /**
+   * #891: `recalc --tables` in one call: a full recalculation of `wb` (iterative when `iterative`
+   * is given, else over `parallelism` waves when above 1; system randomness, as the CLI's
+   * `recalculate(clock)` / `recalculateParallel` / `recalculate(clock, iterative)`), then
+   * `seedDataTablesReport` on its result at the same clock, with the book's own `<calcPr>` deciding
+   * the seeder's iteration. The two steps share one recalculation graph, so each formula is parsed
+   * once for both; run back to back through the public methods they each built one. The graph of
+   * `wb` serves the recalculated book because the two differ in cached values only: the graph reads
+   * formula texts, defined names, sheets and constant cells, none of which a recalculation writes.
+   */
+  private[xl] def recalculateThenSeedTables(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    parallelism: Int
+  ): (RecalcResult, DataTableSeedReport) =
+    recalculateThenSeedTablesCounted(wb, clock, iterative, parallelism, RecalcCounters.disabled)
+
+  /** [[recalculateThenSeedTables]] with `counters`, for the parse-count laws. */
+  private[formula] def recalculateThenSeedTablesCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    parallelism: Int,
+    counters: RecalcCounters
+  ): (RecalcResult, DataTableSeedReport) =
+    val memo = new Evaluator.AggregateMemo(counters = counters)
+    val graph = buildGraph(wb, counters)
+    val result = recalculateImpl(
+      wb,
+      clock,
+      None,
+      iterative,
+      if iterative.isDefined then 1 else parallelism,
+      memo,
+      Some(graph)
+    )
+    val report = DataTableSeeder.seedReport(
+      result.workbook,
+      clock,
+      DataTableSeeder.declaredIterative(result.workbook),
+      Some(graph),
+      counters
+    )
+    (result, report)
+
+  /**
+   * #891: a full recalculation of `wb` and the dirty cone of an edit to `seeds` on it
+   * ([[DependentRecalculation.editCone]]) from one recalculation graph: what a `batch`, a name edit
+   * and a write to an iterating book do, which built the graph once for each. Both questions are
+   * asked of `wb` itself, the book the graph was built on.
+   */
+  private[xl] def recalculateWithEditCone(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    seeds: Set[QualifiedRef]
+  ): (RecalcResult, Set[QualifiedRef]) =
+    recalculateWithEditConeCounted(wb, clock, iterative, seeds, RecalcCounters.disabled)
+
+  /** [[recalculateWithEditCone]] with `counters`, for the parse-count laws. */
+  private[formula] def recalculateWithEditConeCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    seeds: Set[QualifiedRef],
+    counters: RecalcCounters
+  ): (RecalcResult, Set[QualifiedRef]) =
+    val memo = new Evaluator.AggregateMemo(counters = counters)
+    val graph = buildGraph(wb, counters)
+    val result =
+      recalculateImpl(wb, clock, None, iterative, generationMemo = memo, built = Some(graph))
+    (result, DependentRecalculation.editConeOn(wb, graph, seeds))
 
   /** The iterative settings `options` resolve to for `wb` — None when cycles must isolate. */
   private def resolveIterative(wb: Workbook, options: RecalcOptions): Option[IterativeCalc] =
@@ -409,25 +495,27 @@ object WorkbookEvaluator:
   private def recalculateUncachedImpl(
     wb: Workbook,
     options: RecalcOptions,
-    memo: Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    memo: Evaluator.AggregateMemo
   ): RecalcResult =
     val counters = memo.counters
     val uncached: Set[QualifiedRef] = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if isUncachedEvaluable(cell.value) => QualifiedRef(sheet.name, ref)
+        case cell @ Cell(ref, _, _, _) if isUncachedEvaluable(cell.value) =>
+          QualifiedRef(sheet.name, ref)
       }
     }.toSet
-    if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
+    if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty)
     else
       val calculationClock = pinnedCalculationClock(options.clock)
       val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
-        RecalcGraph.build(wb, engine, counters)
+        RecalcGraph.build(wb, counters)
       )
+      // #790: evaluation reuses the build's parse of each formula
+      memo.passCache.foreach(_.useParses(graph.parses))
 
       def formulaText(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => expr
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(expr, _, _) => expr
           case _ => q.ref.toA1
 
       val (cyclicCore, blocked) = counters.time(RecalcCounters.Phase.Tarjan) {
@@ -435,14 +523,17 @@ object WorkbookEvaluator:
         (core, graph.dependents(core, Set.empty))
       }
       val skipped = cyclicCore ++ blocked
-      val skippedErrors = (skipped & uncached).toVector
-        .sortBy(QualifiedRef.gridKey)
-        .map { q =>
-          val reason =
-            if cyclicCore.contains(q) then "Circular reference"
-            else "Blocked by an upstream circular reference"
-          CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
-        }
+      // #891: listed as the full pass lists them — circular cells, then the cells they block, each
+      // in grid order
+      def skippedError(q: QualifiedRef, reason: String): CellEvalError =
+        CellEvalError(q.sheet, q.ref, XLError.FormulaError(formulaText(q), reason))
+      val skippedErrors =
+        (cyclicCore & uncached).toVector
+          .sortBy(QualifiedRef.gridKey)
+          .map(skippedError(_, "Circular reference")) ++
+          ((blocked -- cyclicCore) & uncached).toVector
+            .sortBy(QualifiedRef.gridKey)
+            .map(skippedError(_, "Blocked by an upstream circular reference"))
       counters.time(RecalcCounters.Phase.Kahn)(graph.order(skipped)) match
         case Left(unordered) =>
           // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
@@ -455,13 +546,13 @@ object WorkbookEvaluator:
                 XLError.FormulaError(formulaText(q), unresolvable(unordered))
               )
             }
-          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual, Map.empty)
+          RecalcResult.cacheResults(wb, Map.empty, skippedErrors ++ residual)
         case Right(sorted) =>
           val order = sorted.order
           // GH-274: dynamic readers and their static dependents evaluate last, as in the full pass,
           // but no cache is stripped — a cached cell stays byte-identical by contract.
           val bucket = counters.time(RecalcCounters.Phase.Dynamic) {
-            val dynamic = DependencyGraph.dynamicCells(wb) -- skipped
+            val dynamic = DependencyGraph.dynamicCells(wb, parsesOf(memo)) -- skipped
             if dynamic.isEmpty then Set.empty[QualifiedRef]
             else dynamic ++ graph.dependents(dynamic, skipped)
           }
@@ -474,7 +565,12 @@ object WorkbookEvaluator:
           val slots = ordered.iterator.zipWithIndex.toMap
           memo.passCache.foreach(_.begin(Readiness.build(slots, Set.empty)))
           def evaluatorFor(q: QualifiedRef): Evaluator =
-            Evaluator.recalculationInstance(options.rng, memo, callerPosition(slots, bucket, q))
+            Evaluator.recalculationInstance(
+              options.rng,
+              memo,
+              callerPosition(slots, bucket, q),
+              Some((q.sheet, q.ref))
+            )
           val initial = PassState(wb.sheets, Map.empty, skippedErrors)
           val PassState(_, values, errors, reasons) = counters.time(RecalcCounters.Phase.Eval) {
             ordered.foldLeft(initial) { (state, q) =>
@@ -500,12 +596,15 @@ object WorkbookEvaluator:
                       state.copy(errors = state.errors :+ CellEvalError(q.sheet, q.ref, error))
             }
           }
-          // No dependents edges on purpose: cacheResults would otherwise withdraw the caches of
-          // cached cells downstream of a failure, and this pass promises cached cells stay
-          // byte-identical unconditionally (GH-468).
+          // cacheResults withdraws nothing downstream of a failure: this pass promises cached cells
+          // stay byte-identical unconditionally (GH-468).
           counters.time(RecalcCounters.Phase.Finalize)(
-            RecalcResult.cacheResults(wb, values, errors, Map.empty, reasons = reasons)
+            RecalcResult.cacheResults(wb, values, errors, reasons = reasons)
           )
+
+  /** #790: the formula parses `memo`'s pass reuses (none when it has no pass cache). */
+  private def parsesOf(memo: Evaluator.AggregateMemo): FormulaParses =
+    memo.passCache.fold(FormulaParses.none)(_.parses)
 
   /** The message of a formula Kahn could not order (unreachable once cycles are removed). */
   private def unresolvable(unordered: RecalcGraph.Unordered): String =
@@ -513,7 +612,7 @@ object WorkbookEvaluator:
     s"Unresolvable order: $stuck"
 
   /** A formula cell with no cache that evaluation can compute (data-table records cannot). */
-  private def isUncachedEvaluable(value: CellValue): Boolean = value match
+  private[eval] def isUncachedEvaluable(value: CellValue): Boolean = value match
     case CellValue.Formula(_, None, _: FormulaKind.DataTable) => false
     case CellValue.Formula(_, None, _) => true
     case _ => false
@@ -539,7 +638,7 @@ object WorkbookEvaluator:
     iterativeOpt: Option[IterativeCalc],
     parallelism: Int = 1,
     generationMemo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo,
-    engine: RecalcEngine = RecalcEngine.Compact
+    built: Option[RecalcGraph] = None
   ): RecalcResult =
     // One recalculate call is one volatile calculation generation. The lazy snapshot preserves
     // the old no-volatile fast path (the supplied clock is never touched), while ensuring an
@@ -566,14 +665,16 @@ object WorkbookEvaluator:
     // Whole-book ordering needs only formula-to-formula reachability. Constant cells are read
     // during evaluation but can never participate in a cycle or constrain formula order. #767:
     // the compact graph keeps one node per distinct range and per formula-column segment, so its
-    // size is O((formulas + ranges) log rows), never O(formulas × range size).
-    val graph = counters.time(RecalcCounters.Phase.GraphBuild)(
-      RecalcGraph.build(wb, engine, counters)
-    )
+    // size is O((formulas + ranges) log rows), never O(formulas × range size). #891: a caller
+    // with a second consumer for the graph builds it (from this `wb`, with these counters) and
+    // hands it in as `built`.
+    val graph = built.getOrElse(buildGraph(wb, counters))
+    // #790: evaluation reuses the build's parse of each formula
+    generationMemo.passCache.foreach(_.useParses(graph.parses))
 
     def formulaText(q: QualifiedRef): String =
-      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expr, _, _)) => expr
+      wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(expr, _, _) => expr
         case _ => q.ref.toA1
 
     // GH-346: cycle isolation on the WORKBOOK-level graph — same-sheet and cross-sheet cycles
@@ -628,14 +729,16 @@ object WorkbookEvaluator:
       case Right(ordered) =>
         val evalOrder = ordered.order
         // GH-274/GH-301: dynamic-reference cells (INDIRECT/OFFSET) and their transitive static
-        // dependents evaluate last (stable partition — preserves topological validity per the
-        // deferDynamic lemma), with stale caches stripped so a dynamic read of a
-        // not-yet-evaluated bucket cell recursively evaluates fresh (depth-guarded) instead of
+        // dependents evaluate last (a stable partition of a topological order stays topological), with stale caches stripped so a dynamic read of a
+        // not-yet-evaluated bucket cell recursively evaluates fresh (re-entry-guarded, #829: a
+        // read that closes on a cell being evaluated is its circular reference) instead of
         // trusting a previous generation's cache. The closure is workbook-level (GH-346): a
         // cross-sheet static dependent of a dynamic cell defers with it. Dynamic-free workbooks
         // take the identity path.
         val dynamicAll: Set[QualifiedRef] =
-          counters.time(RecalcCounters.Phase.Dynamic)(DependencyGraph.dynamicCells(wb))
+          counters.time(RecalcCounters.Phase.Dynamic)(
+            DependencyGraph.dynamicCells(wb, parsesOf(generationMemo))
+          )
         val dynamic: Set[QualifiedRef] = dynamicAll -- removed
         val bucket = counters.time(RecalcCounters.Phase.Dynamic) {
           if dynamic.isEmpty then Set.empty[QualifiedRef]
@@ -730,7 +833,8 @@ object WorkbookEvaluator:
           Evaluator.recalculationInstance(
             generationRng,
             generationMemo,
-            callerPosition(slots, deferred, q)
+            callerPosition(slots, deferred, q),
+            Some((q.sheet, q.ref))
           )
 
         // Evaluate in the single global order, threading the partially evaluated workbook:
@@ -979,8 +1083,7 @@ object WorkbookEvaluator:
           // at round end, so a range touching members is fixed for the round and its aggregate may
           // be shared by the members that read it; never across rounds, where the same range
           // changes. Under Gauss–Seidel members change mid-round, so the engine asks for a fresh
-          // evaluator per member evaluation instead. #767: these memos carry no per-pass cache
-          // (no slices inside a fixpoint), so a round allocates none.
+          // evaluator per member evaluation instead. The engine picks each region's memo (#891).
           val outcome =
             jacobiFixpoint(
               wb,
@@ -989,12 +1092,11 @@ object WorkbookEvaluator:
               iterative,
               pinnedClock,
               rngOpt.getOrElse(Rng.system),
-              rng =>
-                Evaluator.recalculationInstance(
-                  rng,
-                  new Evaluator.AggregateMemo(columnCache = false)
-                ),
-              seed
+              Evaluator.recalculationInstance(_, _),
+              seed,
+              // #790: a member reuses the graph build's parse of its formula
+              (q, text) =>
+                SheetEvaluator.parseFormulaCell(text, q.sheet, Some(q.ref), Some(generationMemo))
             )
           // a member's last-round value carries no reason: the round's diagnostic is not kept
           val folded = members.foldLeft(state) { case (st, (q, idx, _)) =>
@@ -1067,7 +1169,8 @@ object WorkbookEvaluator:
             failures,
             graph.dependents,
             cycleReports,
-            reasons
+            reasons,
+            parsesOf(generationMemo)
           )
         )
 
@@ -1195,8 +1298,8 @@ object WorkbookEvaluator:
     members: List[(QualifiedRef, Int, String)]
   ): Map[QualifiedRef, CellValue] =
     members.flatMap { (q, idx, _) =>
-      baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _)) => Some(q -> cached)
+      baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _) => Some(q -> cached)
         case _ => None
     }.toMap
 
@@ -1243,11 +1346,13 @@ object WorkbookEvaluator:
    *   - A member whose overlay is a PINNED cache (GH-353: a cached closed-workbook formula) never
    *     evaluates — its `Some(previous)` overlay IS its value every round, i.e. it is the constant
    *     `seed(q)`; that is decided once, not re-derived per round.
-   *   - `roundEvaluator` is called once per Jacobi round: a FRESH aggregate memo is sound within a
-   *     round (every member is overlaid cached, results apply at round end, so a range over members
-   *     is fixed for the round) and unsound across rounds (the same range changes). A Gauss–Seidel
-   *     sweep changes the overlay mid-round, so it calls the factory once per member evaluation.
-   *     Every factory call receives the round's tracked `Rng`, preserving one underlying sequence.
+   *   - `roundEvaluator` is called once per Jacobi round with a FRESH aggregate memo: sound within
+   *     a round (every member is overlaid cached, results apply at round end, so a range over
+   *     members is fixed for the round) and unsound across rounds (the same range changes). A
+   *     Gauss–Seidel sweep changes the overlay mid-round, so it calls the factory once per member
+   *     evaluation. #891: every region's memo shares one [[Evaluator.AggregateMemo.fixpointCache]],
+   *     so criteria ranges that hold no member are copied and indexed once per fixpoint. Every
+   *     factory call receives the round's tracked `Rng`, preserving one underlying sequence.
    *   - A round that reproduces the previous one EXACTLY without converging can stop only if it
    *     consumed no randomness. RAND can be rounded and RANDBETWEEN can repeat, so equal cell
    *     values do not prove a random round will replay. Tracking draws at the existing `Rng`
@@ -1270,17 +1375,20 @@ object WorkbookEvaluator:
     iterative: IterativeCalc,
     pinnedClock: Clock,
     rng: Rng,
-    roundEvaluator: Rng => Evaluator,
+    roundEvaluator: (Rng, Evaluator.AggregateMemo) => Evaluator,
     seedValues: Map[QualifiedRef, CellValue],
-    parse: String => XLResult[TExpr[?]] = SheetEvaluator.parseFormula
+    parse: (QualifiedRef, String) => XLResult[TExpr[?]] = (_, text) =>
+      SheetEvaluator.parseFormula(text),
+    columnCache: Boolean = true
   ): FixpointOutcome =
     val zero: CellValue = CellValue.Number(BigDecimal(0))
     val seed: Map[QualifiedRef, CellValue] =
       members.map((q, _, _) => q -> seedValues.getOrElse(q, zero)).toMap
     val maxRounds = math.max(1, iterative.maxIter)
-    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them).
+    // GH-537: one parse per DISTINCT text per fixpoint (FixpointEngineSpec counts them), made at
+    // the first member holding the text (#790: `parse` may reuse the build's parse of that cell).
     val parsedText: Map[String, XLResult[TExpr[?]]] =
-      members.iterator.map(_._3).distinct.map(text => text -> parse(text)).toMap
+      members.distinctBy(_._3).map((q, _, text) => text -> parse(q, text)).toMap
     val parsed: Map[QualifiedRef, XLResult[TExpr[?]]] =
       members.map((q, _, text) => q -> parsedText(text)).toMap
     // Each member's formula kind, read from the book: an array formula member (a CSE record or a
@@ -1288,8 +1396,8 @@ object WorkbookEvaluator:
     val kinds: Map[QualifiedRef, FormulaKind] =
       members.map { (q, idx, _) =>
         val kind: FormulaKind =
-          baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-            case Some(CellValue.Formula(_, _, k)) => k
+          baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+            case CellValue.Formula(_, _, k) => k
             case _ => FormulaKind.Normal()
         q -> kind
       }.toMap
@@ -1302,7 +1410,7 @@ object WorkbookEvaluator:
     // Pinned-ness depends on the text and on a cache being present — both fixed for the fixpoint.
     val pinnedConstant: Map[QualifiedRef, CellValue] =
       members.flatMap { (q, _, text) =>
-        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q)))).map(q -> _)
+        SheetEvaluator.pinnedCache(CellValue.Formula(text, Some(seed(q))), parsedText).map(q -> _)
       }.toMap
 
     // Convergence: numeric values compare by |Δ| < maxChange (strict, per Excel); non-numeric
@@ -1346,6 +1454,17 @@ object WorkbookEvaluator:
             )
           }
 
+    // #891: the slices and equality indexes every region of this fixpoint shares (parity tests
+    // switch them off with `columnCache`)
+    val cells = Option.when(columnCache)(Evaluator.AggregateMemo.fixpointCache(members.map(_._1)))
+    def regionMemo(): Evaluator.AggregateMemo =
+      cells.fold(new Evaluator.AggregateMemo(columnCache = false))(
+        Evaluator.AggregateMemo.inFixpoint
+      )
+
+    // the members of each sheet, so a round overlays a sheet's members in one store rebuild (#891)
+    val membersBySheet = members.groupBy(_._2).toVector.sortBy(_._1)
+
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
       // Evaluation-local observation of the existing effect capability: all evaluators in this
@@ -1356,14 +1475,16 @@ object WorkbookEvaluator:
         def nextDouble(): Double =
           drewRandomness = true
           rng.nextDouble()
-      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, overlay(q, text, prev.get(q))))
+      val overlaid = membersBySheet.foldLeft(baseSheets) { case (sheets, (idx, onSheet)) =>
+        val refs = IArray.from(onSheet.map(_._1.ref))
+        val values = IArray.from(onSheet.map((q, _, text) => overlay(q, text, prev.get(q))))
+        sheets.updated(idx, sheets(idx).withValues(refs, values))
       }
       val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
         case IterationScheme.Jacobi =>
           // Every member reads the round's FIXED overlay: one evaluator (one memo) per round.
           val tempWb = wb.copy(sheets = overlaid)
-          val evaluator = roundEvaluator(roundRng)
+          val evaluator = roundEvaluator(roundRng, regionMemo())
           members.map { (q, idx, text) =>
             q -> evaluateMember(q, idx, text, overlaid, tempWb, evaluator)
           }.toMap
@@ -1382,7 +1503,7 @@ object WorkbookEvaluator:
                     text,
                     sheets,
                     wb.copy(sheets = sheets),
-                    roundEvaluator(roundRng)
+                    roundEvaluator(roundRng, regionMemo())
                   )
                 val published = result match
                   case Right(value) =>

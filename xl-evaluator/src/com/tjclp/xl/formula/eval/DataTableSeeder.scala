@@ -6,9 +6,8 @@ import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.{BinarySpine, BindingCoercion, TExpr}
 import com.tjclp.xl.formula.functions.ArgValue
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -227,11 +226,37 @@ object DataTableSeeder:
       clock: Clock,
       iterative: Option[IterativeCalc]
     ): XLResult[DataTableSeedReport] =
-      val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells)
-      Right(DataTableSeedReport(seeded, warnings))
+      Right(seedReport(wb, clock, iterative, None, RecalcCounters.disabled))
+
+  /**
+   * #891: [[seedDataTablesReport]] with an enabled [[RecalcCounters]], for the parse-count laws:
+   * the same run, the same report.
+   */
+  private[formula] def seedDataTablesReportCounted(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    counters: RecalcCounters
+  ): DataTableSeedReport =
+    seedReport(wb, clock, iterative, None, counters)
+
+  /**
+   * #891: the whole-book seeding report over a recalculation graph the caller already holds
+   * (`built`): the graph of `wb`, or of a book that differs from `wb` only in cached values, as a
+   * recalculation's result differs from its input. See [[seedWorkbook]] for when it is set aside.
+   */
+  private[eval] def seedReport(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    built: Option[RecalcGraph],
+    counters: RecalcCounters
+  ): DataTableSeedReport =
+    val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells, built, counters)
+    DataTableSeedReport(seeded, warnings)
 
   /** The book's own iterative-calculation declaration, if any. */
-  private def declaredIterative(wb: Workbook): Option[IterativeCalc] =
+  private[eval] def declaredIterative(wb: Workbook): Option[IterativeCalc] =
     wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
 
   /** Seeding computes every interior cell (the public entry points). */
@@ -261,16 +286,77 @@ object DataTableSeeder:
   private[eval] def seedSample(
     wb: Workbook,
     clock: Clock,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    graph: RecalcGraph,
+    counters: RecalcCounters = RecalcCounters.disabled
   ): Workbook =
-    seedWorkbook(wb, None, clock, declaredIterative(wb), pick)._1
+    seedWorkbook(wb, None, clock, declaredIterative(wb), pick, Some(graph), counters)._1
+
+  /**
+   * #891: the parses a seeding run evaluates with. A what-if pass evaluates the same source formula
+   * and the same cone once per interior cell; each of those formulas is a node of the run's graph,
+   * whose build parsed it. [[at]] answers with that parse while the cell still holds the text the
+   * build read, and otherwise parses, counting the parse: a formula the build could not parse, or a
+   * cell that is no formula node.
+   */
+  private final class SeedParses(built: FormulaParses, counters: RecalcCounters):
+    def at(sheet: SheetName, ref: ARef, text: String): XLResult[TExpr[?]] =
+      built.get(sheet, ref, text) match
+        case Some(expr) => Right(expr)
+        case None =>
+          counters.increment(RecalcCounters.Counter.FormulaParses)
+          counters.time(RecalcCounters.Phase.Parse)(SheetEvaluator.parseFormula(text))
+
+    /**
+     * `sheet.evaluateCell(ref, clock, workbook)` (a plain evaluator, no memo: seeding keeps its
+     * one-shot evaluation profile) reading the cell's parse from [[at]].
+     */
+    def evaluateCell(
+      sheet: Sheet,
+      ref: ARef,
+      clock: Clock,
+      workbook: Workbook
+    ): XLResult[CellValue] =
+      SheetEvaluator
+        .evaluateCellOutcomeParsing(sheet, ref, Evaluator.instance, clock, Some(workbook))(
+          (text, _) => at(sheet.name, ref, text)
+        )
+        .map(_.value)
+
+  /**
+   * How the iterated lane runs a cycle's fixpoint ([[WorkbookEvaluator.jacobiFixpoint]]): the
+   * evaluator of each region and whether the fixpoint shares one criteria cache (#891). Every
+   * production entry point uses [[FixpointLane.Shared]]; another lane exists only so a test can
+   * compare the seeder with and without the shared cache ([[seedReportWith]]).
+   */
+  private[eval] final case class FixpointLane(
+    roundEvaluator: (Rng, Evaluator.AggregateMemo) => Evaluator,
+    columnCache: Boolean
+  )
+
+  private[eval] object FixpointLane:
+    /** Recalculation's evaluator over the fixpoint's shared cache. */
+    val Shared: FixpointLane = FixpointLane(Evaluator.recalculationInstance(_, _), true)
+
+  /**
+   * Test-only: [[seedDataTablesReport]] with the iterated lane's fixpoints run on `lane`. Nothing
+   * outside the test sources calls it.
+   */
+  private[eval] def seedReportWith(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    lane: FixpointLane
+  ): DataTableSeedReport =
+    val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells, None, lane = lane)
+    DataTableSeedReport(seeded, warnings)
 
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
     core: Set[QualifiedRef],
-    dynamic: Set[QualifiedRef]
+    dynamic: Set[QualifiedRef],
+    parses: SeedParses
   )
 
   /**
@@ -278,7 +364,7 @@ object DataTableSeeder:
    *
    * The dependency graph derives at most once per run, lazily — only when a record group exists on
    * a scoped sheet. Reusing it across groups is sound: seeding writes only plain interior values
-   * and record caches, neither of which are graph nodes (`fromWorkbookBounded` excludes DataTable
+   * and record caches, neither of which are graph nodes (the recalculation graph excludes DataTable
    * kinds).
    */
   private def seedWorkbook(
@@ -286,7 +372,10 @@ object DataTableSeeder:
     scope: Option[(SheetName, Option[CellRange])],
     clock: Clock,
     iterative: Option[IterativeCalc],
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    built: Option[RecalcGraph] = None,
+    counters: RecalcCounters = RecalcCounters.disabled,
+    lane: FixpointLane = FixpointLane.Shared
   ): (Workbook, Vector[SeedTableWarning]) =
     val targets: Vector[SheetName] = scope match
       case Some((name, _)) => Vector(name)
@@ -297,12 +386,22 @@ object DataTableSeeder:
     // iterated and the acyclic paths. Lazy: a run that seeds nothing never reads the clock.
     lazy val pinnedClock: Clock = Clock.fixed(clock.today(), clock.now())
     lazy val cycles: CycleContext =
-      val (deps, dependents) = DependencyGraph.fromWorkbookBounded(wb)
+      // #891: the recalculation graph — the cycles `recalc` isolates, #504's precise lookup reads,
+      // case-insensitive sheet qualifiers — and its one parse of each formula
+      // A graph handed in is recalculation's. It serves unless it narrowed a lookup on a selector
+      // this run substitutes; then the seeder builds its own, with those lookups whole.
+      val graph = built
+        .filterNot(_.narrowsOnWhatIfInput)
+        .getOrElse(
+          counters.time(RecalcCounters.Phase.GraphBuild)(
+            RecalcGraph.build(wb, counters, whatIfSafe = true)
+          )
+        )
       CycleContext(
-        deps,
-        dependents,
-        DependencyGraph.qualifiedCyclicNodes(deps),
-        DependencyGraph.dynamicCells(wb)
+        graph,
+        graph.cyclicCore,
+        DependencyGraph.dynamicCells(wb, graph.parses),
+        new SeedParses(graph.parses, counters)
       )
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
       accWb(name).toOption match
@@ -316,7 +415,7 @@ object DataTableSeeder:
               groups.foldLeft((sheet, Vector.empty[SeedTableWarning])) {
                 case ((acc, ws), (_, kind)) =>
                   val (next, w) =
-                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles, pick)
+                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles, pick, lane)
                   (next, ws ++ w)
               }
             // Only a real change may mark the sheet modified — a no-op seed (already-correct
@@ -330,7 +429,7 @@ object DataTableSeeder:
    * row-major-first cell (deterministic under any Map iteration order).
    */
   private def recordGroups(sheet: Sheet): Vector[(CellRange, FormulaKind.DataTable)] =
-    sheet.cells.values.toVector
+    sheet.cells.iterator.toVector
       .flatMap { cell =>
         cell.value match
           case CellValue.Formula(_, _, dt: FormulaKind.DataTable) => Vector((cell, dt))
@@ -348,7 +447,8 @@ object DataTableSeeder:
     clock: Clock,
     iterative: Option[IterativeCalc],
     cycles: => CycleContext,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     val interior = kind.ref
     val startRow = interior.start.row.index0
@@ -373,7 +473,7 @@ object DataTableSeeder:
         // walk just because the book declares no cycle).
         // The substituted inputs are boundaries: their original formulas and ancestors are not read.
         val closure =
-          DependencyGraph.qualifiedTransitivePrecedents(ctx.deps -- inputQ, srcQ) ++ srcQ
+          ctx.graph.precedents(srcQ, inputQ) ++ srcQ
         val relevantCore = ctx.core.intersect(closure)
         val dynamic = ctx.dynamic.intersect(closure) -- inputQ
         if dynamic.nonEmpty then
@@ -432,7 +532,8 @@ object DataTableSeeder:
                   relevantCore,
                   closure,
                   srcQ,
-                  pick
+                  pick,
+                  lane
                 )
 
   /**
@@ -472,25 +573,22 @@ object DataTableSeeder:
     // Source cells evaluate as expressions (never written back) and input cells carry the axis
     // value; both are excluded, as are the cycle members the Jacobi fixpoint owns.
     val precedents = closure -- srcQ -- inputQ -- core
-    val moved = DependencyGraph.qualifiedTransitiveDependents(ctx.dependents, inputQ ++ core)
+    val moved = ctx.graph.cellDependents(inputQ ++ core)
     val axisDependent = precedents.intersect(moved)
     // An input-INDEPENDENT precedent only needs re-deriving when it carries no cache: a cached one
     // reads through its cache (pinned-cache doctrine) and cannot move under the substitution.
     val uncached = (precedents -- axisDependent).filter(q => isUncachedFormula(wb, q))
     val members = axisDependent ++ uncached
-    val deps =
-      members.iterator.map(q => q -> ctx.deps.getOrElse(q, Set.empty).intersect(members)).toMap
-    val back =
-      members.iterator
-        .map(q => q -> ctx.dependents.getOrElse(q, Set.empty).intersect(members))
-        .toMap
-    // Defensive `Nil`: the induced subgraph is acyclic by construction (cycle members are excluded
-    // on the iterated lane, and the acyclic lane only reaches here with an acyclic closure).
-    val ordered = DependencyGraph.qualifiedTopologicalSort(deps, back).getOrElse(Nil)
+    // #891: the members' reads among themselves, ordered by Kahn's algorithm in grid order. The
+    // induced subgraph is acyclic by construction (cycle members are excluded on the iterated lane,
+    // and the acyclic lane only reaches here with an acyclic closure), so the within-component
+    // order makes no cut and is the canonical topological order of the members.
+    val ordered =
+      ctx.graph.withinComponentOrder(members.toVector.sortBy(QualifiedRef.gridKey)).toList
     val indexed = ordered.flatMap(q => sheetIndex.get(q.sheet).map(idx => (q, idx)))
     val downstreamOfCore =
       if core.isEmpty then Set.empty[QualifiedRef]
-      else DependencyGraph.qualifiedTransitiveDependents(ctx.dependents, core)
+      else ctx.graph.dependents(core, Set.empty)
     WhatIfCone(
       base = indexed.filter((q, _) => uncached.contains(q)),
       beforeCycle =
@@ -525,11 +623,12 @@ object DataTableSeeder:
     wb: Workbook,
     sheets: Vector[Sheet],
     cone: List[(QualifiedRef, Int)],
-    clock: Clock
+    clock: Clock,
+    parses: SeedParses
   ): ConeResolution =
     cone.foldLeft(ConeResolution(sheets, Set.empty)) { case (acc, (q, idx)) =>
       val temp = wb.copy(sheets = acc.sheets)
-      SheetEvaluator.evaluateCell(acc.sheets(idx))(q.ref, clock, Some(temp)) match
+      parses.evaluateCell(acc.sheets(idx), q.ref, clock, temp) match
         case Right(value) =>
           acc.copy(sheets = acc.sheets.updated(idx, acc.sheets(idx).put(q.ref, value)))
         case Left(_) => acc.copy(unresolved = acc.unresolved + q)
@@ -583,9 +682,9 @@ object DataTableSeeder:
         val coneBudget = coneBudgetExceeded(sheet.name, interior, cone)
         if coneBudget.nonEmpty then (sheet, coneBudget)
         else
-          val probes = guardProbes(sheet, kind)
+          val probes = guardProbes(sheet, kind, ctx.parses)
           // Input-independent uncached precedents are the same for every combination.
-          val prepared = resolveCone(wb, wb.sheets, cone.base, clock)
+          val prepared = resolveCone(wb, wb.sheets, cone.base, clock, ctx.parses)
           val (seeded, skipped, guarded, guardName, unresolved, failure) =
             pick(interior).foldLeft(
               (sheet, 0, 0, Option.empty[String], prepared.unresolved, Option.empty[String])
@@ -601,7 +700,8 @@ object DataTableSeeder:
                 prepared.sheets,
                 tableIdx,
                 cone,
-                probes
+                probes,
+                ctx.parses
               ) match
                 case None => (acc, skips + 1, fired, named, unres, firstFailure)
                 case Some(outcome) =>
@@ -705,7 +805,8 @@ object DataTableSeeder:
     relevantCore: Set[QualifiedRef],
     closure: Set[QualifiedRef],
     srcQ: Set[QualifiedRef],
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     val sheetIndex: Map[SheetName, Int] = wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
     sheetIndex.get(sheet.name) match
@@ -713,9 +814,7 @@ object DataTableSeeder:
       case Some(tableIdx) =>
         val inputQ = (Set(input1) ++ input2).map(r => QualifiedRef(sheet.name, r))
         val stripSet =
-          DependencyGraph
-            .qualifiedTransitiveDependents(ctx.dependents, inputQ ++ relevantCore)
-            .intersect(closure) -- relevantCore
+          ctx.graph.cellDependents(inputQ ++ relevantCore).intersect(closure) -- relevantCore
         val stripBySheet = stripSet.groupMap(_.sheet)(_.ref)
         val stripped: Vector[Sheet] = wb.sheets.map { s =>
           val toStrip = stripBySheet.getOrElse(s.name, Set.empty)
@@ -741,9 +840,10 @@ object DataTableSeeder:
             inputQ,
             sheetIndex,
             tableIdx,
-            resolveCone(wb, stripped, cone.base, clock),
+            resolveCone(wb, stripped, cone.base, clock, ctx.parses),
             cone,
-            pick
+            pick,
+            lane
           )
 
   /** The interior fold of the iterated lane, once the cone and temp sheets are prepared. */
@@ -762,7 +862,8 @@ object DataTableSeeder:
     tableIdx: Int,
     prepared: ConeResolution,
     cone: WhatIfCone,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     // The what-if substitution PINS the input cells (Excel semantics): a cycle running
     // through an input is broken there, so the inputs are never fixpoint members — they stay
@@ -775,18 +876,28 @@ object DataTableSeeder:
     val canonical: Vector[QualifiedRef] =
       (relevantCore -- inputQ).toVector.sortBy(QualifiedRef.gridKey)
     val sweep: Vector[QualifiedRef] = iterative.scheme match
-      case IterationScheme.GaussSeidel => DependencyGraph.withinComponentOrder(canonical, ctx.deps)
+      case IterationScheme.GaussSeidel => ctx.graph.withinComponentOrder(canonical)
       case IterationScheme.Jacobi => canonical
     val members: List[(QualifiedRef, Int, String)] =
       sweep.toList.flatMap { q =>
         sheetIndex.get(q.sheet).map { idx =>
-          val expr = wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-            case Some(CellValue.Formula(e, _, _)) => e
+          val expr = wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+            case CellValue.Formula(e, _, _) => e
             case _ => q.ref.toA1
           (q, idx, expr)
         }
       }
-    val probes = guardProbes(sheet, kind)
+    // #891: the members' formulas are the same for every interior cell, so each distinct text is
+    // resolved once per table here rather than once per sampled cell inside each fixpoint: to the
+    // graph build's parse of the first member holding it
+    val memberParses: Map[String, XLResult[TExpr[?]]] =
+      members
+        .distinctBy(_._3)
+        .map((q, _, text) => text -> ctx.parses.at(q.sheet, q.ref, text))
+        .toMap
+    val parseMember: (QualifiedRef, String) => XLResult[TExpr[?]] = (q, text) =>
+      memberParses.getOrElse(text, ctx.parses.at(q.sheet, q.ref, text))
+    val probes = guardProbes(sheet, kind, ctx.parses)
     // The clock arrives pinned from seedWorkbook: one seeding run is one volatile
     // generation, like one recalculation (GH-373) — axis values, member fixpoints, cone
     // cells and source formulas all read the same instant.
@@ -806,8 +917,11 @@ object DataTableSeeder:
           prepared.sheets,
           tableIdx,
           members,
+          parseMember,
           cone,
-          probes
+          probes,
+          ctx.parses,
+          lane
         )
         computed match
           case None => (acc, fails, skips + 1, fired, named, unres, firstFailure)
@@ -881,19 +995,22 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     members: List[(QualifiedRef, Int, String)],
+    parseMember: (QualifiedRef, String) => XLResult[TExpr[?]],
     cone: WhatIfCone,
-    probes: Map[ARef, TExpr[?]]
+    probes: Map[ARef, TExpr[?]],
+    parses: SeedParses,
+    lane: FixpointLane
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
-    sheet.cells.get(sourceRef).map(_.value) match
-      case Some(CellValue.Formula(expression, _, sourceKind)) =>
+    sheet.cells.valueAt(sourceRef) match
+      case CellValue.Formula(expression, _, sourceKind) =>
         val evaluator = sourceEvaluator(sourceKind)
         // (1) axis values evaluate against the group's base sheet, exactly like the acyclic path
         val overlays = overlayRefs.foldLeft(Option(Vector.empty[(ARef, CellValue)])) {
           case (acc, (inputRef, axisRef)) =>
             acc.flatMap { vs =>
-              SheetEvaluator
-                .evaluateCell(sheet)(axisRef, clock, Some(wb))
+              parses
+                .evaluateCell(sheet, axisRef, clock, wb)
                 .toOption
                 .map(axisValue => vs :+ (inputRef -> axisValue))
             }
@@ -905,13 +1022,14 @@ object DataTableSeeder:
           val overlaid = axisValues.foldLeft(prepared) { case (sheets, (inputRef, v)) =>
             sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, v))
           }
-          val upstream = resolveCone(wb, overlaid, cone.beforeCycle, clock)
+          val upstream = resolveCone(wb, overlaid, cone.beforeCycle, clock, parses)
           // (3) fixpoint the relevant cycle members under this axis combination.
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
           // already makes above. `recalculate`'s warm start is deliberately not inherited here.
-          // The plain `Evaluator.instance` is exactly what the public `evaluateCell` path used
-          // (system rng, no memo): seeding keeps its one-shot evaluation profile.
+          // #891: each round evaluates with the same per-region memo `recalculate`'s fixpoint uses
+          // (a Jacobi round's criteria calls share one slice and index per criteria range): the
+          // memo lives one region, so the cold seeding argument is unaffected.
           val outcome =
             WorkbookEvaluator.jacobiFixpoint(
               wb,
@@ -920,8 +1038,10 @@ object DataTableSeeder:
               iterative,
               clock,
               Rng.system,
-              rng => Evaluator.instance(rng),
-              Map.empty
+              lane.roundEvaluator,
+              Map.empty,
+              parseMember,
+              lane.columnCache
             )
           val results = outcome.results
           val converged = outcome.converged
@@ -950,11 +1070,11 @@ object DataTableSeeder:
             Some(folded match
               case Left(error) => CellOutcome(Left(error), converged, None, upstream.unresolved)
               case Right(sheets) =>
-                val resolved = resolveCone(wb, sheets, cone.afterCycle, clock)
+                val resolved = resolveCone(wb, sheets, cone.afterCycle, clock, parses)
                 val tempWb = wb.copy(sheets = resolved.sheets)
                 val tempSheet = resolved.sheets(tableIdx)
                 val value =
-                  evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef)
+                  evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef, parses)
                 val guard =
                   if value.isRight then
                     firedGuard(
@@ -1000,17 +1120,18 @@ object DataTableSeeder:
     prepared: Vector[Sheet],
     tableIdx: Int,
     cone: WhatIfCone,
-    probes: Map[ARef, TExpr[?]]
+    probes: Map[ARef, TExpr[?]],
+    parses: SeedParses
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
-    sheet.cells.get(sourceRef).map(_.value) match
-      case Some(CellValue.Formula(expression, _, sourceKind)) =>
+    sheet.cells.valueAt(sourceRef) match
+      case CellValue.Formula(expression, _, sourceKind) =>
         val evaluator = sourceEvaluator(sourceKind)
         // Axis values evaluate against the group's base sheet, so results are order-independent.
         val overlays = overlayRefs.foldLeft(Option(prepared)) { case (acc, (inputRef, axisRef)) =>
           acc.flatMap { sheets =>
-            SheetEvaluator
-              .evaluateCell(sheet)(axisRef, clock, Some(wb))
+            parses
+              .evaluateCell(sheet, axisRef, clock, wb)
               .toOption
               .map(axisValue => sheets.updated(tableIdx, sheets(tableIdx).put(inputRef, axisValue)))
           }
@@ -1019,10 +1140,12 @@ object DataTableSeeder:
           // GH-493/GH-494: re-derive the cone under THIS substitution before the source formula
           // reads it — a cached intermediate would otherwise answer with its base value and an
           // uncached one would vanish from any range argument.
-          val resolved = resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock)
+          val resolved =
+            resolveCone(wb, overlaid, cone.beforeCycle ++ cone.afterCycle, clock, parses)
           val tempWb = wb.copy(sheets = resolved.sheets)
           val tempSheet = resolved.sheets(tableIdx)
-          val value = evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef)
+          val value =
+            evaluateSource(tempSheet, tempWb, expression, evaluator, clock, sourceRef, parses)
           val guard =
             if value.isRight then
               firedGuard(probes.get(sourceRef), tempSheet, tempWb, evaluator, clock, sourceRef)
@@ -1057,10 +1180,11 @@ object DataTableSeeder:
     expression: String,
     evaluator: Evaluator,
     clock: Clock,
-    sourceRef: ARef
+    sourceRef: ARef,
+    parses: SeedParses
   ): XLResult[CellValue] =
-    SheetEvaluator
-      .parseFormula(expression)
+    parses
+      .at(tempSheet.name, sourceRef, expression)
       .flatMap(expr =>
         SheetEvaluator.evaluateParsedWith(
           tempSheet,
@@ -1081,12 +1205,13 @@ object DataTableSeeder:
    */
   private def guardProbes(
     sheet: Sheet,
-    kind: FormulaKind.DataTable
+    kind: FormulaKind.DataTable,
+    parses: SeedParses
   ): Map[ARef, TExpr[?]] =
     sourceRefs(kind).iterator.flatMap { r =>
-      sheet.cells.get(r).map(_.value) match
-        case Some(CellValue.Formula(expression, _, _)) =>
-          FormulaParser.parse(expression).toOption.filter(containsErrorGuard).map(expr => r -> expr)
+      sheet.cells.valueAt(r) match
+        case CellValue.Formula(expression, _, _) =>
+          parses.at(sheet.name, r, expression).toOption.filter(containsErrorGuard).map(r -> _)
         case _ => None
     }.toMap
 
@@ -1509,10 +1634,10 @@ object DataTableSeeder:
 
   /** Shape-preserving interior write shared by both paths (see the object scaladoc). */
   private def writeInterior(acc: Sheet, cellRef: ARef, value: CellValue): Sheet =
-    acc.cells.get(cellRef).map(_.value) match
-      case Some(record @ CellValue.Formula(_, _, _: FormulaKind.DataTable)) =>
+    acc.cells.valueAt(cellRef) match
+      case record @ CellValue.Formula(_, _, _: FormulaKind.DataTable) =>
         acc.put(cellRef, record.copy(cachedValue = Some(value))) // shape-preserving
-      case Some(_: CellValue.Formula) => acc // never overwrite a real formula
+      case _: CellValue.Formula => acc // never overwrite a real formula
       case _ => acc.put(cellRef, value)
 
   /**

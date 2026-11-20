@@ -60,7 +60,12 @@ enum Edit derives CanEqual:
   /** Sort the rows of `at` by `keys` (styles and comments move with their rows). */
   case Sort(at: Area, keys: Vector[Edit.SortKeySpec], hasHeader: Boolean)
 
-  /** Clear contents (unmerging overlaps), styles and/or comments in `at`. */
+  /**
+   * Clear contents, styles and/or comments in `at`. Contents alone is Excel's Clear Contents
+   * (styles and merges stay, GH-890); contents with styles removes the cells. Any clear with styles
+   * unmerges every merge `at` touches and resets the styles of each whole merge, as Excel's Clear
+   * Formats does (GH-909).
+   */
   case Clear(at: Area, what: ClearWhat)
 
   // ----- style & layout -----

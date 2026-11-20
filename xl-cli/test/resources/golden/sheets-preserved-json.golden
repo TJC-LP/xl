@@ -1,0 +1,59 @@
+## args
+-f
+<DIR>/preserved.xlsm
+--json
+sheets
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "sheets",
+  "version": "<VERSION>",
+  "data": {
+    "sheets": [
+      {
+        "name": "Data",
+        "index": 1,
+        "state": "visible",
+        "dimension": "A1:A1"
+      }
+    ],
+    "preservedSheets": [
+      {
+        "name": "Macro",
+        "kind": "macro",
+        "state": "hidden",
+        "sourceIndex": 2
+      },
+      {
+        "name": "Intl",
+        "kind": "international-macro",
+        "state": "veryHidden",
+        "sourceIndex": 3
+      },
+      {
+        "name": "Chart",
+        "kind": "chart",
+        "state": "visible",
+        "sourceIndex": 4
+      },
+      {
+        "name": "Dialog",
+        "kind": "dialog",
+        "state": "visible",
+        "sourceIndex": 5
+      },
+      {
+        "name": "Strict",
+        "kind": "chart",
+        "state": "hidden",
+        "sourceIndex": 6
+      }
+    ]
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

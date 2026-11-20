@@ -375,18 +375,40 @@ private[xl] object SheetEdits:
       val colStart = range.colStart.index0
       val colEnd = range.colEnd.index0
       val dataRowStart = if hasHeader then rowStart + 1 else rowStart
+      val dataRange = Option.when(dataRowStart <= rowEnd)(
+        CellRange(ARef.from0(colStart, dataRowStart), ARef.from0(colEnd, rowEnd))
+      )
+      val blocked = sheet.cells.iterator
+        .collect {
+          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _)
+              if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 &&
+                dataRange.exists(_.intersects(arr.ref)) =>
+            cell.ref -> arr.ref
+        }
+        .toVector
+        .sortBy((anchor, _) => (anchor.row.index0, anchor.col.index0))
+        .headOption
       if dataRowStart > rowEnd then Right(sheet)
       else
-        val rowsToSort: Vector[(Int, Map[Int, Cell])] =
-          (dataRowStart to rowEnd).toVector.map { rowIdx =>
-            val cellMap = (colStart to colEnd).flatMap { colIdx =>
-              sheet.cells.get(ARef.from0(colIdx, rowIdx)).map(colIdx -> _)
-            }.toMap
-            (rowIdx, cellMap)
-          }
-        val comparator = rowComparator(keys)
-        val sortedRows = rowsToSort.sortWith((a, b) => comparator(a._2, b._2) < 0)
-        reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
+        blocked match
+          case Some((anchor, extent)) =>
+            Left(
+              XLError.InvalidReference(
+                s"cannot sort through the dynamic array at ${anchor.toA1} (${extent.toA1}); " +
+                  "clear or overwrite its anchor first, or sort outside its spill range"
+              )
+            )
+          case None =>
+            val rowsToSort: Vector[(Int, Map[Int, Cell])] =
+              (dataRowStart to rowEnd).toVector.map { rowIdx =>
+                val cellMap = (colStart to colEnd).flatMap { colIdx =>
+                  sheet.cells.get(ARef.from0(colIdx, rowIdx)).map(colIdx -> _)
+                }.toMap
+                (rowIdx, cellMap)
+              }
+            val comparator = rowComparator(keys)
+            val sortedRows = rowsToSort.sortWith((a, b) => comparator(a._2, b._2) < 0)
+            reconstructWithSortedRows(sheet, range, dataRowStart, sortedRows)
     }
 
   private def reconstructWithSortedRows(
@@ -425,7 +447,7 @@ private[xl] object SheetEdits:
                   Right(cachedOpt.getOrElse(CellValue.Empty))
                 case v => Right(v)
             else shifted(cell.value, newRef, 0, rowDelta).map(_._1)
-          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, None, cell.hyperlink)))
+          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, cell.hyperlink)))
         }
     }
 
@@ -438,16 +460,65 @@ private[xl] object SheetEdits:
   // ===== Clear =====
 
   /**
-   * Clear contents, styles and/or comments in `range`. Clearing contents also unmerges every merged
-   * region overlapping the range, so no merge is left describing cleared cells.
+   * Clear contents, styles and/or comments in `range`.
+   *
+   * GH-890: a contents-only clear is Excel's Clear Contents: each emptied cell keeps its style but
+   * loses its hyperlink, a cell with no style is removed (unless its row or column has a default
+   * style, GH-897), and merges stay. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`,
+   * GH-886) applies the same rule through [[keepsRecordWhenCleared]] (GH-908). A clear that drops
+   * the cells as well (`ClearWhat.all`) removes the cell records.
+   *
+   * GH-909: any clear with `styles` is Excel's Clear Formats (or Clear All): it unmerges every
+   * merged region the range touches and resets the styles of each whole merge, since Excel widens
+   * the selection to the merges it touches. A cell of a merge that lies outside the range keeps its
+   * value but loses its style. The CLI's `clear --styles` / `--all` (GH-894) make the same change.
    */
   def clear(sheet: Sheet, range: CellRange, what: ClearWhat): Sheet =
-    val s1 = if what.contents then sheet.removeRange(range) else sheet
-    val s2 = if what.styles then s1.clearStylesInRange(range) else s1
+    val dropCells = what.contents && what.styles
+    val touched =
+      if what.styles then sheet.mergedRanges.filter(_.intersects(range)).toVector
+      else Vector.empty
+    val s1 =
+      if dropCells then sheet.removeRange(range)
+      else if what.contents then clearContentsKeepingStyles(sheet, range)
+      else sheet
+    val s2 =
+      if !what.styles then s1
+      else
+        val inRange = if dropCells then s1 else s1.clearStylesInRange(range)
+        crossingMerges(range, touched).foldLeft(inRange)((s, m) => s.clearStylesInRange(m))
     val s3 = if what.comments then s2.clearCommentsInRange(range) else s2
-    if what.contents then
-      s3.mergedRanges.filter(_.intersects(range)).foldLeft(s3)((s, mr) => s.unmerge(mr))
-    else s3
+    touched.foldLeft(s3)((s, m) => s.unmerge(m))
+
+  /**
+   * The merges in `touched` that cross the edge of `range`: their cells outside it need their own
+   * style reset (GH-909). A merge wholly inside `range` is already covered by the range's own.
+   */
+  private[xl] def crossingMerges(range: CellRange, touched: Vector[CellRange]): Vector[CellRange] =
+    touched.filterNot(m => range.contains(m.start) && range.contains(m.end))
+
+  /**
+   * Clear Contents: a cell in `range` that keeps a record is emptied and loses its hyperlink; any
+   * other is removed. A cell keeps its record when it has a style, or when its row or column has a
+   * default style ([[keepsRecordWhenCleared]]).
+   */
+  private def clearContentsKeepingStyles(sheet: Sheet, range: CellRange): Sheet =
+    // the store walks the range and merges the kept records back once (#891)
+    val kept = sheet.cells
+      .inRange(range)
+      .filter(keepsRecordWhenCleared(sheet, _))
+      .map(_.copy(value = CellValue.Empty, hyperlink = None))
+      .toVector
+    sheet.copy(cells = sheet.cells.removedIn(range).putAll(kept))
+
+  /**
+   * Whether a contents clear keeps `cell` as an empty record: it has a style, or its row or column
+   * has a default style (GH-897), which a cell with no record would take instead of its own.
+   */
+  private[xl] def keepsRecordWhenCleared(sheet: Sheet, cell: Cell): Boolean =
+    cell.styleId.isDefined ||
+      sheet.rowProperties.get(cell.ref.row).exists(_.styleId.isDefined) ||
+      sheet.columnProperties.get(cell.ref.col).exists(_.styleId.isDefined)
 
   // ===== Column auto-fit (GH-156) =====
 
@@ -476,7 +547,7 @@ private[xl] object SheetEdits:
    * contributes nothing (GH-613) — evaluate or recalculate first when the fit must reflect it.
    */
   def autoFitWidth(sheet: Sheet, col: Column): Double =
-    fitWidth(sheet, sheet.cells.valuesIterator.filter(_.ref.col == col).toVector)
+    fitWidth(sheet, sheet.cells.iterator.filter(_.ref.col == col).toVector)
 
   /**
    * [[autoFitWidth]] for every column of `columns`, in order, from ONE pass over the sheet's cells:
@@ -485,7 +556,7 @@ private[xl] object SheetEdits:
    * without cells gets [[DefaultColumnWidth]]; a repeated column is reported each time.
    */
   def autoFitWidths(sheet: Sheet, columns: Iterable[Column]): Vector[(Column, Double)] =
-    val byColumn: Map[Column, Vector[Cell]] = sheet.cells.valuesIterator.toVector.groupBy(_.ref.col)
+    val byColumn: Map[Column, Vector[Cell]] = sheet.cells.iterator.toVector.groupBy(_.ref.col)
     columns.iterator
       .map(col => col -> fitWidth(sheet, byColumn.getOrElse(col, Vector.empty)))
       .toVector

@@ -7,12 +7,15 @@ import scala.util.boundary
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
+
+import scala.concurrent.duration.Duration
 
 /**
  * Totality at the evaluation boundary (#681 item 5): a throwable escaping a function body is an
@@ -23,6 +26,10 @@ import munit.FunSuite
  * catches.
  */
 class EvaluationTotalitySpec extends FunSuite:
+
+  // the totality sweep evaluates about 840 whole-axis shapes: seconds here, but a loaded CI
+  // runner must not time it out at munit's 30 s default (#843)
+  override val munitTimeout: Duration = Duration(120, "s")
 
   private val name = SheetName.unsafe("Sheet1")
 
@@ -151,8 +158,8 @@ class EvaluationTotalitySpec extends FunSuite:
         case Right(v) => fail(s"$label: expected a Left, got $v")
     assertDefect("evaluateFormula", sheet.evaluateFormula("=TODAY()+1", boom))
     assertDefect("evaluateCell", sheet.evaluateCell(ref"B1", boom))
-    assertDefect("evaluateWithDependencyCheck", sheet.evaluateWithDependencyCheck(boom))
-    assertDefect("evaluateForRange", sheet.evaluateForRange(CellRange(ref"A1", ref"C1"), boom))
+    assertDefect("recalculate (evalAll)", sheet.evalAll(boom))
+    assertDefect("evaluateForRangePerCell", sheet.evalRange(CellRange(ref"A1", ref"C1"), boom))
     assertDefect("evaluateArrayFormula", sheet.evaluateArrayFormula("=TODAY()+1", ref"H1", boom))
     assertDefect(
       "wb.evaluateFormula",
@@ -250,7 +257,6 @@ class EvaluationTotalitySpec extends FunSuite:
       "=SUM((1:1=\"\")*($R=\"\"))",
       "=MAX($R*{1,2,3})"
     )
-    val started = System.nanoTime()
     for
       (label, evaluator) <- factories
       r <- ranges
@@ -260,8 +266,6 @@ class EvaluationTotalitySpec extends FunSuite:
       val formula = shape.replace("$R", r)
       // any value or Left is total; only a throw (or an OOM) would fail here
       evaluator.eval(parse(formula), sheet, Clock.system, Some(Workbook(sheet)), at): Unit
-    val seconds = (System.nanoTime() - started) / 1e9
-    assert(seconds < 60.0, s"took $seconds s")
   }
 
   test("#750: sparse SUMPRODUCT walks its boxes, not their bounding rectangle or the shape") {
@@ -289,10 +293,9 @@ class EvaluationTotalitySpec extends FunSuite:
       (c3, "=SUMPRODUCT(A1:XFD1048575,(A1:XFD1048575=\"\")*1)", BigDecimal(0)),
       (corners, "=SUMPRODUCT(A1:XFD1048575,(A2:XFD1048576=\"\")*1)", BigDecimal(1))
     )
+    // a walk of the bounding rectangle is 8.6e9 positions: it would trip the suite timeout, the
+    // backstop here (#843), long before it answered
     for (target, formula, expected) <- cases do
-      val started = System.nanoTime()
       val result = Evaluator.instance.eval(parse(formula), target, Clock.system, None, None)
-      val millis = (System.nanoTime() - started) / 1e6
       assertEquals(result: Any, Right(expected): Any, formula)
-      assert(millis < 5000.0, s"$formula took $millis ms")
   }

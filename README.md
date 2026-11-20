@@ -8,7 +8,7 @@
 
 ```scala 3 raw
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 
 import com.tjclp.xl.{*, given}
 
@@ -56,13 +56,13 @@ import com.tjclp.xl.{*, given}
 
 ```scala 3 ignore
 // build.mill — single dependency for everything
-def ivyDeps = Agg(ivy"com.tjclp::xl:0.25.0")
+def ivyDeps = Agg(ivy"com.tjclp::xl:0.26.0")
 
 // Or individual modules for minimal footprint:
-// ivy"com.tjclp::xl-core:0.25.0"        — Pure domain model only
-// ivy"com.tjclp::xl-ooxml:0.25.0"       — Add OOXML read/write
-// ivy"com.tjclp::xl-cats-effect:0.25.0" — Add IO streaming
-// ivy"com.tjclp::xl-evaluator:0.25.0"   — Add formula evaluation
+// ivy"com.tjclp::xl-core:0.26.0"        — Pure domain model only
+// ivy"com.tjclp::xl-ooxml:0.26.0"       — Add OOXML read/write
+// ivy"com.tjclp::xl-cats-effect:0.26.0" — Add IO streaming
+// ivy"com.tjclp::xl-evaluator:0.26.0"   — Add formula evaluation
 ```
 
 ### Basic Usage
@@ -129,10 +129,10 @@ val sheet = Sheet("Model")
     "A4" -> fx"=A3 * 1.1"
   )
 
-// Evaluate all formulas (with cycle detection)
-sheet.evaluateWithDependencyCheck() match
-  case Right(results) => // Map[ARef, CellValue] of computed values
-  case Left(error)    => // Circular reference detected
+// Evaluate all formulas in dependency order (total: a cycle is reported per cell, not thrown)
+val result = Workbook(sheet).recalculate()
+result.evaluated(sheet.name) // Map[ARef, CellValue] of computed values
+result.errors                // Vector[CellEvalError] — cycle members read "Circular reference"
 ```
 
 **Functions**: SUM, AVERAGE, MIN, MAX, COUNT, IF, AND, OR, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, TODAY, DATE, and [more](docs/STATUS.md).

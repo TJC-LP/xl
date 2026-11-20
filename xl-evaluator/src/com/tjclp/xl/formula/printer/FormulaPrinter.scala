@@ -309,8 +309,10 @@ object FormulaPrinter:
       case call: TExpr.Call[?] =>
         val printer = ArgPrinter(
           expr = expr => printExpr(expr, precedence = 0, sep),
-          location = formatLocation,
-          cellRange = formatRange,
+          location = {
+            case TExpr.RangeLocation.Computed(expr) => printExpr(expr, precedence = 0, sep)
+            case location => formatLocation(location)
+          },
           separator = sep
         )
         call.spec.render(call.args, printer)
@@ -398,25 +400,16 @@ object FormulaPrinter:
           case None => name
       // GH-710: a LET name in a range slot prints as its identifier
       case TExpr.RangeLocation.Binding(name) => name
+      case TExpr.RangeLocation.Computed(expr) => print(expr, includeEquals = false)
       // GH-612: an error in a range slot prints as its code — SUM(#REF!), as Excel writes it
       case TExpr.RangeLocation.Error(error, qualifier) => qualifiedError(error, qualifier)
 
   /**
-   * Format ARef to A1 notation with anchor support.
-   *
-   * Helper function to avoid opaque type extension method issues. Manually extracts col/row from
-   * packed Long representation and adds $ prefixes based on anchor mode.
+   * Format ARef to A1 notation with anchor support: `$` prefixes per the anchor mode.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   private[printer] def formatARef(aref: ARef, anchor: Anchor): String =
-    // ARef is opaque type = Long with (row << 32) | col packing
-    // Extract col (low 32 bits) and row (high 32 bits)
-    val arefLong: Long = aref.asInstanceOf[Long] // Safe: ARef is opaque type = Long
-    val colIndex = (arefLong & 0xffffffffL).toInt
-    val rowIndex = (arefLong >> 32).toInt
-
-    // Convert to A1 notation
-    val col = Column.from0(colIndex)
+    val col = aref.col
+    val rowIndex = aref.row.index0
 
     // Format column letter with optional $ prefix
     val colLetter = Column.toLetter(col)
@@ -584,8 +577,7 @@ object FormulaPrinter:
       case call: TExpr.Call[?] =>
         val printer = ArgPrinter(
           expr = expr => printWithTypes(expr),
-          location = formatLocation,
-          cellRange = formatRange
+          location = formatLocation
         )
         s"Call(${call.spec.name}, ${call.spec.argSpec.render(call.args, printer).mkString(", ")})"
       case TExpr.Let(bindings, body) =>

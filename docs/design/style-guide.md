@@ -31,7 +31,7 @@ Never hand-format around the tool; if a construct formats badly, restructure the
 
   ```scala
   opaque type Column = Int   // Cannot pass a raw Int where a Column is expected
-  opaque type ARef = Long    // Packed: (row << 32) | col
+  opaque type ARef = Long    // Packed: (row << 32) | (col ^ (row << 14))
   ```
 
 - **Enums for closed sums** (e.g. `Patch`, `StylePatch`, `CellValue`, `TExpr`) with exhaustive

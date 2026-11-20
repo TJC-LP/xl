@@ -140,28 +140,33 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
 
+  /** The members of the cyclic components of the product condensation (the iterative kernel). */
+  private def cyclicNodes(deps: Map[QualifiedRef, Set[QualifiedRef]]): Set[QualifiedRef] =
+    com.tjclp.xl.formula.graph.DependencyGraph
+      .qualifiedSccOrder(deps)
+      .filter(_.cyclic)
+      .flatMap(_.members)
+      .toSet
+
   test("stack safety: 100k-deep dependency chain neither overflows nor reports cycles"):
     // Graph built directly (no parsing) — pins the iterative Tarjan engine. The recursive
     // strongConnect this replaces overflowed around ~10k frames, violating recalculate's
-    // totality promise on deep-but-legal generated models.
+    // totality promise on deep-but-legal generated models. (#891: on the qualified graph, the
+    // sheet-level one is gone.)
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      val node = ARef.from0(0, i)
-      val next = if i + 1 < n then Set(ARef.from0(0, i + 1)) else Set.empty[ARef]
-      node -> next
+      node(i) -> (if i + 1 < n then Set(node(i + 1)) else Set.empty[QualifiedRef])
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph), Set.empty[ARef])
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isRight)
+    assertEquals(cyclicNodes(deps), Set.empty[QualifiedRef])
 
   test("stack safety: 100k-node cycle is fully collected without overflow"):
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      ARef.from0(0, i) -> Set(ARef.from0(0, (i + 1) % n)) // last points back to first
+      node(i) -> Set(node((i + 1) % n)) // last points back to first
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph).size, n)
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isLeft)
+    assertEquals(cyclicNodes(deps).size, n)
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000
@@ -250,10 +255,11 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"A1"), Some(num(42)))
     assertEquals(cached(result.workbook, "S", ref"B1"), Some(num(42)))
 
-  test("GH-274 dynamic cycle: per-cell depth-guard errors, siblings survive (not Tarjan)"):
+  test("GH-274 dynamic cycle: per-cell circular errors, siblings survive (not Tarjan)"):
     // A1=INDIRECT("B1") -> B1=A1+1 is a cycle only through the dynamic edge, invisible to
-    // the static graph. Pin the graceful path: both cells error, both stay uncached, the
-    // unrelated sibling still evaluates (mirrors the cross-sheet-cycle contract above).
+    // the static graph. Pin the graceful path: both cells error (#829: as the circular reference
+    // at the first re-entry), both stay uncached, the unrelated sibling still evaluates (mirrors
+    // the cross-sheet-cycle contract above).
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", formula("=INDIRECT(\"B1\")"))
       .put(ref"B1", formula("=A1+1"))
@@ -264,13 +270,24 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S", ref"A1"), None)
     assertEquals(cached(result.workbook, "S", ref"B1"), None)
     assertEquals(result.errors.map(_.ref).toSet, Set(ref"A1", ref"B1"))
+    result.errors.foreach(e =>
+      assert(e.error.message.contains("Circular reference through S!"), e.render)
+    )
 
   test("GH-274 dynamic self-reference is total and deterministic"):
     val sheet = Sheet(SheetName.unsafe("S")).put(ref"A1", formula("=INDIRECT(\"A1\")"))
     val r1 = Workbook(sheet).recalculate()
     val r2 = Workbook(sheet).recalculate()
     assertEquals(cached(r1.workbook, "S", ref"A1"), None)
-    assertEquals(r1.errors.map(_.ref), Vector(ref"A1"))
+    // #829: the circular reference at the first re-entry, the same wording on every run and
+    // stack — it used to be the depth guard's or the stack's message, whichever came first
+    assertEquals(
+      r1.errors.map(_.render),
+      Vector(
+        "S!A1: Formula error in '=INDIRECT(\"A1\")': Circular reference through S!A1: " +
+          "the cell is read again while its own evaluation is in progress"
+      )
+    )
     assertEquals(r1, r2)
 
   test("GH-274 determinism: recalculate() twice yields identical RecalcResult"):
@@ -380,12 +397,10 @@ class RecalcSpec extends FunSuite:
         "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE); " +
         "S!B2 #DIV/0! — Division by zero: 1 / 0; S!B3 #N/A; … and 2 more)"
     )
-    // the targeted paths carry the reasons too (an edit of A1 reaches B1, B4 and B5)
+    // the targeted paths carry the reasons too; #891: every formula of this uncached book holds no
+    // value, so the first edit computes them all, as Excel computes such a book on open
     val afterEdit = Workbook(sheet).recalculateAfterEdit(S, Set(ref"A1"), RecalcOptions())
-    assertEquals(
-      afterEdit.errorCells,
-      result.errorCells.filter(c => Set(ref"B1", ref"B4", ref"B5")(c.ref))
-    )
+    assertEquals(afterEdit.errorCells, result.errorCells)
     val uncached = Workbook(sheet).recalculateUncached(RecalcOptions())
     assertEquals(uncached.errorCells, result.errorCells)
     // more than MaxNamedErrorCells: errorCells carries the first ten, the summary names the first

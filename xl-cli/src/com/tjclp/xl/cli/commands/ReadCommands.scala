@@ -408,16 +408,24 @@ object ReadCommands:
       bounds = tempSheet.usedRange
       // Positioned or not, only the formula's value-read closure is analysed: never the whole
       // sheet, which a running total (B{n} = SUM($A$1:A{n})) makes quadratic to expand
-      reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
-      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr))
+      metadataReads = ValueDependencies.Names(tempBook)
+      reads = ValueDependencies.Reader(
+        bounds,
+        Some(tempSheet.name),
+        names = Some(metadataReads),
+        current = Some(tempSheet.name),
+        resolveDefinedNames = false
+      )
+      targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
-      _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
+      _ <- at.flatMap(position =>
+        cycleThrough(tempSheet.name, closure, expr, targetDeps, position, metadataReads)
+      ) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
         case None => IO.unit
-      graph = closure.graph
       allDeps = closure.reached
       formulaDeps = allDeps.filter(ref =>
-        tempSheet(ref).value match
+        tempSheet.cells.valueAt(ref) match
           case _: CellValue.Formula => true
           case _ => false
       )
@@ -425,7 +433,7 @@ object ReadCommands:
         if formulaDeps.isEmpty then scala.util.Right(List.empty[ARef])
         else
           DependencyGraph
-            .topologicalSort(graph)
+            .orderOf(tempSheet.name, closure.edges)
             .map(_.filter(formulaDeps.contains))
             .left
             .map(cyclic(_, formula))
@@ -468,14 +476,14 @@ object ReadCommands:
    * `formulas` holds each parse, so the cycle search does not parse again.
    */
   private final case class ValueReads(
-    graph: DependencyGraph,
+    edges: Map[ARef, Set[ARef]],
     reached: Set[ARef],
     formulas: Map[ARef, TExpr[?]]
   )
 
   /**
    * The dependency graph `eval` (positioned or not) and `evala` order by, built from `roots` (the
-   * formula's own reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
+   * formula's own reads) out. A whole-sheet structural graph will not do, for three reasons:
    *   - its edges are structural. ROW(D5), ROWS(A:A), or a LET name that ROW inspects, make an edge
    *     to cells whose values are never read. A formula that inspects its own address, or a
    *     precedent that inspects the placement, would look circular, and the closure would be
@@ -486,8 +494,8 @@ object ReadCommands:
    *     walk parses and extracts each formula in the closure once, sharing one range cache, and
    *     touches nothing else.
    *
-   * Like `fromSheet`, a data table's cells are value sources, not nodes (GH-430), and a formula
-   * that does not parse is a node with no edges.
+   * As in the recalculation graph, a data table's cells are value sources, not nodes (GH-430), and
+   * a formula that does not parse is a node with no edges.
    */
   private def valueReadClosure(
     sheet: Sheet,
@@ -502,20 +510,16 @@ object ReadCommands:
       formulas: Map[ARef, TExpr[?]]
     ): ValueReads =
       val visit = frontier -- reached
-      if visit.isEmpty then
-        val formulaEdges =
-          edges.toList.flatMap((ref, deps) => deps.filter(edges.contains).map(_ -> ref))
-        val dependents = formulaEdges.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
-        ValueReads(DependencyGraph(edges, dependents), reached, formulas)
+      if visit.isEmpty then ValueReads(edges, reached, formulas)
       else
         val (nextEdges, nextFormulas, next) =
           visit.foldLeft((edges, formulas, Set.empty[ARef])) { case ((e, f, n), ref) =>
-            sheet(ref).value match
+            sheet.cells.valueAt(ref) match
               case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (e, f, n)
               case CellValue.Formula(text, _, _) =>
                 FormulaParser.parse(text) match
                   case Right(expr) =>
-                    val deps = reads.reads(expr)
+                    val deps = reads.reads(expr, Some(ref))
                     (e.updated(ref, deps), f.updated(ref, expr), n ++ deps)
                   case Left(_) => (e.updated(ref, Set.empty), f, n)
               case _ => (e, f, n)
@@ -540,11 +544,18 @@ object ReadCommands:
     closure: ValueReads,
     expr: TExpr[?],
     targetDeps: Set[ARef],
-    at: ARef
+    at: ARef,
+    metadata: ValueDependencies.Names
   ): Option[List[ARef]] =
-    val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
-    def reads(e: TExpr[?]): Boolean = only.reads(e).contains(at)
-    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads)
+    val only = ValueDependencies.Reader(
+      Some(CellRange(at, at)),
+      Some(home),
+      names = Some(metadata),
+      current = Some(home),
+      resolveDefinedNames = false
+    )
+    def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
+    def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))
     // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
     // from any reached cell ends at `at`
     @scala.annotation.tailrec
@@ -559,13 +570,12 @@ object ReadCommands:
         case None =>
           val (next, reached) = frontier.foldLeft((Vector.empty[ARef], parent)) {
             case ((acc, seen), ref) =>
-              closure.graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
-                case ((a, s), dep) =>
-                  if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
+              closure.edges.getOrElse(ref, Set.empty).foldLeft((acc, seen)) { case ((a, s), dep) =>
+                if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
               }
           }
           if next.isEmpty then None else search(next, reached)
-    if reads(expr) then Some(List(at, at))
+    if reads(expr, at) then Some(List(at, at))
     else
       val roots = (targetDeps - at).toVector
       search(roots, roots.map(_ -> at).toMap)
@@ -625,15 +635,12 @@ object ReadCommands:
       )
     else
       for
-        sheet <- SheetResolver.requireSheet(wb, sheetOpt, "evala")
+        anchored <- arrayAnchor(wb, sheetOpt, targetRefOpt)
+        (sheet, originRef) = anchored
         // positionless: evala anchors its display, it does not place the formula in a cell
         precedents <- precedentsEvaluated(wb, sheet, formula, overrides, None)
         evalSheet = precedents.sheet
         evaluator = precedents.evaluator
-        // Parse target ref or use a virtual cell far from data
-        originRef = targetRefOpt
-          .flatMap(ARef.parse(_).toOption)
-          .getOrElse(ARef.from0(25, 999)) // Z1000
         result <- IO.fromEither(
           SheetEvaluator
             .evaluateArrayFormulaUsing(
@@ -648,6 +655,26 @@ object ReadCommands:
         )
         (updatedSheet, spillRange) = result
       yield (formula, updatedSheet, spillRange)
+
+  /**
+   * The sheet `evala` evaluates on and the cell its display is anchored at. `--at` follows THE
+   * sheet rule as `eval --at` does (#727): a qualifier names the sheet, else the default, else the
+   * only sheet, else `SHEET_REQUIRED`; a range or an unparseable ref is `INVALID_REFERENCE`.
+   * Without `--at` the anchor is a virtual cell far from data, Z1000.
+   */
+  private def arrayAnchor(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    targetRefOpt: Option[String]
+  ): IO[(Sheet, ARef)] =
+    targetRefOpt match
+      case Some(atStr) =>
+        SheetResolver.resolveRef(wb, sheetOpt, atStr, "evala").flatMap {
+          case (sheet, Left(cell)) => IO.pure((sheet, cell))
+          case (_, Right(_)) => IO.raiseError(notOneCell(atStr))
+        }
+      case None =>
+        SheetResolver.requireSheet(wb, sheetOpt, "evala").map((_, ARef.from0(25, 999)))
 
   // ==========================================================================
   // Private helpers
@@ -704,11 +731,39 @@ object ReadCommands:
    * in: [[StaleBlockRows]] checks per registration at worst, bounded by the indexes' own size, not
    * by the square of the sheet. A wide reader is checked against each stale cell, as before.
    *
+   * Every formula [[DependencyGraph.dynamicCells]] lists (#763) is stale from the start, whatever
+   * `changed` holds: its reads are known only to evaluation, so `SUM(OFFSET(Data!B1,0,0,2,1))`
+   * reads Data!B2 though no range it names contains it. Its readers are then found like any stale
+   * cell's. A sheet holding one then gets an index even when no override touches it, so the
+   * formulas that could read another sheet are gathered once, in one pass over the book, by the
+   * sheet names their text qualifies ([[qualifiedSheets]]): an index visits its own sheet's
+   * formulas and those candidates. Indexing every sheet then costs one pass over the book's cells,
+   * plus, per sheet, the formulas that mention a defined name (a name may hide any sheet), not a
+   * pass over the book per sheet.
+   *
    * The maps, sets and bit set below are local to one call and never escape it: the result is a
    * new, immutable workbook.
    */
   private[cli] def uncacheReaders(book: Workbook, home: SheetName, changed: Set[ARef]): Workbook =
+    uncacheReadersTraced(book, home, changed)._1
+
+  /**
+   * What one [[uncacheReaders]] walk did: `checks`, the candidate readers it tested for containing
+   * a stale cell (a reader leaves its index once stale, so the walk is linear in the readers and
+   * the cells they read, never quadratic: GH-715), and `parses`, the formulas it parsed. A count,
+   * not a clock, is what a test can pin (#843).
+   */
+  private[cli] final case class UncacheTrace(checks: Long, parses: Int)
+
+  /** [[uncacheReaders]] with the walk's [[UncacheTrace]]. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var")) // one local counter of a one-call walk
+  private[cli] def uncacheReadersTraced(
+    book: Workbook,
+    home: SheetName,
+    changed: Set[ARef]
+  ): (Workbook, UncacheTrace) =
     import scala.collection.mutable
+    var checks = 0L
     val sheets = book.sheets
     // every formula the walk meets, numbered on first sight: (sheet index, cell)
     val nodes = mutable.ArrayBuffer.empty[(Int, ARef)]
@@ -746,40 +801,65 @@ object ReadCommands:
         node,
         NameToken
           .findAllIn(text)
-          .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
+          .exists(names.containsToken)
       )
+
+    // every formula that could read a sheet other than its own, gathered in one pass over the
+    // book: by each sheet name its text qualifies a reference with (folded, [[qualifiedSheets]]),
+    // and every formula mentioning a defined name, which may hide one. An index for one target
+    // then visits that sheet's formulas and these candidates, never every cell of the book, so
+    // indexing every sheet a dynamic cell sits on costs O(cells), not O(sheets x cells)
+    lazy val crossReaders: (Map[String, Vector[(Int, ARef, String)]], Vector[(Int, ARef, String)]) =
+      val qualifying = mutable.HashMap.empty[String, mutable.ArrayBuffer[(Int, ARef, String)]]
+      val naming = mutable.ArrayBuffer.empty[(Int, ARef, String)]
+      sheets.indices.foreach { at =>
+        sheets(at).cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
+          cell.value match
+            // GH-430: a data table's cells are pinned value sources
+            case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+            case CellValue.Formula(text, _, _) =>
+              qualifiedSheets(text).foreach { sheet =>
+                qualifying.getOrElseUpdate(sheet, mutable.ArrayBuffer.empty) += ((at, ref, text))
+              }
+              if mentionsName((at, ref), text) then naming += ((at, ref, text))
+            case _ => ()
+        }
+      }
+      (qualifying.view.mapValues(_.toVector).toMap, naming.toVector)
 
     def readersOf(target: Int): Readers =
       val readers = Readers()
       val name = sheets(target).name
       val bounds = sheets(target).usedRange
-      // a reference qualified with the target spells its name, perhaps quoted, then `!`, in any
-      // case; a name may hide one, so a formula mentioning a name is read too
-      val qualified = java.util.regex.Pattern.compile(
-        "'?" + java.util.regex.Pattern.quote(name.value.replace("'", "''")) + "'?!",
-        java.util.regex.Pattern.CASE_INSENSITIVE | java.util.regex.Pattern.UNICODE_CASE
-      )
-      sheets.indices.foreach { at =>
-        val reader = ValueDependencies.Reader(
-          bounds,
-          Some(name),
-          localReads = at == target,
-          names = Some(names),
-          current = Some(sheets(at).name)
+      val reader = mutable.HashMap.empty[Int, ValueDependencies.Reader]
+      def readerOn(at: Int): ValueDependencies.Reader =
+        reader.getOrElseUpdate(
+          at,
+          ValueDependencies.Reader(
+            bounds,
+            Some(name),
+            localReads = at == target,
+            names = Some(names),
+            current = Some(sheets(at).name)
+          )
         )
-        sheets(at).cells.foreach { (ref, cell) =>
-          cell.value match
-            // GH-430: a data table's cells are pinned value sources
-            case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
-            case CellValue.Formula(text, _, _)
-                if at == target || qualified.matcher(text).find() ||
-                  mentionsName((at, ref), text) =>
-              parse((at, ref), text).foreach { expr =>
-                val read = reader.readRanges(expr).toVector
-                if read.nonEmpty then readers.register(idOf((at, ref)), read)
-              }
-            case _ => ()
+      def index(at: Int, ref: ARef, text: String): Unit =
+        parse((at, ref), text).foreach { expr =>
+          val read = readerOn(at).readRanges(expr, Some(ref)).toVector
+          if read.nonEmpty then readers.register(idOf((at, ref)), read)
         }
+      sheets(target).cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
+        cell.value match
+          // GH-430: a data table's cells are pinned value sources
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case CellValue.Formula(text, _, _) => index(target, ref, text)
+          case _ => ()
+      }
+      // another sheet's formula reads the target only through a reference qualified with its
+      // name, perhaps behind a defined name
+      val (qualifying, naming) = crossReaders
+      (qualifying.getOrElse(foldSheet(name.value), Vector.empty) ++ naming).distinct.foreach {
+        (at, ref, text) => if at != target then index(at, ref, text)
       }
       readers
 
@@ -788,7 +868,10 @@ object ReadCommands:
     // the candidates in `among` whose range contains `cell`; a formula already stale leaves it
     def hitsIn(readers: Readers, among: mutable.Set[Int], cell: ARef): List[Int] =
       among.filterInPlace(i => !stale.contains(i))
-      among.iterator.filter(i => readers.ranges.get(i).exists(_.exists(_.contains(cell)))).toList
+      among.iterator.filter { i =>
+        checks += 1L
+        readers.ranges.get(i).exists(_.exists(_.contains(cell)))
+      }.toList
     @scala.annotation.tailrec
     def walk(frontier: List[(Int, ARef)]): Unit = frontier match
       case Nil => ()
@@ -799,10 +882,19 @@ object ReadCommands:
           hitsIn(readers, readers.wide, cell)).distinct
         stale ++= hits
         walk(hits.map(nodes(_)) ::: rest)
-    sheets.indexWhere(_.name == home) match
+    val uncached = sheets.indexWhere(_.name == home) match
       case -1 => book
       case homeIndex =>
-        walk(changed.toList.map(homeIndex -> _))
+        // #763: a reader whose references are computed at run time (OFFSET, INDIRECT, a name whose
+        // chain reaches one) reads what no static range shows, so it is stale under any override,
+        // as recalculation treats it, and its own readers are walked from it
+        val dynamic = DependencyGraph.dynamicCells(book).toList.flatMap { q =>
+          sheets.indexWhere(_.name == q.sheet) match
+            case -1 => Nil
+            case at => List(at -> q.ref)
+        }
+        stale ++= dynamic.map(idOf)
+        walk(changed.toList.map(homeIndex -> _) ::: dynamic)
         stale.toList.map(nodes(_)).groupMap(_._1)(_._2).foldLeft(book) { case (b, (at, refs)) =>
           b.put(refs.foldLeft(sheets(at)) { (s, ref) =>
             s(ref).value match
@@ -810,6 +902,35 @@ object ReadCommands:
               case _ => s
           })
         }
+    (uncached, UncacheTrace(checks, parsed.size))
+
+  /**
+   * The sheet names `text` qualifies a reference with, each folded by [[foldSheet]]: `Data` for
+   * `Data!B1`, `my sheet's` for `'My Sheet''s'!B1`. A prefilter for [[uncacheReaders]]: it may list
+   * a name that qualifies nothing (text inside a string literal, `[1]Data!` of an external book),
+   * never miss one the parser reads. An unquoted name runs back from its `!` to a character no
+   * unquoted sheet name holds; a quoted one is matched whole, `''` an escaped quote.
+   */
+  private[cli] def qualifiedSheets(text: String): Set[String] =
+    if text.indexOf('!') < 0 then Set.empty
+    else
+      // two scans, so a quoted match that spans a string literal (`"'"&Data!A1&"'!"`) never hides
+      // an unquoted qualifier inside it
+      (QuotedSheet.findAllMatchIn(text).map(_.group(1).replace("''", "'")) ++
+        UnquotedSheet.findAllMatchIn(text).map(_.group(1))).map(foldSheet).toSet
+
+  /**
+   * A sheet name folded as `String.equalsIgnoreCase` compares (each character upper-cased, then
+   * lower-cased), the comparison [[ValueDependencies.Reader]] makes.
+   */
+  private def foldSheet(name: String): String =
+    name.map(c => Character.toLowerCase(Character.toUpperCase(c)))
+
+  /** A quoted qualifier up to its `!`, group 1 its name still escaped. */
+  private val QuotedSheet = """'((?:[^']|'')+)'!""".r
+
+  /** An unquoted qualifier up to its `!`: no character an unquoted sheet name cannot hold. */
+  private val UnquotedSheet = """([^\s'!(),+\-*/^&=<>%:;{}"\[\]]+)!""".r
 
   /** A token of formula text that could be a defined name, for [[uncacheReaders]]'s prefilter. */
   private val NameToken = """[\p{L}_\\][\p{L}\p{N}_.\\?]*""".r

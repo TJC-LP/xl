@@ -7,7 +7,7 @@ import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.Clock
 
-import com.tjclp.xl.cells.CellError
+import com.tjclp.xl.cells.{CellError, CellValue}
 
 /**
  * Typeclass for aggregate functions over cell ranges.
@@ -38,6 +38,11 @@ trait Aggregator[A]:
    * #750: combine `value` into the accumulator `n` times, equal to `n` successive [[combine]]
    * calls. Every built-in aggregator overrides it in closed form, so a sparse array's fill (a
    * million blank or equal cells) folds in one step; this default repeats [[combine]].
+   *
+   * #758: the default is O(n), and `n` is the number of cells a sparse array's fill covers — up to
+   * 17,179,869,184 (2^34) for a whole-sheet argument such as `A:XFD*1`, so an aggregator that keeps
+   * it makes that many [[combine]] calls. Override it in closed form (SUM: `acc + value * n`). It
+   * cannot be derived from [[combine]] alone: that would need a way to merge two accumulators.
    */
   def combineN(acc: A, value: BigDecimal, n: Long): A =
     @scala.annotation.tailrec
@@ -69,8 +74,8 @@ trait Aggregator[A]:
   /**
    * Whether this aggregator counts empty cells (like COUNTBLANK).
    *
-   * When true, the evaluator will count cells that are empty rather than calling `combine` with
-   * values. This is used for COUNTBLANK which counts truly empty cells.
+   * When true, the evaluator will count cells that are blank ([[Aggregator.isBlankForCount]])
+   * rather than calling `combine` with values. This is used for COUNTBLANK.
    */
   def countsEmpty: Boolean = false
 
@@ -98,6 +103,23 @@ object Aggregator:
     if agg.countsNonEmpty then Some(agg.combine(acc, BigDecimal(1)))
     else if !agg.propagatesErrors && !agg.countsEmpty then Some(acc)
     else None
+
+  /**
+   * #731: whether COUNTBLANK counts a cell: an empty one, or one holding text of length 0 (the
+   * constant `""`, rich text with no characters, a formula whose cached value is `""`), as Excel
+   * counts them. A formula's other results are not blank, and COUNTA counts every `""` cell. An
+   * uncached formula is resolved first; its result is blank when [[isEmptyText]].
+   */
+  def isBlankForCount(value: CellValue): Boolean = value match
+    case CellValue.Empty => true
+    case CellValue.Formula(_, cached, _) => cached.exists(isEmptyText)
+    case other => isEmptyText(other)
+
+  /** #731: text of length 0, plain or rich: what a `""` cell or a formula's `""` holds. */
+  def isEmptyText(value: CellValue): Boolean = value match
+    case CellValue.Text(s) => s.isEmpty
+    case CellValue.RichText(rt) => rt.toPlainText.isEmpty
+    case _ => false
 
   /** Registry of all aggregators by name (uppercase) */
   private lazy val registry: Map[String, Aggregator[?]] = Map(
@@ -156,7 +178,7 @@ object Aggregator:
     def finalize(acc: Long) = BigDecimal(acc)
     override def countsNonEmpty: Boolean = true
 
-  /** COUNTBLANK: Count empty cells in a range */
+  /** COUNTBLANK: Count blank cells in a range ([[isBlankForCount]]) */
   given countblankAggregator: Aggregator[Long] with
     def name = "COUNTBLANK"
     def empty = 0L

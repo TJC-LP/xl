@@ -13,7 +13,7 @@ import scala.jdk.CollectionConverters.*
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Sheet, Workbook, given}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.cli.commands.WriteCommands
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.io.ExcelIO
@@ -85,8 +85,12 @@ class LibreOfficeOracleSpec extends FunSuite:
   private def num(n: Int): Option[CellValue] = Some(CellValue.Number(BigDecimal(n)))
 
   /**
-   * The review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10 cached 20,
-   * C1=B1+B2 cached 35. Deleting row 2 makes B1 `SUM(A1:A1)` = 5 and C1 `B1+#REF!` = #REF!.
+   * A variant of the review's reproduction: A1=5, A2=10, B1=SUM(A1:A2) cached 15, B2=ROW()*10
+   * cached 20, C1=B1+INDEX(B1:B2,2) cached 35. Deleting row 2 contracts both ranges, so B1 is 5 and
+   * INDEX(B1:B1,2) makes C1 #REF!. Use INDEX rather than an inline #REF!: LibreOfficeDev 26.8 reads
+   * even a standalone OOXML #REF! literal as #NAME?, independently of cache invalidation.
+   * StructuralCommandSpec pins recalculated deleted references; BatchRecalcSpec pins withdrawal and
+   * the INDEX fixture without requiring LibreOffice.
    */
   private def reviewWorkbook(): Workbook =
     Workbook(
@@ -94,7 +98,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         .put(ref"A1" -> 5, ref"A2" -> 10)
         .put(ref"B1", CellValue.Formula("SUM(A1:A2)", num(15)))
         .put(ref"B2", CellValue.Formula("ROW()*10", num(20)))
-        .put(ref"C1", CellValue.Formula("B1+B2", num(35)))
+        .put(ref"C1", CellValue.Formula("B1+INDEX(B1:B2,2)", num(35)))
     )
 
   test(
@@ -134,7 +138,7 @@ class LibreOfficeOracleSpec extends FunSuite:
         !csv("no-recalc").contains("15"),
         s"stale SUM(A1:A2) cache displayed: ${csv("no-recalc")}"
       )
-      assert(!csv("no-recalc").contains("35"), s"stale B1+B2 cache displayed: ${csv("no-recalc")}")
+      assert(!csv("no-recalc").contains("35"), s"stale C1 cache displayed: ${csv("no-recalc")}")
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
   }
@@ -217,4 +221,78 @@ class LibreOfficeOracleSpec extends FunSuite:
       )
     finally
       Files.walk(workDir).iterator().asScala.toList.reverse.foreach(p => Files.deleteIfExists(p))
+  }
+
+  test(
+    "GH-684: depreciation agrees on shared inputs and pins Excel/LibreOffice boundary differences"
+  ) {
+    assume(soffice.isDefined, "soffice not on PATH - skipping LibreOffice oracle test")
+    val formulas = Vector(
+      "SLN(30000,7500,10)",
+      "SYD(30000,7500,10,1)",
+      "SYD(30000,7500,10,10)",
+      "SLN(100,10,0)",
+      "SYD(100,10,0,1)",
+      "SYD(100,10,2.5,1.5)",
+      "SLN(-100,10,2)",
+      "SYD(10,100,2,1)",
+      // Retain LibreOffice observations even where the independently observed Excel results differ.
+      "SYD(100,10,2,0)",
+      "SYD(100,10,2,3)",
+      "SYD(100,10,2,-5)",
+      "SYD(100,10,2,0.5)",
+      "SYD(100,10,-2,1)"
+    )
+    val sheet = formulas.zipWithIndex.foldLeft(Sheet("Oracle")) { case (s, (formula, i)) =>
+      // No cached values: the external application must calculate every oracle result.
+      s.put(ARef.from0(0, i), CellValue.Formula(formula, None))
+    }
+    val dir = Files.createTempDirectory("xl-depreciation-oracle-")
+    val book = dir.resolve("depreciation.xlsx")
+    try
+      ExcelIO.instance[IO].write(Workbook(sheet), book).unsafeRunSync()
+      val observed = libreOfficeCsv(dir, book)("depreciation").split("\n").toVector.map(_.trim)
+      assertEquals(observed.length, formulas.length)
+      val loBoundaryResults = Map(
+        "SYD(100,10,2,0)" -> 90.0,
+        "SYD(100,10,2,3)" -> 0.0,
+        "SYD(100,10,2,-5)" -> 240.0,
+        "SYD(100,10,-2,1)" -> -180.0
+      )
+      formulas.zip(observed).foreach { (formula, value) =>
+        loBoundaryResults.get(formula) match
+          case Some(expected) =>
+            assertEqualsDouble(
+              value.toDoubleOption.getOrElse(fail(s"$formula: $value")),
+              expected,
+              1e-9,
+              formula
+            )
+            // Excel 16.114.3 returns #NUM! for these four cases; retain the divergence explicitly.
+            assertEquals(
+              sheet.evaluateFormula(formula),
+              Right(CellValue.Error(CellError.Num)),
+              formula
+            )
+          case None =>
+            sheet.evaluateFormula(formula) match
+              case Right(CellValue.Number(n)) =>
+                val external =
+                  value.toDoubleOption.getOrElse(fail(s"$formula: LibreOffice returned $value"))
+                assertEqualsDouble(n.toDouble, external, 1e-9, formula)
+              case Right(CellValue.Error(CellError.Div0)) => assertEquals(value, "#DIV/0!", formula)
+              case Right(CellValue.Error(CellError.Num)) => assertEquals(value, "#NUM!", formula)
+              case other => fail(s"$formula: unexpected XL result $other")
+      }
+    finally
+      val walk = Files.walk(dir)
+      try
+        walk
+          .iterator()
+          .asScala
+          .toVector
+          .sortBy(_.getNameCount)
+          .reverse
+          .foreach(Files.deleteIfExists)
+      finally walk.close()
   }

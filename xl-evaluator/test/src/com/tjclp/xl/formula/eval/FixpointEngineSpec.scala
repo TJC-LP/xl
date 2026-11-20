@@ -39,7 +39,7 @@ class FixpointEngineSpec extends FunSuite:
       iterative,
       Clock.system,
       rng,
-      roundRng => Evaluator.instance(roundRng),
+      (roundRng, _) => Evaluator.instance(roundRng),
       seed
     )
 
@@ -100,7 +100,7 @@ class FixpointEngineSpec extends FunSuite:
         IterativeCalc(100, BigDecimal("1E-9"), scheme = scheme),
         Clock.system,
         Rng.system,
-        rng =>
+        (rng, _) =>
           calls += 1
           Evaluator.instance(rng)
         ,
@@ -140,9 +140,9 @@ class FixpointEngineSpec extends FunSuite:
         IterativeCalc(100, BigDecimal("1E-9"), scheme = scheme),
         Clock.system,
         Rng.system,
-        rng => Evaluator.instance(rng),
+        (rng, _) => Evaluator.instance(rng),
         Map.empty,
-        parse = text =>
+        parse = (_, text) =>
           parses = parses :+ text
           SheetEvaluator.parseFormula(text)
       )
@@ -161,9 +161,9 @@ class FixpointEngineSpec extends FunSuite:
       IterativeCalc(5, BigDecimal("0.001")),
       Clock.system,
       Rng.system,
-      rng => Evaluator.instance(rng),
+      (rng, _) => Evaluator.instance(rng),
       Map.empty,
-      parse = text => Left(com.tjclp.xl.error.XLError.FormulaError(text, "injected"))
+      parse = (_, text) => Left(com.tjclp.xl.error.XLError.FormulaError(text, "injected"))
     )
     assert(rejected.stalled, "every member fails every round")
     assert(rejected.results(q(a1)).swap.exists(_.message.contains("injected")))

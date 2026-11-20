@@ -5,6 +5,7 @@ import java.time.LocalDate
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -83,9 +84,9 @@ class ArrayLiftingSpec extends FunSuite:
     val withF2 = sheet.put(ref"F2", CellValue.Formula(weaver))
     assertEquals(cellAt(s"=$weaver", ref"F2"), Right(num(5)))
     assertEquals(withF2.evaluateCell(ref"F2"), Right(num(5)))
-    assertEquals(withF2.evaluateWithDependencyCheck().map(_.get(ref"F2")), Right(Some(num(5))))
+    assertEquals(withF2.evalAll().map(_.get(ref"F2")), Right(Some(num(5))))
     assertEquals(
-      withF2.evaluateForRange(CellRange(ref"F2", ref"F2")).map(_.get(ref"F2")),
+      withF2.evalRange(CellRange(ref"F2", ref"F2")).map(_.get(ref"F2")),
       Right(Some(num(5)))
     )
     assertEquals(number(arrayEval(s"=$weaver")), BigDecimal(5))

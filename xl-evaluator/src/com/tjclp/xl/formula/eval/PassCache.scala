@@ -9,6 +9,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
+import com.tjclp.xl.formula.graph.FormulaParses
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -47,13 +48,19 @@ private[formula] object EvalPosition:
  * prefix count of stripped rows.
  */
 private[formula] final class Readiness private (
-  columns: Map[(SheetName, Int), Readiness.Column]
+  columns: Map[(SheetName, Int), Readiness.Column],
+  val positionFree: Boolean
 ):
-  /** Whether rows `r0..r1` of `col` on `sheet` are final for a reader at `at`. */
+  /**
+   * Whether rows `r0..r1` of `col` on `sheet` are final for a reader at `at`. A position-free
+   * readiness ([[Readiness.fixpoint]]) answers for every reader, positioned or not.
+   */
   def allows(sheet: SheetName, col: Int, r0: Int, r1: Int, at: EvalPosition): Boolean =
-    if !at.isDefined then false
+    if !at.isDefined && !positionFree then false
     else if r0 > r1 then true
-    else columns.get((sheet, col)).forall(_.allows(r0, r1, at.slot))
+    else
+      val slot = if at.isDefined then at.slot else Int.MaxValue
+      columns.get((sheet, col)).forall(_.allows(r0, r1, slot))
 
 private[formula] object Readiness:
 
@@ -90,15 +97,29 @@ private[formula] object Readiness:
    * evaluate (a stripped cell that is also evaluated counts as evaluated).
    */
   def build(slots: Map[QualifiedRef, Int], stripped: Set[QualifiedRef]): Readiness =
+    new Readiness(columns(slots, stripped), positionFree = false)
+
+  /**
+   * #891: the readiness of one iterative fixpoint, whose members are the only cells that change
+   * while it runs (every other cell of its sheets is fixed for its duration). A box holding a
+   * member is never final; every other box is final for every reader, at any position. An uncached
+   * formula still refuses its box when it is copied (the reader scans, which evaluates it).
+   */
+  def fixpoint(members: Iterable[QualifiedRef]): Readiness =
+    new Readiness(columns(Map.empty, members.toSet), positionFree = true)
+
+  private def columns(
+    slots: Map[QualifiedRef, Int],
+    stripped: Set[QualifiedRef]
+  ): Map[(SheetName, Int), Column] =
     val entries =
       slots.iterator.map((q, slot) => (q, slot, false)) ++
         stripped.iterator.filterNot(slots.contains).map(q => (q, -1, true))
-    val columns = entries.toVector
+    entries.toVector
       .groupBy((q, _, _) => (q.sheet, q.ref.col.index0))
       .view
       .mapValues(members => column(members.map((q, slot, s) => (q.ref.row.index0, slot, s))))
       .toMap
-    new Readiness(columns)
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def column(members: Vector[(Int, Int, Boolean)]): Column =
@@ -173,13 +194,15 @@ private[formula] object ColumnSlice:
  * range of each sheet, static defined-name resolutions, parsed name bodies, [[ColumnSlice]]s (one
  * per column when the column is ready, else per requested box), and, when `criteriaIndex` is on,
  * each slice's equality index ([[EqIndex]]) and the candidate rows of criteria calls
- * ([[CriteriaCandidates]]).
+ * ([[CriteriaCandidates]]). When `parseCache` is on, it also holds the formula parses of the pass's
+ * graph build ([[FormulaParses]], #790).
  *
- * Name caches are valid whenever the memo caches at all: a resolution depends only on the name
- * table and the sheet list, which every entry records and checks, and a parse only on its text.
- * Used ranges and slices depend on cell contents, so they wait for [[begin]], which the passes that
- * thread their own sheets call with the [[Readiness]] of the order they are about to run. Until
- * then (a memo a test drives by hand) every request scans.
+ * Name caches and formula parses are valid whenever the memo caches at all: a resolution depends
+ * only on the name table and the sheet list, which every entry records and checks, and a parse only
+ * on its text, which every formula parse is looked up with. Used ranges and slices depend on cell
+ * contents, so they wait for [[begin]], which the passes that thread their own sheets call with the
+ * [[Readiness]] of the order they are about to run. Until then (a memo a test drives by hand) every
+ * request scans.
  *
  * Every structure here is safe under parallel waves: a used range or a slice is computed once
  * (single flight), so the counters it adds are the same in sequential and parallel passes.
@@ -187,7 +210,8 @@ private[formula] object ColumnSlice:
 private[formula] final class PassCache(
   val limits: PassCache.Limits,
   counters: RecalcCounters,
-  criteriaIndex: Boolean = true
+  criteriaIndex: Boolean = true,
+  parseCache: Boolean = true
 ):
   import PassCache.*
 
@@ -201,7 +225,6 @@ private[formula] final class PassCache(
    */
   def begin(ready: => Readiness): Unit =
     generations.clear()
-    usedRanges.clear()
     slices.clear()
     covering.clear()
     demands.clear()
@@ -233,22 +256,20 @@ private[formula] final class PassCache(
     generationCell(sheet).incrementAndGet()
     ()
 
-  private val usedRanges = new ConcurrentHashMap[(SheetName, Long), UsedRange]()
+  // ----- formula parses -----
+
+  private val formulaParses = new AtomicReference[FormulaParses](FormulaParses.none)
 
   /**
-   * `sheet.usedRange`, scanned once per sheet and structural generation while the pass is active
-   * (every scan counts as a `UsedRangeScans`), and on every call otherwise.
+   * #790: the parses of the graph build of the pass about to run, which evaluation looks up before
+   * it parses a formula cell; ignored when the parse cache is off. [[begin]] keeps them: a parse
+   * depends on its text alone.
    */
-  def usedRange(sheet: Sheet): Option[CellRange] =
-    if !active then scanUsedRange(sheet)
-    else
-      usedRanges
-        .computeIfAbsent((sheet.name, generation(sheet.name)), _ => UsedRange(scanUsedRange(sheet)))
-        .range
+  def useParses(parses: FormulaParses): Unit =
+    if parseCache then formulaParses.set(parses)
 
-  private def scanUsedRange(sheet: Sheet): Option[CellRange] =
-    counters.increment(RecalcCounters.Counter.UsedRangeScans)
-    sheet.usedRange
+  /** The formula parses [[useParses]] supplied, or none. */
+  def parses: FormulaParses = formulaParses.get()
 
   // ----- defined names -----
 
@@ -333,7 +354,9 @@ private[formula] final class PassCache(
   def slice(sheet: Sheet, col: Int, a: Int, b: Int, at: EvalPosition): SliceAnswer =
     readiness.get() match
       case scala.None => SliceAnswer.Ineligible
-      case Some(_) if !at.isDefined || a > b => SliceAnswer.Ineligible
+      case Some(_) if a > b => SliceAnswer.Ineligible
+      case Some(deferred) if !at.isDefined && !deferred.value.positionFree =>
+        SliceAnswer.Ineligible
       case Some(deferred) =>
         val name = sheet.name
         val gen = generation(name)
@@ -343,7 +366,7 @@ private[formula] final class PassCache(
         existing match
           case Some(found) => SliceAnswer.Use(found)
           case scala.None =>
-            val used = usedRange(sheet)
+            val used = sheet.usedRange
             val usedRows = used.fold(0)(_.height)
             val threshold = math.max(limits.minSliceRows, usedRows / limits.sliceRowsDivisor)
             if b - a + 1 < threshold then SliceAnswer.Small
@@ -408,11 +431,10 @@ private[formula] final class PassCache(
       var i = 0
       var complete = true
       while complete && i < n do
-        sheet.cells.get(ARef.from0(col, r0 + i)).map(_.value) match
-          case scala.None => values(i) = CellValue.Empty
-          case Some(CellValue.Formula(_, scala.None, _)) => complete = false
-          case Some(CellValue.Formula(_, Some(cached), _)) => values(i) = cached
-          case Some(value) => values(i) = value
+        sheet.cells.valueAt(ARef.from0(col, r0 + i)) match
+          case CellValue.Formula(_, scala.None, _) => complete = false
+          case CellValue.Formula(_, Some(cached), _) => values(i) = cached
+          case value => values(i) = value
         i += 1
       if !complete then
         cachedCells.addAndGet(-n.toLong)
@@ -423,6 +445,15 @@ private[formula] final class PassCache(
         covering.merge((sheet.name, col), Vector(slice), (known, more) => known ++ more)
         counters.increment(RecalcCounters.Counter.SlicesBuilt)
         Some(slice)
+
+  /**
+   * The slices built so far, in no particular order. Test-only: law specs read it to check which
+   * rows a pass copied; evaluation never does.
+   */
+  def builtSlices: Vector[ColumnSlice] =
+    val all = Vector.newBuilder[ColumnSlice]
+    covering.forEach((_, built) => all ++= built)
+    all.result()
 
   // ----- equality indexes and candidates -----
 
@@ -525,8 +556,6 @@ private[formula] object PassCache:
 
     /** The workbook's sheet of this name. */
     case Book(sheet: SheetName)
-
-  private final case class UsedRange(range: Option[CellRange])
 
   /** A [[Readiness]] built once, on first use; a lazy val is safe to share between waves. */
   private final class Deferred(build: () => Readiness):

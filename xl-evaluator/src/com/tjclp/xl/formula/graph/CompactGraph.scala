@@ -4,7 +4,7 @@ import scala.collection.immutable.{BitSet, LongMap}
 import scala.collection.mutable
 
 import com.tjclp.xl.CellRange
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.RecalcCounters
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -31,11 +31,11 @@ import com.tjclp.xl.workbooks.Workbook
  * formula reaches a range node exactly when it lies inside the range, and a running-total column
  * costs O(rows log rows) edges instead of O(rows²).
  *
- * Reachability between formulas is the legacy per-cell graph's (`fromWorkbookFormulaGraph`): a
- * legacy edge `c → f` (formula `c` inside a range `f` reads) is the path `c → … → canonical segment
- * → range → f`, and every virtual path ends at a reader of a range that contains its start. Hence
- * the same cycles, the same transitive dependents and, with the min-heap order of [[kahn]], the
- * same lexicographically smallest topological order of the formulas.
+ * Reachability between formulas is the per-cell graph's (the `NaiveGraphs.fromWorkbookFormulaGraph`
+ * test oracle): a legacy edge `c → f` (formula `c` inside a range `f` reads) is the path `c → … →
+ * canonical segment → range → f`, and every virtual path ends at a reader of a range that contains
+ * its start. Hence the same cycles, the same transitive dependents and, with the min-heap order of
+ * [[kahn]], the same lexicographically smallest topological order of the formulas.
  *
  * Constant cells are not nodes. [[foreachReaderOfCell]] finds a cell's direct readers through the
  * point reads of constants and an [[IntervalIndex]] of the range nodes per column.
@@ -58,7 +58,14 @@ private[formula] final class CompactGraph private (
   columnIndex: LongMap[IntervalIndex],
   wideIndex: Map[Int, IntervalIndex],
   constKeys: IArray[Long],
-  constReaders: IArray[Int]
+  constReaders: IArray[Int],
+  val parses: FormulaParses,
+  /**
+   * A VLOOKUP/HLOOKUP was narrowed to the strip picked by a selector cell that a data table
+   * substitutes. Right for recalculation (the cell holds that value); a what-if pass over that
+   * input needs the graph built `whatIfSafe`.
+   */
+  val narrowsOnWhatIfInput: Boolean
 ):
   import CompactGraph.*
 
@@ -141,85 +148,8 @@ private[formula] final class CompactGraph private (
   /** The formulas of every cyclic component. */
   def cyclicFormulas: BitSet = components.cyclic
 
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def tarjan(): Components =
-    val n = nodeCount
-    val f = formulaCount
-    val index = Array.fill(n)(-1)
-    val low = new Array[Int](n)
-    val onStack = new Array[Boolean](n)
-    val stack = new Array[Int](n)
-    val frameNode = new Array[Int](n)
-    val frameCursor = new Array[Int](n)
-    val compOf = new Array[Int](n)
-    val compCyclic = new IntBuf()
-    val cyclic = mutable.BitSet.empty
-    var sp = 0
-    var fp = 0
-    var next = 0
-    var comps = 0
-    var work = 0L
-    var root = 0
-    while root < n do
-      if index(root) < 0 then
-        index(root) = next
-        low(root) = next
-        next += 1
-        stack(sp) = root
-        sp += 1
-        onStack(root) = true
-        frameNode(fp) = root
-        frameCursor(fp) = succOff(root)
-        fp += 1
-        while fp > 0 do
-          val v = frameNode(fp - 1)
-          val c = frameCursor(fp - 1)
-          if c < succOff(v + 1) then
-            frameCursor(fp - 1) = c + 1
-            work += 1
-            val w = succDst(c)
-            if index(w) < 0 then
-              index(w) = next
-              low(w) = next
-              next += 1
-              stack(sp) = w
-              sp += 1
-              onStack(w) = true
-              frameNode(fp) = w
-              frameCursor(fp) = succOff(w)
-              fp += 1
-            else if onStack(w) && index(w) < low(v) then low(v) = index(w)
-          else
-            fp -= 1
-            if low(v) == index(v) then
-              val top = sp
-              var done = false
-              while !done do
-                sp -= 1
-                val w = stack(sp)
-                onStack(w) = false
-                compOf(w) = comps
-                done = w == v
-              val size = top - sp
-              val isCyclic = size > 1 || (v < f && selfReads.contains(v))
-              if isCyclic then
-                var k = sp
-                while k < top do
-                  if stack(k) < f then cyclic += stack(k)
-                  k += 1
-              compCyclic += (if isCyclic then 1 else 0)
-              comps += 1
-            if fp > 0 then
-              val parent = frameNode(fp - 1)
-              if low(v) < low(parent) then low(parent) = low(v)
-      root += 1
-    Components(
-      IArray.unsafeFromArray(compOf),
-      comps,
-      IArray.unsafeFromArray(compCyclic.toArray),
-      cyclic.toImmutable,
-      work
-    )
+    SccKernel.tarjan(nodeCount, formulaCount, succOff, succDst, selfReads)
 
   /**
    * Every formula reachable from `seeds` (formula ids) along the edges, the seeds excluded, never
@@ -256,6 +186,82 @@ private[formula] final class CompactGraph private (
           if s < f then found += s
         e += 1
     Reach((found --= seeds).toImmutable, work)
+
+  /**
+   * #891: the transpose of the edge array — for each node, the nodes it reads from — as one CSR
+   * pair (`predOff` of length `nodeCount + 1`, `predDst`), built by a counting pass and a prefix
+   * sum. Derived from the graph's value on first use; the graph stays immutable.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private lazy val predecessors: (IArray[Int], IArray[Int]) =
+    val n = nodeCount
+    val off = new Array[Int](n + 1)
+    var e = 0
+    while e < succDst.length do
+      off(succDst(e) + 1) += 1
+      e += 1
+    var k = 0
+    while k < n do
+      off(k + 1) += off(k)
+      k += 1
+    val dst = new Array[Int](succDst.length)
+    val fill = java.util.Arrays.copyOf(off, n)
+    var u = 0
+    while u < n do
+      var i = succOff(u)
+      val end = succOff(u + 1)
+      while i < end do
+        val v = succDst(i)
+        dst(fill(v)) = u
+        fill(v) += 1
+        i += 1
+      u += 1
+    (IArray.unsafeFromArray(off), IArray.unsafeFromArray(dst))
+
+  /**
+   * #891: every formula `seeds` (formula ids) read, directly or transitively, the seeds excluded
+   * unless a cycle leads back to them — the upstream mirror of [[reach]]. A formula of `stop` is
+   * listed when reached but its own precedents are never walked, a seed's included (a data table's
+   * substituted input). Virtual nodes are walked through: a range node reads the segments and
+   * formulas that make it up, so a formula reached through a range is every formula inside the
+   * range.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def precedentClosure(seeds: BitSet, stop: BitSet): Reach =
+    val (predOff, predDst) = predecessors
+    val n = nodeCount
+    val f = formulaCount
+    val visited = new Array[Boolean](n)
+    val queue = new Array[Int](n)
+    var head = 0
+    var tail = 0
+    seeds.foreach { s =>
+      if s >= 0 && s < f && !visited(s) then
+        visited(s) = true
+        queue(tail) = s
+        tail += 1
+    }
+    val found = mutable.BitSet.empty
+    var work = 0L
+    while head < tail do
+      val u = queue(head)
+      head += 1
+      if !(u < f && stop.contains(u)) then
+        var e = predOff(u)
+        val end = predOff(u + 1)
+        while e < end do
+          val p = predDst(e)
+          work += 1
+          if !visited(p) then
+            visited(p) = true
+            queue(tail) = p
+            tail += 1
+            if p < f then found += p
+          else if p < f && seeds.contains(p) then found += p
+          e += 1
+      // a formula that reads itself is its own precedent
+      if u < f && readsItself(u) then found += u
+    Reach(found.toImmutable, work)
 
   /**
    * The canonical evaluation order of every formula outside `removed`: Kahn's algorithm with a
@@ -386,101 +392,8 @@ private[formula] final class CompactGraph private (
    * whether it is cyclic. Components made only of virtual nodes are expanded in passing, as in
    * [[kahn]].
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def condensation: Vector[(IArray[Int], Boolean)] =
-    val comps = components
-    val n = nodeCount
-    val f = formulaCount
-    val c = comps.count
-    // members per component (formulas only), ascending, by counting sort
-    val memberCount = new Array[Int](c + 1)
-    var v = 0
-    while v < f do
-      memberCount(comps.compOf(v) + 1) += 1
-      v += 1
-    var k = 0
-    while k < c do
-      memberCount(k + 1) += memberCount(k)
-      k += 1
-    val memberOff = memberCount.clone()
-    val members = new Array[Int](f)
-    val fill = memberCount.clone()
-    v = 0
-    while v < f do
-      val cv = comps.compOf(v)
-      members(fill(cv)) = v
-      fill(cv) += 1
-      v += 1
-    // condensation edges (one per underlying edge; in-degrees count them the same way)
-    val outCount = new Array[Int](c + 1)
-    val indeg = new Array[Int](c)
-    var u = 0
-    while u < n do
-      val cu = comps.compOf(u)
-      var e = succOff(u)
-      val end = succOff(u + 1)
-      while e < end do
-        val cs = comps.compOf(succDst(e))
-        if cs != cu then
-          outCount(cu + 1) += 1
-          indeg(cs) += 1
-        e += 1
-      u += 1
-    k = 0
-    while k < c do
-      outCount(k + 1) += outCount(k)
-      k += 1
-    val outDst = new Array[Int](outCount(c))
-    val outFill = outCount.clone()
-    u = 0
-    while u < n do
-      val cu = comps.compOf(u)
-      var e = succOff(u)
-      val end = succOff(u + 1)
-      while e < end do
-        val cs = comps.compOf(succDst(e))
-        if cs != cu then
-          outDst(outFill(cu)) = cs
-          outFill(cu) += 1
-        e += 1
-      u += 1
-
-    def key(comp: Int): Int =
-      if memberOff(comp + 1) > memberOff(comp) then members(memberOff(comp)) else -1
-    val heap = new IntMinHeap(f)
-    val virtual = new Array[Int](math.max(1, c))
-    var vsp = 0
-    def release(comp: Int): Unit =
-      val kk = key(comp)
-      if kk >= 0 then heap.push(kk)
-      else
-        virtual(vsp) = comp
-        vsp += 1
-    def visit(comp: Int): Unit =
-      var e = outCount(comp)
-      val end = outCount(comp + 1)
-      while e < end do
-        val s = outDst(e)
-        indeg(s) -= 1
-        if indeg(s) == 0 then release(s)
-        e += 1
-    def drainVirtual(): Unit =
-      while vsp > 0 do
-        vsp -= 1
-        visit(virtual(vsp))
-    k = 0
-    while k < c do
-      if indeg(k) == 0 then release(k)
-      k += 1
-    drainVirtual()
-    val out = Vector.newBuilder[(IArray[Int], Boolean)]
-    while heap.nonEmpty do
-      val comp = comps.compOf(heap.pop())
-      val listed = java.util.Arrays.copyOfRange(members, memberOff(comp), memberOff(comp + 1))
-      out += ((IArray.unsafeFromArray(listed), comps.compCyclic(comp) == 1))
-      visit(comp)
-      drainVirtual()
-    out.result()
+    SccKernel.condensation(nodeCount, formulaCount, succOff, succDst, components)
 
   /**
    * Member-to-member reads inside a set of formulas: for each member, the members it reads, found
@@ -514,6 +427,63 @@ private[formula] final class CompactGraph private (
     }
     acc.toMap
 
+  /**
+   * #891: [[DependencyGraph.withinComponentOrder]] over formula ids, with the reads among `members`
+   * taken from this graph exactly as [[memberPrecedents]] takes them (walking only `members`'
+   * component when they share one). Formula ids are in grid order, so the members ascending are the
+   * kernel's local ids; one stamp set replaces a visited set per member. Returns formula ids.
+   */
+  def withinComponentOrder(members: BitSet): Array[Int] = sweepOrder(members)._1
+
+  /**
+   * [[withinComponentOrder]] with the scratch its walk allocated, for the pins that hold that
+   * scratch to the size of the component (a book of many small cycles orders each one, so scratch
+   * sized to the graph makes the pass quadratic). Test-only.
+   */
+  private[formula] def withinComponentOrderMeasured(members: BitSet): (Array[Int], SweepScratch) =
+    sweepOrder(members)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def sweepOrder(members: BitSet): (Array[Int], SweepScratch) =
+    val ids = members.toArray
+    val n = ids.length
+    var i = 0
+    val compOf = components.compOf
+    val memberComps = members.iterator.map(compOf(_)).distinct.take(2).toVector
+    val only = memberComps match
+      case Vector(c) => c
+      case _ => -1
+    // scratch sized to the component: a book of many small cycles orders each for its own cost
+    val seen = new StampSet(n)
+    val pending = new IntBuf(16)
+    val src = new IntBuf(math.max(16, n))
+    val dst = new IntBuf(math.max(16, n))
+    i = 0
+    while i < n do
+      val u = ids(i)
+      pending.clear()
+      foreachSucc(u)(v => if only < 0 || compOf(v) == only then pending += v)
+      var head = 0
+      while head < pending.length do
+        val s = pending(head)
+        head += 1
+        if seen.mark(s, u) then
+          if s < formulaCount then
+            // `ids` ascends, so a member's position in it is its local id
+            val reader = if s == u then -1 else java.util.Arrays.binarySearch(ids, s)
+            if reader >= 0 then
+              src += i
+              dst += reader
+          else foreachSucc(s)(v => if only < 0 || compOf(v) == only then pending += v)
+      i += 1
+    val order = DependencyGraph.cutKahn(n, src, dst)
+    val scratch = SweepScratch(
+      members = n,
+      edges = src.length,
+      cells = seen.allocated + pending.capacity + src.capacity + dst.capacity
+    )
+    (Array.tabulate(n)(k => ids(order(k))), scratch)
+
 private[formula] object CompactGraph:
 
   /** Tarjan's result: component per node, whether each is cyclic, and the cyclic formulas. */
@@ -524,6 +494,14 @@ private[formula] object CompactGraph:
     cyclic: BitSet,
     work: Long
   )
+
+  /**
+   * What one [[CompactGraph.withinComponentOrder]] call worked with: the members it ordered, the
+   * distinct member-to-member reads it found, and the array cells its walk allocated (the visited
+   * set with every table it outgrew, the walk queue and the two edge lists). The kernel that orders
+   * them afterwards sees only `members` and `edges`, never the graph.
+   */
+  final case class SweepScratch(members: Int, edges: Int, cells: Long)
 
   /** Formulas reached by [[CompactGraph.reach]] and the edges it walked. */
   final case class Reach(formulas: BitSet, work: Long)
@@ -549,11 +527,28 @@ private[formula] object CompactGraph:
    * Build the graph of `wb`. Each formula is parsed once (timed as [[RecalcCounters.Phase.Parse]])
    * and its reads extracted with the legacy extractor in range-recording mode, with the precise
    * VLOOKUP/HLOOKUP strips of the ordering graph; each defined-name body is parsed once per build.
-   * `counters` also receives the node and edge counts.
+   * The parses are kept as [[parses]] for the pass's evaluation (#790). `counters` also receives
+   * the node and edge counts.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  def build(wb: Workbook, counters: RecalcCounters = RecalcCounters.disabled): CompactGraph =
+  def build(
+    wb: Workbook,
+    counters: RecalcCounters = RecalcCounters.disabled,
+    whatIfSafe: Boolean = false
+  ): CompactGraph =
     val (nodes, texts) = NodeTable.build(wb)
+    // `whatIfSafe`: a lookup whose selector is a data-table input keeps its whole range, so the
+    // graph orders and closes over every strip a substitution can select. Otherwise the lookup is
+    // narrowed as recalculation reads it, and the graph says that it was.
+    var narrowed = false
+    val whatIfSelector: Option[QualifiedRef => Boolean] =
+      if nodes.whatIfInputs.isEmpty then None
+      else if whatIfSafe then Some(nodes.whatIfInputs.contains)
+      else
+        Some { q =>
+          if nodes.whatIfInputs.contains(q) then narrowed = true
+          false
+        }
     val f = nodes.formulaCount
 
     // ---- 1. reads of every formula -----------------------------------------------------------
@@ -570,6 +565,7 @@ private[formula] object CompactGraph:
     val constReaders = new IntBuf()
     val selfReads = mutable.BitSet.empty
     val scratch = new IntBuf()
+    val parsed = new Array[Option[TExpr[?]]](f)
 
     def intern(sheet: Int, range: CellRange): Int =
       val r0 = range.start.row.index0
@@ -601,7 +597,10 @@ private[formula] object CompactGraph:
     while i < f do
       val sheetName = nodes.sheetNames(nodes.sheet(i))
       scratch.clear()
-      counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(texts(i))) match
+      counters.increment(RecalcCounters.Counter.FormulaParses)
+      val parse = counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(texts(i)))
+      parsed(i) = parse.toOption
+      parse match
         case Right(expr) =>
           val points = DependencyGraph.extractQualifiedDependencies(
             expr,
@@ -609,9 +608,11 @@ private[formula] object CompactGraph:
             record,
             Some(wb),
             preciseLookups = true,
+            whatIfSelector = whatIfSelector,
             canonicalSheet = canonicalSheet,
             nameRanges = nameRanges,
-            parseName = parseName
+            parseName = parseName,
+            reader = Some(ARef.from0(nodes.col(i), nodes.row(i)))
           )
           val reader = i
           points.foreach { p =>
@@ -813,7 +814,9 @@ private[formula] object CompactGraph:
       LongMap.from(narrow.iterator.map((k, t) => k -> index(t))),
       wide.iterator.map((k, t) => k -> index(t)).toMap,
       IArray.unsafeFromArray(constKeys.toArray),
-      IArray.unsafeFromArray(constReaders.toArray)
+      IArray.unsafeFromArray(constReaders.toArray),
+      FormulaParses.of(nodes, texts, IArray.unsafeFromArray(parsed)),
+      narrowed
     )
 
   /** First index of `sorted` whose element is at least `x`. */

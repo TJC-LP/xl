@@ -3,7 +3,6 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -117,7 +116,7 @@ class SheetNameCaseSpec extends FunSuite:
     assert(!DependencyGraph.dynamicCells(wb).contains(at("B1")))
   }
 
-  test("recalculateDependents seeds a case-variant sheet name onto the tab's cells") {
+  test("recalculateAfterEdit seeds a case-variant sheet name onto the tab's cells") {
     val wb = Workbook(
       Vector(
         sheetWith("Data", "A1" -> num(1)),
@@ -127,6 +126,6 @@ class SheetNameCaseSpec extends FunSuite:
     val lower = SheetName.unsafe("data")
     val edited =
       wb(lower).map(s => wb.put(s.put(a1("A1"), num(10)))).fold(e => fail(e.message), identity)
-    val recalculated = edited.recalculateDependents(lower, Set(a1("A1")))
+    val recalculated = edited.recalculateAfterEdit(lower, Set(a1("A1")), RecalcOptions()).workbook
     assertEquals(cached(recalculated, "Summary", "A1"), Some(num(20)))
   }

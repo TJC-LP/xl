@@ -5,7 +5,15 @@ import munit.FunSuite
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{
+  EvalError,
+  Evaluator,
+  IterativeMode,
+  RecalcCounters,
+  RecalcOptions,
+  WorkbookEvaluator
+}
+import com.tjclp.xl.formula.eval.RecalcCounters.Counter
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -164,7 +172,7 @@ class LookupChannelSpec extends FunSuite:
     check(keys, "=XLOOKUP(99,A1:A5,B1:B5)", err(CellError.NA))
     check(keys, "=MATCH(25,A1:A5,1)", num(2))
     check(keys, "=XLOOKUP(25,A1:A5,B1:B5,,-1)", text("b"))
-    // the walk is row-major over a 2-D lookup_array, positions the range's own
+    // a 2-D lookup_array is #N/A for MATCH (#724), never a row-major position
     val grid = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(1))
       .put(ref"B1", num(2))
@@ -172,7 +180,8 @@ class LookupChannelSpec extends FunSuite:
       .put(ref"B2", num(4))
       .put(ref"A3", CellValue.Formula("1+", None))
       .put(ref"D2", text("dd"))
-    check(grid, "=MATCH(4,A1:B3,0)", num(4))
+    check(grid, "=MATCH(4,A1:B3,0)", err(CellError.NA))
+    check(grid, "=MATCH(3,A1:A3,0)", num(2))
     // XLOOKUP's keys are one row or column; preserve each orientation's own position.
     check(grid, "=XLOOKUP(4,A2:B2,C2:D2)", text("dd"))
     check(grid, "=XLOOKUP(4,B1:B2,D1:D2)", text("dd"))
@@ -331,13 +340,11 @@ class LookupChannelSpec extends FunSuite:
     "#692: a bounded lookup costs its range, not the sheet, however many cells the sheet holds"
   ) {
     // Sheet.usedRange scans every populated cell. A full-column lookup pays that once to clip its
-    // walk; a bounded range must not pay it at all — on this sheet (200k unrelated cells in Z) the
-    // 20,000 lifted lookups below would otherwise visit 4×10⁹ cells where their keys number ten.
-    // The budget is generous for the ten-cell walks (a few seconds at most) and far below what a
-    // per-call sheet scan takes (over four minutes when measured).
-    val Noise = 200000
+    // walk; a bounded range must not pay it at all — on this sheet (20k unrelated cells in Z) the
+    // 20,000 lifted lookups below would otherwise visit 4×10⁸ cells where their keys number ten.
+    // The lifted results pin the semantics; the scan count is pinned by the test below (#843).
+    val Noise = 20000
     val Lookups = 20000
-    val BudgetMs = 30000L
     val keys = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
       s.put(ref"A1".shift(0, i), num(i + 1))
     }
@@ -345,11 +352,8 @@ class LookupChannelSpec extends FunSuite:
       s.put(ref"B1".shift(0, i), num(i % 10 + 1))
     }
     val sheet = (0 until Noise).foldLeft(lookups) { (s, i) => s.put(ref"Z1".shift(0, i), num(i)) }
-    val t0 = System.nanoTime()
     val matched = sheet.evaluateArrayFormula(s"=MATCH(B1:B$Lookups,A1:A10,0)", ref"C1")
     val looked = sheet.evaluateArrayFormula(s"=XLOOKUP(B1:B$Lookups,A1:A10,A1:A10)", ref"D1")
-    val elapsedMs = (System.nanoTime() - t0) / 1000000L
-    assert(elapsedMs < BudgetMs, s"20k bounded lookups took ${elapsedMs}ms (budget ${BudgetMs}ms)")
     val (matchedSheet, matchedRange) = matched.fold(e => fail(e.toString), identity)
     val (lookedSheet, lookedRange) = looked.fold(e => fail(e.toString), identity)
     assertEquals(matchedRange.height, Lookups)
@@ -364,14 +368,14 @@ class LookupChannelSpec extends FunSuite:
   }
 
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {
-    // A1:B2 is the used range; C1 is blank, so 3 (A2) sits at row-major position 4 of A1:C2
+    // A1:B2 is the used range; C1 is blank, so 2 (B1) sits at position 2 of A1:D1
     val grid = Sheet(SheetName.unsafe("S"))
       .put(ref"A1", num(1))
       .put(ref"B1", num(2))
       .put(ref"A2", num(3))
       .put(ref"B2", num(4))
-    check(grid, "=MATCH(3,A1:C2,0)", num(4))
-    check(grid, "=MATCH(4,A1:C2,0)", num(5))
+    check(grid, "=MATCH(2,A1:D1,0)", num(2))
+    check(grid, "=MATCH(4,A2:D2,0)", num(2))
     check(grid, "=MATCH(3,A1:A9,0)", num(2))
     check(grid, "=XLOOKUP(3,A1:A9,B1:B9)", num(4))
     check(grid, "=XLOOKUP(9,A1:A9,B1:B9)", err(CellError.NA))

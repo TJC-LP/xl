@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 // SheetEvaluator extension methods now available from com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
 import munit.FunSuite
@@ -11,7 +12,8 @@ import java.time.{LocalDate, LocalDateTime}
 /**
  * Tests for Sheet evaluation API (WI-09b Phase 2).
  *
- * Tests evaluateFormula, evaluateCell, and evaluateAllFormulas extension methods.
+ * Tests evaluateFormula, evaluateCell and evaluateForRangePerCell, and whole-sheet evaluation
+ * through `Workbook.recalculate` (EvalAllSyntax).
  */
 class SheetEvaluatorSpec extends FunSuite:
   val emptySheet = new Sheet(name = SheetName.unsafe("Test"))
@@ -269,28 +271,28 @@ class SheetEvaluatorSpec extends FunSuite:
     assertEquals(result, Right(CellValue.Error(CellError.Div0)))
   }
 
-  // ===== evaluateAllFormulas Tests =====
+  // ===== Whole-sheet evaluation (#891: evaluateAllFormulas, now Workbook.recalculate) =====
 
-  test("evaluateAllFormulas: empty sheet") {
-    val result = emptySheet.evaluateAllFormulas()
+  test("whole-sheet recalc: empty sheet") {
+    val result = emptySheet.evalAll()
     assertEquals(result, Right(Map.empty[ARef, CellValue]))
   }
 
-  test("evaluateAllFormulas: sheet with no formulas") {
+  test("whole-sheet recalc: sheet with no formulas") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Text("Hello")
     )
-    val result = sheet.evaluateAllFormulas()
+    val result = sheet.evalAll()
     assertEquals(result, Right(Map.empty[ARef, CellValue]))
   }
 
-  test("evaluateAllFormulas: single formula") {
+  test("whole-sheet recalc: single formula") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1*2")
     )
-    val result = sheet.evaluateAllFormulas()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 1)
@@ -298,14 +300,14 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateAllFormulas: multiple formulas") {
+  test("whole-sheet recalc: multiple formulas") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1*2"),
       ref"C1" -> CellValue.Formula("=A1+5"),
       ref"D1" -> CellValue.Text("Not a formula")
     )
-    val result = sheet.evaluateAllFormulas()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 2)
@@ -314,14 +316,14 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateAllFormulas: error VALUES thread as values, host failures still abort") {
+  test("whole-sheet recalc: error VALUES thread as values, host failures still abort") {
     // GH-344: an Excel error value is a RESULT — it no longer aborts the bulk evaluation
     // (fail-fast now applies to host failures only, e.g. unknown functions below).
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=10/0"),
       ref"B1" -> CellValue.Formula("=20+2")
     )
-    val result = sheet.evaluateAllFormulas()
+    val result = sheet.evalAll()
     assertEquals(
       result,
       Right(
@@ -335,17 +337,17 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"A1" -> CellValue.Formula("=NOSUCHFN(1)"),
       ref"B1" -> CellValue.Formula("=20+2")
     )
-    assert(hostFailure.evaluateAllFormulas().isLeft, "host failures keep fail-fast")
+    assert(hostFailure.evalAll().isLeft, "host failures keep fail-fast")
   }
 
-  test("evaluateAllFormulas: text functions with literals") {
+  test("whole-sheet recalc: text functions with literals") {
     // Note: Cell references in text functions require type-aware parsing (future enhancement)
     // For now, test with literal text
     val sheet = sheetWith(
       ref"B1" -> CellValue.Formula("=UPPER(\"hello\")"),
       ref"C1" -> CellValue.Formula("=CONCATENATE(\"Hello\", \" \", \"World\")")
     )
-    val result = sheet.evaluateAllFormulas()
+    val result = sheet.evalAll()
     result match
       case Right(results) =>
         assertEquals(results.size, 2)
@@ -355,13 +357,13 @@ class SheetEvaluatorSpec extends FunSuite:
         fail(s"Expected Right but got Left($error)")
   }
 
-  test("evaluateAllFormulas: date functions with clock") {
+  test("whole-sheet recalc: date functions with clock") {
     val clock = Clock.fixedDate(LocalDate.of(2025, 11, 21))
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=TODAY()"),
       ref"B1" -> CellValue.Formula("=YEAR(TODAY())")
     )
-    val result = sheet.evaluateAllFormulas(clock)
+    val result = sheet.evalAll(clock)
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 2)
@@ -373,15 +375,15 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  // ===== evaluateWithDependencyCheck Tests (WI-09d Integration) =====
+  // ===== Dependency-ordered evaluation (WI-09d; #891: now Workbook.recalculate) =====
 
-  test("evaluateWithDependencyCheck: no cycles, simple chain") {
+  test("whole-sheet recalc, dependency order: no cycles, simple chain") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1+5"),
       ref"C1" -> CellValue.Formula("=B1*2")
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 2) // B1 and C1 (constants not included)
@@ -390,12 +392,12 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: circular reference detected") {
+  test("whole-sheet recalc, dependency order: circular reference detected") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=B1"),
       ref"B1" -> CellValue.Formula("=A1")
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isLeft)
     result match
       case scala.util.Left(error) =>
@@ -404,13 +406,13 @@ class SheetEvaluatorSpec extends FunSuite:
       case _ => fail("Expected Left with circular reference error")
   }
 
-  test("evaluateWithDependencyCheck: self-reference detected") {
+  test("whole-sheet recalc, dependency order: self-reference detected") {
     val sheet = sheetWith(ref"A1" -> CellValue.Formula("=A1"))
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isLeft)
   }
 
-  test("evaluateWithDependencyCheck: diamond dependency") {
+  test("whole-sheet recalc, dependency order: diamond dependency") {
     // A1 = 10, B1 = A1+5, C1 = A1*2, D1 = B1+C1
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
@@ -418,7 +420,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"C1" -> CellValue.Formula("=A1*2"),
       ref"D1" -> CellValue.Formula("=B1+C1")
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.get(ref"B1"), Some(CellValue.Number(BigDecimal(15))))
@@ -427,7 +429,7 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: formula referencing another formula") {
+  test("whole-sheet recalc, dependency order: formula referencing another formula") {
     // Test that formulas can reference other formulas and get evaluated values
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
@@ -435,7 +437,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"A3" -> CellValue.Formula("=A2+A1"), // 10 + 5 = 15
       ref"A4" -> CellValue.Formula("=A3*A2") // 15 * 10 = 150
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.get(ref"A2"), Some(CellValue.Number(BigDecimal(10))))
@@ -444,14 +446,14 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: multiple disconnected components") {
+  test("whole-sheet recalc, dependency order: multiple disconnected components") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"A2" -> CellValue.Formula("=A1+5"),
       ref"B1" -> CellValue.Number(BigDecimal(20)),
       ref"B2" -> CellValue.Formula("=B1*2")
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.get(ref"A2"), Some(CellValue.Number(BigDecimal(15))))
@@ -459,7 +461,7 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: range aggregation functions") {
+  test("whole-sheet recalc, dependency order: range aggregation functions") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(1)),
       ref"A2" -> CellValue.Number(BigDecimal(2)),
@@ -467,7 +469,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"B1" -> CellValue.Formula("=SUM(A1:A3)"),
       ref"C1" -> CellValue.Formula("=B1*2")
     )
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.get(ref"B1"), Some(CellValue.Number(BigDecimal(6))))
@@ -475,35 +477,35 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: empty sheet") {
-    val result = emptySheet.evaluateWithDependencyCheck()
+  test("whole-sheet recalc, dependency order: empty sheet") {
+    val result = emptySheet.evalAll()
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 0)
     }
   }
 
-  // ===== evaluateForRange Tests (Targeted Range Evaluation) =====
+  // ===== Targeted range evaluation (#891: evaluateForRange, now evaluateForRangePerCell) =====
 
-  test("evaluateForRange: empty range") {
+  test("range evaluation: empty range") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=10+5"),
       ref"Z1" -> CellValue.Formula("=100*2")
     )
     // Range with no formulas
     val range = CellRange(ref"B1", ref"C10")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assertEquals(result, Right(Map.empty[ARef, CellValue]))
   }
 
-  test("evaluateForRange: single formula in range") {
+  test("range evaluation: single formula in range") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"B1" -> CellValue.Formula("=A1*2"),
       ref"Z1" -> CellValue.Formula("=100*2") // Outside range, should NOT be evaluated
     )
     val range = CellRange(ref"A1", ref"B1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 1)
@@ -512,7 +514,7 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateForRange: only evaluates formulas in range") {
+  test("range evaluation: only evaluates formulas in range") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
       ref"A2" -> CellValue.Formula("=A1*2"), // In range
@@ -520,7 +522,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"B1" -> CellValue.Formula("=A1+100") // Outside range
     )
     val range = CellRange(ref"A1", ref"A2")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 1)
@@ -530,7 +532,7 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateForRange: evaluates transitive dependencies outside range") {
+  test("range evaluation: evaluates transitive dependencies outside range") {
     // C1 is in range, depends on B1, which depends on A1 (both outside range)
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(5)),
@@ -538,7 +540,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"C1" -> CellValue.Formula("=B1+10") // In range
     )
     val range = CellRange(ref"C1", ref"C1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isRight)
     result.foreach { results =>
       // Only C1 should be in results (in range), but B1 was evaluated to compute it
@@ -550,29 +552,29 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateForRange: handles range with no formulas") {
+  test("range evaluation: handles range with no formulas") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(10)),
       ref"A2" -> CellValue.Number(BigDecimal(20)),
       ref"A3" -> CellValue.Text("Hello")
     )
     val range = CellRange(ref"A1", ref"A3")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assertEquals(result, Right(Map.empty[ARef, CellValue]))
   }
 
-  test("evaluateForRange: detects circular references in dependencies") {
+  test("range evaluation: detects circular references in dependencies") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Formula("=B1"),
       ref"B1" -> CellValue.Formula("=A1"),
       ref"C1" -> CellValue.Formula("=A1+10") // Depends on circular ref
     )
     val range = CellRange(ref"C1", ref"C1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isLeft)
   }
 
-  test("evaluateForRange: an error VALUE in a dependency outside the range cascades in") {
+  test("range evaluation: an error VALUE in a dependency outside the range cascades in") {
     // GH-344 supersedes the GH-48 fail-fast pin for error VALUES: the dependency's #DIV/0!
     // is a computed value that cascades to its dependents (host failures still fail the call).
     val sheet = sheetWith(
@@ -580,11 +582,11 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"C1" -> CellValue.Formula("=B1+1") // In range, depends on B1
     )
     val range = CellRange(ref"C1", ref"C1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assertEquals(result, Right(Map(ref"C1" -> CellValue.Error(CellError.Div0))))
   }
 
-  test("evaluateForRange: an error VALUE in one component leaves other components intact") {
+  test("range evaluation: an error VALUE in one component leaves other components intact") {
     // GH-344 supersedes the GH-48 fail-fast pin for error VALUES: independent components
     // compute their values; the erroring cell reports its error VALUE.
     val sheet = sheetWith(
@@ -592,7 +594,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"B1" -> CellValue.Formula("=1+1") // In range, independent
     )
     val range = CellRange(ref"A1", ref"B1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assertEquals(
       result,
       Right(
@@ -607,10 +609,10 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"A1" -> CellValue.Formula("=NOSUCHFN(1)"),
       ref"B1" -> CellValue.Formula("=1+1")
     )
-    assert(hostFailure.evaluateForRange(range).isLeft, "host failures keep fail-fast")
+    assert(hostFailure.evalRange(range).isLeft, "host failures keep fail-fast")
   }
 
-  test("evaluateForRange: complex dependency chain") {
+  test("range evaluation: complex dependency chain") {
     // D1 = (A1 + B1) * C1 where each is a formula
     val sheet = sheetWith(
       ref"X1" -> CellValue.Number(BigDecimal(2)),
@@ -620,7 +622,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"D1" -> CellValue.Formula("=(A1+B1)*C1") // (10+5)*2 = 30
     )
     val range = CellRange(ref"D1", ref"D1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 1)
@@ -628,7 +630,7 @@ class SheetEvaluatorSpec extends FunSuite:
     }
   }
 
-  test("evaluateForRange: SUM range dependency") {
+  test("range evaluation: SUM range dependency") {
     val sheet = sheetWith(
       ref"A1" -> CellValue.Number(BigDecimal(1)),
       ref"A2" -> CellValue.Number(BigDecimal(2)),
@@ -638,7 +640,7 @@ class SheetEvaluatorSpec extends FunSuite:
       ref"Z1" -> CellValue.Formula("=999") // Outside, should not be evaluated
     )
     val range = CellRange(ref"C1", ref"C1")
-    val result = sheet.evaluateForRange(range)
+    val result = sheet.evalRange(range)
     assert(result.isRight)
     result.foreach { results =>
       assertEquals(results.size, 1)

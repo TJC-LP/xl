@@ -55,6 +55,6 @@ trait TExprConstructors:
     coercer.coerce(
       Call(
         FunctionSpecs.ifFn,
-        (test, ifTrue.asInstanceOf[TExpr[Any]], ifFalse.asInstanceOf[TExpr[Any]])
+        (test, ifTrue.asInstanceOf[TExpr[Any]], Some(ifFalse.asInstanceOf[TExpr[Any]]))
       )
     )

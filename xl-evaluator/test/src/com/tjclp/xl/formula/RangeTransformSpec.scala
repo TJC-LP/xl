@@ -70,8 +70,9 @@ class RangeTransformSpec extends FunSuite:
     assertEquals(bounded("=ROUND(B:B/A:A,2)"), List("B1:B1", "A1:A1"))
     assertEquals(bounded("=(A:A)^2"), List("A1:A1"))
     assertEquals(bounded("=LEN(A:A&\"\")"), List("A1:A1"))
-    // IFERROR lifts its value only: the fallback keeps its shape
-    assertEquals(bounded("=IFERROR(A:A,B:B)"), List("A1:A1", "B1:B1048576"))
+    // GH-754: fallback arrays are element sources, bounded without eagerly lifting them.
+    assertEquals(bounded("=IFERROR(A:A,B:B)"), List("A1:A1", "B1:B1"))
+    assertEquals(bounded("=IFNA(A:A,B:B)"), List("A1:A1", "B1:B1"))
   }
 
   test("transformRanges leaves shape-sensitive calls alone") {

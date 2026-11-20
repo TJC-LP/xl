@@ -22,14 +22,23 @@
 # instead: `./mill` via MILL_VERSION=<.mill-version>-jvm, coursier via its JAR, scala-cli via a
 # coursier bootstrap launcher. `curl` is unaffected either way (it honours SSL_CERT_FILE).
 #
+# Rate limits: Maven Central intermittently answers a cloud sandbox's burst of parallel downloads
+# with HTTP 429. Coursier retries only socket/TLS exceptions, so one 429 fails a whole resolution
+# (`Failed to download ….pom`, then `Server returned HTTP response code: 429`). What succeeded stays
+# in the cache, so a rerun fetches only what is missing: every network step here is retried with
+# backoff, and step 4 pre-fetches all of the build's dependencies so later `./mill` calls hit cache.
+#
 # Steps:
 #   0. Detect an injected JVM truststore; if present, switch ./mill to the JVM launcher.
 #   1. Obtain coursier (`cs` native launcher, or the JAR behind a proxy) if missing.
 #   2. Provision the JDK named in .mill-jvm-version through coursier (shared cache with Mill).
 #   3. Install scala-cli (native launcher, or a JVM bootstrap behind a proxy).
-#   4. Append MILL_VERSION/JAVA_HOME/PATH to $CLAUDE_ENV_FILE, which Claude Code sources before
+#   4. Pre-fetch Mill and every dependency (`./mill --no-daemon __.prepareOffline`), retried until
+#      XL_REMOTE_DEADLINE seconds after the hook started (default 540, under the 600 s hook timeout);
+#      XL_REMOTE_PREFETCH=false skips it.
+#   5. Append MILL_VERSION/JAVA_HOME/PATH to $CLAUDE_ENV_FILE, which Claude Code sources before
 #      every Bash call (each line once; a re-run appends nothing already there).
-#   5. Print a one-paragraph status; SessionStart stdout lands in Claude's context.
+#   6. Print a one-paragraph status; SessionStart stdout lands in Claude's context.
 #
 # Usage: bash scripts/remote-setup.sh [--force]
 set -uo pipefail
@@ -50,9 +59,29 @@ mkdir -p "$BIN"
 COURSIER_VERSION="${XL_REMOTE_COURSIER_VERSION:-2.1.24}"
 SCALA_CLI_VERSION="${XL_REMOTE_SCALA_CLI_VERSION:-1.9.1}"
 
+# Coursier downloads in our private cache must match committed bytes, including cache hits.
+# Caller-provided PATH tools and Coursier-managed Scala CLI/JDK installs are separate trust inputs.
+. "$ROOT/scripts/verify-download.sh"
 NOTES=""
 note() { NOTES="${NOTES:+$NOTES; }$*"; }
 warn() { echo "[remote-setup] WARN: $*" >&2; note "WARN: $*"; }
+DEADLINE="${XL_REMOTE_DEADLINE:-540}" # seconds since start ($SECONDS); keeps the hook under its timeout
+# retry N CMD...: run CMD up to N times, doubling a delay (XL_REMOTE_RETRY_DELAY, default 10 s)
+# between attempts and never sleeping past DEADLINE (HTTP 429, see above). CMD bounds each attempt
+# by the time left (`timeout $(left)`), and exits NO_RETRY for a failure a rerun cannot fix.
+NO_RETRY=100
+left() { local t=$((DEADLINE - SECONDS)); ((t > 0)) && echo "$t"; }
+retry() {
+  local n="$1" delay="${XL_REMOTE_RETRY_DELAY:-10}" i rc
+  shift
+  for ((i = 1; i <= n; i++)); do
+    "$@" && return 0
+    rc=$?
+    ((rc != NO_RETRY && i < n && SECONDS + delay < DEADLINE)) || return 1
+    sleep "$delay"
+    delay=$((delay * 2))
+  done
+}
 
 # ---------- 0. TLS-intercepting proxy → JVM launchers ----------
 JVM_LAUNCHERS=false
@@ -74,43 +103,77 @@ fi
 # cs_run abstracts over the native launcher and the JAR so steps 2-3 read the same either way.
 CS=""
 CS_JAR=""
-cs_run() {
-  if [[ -n "$CS_JAR" ]]; then java -jar "$CS_JAR" "$@"; else "$CS" "$@"; fi
+CS_CACHE="$BIN/.xl-remote"
+mkdir -p "$CS_CACHE"
+cs_run() { # bounded by DEADLINE so a stalled download cannot outlive the hook's timeout
+  local t
+  t=$(left) || return 1
+  if [[ -n "$CS_JAR" ]]; then timeout "$t" java -jar "$CS_JAR" "$@"; else timeout "$t" "$CS" "$@"; fi
 }
-if [[ "$JVM_LAUNCHERS" == "true" ]]; then
-  CS_JAR_PATH="$BIN/coursier.jar"
-  if [[ -s "$CS_JAR_PATH" ]]; then
-    CS_JAR="$CS_JAR_PATH"
+# Only execute downloaded/cache-managed tools after checking committed bytes.
+# Failure leaves CS empty and lets the remaining session exports complete.
+verified_fetch() {
+  local key="$1" url="$2" target="$3" expected
+  if ! expected=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "$key"); then
+    warn "no committed checksum for $key; skipping Coursier provisioning"
+    return 1
+  fi
+  if [[ -s "$target" ]]; then
+    if xl_verify_sha256 "$expected" "$target"; then return 0; fi
+    warn "discarding mismatched cached $key"
+    rm -f "$target"
+  fi
+  if curl -fsSL "$url" -o "$target.tmp" --retry 4 &&
+      xl_verify_sha256 "$expected" "$target.tmp"; then
+    mv "$target.tmp" "$target"
   else
+    rm -f "$target.tmp"
+    warn "could not obtain verified $key; skipping Coursier provisioning"
+    return 1
+  fi
+}
+SYSTEM=$(uname -s)
+ARCH=$(uname -m)
+PATH_CS=$(command -v cs || true)
+# Caller tools elsewhere on PATH are caller-trusted. On Linux, legacy $BIN/cs
+# may be either user-owned or an old unverified download: preserve it, but use
+# the private verified cache instead. Never delete or replace that ambiguous file.
+# Only .xl-remote is setup-owned; no unverified executable from it is trusted.
+if [[ "$JVM_LAUNCHERS" != "true" && -n "$PATH_CS" &&
+      "$PATH_CS" != "$CS_CACHE/"* &&
+      ( "$SYSTEM" != "Linux" || "$PATH_CS" != "$BIN/cs" ) ]]; then
+  CS="$PATH_CS"
+elif [[ "$JVM_LAUNCHERS" == "true" ||
+        ( "$SYSTEM" == "Linux" && ( "$ARCH" == "aarch64" || "$ARCH" == "arm64" ) ) ]]; then
+  if ! java -version >/dev/null 2>&1; then
+    warn "Coursier JVM launcher needs a working Java; skipping provisioning"
+  else
+    CS_JAR_PATH="$CS_CACHE/coursier.jar"
     URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/coursier"
-    if curl -fsSL "$URL" -o "$CS_JAR_PATH.tmp" && [[ -s "$CS_JAR_PATH.tmp" ]]; then
-      mv "$CS_JAR_PATH.tmp" "$CS_JAR_PATH" && CS_JAR="$CS_JAR_PATH"
-      note "coursier: JAR launcher installed to $CS_JAR_PATH"
-    else
-      rm -f "$CS_JAR_PATH.tmp"
-      warn "could not fetch the coursier JAR ($URL); ./mill still self-provisions its JDK, but scala-cli and java-on-PATH are unavailable"
+    if verified_fetch "coursier-$COURSIER_VERSION" "$URL" "$CS_JAR_PATH"; then
+      CS_JAR="$CS_JAR_PATH"
     fi
   fi
-elif command -v cs >/dev/null 2>&1; then
-  CS="$(command -v cs)"
-elif [[ -x "$BIN/cs" ]]; then
-  CS="$BIN/cs"
-elif [[ "$(uname -s)" == "Linux" ]]; then
-  case "$(uname -m)" in
-    x86_64 | amd64) ARCH=x86_64 ;;
-    aarch64 | arm64) ARCH=aarch64 ;;
-    *) ARCH="" ;;
-  esac
-  URL="https://github.com/coursier/launchers/raw/master/cs-${ARCH}-pc-linux.gz"
-  if [[ -n "$ARCH" ]] && curl -fsSL "$URL" | gzip -d > "$BIN/cs.tmp" 2>/dev/null && [[ -s "$BIN/cs.tmp" ]]; then
-    chmod +x "$BIN/cs.tmp" && mv "$BIN/cs.tmp" "$BIN/cs" && CS="$BIN/cs"
-    note "coursier: installed to $BIN/cs"
+elif [[ "$SYSTEM" == "Linux" && ( "$ARCH" == "x86_64" || "$ARCH" == "amd64" ) ]]; then
+  if ! CS_NATIVE_SHA=$(xl_expected_sha256 "$ROOT/scripts/launcher-checksums.txt" "cs-$COURSIER_VERSION-x86_64-pc-linux"); then
+    warn "no committed native Coursier checksum for $COURSIER_VERSION; skipping provisioning"
+  elif [[ -x "$CS_CACHE/cs" ]] && xl_verify_sha256 "$CS_NATIVE_SHA" "$CS_CACHE/cs"; then
+    CS="$CS_CACHE/cs"
   else
-    rm -f "$BIN/cs.tmp"
-    warn "could not fetch the coursier launcher ($URL); ./mill still self-provisions its JDK, but scala-cli and java-on-PATH are unavailable"
+    [[ ! -e "$CS_CACHE/cs" ]] || { warn "discarding mismatched cached cs"; rm -f "$CS_CACHE/cs"; }
+    URL="https://github.com/coursier/coursier/releases/download/v${COURSIER_VERSION}/cs-x86_64-pc-linux.gz"
+    if verified_fetch "cs-$COURSIER_VERSION-x86_64-pc-linux.gz" "$URL" "$CS_CACHE/cs.gz" &&
+        gzip -dc "$CS_CACHE/cs.gz" > "$CS_CACHE/cs.tmp" &&
+        xl_verify_sha256 "$CS_NATIVE_SHA" "$CS_CACHE/cs.tmp"; then
+      chmod +x "$CS_CACHE/cs.tmp" && mv "$CS_CACHE/cs.tmp" "$CS_CACHE/cs" && CS="$CS_CACHE/cs"
+    else
+      rm -f "$CS_CACHE/cs.tmp"
+      warn "could not provision verified native Coursier"
+    fi
+    rm -f "$CS_CACHE/cs.gz"
   fi
 else
-  warn "no coursier launcher found and this is not Linux; install it manually (https://get-coursier.io) to use --force here"
+  warn "no trusted Coursier on PATH for $SYSTEM/$ARCH; skipping provisioning"
 fi
 
 # ---------- 2. JDK from .mill-jvm-version ----------
@@ -120,7 +183,7 @@ JVM_INDEX_OPT=()
 [[ "$JVM_LAUNCHERS" == "true" ]] && JVM_INDEX_OPT=(--jvm-index "https://raw.githubusercontent.com/coursier/jvm-index/master/index.json")
 JAVA_HOME_NEW=""
 if [[ -n "$CS" || -n "$CS_JAR" ]]; then
-  if JAVA_HOME_NEW="$(cs_run java-home --jvm "$JVM_SPEC" ${JVM_INDEX_OPT[@]+"${JVM_INDEX_OPT[@]}"} 2>/dev/null)" && [[ -x "$JAVA_HOME_NEW/bin/java" ]]; then
+  if JAVA_HOME_NEW="$(retry 3 cs_run java-home --jvm "$JVM_SPEC" ${JVM_INDEX_OPT[@]+"${JVM_INDEX_OPT[@]}"} 2>/dev/null)" && [[ -x "$JAVA_HOME_NEW/bin/java" ]]; then
     note "JDK $JVM_SPEC at $JAVA_HOME_NEW"
   else
     JAVA_HOME_NEW=""
@@ -133,20 +196,54 @@ if [[ -n "$CS" || -n "$CS_JAR" ]]; then
   elif [[ -n "$CS_JAR" ]]; then
     # A coursier bootstrap is a JVM launcher: it fetches scala-cli's jars through the JVM (and so
     # through the injected truststore) instead of downloading the native image.
-    if cs_run bootstrap "org.virtuslab.scala-cli:cli_3:${SCALA_CLI_VERSION}" -M scala.cli.ScalaCli \
+    if retry 3 cs_run bootstrap "org.virtuslab.scala-cli:cli_3:${SCALA_CLI_VERSION}" -M scala.cli.ScalaCli \
         -o "$BIN/scala-cli" -f >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
       note "scala-cli $SCALA_CLI_VERSION installed to $BIN as a JVM launcher"
     else
       warn "scala-cli JVM bootstrap failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"
     fi
-  elif cs_run install --install-dir "$BIN" scala-cli >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
+  elif retry 3 cs_run install --install-dir "$BIN" "scala-cli:$SCALA_CLI_VERSION" >/dev/null 2>&1 && [[ -x "$BIN/scala-cli" ]]; then
     note "scala-cli installed to $BIN"
   else
     warn "scala-cli install failed; scripts/test-examples.sh and scripts/verify-skill-snippets.sh need it"
   fi
 fi
 
-# ---------- 4. Export to the session ----------
+# ---------- 4. Pre-fetch the build's dependencies ----------
+# Downloads land in the shared coursier cache, so later `./mill` and `make install-jar` calls start
+# offline instead of each meeting Maven Central's rate limit on their own. Fast when the cache is warm.
+# A stamp of the build definition skips it on a later start or resume that changed nothing.
+if [[ "${XL_REMOTE_PREFETCH:-true}" == "true" && -f "$ROOT/build.mill" ]]; then
+  PREFETCH_LOG="$CS_CACHE/prefetch.log"
+  PREFETCH_STAMP="$CS_CACHE/prefetch.stamp"
+  BUILD_KEY="$( (cd "$ROOT" && echo "${MILL_VERSION_EXPORT:-}" && cat .mill-version .mill-jvm-version 2>/dev/null &&
+    find . -name '*.mill' -not -path './out/*' -not -path './.git/*' | LC_ALL=C sort | xargs cat) |
+    sha256sum | cut -d' ' -f1)"
+  prefetch() {
+    local t log="$PREFETCH_LOG.attempt"
+    t=$(left) && ((t > 30)) || return 1
+    (cd "$ROOT" && env ${MILL_VERSION_EXPORT:+MILL_VERSION="$MILL_VERSION_EXPORT"} \
+      timeout "$t" ./mill --no-daemon __.prepareOffline) > "$log" 2>&1 && { cat "$log" >> "$PREFETCH_LOG"; return 0; }
+    cat "$log" >> "$PREFETCH_LOG"
+    # Only a download error (429 and friends) is worth a rerun; a broken build fails the same way again.
+    grep -qE 'response code: (429|50[234])|Failed to download|Error downloading' "$log" || return "$NO_RETRY"
+    return 1
+  }
+  if [[ -f "$PREFETCH_STAMP" && "$(cat "$PREFETCH_STAMP")" == "$BUILD_KEY" ]]; then
+    note "build dependencies already pre-fetched"
+  else
+    : > "$PREFETCH_LOG"
+    if retry 5 prefetch; then
+      printf '%s\n' "$BUILD_KEY" > "$PREFETCH_STAMP"
+      note "build dependencies pre-fetched"
+    else
+      warn "dependency pre-fetch did not finish ($(grep -c 'response code: 429' "$PREFETCH_LOG") HTTP 429 answers; log: $PREFETCH_LOG); rerun ./mill, it resumes from the cache"
+    fi
+    rm -f "$PREFETCH_LOG.attempt"
+  fi
+fi
+
+# ---------- 5. Export to the session ----------
 # The hook runs on every SessionStart, so $CLAUDE_ENV_FILE may already hold these lines and PATH
 # may already start with these directories: prepend only what is missing, append only new lines.
 prepend_path() { # prepend_path DIR PATH → DIR:PATH, or PATH unchanged when DIR is already on it
@@ -166,6 +263,6 @@ else
   note "CLAUDE_ENV_FILE unset, so nothing was exported (prefix PATH with $BIN and the JDK bin yourself${MILL_VERSION_EXPORT:+, and export MILL_VERSION=$MILL_VERSION_EXPORT} if needed)"
 fi
 
-# ---------- 5. Context for Claude ----------
+# ---------- 6. Context for Claude ----------
 echo "xl remote setup (scripts/remote-setup.sh): ${NOTES}. Mill pins its own JDK via .mill-jvm-version. In a fresh sandbox the first ./mill build downloads dependencies: give it a 600000 ms Bash timeout. Not available here: gtr, GraalVM (use 'make install-jar', not 'make install'). Details: docs/reference/remote-sessions.md."
 exit 0

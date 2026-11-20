@@ -2,6 +2,18 @@ package com.tjclp.xl.ooxml
 
 import com.tjclp.xl.workbooks.DefinedName
 
+/** Reportable non-worksheet kind; the model still contains worksheets only (GH-788). */
+enum PreservedSheetKind derives CanEqual:
+  case Macro, InternationalMacro, Chart, Dialog
+
+  def slug: String = this match
+    case Macro => "macro"
+    case InternationalMacro => "international-macro"
+    case Chart => "chart"
+    case Dialog => "dialog"
+
+  def isMacro: Boolean = this == Macro || this == InternationalMacro
+
 /**
  * The `<sheet>` kinds of `xl/workbook.xml` that are not worksheets (GH-785).
  *
@@ -19,16 +31,18 @@ object SheetKinds:
   val relTypeIntlMacrosheet: String =
     "http://schemas.microsoft.com/office/2006/relationships/xlIntlMacrosheet"
 
-  /** Relationship types of `<sheet>` targets that are not worksheets. */
-  val nonWorksheetRelTypes: Set[String] = Set(
-    XmlUtil.relTypeChartsheet,
-    XmlUtil.relTypeDialogsheet,
-    XmlUtil.relTypeMacrosheet,
-    relTypeIntlMacrosheet,
+  private val preservedKinds: Map[String, PreservedSheetKind] = Map(
+    XmlUtil.relTypeChartsheet -> PreservedSheetKind.Chart,
+    XmlUtil.relTypeDialogsheet -> PreservedSheetKind.Dialog,
+    XmlUtil.relTypeMacrosheet -> PreservedSheetKind.Macro,
+    relTypeIntlMacrosheet -> PreservedSheetKind.InternationalMacro,
     // ISO/IEC 29500 Strict spellings of the two standard kinds
-    "http://purl.oclc.org/ooxml/officeDocument/relationships/chartsheet",
-    "http://purl.oclc.org/ooxml/officeDocument/relationships/dialogsheet"
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/chartsheet" -> PreservedSheetKind.Chart,
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/dialogsheet" -> PreservedSheetKind.Dialog
   )
+
+  /** Relationship types of `<sheet>` targets that are not worksheets. */
+  val nonWorksheetRelTypes: Set[String] = preservedKinds.keySet
 
   /**
    * Whether a `<sheet>` whose `r:id` resolves to a relationship of `relType` is a worksheet. An
@@ -36,6 +50,9 @@ object SheetKinds:
    */
   def isWorksheet(relType: Option[String]): Boolean =
     !relType.exists(nonWorksheetRelTypes.contains)
+
+  /** Stable reporting kind; does not make the entry addressable as a worksheet (GH-788). */
+  def preservedKind(relType: String): Option[PreservedSheetKind] = preservedKinds.get(relType)
 
   /** Per `<sheet>` entry, in `<sheets>` order: whether it is a worksheet. */
   def worksheetMask(refs: Seq[SheetRef], rels: Relationships): Vector[Boolean] =

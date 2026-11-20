@@ -1,13 +1,20 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{BindingCoercion, ExprValue, RangeForm, TExpr}
-import com.tjclp.xl.formula.eval.{EvalError, EvalPosition, Evaluator, RecalcCounters}
+import com.tjclp.xl.formula.eval.{
+  ArrayResult,
+  EvalError,
+  EvalPosition,
+  Evaluator,
+  RangeOperand,
+  RecalcCounters
+}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity, Rng}
 
 import com.tjclp.xl.{Anchor, CellRange, SheetName}
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 
@@ -27,7 +34,7 @@ final case class FunctionFlags(
    * GH-274: True for functions whose data dependencies are not statically knowable (e.g. INDIRECT,
    * which reads whatever cell its evaluated text names). The static dependency graph sees only the
    * function's *arguments*; cells bearing such calls are deferred to the end of recalculation order
-   * (`DependencyGraph.deferDynamic`) and treated as always-dirty by targeted recalculation
+   * (a stable evaluate-last partition) and treated as always-dirty by targeted recalculation
    * (`DependentRecalculation`).
    */
   dynamicDeps: Boolean = false,
@@ -42,7 +49,8 @@ final case class FunctionFlags(
    * Excel array lifting: whether (and where) the function evaluates once per element when a scalar
    * parameter receives an array — `ABS(C2:C4+D2:D4)` is `{2;2;3}` in an array context. The flag is
    * the single source of truth; the evaluator implements the lift once, at the Call node, over the
-   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302).
+   * slots [[ArgSpec.scalarSlots]] offers. Off keeps the typed top-left collapse (GH-302). Lazy
+   * control flow may supply [[FunctionSpec.evalArray]] instead of the generic lift.
    */
   lift: ArrayLift = ArrayLift.Off,
   /**
@@ -119,7 +127,6 @@ enum LiftSlot derives CanEqual:
 final case class ArgPrinter(
   expr: TExpr[?] => String,
   location: TExpr.RangeLocation => String,
-  cellRange: CellRange => String,
   /**
    * GH-484: the argument separator to join rendered args with — the canonical human-facing ", " by
    * default; Excel's bare "," when printing the file form (FormulaPrinter.printFileForm).
@@ -255,19 +262,40 @@ final case class EvalContext(
   private[formula] def resolveRangeTraced(
     location: TExpr.RangeLocation
   ): Either[EvalError, (Sheet, CellRange, Boolean)] =
-    Evaluator.resolveRangeSlotTraced(
-      location,
-      sheet,
-      workbook,
-      operands.nameTrail,
-      bindings,
-      operands.nameReference.getOrElse { (name, scope) =>
-        // a context built outside the evaluator: the generic reference path
-        val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
-        evalReference(named.asInstanceOf[TExpr[Any]])
-      },
-      aggregateMemo
-    )
+    location match
+      case TExpr.RangeLocation.Computed(expr) =>
+        // TExpr's result type is erased at this heterogeneous reference boundary.
+        evalReference(expr.asInstanceOf[TExpr[Any]]).flatMap {
+          case RangeOperand(target, range) => Right((target, range, false))
+          case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+          case array: ArrayResult =>
+            def unsupported = Left(
+              EvalError.EvalFailed(
+                "Computed range argument returned values; array-valued range arguments are unsupported",
+                None
+              )
+            )
+            if array.rows == 1 && array.cols == 1 then
+              array(0, 0) match
+                case CellValue.Error(error) => Left(EvalError.ErrorValue(error))
+                case _ => unsupported
+            else unsupported
+          case _ => Left(EvalError.ErrorValue(CellError.Value))
+        }
+      case _ =>
+        Evaluator.resolveRangeSlotTraced(
+          location,
+          sheet,
+          workbook,
+          operands.nameTrail,
+          bindings,
+          operands.nameReference.getOrElse { (name, scope) =>
+            // a context built outside the evaluator: the generic reference path
+            val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+            evalReference(named.asInstanceOf[TExpr[Any]])
+          },
+          aggregateMemo
+        )
 
   /**
    * #767: the slot of the pass this call's formula evaluates at, defined only for a top-level
@@ -325,7 +353,6 @@ sealed trait ArgValue
 object ArgValue:
   final case class Expr(value: TExpr[?]) extends ArgValue
   final case class Range(value: TExpr.RangeLocation) extends ArgValue
-  final case class Cells(value: CellRange) extends ArgValue
 
 /**
  * Describes how to parse, render, and transform a function's arguments.
@@ -361,15 +388,13 @@ trait ArgSpec[A]:
     args: A
   )(
     mapExpr: TExpr[?] => TExpr[?],
-    mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-    mapCells: CellRange => CellRange
+    mapRange: TExpr.RangeLocation => TExpr.RangeLocation
   ): A
 
   def render(args: A, printer: ArgPrinter): List[String] =
     toValues(args).map {
       case ArgValue.Expr(expr) => printer.expr(expr)
       case ArgValue.Range(location) => printer.location(location)
-      case ArgValue.Cells(range) => printer.cellRange(range)
     }
 
   /**
@@ -389,6 +414,13 @@ trait FunctionSpec[A]:
   def eval(args: Args, ctx: EvalContext): Either[EvalError, A]
   def flags: FunctionFlags = FunctionFlags()
 
+  /** GH-754: lazy array control flow may need the complete primary and fallback shapes. */
+  private[formula] def evalArray(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
+    None
+
+  /** Additional scalar slots whose arrays take SUMPRODUCT's shared whole-axis bounds. */
+  private[formula] def arrayBoundSlots: Set[Int] = Set.empty
+
   /**
    * The reference the call returns, for a function that returns one (OFFSET, INDIRECT, INDEX): a
    * [[com.tjclp.xl.formula.eval.RangeOperand]], unread, or the value the call computes when it
@@ -398,6 +430,21 @@ trait FunctionSpec[A]:
    */
   private[formula] def reference(args: Args, ctx: EvalContext): Option[Either[EvalError, Any]] =
     None
+
+  /**
+   * #745: the area the reference this call returns lies in, for the dependency graph (see
+   * [[ReferenceOperators.Envelope]]). `of` is the envelope of an operand; `at` is the cell whose
+   * formula holds the call, when the graph knows it (#743: INDEX folds a position written with
+   * ROW() or COLUMN() relative to it). An `Exact` answer also states that finding the reference
+   * reads no cell, so the call's dependency edges become its areas alone. `Unknown` for every
+   * function that declares none: a range it ends is a dynamic reference.
+   */
+  private[formula] def envelope(
+    args: Args,
+    of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+    at: Option[ARef]
+  ): ReferenceOperators.Envelope =
+    ReferenceOperators.Envelope.Unknown
 
   def render(args: Args, printer: ArgPrinter): String =
     s"${name}(${FunctionSpec.joinSlots(argSpec.renderSlots(args, printer), printer.separator)})"
@@ -444,7 +491,40 @@ object FunctionSpec:
   ): FunctionSpec[A] { type Args = A0 } =
     Simple(name, arity, spec, evalFn, flags, renderFn)
 
-  /** A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`. */
+  /** Keep a typed scalar result while allowing explicit, lazy array control flow. */
+  private[formula] def arrayAware[A, A0](
+    fnName: String,
+    fnArity: Arity,
+    fnFlags: FunctionFlags,
+    boundSlots: Set[Int]
+  )(arrayFn: (A0, EvalContext) => Either[EvalError, Any])(
+    scalarFn: (A0, EvalContext) => Either[EvalError, A]
+  )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
+    new FunctionSpec[A]:
+      type Args = A0
+      val name = fnName
+      val arity = fnArity
+      val argSpec = spec
+      override val flags = fnFlags
+      override private[formula] val arrayBoundSlots = boundSlots
+      def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = scalarFn(args, ctx)
+      override private[formula] def evalArray(
+        args: A0,
+        ctx: EvalContext
+      ): Option[Either[EvalError, Any]] = Some(arrayFn(args, ctx))
+
+  /** #745: a [[FunctionSpec.envelope]] hook. */
+  private[formula] type EnvelopeFn[A0] =
+    (
+      A0,
+      ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      Option[ARef]
+    ) => ReferenceOperators.Envelope
+
+  /**
+   * A function that returns a reference: [[FunctionSpec.reference]] is `referenceFn`, and
+   * [[FunctionSpec.envelope]] is `envelopeFn` when it declares one.
+   */
   private[formula] final case class Referencing[A, A0](
     name: String,
     arity: Arity,
@@ -452,7 +532,8 @@ object FunctionSpec:
     referenceFn: (A0, EvalContext) => Either[EvalError, Any],
     evalFn: (A0, EvalContext) => Either[EvalError, A],
     override val flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelopeFn: Option[EnvelopeFn[A0]] = None
   ) extends FunctionSpec[A]:
     type Args = A0
     def eval(args: A0, ctx: EvalContext): Either[EvalError, A] = evalFn(args, ctx)
@@ -460,7 +541,22 @@ object FunctionSpec:
       args: A0,
       ctx: EvalContext
     ): Option[Either[EvalError, Any]] =
-      Some(referenceFn(args, ctx))
+      // #725: an error the call computes instead of a reference (OFFSET off the grid, INDIRECT to
+      // a missing sheet, INDEX picking an error element) is the error value, not a 1x1 array of
+      // it: ROWS of it is the error, while ROWS of an array holding one keeps the array's shape
+      Some(referenceFn(args, ctx).map {
+        case ar: ArrayResult if ar.rows == 1 && ar.cols == 1 =>
+          ar(0, 0) match
+            case error: CellValue.Error => error
+            case _ => ar
+        case other => other
+      })
+    override private[formula] def envelope(
+      args: A0,
+      of: ReferenceOperators.Operand => ReferenceOperators.Envelope,
+      at: Option[ARef]
+    ): ReferenceOperators.Envelope =
+      envelopeFn.fold(ReferenceOperators.Envelope.Unknown)(_(args, of, at))
     override def render(args: A0, printer: ArgPrinter): String =
       renderFn.map(_(args, printer)).getOrElse(super.render(args, printer))
 
@@ -468,11 +564,12 @@ object FunctionSpec:
     name: String,
     arity: Arity,
     flags: FunctionFlags = FunctionFlags(),
-    renderFn: Option[(A0, ArgPrinter) => String] = None
+    renderFn: Option[(A0, ArgPrinter) => String] = None,
+    envelope: Option[EnvelopeFn[A0]] = None
   )(referenceFn: (A0, EvalContext) => Either[EvalError, Any])(
     evalFn: (A0, EvalContext) => Either[EvalError, A]
   )(using spec: ArgSpec[A0]): FunctionSpec[A] { type Args = A0 } =
-    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn)
+    Referencing(name, arity, spec, referenceFn, evalFn, flags, renderFn, envelope)
 
 trait ExprCoercer[A]:
   def label: String
@@ -548,28 +645,47 @@ object ArgSpec:
         args: TExpr[A]
       )(
         mapExpr: TExpr[?] => TExpr[?],
-        mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-        mapCells: CellRange => CellRange
+        mapRange: TExpr.RangeLocation => TExpr.RangeLocation
       ): TExpr[A] =
         mapExpr(args).asInstanceOf[TExpr[A]]
 
   /**
-   * GH-713: the calls a range slot names as "a computed reference" rather than reporting an
-   * argument count — every registered reference-computing function
-   * ([[ReferenceFunctionNames.computing]], tied to the registry by the drift law) and the `:`
-   * operator. It differs from `Evaluator.referenceFunctions` on purpose: a selector
-   * (`SUMIF(IF(…),…)`) keeps the plain diagnostic it always had, and an intersection is not a
-   * computed reference. The drift law ties the two sets together.
+   * GH-723: the calls admitted as computed references in range argument slots — every registered
+   * reference-computing function ([[ReferenceFunctionNames.computing]], tied to the registry by the
+   * drift law) and the `:` operator. It differs from `Evaluator.referenceFunctions` on purpose:
+   * selectors and intersections remain outside computed range-slot admission in this bounded
+   * contribution. The drift law ties the two sets together.
    */
   private[formula] val computedReferenceCalls: Set[String] =
-    ReferenceFunctionNames.computing + ReferenceOperators.RangeName
+    ReferenceFunctionNames.computing + ReferenceOperators.RangeName + TableColumnReferences.Name
 
   /** A call to one of [[computedReferenceCalls]], looking through the parser's coercion wrapper. */
   private object ComputedReferenceCall:
     def unapply(e: TExpr[?]): Option[TExpr.Call[?]] = e match
       case TExpr.Coerced(inner, _) => unapply(inner)
-      case call: TExpr.Call[?] if computedReferenceCalls.contains(call.spec.name) => Some(call)
+      case call: TExpr.Call[?]
+          if computedReferenceCalls.contains(call.spec.name) && referenceResult(call) =>
+        Some(call)
       case _ => None
+
+    // A reference-computing spec may also return VALUES: INDEX over arithmetic, a scalar or an
+    // array constant is valid on its own, but remains outside reference-only argument support.
+    // Inspect only reference-bearing operands, not numeric INDEX/OFFSET arguments.
+    private def referenceResult(expr: TExpr[?]): Boolean = expr match
+      case TExpr.Coerced(inner, _) => referenceResult(inner)
+      case call: TExpr.Call[?] if call.spec.name == "INDEX" =>
+        call.spec.argSpec.toValues(call.args).headOption.exists(referenceArgument)
+      case call: TExpr.Call[?]
+          if ReferenceOperators.isOperatorCall(call) ||
+            call.spec.name == ReferenceOperators.RangeName =>
+        call.spec.argSpec.toValues(call.args).forall(referenceArgument)
+      case _ => true
+
+    private def referenceArgument(arg: ArgValue): Boolean = arg match
+      case ArgValue.Range(TExpr.RangeLocation.Computed(expr)) => referenceResult(expr)
+      case _: ArgValue.Range => true
+      case ArgValue.Expr(expr) =>
+        ReferenceOperators.isReferenceShape(expr) && referenceResult(expr)
 
   given rangeLocation: ArgSpec[TExpr.RangeLocation] with
     def describeParts: List[String] = List("range")
@@ -627,21 +743,9 @@ object ArgSpec:
               tail
             )
           )
-        // GH-713: a call computing a reference (OFFSET, INDIRECT, INDEX, XLOOKUP, `A1:INDEX(…)`)
-        // is named, never reported as a wrong argument count — accepting it here is #723's
-        case ComputedReferenceCall(call) :: _ =>
-          // named after the call itself, so the message follows the derived set
-          val computed =
-            if call.spec.name == ReferenceOperators.RangeName then "the range operator `:`"
-            else s"${call.spec.name}(…)"
-          Left(
-            ParseError.InvalidArguments(
-              fnName,
-              pos,
-              describe,
-              s"a computed reference ($computed), which this range argument does not accept yet"
-            )
-          )
+        // GH-723: preserve the reference expression, not its materialized array values.
+        case ComputedReferenceCall(call) :: tail =>
+          Right((TExpr.RangeLocation.Computed(call), tail))
         case _ =>
           Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
 
@@ -656,55 +760,9 @@ object ArgSpec:
       args: TExpr.RangeLocation
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): TExpr.RangeLocation =
       mapRange(args)
-
-  @deprecated(
-    "Use ArgSpec.rangeLocation (TExpr.RangeLocation) instead: range-typed argument slots " +
-      "resolve through Evaluator.resolveRangeLocation since GH-394, admitting sheet-qualified " +
-      "ranges and defined names. This local-literal-only spec has no remaining in-repo " +
-      "consumers and will be removed in the next breaking cycle.",
-    "0.18.0"
-  )
-  given cellRange: ArgSpec[CellRange] with
-    def describeParts: List[String] = List("range")
-
-    def parse(
-      args: List[TExpr[?]],
-      pos: Int,
-      fnName: String
-    ): Either[ParseError, (CellRange, List[TExpr[?]])] =
-      args match
-        case TExpr.RangeRef(range, _) :: tail =>
-          Right((range, tail))
-        // GH-353: this slot requires a LOCAL literal range — name the unsupported construct
-        // instead of the generic arity message
-        case (_: TExpr.ExternalRef | _: TExpr.ExternalRange) :: _ =>
-          Left(
-            ParseError.InvalidArguments(
-              fnName,
-              pos,
-              describe,
-              "an external-workbook reference (not supported in this argument; " +
-                "external workbooks are not loaded)"
-            )
-          )
-        case _ =>
-          Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
-
-    def toValues(args: CellRange): List[ArgValue] =
-      List(ArgValue.Cells(args))
-
-    def map(
-      args: CellRange
-    )(
-      mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
-    ): CellRange =
-      mapCells(args)
 
   given option[A](using inner: ArgSpec[A]): ArgSpec[Option[A]] with
     def describeParts: List[String] = List(s"optional ${inner.describe}")
@@ -757,10 +815,9 @@ object ArgSpec:
       args: Option[A]
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): Option[A] =
-      args.map(inner.map(_)(mapExpr, mapRange, mapCells))
+      args.map(inner.map(_)(mapExpr, mapRange))
 
   given list[A](using inner: ArgSpec[A]): ArgSpec[List[A]] with
     def describeParts: List[String] = List(s"${inner.describe}...")
@@ -807,10 +864,9 @@ object ArgSpec:
       args: List[A]
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): List[A] =
-      args.map(inner.map(_)(mapExpr, mapRange, mapCells))
+      args.map(inner.map(_)(mapExpr, mapRange))
 
   given emptyTuple: ArgSpec[EmptyTuple] with
     def describeParts: List[String] = Nil
@@ -828,8 +884,7 @@ object ArgSpec:
       args: EmptyTuple
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): EmptyTuple =
       args
 
@@ -868,11 +923,10 @@ object ArgSpec:
       args: H *: T
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): H *: T =
-      head.map(args.head)(mapExpr, mapRange, mapCells) *: tail
-        .map(args.tail)(mapExpr, mapRange, mapCells)
+      head.map(args.head)(mapExpr, mapRange) *: tail
+        .map(args.tail)(mapExpr, mapRange)
 
   /** Variadic numeric arg: either a range location or a numeric expression. */
   type NumericArg = Either[TExpr.RangeLocation, TExpr[BigDecimal]]
@@ -911,8 +965,7 @@ object ArgSpec:
       args: NumericArg
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): NumericArg =
       args match
         case Left(loc) => Left(mapRange(loc))
@@ -959,8 +1012,7 @@ object ArgSpec:
       args: SumProductArg
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): SumProductArg =
       args match
         case Left(loc) => Left(mapRange(loc))

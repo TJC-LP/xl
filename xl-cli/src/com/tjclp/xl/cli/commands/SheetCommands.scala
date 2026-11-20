@@ -253,7 +253,7 @@ object SheetCommands:
     before.sheets
       .zip(after.sheets)
       .map { (was, is) =>
-        is.cells.count { (ref, cell) =>
+        is.cells.iterator.count { case cell @ Cell(ref, _, _, _) =>
           (cell.value, was.cells.get(ref).map(_.value)) match
             case (CellValue.Formula(after, _, _), Some(CellValue.Formula(before, _, _))) =>
               after != before

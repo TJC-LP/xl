@@ -100,7 +100,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-roundtrip", ".xlsx")
     try {
       val original = Workbook.empty
-        .put(Sheet("Sales").put("A1", "Revenue").put("B1", 1000).unsafe)
+        .put(Sheet("Sales").put("A1", "Revenue").put("B1", 1000))
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -118,7 +118,7 @@ class EasyExcelSpec extends CatsEffectSuite:
     try {
       val boldStyle = CellStyle.default.bold
       val original = Workbook.empty
-        .put(Sheet("Styled").put("A1", "Bold", boldStyle).unsafe)
+        .put(Sheet("Styled").put("A1", "Bold", boldStyle))
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -136,9 +136,9 @@ class EasyExcelSpec extends CatsEffectSuite:
     val tempFile = Files.createTempFile("test-multi", ".xlsx")
     try {
       val original = Workbook.empty
-        .put(Sheet("First").put("A1", "1").unsafe)
-        .put(Sheet("Second").put("A1", "2").unsafe)
-        .put(Sheet("Third").put("A1", "3").unsafe)
+        .put(Sheet("First").put("A1", "1"))
+        .put(Sheet("Second").put("A1", "2"))
+        .put(Sheet("Third").put("A1", "3"))
 
       Excel.write(original, tempFile.toString)
       val loaded = Excel.read(tempFile.toString)
@@ -171,7 +171,7 @@ class EasyExcelSpec extends CatsEffectSuite:
 
       // Modify - update the default Sheet1
       Excel.modify(tempFile.toString) { wb =>
-        wb.update("Sheet1", _.put("A1", "Modified").unsafe).unsafe
+        wb.update("Sheet1", _.put("A1", "Modified")).unsafe
       }
 
       // Verify
@@ -188,13 +188,13 @@ class EasyExcelSpec extends CatsEffectSuite:
     try {
       // Setup with 2 sheets
       val initial = Workbook.empty
-        .put(Sheet("Preserve").put("A1", "Original").unsafe)
+        .put(Sheet("Preserve").put("A1", "Original"))
 
       Excel.write(initial, tempFile.toString)
 
       // Modify only Sheet1 (not Preserve)
       Excel.modify(tempFile.toString) { wb =>
-        wb.update("Sheet1", _.put("A1", "Changed").unsafe).unsafe
+        wb.update("Sheet1", _.put("A1", "Changed")).unsafe
       }
 
       // Verify "Preserve" sheet unchanged
@@ -214,8 +214,8 @@ class EasyExcelSpec extends CatsEffectSuite:
     finally Files.deleteIfExists(tempFile)
 
   private val twoSheets: Workbook = Workbook.empty
-    .put(Sheet("Data").put("A1", 1).unsafe)
-    .put(Sheet("Summary").put("A1", "total").unsafe)
+    .put(Sheet("Data").put("A1", 1))
+    .put(Sheet("Summary").put("A1", "total"))
     .remove("Sheet1")
     .unsafe
 
@@ -295,7 +295,7 @@ class EasyExcelSpec extends CatsEffectSuite:
   test("modifyR writes the Right workbook in place") {
     withTempXlsx("test-modifyr") { tempFile =>
       Excel.write(twoSheets, tempFile.toString)
-      Excel.modifyR(tempFile.toString)(_.update("Data", _.put("B1", "changed").unsafe))
+      Excel.modifyR(tempFile.toString)(_.update("Data", _.put("B1", "changed")))
       val loaded = Excel.read(tempFile.toString)
       assertEquals(
         loaded.get("Data").flatMap(_.cell("B1")).map(_.value),

@@ -6,7 +6,7 @@ import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet, SheetEdits}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -292,7 +292,7 @@ private[xl] object DynamicArrayAuthoring:
    * writes to one sheet (a batch) computes this once and keeps it current instead of rescanning.
    */
   def spillsOf(sheet: Sheet): Vector[Spill] =
-    sheet.cells.valuesIterator
+    sheet.cells.iterator
       .flatMap(cell =>
         cell.value match
           case CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula)
@@ -349,16 +349,25 @@ private[xl] object DynamicArrayAuthoring:
 
   /**
    * A contents clear of `ranges` on `sheet`, applied to its dynamic arrays as Excel 365 applies it:
-   * every cell of the ranges is removed, except the cells of a live spill whose anchor the clear
+   * every cell of the ranges is emptied, except the cells of a live spill whose anchor the clear
    * leaves in place — Excel keeps a spill's cells while its anchor stays, so clearing them changes
    * nothing, and the rest of the clear still happens ([[KeptSpill]], for the caller to report). A
    * cleared anchor takes its whole spill with it, inside the ranges or not. `spills` are the
    * sheet's ([[spillsOf]]); the ranges are matched as ranges, never expanded.
+   *
+   * GH-886: like Excel's Clear Contents, an emptied cell keeps its style but loses its hyperlink; a
+   * cell with no style is removed, unless its row or column has a default style (GH-897): a cell
+   * with no record takes that row's or column's style, so the emptied cell keeps its record, with
+   * no style of its own, and stays on the default format; so does a released spill cell there. The
+   * keep rule is the library's [[SheetEdits.keepsRecordWhenCleared]] (GH-908), so this and
+   * `SheetEdits.clear` cannot drift apart. `keepFormatting = false` removes every emptied cell
+   * outright, for a clear that drops the formatting too (`clear --all`).
    */
   def clearContents(
     sheet: Sheet,
     spills: Vector[Spill],
-    ranges: Vector[CellRange]
+    ranges: Vector[CellRange],
+    keepFormatting: Boolean = true
   ): ContentsCleared =
     val targeted = (r: ARef) => ranges.exists(_.contains(r))
     val (released, cleared) = spills
@@ -374,7 +383,24 @@ private[xl] object DynamicArrayAuthoring:
         Option.when(parts.nonEmpty)(KeptSpill(s.anchor, s.formula, s.extent, parts))
       )
     val keep = (r: ARef) => kept.exists(_.kept.exists(_.contains(r)))
-    val remaining = released.cells.filterNot((r, _) => targeted(r) && !keep(r))
+    val emptied = (r: ARef) => targeted(r) && !keep(r)
+    val remaining =
+      if keepFormatting then
+        // GH-897: a released spill cell that `clearValues` dropped (no style, no hyperlink) gets
+        // a bare record too when its row or column is styled, inside the ranges or not
+        val pinned = cleared.iterator
+          .filterNot(released.cells.contains)
+          .flatMap(sheet.cells.get)
+          .filter(SheetEdits.keepsRecordWhenCleared(sheet, _))
+          .map(_.copy(value = CellValue.Empty))
+        CellStore.from(released.cells.iterator.flatMap { cell =>
+          if !emptied(cell.ref) then Some(cell)
+          else
+            Option.when(SheetEdits.keepsRecordWhenCleared(sheet, cell))(
+              cell.copy(value = CellValue.Empty, hyperlink = None)
+            )
+        } ++ pinned)
+      else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
     ContentsCleared(released.copy(cells = remaining), cleared, kept)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
@@ -445,8 +471,8 @@ private[xl] object DynamicArrayAuthoring:
    * legacy (CSE) extent is left alone: its cells are the user's to clear.
    */
   private def clearOwnSpill(sheet: Sheet, anchor: ARef): (Sheet, Set[ARef]) =
-    sheet.cells.get(anchor).map(_.value) match
-      case Some(CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula))
+    sheet.cells.valueAt(anchor) match
+      case CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
           if arr.isDynamicArray && arr.ref.start == anchor =>
         val children = arr.ref.cells
           .filter(_ != anchor)
@@ -466,7 +492,7 @@ private[xl] object DynamicArrayAuthoring:
     val cells = refs.foldLeft(sheet.cells) { (acc, r) =>
       acc.get(r) match
         case Some(cell) if cell.styleId.isDefined || cell.hyperlink.isDefined =>
-          acc.updated(r, cell.withValue(CellValue.Empty))
+          acc.updated(cell.withValue(CellValue.Empty))
         case Some(_) => acc.removed(r)
         case None => acc
     }
@@ -491,7 +517,7 @@ private[xl] object DynamicArrayAuthoring:
       .filter(r => sheet.cells.get(r).exists(_.value != CellValue.Empty))
       .toVector
     lazy val merges = sheet.mergedRanges.filter(_.intersects(extent)).toVector.sortBy(rowMajor)
-    lazy val arrays = sheet.cells.valuesIterator
+    lazy val arrays = sheet.cells.iterator
       .filterNot(cell => replaced(cell.ref))
       .flatMap(cell =>
         cell.value match

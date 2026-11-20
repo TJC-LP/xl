@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop
@@ -39,7 +39,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
     def ids(qs: IterableOnce[QualifiedRef]): BitSet = BitSet.fromSpecific(qs.iterator.map(id))
 
   private def fixture(wb: Workbook): Fixture =
-    val (deps, rev) = DependencyGraph.fromWorkbookFormulaGraph(wb)
+    val (deps, rev) = NaiveGraphs.fromWorkbookFormulaGraph(wb)
     Fixture(wb, CompactGraph.build(wb), deps, rev)
 
   /** Kahn over the legacy graph with a grid-ordered ready set: the canonical order. */
@@ -70,8 +70,8 @@ class CompactGraphSpec extends ScalaCheckSuite:
     go(initial, preds, Nil)
 
   private def removedSet(f: Fixture): Set[QualifiedRef] =
-    val core = DependencyGraph.qualifiedCyclicNodes(f.deps)
-    core ++ DependencyGraph.qualifiedTransitiveDependents(f.rev, core)
+    val core = NaiveGraphs.qualifiedCyclicNodes(f.deps)
+    core ++ NaiveGraphs.qualifiedTransitiveDependents(f.rev, core)
 
   property("nodes: the legacy node set, numbered in grid order") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
@@ -91,7 +91,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
       Prop.all((0 until f.graph.formulaCount).map { n =>
         val q = f.ref(n)
         val compact = f.refs(f.graph.reach(BitSet(n), BitSet.empty).formulas)
-        val legacy = DependencyGraph.qualifiedTransitiveDependents(f.rev, Set(q))
+        val legacy = NaiveGraphs.qualifiedTransitiveDependents(f.rev, Set(q))
         Prop(compact == legacy) :| s"dependents of $q: $compact vs $legacy"
       }*)
     }
@@ -103,7 +103,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
       val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
       val seeds = all.zipWithIndex.collect { case (q, i) if i % 3 == 0 => q }.toSet
       val skip = all.zipWithIndex.collect { case (q, i) if i % 3 == 1 => q }.toSet
-      val legacy = DependencyGraph.qualifiedTransitiveDependents(
+      val legacy = NaiveGraphs.qualifiedTransitiveDependents(
         f.rev.view.mapValues(_ -- skip).toMap,
         seeds
       )
@@ -112,11 +112,43 @@ class CompactGraphSpec extends ScalaCheckSuite:
     }
   }
 
+  /** The upstream walk over the legacy graph: precedent formulas of `seeds`, never past `stop`. */
+  private def naivePrecedents(
+    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    seeds: Set[QualifiedRef],
+    stop: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    @scala.annotation.tailrec
+    def go(frontier: List[QualifiedRef], seen: Set[QualifiedRef]): Set[QualifiedRef] =
+      frontier match
+        case Nil => seen
+        case q :: rest =>
+          val expand = !stop.contains(q)
+          val next =
+            if expand then deps.getOrElse(q, Set.empty).filter(deps.contains) else Set.empty
+          val fresh = next -- seen
+          go(fresh.toList ++ rest, seen ++ next)
+    go(seeds.toList, Set.empty)
+
+  property("#891 precedent closure: the legacy upstream walk, stopping at the stop set") {
+    Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
+      val f = fixture(wb)
+      val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
+      val seeds = all.zipWithIndex.collect { case (q, i) if i % 4 == 0 => q }.toSet
+      val stop = all.zipWithIndex.collect { case (q, i) if i % 4 == 1 => q }.toSet
+      val legacy = naivePrecedents(f.deps, seeds, stop)
+      val compact = f.refs(f.graph.precedentClosure(f.ids(seeds), f.ids(stop)).formulas)
+      Prop(
+        compact == legacy
+      ) :| s"compact-only ${compact -- legacy}\nlegacy-only ${legacy -- compact}"
+    }
+  }
+
   property("cycles: the cyclic formulas equal the legacy graph's") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val f = fixture(wb)
       val compact = f.refs(f.graph.cyclicFormulas)
-      val legacy = DependencyGraph.qualifiedCyclicNodes(f.deps)
+      val legacy = NaiveGraphs.qualifiedCyclicNodes(f.deps)
       Prop(compact == legacy) :| s"$compact vs $legacy"
     }
   }
@@ -145,9 +177,9 @@ class CompactGraphSpec extends ScalaCheckSuite:
       def rangeSelf(q: QualifiedRef): Boolean =
         reads(q)._2.exists((s, r) => s == q.sheet && r.contains(q.ref))
       val deps = f.deps.map((q, ps) => q -> (if rangeSelf(q) then ps else ps - q))
-      val rev = DependencyGraph.reverseEdges(deps)
-      val core = DependencyGraph.qualifiedCyclicNodes(deps)
-      val expected = core ++ DependencyGraph.qualifiedTransitiveDependents(rev, core)
+      val rev = NaiveGraphs.reverseEdges(deps)
+      val core = NaiveGraphs.qualifiedCyclicNodes(deps)
+      val expected = core ++ NaiveGraphs.qualifiedTransitiveDependents(rev, core)
       Prop(stuck == expected) :| s"unordered $stuck vs $expected"
     }
   }
@@ -173,6 +205,24 @@ class CompactGraphSpec extends ScalaCheckSuite:
         val compact = DependencyGraph.withinComponentOrder(scc.members, deps)
         val legacy = DependencyGraph.withinComponentOrder(scc.members, f.deps)
         Prop(compact == legacy) :| s"$compact vs $legacy"
+      }*)
+    }
+  }
+
+  property("#891: the id-based sweep order equals the Map form over memberPrecedents") {
+    Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
+      val f = fixture(wb)
+      val all = f.deps.keySet.toVector.sortBy(QualifiedRef.gridKey)
+      val subsets: Vector[Vector[QualifiedRef]] =
+        Vector(all, all.zipWithIndex.collect { case (q, i) if i % 2 == 0 => q }) ++
+          DependencyGraph.qualifiedSccOrder(f.deps).map(_.members)
+      Prop.all(subsets.map { members =>
+        val ids = f.ids(members)
+        val reads = f.graph.memberPrecedents(ids)
+        val deps = reads.map((reader, read) => f.ref(reader) -> f.refs(read))
+        val expected = DependencyGraph.withinComponentOrder(members, deps)
+        val actual = f.graph.withinComponentOrder(ids).toVector.map(f.ref)
+        Prop(actual == expected) :| s"$actual vs $expected"
       }*)
     }
   }
@@ -205,7 +255,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
       val order = kahn.formulaOrder.iterator.map(f.ref).toVector
       // a suffix-closed subset: drop the dependents of a few formulas, as the dynamic bucket does
       val bucketSeeds = order.zipWithIndex.collect { case (q, i) if i % 7 == 3 => q }.toSet
-      val bucket = bucketSeeds ++ DependencyGraph.qualifiedTransitiveDependents(f.rev, bucketSeeds)
+      val bucket = bucketSeeds ++ NaiveGraphs.qualifiedTransitiveDependents(f.rev, bucketSeeds)
       val main = order.filterNot(bucket.contains)
       val depth = f.graph.waveDepths(kahn, f.ids(main))
       val legacy = main
@@ -267,7 +317,8 @@ class CompactGraphSpec extends ScalaCheckSuite:
             ,
             Some(wb),
             preciseLookups = true,
-            canonicalSheet = canonical
+            canonicalSheet = canonical,
+            reader = Some(q.ref)
           )
         case Left(_) => Set.empty[QualifiedRef]
       q -> (points, ranges.result())
@@ -332,7 +383,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
           ARef.from0(3, r - 1) -> CellValue.Formula(s"SUM($$C$$2:C$r)")
         )
       }
-      Sheet(SheetName.unsafe("Run"), cells = cells.map((ref, v) => ref -> Cell(ref, v)).toMap)
+      Sheet(SheetName.unsafe("Run"), cells = CellStore.from(cells.map((ref, v) => Cell(ref, v))))
     }))
     val g = CompactGraph.build(wb)
     val log2 = 32 - Integer.numberOfLeadingZeros(n)
@@ -351,10 +402,12 @@ class CompactGraphSpec extends ScalaCheckSuite:
   test("a 100k-formula chain needs no call stack") {
     val n = 100000
     val cells = (1 to n).map { r =>
-      val ref = ARef.from0(0, r - 1)
-      ref -> Cell(ref, CellValue.Formula(if r == 1 then "1" else s"A${r - 1}+1"))
+      Cell(ARef.from0(0, r - 1), CellValue.Formula(if r == 1 then "1" else s"A${r - 1}+1"))
     }
-    val g = CompactGraph.build(Workbook(Vector(Sheet(SheetName.unsafe("S"), cells = cells.toMap))))
+    val g =
+      CompactGraph.build(
+        Workbook(Vector(Sheet(SheetName.unsafe("S"), cells = CellStore.from(cells))))
+      )
     assertEquals(g.cyclicFormulas, BitSet.empty)
     assertEquals(g.kahn(BitSet.empty).formulaOrder.toVector, (0 until n).toVector)
     assertEquals(g.reach(BitSet(0), BitSet.empty).formulas.size, n - 1)

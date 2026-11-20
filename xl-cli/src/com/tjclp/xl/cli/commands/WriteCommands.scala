@@ -133,7 +133,15 @@ object WriteCommands:
     fullFormula: String,
     prefix: String
   ): String =
-    s"${prefix}the formula does not parse\n${FormulaEcho.diagnostic(error, fullFormula)}"
+    val heading = error match
+      case ParseError.FormulaTooLong(length, max) =>
+        val inputLength = CellValue.canonicalFormulaText(fullFormula).length
+        if inputLength > max then "the formula does not parse"
+        else
+          s"stored formula exceeds the $max-character limit " +
+            s"(input: $inputLength characters; stored: $length characters after storage-prefix expansion)"
+      case _ => "the formula does not parse"
+    s"$prefix$heading\n${FormulaEcho.diagnostic(error, fullFormula)}"
 
   /**
    * Write workbook using the standard or SAX/StAX backend based on mode.
@@ -176,8 +184,8 @@ object WriteCommands:
         MemoryGuard.blocking(outputPath, "recalc") {
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
-              val full = recalcHonoringCalcPr(wb, clock = clock.getOrElse(Clock.system)).result
-              val cone = dirtyCone(wb, Map(sheetName -> modifiedRefs))
+              val (full, cone) =
+                recalcWithCone(wb, Map(sheetName -> modifiedRefs), clock.getOrElse(Clock.system))
               val written = applyConeCaches(wb, full.workbook, cone)
               scopeToCone(full, cone, written).copy(workbook = written)
             else
@@ -636,7 +644,7 @@ object WriteCommands:
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
+        ValueParser.parseAuthoredFormula(fullFormula).left.map(formulaError(_, fullFormula))
       )
       released <- releaseSpills(wb, sheet, Set(ref))
       (releasedWb, releasedSheet, cleared) = released
@@ -703,6 +711,13 @@ object WriteCommands:
     val formula = CellValue.canonicalFormulaText(formulaStr)
     val fullFormula = s"=$formula"
     for
+      _ <- IO.fromEither(
+        ValueParser
+          .storedFormulaLengthError(fullFormula)
+          .toLeft(())
+          .left
+          .map(formulaError(_, fullFormula))
+      )
       // one reading: the spill and the dependent refresh see the same NOW()
       clock <- commandClock
       authored <- IO.fromEither(
@@ -843,7 +858,7 @@ object WriteCommands:
     val fullFormula = s"=$formula"
     for
       parsedExpr <- IO.fromEither(
-        FormulaParser.parse(fullFormula).left.map(formulaError(_, fullFormula))
+        ValueParser.parseAuthoredFormula(fullFormula).left.map(formulaError(_, fullFormula))
       )
       modifiedRefs = range.cells.toSet
       released <- releaseSpills(wb, sheet, modifiedRefs)
@@ -914,8 +929,8 @@ object WriteCommands:
               val formula = CellValue.canonicalFormulaText(formulaStr)
               val fullFormula = s"=$formula"
               IO.fromEither(
-                FormulaParser
-                  .parse(fullFormula)
+                ValueParser
+                  .parseAuthoredFormula(fullFormula)
                   .left
                   .map(formulaError(_, fullFormula, s"Formula for ${ref.toA1}: "))
               ).as((ref, formula))
@@ -1402,27 +1417,45 @@ object WriteCommands:
    * cycles. Every CLI verb that recalculates goes through here, so an iterate-declared circular
    * book fixpoints under `batch` and the structural verbs exactly as it does under `recalc`.
    */
-  private final case class RecalcRun(result: RecalcResult, advisory: Option[String])
+  private final case class RecalcRun(
+    result: RecalcResult,
+    advisory: Option[String],
+    tables: Option[DataTableSeedReport] = None
+  )
 
+  /** The iterative settings the file declares, if it declares any. */
+  private def declaredIterative(wb: Workbook): Option[IterativeCalc] =
+    wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr)
+
+  /**
+   * `seedTables` (`recalc --tables`) also seeds every data table of the recalculated book, off the
+   * recalculation's own graph (#891: one graph and one parse of each formula for both steps).
+   */
   private def recalcHonoringCalcPr(
     wb: Workbook,
     parallel: Option[Int] = None,
-    clock: Clock = Clock.system
+    clock: Clock = Clock.system,
+    seedTables: Boolean = false
   ): RecalcRun =
-    wb.metadata.calcPr.filter(_.iterativeCalculation).map(IterativeCalc.fromCalcPr) match
-      case Some(iterative) =>
-        RecalcRun(
-          wb.recalculate(clock, iterative),
-          parallel.map(_ =>
-            "NOTE: --parallel ignored — the book declares iterative calculation " +
-              "(<calcPr iterate=\"1\"/>), which fixpoints sequentially"
+    val iterative = declaredIterative(wb)
+    val advisory = iterative.flatMap(_ =>
+      parallel.map(_ =>
+        "NOTE: --parallel ignored — the book declares iterative calculation " +
+          "(<calcPr iterate=\"1\"/>), which fixpoints sequentially"
+      )
+    )
+    if seedTables then
+      val (result, report) =
+        WorkbookEvaluator.recalculateThenSeedTables(wb, clock, iterative, parallel.getOrElse(1))
+      RecalcRun(result, advisory, Some(report))
+    else
+      iterative match
+        case Some(calc) => RecalcRun(wb.recalculate(clock, calc), advisory)
+        case None =>
+          RecalcRun(
+            parallel.fold(wb.recalculate(clock))(n => wb.recalculateParallel(clock, n)),
+            advisory
           )
-        )
-      case None =>
-        RecalcRun(
-          parallel.fold(wb.recalculate(clock))(n => wb.recalculateParallel(clock, n)),
-          None
-        )
 
   /**
    * Cells whose value (or formula TEXT — a structural edit rewrites references) differs between two
@@ -1433,9 +1466,9 @@ object WriteCommands:
     after.sheets.iterator
       .map { sheet =>
         previous.get(sheet.name) match
-          case None => sheet.name -> sheet.cells.keySet
+          case None => sheet.name -> sheet.cells.refs.toSet
           case Some(old) =>
-            val refs = (old.cells.keySet ++ sheet.cells.keySet).filter { r =>
+            val refs = (old.cells.refs.toSet ++ sheet.cells.refs.toSet).filter { r =>
               old.cells.get(r).map(_.value) != sheet.cells.get(r).map(_.value)
             }
             sheet.name -> refs
@@ -1444,7 +1477,11 @@ object WriteCommands:
       .toMap
 
   /**
-   * The dirty dependency cone of an edit — `DependencyGraph.editCone`, the same cone
+   * A whole-book recalculation of `wb` honoring its `<calcPr>` (as [[recalcHonoringCalcPr]]) with
+   * the dirty dependency cone of an edit to `seeds` on it, from one recalculation graph (#891: the
+   * two used to build one each).
+   *
+   * The cone is `DependentRecalculation.editCone`, the same cone
    * `DependentRecalculation.recalculateAfterEdit` evaluates, grouped by sheet: the changed cells
    * themselves plus every transitive dependent, workbook-wide (cross-sheet dependents included).
    * Dynamic-reference cells (INDIRECT / OFFSET) on every sheet join unconditionally and drag their
@@ -1452,16 +1489,17 @@ object WriteCommands:
    * affect them. Formulas the parser rejects join only when their TEXT names a dirty cell (GH-606,
    * `ReferenceScan`); one the scanner cannot bound is always dirty, as before.
    */
-  private def dirtyCone(
+  private def recalcWithCone(
     wb: Workbook,
-    seeds: Map[SheetName, Set[ARef]]
-  ): Map[SheetName, Set[ARef]] =
+    seeds: Map[SheetName, Set[ARef]],
+    clock: Clock
+  ): (RecalcResult, Map[SheetName, Set[ARef]]) =
     import DependencyGraph.QualifiedRef
     val seeded: Set[QualifiedRef] =
       seeds.iterator.flatMap((name, refs) => refs.iterator.map(QualifiedRef(name, _))).toSet
-    val dynamic: Set[QualifiedRef] = DependencyGraph.dynamicCells(wb)
-    val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
-    DependencyGraph.editCone(wb, seeded, dependencyIndex, dynamic).groupMap(_.sheet)(_.ref)
+    val (result, cone) =
+      WorkbookEvaluator.recalculateWithEditCone(wb, clock, declaredIterative(wb), seeded)
+    (result, cone.groupMap(_.sheet)(_.ref))
 
   /**
    * Carry the recalculated caches of the cone — and only those — back onto the edited workbook.
@@ -1542,7 +1580,7 @@ object WriteCommands:
   ): StructuralCaches =
     def cachedCells(wb: Workbook, keep: (SheetName, ARef) => Boolean): Int =
       wb.sheets.iterator.map { sheet =>
-        sheet.cells.iterator.count { case (ref, cell) =>
+        sheet.cells.iterator.count { case cell @ Cell(ref, _, _, _) =>
           cell.value match
             case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => false
             case CellValue.Formula(_, Some(_), _) => keep(sheet.name, ref)
@@ -1550,7 +1588,7 @@ object WriteCommands:
         }
       }.sum
     val preserved = edited.sheets.iterator.map { sheet =>
-      sheet.cells.iterator.count { case (_, cell) =>
+      sheet.cells.iterator.count { case cell =>
         cell.value match
           case CellValue.Formula(_, Some(_), _) => true
           case _ => false
@@ -1619,7 +1657,6 @@ object WriteCommands:
     edited: Workbook,
     clock: Clock = Clock.system
   ): (Workbook, RecalcResult) =
-    val result = recalcHonoringCalcPr(edited, clock = clock).result
     val changed = changedRefs(before, edited)
     // A name's binding can change while every cell retains its text and cache. Seed its readers
     // explicitly before closing the cell graph, including readers of removed names and aliases.
@@ -1627,7 +1664,7 @@ object WriteCommands:
     val seeds = (changed.keySet ++ nameReaders.keySet).iterator.map { sheet =>
       sheet -> (changed.getOrElse(sheet, Set.empty) ++ nameReaders.getOrElse(sheet, Set.empty))
     }.toMap
-    val cone = dirtyCone(edited, seeds)
+    val (result, cone) = recalcWithCone(edited, seeds, clock)
     val written = applyConeCaches(edited, result.workbook, cone)
     (written, scopeToCone(result, cone, written))
 
@@ -1886,31 +1923,28 @@ object WriteCommands:
     // Keep the expensive pure recalculation inside the returned IO. In particular, constructing an
     // IO value must not print the iterative fallback advisory or start consuming CPU. Under the
     // memory guard (GH-636): a heap the whole-book recalculation exhausts is RESOURCE_LIMIT.
-    MemoryGuard.blocking(outputPath, "recalc")(recalcHonoringCalcPr(wb, parallel)).flatMap { run =>
-      val result = run.result
-      val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
-        if !seedTables then IO.pure((result.workbook, Vector.empty))
-        else
-          IO.fromEither(
-            result.workbook
-              .seedDataTablesReport()
-              .left
-              .map(domain)
-          ).map(report => (report.workbook, report.warnings))
-      prepared.flatMap { case (workbook, warnings) =>
-        writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
-          val tableNote = if seedTables then "\nData table cache evaluation completed" else ""
-          val advisory = run.advisory.fold("")(note => s"\n$note")
-          val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
-          val rendered =
-            s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
-          val facts = recalcFacts(result)
-          strictGate(policy, rendered, Some(result), warnings, warn)
-            .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
-            .map(_ -> facts)
+    MemoryGuard
+      .blocking(outputPath, "recalc")(
+        recalcHonoringCalcPr(wb, parallel, seedTables = seedTables)
+      )
+      .flatMap { run =>
+        val result = run.result
+        val prepared: IO[(Workbook, Vector[SeedTableWarning])] =
+          IO.pure(run.tables.fold((result.workbook, Vector.empty))(t => (t.workbook, t.warnings)))
+        prepared.flatMap { case (workbook, warnings) =>
+          writeWorkbook(workbook, outputPath, config, stream).flatMap { _ =>
+            val tableNote = if seedTables then "\nData table cache evaluation completed" else ""
+            val advisory = run.advisory.fold("")(note => s"\n$note")
+            val warningLines = warnings.map(w => s"\n${renderSeedWarning(w)}").mkString
+            val rendered =
+              s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
+            val facts = recalcFacts(result)
+            strictGate(policy, rendered, Some(result), warnings, warn)
+              .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
+              .map(_ -> facts)
+          }
         }
       }
-    }
 
   private def recalcFacts(result: RecalcResult): Vector[(String, ujson.Value)] =
     Vector(
@@ -2584,8 +2618,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "insert-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited =
-        StructuralEditor.insertRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .insertRowsChecked(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2614,8 +2652,12 @@ object WriteCommands:
       sheet <- SheetResolver.requireSheet(wb, sheetOpt, "delete-rows")
       _ <- requirePositive(at, "row number")
       _ <- requirePositive(count, "count")
-      edited =
-        StructuralEditor.deleteRows(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .deleteRowsChecked(wb, sheet.name, at - 1, count, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2645,8 +2687,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited =
-        StructuralEditor.insertColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .insertColumnsChecked(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,
@@ -2676,8 +2722,12 @@ object WriteCommands:
       spec <- colSpec(col, count)
       (at0, n) = spec
       _ <- requirePositive(n, "count")
-      edited =
-        StructuralEditor.deleteColumns(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+      edited <- IO.fromEither(
+        StructuralEditor
+          .deleteColumnsChecked(wb, sheet.name, at0, n, structuralCachePolicy(policy))
+          .left
+          .map(domain)
+      )
       result <- writeStructural(
         wb,
         edited,

@@ -91,9 +91,12 @@ object CellCommands:
    * Clear cell contents, styles, or comments from range.
    *
    * Modes:
-   *   - Default (no flags): Clear contents only (remove cells from range)
-   *   - --all: Clear contents, styles, and comments
-   *   - --styles: Clear styles only (reset styleId to None)
+   *   - Default (no flags): Clear contents only, as Excel's Clear Contents: values, formulas and
+   *     hyperlinks go; number formats, fonts, fills, borders and merges stay (GH-886)
+   *   - --all: Clear contents, styles, and comments; removes the cells and unmerges any merged
+   *     region the range touches
+   *   - --styles: Clear styles only (reset styleId to None) and unmerge any merged region the range
+   *     touches, as Excel's Clear Formats (GH-894)
    *   - --comments: Clear comments only
    *
    * Flags can be combined (e.g., --styles --comments clears both).
@@ -131,25 +134,34 @@ object CellCommands:
       // GH-714: clearing a dynamic anchor clears its whole spill, as in Excel; the cells of a live
       // spill whose anchor stays are left as they were (Excel keeps them) and the rest is cleared,
       // with SPILL_CELLS_SKIPPED. Styles and comments do not touch a spill: they clear everywhere.
+      // GH-886: a contents clear keeps each cell's formatting, as Excel's Clear Contents does;
+      // only --all drops the cell records.
       contents = Option.when(clearContents)(
         DynamicArrayAuthoring.clearContents(
           targetSheet,
           DynamicArrayAuthoring.spillsOf(targetSheet),
-          Vector(range)
+          Vector(range),
+          keepFormatting = !all
         )
       )
 
       // Apply clearing operations
       sheet1 = contents.fold(targetSheet)(_.sheet)
-      sheet2 = if clearStyles then sheet1.clearStylesInRange(range) else sheet1
+      // GH-886/GH-894: a merge is formatting. A contents or comments clear keeps it (Excel's
+      // Clear Contents does); --styles and --all unmerge every merged region the range touches,
+      // as Excel's Clear Formats and Clear All do, and reset the styles of the whole merge (Excel
+      // expands a selection to the merges it touches), so no unmerged cell keeps the old format.
+      overlappingMerges = sheet1.mergedRanges.filter(_.intersects(range)).toVector
+      sheet2 =
+        if clearStyles then
+          // A merge inside the range is already covered; only those crossing its edge need a pass
+          val crossing =
+            overlappingMerges.filterNot(m => range.contains(m.start) && range.contains(m.end))
+          (range +: crossing).foldLeft(sheet1)((s, r) => s.clearStylesInRange(r))
+        else sheet1
       sheet3 = if clearComments then sheet2.clearCommentsInRange(range) else sheet2
-
-      // Unmerge any merged regions that overlap with the cleared range
-      // This prevents leaving orphaned merge regions that reference cleared cells
       sheet4 =
-        if clearContents then
-          val overlappingMerges = sheet3.mergedRanges.filter(_.intersects(range))
-          overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
+        if clearStyles then overlappingMerges.foldLeft(sheet3)((s, mr) => s.unmerge(mr))
         else sheet3
 
       updatedWb = wb.put(sheet4)

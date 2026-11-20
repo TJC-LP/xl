@@ -5,8 +5,9 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.DependentRecalculation
 import com.tjclp.xl.formula.functions.CriteriaRangeResize
-import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.EvalAllSyntax.*
+import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -48,7 +49,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
           .put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
           .put(ref"F1", CellValue.Formula("E1*2", Some(n(initial * 2))))
         assertEquals(original.evaluateCell(ref"E1"), Right(n(initial)))
-        val updated = original.put(ref"C2", n(200)).recalculateDependents(Set(ref"C2"))
+        val updated = original.put(ref"C2", n(200)).afterEdit(Set(ref"C2"))
         assertEquals(cache(updated, ref"E1"), Some(n(expected)))
         assertEquals(cache(updated, ref"F1"), Some(n(expected * 2)))
       }
@@ -67,7 +68,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
         assertEquals(original.evaluateCell(ref"E1", Clock.system, Some(wb)), Right(n(initial)))
         val updated = wb
           .put(original.put(ref"C2", n(200)))
-          .recalculateDependents(original.name, Set(ref"C2"))
+          .afterEdit(original.name, Set(ref"C2"))
         assertEquals(cache(resultSheet(updated), ref"E1"), Some(n(expected)))
       }
     }
@@ -93,7 +94,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
         assertEquals(cache(updated, ref"Y2"), Some(n(200)))
         assertEquals(cache(updated, ref"E1"), Some(n(expected)))
         assertEquals(cache(updated, ref"F1"), Some(n(expected * 2)))
-        val checked = original.evaluateWithDependencyCheck().fold(e => fail(e.message), identity)
+        val checked = original.evalAll().fold(e => fail(e.message), identity)
         assertEquals(checked.get(ref"E1"), Some(n(expected)))
       }
     }
@@ -107,7 +108,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
         .put(ref"Z2", n(2))
         .put(ref"E1", CellValue.Formula(formula, Some(n(initial))))
       val edited = original.put(ref"Z2", n(20))
-      val updated = edited.recalculateDependents(Set(ref"Z2"))
+      val updated = edited.afterEdit(Set(ref"Z2"))
       assertEquals(cache(updated, ref"Y2"), Some(n(200)))
       assertEquals(cache(updated, ref"E1"), Some(n(expected)))
       val cone = DependentRecalculation.recalculateAfterEdit(
@@ -129,7 +130,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       assertEquals(DependencyGraph.dynamicCells(original), Set(QualifiedRef(calcName, ref"E1")))
       val updated = original
         .put(sheet.put(ref"C2", n(200)))
-        .recalculateDependents(sheet.name, Set(ref"C2"))
+        .afterEdit(sheet.name, Set(ref"C2"))
       assertEquals(cache(resultSheet(updated, calcName), ref"E1"), Some(n(expected)))
     }
   }
@@ -140,7 +141,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       .put(ref"E2", CellValue.Formula("AVERAGEIF(A1:A3,\">0\",C1)", None))
       .put(ref"E3", CellValue.Formula("SUMIF(criteria,\">0\")", None))
       .put(ref"E4", CellValue.Formula("LET(r,A1:A3,AVERAGEIF(r,\">0\"))", None))
-    assertEquals(DependencyGraph.dynamicCells(original), Set.empty[ARef])
+    assertEquals(original.dynamicRefs, Set.empty[ARef])
     assertEquals(DependencyGraph.dynamicCells(names(Workbook(original))), Set.empty[QualifiedRef])
   }
 
@@ -179,14 +180,14 @@ class CriteriaRangeDependencySpec extends FunSuite:
       }
       val updated = wb
         .put(original.put(ref"C2", n(200)))
-        .recalculateDependents(original.name, Set(ref"C2"))
+        .afterEdit(original.name, Set(ref"C2"))
       List(ref"E1", ref"E2", ref"E3").foreach { at =>
         assertEquals(cache(resultSheet(updated), at), Some(n(expected)), at.toA1)
       }
       List(computed, bound, static).foreach(f =>
         assert(CriteriaRangeResize.mayResizeThroughName(f))
       )
-      assertEquals(DependencyGraph.dynamicCells(original), Set(ref"E2"))
+      assertEquals(original.dynamicRefs, Set(ref"E2"))
       assertEquals(
         DependencyGraph.dynamicCells(wb),
         Set(QualifiedRef(sheet.name, ref"E1"), QualifiedRef(sheet.name, ref"E2"))
@@ -212,7 +213,10 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "LET(t,C1,SUMIF(A1:A3,\">0\",t))",
     "_xlfn.LET(_xlpm.t,C1,SUMIF(A1:A3,\">0\",_xlpm.t))",
     "SUMIF(A1:A3,\"x\",C1)+LET(t,C1,SUMIF(A1:A3,\">0\",t))",
-    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)"
+    "SUMIFS(C1:C3,A1:A3,1)+SUMIF(A1:A3,1,amt)",
+    // #841: a range's second corner read whole is a name when it is no cell, column or row
+    "SUMIF(A1:B2_x,\">0\",C1)",
+    "SUMIF(A1:XFE1,\">0\",C1)"
   ).foreach { formula =>
     test(s"pre-filter keeps =$formula, which may resize through a name") {
       assert(CriteriaRangeResize.mayResizeThroughName(formula))
@@ -236,7 +240,10 @@ class CriteriaRangeDependencySpec extends FunSuite:
     "ROUND(SUMIF(A1:A3,\">0\",C1),2)",
     "SUMIF(A1:A3,#N/A,C1)+SUMIF(A1:A3,1.5E3,C1)",
     "SUMIF(A1:A3,\">0\",C1#)",
-    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)"
+    "IFERROR(SUMIF(A1:A3,\"\"\"amt\"\"\",C1),0)",
+    // an empty token after the colon (a space, a typo) is no name
+    "SUMIF(A1: B10,\">0\",C1)",
+    "SUMIF(A1:$B$2,\">0\",C1)"
   ).foreach { formula =>
     test(s"pre-filter skips =$formula, which cannot resize through a name") {
       assert(!CriteriaRangeResize.mayResizeThroughName(formula))
@@ -254,7 +261,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
     assertEquals(trace.cells, Set.empty[QualifiedRef])
     // the three definitions parse; no cell does
     assertEquals(trace.parses, 3)
-    assertEquals(DependencyGraph.dynamicCells(literal), Set.empty[ARef])
+    assertEquals(literal.dynamicRefs, Set.empty[ARef])
 
     // one resizing reader through a name is found, and is the one cell parsed
     val withReader = literal.put(ref"E1", CellValue.Formula("SUMIF(A1:A3,\">0\",target)", None))
@@ -262,9 +269,9 @@ class CriteriaRangeDependencySpec extends FunSuite:
     assertEquals(traced.cells, Set(QualifiedRef(sheet.name, ref"E1")))
     assertEquals(traced.parses, 4)
     // without a workbook a defined name resolves to nothing, so the reader reads nothing through it
-    assertEquals(DependencyGraph.dynamicCells(withReader), Set.empty[ARef])
+    assertEquals(withReader.dynamicRefs, Set.empty[ARef])
     val withLet = literal.put(ref"E1", CellValue.Formula("LET(t,C1,SUMIF(A1:A3,\">0\",t))", None))
-    assertEquals(DependencyGraph.dynamicCells(withLet), Set(ref"E1"))
+    assertEquals(withLet.dynamicRefs, Set(ref"E1"))
   }
 
   // ----- #733: names bound to plain ranges resize statically; only computed geometry is dynamic -----
@@ -297,20 +304,20 @@ class CriteriaRangeDependencySpec extends FunSuite:
     val wb = staticBook
     assertEquals(DependencyGraph.dynamicCells(wb), Set.empty[QualifiedRef])
     assertEquals(com.tjclp.xl.formula.eval.WorkbookAudit.of(wb).dynamic, Vector.empty)
-    val graph = DependencyGraph.fromWorkbook(wb)
+    val graph = QualifiedGraph.of(wb)
     // staticTarget names C1, but the call reads C1:C3: the graph records the resized cells
     List(ref"E2", ref"E3", ref"E4", ref"E5").foreach { at =>
-      val deps = graph.getOrElse(q(at), Set.empty)
+      val deps = graph.precedentsOf(q(at))
       assert(Set(q(ref"C1"), q(ref"C2"), q(ref"C3")).subsetOf(deps), s"$at: $deps")
     }
-    assert(Set(q(ref"C2"), q(ref"C3")).subsetOf(graph.getOrElse(q(ref"E1"), Set.empty)))
+    assert(Set(q(ref"C2"), q(ref"C3")).subsetOf(graph.precedentsOf(q(ref"E1"))))
   }
 
   test("#733: an edit inside the resized target refreshes the static readers") {
     val wb = staticBook
     val viaDependents = wb
       .put(resultSheet(wb).put(ref"C2", n(200)))
-      .recalculateDependents(S, Set(ref"C2"))
+      .afterEdit(S, Set(ref"C2"))
     val cone = DependentRecalculation.recalculateAfterEdit(
       wb.put(resultSheet(wb).put(ref"C2", n(200))),
       S,
@@ -351,9 +358,9 @@ class CriteriaRangeDependencySpec extends FunSuite:
       val wb = Workbook(sheet.put(ref"C5", CellValue.Formula(formula, None)))
         .withDefinedName("amt", "S!$C$1:$C$10")
         .withDefinedName("amtAlias", "amt")
-      val graph = DependencyGraph.fromWorkbook(wb)
+      // C5 itself is occupied: an over-read of C1:C10 would list it
       assertEquals(
-        graph.getOrElse(q(ref"C5"), Set.empty).filter(_.ref.col == ref"C1".col),
+        QualifiedGraph.of(wb).precedentsOf(q(ref"C5")).filter(_.ref.col == ref"C1".col),
         Set(q(ref"C1"), q(ref"C2"), q(ref"C3")),
         formula
       )
@@ -362,7 +369,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
       assertEquals(cache(resultSheet(result.workbook), ref"C5"), Some(n(60)), formula)
       val updated = result.workbook
         .put(resultSheet(result.workbook).put(ref"C2", n(200)))
-        .recalculateDependents(S, Set(ref"C2"))
+        .afterEdit(S, Set(ref"C2"))
       assertEquals(cache(resultSheet(updated), ref"C5"), Some(n(240)), formula)
     }
   }
@@ -426,7 +433,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
     assertEquals(DependencyGraph.dynamicCells(wb), Set(q(ref"E1"), q(ref"E2")))
     val updated = wb
       .put(resultSheet(wb).put(ref"C2", n(200)))
-      .recalculateDependents(S, Set(ref"C2"))
+      .afterEdit(S, Set(ref"C2"))
     List(ref"E1", ref"E2", ref"E3").foreach { at =>
       assertEquals(cache(resultSheet(updated), at), Some(n(240)), at.toA1)
     }
@@ -469,7 +476,7 @@ class CriteriaRangeDependencySpec extends FunSuite:
 
   test("#733: a computed name is static without a workbook, dynamic with one") {
     val reader = sheet.put(ref"E1", CellValue.Formula("SUMIF(criteria,\">0\",C1)", None))
-    assertEquals(DependencyGraph.dynamicCells(reader), Set.empty[ARef])
+    assertEquals(reader.dynamicRefs, Set.empty[ARef])
     assertEquals(DependencyGraph.dynamicCells(names(Workbook(reader))), Set(q(ref"E1")))
   }
 

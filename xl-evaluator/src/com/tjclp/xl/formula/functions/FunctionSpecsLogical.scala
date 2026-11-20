@@ -50,7 +50,7 @@ trait FunctionSpecsLogical extends FunctionSpecsBase:
         // a range, a reference IF/CHOOSE selected, or a range name: Excel's reference rule, which
         // ignores blanks, so a whole column or row reads only the used range (GH-711)
         case RangeOperand(target, selected) =>
-          boundedToUsed(selected, target).fold(Right(None))(used =>
+          boundedToUsed(selected, target, ctx).fold(Right(None))(used =>
             extractRangeAsMatrixEval(used, target, ctx)
               .flatMap(m => rangeFold(label, ArrayResult(m), combine))
           )

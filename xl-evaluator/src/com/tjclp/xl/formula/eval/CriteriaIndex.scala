@@ -91,10 +91,49 @@ private[formula] object CriteriaKeys:
    * that far above `Int.MinValue` never overflows and skips the `Try`.
    */
   def strip(n: BigDecimal): Option[MatchKey] =
+    stripped(n).map(MatchKey.Num(_))
+
+  /** `n` without trailing zeros, or `None` where `stripTrailingZeros` throws ([[strip]]). */
+  private def stripped(n: BigDecimal): Option[java.math.BigDecimal] =
     val bd = n.bigDecimal
-    if bd.scale.toLong - bd.precision > Int.MinValue.toLong then
-      Some(MatchKey.Num(bd.stripTrailingZeros))
-    else scala.util.Try(bd.stripTrailingZeros).toOption.map(MatchKey.Num(_))
+    if bd.scale.toLong - bd.precision > Int.MinValue.toLong then Some(bd.stripTrailingZeros)
+    else scala.util.Try(bd.stripTrailingZeros).toOption
+
+  /** The largest scale magnitude [[numberText]] writes in plain notation. */
+  private val MaxPlainScale = 400L
+
+  /**
+   * #780: a number as text, total and canonical: value-equal numbers (`4.20`, `4.2`) give the same
+   * text. A number whose stripped scale is within ±400 (every double, and more) is written plainly
+   * without trailing zeros (`4.2`, `1000`), as `toPlainString` writes it; any other in scientific
+   * notation (`1E+999999999`), where `toPlainString` would build a string of up to two billion
+   * characters. Where `stripTrailingZeros` throws (`100E+2147483647`), the zeros are counted in a
+   * `Long` exponent instead.
+   */
+  def numberText(n: BigDecimal): String =
+    stripped(n) match
+      case Some(s) if math.abs(s.scale.toLong) <= MaxPlainScale => s.toPlainString
+      case Some(s) => s.toString
+      case None => scientific(n.bigDecimal)
+
+  /** `bd` as `<d>[.<digits>]E<sign><exponent>`, its trailing zeros moved into a `Long` exponent. */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def scientific(bd: java.math.BigDecimal): String =
+    var unscaled = bd.unscaledValue
+    var exponent = -bd.scale.toLong
+    if unscaled.signum == 0 then "0"
+    else
+      var divided = unscaled.divideAndRemainder(java.math.BigInteger.TEN)
+      while divided(1).signum == 0 do
+        unscaled = divided(0)
+        exponent += 1
+        divided = unscaled.divideAndRemainder(java.math.BigInteger.TEN)
+      val digits = unscaled.abs.toString
+      val sign = if unscaled.signum < 0 then "-" else ""
+      val mantissa =
+        if digits.length == 1 then digits else s"${digits.charAt(0)}.${digits.substring(1)}"
+      val adjusted = exponent + digits.length - 1
+      s"$sign${mantissa}E${if adjusted < 0 then "-" else "+"}${math.abs(adjusted)}"
 
   private def textKeys(s: String): CellKeys =
     if hasSurrogate(s) then CellKeys.Residual
@@ -285,8 +324,11 @@ private[formula] object EqIndex:
  * Each indexed pair `k` selects the offsets whose row holds one of its lookup keys or is residual.
  * The candidates are the offsets every indexed pair selects: the pair selecting the fewest rows is
  * listed, and each further pair keeps the listed offsets it selects, found by galloping search
- * forward through its posting lists. When even the smallest selection is more than half the rows,
- * listing it costs about as much as testing every row, so the call tests every row (`None`).
+ * forward through its posting lists. A pair's selection is the DISTINCT rows its posting lists hold
+ * in the window: a row holding both keys of a two-key lookup (text `"1"` has the Text and Num keys
+ * a lookup for `"1"` reads) sits in two lists and counts once (#842). When even the smallest
+ * selection is more than half the rows, listing it costs about as much as testing every row, so the
+ * call tests every row (`None`); the count stops as soon as it passes that bound.
  */
 private[formula] object CriteriaCandidates:
 
@@ -305,16 +347,15 @@ private[formula] object CriteriaCandidates:
   def compute(pairs: List[Pair], n: Int): Option[ArraySeq.ofInt] =
     if pairs.isEmpty || n <= 0 then None
     else
+      val limit = n / 2
       val selections = pairs.map { p =>
         val lists = p.index.postings(p.keys)
-        // an upper bound of the pair's selection: its lists may share rows
-        val size = lists.map(_.countIn(p.offset, p.offset + n - 1)).sum
-        (lists, p.offset, size)
+        (lists, p.offset, selectionSize(lists, p.offset, n, limit))
       }
       val sorted = selections.sortBy(_._3)
       sorted match
         case (lists, offset, size) :: rest =>
-          if size > n / 2 then None
+          if size > limit then None
           else
             val listed = union(lists, offset, n)
             Some(
@@ -323,6 +364,55 @@ private[formula] object CriteriaCandidates:
               })
             )
         case Nil => None
+
+  /**
+   * The distinct rows of `lists` in `offset .. offset + n - 1`, exact up to `limit`: a larger count
+   * is reported as some count past `limit`. One list is counted whole by binary search (`countIn`);
+   * several are merged in row order, a row in more than one list counting once, and the merge stops
+   * one past `limit`, so a refusal costs at most about `limit` steps per list (#842). A summed
+   * count overstated a window of two-key rows by up to twice and refused it.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While")) // hot path
+  private[eval] def selectionSize(
+    lists: List[EqIndex.Postings],
+    offset: Int,
+    n: Int,
+    limit: Int
+  ): Int =
+    val last = offset + n - 1
+    lists match
+      case Nil => 0
+      case List(p) => p.countIn(offset, last)
+      case _ =>
+        // each list's window, found once: its bounds give its count and start the merge
+        val parts = lists.map { p =>
+          val from = p.lowerBound(offset, p.from)
+          (p.rows, from, p.lowerBound(last + 1, from))
+        }
+        // every row of one list is distinct: past the limit, no merge is needed
+        if parts.exists((_, from, until) => until - from > limit) then limit + 1
+        else
+          val rows = parts.map(_._1).toArray
+          val cursors = parts.map(_._2).toArray
+          val untils = parts.map(_._3).toArray
+          // the smallest row at any cursor, Int.MaxValue when every list is spent
+          def smallest: Int =
+            var min = Int.MaxValue
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) then min = math.min(min, rows(i)(cursors(i)))
+              i += 1
+            min
+          var count = 0
+          var row = smallest
+          while count <= limit && row != Int.MaxValue do
+            count += 1
+            var i = 0
+            while i < rows.length do
+              if cursors(i) < untils(i) && rows(i)(cursors(i)) == row then cursors(i) += 1
+              i += 1
+            row = smallest
+          count
 
   /** The ascending, distinct offsets `row - offset` of the rows of `lists` in the window. */
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))

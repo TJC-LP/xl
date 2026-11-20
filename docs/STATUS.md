@@ -1,12 +1,20 @@
 # XL Project Status
 
-**Last Updated**: 2026-10-19 (0.25.0)
+**Last Updated**: 2026-11-12 (0.26.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.26.0** (2026-11-12) — criteria and lookups follow desktop Excel, deterministic dynamic cycles, one parse per formula per recalculation, and supply-chain hardening; two **Breaking** entries and two binary changes:
+- ✅ **Criteria and lookups as in desktop Excel** (#774, #773, #780, #731, #724, #775, #693) — wildcards match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error cells, MATCH/XMATCH/XLOOKUP/VLOOKUP/HLOOKUP share one exact test, rich text is text (`ISTEXT`, UNIQUE, SORT), COUNTBLANK counts empty text and takes a reference only; each is a marked behaviour change
+- ✅ **Circular references** — a cycle through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), `x#`) fails with the same `Circular reference through …` error on every run (#828, #829); a running total through `INDEX(…, ROW()-1)` is no longer one (#743, #745)
+- ✅ **Recalculation** — each formula is parsed once per pass (#790); whole-column lookups share the pass's used-range memo (#747); numeric-text criteria windows are sized exactly (#842); ROW/COLUMN position arrays are lazy (#735) and reference aggregates skip absent blank borders (#736)
+- ✅ **Functions and fixes** — `SLN`, `SYD` (#684), `ISNONTEXT` (#775), two-argument `IF` (#723, **Breaking**: `IfArgs`), array fallbacks in `IFERROR`/`IFNA` (#754), INDEX over a value (#725, #753), ROWS/COLUMNS of an error (#725), `x#` on a non-spilling formula (#803), `#NUM!` for invalid date serials and bounded numeric text (#726), names like `B2_x` after a range's `:` (#841); `TExpr.RangeLocation.Binding` noted late as **Breaking** from 0.24.0
+- ✅ **CLI and I/O** — `xl sheets` lists preserved macro, international macro, chart and dialog sheets and `xl lint` reports a `macro-sheet` finding (#788, binary: `LightMetadata.preservedSheets`); `--stream putf` drags over a range (#789); spill-aware `sort` and streamed writes (#738, binary: `WorksheetMetadata.clearContents`); streaming dynamic-array round trips (#749); `eval --with` through OFFSET/INDIRECT readers (#763); `evala --at` validation (#727); international macro sheets in `xl lint` (#791)
+- ✅ **Supply chain** (#833–#839) — checksummed dependency lock, dependency age policy and a compatible dependency refresh, actions and pre-commit hooks pinned to verified commits, release jobs without shared caches, verified launcher and release downloads with a `SHA256SUMS` release asset, and agent credentials read only from the environment or a local `.env`
 
 **New in 0.25.0** (2026-10-19) — recalculation speed and memory (#767), shared-string hygiene (#768, #781, #783) and five smaller fixes and additions; three **Breaking** entries:
 - ✅ **Faster, leaner recalculation** (#767) — per-pass caches (used ranges, defined-name resolutions, criteria column slices), an equality criteria index for COUNTIF(S), SUMIF(S), AVERAGEIF(S), MINIFS and MAXIFS, and a compact dependency graph with range and segment nodes (92.5M edges to 116k on the 10k-row benchmark book); a synthetic 187,699-formula workbook shaped like a real customer book goes through `writeChecked` in about 7.6 s under a 4 GB heap, where 0.24.1 ran out of memory; results unchanged, pinned by property tests and a non-blocking CI `perf` job
@@ -242,7 +250,7 @@
 - ✅ **Formula Evaluation** (WI-08 complete): Pure functional evaluator with total error handling, short-circuit semantics, and Excel-compatible behavior
 - ✅ **Function Library**: **108 built-in functions** (aggregate, conditional, logical, text, date, financial, lookup, math, statistical, dynamic arrays), extensible type class parser, evaluation API. 0.10.0 added IFS, SWITCH, CHOOSE, LARGE, SMALL, RANK, PERCENTILE, QUARTILE, HLOOKUP, MAXIFS, MINIFS, OFFSET, and the spill functions SEQUENCE/SORT/UNIQUE/FILTER (#76, #120, #122); 0.11.2 added INDIRECT (GH-274), RAND/RANDBETWEEN via the seeded Rng capability (GH-115), and LET lexical bindings (GH-193) (dynamic text-to-reference resolution with deferred-bucket recalculation).
 - ✅ **Dependency Graph** (WI-09d complete): Circular reference detection (Tarjan's SCC), topological sort (Kahn's algorithm), safe evaluation with cycle detection
-- ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`DependencyGraph.fromWorkbook`)
+- ✅ **Cross-Sheet Formula References** (TJC-351): Single cell refs (`=Sales!A1`), range refs (`=SUM(Sales!A1:A10)`), arithmetic with cross-sheet refs, workbook-level cycle detection (`QualifiedGraph.of(wb).sccs`)
 
 **Performance** (JMH Benchmarked - WI-15; figures captured on an earlier release, not re-validated for 0.12.x — treat as indicative):
 - ✅ **Streaming reads: 35% faster than POI for small files** (0.887ms vs 1.357ms @ 1k rows)
@@ -259,7 +267,7 @@
 - ✅ `readStream` / `readSheetStream` / `readStreamByIndex` – constant‑memory streaming read (fs2.io.readInputStream + fs2‑data‑xml)
 - ✅ `writeStream` / `writeStreamsSeq` – constant‑memory streaming write (fs2‑data‑xml)
 - ✅ `writeWorkbookStream` – lower-allocation SAX/StAX write for in-memory workbooks; preserves merges, comments, tables, row/column properties, and freeze panes
-- ✅ **`writeFast`** – SAX/StAX streaming write (opt-in via `ExcelIO.writeFast()` or `WriterConfig(backend = XmlBackend.SaxStax)`)
+- ✅ SAX/StAX write backend – opt-in via `WriterConfig(backend = XmlBackend.SaxStax)`
 - ✅ Benchmark: 100k rows in ~1.8s read (~10MB constant memory) / ~1.1s write (~10MB constant memory)
 
 **Output Configuration** (P6.7 Complete):
@@ -277,18 +285,19 @@
 
 ### Test Coverage
 
-**9,616 test cases** (from the JUnit reports of the 0.25.0 release branch's `./mill __.test`, 2026-10-19): zero failures; the existing style-performance comparison is skipped; this run had soffice and rsvg-convert, so the LibreOffice-oracle tests and the rsvg-convert smoke ran (they skip where the tool is absent).
+**10,398 test cases** (the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19): 10,398 passed, 0 failed, none ignored. Counts include skipped cases.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 3960 | parser, evaluator, 125-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1872 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1435 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 1924 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 213 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
-| xl-agent | 147 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 65 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl-evaluator | 4508 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1935 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1484 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 2025 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 220 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
+| xl (prelude) | 73 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
+
 
 See [reference/testing-guide.md](reference/testing-guide.md) for suite structure and testing patterns.
 
@@ -314,13 +323,13 @@ See [reference/testing-guide.md](reference/testing-guide.md) for suite structure
   - **Dynamic Arrays** (5): TRANSPOSE, SEQUENCE, SORT, UNIQUE, FILTER
   - **Random** (2): RAND, RANDBETWEEN
   - FunctionSpec registry: macro-collected specs with extensible registry
-  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateAllFormulas()
+  - APIs: sheet.evaluateFormula(), sheet.evaluateCell(), sheet.evaluateForRangePerCell(), wb.recalculate()
   - Clock trait for pure date/time functions (deterministic testing)
 - ✅ **Dependency Graph** (WI-09d): Circular reference detection + topological sort, 52 tests
   - Tarjan's SCC algorithm: O(V+E) cycle detection with early exit
   - Kahn's algorithm: O(V+E) topological sort for correct evaluation order
-  - Precedent/dependent queries: O(1) lookups via adjacency lists
-  - Safe evaluation: sheet.evaluateWithDependencyCheck() (production-ready)
+  - Precedent/dependent queries: `QualifiedGraph.of(wb)` (cross-sheet, bounded ranges)
+  - Safe evaluation: `wb.recalculate()` — cycles isolated per cell (the sheet-level graph and `evaluateWithDependencyCheck` were removed in #891)
   - Performance: Handles 10k formula cells in <10ms
 - ⚠️ Merged cells are supported by the in-memory OOXML path and `writeWorkbookStream`. Pure row-stream generation (`writeStream` / `writeStreamsSeq`) has no merge API.
 - ✅ Hyperlinks serialized as of 0.10.0 (`Cell.hyperlink` → `<hyperlinks>` + worksheet relationships; populated on read).

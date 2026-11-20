@@ -424,6 +424,18 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     agree(plain("Sheet1", "H1", withSlot), N("5.5"))
   }
 
+  test("#753: a range-slot read of a dynamic name leaves an IF binding's array value unchanged") {
+    // c, an IF selecting A1:A3 read as an array operand, keeps {1,-2,3.5} (SUM 2.5) when r is
+    // read by COUNTIF's range slot; COUNTIF(dyn,">2") is 5. LibreOffice 24.2 gives 7.5 for the
+    // form with r written in place.
+    val together = "LET(c,IF(TRUE,A1:A3,0),r,dyn,SUMPRODUCT(c*1)+COUNTIF(r,\">2\"))"
+    val apart = "LET(c,IF(TRUE,A1:A3,0),SUMPRODUCT(c*1))+COUNTIF(dyn,\">2\")"
+    agree(unplaced(together), N("7.5"))
+    agree(unplaced(apart), N("7.5"))
+    agree(plain("Sheet1", "H1", together), N("7.5"))
+    agree(plain("Sheet1", "H1", apart), N("7.5"))
+  }
+
   test("OFFSET's reference binding leaves another binding's value read unchanged") {
     // OFFSET makes the array-mode LET bind references; x, an array value, must still read as one.
     // Array mode: x is {1,-2,3.5}, SUM 2.5, plus B6's 2. A plain cell is Excel's legacy formula:
@@ -600,10 +612,9 @@ class DynamicNameRangeSlotSpec extends FunSuite:
     val readers = scoped
       .put(sheet1.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
       .put(other.put(ref"H1", CellValue.Formula("SUMIF(amt,\">0\",B1)", None)))
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph.fromWorkbook(readers)
-    def deps(sheet: SheetName) = graph.getOrElse(
-      com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef(sheet, ref"H1"),
-      Set.empty
+    val graph = com.tjclp.xl.formula.graph.QualifiedGraph.of(readers)
+    def deps(sheet: SheetName) = graph.precedentsOf(
+      com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef(sheet, ref"H1")
     )
     assert(deps(sheet1Name).forall(_.sheet == sheet1Name), deps(sheet1Name).toString)
     assert(

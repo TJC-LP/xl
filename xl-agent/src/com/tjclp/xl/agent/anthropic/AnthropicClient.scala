@@ -11,6 +11,7 @@ import com.tjclp.xl.agent.error.AgentError
 import io.github.cdimascio.dotenv.Dotenv
 
 import java.nio.file.{Files, Path, StandardCopyOption}
+import scala.jdk.CollectionConverters.*
 
 /** Wrapper around the Anthropic Java SDK with Cats Effect IO */
 trait AnthropicClientIO:
@@ -42,28 +43,30 @@ trait AnthropicClientIO:
 
 object AnthropicClientIO:
 
-  /** Load API key from environment or .env file */
+  /** Load from the process environment, then .env in the working directory or xl-agent. */
   def loadApiKey: IO[String] =
-    IO.blocking {
-      // Try multiple directories for .env file (supports running from different locations)
-      val directories = List(
-        ".", // Current directory (typical for mill)
-        "..", // Parent directory
-        "xl-agent", // Mill submodule directory
-        "../xl-agent", // From sibling module
-        "examples/anthropic-sdk",
-        "examples/anthropic-sdk/spreadsheetbench"
-      )
-      val dotenv = directories.view
-        .map(dir => Dotenv.configure().directory(dir).ignoreIfMissing().load())
-        .find(d => d.get("ANTHROPIC_API_KEY") != null)
-        .getOrElse(Dotenv.configure().ignoreIfMissing().load())
+    IO.defer(loadApiKey(Path.of("."), Option(java.lang.System.getenv("ANTHROPIC_API_KEY"))))
 
-      Option(java.lang.System.getenv("ANTHROPIC_API_KEY"))
-        .orElse(Option(dotenv.get("ANTHROPIC_API_KEY")))
+  private[anthropic] def loadApiKey(directory: Path, environmentKey: Option[String]): IO[String] =
+    IO.blocking {
+      environmentKey
+        .orElse {
+          // Never search parent or legacy example directories (GH-838).
+          List(directory, directory.resolve("xl-agent")).view
+            .filter(dir => Files.isRegularFile(dir.resolve(".env")))
+            .flatMap { dir =>
+              val dotenv = Dotenv.configure().directory(dir.toString).ignoreIfMissing().load()
+              dotenv
+                .entries(Dotenv.Filter.DECLARED_IN_ENV_FILE)
+                .asScala
+                .find(_.getKey == "ANTHROPIC_API_KEY")
+                .map(_.getValue)
+            }
+            .headOption
+        }
         .getOrElse(
           throw AgentError.ApiKeyMissing(
-            "ANTHROPIC_API_KEY not found. Set in .env or as environment variable."
+            "ANTHROPIC_API_KEY not found. Set the environment variable or .env in the working directory or xl-agent."
           )
         )
     }

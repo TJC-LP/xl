@@ -1,6 +1,6 @@
 package com.tjclp.xl.cli.contract
 
-import java.nio.file.NoSuchFileException
+import java.nio.file.{NoSuchFileException, Paths}
 
 import cats.effect.ExitCode
 import munit.FunSuite
@@ -118,4 +118,89 @@ class CliErrorSpec extends FunSuite:
     assertEquals(e.getMessage, "boom")
     assertEquals(e.getStackTrace.length, 0)
     assertEquals(e.error.code, ErrorCode.INTERNAL)
+  }
+
+  test("GH-870: an IO_READ on a relative path names the absolute path and the working directory") {
+    val cwd = Paths.get("/work/books")
+    val missing = CliError(
+      ErrorCode.IO_READ,
+      "No such file: q3/model.xlsx",
+      hint = Some("check the path; the previous write may have failed"),
+      location = Some(Location.file("q3/model.xlsx"))
+    )
+    val resolved = CliError.resolvingInputPath(missing, cwd)
+    assertEquals(
+      resolved.message,
+      "No such file: q3/model.xlsx (resolved to /work/books/q3/model.xlsx " +
+        "from working directory /work/books)"
+    )
+    // the rest of the error is untouched: location stays the path as given
+    assertEquals(resolved.copy(message = missing.message), missing)
+    // `..` is kept, not collapsed: through a symlinked directory a lexical `..` names a different
+    // file from the one the OS opened, so the message shows the path exactly as resolved
+    val up = missing.copy(
+      message = "IO error: link/../model.xlsx (Permission denied)",
+      location = Some(Location.file("link/../model.xlsx"))
+    )
+    assertEquals(
+      CliError.resolvingInputPath(up, cwd).message,
+      "IO error: link/../model.xlsx (Permission denied) (resolved to " +
+        "/work/books/link/../model.xlsx from working directory /work/books)"
+    )
+  }
+
+  test("GH-870: `.` segments are dropped from the resolved path; `..` is kept") {
+    val cwd = Paths.get("/work/books")
+    def resolved(typed: String): String =
+      CliError
+        .resolvingInputPath(
+          CliError(
+            ErrorCode.IO_READ,
+            s"No such file: $typed",
+            location = Some(Location.file(typed))
+          ),
+          cwd
+        )
+        .message
+    assertEquals(
+      resolved("./model.xlsx"),
+      "No such file: ./model.xlsx (resolved to /work/books/model.xlsx " +
+        "from working directory /work/books)"
+    )
+    assertEquals(
+      resolved("./q3/./link/../model.xlsx"),
+      "No such file: ./q3/./link/../model.xlsx (resolved to /work/books/q3/link/../model.xlsx " +
+        "from working directory /work/books)"
+    )
+  }
+
+  test("GH-870: resolving an error twice adds the resolution once") {
+    val cwd = Paths.get("/work/books")
+    val missing = CliError(
+      ErrorCode.IO_READ,
+      "No such file: model.xlsx",
+      location = Some(Location.file("model.xlsx"))
+    )
+    val once = CliError.resolvingInputPath(missing, cwd)
+    assertEquals(CliError.resolvingInputPath(once, cwd), once)
+  }
+
+  test("GH-870: an absolute path, a pathless IO_READ, and every other code are left as they are") {
+    val cwd = Paths.get("/work/books")
+    val absolute =
+      CliError(
+        ErrorCode.IO_READ,
+        "No such file: /tmp/a.xlsx",
+        location = Some(Location.file("/tmp/a.xlsx"))
+      )
+    val pathless = CliError(ErrorCode.IO_READ, "Parse error: bad (line 1, column 2)")
+    val write =
+      CliError(
+        ErrorCode.IO_WRITE,
+        "cannot write out.xlsx: denied",
+        location = Some(Location.file("out.xlsx"))
+      )
+    List(absolute, pathless, write).foreach(e =>
+      assertEquals(CliError.resolvingInputPath(e, cwd), e)
+    )
   }

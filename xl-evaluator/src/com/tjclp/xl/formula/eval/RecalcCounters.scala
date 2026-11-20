@@ -62,9 +62,8 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph (`RecalcEngine.Legacy`) has no virtual or range nodes and
-   * does not count `GraphWork`. Every criteria call counts once as `CriteriaIndexed` or
-   * `CriteriaScan`; a call with no indexed criterion also counts once as `CriteriaWindowOnly` or
+   * What a pass counts. Every criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a
+   * call with no indexed criterion also counts once as `CriteriaWindowOnly` or
    * `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
@@ -82,7 +81,7 @@ private[formula] object RecalcCounters:
 
     /**
      * Edges walked by the compact graph's passes: Tarjan, Kahn's in-degree count and order, and the
-     * reachability walks (blocked cells, the dynamic bucket, invalidation). 0 for the legacy graph.
+     * reachability walks (blocked cells, the dynamic bucket, invalidation).
      */
     case GraphWork
 
@@ -117,14 +116,16 @@ private[formula] object RecalcCounters:
      */
     case ScanFallbacks
 
-    /**
-     * `Sheet.usedRange` scans made to bound whole-column or whole-row ranges and to size slices; a
-     * pass scans each sheet once per structural generation.
-     */
-    case UsedRangeScans
-
     /** Defined-name bodies parsed during evaluation; a pass parses each distinct body once. */
     case NameParses
+
+    /**
+     * Formula cell texts parsed by the graph build, by cell evaluation (its external-reference pin
+     * check included) and by iterative fixpoints (#790). The compact graph parses each formula once
+     * and the pass reuses that parse, so it parses again only a formula the build could not parse
+     * or whose text changed after it.
+     */
+    case FormulaParses
 
   /** Where a pass spends its time. `Write` is measured by the caller that writes the file. */
   enum Phase derives CanEqual:

@@ -135,7 +135,7 @@ object SheetRenamer:
     wb.sheets.flatMap { s =>
       s.cells.iterator
         .collect {
-          case (ref, cell) if mentions(cell.value, sheet) => QualifiedRef(s.name, ref)
+          case cell @ Cell(ref, _, _, _) if mentions(cell.value, sheet) => QualifiedRef(s.name, ref)
         }
         .toVector
         .sortBy(q => (q.ref.row.index0, q.ref.col.index0))
@@ -160,9 +160,8 @@ object SheetRenamer:
     def rewriteText(site: Site)(text: String): Refused[String] =
       FormulaOps.renameSheet(text, from, to).left.map(located(site, _))
     for
-      changedCells <- sheet.cells.toVector
-        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
-        .traverse((ref, cell) => rewriteCell(ref, cell, rewriteText(Site.Cell(labelName, ref))))
+      changedCells <- sheet.cells.iterator.toVector // row-major already
+        .traverse(cell => rewriteCell(cell.ref, cell, rewriteText(Site.Cell(labelName, cell.ref))))
         .map(_.flatten)
       cfs <- sheet.conditionalFormats.traverse(
         rewriteCf(_, rewriteText(Site.ConditionalFormat(labelName)))
@@ -177,7 +176,7 @@ object SheetRenamer:
       else
         Some(
           sheet.copy(
-            cells = sheet.cells ++ changedCells,
+            cells = sheet.cells.putAll(changedCells.map(_._2)),
             conditionalFormats = if cfChanged then cfs else sheet.conditionalFormats,
             dataValidations = if dvChanged then dvs else sheet.dataValidations
           )

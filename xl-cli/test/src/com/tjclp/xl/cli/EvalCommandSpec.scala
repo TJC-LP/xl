@@ -2,6 +2,8 @@ package com.tjclp.xl.cli
 
 import java.nio.file.{Files, Path}
 
+import scala.concurrent.duration.*
+
 import cats.effect.IO
 import munit.CatsEffectSuite
 
@@ -29,6 +31,10 @@ import com.tjclp.xl.workbooks.DefinedName
   )
 )
 class EvalCommandSpec extends CatsEffectSuite:
+
+  // the 20,000-row running totals below are seconds of work: a loaded CI runner must not time
+  // them out at munit's 30 s default; the timeout is the backstop, never a performance gate (#843)
+  override def munitIOTimeout: Duration = 2.minutes
 
   // Create a test workbook with formula chain: A1=100, B1=A1*2, C1=B1+50
   private def createFormulaChainWorkbook: IO[Workbook] =
@@ -724,16 +730,14 @@ class EvalCommandSpec extends CatsEffectSuite:
     val wb = Workbook(Vector(sheet))
     // A1 goes from 1 to 5: every running total rises by 4
     val expected = rows.toLong * (rows + 1) / 2 + 4
+    // the range index is pinned structurally (FormulaGraphPerfSpec: one entry per shared range);
+    // a cell-by-cell index here would trip the suite timeout, the backstop (#843)
     for
-      start <- IO.monotonic
       positionless <- ReadCommands.eval(wb, Some(sheet), s"=B$rows", None, List("A1=5"))
       at <- ReadCommands.eval(wb, Some(sheet), s"=INDIRECT(\"B$rows\")", Some("D1"), List("A1=5"))
-      end <- IO.monotonic
     yield
       assert(positionless.contains(s"Result: $expected (number)"), positionless)
       assert(at.contains(s"Result: $expected (number)"), at)
-      // generous: a cell-by-cell index took tens of seconds here; the range index takes well under
-      assert((end - start).toSeconds < 20, s"took ${(end - start).toMillis} ms")
   }
 
   /** B{n} = SUM($A$1:A{n}) and C{n} = SUM($B$1:B{n}) over A{n} = n, every formula cached. */
@@ -761,28 +765,39 @@ class EvalCommandSpec extends CatsEffectSuite:
     yield assert(result.contains(s"Result: $expected (number)"), result)
   }
 
-  test("GH-715: --with over a running total of running totals stays near-linear to find") {
-    // Every B goes stale, and each C range overlaps every B block up to its row, so asking each
-    // stale B for its candidate readers afresh cost about rows²/2 checks (26 s here). A reader
-    // leaves the index once stale, so each is checked a bounded number of times. The formula
-    // reads one B and one C at run time, so the evaluation itself stays cheap.
+  test("GH-715: --with over a running total of running totals reaches the right readers") {
+    // Every B goes stale, and each C range overlaps every B block up to its row. The formula reads
+    // one B and one C at run time, so the evaluation itself stays cheap.
     val rows = 20000
     val sheet = runningTotals(rows)
     // B{rows} rises by 4; C2 = B1 + B2 rises by 8, from 4
     val expected = rows.toLong * (rows + 1) / 2 + 4 + 12
-    for
-      start <- IO.monotonic
-      result <- ReadCommands.eval(
+    for result <- ReadCommands.eval(
         Workbook(sheet),
         Some(sheet),
         s"=INDIRECT(\"B$rows\")+INDIRECT(\"C2\")",
         Some("E1"),
         List("A1=5")
       )
-      end <- IO.monotonic
-    yield
-      assert(result.contains(s"Result: $expected (number)"), result)
-      assert((end - start).toSeconds < 20, s"took ${(end - start).toMillis} ms")
+    yield assert(result.contains(s"Result: $expected (number)"), result)
+  }
+
+  test(
+    "GH-715: stale-reader checks over a running total of running totals are linear in the rows"
+  ) {
+    // Asking each stale B for its candidate readers afresh cost about rows²/2 containment checks
+    // (26 s at 20,000 rows). A reader leaves its index once stale, so the walk checks every B once
+    // for A1 and every C once for the first stale B: about two checks per row. The count is the
+    // gate; the clock on a shared runner is not (#843).
+    def checks(rows: Int): Long =
+      val sheet = runningTotals(rows)
+      ReadCommands
+        .uncacheReadersTraced(Workbook(sheet), sheet.name, Set(ARef.from0(0, 0)))
+        ._2
+        .checks
+    val (small, large) = (checks(5000), checks(20000))
+    assert(large <= 4.5 * small, s"checks $small -> $large: not linear")
+    assert(large < 20000L * 20000L / 8, s"$large checks at 20,000 rows: quadratic")
   }
 
   test("GH-715: --at far below the used range, read through a whole column, is circular") {
@@ -1197,8 +1212,8 @@ class EvalCommandSpec extends CatsEffectSuite:
     )
 
   test("#750: eval of whole-axis arrays answers at once, with Excel's values") {
+    // an evaluation that materialised an axis would trip the suite timeout, the backstop (#843)
     val sheet = axisBook.sheets.head
-    val started = System.nanoTime()
     for
       top <- ReadCommands.eval(axisBook, Some(sheet), "=R:KHI", None, Nil)
       whole <- ReadCommands.eval(axisBook, Some(sheet), "=A:XFD", None, Nil)
@@ -1206,8 +1221,6 @@ class EvalCommandSpec extends CatsEffectSuite:
       rows <- ReadCommands.eval(axisBook, Some(sheet), "=ROWS(A:A*1)", None, Nil)
       byColumn <- ReadCommands.eval(axisBook, Some(sheet), "=SUM((A:A=\"\")*{1,2,3})", None, Nil)
     yield
-      val seconds = (System.nanoTime() - started) / 1e9
-      assert(seconds < 30.0, s"took $seconds s")
       // a positionless whole-axis range is its top-left value, as `=A1:B3` is
       assert(top.contains("Result: 0 (number)"), top)
       assert(whole.contains("Result: 1 (number)"), whole)
@@ -1234,3 +1247,172 @@ class EvalCommandSpec extends CatsEffectSuite:
         case Left(e) => assert(e.getMessage.contains("2,097,152 cells"), e.getMessage)
         case Right(out) => fail(s"expected a too-large refusal, got: $out")
   }
+
+  // ===== #763: --with reaches readers whose references are computed at run time =====
+
+  /**
+   * #763: Data: B1 = 10, B2 = 1. Name: dyn = OFFSET(Data!$B$1,0,0,2,1). Other, each cached 11 (12
+   * for A6): A1 = SUM(dyn), A2 = SUMIF(dyn,">0"), A3 = SUM(OFFSET(Data!B1,0,0,2,1)), A4 =
+   * SUM(INDIRECT("Data!B1:B2")), A5 = SUM(Data!B1:B2) (the static control), A6 = A3+1.
+   */
+  private val dynamicReadBacks: Workbook =
+    val book = Workbook(
+      Vector(
+        Sheet("Data")
+          .put(ref"B1", CellValue.Number(BigDecimal(10)))
+          .put(ref"B2", CellValue.Number(BigDecimal(1))),
+        Sheet("Other")
+          .put(ref"A1", cachedFormula("=SUM(dyn)", 11))
+          .put(ref"A2", cachedFormula("=SUMIF(dyn,\">0\")", 11))
+          .put(ref"A3", cachedFormula("=SUM(OFFSET(Data!B1,0,0,2,1))", 11))
+          .put(ref"A4", cachedFormula("=SUM(INDIRECT(\"Data!B1:B2\"))", 11))
+          .put(ref"A5", cachedFormula("=SUM(Data!B1:B2)", 11))
+          .put(ref"A6", cachedFormula("=A3+1", 12))
+      )
+    )
+    book.copy(metadata =
+      book.metadata.copy(definedNames = Vector(DefinedName("dyn", "OFFSET(Data!$B$1,0,0,2,1)")))
+    )
+
+  test("#763: --with reaches a cached reader through OFFSET or INDIRECT, direct or by a name") {
+    // B2 = 0: each reader sums B1:B2 to 10, and A6 = A3+1 is 11. Before, only the static control
+    // dropped its cache; the computed references read B1 alone to the static search
+    val data = dynamicReadBacks.sheets.headOption
+    val cases = List(
+      "=Other!A1" -> 10,
+      "=Other!A2" -> 10,
+      "=Other!A3" -> 10,
+      "=Other!A4" -> 10,
+      "=Other!A5" -> 10,
+      "=Other!A6" -> 11
+    )
+    val checks = for
+      (formula, expected) <- cases
+      at <- List(Some("D5"), None)
+    yield ReadCommands.eval(dynamicReadBacks, data, formula, at, List("B2=0")).map { result =>
+      assert(result.contains(s"Result: $expected (number)"), s"$formula at $at: $result")
+    }
+    checks.foldLeft(IO.unit)(_ >> _) >>
+      ReadCommands
+        .evalArray(dynamicReadBacks, data, "=Other!A1+Other!A4", None, List("B2=0"))
+        .map(array => assert(array.contains("20"), array))
+  }
+
+  test("#763 CLI: eval --with sees past a dynamic reader's cache in a saved file") {
+    for
+      book <- written(dynamicReadBacks)
+      named <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A1", "--with", "B2=0")
+      indirect <- CliHarness.run("-f", book, "-s", "Data", "eval", "=Other!A4", "--with", "B2=0")
+    yield
+      assertEquals(named.exit, 0, named.stderr)
+      assert(named.stdout.contains("Result: 10 (number)"), named.stdout)
+      assertEquals(indirect.exit, 0, indirect.stderr)
+      assert(indirect.stdout.contains("Result: 10 (number)"), indirect.stdout)
+  }
+
+  // ===== #727: evala --at validates its anchor =====
+
+  test("#727: evala --at a bad anchor is INVALID_REFERENCE, not the Z1000 fallback") {
+    def refused(at: String): IO[Unit] =
+      ReadCommands
+        .evalArray(pairedBook, pairedBook.sheets.headOption, "=A1:A3*2", Some(at), Nil)
+        .attempt
+        .map {
+          case Left(e: CliException) => assertEquals(e.error.code, "INVALID_REFERENCE", at)
+          case other => fail(s"evala --at $at: expected INVALID_REFERENCE, got $other")
+        }
+    // `$C$2`: a ref argument is written without `$` anchors, for --at as for every verb
+    refused("ZZZZ9") >> refused("not a ref") >> refused("D5:D6") >> refused("$C$2") >>
+      refused("'My Sheet'!$C$2")
+  }
+
+  test("#727: a qualified evala --at anchors on, and evaluates against, the sheet it names") {
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Number(BigDecimal(7)))
+      .put(ref"A2", CellValue.Number(BigDecimal(8)))
+    val wb = Workbook(Vector(pairedColumns(Sheet("Test")), other))
+    for
+      qualified <- ReadCommands.evalArrayData(
+        wb,
+        wb.sheets.headOption,
+        "=A1:A2*2",
+        Some("Other!C2"),
+        Nil
+      )
+      plain <- ReadCommands.evalArrayData(wb, wb.sheets.headOption, "=A1:A2*2", Some("C2"), Nil)
+    yield
+      val q = ujson.read(qualified)
+      assertEquals(q("spillRange"), ujson.Str("C2:C3"), qualified)
+      assertEquals(q("result")("sheet"), ujson.Str("Other"), qualified)
+      assert(qualified.contains("14") && qualified.contains("16"), qualified)
+      val p = ujson.read(plain)
+      assertEquals(p("result")("sheet"), ujson.Str("Test"), plain)
+  }
+
+  test("#727 CLI: evala --at ZZZZ9 exits 3; a qualified anchor is honoured") {
+    for
+      book <- written(pairedBook)
+      bad <- CliHarness.run("-f", book, "--json", "evala", "=A1:A3*2", "--at", "ZZZZ9")
+      good <- CliHarness.run("-f", book, "evala", "=A1:A3*2", "--at", "Test!C2")
+    yield
+      assertEquals(bad.exit, 3, bad.stdout)
+      assertEquals(ujson.read(bad.stdout)("error")("code"), ujson.Str("INVALID_REFERENCE"))
+      assertEquals(good.exit, 0, good.stderr)
+      assert(good.stdout.contains("C2:C4"), good.stdout)
+  }
+
+  private def tableFixture: (Sheet, Workbook) =
+    import com.tjclp.xl.tables.{TableColumn, TableSpec}
+    val table = TableSpec("Internal", "Table1", ref"B2:B4", Vector(TableColumn(1, "Col")))
+    val data = Sheet("Data").withTable(table).put(ref"B3" -> 1, ref"B4" -> 3, ref"C3" -> 2)
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(CellValue.Number(999))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(CellValue.Number(1998))))
+    (data, Workbook(data, reader))
+
+  test("GH-669: eval refreshes a table column's poisoned formula precedents") {
+    val (data, wb) = tableFixture
+    val poisoned = data.put(ref"B3", CellValue.Formula("C3+1", Some(CellValue.Number(999))))
+    for
+      plain <- ReadCommands.eval(wb.put(poisoned), Some(poisoned), "SUM(B3:B4)", None, Nil)
+      table <- ReadCommands.eval(wb.put(poisoned), Some(poisoned), "SUM(Table1[Col])", None, Nil)
+    yield
+      assert(plain.contains("Result: 6 (number)"), plain)
+      assert(table.contains("Result: 6 (number)"), table)
+  }
+
+  test("GH-669: eval --with invalidates cross-sheet cached table readers transitively") {
+    val (data, wb) = tableFixture
+    ReadCommands
+      .eval(wb, Some(data), "Reader!A2", None, List("B3=10"))
+      .map(result => assert(result.contains("26"), result))
+  }
+
+  test("GH-669: positioned shape inspection reads no table values while SUM detects a cycle") {
+    val (data, wb) = tableFixture
+    for
+      shape <- ReadCommands.eval(wb, Some(data), "ROWS(Table1[Col])", Some("B3"), Nil)
+      cycle <- ReadCommands.eval(wb, Some(data), "SUM(Table1[Col])", Some("B3"), Nil).attempt
+    yield
+      assert(shape.contains("2"), shape)
+      assert(cycle.isLeft, cycle.toString)
+  }
+
+  for (display, spelling) <- List("Items" -> "ıtems", "Sales" -> "ſales") do
+    test(s"GH-669: --with table candidates match resolver case folding for $spelling") {
+      val (data, _) = tableFixture
+      val table = data.tables("Internal").copy(displayName = display)
+      val source = data.withTable(table)
+      val reader = Sheet("Reader").put(
+        ref"A1",
+        CellValue.Formula(s"SUM($spelling[Col])", Some(CellValue.Number(999)))
+      )
+      val wb = Workbook(source, reader)
+      assertEquals(wb.evaluateFormula(s"SUM($spelling[Col])", "Data"), Right(CellValue.Number(4)))
+      for
+        plain <- ReadCommands.eval(wb, Some(source), "SUM(B3:B4)", None, List("B3=10"))
+        table <- ReadCommands.eval(wb, Some(source), "Reader!A1", None, List("B3=10"))
+      yield
+        assert(plain.contains("Result: 13 (number)"), plain)
+        assert(table.contains("Result: 13 (number)"), table)
+    }

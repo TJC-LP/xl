@@ -19,6 +19,9 @@ private[xl] object PatchLowering:
   private def cell(ref: ARef): Area = Area(None, CellRange(ref, ref))
   private def area(range: CellRange): Area = Area(None, range)
 
+  /** Removes the cell records (contents with styles); a contents-only clear keeps styled cells. */
+  private val removeCells: ClearWhat = ClearWhat(contents = true, styles = true, comments = false)
+
   def toEdits(patch: Patch, sheet: Sheet): Option[Vector[Edit]] = patch match
     case Patch.Put(ref, value) => Some(Vector(Edit.Put(loc(ref), value, None)))
 
@@ -46,7 +49,11 @@ private[xl] object PatchLowering:
       Option.when(!overlay.isEmpty)(Vector(Edit.Style(cell(ref), overlay, StyleMode.Merge)))
 
     case Patch.ClearStyle(ref) =>
-      Option.when(sheet.contains(ref))(Vector(Edit.Clear(cell(ref), ClearWhat.styles)))
+      // A styles clear of a merged cell also unmerges it and resets the whole merge (GH-909), so
+      // ClearStyle on a merged cell has no exact desugaring.
+      Option.when(sheet.contains(ref) && !sheet.isMerged(ref))(
+        Vector(Edit.Clear(cell(ref), ClearWhat.styles))
+      )
 
     case Patch.Merge(range) => Some(Vector(Edit.Merge(area(range))))
     case Patch.Unmerge(range) => Some(Vector(Edit.Unmerge(area(range))))
@@ -56,12 +63,12 @@ private[xl] object PatchLowering:
 
     case Patch.Remove(ref) =>
       Option.when(!sheet.mergedRanges.exists(_.contains(ref)))(
-        Vector(Edit.Clear(cell(ref), ClearWhat.contents))
+        Vector(Edit.Clear(cell(ref), removeCells))
       )
 
     case Patch.RemoveRange(range) =>
       Option.when(!sheet.mergedRanges.exists(_.intersects(range)))(
-        Vector(Edit.Clear(area(range), ClearWhat.contents))
+        Vector(Edit.Clear(area(range), removeCells))
       )
 
     case Patch.PutArray(origin, values) =>

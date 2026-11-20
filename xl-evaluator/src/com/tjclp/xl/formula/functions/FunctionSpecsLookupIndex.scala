@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{ArrayResult, EvalError, RangeOperand}
+import com.tjclp.xl.formula.eval.{ArrayArithmetic, ArrayResult, EvalError, RangeOperand}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -33,7 +33,8 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     FunctionSpec.referencing[ArrayResult, IndexArgs](
       "INDEX",
       Arity.Range(2, 4),
-      flags = FunctionFlags(lift = ArrayLift.all)
+      flags = FunctionFlags(lift = ArrayLift.all),
+      envelope = Some(ReferenceOperators.indexEnvelope)
     )((args, ctx) => indexTarget(args, ctx).map(_.fold(identity, identity))) { (args, ctx) =>
       indexTarget(args, ctx).flatMap {
         case Left(values) => Right(values)
@@ -72,61 +73,99 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       areaNum <- areaNumOpt match
         case Some(TExpr.Missing) | Some(TExpr.Coerced(TExpr.Missing, _)) | None => Right(1)
         case Some(expr) => ctx.evalExpr(expr).map(_.toInt)
-      operandText = array match
-        case Left(location) => location.toA1
-        case Right(expr) => FormulaPrinter.printFileForm(expr)
-      call = s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
-        s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
-      // an array constant, or a LET name bound to an array (LET(x, SEQUENCE(3), INDEX(x, 2)))
-      constant = array match
-        case Right(TExpr.Lit(values: ArrayResult)) => Some(values)
+      // #758: the call is quoted in error messages only, so it is printed on that path alone — a
+      // selection that succeeds never prints its operand (a large array constant costs its size)
+      call = () =>
+        val operandText = array match
+          case Left(location) => location.toA1
+          case Right(expr) => FormulaPrinter.printFileForm(expr)
+        s"INDEX($operandText, $rowNum${colNum.map(c => s", $c").getOrElse("")}" +
+          s"${areaNumOpt.fold("")(_ => s", $areaNum")})"
+      // a value INDEX indexes: an array constant or any other expression that is no reference
+      // (#725: a scalar is a 1x1 array, `INDEX(5,1)` is 5), or a LET name bound to a value
+      // (LET(x, SEQUENCE(3), INDEX(x, 2)), LET(x, 5, INDEX(x, 1)))
+      constant <- array match
+        case Right(expr) if !ReferenceOperators.isReferenceShape(expr) =>
+          // outside SUMPRODUCT's shared extent: the extent aligns arrays, and would cut the
+          // positions INDEX counts (`INDEX(ROW(A:A),1000)`)
+          ctx.evalBoundedArrayExpr(expr, identity).map(valuesOf)
         case Left(TExpr.RangeLocation.Binding(name)) =>
-          ctx.bindings.get(name).collect { case values: ArrayResult => values }
-        case _ => None
+          Right(ctx.bindings.get(name).flatMap(valuesOf))
+        case _ => Right(None)
       target <- constant match
-        case Some(values) =>
-          pickArea(1, areaNum, call).flatMap(_ =>
-            selection(rowNum, colNum, values.rows, values.cols, call).flatMap { (rows, cols) =>
-              sliceOf(values, rows, cols).map(Left(_))
-            }
-          )
+        case Some(values) => indexValues(values, rowNum, colNum, areaNum, call)
         case None =>
-          for
-            areas <- ReferenceOperators.areas(array, ctx)
-            _ <- pickArea(areas.size, areaNum, call)
-            RangeOperand(targetSheet, arrayRange) = areas(areaNum - 1)
-            (rows, cols) <- selection(rowNum, colNum, arrayRange.height, arrayRange.width, call)
-          yield
-            val startCol = arrayRange.colStart.index0
-            val startRow = arrayRange.rowStart.index0
-            Right(
-              RangeOperand(
-                targetSheet,
-                CellRange(
-                  ARef.from0(
-                    startCol + cols.headOption.getOrElse(0),
-                    startRow + rows.headOption.getOrElse(0)
-                  ),
-                  ARef.from0(
-                    startCol + cols.lastOption.getOrElse(0),
-                    startRow + rows.lastOption.getOrElse(0)
+          ReferenceOperators.areas(array, ctx) match
+            case Right(areas) =>
+              for
+                _ <- pickArea(areas.size, areaNum, call)
+                RangeOperand(targetSheet, arrayRange) = areas(areaNum - 1)
+                (rows, cols) <- selection(rowNum, colNum, arrayRange.height, arrayRange.width, call)
+              yield
+                val startCol = arrayRange.colStart.index0
+                val startRow = arrayRange.rowStart.index0
+                Right(
+                  RangeOperand(
+                    targetSheet,
+                    CellRange(
+                      ARef.from0(
+                        startCol + cols.headOption.getOrElse(0),
+                        startRow + rows.headOption.getOrElse(0)
+                      ),
+                      ARef.from0(
+                        startCol + cols.lastOption.getOrElse(0),
+                        startRow + rows.lastOption.getOrElse(0)
+                      )
+                    )
                   )
                 )
-              )
-            )
+            // #725: a defined name bound to a value (`konst = 5`, `=SUM(A1:A3)`) is INDEX's
+            // array: its range slot is `#VALUE!` ("does not refer to a range"), and the name is
+            // evaluated for its value. Any other error (an OFFSET off the grid) stays the result.
+            case Left(notAReference @ EvalError.ErrorValue(CellError.Value, _)) =>
+              array match
+                case Left(TExpr.RangeLocation.Name(name, scope)) =>
+                  val named = scope.fold[TExpr[?]](TExpr.NameRef(name))(TExpr.SheetNameRef(_, name))
+                  ctx
+                    .evalReference(named.asInstanceOf[TExpr[Any]])
+                    .flatMap(valuesOf(_).toRight(notAReference))
+                    .flatMap(indexValues(_, rowNum, colNum, areaNum, call))
+                case _ => Left(notAReference)
+            case Left(err) => Left(err)
     yield target
 
+  /** The values of INDEX's first slot when it holds a value, never a reference. */
+  private def valuesOf(value: Any): Option[ArrayResult] = value match
+    case _: RangeOperand => None
+    case values: ArrayResult => Some(values)
+    case scalar => Some(ArrayResult.single(ArrayArithmetic.anyToCellValue(scalar)))
+
+  /** INDEX over values, which form one area: the selected window of them. */
+  private def indexValues(
+    values: ArrayResult,
+    rowNum: BigDecimal,
+    colNum: Option[BigDecimal],
+    areaNum: Int,
+    call: () => String
+  ): Either[EvalError, Either[ArrayResult, RangeOperand]] =
+    pickArea(1, areaNum, call).flatMap(_ =>
+      selection(rowNum, colNum, values.rows, values.cols, call).flatMap { (rows, cols) =>
+        sliceOf(values, rows, cols).map(Left(_))
+      }
+    )
+
   /** GH-669: area_num against the number of areas — `#VALUE!` below 1, `#REF!` past the last. */
-  private def pickArea(count: Int, areaNum: Int, call: String): Either[EvalError, Unit] =
+  private def pickArea(count: Int, areaNum: Int, call: () => String): Either[EvalError, Unit] =
     if areaNum < 1 then
       Left(
-        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 ($call)"))
+        EvalError
+          .ErrorValue(CellError.Value, Some(s"INDEX: area_num $areaNum is below 1 (${call()})"))
       )
     else if areaNum > count then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
-          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) ($call)")
+          Some(s"INDEX: area_num $areaNum is past the reference's $count area(s) (${call()})")
         )
       )
     else Right(())
@@ -141,7 +180,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     colNum: Option[BigDecimal],
     numRows: Int,
     numCols: Int,
-    call: String
+    call: () => String
   ): Either[EvalError, (Vector[Int], Vector[Int])] =
     val (rowPos, colPos) = colNum match
       case Some(c) => (rowNum.toInt, c.toInt)
@@ -161,19 +200,21 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     size: Int,
     label: String,
     noun: String,
-    call: String
+    call: () => String
   ): Either[EvalError, Option[Int]] =
     // #670: Excel's codes as cached error values — a negative position is #VALUE!, one past the
     // array #REF! (LibreOffice: Err:502, its #VALUE!, and #REF!)
     if pos == 0 then Right(None)
     else if pos < 0 then
-      Left(EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: $call")))
+      Left(
+        EvalError.ErrorValue(CellError.Value, Some(s"INDEX: $label $pos is negative: ${call()}"))
+      )
     else if pos > size then
       Left(
         EvalError.ErrorValue(
           CellError.Ref,
           Some(
-            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): $call"
+            s"INDEX: $label $pos is out of bounds (array has $size $noun, valid range: 1-$size): ${call()}"
           )
         )
       )
@@ -190,19 +231,31 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
       for
         lookupValueEval <- evalValue(ctx, lookupValue)
         // GH-467: dereference cell-ref lookup values and coerce dates to serials up front —
-        // positions below are RANGE positions (idx + 1), blanks included, never compacted.
-        lookup = normalizeLookupValue(lookupValueEval)
+        // positions below are RANGE positions (idx + 1), blanks included, never compacted. A
+        // blank lookup value is the number 0 (#693)
+        lookup = blankLookupAsZero(normalizeLookupValue(lookupValueEval))
         _ <- lookupValueError("MATCH", lookup)
         matchType <- ctx.evalExpr(matchTypeExpr)
         resolved <- ctx.resolveRange(lookupArray)
         (targetSheet, lookupRange) = resolved
+        // #724: lookup_array is one row or one column; desktop Excel answers any other shape #N/A
+        // in every match_type (LibreOffice: #VALUE!), never a row-major position
+        _ <-
+          if lookupRange.width == 1 || lookupRange.height == 1 then Right(())
+          else
+            Left(
+              lookupNotFound(
+                s"MATCH: lookup_array ${lookupArray.toA1} is not a single row or column: MATCH(${renderLookupValue(lookup)}, ${lookupArray.toA1}, …)"
+              )
+            )
         // #670(c): Excel reads match_type by its sign once truncated — 5 is 1, -3 is -1, and a
         // fraction below 1 in magnitude is 0 (LibreOffice agrees on 1.5, -1.5 and 0.5)
         matchTypeInt = matchType.setScale(0, BigDecimal.RoundingMode.DOWN).signum
         // the keys as references read them, lazily (GH-715: see LookupLine)
         line = lookupLine(lookupRange, targetSheet, ctx)
         found <- matchTypeInt match
-          case 0 => line.find(forward = true)(matchesLookupExact(_, lookup))
+          // #693: type 0 applies wildcards, as exact VLOOKUP/HLOOKUP do
+          case 0 => line.find(forward = true)(exactMatcher(lookup, wildcards = true))
           // #670(g): 1 is the largest key ≤ the value over ascending keys, -1 the smallest key ≥
           // it over descending keys — numbers or text (case-insensitive), the last of a run of
           // equal keys as Excel's binary search lands
@@ -277,15 +330,19 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
         // the whole (used) range for the approximate plane
         positionOpt <- matchMode match
           case 0 =>
-            exactLookupPosition(lookupRange, targetSheet, ctx, lookup, None, searchMode)
-              .map(_.map(_ + 1))
+            exactLookupPosition(
+              lookupRange,
+              targetSheet,
+              ctx,
+              exactMatcher(lookup, wildcards = false),
+              searchMode
+            ).map(_.map(_ + 1))
           case 2 =>
             exactLookupPosition(
               lookupRange,
               targetSheet,
               ctx,
-              lookup,
-              wildcardCriterion(lookup),
+              exactMatcher(lookup, wildcards = true),
               searchMode
             ).map(_.map(_ + 1))
           case -1 | 1 =>

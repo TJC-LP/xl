@@ -59,6 +59,8 @@ val sheet = wb.sheets.headOption.getOrElse(sys.exit(1))
 // Single-formula evaluation returns XLResult — compose with for-comprehensions
 val total = sheet.evaluateFormula("=SUM(D2:D4)")
 println(s"  ✓ Total revenue: $total")
+assert(sheet.evaluateFormula("=SLN(30000,7500,10)") == Right(CellValue.Number(BigDecimal(2250))))
+println(s"  ✓ First-year depreciation: ${sheet.evaluateFormula("=SYD(30000,7500,10,1)")}")
 
 // ========== 5. Typed extraction: readTyped returns Either[CodecError, Option[A]] ==========
 val firstUnits = sheet.readTyped[Int](ref"B2")
@@ -90,6 +92,7 @@ val orders = Vector(
   Order(2, "Globex", 1, BigDecimal("120.00"), None)
 )
 val placed = Sheet("Orders").putTable(ref"A1", orders, "Orders").unsafe // header + rows + Excel table
+assert(placed.sheet.evaluateFormula("=SUM(Orders[qty])") == Right(CellValue.Number(BigDecimal(4))))
 val back = placed.sheet.readRowsByHeader[Order](Row.from1(1))            // Either[RowCodecError, Vector[Order]]
 println(s"  ✓ Records: wrote ${placed.count} rows over ${placed.range.map(_.toA1).getOrElse("-")}, read back ${back.map(_.size).getOrElse(-1)}")
 

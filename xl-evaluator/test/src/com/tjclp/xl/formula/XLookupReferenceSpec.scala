@@ -191,22 +191,16 @@ class XLookupReferenceSpec extends FunSuite:
     assertEquals(tall("XLOOKUP(2,A:A,B:B)"), Right(N("20")))
     assertEquals(tall("ROWS(B1:XLOOKUP(3,A:A,B:B,,0,-1))"), Right(N("3")))
     // keys that could meet the blanks past the data (a blank cell, "", 0, wildcards), forward
-    // and in both reverse modes, exact and wildcard. None matches a blank — a wildcard matches
-    // the numbers as text, so it lands on the first or the last of the data. These are the
-    // answers the search gave when it read every cell of A:A.
+    // and in both reverse modes, exact and wildcard. None matches a blank, and a wildcard matches
+    // text keys only (#780), so none matches the numbers either.
     val blankLike =
       for
         key <- List("Z9", "\"\"", "0", "\"*\"", "\"?*\"")
         mode <- List("", ",,0,-1", ",,0,-2", ",,2", ",,2,-1", ",,2,-2")
       yield (key, mode)
-    def expected(key: String, mode: String): Either[String, CellValue] =
-      (key.contains('*'), mode) match
-        case (true, ",,2") => Right(N("1"))
-        case (true, ",,2,-1" | ",,2,-2") => Right(N("3"))
-        case _ => Right(E("#N/A"))
     assertEquals(
       blankLike.map((k, m) => (k + m, tall(s"ROWS(B1:XLOOKUP($k,A:A,B:B$m))"))),
-      blankLike.map((k, m) => (k + m, expected(k, m)))
+      blankLike.map((k, m) => (k + m, Right(E("#N/A"))))
     )
     // the approximate modes over data then blanks: next smaller from either end, next larger
     assertEquals(tall("ROWS(B1:XLOOKUP(5,A:A,B:B,,-1))"), Right(N("3")))
@@ -214,16 +208,16 @@ class XLookupReferenceSpec extends FunSuite:
     assertEquals(tall("ROWS(B1:XLOOKUP(0,A:A,B:B,,1))"), Right(N("1")))
     assertEquals(tall("XLOOKUP(9,A:A,B:B,,1)"), Right(E("#N/A")))
     // a finite lookup array past the data, and a horizontal one over a whole row
-    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A1:A10,B1:B10,,2,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(3,A1:A10,B1:B10,,2,-1))"), Right(N("3")))
     assertEquals(tall("ROWS(B1:XLOOKUP(5,A1:A10,B1:B10,,-1,-1))"), Right(N("3")))
-    assertEquals(tall("COLUMNS(A2:XLOOKUP(\"*\",2:2,2:2,,2,-1))"), Right(N("2")))
+    assertEquals(tall("COLUMNS(A2:XLOOKUP(20,2:2,2:2,,2,-1))"), Right(N("2")))
     assertEquals(tall("XLOOKUP(20,2:2,2:2)"), Right(N("20")))
     assertEquals(tall("XLOOKUP(Z9,2:2,2:2,,0,-1)"), Right(E("#N/A")))
     // the matched address itself, read through `:` (ROW does not take a computed reference yet):
     // a reverse search lands on the LAST match, a forward one on the first
     assertEquals(tall("ROWS(B1:XLOOKUP(2,A:A,B:B,,0,-1))"), Right(N("2")))
-    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A:A,B:B,,2,-1))"), Right(N("3")))
-    assertEquals(tall("ROWS(B1:XLOOKUP(\"*\",A:A,B:B,,2))"), Right(N("1")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(3,A:A,B:B,,2,-1))"), Right(N("3")))
+    assertEquals(tall("ROWS(B1:XLOOKUP(1,A:A,B:B,,2))"), Right(N("1")))
     // `""` matches no blank here, so a reverse search over A:A is #N/A — not B1048576, the
     // address it would be if `""` matched the blanks past the data (the stand-in's position).
     // 0.23.1's full read answered the same; Excel's answer is unconfirmed (LibreOffice 24.2 has no

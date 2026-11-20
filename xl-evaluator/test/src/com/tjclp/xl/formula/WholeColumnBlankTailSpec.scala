@@ -365,7 +365,8 @@ class WholeColumnBlankTailSpec extends FunSuite:
     assertEquals(eval("=AND(A:A*{1,2,3}>=0)"), Right(CellValue.Bool(true)))
     assertEquals(eval("=OR(A:A*{1,2,3}>14)"), Right(CellValue.Bool(true)))
     assertEquals(eval("=COUNT(A:A*{1,2,3})"), Right(num(3145728)))
-    assertEquals(eval("=COUNTBLANK(A:A*{1,2,3})"), Right(num(0)))
+    // COUNTBLANK takes a reference, not an array (#731)
+    assertEquals(eval("=COUNTBLANK(A:A*{1,2,3})"), Right(CellValue.Error(CellError.Value)))
     assertEquals(eval("=MAX(A:A*{1,2,3})"), Right(num(15)))
     assertEquals(eval("=MIN(A:A*{1,2,3})"), Right(num(0)))
     assertEquals(eval("=MAX((A:A=\"\")*{10,20})"), Right(num(20)))
@@ -407,4 +408,169 @@ class WholeColumnBlankTailSpec extends FunSuite:
       case other => fail(s"expected a sum, got $other")
     // per cell past the limit is refused, never built
     assert(eval("=SUM(IFERROR(A:B/0,RAND()))").isLeft)
+  }
+
+  // ===== #755: a whole column computed by INDEX or `:` =====
+
+  /**
+   * #755's book: data stops at row 3 and A2 is blank (A1=1, A3=3; B1:B3 = 10, 20, 30). The Excel
+   * values are from #755's report (arcaputo3); 1048574 is A2 plus the 1048573 rows below row 3.
+   */
+  private val computed: Sheet =
+    Sheet(SheetName.unsafe("T"))
+      .put(ref"A1", num(1))
+      .put(ref"A3", num(3))
+      .put(ref"B1", num(10))
+      .put(ref"B2", num(20))
+      .put(ref"B3", num(30))
+
+  test("#755: a whole column INDEX selects counts its blank rows past the used range") {
+    assertEquals(eval("=SUMPRODUCT(--(A:A=\"\"))", computed), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT(--(INDEX(A:A,0)=\"\"))", computed), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT(--(INDEX(A:A,0,1)=\"\"))", computed), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT(--ISBLANK(INDEX(A:A,0)))", computed), Right(num(1048574)))
+  }
+
+  test("#755: a range from a cell to INDEX of the column's last row counts them too") {
+    assertEquals(
+      eval("=SUMPRODUCT(--(A1:INDEX(A:A,1048576)=\"\"))", computed),
+      Right(num(1048574))
+    )
+  }
+
+  test("#755: a computed whole column times a value column stays the trimmed sum") {
+    // the blank rows contribute 0 (Excel: 20)
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*INDEX(B:B,0))", computed), Right(num(20)))
+    assertEquals(eval("=SUMPRODUCT((INDEX(A:A,0)=\"\")*B:B)", computed), Right(num(20)))
+    assertEquals(eval("=SUMPRODUCT(INDEX(A:A,0),INDEX(B:B,0))", computed), Right(num(100)))
+  }
+
+  test("#755: INDEX's column, another sheet's column and a range of two INDEXes count too") {
+    // not checked in Excel: each is the same count as its written range, every row below 3 blank
+    val other = Sheet(SheetName.unsafe("O")).put(ref"A1", num(1)).put(ref"A3", num(3))
+    val run = evalIn(Workbook(Vector(computed, other)), computed)
+    // B1:B3 are filled: the 1048573 rows below
+    assertEquals(run("=SUMPRODUCT(--(INDEX(A:B,0,2)=\"\"))"), Right(num(1048573)))
+    assertEquals(run("=SUMPRODUCT(--(INDEX(O!A:A,0)=\"\"))"), Right(num(1048574)))
+    assertEquals(
+      run("=SUMPRODUCT(--(INDEX(A:A,1):INDEX(A:A,1048576)=\"\"))"),
+      Right(num(1048574))
+    )
+    assertEquals(run("=SUMPRODUCT(--(INDEX(1:1,0)=\"\"))"), Right(num(16382)))
+    assertEquals(run("=SUMPRODUCT(--(INDEX(A:A,0)=\"\"),--(B:B=\"\"))"), Right(num(1048573)))
+  }
+
+  test("#755: a computed range from below row 1 counts as its written edge range (#746)") {
+    // A2:A1048576 is 1048575 rows with only A3 filled: 1048574, as the written range gives
+    assertEquals(eval("=SUMPRODUCT(--(A2:A1048576=\"\"))", computed), Right(num(1048574)))
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:INDEX(A:A,1048576)=\"\"))", computed),
+      Right(num(1048574))
+    )
+    assertEquals(
+      eval("=SUMPRODUCT(--(INDEX(A2:A1048576,0)=\"\"))", computed),
+      Right(num(1048574))
+    )
+    // beside a written edge range of the same rows, the value column's blank rows add 0
+    assertEquals(
+      eval("=SUMPRODUCT((A2:A1048576=\"\")*INDEX(B2:B1048576,0))", computed),
+      Right(num(20))
+    )
+  }
+
+  test("#755: on a one-row used range, INDEX over an edge range reads blank on the tail") {
+    // only A2 and B2 filled: every blank row of A pairs with a blank B, so the product is 0
+    // (#746's LIMITATIONS note; not checked in Excel). Before #755 the tail read INDEX at B2's
+    // value and counted 7 for each of the 1048574 blank rows
+    val one = Sheet(SheetName.unsafe("S")).put(ref"A2", num(1)).put(ref"B2", num(7))
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:A1048576=\"\")*INDEX(B2:B1048576,0))", one),
+      Right(num(0))
+    )
+    assertEquals(
+      eval("=SUMPRODUCT(--(A2:A1048576=\"\")*(B2:INDEX(B:B,1048576)))", one),
+      Right(num(0))
+    )
+  }
+
+  test("#755 limit: a computed whole column only evaluation can place keeps the trimmed sum") {
+    // Excel counts every blank row (1048574); xl counts the used rows' blank, A2 (LIMITATIONS)
+    assertEquals(eval("=SUMPRODUCT(--(OFFSET(A:A,0,0)=\"\"))", computed), Right(num(1)))
+    assertEquals(eval("=SUMPRODUCT(--(INDIRECT(\"A:A\")=\"\"))", computed), Right(num(1)))
+    // an INDEX position the formula's own cell gives is placed only at evaluation (review of
+    // #881): in C5, A5:A1048576 is every row blank in Excel (1048572); xl reads the used rows,
+    // here A5 alone, as origin/main does
+    val placedRow = computed.put(
+      ref"C5",
+      CellValue.Formula("SUMPRODUCT(--(INDEX(A:A,ROW()):A1048576=\"\"))", None)
+    )
+    assertEquals(
+      placedRow.evaluateCell(ref"C5", Clock.system, Some(Workbook(Vector(placedRow)))),
+      Right(num(1))
+    )
+    // a LET-bound computed column stays computed: the trimmed sum, A2 (origin/main's answer)
+    assertEquals(
+      eval("=SUMPRODUCT(LET(t,INDEX(A:A,0),--(t=\"\")))", computed),
+      Right(num(1))
+    )
+    // ROW beside it reads positions, as beside a written whole column: no tail
+    assertEquals(eval("=SUMPRODUCT((INDEX(A:A,0)=\"\")*ROW(A:A))", computed), Right(num(2)))
+  }
+
+  test("#755: a LET binding read in a range slot stays the reference it computes") {
+    // review of #881 (A1=4, A2=5, B1=10): MAX(t) is MAX(B:B), 10, so every row of A, blank
+    // included, is below it: 1048576, as origin/main gives. Rewriting the binding to B:B moved it
+    // onto the blank line, where MAX read one blank cell
+    assertEquals(
+      eval("=SUMPRODUCT(LET(t,INDEX(B:B,0),--(A:A<MAX(t))))", sheet.put(ref"B1", num(10))),
+      Right(num(1048576))
+    )
+  }
+
+  test("#755: a placed formula counts the same") {
+    val placed = computed.put(ref"G9", CellValue.Formula("SUMPRODUCT(--(INDEX(A:A,0)=\"\"))", None))
+    assertEquals(
+      placed.evaluateCell(ref"G9", Clock.system, Some(Workbook(Vector(placed)))),
+      Right(num(1048574))
+    )
+  }
+
+  test("#755: a computed reference in a range slot beside a whole column keeps the tail") {
+    // review book (A1=4, A2=5, B1=1): the slot reads one fixed reference, as SUM(B:B) does, so
+    // every blank row of A adds SUM(B:B) (Excel's rule, as for the written range: 1048574 rows)
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(B:B))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*SUM(INDEX(B:B,0)))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*MAX(INDEX(B:B,0)))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*COUNTA(INDEX(B:B,0)))"), Right(num(1048574)))
+    assertEquals(eval("=SUMPRODUCT((A:A=\"\")*COUNTIF(INDEX(B:B,0),1))"), Right(num(1048574)))
+  }
+
+  test("#755: the plan reads a computed reference with a known range as that range") {
+    // an argument as SUMPRODUCT holds it, rewritten and printed back
+    def written(argument: String): String =
+      FormulaParser.parse(s"=$argument") match
+        case Right(expr) =>
+          com.tjclp.xl.formula.printer.FormulaPrinter.printFileForm(
+            SumProductTail.writtenReferences(expr)
+          )
+        case Left(err) => fail(s"$argument: $err")
+    // the range written in its cell form: A:A is A1:A1048576
+    assertEquals(written("--(INDEX(A:A,0)=\"\")"), "--(A1:A1048576=\"\")")
+    assertEquals(written("--(A1:INDEX(A:A,1048576)=\"\")"), "--(A1:A1048576=\"\")")
+    // inside a range slot the call stays: SUM reads it as one fixed reference
+    assertEquals(written("(A:A=\"\")*SUM(INDEX(B:B,0))"), "(A:A=\"\")*SUM(INDEX(B:B,0))")
+    // a position read from a cell, or OFFSET, stays computed
+    assertEquals(written("--(INDEX(A:A,B1)=\"\")"), "--(INDEX(A:A,B1)=\"\")")
+    assertEquals(written("--(OFFSET(A:A,0,0)=\"\")"), "--(OFFSET(A:A,0,0)=\"\")")
+    // review of #881: ROW() and COLUMN() read the formula's own cell, which the fold does not know
+    assertEquals(
+      written("--(INDEX(A:A,ROW()):A1048576=\"\")"),
+      "--(INDEX(A:A,ROW()):A1048576=\"\")"
+    )
+    assertEquals(written("--(INDEX(A:B,0,COLUMN())=\"\")"), "--(INDEX(A:B,0,COLUMN())=\"\")")
+    // review of #881: a LET binding stays computed, since the body may read it in a range slot
+    assertEquals(
+      written("LET(t,INDEX(B:B,0),--(A:A<MAX(t)))"),
+      "LET(t,INDEX(B:B,0),--(A:A<MAX(t)))"
+    )
   }

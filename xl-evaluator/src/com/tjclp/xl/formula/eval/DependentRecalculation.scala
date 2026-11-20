@@ -1,100 +1,150 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.XLError
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, ReferenceScan}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
-import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.formula.{Clock, Rng}
 
 /**
- * Extension methods for eager recalculation of dependent formulas.
+ * Targeted recalculation after an edit: evaluate the edited formulas and every formula the edit can
+ * affect, keep every other cache.
  *
- * When a cell value changes, all formulas that depend on it (directly or transitively) must be
- * re-evaluated to keep cached values current. This follows Excel's eager recalculation model.
- *
- * Usage:
- * {{{
- * import com.tjclp.xl.{*, given}
- *
- * // Single-sheet recalculation
- * val updatedSheet = sheet.put(ref"A1", 100).recalculateDependents(Set(ref"A1"))
- *
- * // Cross-sheet recalculation (workbook-level)
- * val updatedWb = wb.recalculateDependents(SheetName.unsafe("Sheet1"), Set(ref"A1"))
- * }}}
+ * #891: one pass over the recalculation graph ([[RecalcGraph]], the compact graph a whole-workbook
+ * recalculation orders with), in the canonical order: the lexicographically smallest topological
+ * order in grid order, restricted to the cone. A seeded RAND therefore draws in the same order as a
+ * full recalculation would. The per-sheet and workbook `recalculateDependents` copies that ordered
+ * by a hash-seeded FIFO and dropped evaluation errors are gone; `recalculateAfterEdit` is the one
+ * entry point.
  */
 object DependentRecalculation:
 
   /**
+   * #891: the dirty cone of an edit to `seeds` on `wb` — the cells [[recalculateAfterEdit]]
+   * evaluates (its formulas) and the CLI's cone-scoped writes refresh: see
+   * [[RecalcGraph.editCone]].
+   */
+  private[xl] def editCone(wb: Workbook, seeds: Set[QualifiedRef]): Set[QualifiedRef] =
+    if seeds.isEmpty then Set.empty
+    else editConeOn(wb, RecalcGraph.build(wb, RecalcCounters.disabled), seeds)
+
+  /** [[editCone]] over `graph`, the recalculation graph already built from `wb` (#891). */
+  private[eval] def editConeOn(
+    wb: Workbook,
+    graph: RecalcGraph,
+    seeds: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    if seeds.isEmpty then Set.empty
+    else coneOf(wb, graph, seeds, DependencyGraph.dynamicCells(wb, graph.parses))
+
+  private def coneOf(
+    wb: Workbook,
+    graph: RecalcGraph,
+    seeds: Set[QualifiedRef],
+    dynamic: Set[QualifiedRef]
+  ): Set[QualifiedRef] =
+    val reaches = ReferenceScan.reaches(wb, DependencyGraph.unresolvedReaders(wb, graph.parses))
+    graph.editCone(seeds ++ uncachedFormulas(wb), dynamic, reaches)
+
+  /**
+   * #891 (Excel parity): every formula that holds no value. Excel has no such cell (after any
+   * calculation every formula holds a value, an error being one), so the after-edit pass computes
+   * them with the edit, and what reads them, exactly as a full recalculation would: one that fails
+   * again withdraws its readers' caches instead of being read as empty. A book saved without caches
+   * therefore computes in full on its first edit, as Excel computes it on open.
+   */
+  private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
+    wb.sheets.iterator.flatMap { sheet =>
+      sheet.cells.iterator.collect {
+        case cell @ Cell(ref, _, _, _) if WorkbookEvaluator.isUncachedEvaluable(cell.value) =>
+          QualifiedRef(sheet.name, ref)
+      }
+    }.toSet
+
+  /**
    * GH-504/GH-508: evaluate authored formulas as well as affected dependents and retain outcomes.
-   * The affected set is `DependencyGraph.editCone`: the edit, its transitive dependents, every
-   * dynamic reader, and — GH-606 — an unresolved reader only when its textual reach
-   * (`ReferenceScan`) contains a dirty cell, or is unbounded. A missing graph edge cannot prove
-   * independence, but the formula's text often can; readers it cannot bound stay always-dirty.
-   * Unaffected formulas retain their caches and do not consume clock or randomness capabilities.
+   * The affected set is [[editCone]]: the edit, its transitive dependents, every dynamic reader,
+   * and — GH-606 — an unresolved reader only when its textual reach (`ReferenceScan`) contains a
+   * dirty cell, or is unbounded. A missing graph edge cannot prove independence, but the formula's
+   * text often can; readers it cannot bound stay always-dirty. Unaffected formulas retain their
+   * caches and do not consume clock or randomness capabilities. Cycle members and the formulas they
+   * block are reported, never evaluated; a failure withdraws the caches downstream of it.
    *
    * #767: `memo` is the pass's aggregate memo (the per-pass caches live in it); the parity laws
-   * supply one with the caches switched off or with small slice thresholds.
+   * supply one with the caches switched off or with small slice thresholds. #891: `rng` is the
+   * pass's randomness, drawn in the canonical order.
    */
   private[xl] def recalculateAfterEdit(
     wb: Workbook,
     sheetName: SheetName,
     modifiedRefs: Set[ARef],
     clock: Clock,
-    memo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo
+    memo: Evaluator.AggregateMemo = new Evaluator.AggregateMemo,
+    rng: Rng = Rng.system
   ): RecalcResult =
-    if modifiedRefs.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty, Map.empty)
+    if modifiedRefs.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty)
     else
       val calculationClock = WorkbookEvaluator.pinnedCalculationClock(clock)
-      val (graph, dependents) = DependencyGraph.fromWorkbookFormulaGraph(wb)
-      val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
-      val dynamic = DependencyGraph.dynamicCells(wb)
-      // #752: the graph's nodes carry each tab's own spelling; a seed in another case must match
+      val counters = memo.counters
+      val graph = counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(wb, counters))
+      // #790: evaluation reuses the build's parse of each formula
+      memo.passCache.foreach(_.useParses(graph.parses))
+      val dynamic = DependencyGraph.dynamicCells(wb, graph.parses)
       val sheet = DependencyGraph.sheetCanonicaliser(wb)(sheetName)
       val seeds = modifiedRefs.map(QualifiedRef(sheet, _))
-      val affected = DependencyGraph.editCone(wb, seeds, index, dynamic).intersect(graph.keySet)
-      val affectedGraph = graph.filter((ref, _) => affected.contains(ref))
-      val allCyclic = DependencyGraph.qualifiedCyclicNodes(graph)
+      val affected = coneOf(wb, graph, seeds, dynamic).filter(graph.isFormula)
+      val allCyclic = graph.cyclicCore
+      val allBlocked = graph.dependents(allCyclic, Set.empty)
       val cyclic = allCyclic.intersect(affected)
-      val blocked =
-        DependencyGraph.qualifiedTransitiveDependents(dependents, allCyclic).intersect(affected)
-      val skipped = cyclic ++ blocked
+      val skipped = cyclic ++ allBlocked.intersect(affected)
 
       def expression(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(text, _, _)) => text
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(text, _, _) => text
           case _ => q.ref.toA1
 
       val cycleErrors = skipped.toVector
-        .sortBy(q => (q.sheet.value, q.ref.row.index0, q.ref.col.index0))
+        .sortBy(QualifiedRef.gridKey)
         .map { q =>
           val reason =
             if cyclic.contains(q) then "Circular reference"
             else "Blocked by an upstream circular reference"
           CellEvalError(q.sheet, q.ref, XLError.FormulaError(expression(q), reason))
         }
-      val orderedGraph = (affectedGraph -- skipped).view.mapValues(_ -- skipped).toMap
-      val orderedDependents = (dependents.filter((ref, _) =>
-        affected.contains(ref)
-      ) -- skipped).view.mapValues(_ -- skipped).toMap
-      DependencyGraph.qualifiedTopologicalSort(orderedGraph, orderedDependents) match
-        case Left(error) =>
-          val failures =
-            orderedGraph.keys.toVector.sortBy(q => (q.sheet.value, q.ref.toA1)).map { q =>
+      counters.time(RecalcCounters.Phase.Kahn)(graph.order(allCyclic ++ allBlocked)) match
+        case Left(unordered) =>
+          // Unreachable: the cyclic core and its dependents left the order. Stay total anyway.
+          val failures = ((unordered.candidates & affected) -- skipped).toVector
+            .sortBy(QualifiedRef.gridKey)
+            .map { q =>
               CellEvalError(
                 q.sheet,
                 q.ref,
-                XLError.FormulaError(expression(q), s"Unresolvable order: $error")
+                XLError.FormulaError(
+                  expression(q),
+                  s"Unresolvable order: ${unordered.remaining.size} formulas left"
+                )
               )
             }
-          RecalcResult.cacheResults(wb, Map.empty, cycleErrors ++ failures, dependents)
-        case Right(order) =>
+          RecalcResult.cacheResultsWith(
+            wb,
+            Map.empty,
+            cycleErrors ++ failures,
+            graph.dependents,
+            Vector.empty,
+            Map.empty,
+            graph.parses
+          )
+        case Right(sorted) =>
+          // GH-274/GH-301: dynamic readers and every static dependent of one evaluate last. A
+          // stable partition of the canonical order, so the order stays dependency-first even
+          // when the dynamic chain crosses sheets.
           val dynamicClosure =
-            (dynamic ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamic))
-              .intersect(affected) -- skipped
+            if dynamic.isEmpty then Set.empty[QualifiedRef]
+            else (dynamic ++ graph.dependents(dynamic, Set.empty)).intersect(affected) -- skipped
+          val order = sorted.order.filter(affected.contains)
           val ordered =
             order.filterNot(dynamicClosure.contains) ++ order.filter(dynamicClosure.contains)
           val stripBySheet = (dynamicClosure ++ skipped ++ allCyclic).groupMap(_.sheet)(_.ref)
@@ -119,272 +169,41 @@ object DependentRecalculation:
           )
           def evaluatorFor(q: QualifiedRef): Evaluator =
             Evaluator.recalculationInstance(
-              Rng.system,
+              rng,
               memo,
-              WorkbookEvaluator.callerPosition(slots, dynamicClosure, q)
+              WorkbookEvaluator.callerPosition(slots, dynamicClosure, q),
+              Some((q.sheet, q.ref))
             )
           val initial = WorkbookEvaluator.PassState(initialSheets, Map.empty, cycleErrors)
           val WorkbookEvaluator.PassState(_, values, errors, reasons) =
-            ordered.foldLeft(initial) { (state, q) =>
-              positions.get(q.sheet) match
-                case None => state
-                case Some(position) =>
-                  val result =
-                    EvalDefect.xlGuard(expression(q), Some(q.ref)) {
-                      SheetEvaluator.evaluateCellOutcome(
-                        state.sheets(position),
-                        q.ref,
-                        evaluatorFor(q),
-                        calculationClock,
-                        Some(wb.copy(sheets = state.sheets))
-                      )
-                    }
-                  result match
-                    case Right(outcome) => state.computed(position, q, outcome, memo.passCache)
-                    case Left(error) => state.failed(position, q, error)
+            counters.time(RecalcCounters.Phase.Eval) {
+              ordered.foldLeft(initial) { (state, q) =>
+                positions.get(q.sheet) match
+                  case None => state
+                  case Some(position) =>
+                    val result =
+                      EvalDefect.xlGuard(expression(q), Some(q.ref)) {
+                        SheetEvaluator.evaluateCellOutcome(
+                          state.sheets(position),
+                          q.ref,
+                          evaluatorFor(q),
+                          calculationClock,
+                          Some(wb.copy(sheets = state.sheets))
+                        )
+                      }
+                    result match
+                      case Right(outcome) => state.computed(position, q, outcome, memo.passCache)
+                      case Left(error) => state.failed(position, q, error)
+              }
             }
-          RecalcResult.cacheResults(wb, values, errors, dependents, reasons = reasons)
-
-  extension (sheet: Sheet)
-    /**
-     * Recalculate all formulas depending on modifiedRefs.
-     *
-     * Evaluates in topological order and updates cached values in Formula cells.
-     *
-     * GH-274: dynamic-reference cells (INDIRECT) are always dirty — the static graph cannot see
-     * which cells their evaluated text names, so any edit may affect them. They and their static
-     * dependents recalculate last (`DependencyGraph.deferDynamic`); earlier-refreshed caches are
-     * exactly what dynamic reads should observe. This is the purity-charter encoding of Excel's
-     * "volatile" marking. The entire dynamic closure has its old caches stripped before the pass,
-     * so multi-hop INDIRECT/OFFSET chains cannot observe a previous calculation generation.
-     *
-     * @param modifiedRefs
-     *   Set of cell references that have been modified
-     * @param workbook
-     *   Optional workbook context for cross-sheet formula references
-     * @param clock
-     *   Clock for date/time functions (defaults to system clock)
-     * @return
-     *   Sheet with updated formula caches
-     */
-    def recalculateDependents(
-      modifiedRefs: Set[ARef],
-      workbook: Option[Workbook] = None,
-      clock: Clock = Clock.system
-    ): Sheet =
-      if modifiedRefs.isEmpty then sheet
-      else
-        val calculationClock = WorkbookEvaluator.pinnedCalculationClock(clock)
-        val analysisWorkbook = workbook.fold(Workbook(sheet))(_.put(sheet))
-        val seeds = modifiedRefs.map(ref => QualifiedRef(sheet.name, ref))
-        val dynamic = DependencyGraph.dynamicCells(analysisWorkbook).filter(_.sheet == sheet.name)
-        val (graph, dependents) = DependencyGraph.fromWorkbookFormulaGraph(analysisWorkbook)
-        val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(analysisWorkbook)
-        val toRecalc =
-          (dependencyIndex.transitiveDependents(seeds ++ dynamic) ++ dynamic)
-            .filter(_.sheet == sheet.name)
-        if toRecalc.isEmpty then sheet
-        else
-          val affectedGraph = graph.filter((q, _) => toRecalc.contains(q))
-          val affectedDependents = dependents.filter((q, _) => toRecalc.contains(q))
-          val cyclic = DependencyGraph.qualifiedCyclicNodes(affectedGraph)
-          val blocked = DependencyGraph.qualifiedTransitiveDependents(affectedDependents, cyclic)
-          val skipped = (cyclic ++ blocked) & toRecalc
-          val orderGraph =
-            (affectedGraph -- skipped).view.mapValues(_ -- skipped).toMap
-          val orderDependents =
-            (affectedDependents -- skipped).view.mapValues(_ -- skipped).toMap
-          DependencyGraph.qualifiedTopologicalSort(orderGraph, orderDependents) match
-            case Left(_) => sheet
-            case Right(evalOrder) =>
-              val dynamicClosure =
-                if dynamic.isEmpty then Set.empty[QualifiedRef]
-                else
-                  (dynamic ++ DependencyGraph.qualifiedTransitiveDependents(dependents, dynamic))
-                    .filter(_.sheet == sheet.name)
-                    .diff(skipped)
-              val ordered =
-                evalOrder.filterNot(dynamicClosure.contains) ++
-                  evalOrder.filter(dynamicClosure.contains)
-              val initial = SheetEvaluator.stripFormulaCaches(
-                sheet,
-                dynamicClosure.iterator.map(_.ref).toSet
-              )
-              recalculateInOrder(
-                initial,
-                ordered.map(_.ref),
-                Some(analysisWorkbook),
-                calculationClock
-              )
-
-  extension (wb: Workbook)
-    /**
-     * Cross-sheet recalculation - handles formulas on other sheets.
-     *
-     * When Sheet1!B1 changes, this recalculates Sheet2!A1 if it references Sheet1!B1. Uses system
-     * clock for date/time functions.
-     *
-     * @param sheetName
-     *   The sheet where cells were modified, matched as `Workbook.apply` matches it (#752: exact,
-     *   else ignoring case)
-     * @param modifiedRefs
-     *   Set of cell references that have been modified on that sheet
-     * @return
-     *   Workbook with updated formula caches across all affected sheets
-     */
-    def recalculateDependents(
-      sheetName: SheetName,
-      modifiedRefs: Set[ARef]
-    ): Workbook =
-      recalculateDependentsWithClock(sheetName, modifiedRefs, Clock.system)
-
-    /**
-     * Cross-sheet recalculation with explicit clock.
-     *
-     * Use this variant when you need deterministic date/time function results.
-     */
-    def recalculateDependentsWithClock(
-      sheetName: SheetName,
-      modifiedRefs: Set[ARef],
-      clock: Clock
-    ): Workbook =
-      if modifiedRefs.isEmpty then wb
-      else
-        val calculationClock = WorkbookEvaluator.pinnedCalculationClock(clock)
-        // #752: the graph's nodes carry each tab's own spelling; a seed in another case must match
-        val sheet = DependencyGraph.sheetCanonicaliser(wb)(sheetName)
-        val qualifiedRefs = modifiedRefs.map(ref => QualifiedRef(sheet, ref))
-        // GH-274: dynamic-reference cells (INDIRECT) on ANY sheet are always dirty — their
-        // resolved targets are invisible to the static graph, so every sheet's dynamic cells
-        // join the seeds (and the recalc set) unconditionally.
-        val dynamicQualified = DependencyGraph.dynamicCells(wb)
-        // Ordering needs only formula-to-formula edges; dirty discovery uses symbolic declared
-        // ranges so A:A never materializes one million cells and a just-cleared boundary ref still
-        // reaches formulas that read it.
-        val (graph, dependentsMap) = DependencyGraph.fromWorkbookFormulaGraph(wb)
-        val dependencyIndex = DependencyGraph.fromWorkbookDependencyIndex(wb)
-        val dynamicClosure =
-          if dynamicQualified.isEmpty then Set.empty[QualifiedRef]
-          else
-            dynamicQualified ++ DependencyGraph.qualifiedTransitiveDependents(
-              dependentsMap,
-              dynamicQualified
+          counters.time(RecalcCounters.Phase.Finalize)(
+            RecalcResult.cacheResultsWith(
+              wb,
+              values,
+              errors,
+              graph.dependents,
+              Vector.empty,
+              reasons,
+              graph.parses
             )
-        val modifiedDependents =
-          dependencyIndex.transitiveDependents(qualifiedRefs)
-        // Modified seeds themselves are not recalculated unless they are dynamic (the historical
-        // targeted-recalc contract); splitting the two closures avoids walking dynamic-only
-        // branches twice while retaining the closure-of-union result.
-        val toRecalc = ((modifiedDependents ++ dynamicClosure) -- qualifiedRefs) ++ dynamicQualified
-
-        if toRecalc.isEmpty then wb
-        else
-          // Sort the affected workbook nodes once. Grouping by sheet is not valid here: a
-          // downstream sheet can otherwise run before an upstream sheet and read its stale cache.
-          // Restricting only the node map keeps stable precedents out of the work while Kahn still
-          // sees every edge between affected formulas (it ignores successors absent from keySet).
-          val affectedGraph = graph.filter((q, _) => toRecalc.contains(q))
-          val affectedDependents = dependentsMap.filter((q, _) => toRecalc.contains(q))
-          val cyclic = DependencyGraph.qualifiedCyclicNodes(affectedGraph)
-          val blocked =
-            DependencyGraph.qualifiedTransitiveDependents(affectedDependents, cyclic)
-          val skipped = (cyclic ++ blocked) & toRecalc
-          val orderGraph =
-            (affectedGraph -- skipped).view.mapValues(_ -- skipped).toMap
-          val orderDependents =
-            (affectedDependents -- skipped).view.mapValues(_ -- skipped).toMap
-          DependencyGraph.qualifiedTopologicalSort(orderGraph, orderDependents) match
-            // Defensive totality: qualifiedCyclicNodes removed every cycle participant.
-            case Left(_) => wb
-            case Right(evalOrder) =>
-              // GH-274/GH-301: dynamic cells and every static dependent of one evaluate last.
-              // This is a workbook-wide stable partition, so the dependency-first order remains
-              // valid even when the dynamic chain crosses sheet boundaries.
-              val orderedMain = evalOrder.filterNot(dynamicClosure.contains)
-              val orderedDynamic = evalOrder.filter(dynamicClosure.contains)
-              recalculateQualifiedInOrder(
-                wb,
-                orderedMain ++ orderedDynamic,
-                dynamicClosure -- skipped,
-                calculationClock
-              )
-
-  /** Recalculate formulas in the given order, updating cached values */
-  private def recalculateInOrder(
-    sheet: Sheet,
-    refs: List[ARef],
-    workbook: Option[Workbook],
-    clock: Clock
-  ): Sheet =
-    refs.foldLeft(sheet) { (s, ref) =>
-      // A sheet-qualified self-reference resolves through the workbook context rather than the
-      // direct `sheet` argument. Keep that view on the same threaded snapshot so targeted
-      // recalculation cannot expose a stale copy of the sheet currently being refreshed.
-      val currentWorkbook = workbook.map(_.put(s))
-      recalculateOne(s, ref, currentWorkbook, clock)
-    }
-
-  /**
-   * Recalculate workbook-qualified formulas in one global dependency-first pass.
-   *
-   * The `sheets` vector is threaded cell by cell so a cross-sheet reader sees every previously
-   * refreshed precedent. Workbook/source modification tracking is applied once per changed sheet
-   * after evaluation rather than rebuilding and marking the workbook for every formula.
-   */
-  private def recalculateQualifiedInOrder(
-    workbook: Workbook,
-    refs: List[QualifiedRef],
-    dynamicClosure: Set[QualifiedRef],
-    clock: Clock
-  ): Workbook =
-    val sheetIndex = workbook.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
-    val changed = scala.collection.mutable.BitSet.empty
-    val stripBySheet = dynamicClosure.groupMap(_.sheet)(_.ref)
-    val initialSheets = workbook.sheets.map { sheet =>
-      SheetEvaluator.stripFormulaCaches(
-        sheet,
-        stripBySheet.getOrElse(sheet.name, Set.empty)
-      )
-    }
-    val recalculatedSheets = refs.foldLeft(initialSheets) { (sheets, q) =>
-      sheetIndex.get(q.sheet) match
-        case None => sheets
-        case Some(index) =>
-          val currentWorkbook = workbook.copy(sheets = sheets)
-          val updated = recalculateOne(sheets(index), q.ref, Some(currentWorkbook), clock)
-          changed += index
-          sheets.updated(index, updated)
-    }
-    changed.foldLeft(workbook) { (current, index) =>
-      current.put(recalculatedSheets(index))
-    }
-
-  /** Recalculate one formula cell, preserving pinned caches and formula record kinds. */
-  private def recalculateOne(
-    sheet: Sheet,
-    ref: ARef,
-    workbook: Option[Workbook],
-    clock: Clock
-  ): Sheet =
-    sheet.cells
-      .get(ref)
-      .map { cell =>
-        cell.value match
-          // GH-353/GH-430: external-workbook and data-table formulas keep their Excel-written
-          // cache verbatim — re-evaluating can only fail (the external workbook is not loaded;
-          // TABLE(...) is a record, not evaluable text), and clearing the cache would destroy
-          // the sole source of truth
-          case value: CellValue.Formula if SheetEvaluator.pinnedCache(value).isDefined =>
-            sheet
-          case f @ CellValue.Formula(_, _, _) =>
-            // Evaluate the cell at its own position and by its record kind (a plain cell as a
-            // legacy formula, an array formula as an array); .copy keeps the kind (GH-430)
-            SheetEvaluator.evaluateCell(sheet)(ref, clock, workbook) match
-              case Right(newValue) =>
-                sheet.put(ref, f.copy(cachedValue = Some(newValue)))
-              case Left(_) =>
-                // Evaluation error - clear cache (will show error on next eval)
-                sheet.put(ref, f.copy(cachedValue = None))
-          case _ => sheet
-      }
-      .getOrElse(sheet)
+          )
