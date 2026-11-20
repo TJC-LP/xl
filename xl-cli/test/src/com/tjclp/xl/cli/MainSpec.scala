@@ -547,8 +547,7 @@ class MainSpec extends CatsEffectSuite:
 
   // ========== Nested Formula Evaluation (TJC-350 / GH-94) ==========
 
-  test("evaluateWithDependencyCheck: nested formulas evaluate correctly") {
-    import com.tjclp.xl.formula.SheetEvaluator
+  test("recalculate: nested formulas evaluate correctly") {
 
     IO {
       // Create a sheet with nested formulas:
@@ -568,12 +567,12 @@ class MainSpec extends CatsEffectSuite:
         .put(ref"E5", CellValue.Formula("=SUM(B2:B4)", None)) // = 60
         .put(ref"F5", CellValue.Formula("=SUM(B5:E5)", None)) // = 240 (depends on above formulas!)
 
-      // Evaluate using dependency-aware evaluation
-      val result = SheetEvaluator.evaluateWithDependencyCheck(sheet)()
+      // Evaluate in dependency order (whole-workbook recalculation)
+      val result = Workbook(sheet).recalculate()
 
-      assert(result.isRight, s"Evaluation should succeed, got: $result")
+      assert(result.isClean, s"Evaluation should succeed, got: ${result.errors}")
 
-      val evaluated = result.toOption.get
+      val evaluated = result.evaluated.getOrElse(sheet.name, Map.empty)
 
       // B5, C5, D5, E5 should each be 60
       assertEquals(evaluated.get(ref"B5"), Some(CellValue.Number(BigDecimal(60))))
@@ -591,8 +590,7 @@ class MainSpec extends CatsEffectSuite:
     }
   }
 
-  test("evaluateWithDependencyCheck: simple chain A1=10, B1=A1*2, C1=B1+5") {
-    import com.tjclp.xl.formula.SheetEvaluator
+  test("recalculate: simple chain A1=10, B1=A1*2, C1=B1+5") {
 
     IO {
       val sheet = Sheet("Test")
@@ -600,11 +598,11 @@ class MainSpec extends CatsEffectSuite:
         .put(ref"B1", CellValue.Formula("=A1*2", None)) // depends on A1
         .put(ref"C1", CellValue.Formula("=B1+5", None)) // depends on B1
 
-      val result = SheetEvaluator.evaluateWithDependencyCheck(sheet)()
+      val result = Workbook(sheet).recalculate()
 
-      assert(result.isRight, s"Evaluation should succeed, got: $result")
+      assert(result.isClean, s"Evaluation should succeed, got: ${result.errors}")
 
-      val evaluated = result.toOption.get
+      val evaluated = result.evaluated.getOrElse(sheet.name, Map.empty)
       assertEquals(evaluated.get(ref"A1"), Some(CellValue.Number(BigDecimal(10))))
       assertEquals(evaluated.get(ref"B1"), Some(CellValue.Number(BigDecimal(20))))
       assertEquals(evaluated.get(ref"C1"), Some(CellValue.Number(BigDecimal(25))))

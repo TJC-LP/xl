@@ -4,7 +4,7 @@ import scala.util.Random
 
 import com.tjclp.xl.addressing.{ARef, Column, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -118,10 +118,9 @@ object LoadsBook:
   private type Put = (Int, Int, CellValue)
 
   private def sheet(name: String, puts: IterableOnce[Put]): Sheet =
-    val cells = puts.iterator.map { case (c, r, v) =>
-      val ref = ARef.from0(c, r - 1)
-      ref -> Cell(ref, v)
-    }.toMap
+    val cells = CellStore.from(puts.iterator.map { case (c, r, v) =>
+      Cell(ARef.from0(c, r - 1), v)
+    })
     Sheet(SheetName.unsafe(name), cells = cells)
 
   /** One Loads data row's key, drawn from the seeded generator. */

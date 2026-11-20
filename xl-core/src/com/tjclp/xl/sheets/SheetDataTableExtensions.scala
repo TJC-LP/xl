@@ -224,7 +224,7 @@ private[sheets] object DataTableAuthoring:
 
   /** Every DataTable-record cell on the sheet, first offender selection in row-major order. */
   private def recordCells(sheet: Sheet): Vector[(Cell, FormulaKind.DataTable)] =
-    sheet.cells.values.toVector
+    sheet.cells.iterator.toVector
       .flatMap { cell =>
         cell.value match
           case CellValue.Formula(_, _, dt: FormulaKind.DataTable) => Vector((cell, dt))

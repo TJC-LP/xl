@@ -517,8 +517,8 @@ class ClearCommandSpec extends FunSuite:
       .withCellStyle(b7, link)
     val linked = sheet.copy(cells =
       sheet.cells
-        .updated(b7, sheet.cells(b7).withHyperlink("https://example.com/"))
-        .updated(c7, sheet.cells(c7).withHyperlink("https://example.com/"))
+        .updated(sheet(b7).withHyperlink("https://example.com/"))
+        .updated(sheet(c7).withHyperlink("https://example.com/"))
     )
     CellCommands
       .clear(
@@ -676,9 +676,10 @@ class ClearCommandSpec extends FunSuite:
     val c5 = ARef.from0(2, 4)
     val ownStyle = CellStyle.default.withFont(Font.default.withBold(true))
     val styled = banded.put(c5, CellValue.Text("Note")).withCellStyle(c5, ownStyle)
-    val sheet = styled.copy(cells =
-      styled.cells.updated(c5, styled.cells(c5).withHyperlink("https://example.com/notes"))
-    )
+    val sheet =
+      styled.copy(cells =
+        styled.cells.updated(styled(c5).withHyperlink("https://example.com/notes"))
+      )
     val range = CellRange.parse("A1:F8").toOption.get
     val cli = BatchParser
       .applyBatchOperations(

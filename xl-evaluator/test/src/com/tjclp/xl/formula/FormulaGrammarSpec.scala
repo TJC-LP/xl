@@ -641,8 +641,7 @@ class FormulaGrammarSpec extends ScalaCheckSuite:
     case call: TExpr.Call[?] =>
       val printer = ArgPrinter(
         expr = e => FormulaPrinter.print(e, includeEquals = false),
-        location = _ => "range",
-        cellRange = _ => "cells"
+        location = _ => "range"
       )
       call.spec.argSpec.renderSlots(call.args, printer)
     case other => fail(s"expected a call, got ${FormulaPrinter.printWithTypes(other)}")

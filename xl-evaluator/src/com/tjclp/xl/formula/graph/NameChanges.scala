@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{Evaluator, NameWalk, SheetEvaluator}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -83,7 +83,7 @@ private[xl] object NameChanges:
 
       after.sheets.iterator.flatMap { sheet =>
         sheet.cells.iterator.collect {
-          case (ref, cell) if (cell.value match
+          case cell @ Cell(ref, _, _, _) if (cell.value match
                 case CellValue.Formula(_, _, _: FormulaKind.DataTable) => false
                 case CellValue.Formula(text, _, _) =>
                   SheetEvaluator.pinnedExternalCache(cell.value).isEmpty &&

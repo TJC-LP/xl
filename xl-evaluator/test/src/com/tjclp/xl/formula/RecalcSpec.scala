@@ -140,28 +140,33 @@ class RecalcSpec extends FunSuite:
     assertEquals(cached(result.workbook, "S1", a1), None)
     assertEquals(cached(result.workbook, "S2", a1), None)
 
+  /** The members of the cyclic components of the product condensation (the iterative kernel). */
+  private def cyclicNodes(deps: Map[QualifiedRef, Set[QualifiedRef]]): Set[QualifiedRef] =
+    com.tjclp.xl.formula.graph.DependencyGraph
+      .qualifiedSccOrder(deps)
+      .filter(_.cyclic)
+      .flatMap(_.members)
+      .toSet
+
   test("stack safety: 100k-deep dependency chain neither overflows nor reports cycles"):
     // Graph built directly (no parsing) — pins the iterative Tarjan engine. The recursive
     // strongConnect this replaces overflowed around ~10k frames, violating recalculate's
-    // totality promise on deep-but-legal generated models.
+    // totality promise on deep-but-legal generated models. (#891: on the qualified graph, the
+    // sheet-level one is gone.)
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      val node = ARef.from0(0, i)
-      val next = if i + 1 < n then Set(ARef.from0(0, i + 1)) else Set.empty[ARef]
-      node -> next
+      node(i) -> (if i + 1 < n then Set(node(i + 1)) else Set.empty[QualifiedRef])
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph), Set.empty[ARef])
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isRight)
+    assertEquals(cyclicNodes(deps), Set.empty[QualifiedRef])
 
   test("stack safety: 100k-node cycle is fully collected without overflow"):
     val n = 100000
+    def node(i: Int) = QualifiedRef(SheetName.unsafe("S"), ARef.from0(0, i))
     val deps = (0 until n).map { i =>
-      ARef.from0(0, i) -> Set(ARef.from0(0, (i + 1) % n)) // last points back to first
+      node(i) -> Set(node((i + 1) % n)) // last points back to first
     }.toMap
-    val graph = com.tjclp.xl.formula.graph.DependencyGraph(deps, Map.empty)
-    assertEquals(com.tjclp.xl.formula.graph.DependencyGraph.cyclicNodes(graph).size, n)
-    assert(com.tjclp.xl.formula.graph.DependencyGraph.detectCycles(graph).isLeft)
+    assertEquals(cyclicNodes(deps).size, n)
 
   test("recalculate end-to-end on a 3k-deep formula chain stays total and clean"):
     val n = 3000
@@ -392,12 +397,10 @@ class RecalcSpec extends FunSuite:
         "S!B1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:A1, 1, FALSE); " +
         "S!B2 #DIV/0! — Division by zero: 1 / 0; S!B3 #N/A; … and 2 more)"
     )
-    // the targeted paths carry the reasons too (an edit of A1 reaches B1, B4 and B5)
+    // the targeted paths carry the reasons too; #891: every formula of this uncached book holds no
+    // value, so the first edit computes them all, as Excel computes such a book on open
     val afterEdit = Workbook(sheet).recalculateAfterEdit(S, Set(ref"A1"), RecalcOptions())
-    assertEquals(
-      afterEdit.errorCells,
-      result.errorCells.filter(c => Set(ref"B1", ref"B4", ref"B5")(c.ref))
-    )
+    assertEquals(afterEdit.errorCells, result.errorCells)
     val uncached = Workbook(sheet).recalculateUncached(RecalcOptions())
     assertEquals(uncached.errorCells, result.errorCells)
     // more than MaxNamedErrorCells: errorCells carries the first ten, the summary names the first

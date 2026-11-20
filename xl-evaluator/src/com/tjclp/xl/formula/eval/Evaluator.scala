@@ -16,11 +16,12 @@ import com.tjclp.xl.formula.functions.{
   SumProductTail
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -209,7 +210,7 @@ object Evaluator:
     )
 
   private[formula] def mayReadSpills(sheet: Sheet): Boolean =
-    sheet.cells.valuesIterator.exists(_.value match
+    sheet.cells.iterator.exists(_.value match
       case CellValue.Formula(text, _, _) => mayReadSpills(text)
       case _ => false)
 
@@ -994,7 +995,7 @@ object Evaluator:
           case ArgValue.Range(TExpr.RangeLocation.Binding(_)) => true
           case ArgValue.Range(TExpr.RangeLocation.Computed(inner)) => readsBindingAsRange(inner)
           case ArgValue.Expr(arg) => readsBindingAsRange(arg)
-          case ArgValue.Range(_) | ArgValue.Cells(_) => false
+          case ArgValue.Range(_) => false
         }
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
           _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
@@ -1104,7 +1105,7 @@ object Evaluator:
     workbookPath: Option[String],
     aggregateMemo: Option[AggregateMemo]
   ): ARef => Either[EvalError, CellValue] = at =>
-    targetSheet(at).value match
+    targetSheet.cells.valueAt(at) match
       case CellValue.Formula(_, Some(cached), _) => Right(cached)
       case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(CellValue.Empty)
       case CellValue.Formula(expression, None, kind) =>
@@ -1385,22 +1386,6 @@ object Evaluator:
     ): Either[EvalError, CellValue] =
       guard(sheet, at).fold(memoized(sheet, at, compute))(Left(_))
 
-    private val boxes =
-      new java.util.IdentityHashMap[
-        Sheet,
-        scala.collection.mutable.HashMap[CellRange, Option[CellRange]]
-      ]()
-
-    /**
-     * #750: the populated box of `range` on `sheet` ([[ArrayArithmetic.readRange]]), found once per
-     * pass: a formula that reads one whole column twice scans the sheet's keys once.
-     */
-    def populatedBox(sheet: Sheet, range: CellRange)(
-      compute: => Option[CellRange]
-    ): Option[CellRange] =
-      val forSheet = boxes.computeIfAbsent(sheet, _ => scala.collection.mutable.HashMap.empty)
-      forSheet.getOrElseUpdate(range, compute)
-
     /**
      * The guarded placement's error when `at` on `sheet` is it. Reads that evaluate an uncached
      * formula without this memo's lookup ([[evalCrossSheetFormula]], [[evalSpillFormula]]) ask too.
@@ -1508,20 +1493,48 @@ object Evaluator:
    * default; parity tests turn it off) lets evaluation reuse the graph build's formula parses
    * (#790).
    */
+  private[formula] object AggregateMemo:
+
+    /**
+     * #891: the cell-content cache one iterative fixpoint shares across all its regions (Jacobi
+     * rounds and Gauss–Seidel member evaluations). Only the fixpoint's members change while it
+     * runs, so it is armed with [[Readiness.fixpoint]]: a criteria range that holds no member and
+     * no uncached formula is copied and indexed once for the whole fixpoint instead of scanned by
+     * every call of every round. A slice pays off at a few rows here, where the same criteria
+     * columns are read thousands of times.
+     */
+    def fixpointCache(members: Iterable[QualifiedRef]): PassCache =
+      val cache = new PassCache(FixpointLimits, RecalcCounters.disabled)
+      cache.begin(Readiness.fixpoint(members))
+      cache
+
+    /** One region of a fixpoint: fresh aggregate results over the fixpoint's shared cache. */
+    def inFixpoint(cache: PassCache): AggregateMemo = new AggregateMemo(shared = Some(cache))
+
+    /** What a fixpoint's cache may hold; law specs derive their tighter budgets from it. */
+    private[formula] val FixpointLimits: PassCache.Limits =
+      PassCache.DefaultLimits.copy(minSliceRows = 16)
+
   private[formula] final class AggregateMemo(
     cachesAggregates: Boolean = true,
     val counters: RecalcCounters = RecalcCounters.disabled,
     columnCache: Boolean = true,
     limits: PassCache.Limits = PassCache.DefaultLimits,
     criteriaIndex: Boolean = true,
-    parseCache: Boolean = true
+    parseCache: Boolean = true,
+    shared: Option[PassCache] = None
   ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
-    /** #767: the pass's caches; None for a memo that caches nothing or has them switched off. */
+    /**
+     * #767: the pass's caches; None for a memo that caches nothing or has them switched off. #891:
+     * a fixpoint region's memo uses its fixpoint's `shared` cache instead.
+     */
     val passCache: Option[PassCache] =
-      Option.when(cachesAggregates && columnCache)(
-        new PassCache(limits, counters, criteriaIndex, parseCache)
+      shared.orElse(
+        Option.when(cachesAggregates && columnCache)(
+          new PassCache(limits, counters, criteriaIndex, parseCache)
+        )
       )
 
     /**
@@ -1604,21 +1617,19 @@ object Evaluator:
         entries = entries.size
       )
 
+    // a data-table record carries its own tag whether or not it holds a cache
+    private val UncachedTags: Int =
+      CellStore.tagBit(CellStore.TagFormulaUncached) | CellStore.tagBit(
+        CellStore.TagFormulaDataTable
+      )
+
     private def cacheable(targetSheet: Sheet, range: CellRange): Boolean =
       def isUncachedFormula(value: CellValue): Boolean = value match
         case CellValue.Formula(_, None, _) => true
         case _ => false
 
-      val containsUncachedFormula =
-        if range.cellCount <= targetSheet.cells.size.toLong then
-          range.cells.exists(ref =>
-            targetSheet.cells.get(ref).exists(c => isUncachedFormula(c.value))
-          )
-        else
-          targetSheet.cells.iterator.exists { case (ref, cell) =>
-            range.contains(ref) && isUncachedFormula(cell.value)
-          }
-      !containsUncachedFormula
+      !targetSheet.cells.hasTag(UncachedTags) ||
+      !targetSheet.cells.inRange(range).exists(c => isUncachedFormula(c.value))
 
   /** Generation-local logical key; anchors and transient immutable Sheet identities are absent. */
   private final case class AggregateMemoKey(

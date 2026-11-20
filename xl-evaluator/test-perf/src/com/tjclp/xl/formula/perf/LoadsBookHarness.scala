@@ -6,7 +6,7 @@ import java.nio.file.{Files, Path}
 import scala.jdk.CollectionConverters.*
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.eval.{
   Evaluator,
   IterativeMode,
@@ -122,10 +122,10 @@ object LoadsBookHarness:
    */
   def valueLines(wb: Workbook): Vector[String] =
     wb.sheets.flatMap { sheet =>
-      sheet.cells.toVector
-        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
+      sheet.cells.iterator.toVector
+        .sortBy(cell => (cell.ref.row.index0, cell.ref.col.index0))
         .collect {
-          case (ref, cell) if isFormula(cell.value) =>
+          case cell @ Cell(ref, _, _, _) if isFormula(cell.value) =>
             s"${sheet.name.value}!${ref.toA1}\t${show(cell.value)}"
         }
     }

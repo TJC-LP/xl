@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -168,8 +168,7 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
   test("GH-384: dependency graph carries an edge from the name user to the name's target") {
     val other = Sheet(SheetName.unsafe("Other")).put(a1, formula("=IF(case=2, 10, 20)"))
     val wb = Workbook(model.put(b2, formula("=1+1")), other).withDefinedName("case", "Model!$B$2")
-    val graph = DependencyGraph.fromWorkbook(wb)
-    val edges = graph.getOrElse(QualifiedRef(SheetName.unsafe("Other"), a1), Set.empty)
+    val edges = QualifiedGraph.of(wb).precedentsOf(QualifiedRef(SheetName.unsafe("Other"), a1))
     assert(
       edges.contains(QualifiedRef(SheetName.unsafe("Model"), b2)),
       s"expected Other!A1 -> Model!B2 edge via defined name, got $edges"
@@ -490,17 +489,4 @@ class WorkbookDefinedNameEvalSpec extends FunSuite:
     val result = wb.recalculate()
     assert(result.isClean, s"expected clean recalc, got: ${result.errors.map(_.render)}")
     assertEquals(cached(result.workbook, "Calc", a1), Some(num(50))) // 20 + 30
-  }
-
-  test("GH-411: deprecated ArgSpec.cellRange remains usable (published API, removal deferred)") {
-    // Zero in-repo consumers after the GH-394 rangeLocation migration; kept for source
-    // compatibility — deprecated with the migration hint, removed next breaking cycle.
-    import com.tjclp.xl.formula.ast.TExpr
-    import com.tjclp.xl.formula.functions.ArgSpec
-    @annotation.nowarn("cat=deprecation")
-    def spec: ArgSpec[CellRange] = ArgSpec.cellRange
-    CellRange.parse("A1:B2") match
-      case Right(r) =>
-        assertEquals(spec.parse(List(TExpr.RangeRef(r)), 0, "TEST").map(_._1), Right(r))
-      case Left(err) => fail(s"CellRange.parse(A1:B2) must parse, got $err")
   }

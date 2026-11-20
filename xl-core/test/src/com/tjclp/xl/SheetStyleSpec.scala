@@ -39,7 +39,6 @@ class SheetStyleSpec extends FunSuite:
     val redStyle = CellStyle.default.withFill(Fill.Solid(Color.Rgb(0xffff0000)))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Text1", ref"A2" -> "Text2")
-      .unsafe
       .withCellStyle(ref"A1", redStyle)
       .withCellStyle(ref"A2", redStyle)
 
@@ -57,7 +56,6 @@ class SheetStyleSpec extends FunSuite:
     val headerStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Col1", ref"B1" -> "Col2", ref"C1" -> "Col3")
-      .unsafe
       .withRangeStyle(ref"A1:C1", headerStyle)
 
     // All cells should have styleId
@@ -191,25 +189,22 @@ class SheetStyleSpec extends FunSuite:
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Link"))
       .copy(cells = {
-        val cell = Sheet("Test")
-          .unsafe(ref"A1")
-          .withComment("Important note")
+        val cell = Sheet("Test")(ref"A1")
           .withHyperlink("https://example.com")
-        Map(ref"A1" -> cell)
+        CellStore.of(cell)
       })
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Important note"))
       .put(ref"A1", CellValue.Text("Updated Link"))
 
-    // GH-295: the legacy Cell.comment field is converted into Sheet.comments (the serialized
-    // store) on write-back; the hyperlink stays on the cell.
+    // Comments live in Sheet.comments (the serialized store); the hyperlink stays on the cell.
     assertEquals(
       sheet.getComment(ref"A1"),
       Some(com.tjclp.xl.cells.Comment.plainText("Important note")),
       "Comment should be preserved (in the sheet-level store)"
     )
-    assertEquals(sheet(ref"A1").comment, None, "Vestigial field is cleared after write-through")
     assertEquals(
       sheet(ref"A1").hyperlink,
-      Some("https://example.com"),
+      Some(Hyperlink("https://example.com")),
       "Hyperlink should be preserved"
     )
     assertEquals(sheet(ref"A1").value, CellValue.Text("Updated Link"), "Value should be updated")
@@ -220,93 +215,53 @@ class SheetStyleSpec extends FunSuite:
   test("put via Any preserves existing styleId (template pattern)") {
     import java.time.LocalDate
     val style = CellStyle.default.bold
-    val sheet = Sheet("Test").unsafe
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", style)
-    val updated = sheet.put(ref"A1", "Value").unsafe
+    val updated = sheet.put(ref"A1", "Value")
 
     assert(updated(ref"A1").styleId.isDefined, "styleId should be preserved")
   }
 
   test("put via Any preserves comment metadata") {
-    val sheet = Sheet("Test").unsafe
-      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withComment("Note"))
-    val updated = sheet.put(ref"A1", "New").unsafe
+    val sheet = Sheet("Test")
+      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")))
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note"))
+    val updated = sheet.put(ref"A1", "New")
 
-    // GH-295: put(cell) converted the legacy field into Sheet.comments; the value put leaves it
+    // The value put leaves the sheet-level comment in place
     assertEquals(updated.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("Note")))
-    assertEquals(updated(ref"A1").comment, None)
   }
 
   test("put via Any preserves hyperlink metadata") {
-    val sheet = Sheet("Test").unsafe
+    val sheet = Sheet("Test")
       .put(
         com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withHyperlink("https://example.com")
       )
-    val updated = sheet.put(ref"A1", "New").unsafe
+    val updated = sheet.put(ref"A1", "New")
 
-    assertEquals(updated(ref"A1").hyperlink, Some("https://example.com"))
+    assertEquals(updated(ref"A1").hyperlink, Some(Hyperlink("https://example.com")))
   }
 
-  // ========== GH-295: Cell.comment write-through to Sheet.comments ==========
-  // Cell.comment is deprecated: it was never serialized (only Sheet.comments is).
-  // put(cell) converts the field into the sheet-level store so the comment survives writes.
+  // ========== GH-295: comments live only in Sheet.comments ==========
 
-  test("GH-295: put(cell) converts Cell.comment into Sheet.comments and clears the field") {
-    val cell = com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Value")).withComment("Note")
-    val sheet = Sheet("Test").unsafe.put(cell)
-
-    assertEquals(
-      sheet.getComment(ref"A1"),
-      Some(com.tjclp.xl.cells.Comment.plainText("Note")),
-      "comment must land in the serialized store (Sheet.comments)"
-    )
-    assertEquals(
-      sheet(ref"A1").comment,
-      None,
-      "the vestigial field must be cleared after write-through"
-    )
-    assertEquals(sheet(ref"A1").value, CellValue.Text("Value"))
-  }
-
-  test("GH-295: put(cell) without legacy comment leaves sheet comment store untouched") {
-    val sheet = Sheet("Test").unsafe
+  test("GH-295: put(cell) leaves the sheet comment store untouched") {
+    val sheet = Sheet("Test")
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Existing", Some("Author")))
       .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("New")))
 
     assertEquals(
       sheet.getComment(ref"A1"),
       Some(com.tjclp.xl.cells.Comment.plainText("Existing", Some("Author"))),
-      "put(cell) with comment=None must not clear an existing sheet comment"
+      "put(cell) must not clear an existing sheet comment"
     )
-  }
-
-  test("GH-295: put(cell) write-through overwrites existing sheet comment (last write wins)") {
-    val sheet = Sheet("Test").unsafe
-      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Old", Some("Author")))
-      .put(com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("V")).withComment("New"))
-
-    assertEquals(sheet.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("New")))
-  }
-
-  test("GH-295: put(ref, CellValue) on a legacy commented cell converts on write-back") {
-    // Legacy cell smuggled in via direct copy (bypasses put) — the next value put flows
-    // through put(cell) and must convert rather than silently carry the dead field.
-    val legacy = com.tjclp.xl.cells.Cell(ref"A1", CellValue.Text("Old")).withComment("Note")
-    val sheet = Sheet("Test")
-      .copy(cells = Map(ref"A1" -> legacy))
-      .put(ref"A1", CellValue.Text("New"))
-
-    assertEquals(sheet.getComment(ref"A1"), Some(com.tjclp.xl.cells.Comment.plainText("Note")))
-    assertEquals(sheet(ref"A1").comment, None)
-    assertEquals(sheet(ref"A1").value, CellValue.Text("New"))
   }
 
   test("style merge: template bold + codec Date format") {
     import java.time.LocalDate
     val template = CellStyle.default.bold
-    val sheet = Sheet("Test").unsafe
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", template)
-    val updated = sheet.put(ref"A1", LocalDate.of(2025, 1, 1)).unsafe
+    val updated = sheet.put(ref"A1", LocalDate.of(2025, 1, 1))
 
     val style = updated.getCellStyle(ref"A1").getOrElse(fail("Missing style"))
     assert(style.font.bold, "Template bold should be preserved")
@@ -315,9 +270,9 @@ class SheetStyleSpec extends FunSuite:
 
   test("batch put preserves existing metadata") {
     val style = CellStyle.default.bold
-    val sheet = Sheet("Test").unsafe
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", style)
-    val updated = sheet.put(ref"A1" -> "Value", ref"B1" -> "Other").unsafe
+    val updated = sheet.put(ref"A1" -> "Value", ref"B1" -> "Other")
 
     assert(updated(ref"A1").styleId.isDefined, "Batch put should preserve styleId")
   }
@@ -325,9 +280,9 @@ class SheetStyleSpec extends FunSuite:
   test("style merge: preserves explicit NumFmt over codec General") {
     // If cell has Currency format, putting a String (which has General NumFmt) should keep Currency
     val currencyStyle = CellStyle.default.withNumFmt(NumFmt.Currency)
-    val sheet = Sheet("Test").unsafe
+    val sheet = Sheet("Test")
       .withCellStyle(ref"A1", currencyStyle)
-    val updated = sheet.put(ref"A1", "Label").unsafe // String codec returns General NumFmt
+    val updated = sheet.put(ref"A1", "Label") // String codec returns General NumFmt
 
     val style = updated.getCellStyle(ref"A1").getOrElse(fail("Missing style"))
     assertEquals(

@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`xl audit --skip-data-tables`** (#891): leaves out the stale-data-table note, which
+  re-evaluates each data table's corner at sampled inputs and on a large circular model costs one
+  fixpoint over the whole cyclic core per sampled cell. The JSON report now always carries
+  `dataTableCheck` (`"checked"` or `"skipped"`), and text mode prints `Stale data tables: not
+  checked` when skipped. The note is never a finding, so `clean` and `findings` do not move.
+  `WorkbookAudit.of(wb, clock, checkDataTables)` and `WorkbookAudit.dataTablesChecked` are the
+  library side. `dataTablesChecked` is a new field of the `WorkbookAudit` case class: it
+  defaults to `true`, takes part in equality, and changes the shapes of `copy` and `unapply`.
+
 - **Qualified table-column references** (part of #669): plain references such as
   `SUM(Table1[Col])` and `COUNTIF(Table1[Col],1)` evaluate as data-row references, including
   workbook table lookup, dependency ordering and formula copy/structural-edit support.
@@ -26,6 +35,157 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a
+  persistent row-radix trie whose rows keep their cells in parallel arrays (value, style and
+  hyperlink side by side), so a cell costs roughly 12-17 bytes of overhead instead of about 60,
+  a lookup is a few shifts with no hashing, and every node carries summaries: `usedRange` reads
+  them in O(height) instead of scanning every cell. A row of more than 64 cells that spans
+  several 256-column bands keeps one leaf per band, so a single-cell write copies at most 256
+  cells however wide the row is. It is keyed by each cell's own `ref`, has
+  value equality (equal cells at equal references, however the store was built) and iterates
+  row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
+  change. Single-cell writes are slower than on the `Map` (about 1.5× on 20-column rows, about 3×
+  on 500-column rows: a `put` copies the row's leaf, or its 256-column band); bulk writes
+  (`putAll`, `Sheet.withValues`, the builder) are not: see "Sheet cell storage" in
+  `docs/reference/performance-guide.md`. Java-serialized `ARef`s and sheets are not portable
+  across this version: the `ARef` packing changed and the store has its own serial form (its
+  cells, rebuilt through the builder on reading). Migrating:
+  - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
+    macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
+  - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
+    `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
+    traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+    The five `Map` names (`keys`, `keySet`, `keysIterator`, `values`, `valuesIterator`) remain as
+    deprecated forwarders (since 0.27.0) so such code compiles with a warning: views over the
+    store, row-major, nothing copied. No other `Map` method is kept (`map`, `filter`, `foreach`,
+    `toMap`, `(ref, cell)` tuples: go through `iterator`). A script that must compile against
+    both 0.26.0 and this version can read through `sheet.cellsSorted`/`rowsSorted` and
+    `cells.get(ref)`, which did not change.
+  - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
+    `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
+    `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
+    `removedIn(range)`.
+  - `Optics.sheetCells` is a `Lens[Sheet, CellStore]`. `CellStore` is exported from
+    `com.tjclp.xl.{*, given}` and the scripting prelude.
+  - `Sheet.withValues(refs, values)` writes many values in one store rebuild. Row and column
+    inserts and deletes re-key the store instead of rebuilding it.
+  - `RecalcCounters.Counter.UsedRangeScans` is removed with the per-pass used-range memo it
+    counted: the store's summaries answer `usedRange` without a scan.
+
+- **Breaking: long-deprecated API is removed** (#891).
+  - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
+    0.2.0): use `put`, `insertAt` (which refuses a duplicate name, as `addSheet` did), `remove` and
+    `rename`.
+  - `Cell.comment`, `withComment` and `clearComment` (deprecated since 0.12.1) and the `Sheet.put`
+    shim that moved a cell comment into `sheet.comments`: `Cell` is `Cell(ref, value, styleId,
+    hyperlink)`; comments live in `sheet.comments` (`sheet.comment(ref, …)`).
+  - `Cell.hyperlink` is an `Option[Hyperlink]`, no longer an `Option[String]`. The comment was
+    `Cell`'s fourth parameter, so `Cell(ref, value, None, Some("review note"))` (a comment until
+    now, compiled with a deprecation warning) would otherwise still compile and silently write a
+    hyperlink; it is now a type error. `Hyperlink` is an opaque type over the target string,
+    exported from `com.tjclp.xl.{*, given}` and the scripting prelude: build one with
+    `Hyperlink("https://…")`, read the text with `.target`. Migration: `hyperlink = Some(url)`
+    becomes `hyperlink = Some(Hyperlink(url))`, and `cell.hyperlink` reads become
+    `cell.hyperlink.map(_.target)`; `cell.withHyperlink(url: String)` and `clearHyperlink` are
+    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). A file that
+    wildcard-imports the edit cases beside the library (`import Edit.*`) now sees two `Hyperlink`s
+    and must write `Edit.Hyperlink(at, target)`; that case keeps its `Option[String]` target.
+    Written workbooks and CLI output are byte-identical.
+  - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
+  - The identity `Sheet.unsafe`.
+  - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`
+    takes `(mapExpr, mapRange)`, and `ArgPrinter.cellRange` is gone.
+  - `StructuralEditor`'s throwing facade: use the `*Checked` variants (`XLResult`); the unused
+    `Workbook` `insertRowsShifted`/`deleteRowsShifted`/`insertColumnsShifted`/`deleteColumnsShifted`
+    extensions now return `XLResult[Workbook]`.
+  - `writeFast`, `writeFastWith`, `writeStreamMaterialized` and `writeStreamMaterializedR` on
+    `Excel`/`ExcelIO`: use `write`/`writeWith` with a `WriterConfig`.
+
+- **An edit computes every formula that holds no value** (#891, Excel parity). Excel has no
+  formula without a value (after any calculation every formula holds one, an error value
+  included), so the after-edit pass every CLI write ends with now evaluates each uncached formula
+  with the edit, and what reads it, exactly as a full recalculation would: a formula that fails
+  again withdraws its readers' caches instead of being read as empty. A book saved without caches
+  therefore computes in full on its first edit, as Excel computes it on open. A formula xl cannot
+  evaluate (an unsupported function, a closed external workbook) holds no value after a
+  recalculation, so every later write re-evaluates it and lists it in the summary: **`--strict`
+  now fails any write to such a book**, where it used to pass when the edit did not reach the
+  formula (2 of 60 real books; the written bytes are unchanged). The uncached pass
+  (`recalculateUncached`) now lists circular cells before the cells they block, as the full pass
+  does.
+
+- **Breaking: the sheet-level graph and evaluator are removed** (#891). Gone: the
+  `DependencyGraph(dependencies, dependents)` case class with `DependencyGraph.fromSheet`,
+  `precedents`, `dependents`, `transitiveDependencies`, `transitiveDependents`, `detectCycles`,
+  `cyclicNodes`, `topologicalSort`, `dynamicClosure`, `deferDynamic` and `dynamicCells(sheet)`;
+  the unused `fromWorkbook`, `fromWorkbookBounded`, `detectCrossSheetCycles`,
+  `qualifiedCyclicNodes`, `qualifiedTransitiveDependents`, `qualifiedTransitivePrecedents`,
+  `qualifiedTopologicalSort` and `extractDependenciesBounded`; and
+  `sheet.evaluateWithDependencyCheck`, `evaluateAllFormulas` and `evaluateForRange`. They were a second, per-sheet copy of the workbook machinery, with hash-map
+  Tarjan and Kahn engines that saw no other sheet. Use `Workbook(sheet).recalculate(...)` to
+  evaluate (cycles are reported per cell instead of failing the call), `QualifiedGraph.of(wb)` for
+  precedents, dependents and cycles (`.sccs.filter(_.cyclic)`), and
+  `sheet.evaluateForRangePerCell` for a window. `sccs` follows declared reads, so a
+  VLOOKUP/HLOOKUP that sits inside its own table shows there as a self-cycle although
+  recalculation (and Excel, verified) computes it; the errors of `recalculate` and `xl audit` are
+  the authority on real cycles. `evaluateForRangePerCell` (what `view --eval`
+  renders) now takes its closure, cycles and order from the workbook's recalculation graph, so a
+  cycle that runs through another sheet is reported instead of evaluated against stale caches.
+
+- **Breaking: `sheet.recalculateDependents` and `wb.recalculateDependents(WithClock)` are
+  removed** (#891). They were a second and third copy of targeted recalculation that ordered by a
+  hash-seeded FIFO and dropped evaluation errors. Use `wb.recalculateAfterEdit(sheet, refs,
+  options)`: it evaluates the edited formulas too, reports and withdraws cycle members and the
+  formulas a failure blocks, and draws `options.rng` (previously ignored there) in the canonical
+  order a full recalculation uses.
+
+- **Targeted recalculation runs on the compact graph in canonical order** (#891). The after-edit
+  pass (every CLI write, `copy` included) orders its cone with the graph a full recalculation
+  uses, so seeded RAND draws match a full pass; the cone uses the same precise lookup reads (#504):
+  an edit inside a fixed-column VLOOKUP/HLOOKUP table but off its key and result columns no longer
+  re-evaluates the lookup. A batch `copy` now refreshes through the same pass, so a pasted formula
+  that fails is reported. The internal `RecalcEngine.Legacy` (the per-cell graph kept as a rollback
+  for #767) is gone.
+
+- **`audit`'s cycles are the ones `recalc` isolates** (#891): they come from the recalculation
+  graph, with #504's precise lookup reads, so a fixed-column VLOOKUP/HLOOKUP whose table contains
+  its own cell (off its key and result columns) is no longer reported as circular while `recalc`
+  evaluates it. `QualifiedGraph.sccs` (the declared-reads view behind `deps`) is unchanged.
+
+- **Data-table seeding reads the recalculation graph** (#891): `recalc --tables` and the audit's
+  stale-table note took their cycles, what-if cones and input dependents from a separate
+  used-range-bounded per-cell graph. That graph resolved a case-variant sheet qualifier
+  (`'MID'!A1` for sheet `Mid`) to no sheet, and an empty cell outside its sheet's used range had
+  no readers, so a cycle or a dependent could be missed. The seeder now asks the recalculation
+  graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
+  now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
+  The audit's volatility exemption asks the same graph the what-if pass uses: a table whose
+  lookup column is chosen by one of its own inputs is exempt when any column that input can
+  select draws RAND()/NOW() in the table's cone, not only the column selected today.
+
+- **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
+  --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
+  writes to an iterating book built a second one for the edit's dirty cone; each now hands the
+  recalculation's graph to its second consumer (as does `recalculate` with `seedTables`). Data-table
+  seeding, and the audit's stale-table check with it, parsed the corner and every formula of the
+  what-if cone again for each interior cell; they read the graph's parses now. Results are
+  unchanged. A table whose corner is a VLOOKUP/HLOOKUP selected by the table's own input still
+  costs seeding a second graph (the recalculation graph narrows that lookup).
+
+- **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
+  `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
+  anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision
+  buckets of up to min(rows, columns) boxed keys. The hash is now distinct for every cell of the
+  grid below row 2^18; the packing is still a bijection on all `Int` pairs (off-grid refs from
+  `shift` decode unchanged) and in-grid values still order row-major. Code that decoded the raw
+  `Long` by hand (the only in-repo case was `FormulaPrinter`) must use `ref.row` and `ref.col`.
+  The iteration order of `Map[ARef, _]` and `Set[ARef]` changes with it.
+
+- **A generated shared-string table is numbered in row-major first-reference order** (#891): it
+  followed `sheet.cells`' hash order, so the indices written into text cells depended on how
+  `ARef` hashes. Files written with a freshly generated table now number their strings
+  differently from 0.26.0 (same strings, same cells); a preserved table is unchanged.
+
 - **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
   sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
   `combine` once per cell outside the array's populated box, so a downstream aggregator that keeps
@@ -35,6 +195,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no faster default gives the same result.
 
 ### Fixed
+
+- **`view --eval` computes the window's precedents on other sheets** (#891). The window
+  evaluation (`sheet.evaluateForRangePerCell`, `view --eval` and its rendered pictures) evaluated
+  the window's formulas and their precedents on the window's own sheet, and read every other
+  sheet's caches as they stood. With `S!F1 = A1*2`, `T!B1 = S!A1+S!F1` and `S!H1 = T!B1*10`, after
+  `put --no-recalc A1 5` it showed `H1 = 30` where `recalc` writes `150` (0.26.0 does the same).
+  The closure now follows precedents across sheets, in the canonical order, so the window shows
+  what a recalculation would put in its cells. Consequences: a precedent on another sheet that
+  cannot evaluate is listed in `RangeEvalResult.failures` under its own sheet (the `EVAL_FAILED`
+  warning names it there) and the window's cell that reads it is `blocked` and keeps the file's
+  value, where it used to be computed off that precedent's cache; a dynamic reader
+  (INDIRECT/OFFSET) among the precedents on another sheet has that sheet's formulas computed with
+  it. Unchanged: cycles report as before (members on the window's sheet are listed, a reader of a
+  cycle on another sheet is blocked), and what a dynamic reader reads on a sheet the closure never
+  reaches is still read from the file.
+  The evaluation is now a recalculation pass over the closure (the graph's parses, column slices,
+  the criteria index), so a window costs what recalculating its closure costs: a summary cell over
+  a whole model takes about as long as `recalc`, where it used to return at once with whatever
+  the caches held. On a 40,000-formula SUMIF model: 0.2-0.4 s and a stale value before, about 6 s
+  and the recalculated value now (`recalc`: 5-7 s); a window whose closure is a few cells is
+  unchanged.
+  In a book whose `calcPr` iterates, cycle members keep the converged values the file holds, as
+  Excel shows them. When a member holds no value at all (a library-authored or `--no-recalc`
+  book; Excel never writes one) there is nothing converged to show, so the window is taken from
+  an iterative recalculation of the book and costs one: the window used to fail such a cell with
+  "Circular reference … read again while its own evaluation is in progress", or compute it from
+  its precedents' stale caches.
+  When every member holds a value, the cycle is a source of those values and nothing else: a
+  formula that only feeds the cycle is not evaluated for the window, a failure behind the cycle
+  does not block a cell that reads it, and a member that reads through INDIRECT keeps its value
+  (a member downstream of one lost its cache and was recomputed once, out of the cycle).
 
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region
@@ -179,10 +370,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **`QualifiedRef` hashes the row and the column as separate words** (#891): the derived hash
+  mixed the cell as a `Long`, whose hash is `row ^ column`, so every cell on an anti-diagonal of a
+  sheet collided (512 distinct hashes for a 500 x 64 sheet) and hash sets and maps of qualified
+  cells scanned buckets of up to min(rows, columns) entries. `xl audit` on three real workbooks,
+  JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. (`ARef` keys are fixed
+  under Changed.)
+
+- **`xl audit` on real models: 206.7 s to 84.6 s, 228.6 s to 11.2 s, 92.0 s to 30.9 s** (#891;
+  the 0.26.0 release binary against a native build of this change, macOS arm64, one serial run
+  each, same findings and notes). Data-oriented rewrites, no caches:
+  - the workbook SCC condensation (`qualifiedSccOrder`, `qualifiedCyclicNodes`) numbers the
+    formula cells once in grid order and runs Tarjan and the key-minimum condensation over one
+    CSR edge array, sharing the compact graph's kernel (`SccKernel`); it rebuilt two immutable
+    `Map[Int, Set[Int]]` per edge;
+  - `withinComponentOrder` (the Gauss–Seidel sweep) runs on the same ids with an `Int` heap and a
+    cursor for the cut instead of immutable `TreeSet`s;
+  - the `ARef` hash fix above;
+  - a criteria range read cell by cell (SUMIFS and friends outside a recalculation pass) indexes
+    by offset arithmetic instead of copying the range into a `Vector` of boxed refs per call;
+  - a data table's cycle members parse once per table instead of once per sampled cell.
+  On the three books, JVM, from the `QualifiedRef` fix above: 82.3 s to 25.6 s, 14.5 s to 3.9 s,
+  17.0 s to 7.2 s. What remains on
+  the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
+  `--skip-data-tables` (under Added) audits it in 2.6 s.
+
+- **Building a `CellStore` from sorted cells streams it 32 rows at a time** (#891): the builder
+  kept several arrays with a slot per cell and held them all while assembling the store, so
+  loading a numeric workbook peaked higher than on the `Map` although the finished store is a
+  seventh of the size. A cell that sorts after the last one now goes straight into its row
+  group, and only finished groups are kept; a cell out of order is buffered, sorted and merged
+  at the end (last write still wins). A 2M-cell build in 8 columns allocates 13.8 bytes a cell
+  where it allocated 133, and a 1M x 8 numeric workbook loads in a 5,120 MiB heap where the
+  `Map` needed 5,696. The built store is unchanged.
+
+- **Array mode reads a range that lies mostly past the data through its populated box** (#891):
+  a range was read position by position whenever it had no more positions than the sheet had
+  cells, which on a sheet of more than 1,048,576 cells sent a whole column down that path (a
+  million reads for a column whose data ends at row 60,000). The rule now also asks that at
+  least half of the range lie inside the sheet's extent, which the store answers from its
+  summaries. SUMPRODUCT's choice for a raw range beside a sparse argument uses the same rule.
+  Values are unchanged.
+
 - **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
   `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed
   its first argument, and an array constant was spelled out cell by cell. The call is now printed
   on the error path alone; messages and results are unchanged.
+
+- **`xl audit` on a model with data tables over a circular block takes half the time** (#891;
+  JVM, median of three serial runs against the change before it, same output: 20.8 s to 9.7 s on
+  a quiet machine, 22.0 s to 10.9 s re-measured at the final commit on a busy one; the other two
+  real workbooks are within noise). An iterative fixpoint (a circular block under
+  recalculation, and each interior cell of a data table whose corner reads one) evaluated its
+  criteria calls with nothing shared, so every SUMIFS, COUNTIFS, SUMIF and AVERAGEIFS re-read
+  its ranges row by row: 219 million row tests for one audit, over two 200-row ranges.
+  - Within one fixpoint only its member cells change, so the fixpoint keeps one set of criteria
+    columns and their equality indexes for all its rounds. A column window that holds a member
+    or a formula without a value is never kept. Aggregate results are still never shared between
+    rounds or between member evaluations.
+  - The order a cycle's members are swept in is computed on formula ids (`CompactGraph`), with
+    scratch sized to the cycle, not through a map of qualified references per member.
 
 ## [0.26.0] - 2026-11-12
 

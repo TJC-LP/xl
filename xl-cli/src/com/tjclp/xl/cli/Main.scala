@@ -1156,18 +1156,32 @@ bucket; -s restricts the cell buckets to one sheet.
 Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
 book with the report kept, so a CI lane can gate on it.
 
+The stale-data-table note re-evaluates each data table's corner at sampled inputs; on a large
+circular model that costs many recalculations. --skip-data-tables leaves it out, and the report
+says it was not checked (JSON data.dataTableCheck: "skipped"). It is a note, never a finding, so
+skipping it never changes clean or findings.
+
 USAGE:
   xl -f model.xlsx audit
   xl -f model.xlsx -s Summary audit
   xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+  xl -f model.xlsx audit --fail-on-findings --skip-data-tables   # a fast gate on a data-table model
 """
 
   private val failOnFindingsOpt: Opts[Boolean] =
     Opts.flag("fail-on-findings", "Exit 1 (AUDIT_FINDINGS) when the audit has findings").orFalse
 
+  private val skipDataTablesOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "skip-data-tables",
+        "Leave out the stale-data-table note (no data-table corner is re-evaluated)"
+      )
+      .orFalse
+
   val auditCmd: Opts[CliCommand] =
     Opts.subcommand("audit", auditHelp) {
-      failOnFindingsOpt.map(CliCommand.Audit.apply)
+      (failOnFindingsOpt, skipDataTablesOpt).mapN(CliCommand.Audit.apply)
     }
 
   private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
@@ -3066,11 +3080,11 @@ EXAMPLES:
 
       // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
       // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
-      case CliCommand.Audit(failOnFindings) =>
+      case CliCommand.Audit(failOnFindings, skipDataTables) =>
         for
           wb <- readWorkbook(excel, filePath, readerConfig)
           sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode, skipDataTables)
         yield payload
 
       case CliCommand.Deps(refStr, direction, depth, expand) =>
@@ -3819,7 +3833,7 @@ EXAMPLES:
     // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
     case CliCommand.Describe(_) =>
       IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
-    case CliCommand.Audit(_) =>
+    case CliCommand.Audit(_, _) =>
       IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
     case CliCommand.Deps(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))

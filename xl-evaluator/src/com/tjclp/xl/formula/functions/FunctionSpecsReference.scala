@@ -556,7 +556,7 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           anchor
         )
       )
-    anchorSheet(anchor).value match
+    anchorSheet.cells.valueAt(anchor) match
       case CellValue.Formula(text, cached, FormulaKind.ArrayFormula(ref, _, _, _)) =>
         // GH-695: an evaluation fold that computed this anchor in the current generation recorded
         // its result; the recorded extent's cells are then the previous generation's spill

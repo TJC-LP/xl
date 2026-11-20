@@ -133,8 +133,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
     def map(args: Operand)(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: com.tjclp.xl.CellRange => com.tjclp.xl.CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): Operand = args match
       case Left(location) => Left(mapRange(location))
       case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[Any]])
@@ -678,7 +677,6 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   private def operandOf(value: ArgValue): Option[Operand] = value match
     case ArgValue.Range(location) => Some(Left(location))
     case ArgValue.Expr(expr) => Some(Right(expr.asInstanceOf[TExpr[Any]]))
-    case ArgValue.Cells(_) => None
 
   /** The bounding range of a range whose operands denote fixed cells, on each sheet it may be. */
   private def boundingEdges(
