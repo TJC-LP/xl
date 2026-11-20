@@ -1487,6 +1487,16 @@ object DependencyGraph:
     // unambiguously in diagnostics ('A1'!B2, not A1!B2)
     override def toString: String = s"${SheetName.quoteForFormula(sheet.value)}!${ref.toA1}"
 
+    // The derived hash mixes `ref` as a Long, whose hash is `high ^ low`: row ^ column. Every
+    // cell on an anti-diagonal of a sheet then shares one hash, so a sheet of R rows by C columns
+    // has about max(R, C) distinct hashes and hash sets and maps of its cells scan buckets of
+    // about min(R, C) entries. Mix the row and the column as separate words instead.
+    override def hashCode: Int =
+      import scala.util.hashing.MurmurHash3
+      val withSheet = MurmurHash3.mix(MurmurHash3.productSeed, sheet.hashCode)
+      val withRow = MurmurHash3.mix(withSheet, ref.row.index0)
+      MurmurHash3.finalizeHash(MurmurHash3.mixLast(withRow, ref.col.index0), 3)
+
   object QualifiedRef:
     /**
      * The GRID order: sheet name, then row, then column — row-major within a sheet, Excel's
