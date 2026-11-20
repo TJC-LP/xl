@@ -5,6 +5,7 @@ import java.util.concurrent.TimeUnit
 import scala.compiletime.uninitialized
 
 import com.tjclp.xl.formula.eval.{
+  Evaluator,
   IterativeMode,
   RecalcCounters,
   RecalcOptions,
@@ -69,4 +70,47 @@ class RecalcBenchmark {
     val c = if counters == "on" then RecalcCounters.create() else RecalcCounters.disabled
     WorkbookEvaluator.recalculateCounted(workbook, options, c)
   }
+}
+
+/**
+ * #920: whole-workbook recalculation of the made-up date-window book ([[LoadsBook.dateWindow]]):
+ * 50,000 data rows and 2,000 trailing 30-day `SUMIFS` over whole columns, half of them also keyed
+ * by a region. Every formula reads two relational criteria on the date column, which the order
+ * index answers with one run of its sorted dates; before it, each formula tested every row.
+ *
+ *   - `index`: `on` (the default engine) or `off` (no criteria index: every call tests every row)
+ */
+@State(Scope.Benchmark)
+@BenchmarkMode(Array(Mode.SingleShotTime))
+@OutputTimeUnit(TimeUnit.MILLISECONDS)
+@Warmup(iterations = 1)
+@Measurement(iterations = 3)
+@Fork(value = 1)
+@SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.Null"))
+class RecalcDateWindowBenchmark {
+
+  @Param(Array("50000"))
+  var rows: Int = uninitialized
+
+  @Param(Array("2000"))
+  var formulas: Int = uninitialized
+
+  @Param(Array("on", "off"))
+  var index: String = uninitialized
+
+  var workbook: Workbook = uninitialized
+
+  private val options = RecalcOptions(iterative = IterativeMode.Off)
+
+  @Setup(Level.Trial)
+  def setup(): Unit =
+    workbook = LoadsBook.dateWindow(rows, formulas)
+
+  @Benchmark
+  def recalculate(): RecalcResult =
+    WorkbookEvaluator.recalculateWithMemo(
+      workbook,
+      options,
+      new Evaluator.AggregateMemo(criteriaIndex = index == "on")
+    )
 }
