@@ -1183,7 +1183,7 @@ final case class Sheet(
   ): XLResult[Sheet] =
     SheetEdits.sort(this, range, keys, hasHeader)
 
-  /** Clear contents (unmerging overlapping merges), styles and/or comments in `range`. */
+  /** Clear contents, styles and/or comments in `range`; a styles clear unmerges what it touches. */
   def clearRange(range: CellRange, what: ClearWhat): Sheet = SheetEdits.clear(this, range, what)
 
   /** The width `col` needs for its formatted content, in Excel character units (GH-156). */

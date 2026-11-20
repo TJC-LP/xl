@@ -204,6 +204,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the source's hyperlink relationships. A link xl reads as preserved XML rather than onto a cell
   (a range `ref="D2:E3"`, or a target it cannot resolve) still rides through with its relationship.
   **Behaviour change:** a removed last hyperlink no longer reappears after a save.
+
+- **The library's styles clear unmerges too, like Excel's Clear Formats** (#909):
+  `Sheet.clearRange(range, ClearWhat.styles)` and `Edit.Clear(at, ClearWhat.styles)` now unmerge
+  every merged region the range touches (inside it, partly overlapping it, or wholly covering it)
+  and reset the styles of each whole merge, as the CLI's `clear --styles` does since #894. A clear
+  with contents and styles (`ClearWhat.all`) also resets the styles of a merge's cells outside the
+  range, as the CLI's `--all` does. Contents-only and comments-only clears still keep merges.
+  `Edit.lower` adds a `ClearStyle` per crossing-merge cell and an `Unmerge` per touched merge, and
+  `Patch.toEdits` no longer desugars `ClearStyle` on a merged cell (it has no exact `Edit`).
+  **Behaviour change:** with B2:D2 merged and bold, `sheet.clearRange(C2:C2, ClearWhat.styles)`
+  leaves B2:D2 unmerged and all three cells on the default style (was: B2:D2 still merged, only
+  C2 reset). The CLI still has its own copy of this rule; pointing it at the library is a
+  follow-up.
+
 - **`view --eval` computes the window's precedents on other sheets** (#891). The window
   evaluation (`sheet.evaluateForRangePerCell`, `view --eval` and its rendered pictures) evaluated
   the window's formulas and their precedents on the window's own sheet, and read every other
@@ -259,9 +273,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
   ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
   CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
-  style is removed, and merged regions stay merged. One difference from the CLI for now: an
-  unstyled cell in a row or column with a default style keeps an empty record, so it does not
-  take that row's or column's format. The CLI still removes it until #897 is fixed there. A clear with `styles` as well as `contents`
+  style is removed, and merged regions stay merged. An unstyled cell in a row or column with a
+  default style keeps an empty record, so it does not take that row's or column's format, as in
+  the CLI since #897; both share one rule since #908. A clear with `styles` as well as `contents`
   (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
   comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
   `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars

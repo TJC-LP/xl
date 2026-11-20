@@ -464,23 +464,38 @@ private[xl] object SheetEdits:
    *
    * GH-890: a contents-only clear is Excel's Clear Contents: each emptied cell keeps its style but
    * loses its hyperlink, a cell with no style is removed (unless its row or column has a default
-   * style, GH-897), and merges stay. A clear that drops the styles as well (`ClearWhat.all`)
-   * removes the cell records and unmerges every merged region overlapping the range, as Clear All
-   * does. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`, GH-886) follows the same
-   * rule, except that it removes an unstyled cell in a styled row or column until GH-897 lands
-   * there too.
+   * style, GH-897), and merges stay. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`,
+   * GH-886) applies the same rule through [[keepsRecordWhenCleared]] (GH-908). A clear that drops
+   * the cells as well (`ClearWhat.all`) removes the cell records.
+   *
+   * GH-909: any clear with `styles` is Excel's Clear Formats (or Clear All): it unmerges every
+   * merged region the range touches and resets the styles of each whole merge, since Excel widens
+   * the selection to the merges it touches. A cell of a merge that lies outside the range keeps its
+   * value but loses its style. The CLI's `clear --styles` / `--all` (GH-894) make the same change.
    */
   def clear(sheet: Sheet, range: CellRange, what: ClearWhat): Sheet =
     val dropCells = what.contents && what.styles
+    val touched =
+      if what.styles then sheet.mergedRanges.filter(_.intersects(range)).toVector
+      else Vector.empty
     val s1 =
       if dropCells then sheet.removeRange(range)
       else if what.contents then clearContentsKeepingStyles(sheet, range)
       else sheet
-    val s2 = if what.styles && !dropCells then s1.clearStylesInRange(range) else s1
+    val s2 =
+      if !what.styles then s1
+      else
+        val inRange = if dropCells then s1 else s1.clearStylesInRange(range)
+        crossingMerges(range, touched).foldLeft(inRange)((s, m) => s.clearStylesInRange(m))
     val s3 = if what.comments then s2.clearCommentsInRange(range) else s2
-    if dropCells then
-      s3.mergedRanges.filter(_.intersects(range)).foldLeft(s3)((s, mr) => s.unmerge(mr))
-    else s3
+    touched.foldLeft(s3)((s, m) => s.unmerge(m))
+
+  /**
+   * The merges in `touched` that cross the edge of `range`: their cells outside it need their own
+   * style reset (GH-909). A merge wholly inside `range` is already covered by the range's own.
+   */
+  private[xl] def crossingMerges(range: CellRange, touched: Vector[CellRange]): Vector[CellRange] =
+    touched.filterNot(m => range.contains(m.start) && range.contains(m.end))
 
   /**
    * Clear Contents: a cell in `range` that keeps a record is emptied and loses its hyperlink; any
