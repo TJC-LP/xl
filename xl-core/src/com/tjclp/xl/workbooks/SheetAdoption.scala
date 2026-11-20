@@ -13,17 +13,15 @@ private[workbooks] object SheetAdoption:
       refuse(sheet, "sheet does not match a member of the supplied source workbook")
     else if destination == from then Right(destination)
     else
-      val affected = sheet.cells.iterator
-        .flatMap { cell =>
-          cell.value match
-            case CellValue.Formula(expression, _, _) =>
-              val ordinals = FormulaStorage.externalOrdinals(expression).toVector.sorted
-              Option.when(ordinals.nonEmpty)(
-                s"${cell.ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})"
-              )
-            case _ => None
-        }
-        .toVector
+      val affected = sheet.cells.iterator.flatMap { cell =>
+        cell.value match
+          case CellValue.Formula(expression, _, _) =>
+            val ordinals = FormulaStorage.externalOrdinals(expression).toVector.sorted
+            Option.when(ordinals.nonEmpty)(
+              s"${cell.ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})"
+            )
+          case _ => None
+      }.toVector
       if affected.nonEmpty then
         refuse(
           sheet,
