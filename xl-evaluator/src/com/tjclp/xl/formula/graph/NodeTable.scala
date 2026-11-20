@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.workbooks.Workbook
 
@@ -23,7 +23,12 @@ private[formula] final class NodeTable private (
   formulaRow: IArray[Int],
   formulaCol: IArray[Int],
   byCell: LongIntMap,
-  offGrid: Map[(Int, Int, Int), Int]
+  offGrid: Map[(Int, Int, Int), Int],
+  /**
+   * The input cells of the workbook's data tables (`r1`/`r2` of every record). A what-if pass
+   * substitutes them, so no read may be narrowed on the value one holds.
+   */
+  val whatIfInputs: Set[QualifiedRef]
 ):
   /** Number of formula nodes. */
   def formulaCount: Int = formulaSheet.length
@@ -75,22 +80,48 @@ private[formula] object NodeTable:
    * position (only a workbook holding two sheets of one name has them) keep the later one, as the
    * legacy graph's `toMap` does.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def build(wb: Workbook): (NodeTable, IArray[String]) =
     val names: Vector[SheetName] = wb.sheets.map(_.name).distinct.sortBy(_.value)
     val sheetIndex: Map[SheetName, Int] = names.iterator.zipWithIndex.toMap
     val entries = Array.newBuilder[Entry]
+    val inputs = Set.newBuilder[QualifiedRef]
     wb.sheets.foreach { sheet =>
       val s = sheetIndex.getOrElse(sheet.name, -1)
-      sheet.cells.foreach { case (ref, cell) =>
+      sheet.cells.iterator.foreach { case cell @ Cell(ref, _, _, _) =>
         cell.value match
-          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case CellValue.Formula(_, _, dt: FormulaKind.DataTable) =>
+            dt.r1.foreach(input => inputs += QualifiedRef(sheet.name, input))
+            dt.r2.foreach(input => inputs += QualifiedRef(sheet.name, input))
           case CellValue.Formula(text, _, _) =>
             entries += Entry(s, ref.row.index0, ref.col.index0, text)
           case _ => ()
       }
     }
-    val all = entries.result()
+    assemble(names, sheetIndex, entries.result(), inputs.result())
+
+  /**
+   * #891: the table of an arbitrary set of cells — the keys of a workbook-level dependency map —
+   * numbered in grid order exactly as [[build]] numbers formula cells.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def of(cells: Iterable[QualifiedRef]): NodeTable =
+    val names: Vector[SheetName] = cells.iterator.map(_.sheet).distinct.toVector.sortBy(_.value)
+    val sheetIndex: Map[SheetName, Int] = names.iterator.zipWithIndex.toMap
+    val entries = new Array[Entry](cells.size)
+    var i = 0
+    cells.foreach { q =>
+      entries(i) = Entry(sheetIndex.getOrElse(q.sheet, -1), q.ref.row.index0, q.ref.col.index0, "")
+      i += 1
+    }
+    assemble(names, sheetIndex, entries, Set.empty)._1
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def assemble(
+    names: Vector[SheetName],
+    sheetIndex: Map[SheetName, Int],
+    all: Array[Entry],
+    whatIfInputs: Set[QualifiedRef]
+  ): (NodeTable, IArray[String]) =
     // stable: equal positions keep their input order, so the later duplicate is last
     java.util.Arrays.sort(all, gridOrder)
     val kept = Array.newBuilder[Entry]
@@ -123,6 +154,7 @@ private[formula] object NodeTable:
       IArray.unsafeFromArray(formulas.map(_.row)),
       IArray.unsafeFromArray(formulas.map(_.col)),
       LongIntMap.from(keys, ids, onGrid),
-      offGrid.result()
+      offGrid.result(),
+      whatIfInputs
     )
     (table, IArray.unsafeFromArray(formulas.map(_.text)))

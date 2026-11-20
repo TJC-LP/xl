@@ -250,6 +250,7 @@ class InspectCommandsSpec extends CatsEffectSuite:
           "unresolvedReaders",
           "calcPr",
           "iterativeCycles",
+          "dataTableCheck",
           "dataTableStale"
         )
       )
@@ -375,8 +376,23 @@ class InspectCommandsSpec extends CatsEffectSuite:
       text <- CliHarness.run("-f", edited.toString, "audit")
       recalc <- CliHarness.run("-f", edited.toString, "-o", reseeded.toString, "recalc", "--tables")
       healed <- CliHarness.run("-f", reseeded.toString, "--json", "audit")
+      skipped <- CliHarness.run("-f", edited.toString, "--json", "audit", "--skip-data-tables")
+      skippedText <- CliHarness.run("-f", edited.toString, "audit", "--skip-data-tables")
     yield
       assertEquals(data(before)("dataTableStale"), ujson.Arr(), "a freshly seeded table is current")
+      // #891: the skip is reported, the note is empty, and nothing else moves
+      assertEquals(data(after)("dataTableCheck"), ujson.Str("checked"))
+      assertEquals(skipped.exit, 0, skipped.stderr)
+      assertEquals(data(skipped)("dataTableCheck"), ujson.Str("skipped"))
+      assertEquals(data(skipped)("dataTableStale"), ujson.Arr())
+      assertEquals(
+        data(skipped).obj.view
+          .filterKeys(k => k != "dataTableCheck" && k != "dataTableStale")
+          .toMap,
+        data(after).obj.view.filterKeys(k => k != "dataTableCheck" && k != "dataTableStale").toMap
+      )
+      assert(skippedText.stdout.contains("Stale data tables: not checked"), skippedText.stdout)
+      assert(!skippedText.stdout.contains("sampled"), skippedText.stdout)
       assertEquals(put.exit, 0, put.stderr)
       val d = data(after)
       assertEquals(d("clean"), ujson.True, "a note, not a finding")

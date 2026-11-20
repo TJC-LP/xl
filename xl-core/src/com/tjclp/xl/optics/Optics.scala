@@ -2,7 +2,7 @@ package com.tjclp.xl.optics
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.styles.units.StyleId
 
 /**
@@ -18,7 +18,7 @@ import com.tjclp.xl.styles.units.StyleId
 object Optics:
 
   /** Lens for accessing all cells in a sheet */
-  val sheetCells: Lens[Sheet, Map[ARef, Cell]] =
+  val sheetCells: Lens[Sheet, CellStore] =
     Lens(
       get = s => s.cells,
       set = (cells, s) => s.copy(cells = cells)

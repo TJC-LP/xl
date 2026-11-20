@@ -18,7 +18,7 @@ import com.tjclp.xl.richtext.RichText
  * "Critical issue!", author = Some("Jane Smith") ) }}}
  *
  * '''Adding comments to cells'''{{{ val sheet = Sheet("Data") .put(ref"A1", "Revenue")
- * .withComment(ref"A1", Comment.plainText("Q1 2025 data")) }}}
+ * .comment(ref"A1", Comment.plainText("Q1 2025 data")) }}}
  *
  * @param text
  *   Comment content (supports rich text formatting)

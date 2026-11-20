@@ -279,12 +279,17 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
       val targeted = book.recalculateAfterEdit(name, Set(edited), RecalcOptions()).workbook
       val full = book.recalculate().workbook
       def caches(wb: Workbook): Map[ARef, Option[CellValue]] =
-        wb(name).fold(e => fail(e.message), identity).cells.collect {
-          case (at, cell) if cell.value.isInstanceOf[CellValue.Formula] =>
-            at -> (cell.value match
-              case CellValue.Formula(_, cached, _) => cached
-              case _ => None)
-        }
+        wb(name)
+          .fold(e => fail(e.message), identity)
+          .cells
+          .iterator
+          .collect {
+            case cell @ Cell(at, _, _, _) if cell.value.isInstanceOf[CellValue.Formula] =>
+              at -> (cell.value match
+                case CellValue.Formula(_, cached, _) => cached
+                case _ => None)
+          }
+          .toMap
       assertEquals(
         caches(targeted),
         caches(full),

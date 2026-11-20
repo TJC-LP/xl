@@ -151,20 +151,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
       case Left(err) => Async[F].raiseError(new Exception(s"Failed to write XLSX: ${err.message}"))
     }
 
-  /** Write workbook using SAX/StAX backend for faster writes */
-  @deprecated("SaxStax is now the default backend. Use write() instead.", "0.4.0")
-  def writeFast(wb: Workbook, path: Path): F[Unit] =
-    write(wb, path)
-
-  /** Write workbook with custom config but forcing SAX/StAX backend */
-  @deprecated("SaxStax is now the default backend. Use writeWith() instead.", "0.4.0")
-  def writeFastWith(
-    wb: Workbook,
-    path: Path,
-    config: com.tjclp.xl.ooxml.WriterConfig
-  ): F[Unit] =
-    writeWith(wb, path, config)
-
   /**
    * Stream rows from first sheet with constant memory.
    *
@@ -1260,27 +1246,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     zip.closeEntry()
 
   /**
-   * Write rows to XLSX file, materializing all rows first.
-   *
-   * @deprecated
-   *   Use writeStream instead for true O(1) streaming.
-   */
-  @deprecated("Use writeStream for true O(1) streaming", "0.8.0")
-  def writeStreamMaterialized(path: Path, sheetName: String): Pipe[F, RowData, Unit] =
-    rows =>
-      Stream.eval {
-        rows.compile.toVector.flatMap { rowVec =>
-          val sheet = rowDataToSheet(sheetName, rowVec)
-          sheet match
-            case Right(s) =>
-              val wb = Workbook(Vector(s))
-              write(wb, path)
-            case Left(err) =>
-              Async[F].raiseError(new Exception(s"Failed to create sheet: ${err.message}"))
-        }
-      }
-
-  /**
    * Write multiple sheets sequentially with constant memory.
    *
    * Consumes each sheet once into a temporary worksheet body before ZIP assembly. Dimensions can be
@@ -1577,17 +1542,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
         .map(_ => Right(()))
         .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
 
-  /** Write stream (materializing) with explicit error channel */
-  @deprecated("Use writeStreamR for true O(1) streaming", "0.8.0")
-  def writeStreamMaterializedR(
-    path: Path,
-    sheetName: String
-  ): Pipe[F, RowData, Either[XLError, Unit]] =
-    rows =>
-      writeStreamMaterialized(path, sheetName)(rows)
-        .map(_ => Right(()))
-        .handleErrorWith(e => Stream.emit(Left(XLError.IOError(e.getMessage))))
-
   /** Write multiple sheets with explicit error channel */
   def writeStreamsSeqR(
     path: Path,
@@ -1602,7 +1556,7 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
 
   // Helper: Convert Sheet to RowData stream
   private def streamSheet(sheet: Sheet): Stream[F, RowData] =
-    val rowMap = sheet.cells.values
+    val rowMap = sheet.cells.iterator.toVector
       .groupBy(_.ref.row.index1) // Group by 1-based row
       .view
       .mapValues { cells =>
@@ -1613,25 +1567,6 @@ class ExcelIO[F[_]: Async](warningHandler: XlsxReader.Warning => F[Unit])
     Stream.emits(rowMap.toSeq.sortBy(_._1)).map { case (rowIdx, cellMap) =>
       RowData(rowIdx, cellMap)
     }
-
-  // Helper: Convert RowData vector to Sheet
-  private def rowDataToSheet(
-    sheetName: String,
-    rows: Vector[RowData]
-  ): Either[XLError, Sheet] =
-    import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-    import com.tjclp.xl.cells.Cell
-
-    for
-      name <- SheetName(sheetName).left.map(err => XLError.InvalidSheetName(sheetName, err))
-      cells = rows.flatMap { row =>
-        row.cells.map { case (colIdx, value) =>
-          val ref = ARef(Column.from0(colIdx), Row.from1(row.rowIndex))
-          Cell(ref, value)
-        }
-      }
-      sheet = Sheet(name, cells.map(c => c.ref -> c).toMap)
-    yield sheet
 
 object ExcelIO:
 

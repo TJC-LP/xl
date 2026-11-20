@@ -42,8 +42,17 @@ object api:
   type SheetName = addressing.SheetName
   val SheetName: addressing.SheetName.type = addressing.SheetName
 
+  // Cell hyperlink target: opaque over String, same alias + singleton val treatment
+  type Hyperlink = cells.Hyperlink
+  val Hyperlink: cells.Hyperlink.type = cells.Hyperlink
+
   // Rich text types
   export richtext.{TextRun, RichText}
+
+  // A sheet's cell store (#891): a plain final class, exported as an explicit type + val pair so
+  // `CellStore.of`/`CellStore.empty`/`CellStore.newBuilder` resolve outside the package.
+  type CellStore = sheets.CellStore
+  val CellStore: sheets.CellStore.type = sheets.CellStore
 
   // Sheet types
   export sheets.{

@@ -7,6 +7,7 @@ import scala.util.boundary
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.{EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.FormulaParser
@@ -157,8 +158,8 @@ class EvaluationTotalitySpec extends FunSuite:
         case Right(v) => fail(s"$label: expected a Left, got $v")
     assertDefect("evaluateFormula", sheet.evaluateFormula("=TODAY()+1", boom))
     assertDefect("evaluateCell", sheet.evaluateCell(ref"B1", boom))
-    assertDefect("evaluateWithDependencyCheck", sheet.evaluateWithDependencyCheck(boom))
-    assertDefect("evaluateForRange", sheet.evaluateForRange(CellRange(ref"A1", ref"C1"), boom))
+    assertDefect("recalculate (evalAll)", sheet.evalAll(boom))
+    assertDefect("evaluateForRangePerCell", sheet.evalRange(CellRange(ref"A1", ref"C1"), boom))
     assertDefect("evaluateArrayFormula", sheet.evaluateArrayFormula("=TODAY()+1", ref"H1", boom))
     assertDefect(
       "wb.evaluateFormula",

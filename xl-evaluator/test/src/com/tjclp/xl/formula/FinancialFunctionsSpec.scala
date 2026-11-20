@@ -461,7 +461,7 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
         None
       )
     )
-    val reread = authored.cells.foldLeft(authored) { case (s, (ref, cell)) =>
+    val reread = authored.cells.iterator.foldLeft(authored) { case (s, cell @ Cell(ref, _, _, _)) =>
       cell.value match
         case CellValue.DateTime(dt) =>
           s.put(ref, CellValue.Number(BigDecimal(CellValue.dateTimeToExcelSerial(dt))))

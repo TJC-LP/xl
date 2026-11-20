@@ -595,8 +595,8 @@ private[xl] object EditInterpreter:
         else if what.contents then
           // GH-890 Clear Contents: remove each cell, then restore a kept one as an empty record
           // (its style alone, no hyperlink); merges stay.
-          existing.cells.values
-            .filter(c => range.contains(c.ref))
+          existing.cells
+            .inRange(range)
             .toVector
             .sortBy(_.ref.toA1)
             .flatMap { c =>
@@ -611,7 +611,7 @@ private[xl] object EditInterpreter:
       // Styles clear only what contents left behind: after a removal nothing in range remains.
       val styles =
         if what.styles && !what.contents then
-          existing.cells.keys
+          existing.cells.refs
             .filter(range.contains)
             .toVector
             .sortBy(_.toA1)

@@ -1,11 +1,11 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry}
-import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
+import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.{QualifiedRef, Scc}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.sheets.Sheet
@@ -64,9 +64,10 @@ object StaleDataTable:
  *   - `errorCells` — a cached Excel error on a formula, or a bare error value
  *   - `uncachedFormulas` — formulas with no cached value (`xl recalc` fills them)
  *   - `unparseable` — formulas this evaluator cannot parse, each with the parser's one-line reason
- *   - `cycles` — the cyclic strongly connected components of the formula graph, when the file's
- *     `calcPr` does NOT enable iterative calculation (Excel shows such a book with a circular
- *     reference warning and zeros)
+ *   - `cycles` — the cyclic strongly connected components of the recalculation graph (#891: the
+ *     cycles `recalc` isolates, with #504's precise lookup reads), when the file's `calcPr` does
+ *     NOT enable iterative calculation (Excel shows such a book with a circular reference warning
+ *     and zeros)
  *   - `unresolvedReaders` — formulas whose name references the static graph cannot resolve
  *     (GH-507); an unparseable formula is reported once, in `unparseable`
  *
@@ -78,7 +79,9 @@ object StaleDataTable:
  * names whose bodies make one, #678 — conservatively even when another name chain exceeds
  * [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
- * caches are pinned) and the file's `calcPr`.
+ * caches are pinned) and the file's `calcPr`, and `staleDataTables` (#678; `dataTablesChecked` is
+ * false when the caller skipped that note, #891 — it re-evaluates each table's corner, which on a
+ * large circular model costs many recalculations).
  *
  * Every bucket is in workbook order — sheet position, then row, then column — so two runs on the
  * same file print the same report. Pure and total.
@@ -94,7 +97,8 @@ final case class WorkbookAudit(
   unresolvedReaders: Vector[QualifiedRef],
   calcPr: Option[CalcPr],
   iterativeCycles: Vector[Scc],
-  staleDataTables: Vector[StaleDataTable] = Vector.empty
+  staleDataTables: Vector[StaleDataTable] = Vector.empty,
+  dataTablesChecked: Boolean = true
 ) derives CanEqual:
 
   /** The number of findings: error cells, uncached and unparseable formulas, cycles, unresolved. */
@@ -161,7 +165,26 @@ object WorkbookAudit:
   def of(wb: Workbook): WorkbookAudit = of(wb, Clock.system)
 
   /** The audit, re-evaluating data-table corners (the stale-interior note) at `clock`. */
-  def of(wb: Workbook, clock: Clock): WorkbookAudit =
+  def of(wb: Workbook, clock: Clock): WorkbookAudit = of(wb, clock, checkDataTables = true)
+
+  /**
+   * #891: the audit with or without the stale-data-table note. Without it (`checkDataTables =
+   * false`) no corner is re-evaluated, `staleDataTables` is empty and `dataTablesChecked` says so;
+   * every other bucket is the same.
+   */
+  def of(wb: Workbook, clock: Clock, checkDataTables: Boolean): WorkbookAudit =
+    of(wb, clock, checkDataTables, RecalcCounters.disabled)
+
+  /**
+   * #891: the audit with an enabled [[RecalcCounters]], for the parse-count laws: the same audit,
+   * with the graph build's and the data-table check's work added to `counters`.
+   */
+  private[formula] def of(
+    wb: Workbook,
+    clock: Clock,
+    checkDataTables: Boolean,
+    counters: RecalcCounters
+  ): WorkbookAudit =
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val position: Map[SheetName, Int] =
       wb.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
@@ -170,17 +193,30 @@ object WorkbookAudit:
         (position.getOrElse(q.sheet, Int.MaxValue), q.ref.row.index0, q.ref.col.index0)
       )
 
+    // #891: one graph and one parse of each formula for the whole audit — the recalculation
+    // graph's build parses them; the scan and the dynamic and unresolved-reader classifications
+    // read those parses, and the cycles and the data-table volatile cones come from the graph
+    val recalcGraph =
+      counters.time(RecalcCounters.Phase.GraphBuild)(RecalcGraph.build(wb, counters))
+    val parses = recalcGraph.parses
     val viaName = volatileNames(wb)
     val scanned: Vector[Finding] = wb.sheets.iterator.flatMap { sheet =>
-      sheet.cells.iterator.flatMap { (ref, cell) =>
-        classify(QualifiedRef(sheet.name, ref), cell.value, viaName(sheet.name, _, _))
+      sheet.cells.iterator.flatMap { case cell @ Cell(ref, _, _, _) =>
+        classify(
+          QualifiedRef(sheet.name, ref),
+          cell.value,
+          viaName(sheet.name, _, _),
+          parses.parse(sheet.name, ref, _, counters)
+        )
       }
     }.toVector
     val unparseable = scanned.collect { case Finding.Unparseable(q, message) => (q, message) }
     val unparseableRefs = unparseable.iterator.map(_._1).toSet
-    val graph = QualifiedGraph.of(wb)
-    // sccs come dependency-first; the report reads in workbook order like every other bucket
-    val cyclic = graph.sccs.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
+    // #891: the cycles a recalculation sees — the recalculation graph's components, with #504's
+    // precise lookup reads — so `audit` never reports a cycle `recalc` does not have. They come
+    // dependency-first; the report reads in workbook order like every other bucket
+    val cyclic =
+      recalcGraph.components.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
     // With iterative calculation on, a circular model is the file's declared intent, not a finding
     val iterative = wb.metadata.calcPr.exists(_.iterativeCalculation)
 
@@ -189,23 +225,33 @@ object WorkbookAudit:
       uncachedFormulas = scanned.collect { case Finding.Uncached(q) => q }.sorted,
       unparseable = unparseable.sortBy(_._1),
       volatile = scanned.collect { case Finding.Volatile(q) => q }.sorted,
-      dynamic = DependencyGraph.dynamicCells(wb).toVector.sorted,
+      dynamic = DependencyGraph.dynamicCells(wb, parses).toVector.sorted,
       cycles = if iterative then Vector.empty else cyclic,
       externalRefs = scanned.collect { case Finding.External(q) => q }.sorted,
-      unresolvedReaders =
-        DependencyGraph.unresolvedReaders(wb).iterator.filterNot(unparseableRefs).toVector.sorted,
+      unresolvedReaders = DependencyGraph
+        .unresolvedReaders(wb, parses)
+        .iterator
+        .filterNot(unparseableRefs)
+        .toVector
+        .sorted,
       calcPr = wb.metadata.calcPr,
       iterativeCycles = if iterative then cyclic else Vector.empty,
-      staleDataTables = staleDataTablesOf(
-        wb,
-        clock,
-        graph.dependencies,
-        // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
-        scanned.iterator.collect {
-          case Finding.Volatile(q) => q
-          case Finding.MaybeVolatile(q) => q
-        }.toSet
-      )
+      staleDataTables =
+        if !checkDataTables then Vector.empty
+        else
+          staleDataTablesOf(
+            wb,
+            clock,
+            recalcGraph,
+            counters,
+            // #691: a name chain too deep to resolve may be volatile, so it exempts a table too
+            scanned.iterator.collect {
+              case Finding.Volatile(q) => q
+              case Finding.MaybeVolatile(q) => q
+            }.toSet
+          )
+      ,
+      dataTablesChecked = checkDataTables
     )
 
   /**
@@ -223,15 +269,30 @@ object WorkbookAudit:
   private def staleDataTablesOf(
     wb: Workbook,
     clock: Clock,
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
+    counters: RecalcCounters,
     volatile: Set[QualifiedRef]
   ): Vector[StaleDataTable] =
-    val tables = wb.sheets
-      .flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
-      .filterNot { case (sheet, (_, kind)) => readsVolatile(sheet.name, kind, deps, volatile) }
+    val declared = wb.sheets.flatMap(sheet => DataTableSeeder.dataTables(sheet).map(sheet -> _))
+    // The recalculation graph may have narrowed a lookup on a selector a table substitutes. The
+    // what-if pass reads such a lookup whole, so the exemption asks the graph that pass uses: a
+    // volatile strip only another selector value reaches is in the table's cone all the same.
+    lazy val whatIf =
+      if graph.narrowsOnWhatIfInput then
+        counters.time(RecalcCounters.Phase.GraphBuild)(
+          RecalcGraph.build(wb, counters, whatIfSafe = true)
+        )
+      else graph
+    val tables =
+      if declared.isEmpty then declared
+      else
+        declared.filterNot { case (sheet, (_, kind)) =>
+          readsVolatile(sheet.name, kind, whatIf, volatile)
+        }
     if tables.isEmpty then Vector.empty
     else
-      val seeded = DataTableSeeder.seedSample(wb, clock, interior => sampleOf(interior).iterator)
+      val seeded =
+        DataTableSeeder.seedSample(wb, clock, sampleOf(_).iterator, whatIf, counters)
       val after = seeded.sheets.iterator.map(s => s.name -> s).toMap
       tables.flatMap { case (sheet, (interior, _)) =>
         val sampled = sampleOf(interior)
@@ -254,14 +315,14 @@ object WorkbookAudit:
   private def readsVolatile(
     sheet: SheetName,
     kind: FormulaKind.DataTable,
-    deps: Map[QualifiedRef, Set[QualifiedRef]],
+    graph: RecalcGraph,
     volatile: Set[QualifiedRef]
   ): Boolean =
     volatile.nonEmpty && {
       val (sources, inputs) = DataTableSeeder.whatIfEnds(kind)
       val srcQ = sources.map(QualifiedRef(sheet, _))
       val inputQ = inputs.map(QualifiedRef(sheet, _))
-      val cone = DependencyGraph.qualifiedTransitivePrecedents(deps -- inputQ, srcQ) ++ srcQ
+      val cone = graph.precedents(srcQ, inputQ) ++ srcQ
       (cone -- inputQ).exists(volatile)
     }
 
@@ -325,13 +386,14 @@ object WorkbookAudit:
   private def classify(
     q: QualifiedRef,
     value: CellValue,
-    viaName: (Option[SheetName], String) => NameWalk.Reach
+    viaName: (Option[SheetName], String) => NameWalk.Reach,
+    parse: String => Either[ParseError, TExpr[?]]
   ): List[Finding] = value match
     case CellValue.Error(e) => List(Finding.ErrorValue(q, e))
     // A data-table record is a pinned value source: its cache is audited, its text never parsed
     case CellValue.Formula(_, cached, _: FormulaKind.DataTable) => cacheFindings(q, cached)
     case CellValue.Formula(text, cached, _) =>
-      val parsed = FormulaParser.parse(text) match
+      val parsed = parse(text) match
         case Left(err) => List(Finding.Unparseable(q, unparseableMessage(text, err)))
         case Right(expr) =>
           val volatile =

@@ -10,7 +10,7 @@ import munit.{FunSuite, ScalaCheckSuite}
 import org.scalacheck.{Gen, Prop}
 
 import com.tjclp.xl.addressing.ARef
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.cli.commands.ImportCommands
 import com.tjclp.xl.cli.contract.CliHarness
 import com.tjclp.xl.io.ExcelIO
@@ -98,9 +98,9 @@ class ImportParityLawSpec extends FunSuite with ScalaCheckSuite:
   private def cellsOf(path: Path): IO[Map[ARef, (CellValue, Option[NumFmt])]] =
     ExcelIO.instance[IO].read(path).map { wb =>
       wb.sheets.find(_.name.value == "L").fold(Map.empty) { sheet =>
-        sheet.cells.map { (ref, cell) =>
+        sheet.cells.iterator.map { case cell @ Cell(ref, _, _, _) =>
           ref -> (cell.value, cell.styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt))
-        }
+        }.toMap
       }
     }
 

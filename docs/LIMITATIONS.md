@@ -137,20 +137,17 @@ FormulaParser.parse("=IF(A1>0, \"Positive\", \"Negative\")") // Right(TExpr.Call
 sheet.evaluateFormula("=SUM(A1:A10)") // XLResult[CellValue]
 sheet.evaluateCell(ref"B1") // Evaluates formula in B1 if present
 
-// Safe evaluation with circular reference detection
-sheet.evaluateWithDependencyCheck() match
-  case Right(results) => // All formulas evaluated in correct order
-  case Left(circularRef) => // Cycle detected: A1 → B1 → C1 → A1
+// Whole-workbook evaluation in dependency order; circular references are isolated per cell
+val result = Workbook(sheet).recalculate()
+result.evaluated(sheet.name) // All formulas evaluated in correct order
+result.errors                // cycle members ("Circular reference") and their blocked dependents
 
 // Cross-sheet formula evaluation (TJC-351)
 main.evaluateFormula("=Sales!A1+10", workbook = Some(wb)) // XLResult[CellValue]
 main.evaluateFormula("=SUM(Sales!A1:A10)", workbook = Some(wb)) // Cross-sheet SUM
 
 // Cross-sheet cycle detection
-val graph = DependencyGraph.fromWorkbook(workbook)
-DependencyGraph.detectCrossSheetCycles(graph) match
-  case Right(_) => // No cycles, safe to evaluate
-  case Left(err) => // Cross-sheet circular reference detected
+QualifiedGraph.of(workbook).sccs.filter(_.cyclic) // each cyclic component, across sheets
 ```
 
 **Capabilities**:
@@ -171,8 +168,8 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 - ✅ **Dependency Graph** (WI-09d - 52 tests):
   - Tarjan's SCC algorithm: O(V+E) cycle detection
   - Kahn's algorithm: O(V+E) topological sort
-  - Precedent/dependent queries: O(1) lookups
-  - Safe evaluation API: sheet.evaluateWithDependencyCheck()
+  - Precedent/dependent queries: `QualifiedGraph.of(wb)` (`precedentsOf`, `dependentsOf`, layered `precedents`/`dependents`)
+  - Safe evaluation API: `Workbook(sheet).recalculate()` (cycles isolated per cell; the sheet-level `evaluateWithDependencyCheck` was removed in #891)
   - Performance: 10k formula cells in <10ms
 - ✅ **Operators**: +, -, *, /, <, <=, >, >=, =, <>, &, AND, OR, NOT
 - ✅ **Scientific notation**: 1.5E10, 2.3E-7
@@ -182,7 +179,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
   - Range refs with aggregates: `=SUM(Sales!A1:A10)`, `=MIN(...)`, `=MAX(...)`, `=AVERAGE(...)`
   - VLOOKUP with cross-sheet tables: `=VLOOKUP(A1,Lookup!A1:B10,2,FALSE)` (TJC-352)
   - Arithmetic: `=Sales!A1 + Revenue!B1`
-  - Workbook-level cycle detection: `DependencyGraph.fromWorkbook`, `detectCrossSheetCycles`
+  - Workbook-level cycle detection: `QualifiedGraph.of(wb).sccs` (`fromWorkbook`/`detectCrossSheetCycles` removed in #891)
 
 **Future Extensions** (Not Critical):
 - ⏳ Extended function library (300+ Excel functions) - WI-09e+
@@ -194,7 +191,7 @@ DependencyGraph.detectCrossSheetCycles(graph) match
 
 **INDIRECT — dynamic references (GH-274)**: `INDIRECT(ref_text, [a1])` resolves A1-style text — `"B5"`, `"A1:B10"`, `"$A$1:B10"`, `"A:A"`, `"Sheet2!A1"`, `"'My Sheet'!A1:C3"` — at evaluation time and returns that reference, like OFFSET: whole to aggregates (`=SUM(INDIRECT("A1:A"&B1))`), counted by ROWS and COLUMNS without reading it (`ROWS(INDIRECT("B:B"))` is 1048576), materialized for array arithmetic and spill (`evala`), and intersected in a plain cell's value position. Unresolvable, out-of-grid, defined-name, external-workbook, or structured-reference text evaluates to `#REF!` (a value — total, never throws). Materializing clamps full column/row text to the sheet's used range and caps the result at 1,048,576 cells.
 
-**Dependency semantics (differs from Excel):** the static graph sees INDIRECT's *arguments* (e.g. A1 in `=INDIRECT(A1)`), not its resolved *targets*. `recalculate()` evaluates INDIRECT-bearing formulas and their dependents after all other formulas (stable evaluate-last partition), and resolves not-yet-evaluated targets on demand with the same depth-100 recursion guard as cross-sheet references — so INDIRECT chains compute fresh values. Dynamic circular references (INDIRECT resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell recursion-guard errors (cells left uncached) while the rest of the workbook still evaluates. Static cycle detection is unchanged (zero new false positives). xl's `recalculate()` is always full-workbook, so Excel's "volatile" marking is moot there; the targeted `recalculateDependents` treats INDIRECT-bearing cells as always dirty.
+**Dependency semantics (differs from Excel):** the static graph sees INDIRECT's *arguments* (e.g. A1 in `=INDIRECT(A1)`), not its resolved *targets*. `recalculate()` evaluates INDIRECT-bearing formulas and their dependents after all other formulas (stable evaluate-last partition), and resolves not-yet-evaluated targets on demand with the same depth-100 recursion guard as cross-sheet references — so INDIRECT chains compute fresh values. Dynamic circular references (INDIRECT resolving into its own dependents) are not pre-detected by Tarjan; they surface as per-cell recursion-guard errors (cells left uncached) while the rest of the workbook still evaluates. Static cycle detection is unchanged (zero new false positives). xl's `recalculate()` is always full-workbook, so Excel's "volatile" marking is moot there; the targeted `recalculateAfterEdit` treats INDIRECT-bearing cells as always dirty.
 
 **Not supported (v1):** R1C1 mode (`a1=FALSE`) returns an evaluation error and leaves the cell uncached (Excel computes it on open) — deliberately not `#REF!`; consequently `INDIRECT(ADDRESS(..., FALSE), FALSE)` does not compose. Direct INDIRECT and OFFSET calls now resolve in range-typed slots (GH-723), as do defined names and LET names bound to those calls (GH-710: `COUNTIF(dyn,">2")` with `dyn = INDIRECT("Sheet1!A1:A10")`). INDIRECT returns a reference, like OFFSET and INDEX: its values in an array formula, the whole range as an aggregate's argument, and in a plain cell's value position (a scalar argument, an operand) the cell implicit intersection picks — `=INDIRECT("A1:A10")*2` in row 5 reads A5 (see "Plain cells" below); `IFERROR(INDIRECT("A1"), x)` and `LEFT(INDIRECT("B1"), 2)` work for valid references. Structural row/column edits do not rewrite text inside INDIRECT strings (Excel parity — that is INDIRECT's purpose).
 
@@ -305,8 +302,6 @@ Where xl differs from LibreOffice, following Excel's rule (not verified against 
 **Operator precedence (GH-578)**: negation binds tighter than `^`, as in Excel: `=-2^2` is 4, `=-A1^2/2` carries Excel's sign, `=0-2^2` (binary subtraction) is -4, `=-(2^2)` keeps its grouping. Before 0.23.0 xl read `-2^2` as `-(2^2)`; a file written by an older xl that reprinted `(-2)^2` re-parses to the same tree and reprints flat as `-2^2`.
 
 **Lenient sheet-reference parsing (GH-281, intentional)**: the formula parser accepts unquoted cell-ref-shaped sheet references (`=Q1!A1`) that Excel itself rejects (Excel requires `='Q1'!A1`). Printing always canonicalizes to the quoted form, so anything xl writes re-parses everywhere; the leniency only widens what xl can READ. Pinned by a named parser test.
-
-**`Cell.comment` deprecated (GH-295, since 0.12.1)**: the `Option[String]` field on `Cell` was never serialized — `Sheet.comments` is the store the OOXML writer reads. Setting it now write-throughs into `Sheet.comments` on `put` (plain text, no author) instead of vanishing; migrate to `Sheet.comment(ref, Comment.plainText(...))`. The field will be removed in a future major.
 
 **External-workbook references — closed-workbook pinning (GH-353)**: formulas referencing another workbook (`=[2]Book1!A1`, `=SUM([2]Consolidation.xlsx!D5:D9)`, `='[3]Sheet Name'!B2`) parse, print (round-trip exact), and participate in dependency graphs (contributing **no edges** — the target lives outside the workbook). xl does **not** load external workbooks or read the `xl/externalLinks/*` cache parts (they ride as preserved parts); instead, Excel's closed-workbook model is approximated by **pinning**: a formula cell whose expression touches an external workbook keeps its Excel-written cached value verbatim — never re-evaluated, never overwritten — and dependents compute from that cache like from any cached precedent. Known divergences and conventions:
 
@@ -1024,7 +1019,7 @@ SAX parsing is inherently synchronous - the `parser.parse()` call blocks until t
 **What's implemented**:
 - 108 built-in functions (SUM, SUMIF, COUNTIF, XLOOKUP, HLOOKUP, INDEX, MATCH, OFFSET, INDIRECT, XIRR, XNPV, dynamic arrays, etc.)
 - Full dependency graph with cycle detection
-- Safe evaluation with `evaluateWithDependencyCheck()`
+- Safe evaluation with `Workbook(sheet).recalculate()` (cycles reported per cell)
 - Type coercion and error handling
 
 **What's planned for future**:

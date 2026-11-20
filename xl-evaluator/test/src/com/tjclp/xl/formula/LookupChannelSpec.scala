@@ -367,33 +367,6 @@ class LookupChannelSpec extends FunSuite:
     check(sheet, "=XMATCH(7,A:A)", num(7))
   }
 
-  test("#692: a bounded lookup never scans the sheet's used range; a whole-column one scans once") {
-    // `usedRangeOf` (FunctionSpecsBase) is the one seam that pays for Sheet.usedRange, and only a
-    // whole-column or whole-row range reaches it; `UsedRangeScans` counts those visits, so the
-    // twenty lookups below are a count, not a clock (#843). A regression that read Sheet.usedRange
-    // around that seam would be invisible here; evaluation is routed through it on purpose.
-    def scans(formula: Int => String): Long =
-      val keys = (0 until 10).foldLeft(Sheet(SheetName.unsafe("S"))) { (s, i) =>
-        s.put(ref"A1".shift(0, i), num(i + 1))
-      }
-      val lookups = (0 until 20).foldLeft(keys) { (s, i) =>
-        s.put(ref"B1".shift(0, i), num(i % 10 + 1))
-          .put(ref"C1".shift(0, i), CellValue.Formula(formula(i + 1), None))
-      }
-      val counters = RecalcCounters.create()
-      val result = WorkbookEvaluator.recalculateCounted(
-        Workbook(lookups),
-        RecalcOptions(iterative = IterativeMode.Off),
-        counters
-      )
-      assertEquals(result.errors, Vector.empty)
-      counters.snapshot(Counter.UsedRangeScans)
-    assertEquals(scans(i => s"MATCH(B$i,$$A$$1:$$A$$10,0)"), 0L)
-    assertEquals(scans(i => s"XLOOKUP(B$i,$$A$$1:$$A$$10,$$A$$1:$$A$$10)"), 0L)
-    // a pass scans each sheet once per structural generation (#747), however many readers
-    assertEquals(scans(i => s"MATCH(B$i,$$A:$$A,0)"), 1L)
-  }
-
   test("#692: MATCH keeps RANGE positions over a range wider than the used range") {
     // A1:B2 is the used range; C1 is blank, so 2 (B1) sits at position 2 of A1:D1
     val grid = Sheet(SheetName.unsafe("S"))

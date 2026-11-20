@@ -10,6 +10,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.SheetName
+import com.tjclp.xl.formula.EvalAllSyntax.*
 
 /**
  * GH-344: end-to-end pins for Excel error VALUES as first-class results, exact codes.
@@ -126,7 +127,7 @@ class ErrorValueSemanticsSpec extends FunSuite:
       .put(ref"A1", CellValue.Formula("=1/0", None))
       .put(ref"B1", CellValue.Formula("=A1+1", None))
       .put(ref"C1", CellValue.Formula("=IFERROR(B1,7)", None))
-    val result = sheet.evaluateWithDependencyCheck()
+    val result = sheet.evalAll()
     assert(result.isRight, s"expected Right, got $result")
     val values = result.toOption.get
     assertEquals(values.get(ref"A1"), Some(div0))

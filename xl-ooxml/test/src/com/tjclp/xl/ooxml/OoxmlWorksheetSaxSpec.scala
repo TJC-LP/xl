@@ -6,13 +6,13 @@ import scala.xml.XML
 import java.io.StringWriter
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 
 class OoxmlWorksheetSaxSpec extends FunSuite:
 
   test("writeSax emits inline strings with xml:space preserve when needed") {
     val cell = Cell(ARef(Column.from0(0), Row.from0(0)), CellValue.Text("  spaced"))
-    val sheet = Sheet(SheetName.unsafe("Sheet1"), Map(cell.ref -> cell))
+    val sheet = Sheet(SheetName.unsafe("Sheet1"), CellStore.of(cell))
     val ws = OoxmlWorksheet.fromDomain(sheet)
 
     val saxXml = writeWithSax(ws)
@@ -28,7 +28,7 @@ class OoxmlWorksheetSaxSpec extends FunSuite:
   test("writeSax sheetData matches toXml for simple rows") {
     val cell1 = Cell(ARef(Column.from0(0), Row.from0(0)), CellValue.Number(BigDecimal(42)))
     val cell2 = Cell(ARef(Column.from0(1), Row.from0(1)), CellValue.Bool(true))
-    val sheet = Sheet(SheetName.unsafe("Sheet1"), Map(cell1.ref -> cell1, cell2.ref -> cell2))
+    val sheet = Sheet(SheetName.unsafe("Sheet1"), CellStore.of(cell1, cell2))
     val ws = OoxmlWorksheet.fromDomain(sheet)
 
     val saxXml = XML.loadString(writeWithSax(ws))

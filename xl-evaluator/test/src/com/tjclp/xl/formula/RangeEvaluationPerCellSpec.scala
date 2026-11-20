@@ -51,7 +51,9 @@ class RangeEvaluationPerCellSpec extends FunSuite:
     ref"G3" -> formula("F3+1")
   )
 
-  test("a clean sheet evaluates exactly what the fail-fast evaluateForRange evaluates") {
+  test(
+    "a clean sheet evaluates exactly what the whole-sheet recalculation computes in the window"
+  ) {
     val clean = withCells(
       ref"F3" -> cached("B2*2", num(99)),
       ref"F4" -> formula("SUM(B2:D4)"),
@@ -62,13 +64,33 @@ class RangeEvaluationPerCellSpec extends FunSuite:
     val window = range("A1:G4")
     val perCell = clean.evaluateForRangePerCell(window, Clock.system, None)
     assert(perCell.isClean, perCell.summary)
-    assertEquals(Right(perCell.values), clean.evaluateForRange(window))
+    val whole = Workbook(clean).recalculate().evaluated.getOrElse(clean.name, Map.empty)
+    assertEquals(perCell.values, whole.filter((ref, _) => window.contains(ref)))
     assertEquals(perCell.values.get(ref"F3"), Some(num(10)))
     assertEquals(perCell.values.get(ref"G4"), Some(num(71)))
     // K1 is a precedent outside the window: evaluated, but not reported
     assertEquals(perCell.values.get(ref"K1"), None)
     assertEquals(perCell.failures, Vector.empty)
     assertEquals(perCell.blocked, Vector.empty)
+  }
+
+  test("#891: on an iterating book, a cycle keeps its converged values and feeds its readers") {
+    // A1 = B1/2 + 3 and B1 = A1/2 + 1 hold converged caches (14/3, 10/3); C1 reads A1. Excel shows
+    // those values, so a window evaluates C1 off the cache and reports no circular reference
+    val sheet = withCells(
+      ref"A1" -> cached("B1/2+3", num(BigDecimal(14) / 3)),
+      ref"B1" -> cached("A1/2+1", num(BigDecimal(10) / 3)),
+      ref"C1" -> formula("A1*3")
+    )
+    val book = Workbook(sheet).copy(metadata =
+      Workbook().metadata.copy(calcPr =
+        Some(com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true, Some(100), None))
+      )
+    )
+    val result = sheet.evaluateForRangePerCell(range("A1:C1"), Clock.system, Some(book))
+    assertEquals(result.failures, Vector.empty)
+    assertEquals(result.blocked, Vector.empty)
+    assertEquals(result.values.get(ref"C1"), Some(num(BigDecimal(14) / 3 * 3)))
   }
 
   test("one failing cell leaves the others live, and is reported with its location") {
@@ -128,8 +150,12 @@ class RangeEvaluationPerCellSpec extends FunSuite:
     val result = sheet.evaluateForRangePerCell(range("A1:G4"), Clock.system, None)
     assert(result.isClean, result.summary)
     assertEquals(result.values, Map(ref"F2" -> num(6)))
-    // the fail-fast method keeps its whole-sheet cycle check
-    assert(sheet.evaluateForRange(range("A1:G4")).isLeft)
+    // the whole-sheet recalculation still reports the cycle (#891: the fail-fast range method,
+    // which failed the view on it, is gone)
+    assertEquals(
+      Workbook(sheet).recalculate().errors.map(_.ref).toSet,
+      Set(ref"J2", ref"J3")
+    )
   }
 
   test("failures and blocked cells are listed in row-major order") {

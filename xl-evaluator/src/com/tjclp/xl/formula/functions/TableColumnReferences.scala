@@ -34,8 +34,7 @@ private[formula] object TableColumnReferences extends FunctionSpecsBase:
     def toValues(args: Column): List[ArgValue] = Nil
     def map(args: Column)(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): Column = args
 
   private val spec: FunctionSpec[ArrayResult] { type Args = Column } =
