@@ -440,6 +440,26 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     assertEquals(counters.snapshot(Counter.CriteriaNotIndexable), 2L)
   }
 
+  test("a mixed COUNTIFS tests the unindexed window only on equality candidates") {
+    val sheet = (1 to 600).foldLeft(Sheet(data)) { (s, row) =>
+      s.put(ARef.from0(0, row - 1), CellValue.Text(if row % 60 == 0 then "pick" else "other"))
+        .put(ARef.from0(1, row - 1), num(row))
+    }
+    val query = CellValue.Formula("""COUNTIFS(Data!A:A,"pick",Data!B:B,">300")""")
+    val wb = Workbook(Vector(sheet, Sheet(out).put(at("A1"), query)))
+    val counters = RecalcCounters.create()
+    // Two text keys fit. An order index with 600 distinct numeric keys does not.
+    val memo = new Evaluator.AggregateMemo(
+      counters = counters,
+      limits = PassCache.DefaultLimits.copy(maxIndexBytes = 8192L)
+    )
+    val result = recalculateWithMemo(wb, sequential(), memo)
+    assertEquals(result, recalculateWithMemo(wb, sequential(), cachesOff()))
+    assertEquals(result.evaluated.get(out).flatMap(_.get(at("A1"))), Some(num(5)))
+    assertEquals(counters.snapshot(Counter.CriteriaIndexed), 1L)
+    assert(counters.snapshot(Counter.MatcherCalls) <= 20)
+  }
+
   test("a tiny index budget scans instead, with the same results") {
     val counters = RecalcCounters.create()
     val memo = new Evaluator.AggregateMemo(

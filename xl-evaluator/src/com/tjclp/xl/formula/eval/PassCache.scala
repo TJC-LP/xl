@@ -471,7 +471,7 @@ private[formula] final class PassCache(
 
   /**
    * The equality index of `slice`, built once per slice (single flight). `None` when indexing is
-   * off or the index would take the pass past `maxIndexBytes`; the call then tests every row.
+   * off or the index would take the pass past `maxIndexBytes`.
    */
   def eqIndex(slice: ColumnSlice): Option[EqIndex] =
     if !indexing then scala.None
@@ -480,7 +480,7 @@ private[formula] final class PassCache(
   /**
    * #920: the order index of `slice`, built once per slice (single flight) on its first numeric
    * window lookup. `None` when indexing is off or the index would take the pass past
-   * `maxIndexBytes`; the call then tests every row.
+   * `maxIndexBytes`.
    */
   def orderIndex(slice: ColumnSlice): Option[OrderIndex] =
     if !indexing then scala.None
@@ -551,8 +551,8 @@ private[formula] object PassCache:
    * is sliced only when it spans at least `max(minSliceRows, usedRows / sliceRowsDivisor)` rows
    * (smaller windows scan, or read a slice that covers them); a box whose column is not ready is
    * sliced on its `boxDemand`-th request. `maxIndexBytes` caps what equality and order indexes and
-   * memoised candidate lists hold together, the lists at most half of it. Past a cap a call scans;
-   * results are unaffected.
+   * memoised candidate lists hold together, the lists at most half of it. An unavailable index
+   * leaves its criterion to the matcher; other indexes can still narrow the candidate rows.
    */
   final case class Limits(
     maxCachedCells: Long = 64L * 1024 * 1024,
