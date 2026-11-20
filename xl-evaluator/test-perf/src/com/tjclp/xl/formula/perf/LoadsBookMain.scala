@@ -11,7 +11,8 @@ import java.nio.file.{Files, Path}
  * }}}
  *
  * Arguments are `key=value`:
- *   - `shape`: `Tiny` (default), `H10`, `R20`, `Real`, or `RunTotal` (with `rows`)
+ *   - `shape`: `Tiny` (default), `H10`, `R20`, `Real`, `RunTotal` (with `rows`), or `DateWindow`
+ *     (#920: `rows` data rows, default 50000, and `formulas` date-window SUMIFS, default 2000)
  *   - `rows`, `aggs`, `rh`: override the preset's sizes
  *   - `crit`: `helper` or `raw` criteria; `raw` also drops the helper columns (`Real crit=raw` is
  *     the real shape with raw criteria)
@@ -56,10 +57,20 @@ object LoadsBookMain:
       if shapeName.equalsIgnoreCase("RunTotal") then
         val rows = int("rows").getOrElse(2000)
         (s"RunTotal rows=$rows", LoadsBook.runTotal(rows), None)
+      else if shapeName.equalsIgnoreCase("DateWindow") then
+        val rows = int("rows").getOrElse(50000)
+        val formulas = int("formulas").getOrElse(2000)
+        (
+          s"DateWindow rows=$rows formulas=$formulas",
+          LoadsBook.dateWindow(rows, formulas),
+          None
+        )
       else
         val preset = LoadsBook
           .preset(shapeName)
-          .getOrElse(refuse(s"unknown shape=$shapeName; one of Tiny, H10, R20, Real, RunTotal"))
+          .getOrElse(
+            refuse(s"unknown shape=$shapeName; one of Tiny, H10, R20, Real, RunTotal, DateWindow")
+          )
         val crit = kv.get("crit") match
           case None => preset.crit
           case Some(c) =>

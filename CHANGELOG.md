@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Date-window benchmark book** (#920): `LoadsBookMain shape=DateWindow [rows=50000]
+  [formulas=2000]` (`xl-evaluator.perf`) builds a made-up book of seeded dates, amounts and regions
+  read by trailing 30-day `SUMIFS` over whole columns, half of them also keyed by region: the
+  relational criteria that still test every row. `RecalcDateWindowBenchmark` (JMH) runs it with
+  the criteria index on and off.
+
 - **`xl audit --skip-data-tables`** (#891): leaves out the stale-data-table note, which
   re-evaluates each data table's corner at sampled inputs and on a large circular model costs one
   fixpoint over the whole cyclic core per sampled cell. The JSON report now always carries
