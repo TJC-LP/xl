@@ -167,7 +167,7 @@ final class CellStore private (
    * Whether some stored cell's value tag is in `tagMask` (a union of [[CellStore.tagBit]]s, e.g.
    * [[CellStore.FormulaTags]]). Reads the root summary: O(1).
    */
-  def hasTag(tagMask: Int): Boolean = (root.tagMask & tagMask) != 0
+  private[xl] def hasTag(tagMask: Int): Boolean = (root.tagMask & tagMask) != 0
 
   private def box(minCol: Int, maxCol: Int, valuedOnly: Boolean): CellRange =
     val shift = 5 * (height - 1)
@@ -259,7 +259,7 @@ final class CellStore private (
    * and hyperlinks are kept. Rows (and whole subtrees) where `f` changes nothing, by reference, are
    * shared; `this` when nothing changes.
    */
-  def transformValues(tagMask: Int)(f: CellValue => CellValue): CellStore =
+  private[xl] def transformValues(tagMask: Int)(f: CellValue => CellValue): CellStore =
     if (root.tagMask & tagMask) == 0 then this
     else
       val skip = (e: Entry) => (e.tagMask & tagMask) == 0
@@ -387,32 +387,32 @@ object CellStore:
 
   // ----- value tags (for hasTag / transformValues) -----
 
-  final val TagEmpty = Meta.Empty
-  final val TagText = Meta.Text
-  final val TagRichText = Meta.RichText
-  final val TagNumber = Meta.Number
-  final val TagBool = Meta.Bool
-  final val TagDateTime = Meta.DateTime
-  final val TagFormulaUncached = Meta.FormulaUncached
-  final val TagFormulaCached = Meta.FormulaCached
-  final val TagFormulaDataTable = Meta.FormulaDataTable
-  final val TagError = Meta.Error
+  private[xl] final val TagEmpty = Meta.Empty
+  private[xl] final val TagText = Meta.Text
+  private[xl] final val TagRichText = Meta.RichText
+  private[xl] final val TagNumber = Meta.Number
+  private[xl] final val TagBool = Meta.Bool
+  private[xl] final val TagDateTime = Meta.DateTime
+  private[xl] final val TagFormulaUncached = Meta.FormulaUncached
+  private[xl] final val TagFormulaCached = Meta.FormulaCached
+  private[xl] final val TagFormulaDataTable = Meta.FormulaDataTable
+  private[xl] final val TagError = Meta.Error
 
   /** The mask bit of one tag. */
-  def tagBit(tag: Int): Int = 1 << tag
+  private[xl] def tagBit(tag: Int): Int = 1 << tag
 
   /** Every formula tag: uncached, cached and data-table. */
-  final val FormulaTags: Int =
+  private[xl] final val FormulaTags: Int =
     (1 << Meta.FormulaUncached) | (1 << Meta.FormulaCached) | (1 << Meta.FormulaDataTable)
 
   /** Every tag. */
-  final val AllTags: Int = (1 << 10) - 1
+  private[xl] final val AllTags: Int = (1 << 10) - 1
 
   /**
    * The tag of a value: Empty 0, Text 1, RichText 2, Number 3, Bool 4, DateTime 5, Formula 6..8,
    * Error 9.
    */
-  def tagOf(value: CellValue): Int = Meta.tagOf(value)
+  private[xl] def tagOf(value: CellValue): Int = Meta.tagOf(value)
 
   // ----- construction -----
 
