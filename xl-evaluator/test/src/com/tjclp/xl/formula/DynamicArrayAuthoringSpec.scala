@@ -338,6 +338,34 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     )
   }
 
+  test("GH-897: a cleared anchor in a styled column leaves its spill cells on the default format") {
+    // Column A has a default style; A1:A3 (SORT's anchor and spill cells) have no style of their
+    // own. A cell with no record shows the column's style, so each emptied cell keeps a bare
+    // record, the spill cells beyond the cleared range included.
+    val banded = sorted.withColumnStyle(ref"A1".col, CellStyle.default.withNumFmt(NumFmt.Percent))
+    Vector(ref"A1", ref"A2", ref"A3").foreach(r =>
+      assertEquals(banded.cells.get(r).flatMap(_.styleId), None, s"fixture: ${r.toA1} unstyled")
+    )
+    val c = clearOf(banded, "A1")
+    assertEquals(c.released, Set(ref"A2", ref"A3"))
+    Vector(ref"A1", ref"A2", ref"A3").foreach { r =>
+      assertEquals(c.sheet.cells.get(r).map(_.value), Some(CellValue.Empty), r.toA1)
+      assertEquals(c.sheet.cells.get(r).flatMap(_.styleId), None, r.toA1)
+    }
+    // outside a styled row or column the spill cells still go
+    assertEquals(clearOf(sorted, "A1").sheet.cells.get(ref"A2"), None)
+    // clear --all removes the records
+    val all = DynamicArrayAuthoring.clearContents(
+      banded,
+      DynamicArrayAuthoring.spillsOf(banded),
+      Vector(range("A1")),
+      keepFormatting = false
+    )
+    Vector(ref"A1", ref"A2", ref"A3").foreach(r =>
+      assertEquals(all.sheet.cells.get(r), None, s"--all: ${r.toA1}")
+    )
+  }
+
   test("a formula reading its own anchor is circular: an uncached 1x1 record, not a spill") {
     // =A1:A3 at A1 reads A1 itself: Excel reports a circular reference rather than spilling
     val self = authored(base.put(ref"A2", num(7)), ref"A1", "=A1:A3")

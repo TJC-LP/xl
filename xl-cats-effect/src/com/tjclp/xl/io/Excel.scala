@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.api.Workbook
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.ooxml.OutputFileMode
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.ooxml.style.WorkbookStyles
 import fs2.Stream
@@ -195,16 +196,6 @@ trait Excel[F[_]]:
   ): fs2.Pipe[F, RowData, Unit]
 
   /**
-   * Write rows to XLSX file, materializing all rows first.
-   *
-   * @deprecated
-   *   Use writeStream instead for true O(1) streaming. This method materializes all rows in memory
-   *   before writing, defeating the purpose of streaming.
-   */
-  @deprecated("Use writeStream for true O(1) streaming", "0.8.0")
-  def writeStreamMaterialized(path: Path, sheetName: String): fs2.Pipe[F, RowData, Unit]
-
-  /**
    * Write multiple sheets sequentially with constant memory.
    *
    * Streams each sheet in order - never materializes full datasets. Memory usage is constant
@@ -340,13 +331,6 @@ trait ExcelR[F[_]]:
     sheetIndex: Int = 1,
     config: com.tjclp.xl.ooxml.WriterConfig = com.tjclp.xl.ooxml.WriterConfig.default,
     dimension: Option[CellRange] = None
-  ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
-
-  /** Write stream (materializing) with explicit error channel */
-  @deprecated("Use writeStreamR for true O(1) streaming", "0.8.0")
-  def writeStreamMaterializedR(
-    path: Path,
-    sheetName: String
   ): fs2.Pipe[F, RowData, Either[XLError, Unit]]
 
   /** Write multiple sheets with explicit error channel */
@@ -515,14 +499,15 @@ object Excel:
       writeResult <- excel.write(modified, tempFile).attempt
       _ <- writeResult match
         case scala.util.Right(_) =>
-          Sync[IO].delay(
+          Sync[IO].delay {
+            OutputFileMode.prepare(tempFile, targetPath) // GH-868: keep the file's mode
             Files.move(
               tempFile,
               targetPath,
               StandardCopyOption.REPLACE_EXISTING,
               StandardCopyOption.ATOMIC_MOVE
             )
-          )
+          }
         case scala.util.Left(err) =>
           Sync[IO].delay(Files.deleteIfExists(tempFile)) >>
             IO.raiseError(err)

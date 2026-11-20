@@ -3,7 +3,7 @@ package com.tjclp.xl.ops
 import java.time.LocalDate
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cells.{CellValue, Comment, Hyperlink}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, PageSetup, Sheet}
@@ -363,7 +363,7 @@ class EditInterpreterSpec extends FunSuite:
     assert(!EditSchema.specOf(Edit.Sort(area("A1:C2"), key, hasHeader = false)).idempotent)
   }
 
-  test("clear: contents unmerge overlaps; styles and comments clear independently") {
+  test("clear: all unmerges overlaps; styles and comments clear independently") {
     val all = sheetAfter(Workbook(baseData), Edit.Clear(area("A1:F6"), ClearWhat.all))
     assert(all.cells.isEmpty)
     assert(all.comments.isEmpty)
@@ -378,6 +378,31 @@ class EditInterpreterSpec extends FunSuite:
       failure(Workbook(baseData), Edit.Clear(area("A1"), ClearWhat(false, false, false))).root,
       XLError.InvalidArgument("clear", "nothing to clear (contents, styles or comments)")
     )
+  }
+
+  test("GH-890: a contents clear keeps each cell's style and every merge") {
+    val currency = baseData(a1("A1")).styleId
+    assert(currency.isDefined, "fixture: A1 carries a Currency style")
+    val out = sheetAfter(Workbook(baseData), Edit.Clear(area("A1:F6"), ClearWhat.contents))
+    assertEquals(out(a1("A1")).value, CellValue.Empty)
+    assertEquals(out(a1("A1")).styleId, currency)
+    // Unstyled cells go; the comment and the E5:F6 merge stay
+    assertEquals(out.cells.refs.toSet, Set(a1("A1")))
+    assertEquals(out.mergedRanges, baseData.mergedRanges)
+    assertEquals(out.comments, baseData.comments)
+  }
+
+  test("GH-909: a styles clear unmerges every merge it touches, like Excel's Clear Formats") {
+    val merged = baseData.mergedRanges
+    assertEquals(merged.size, 1, "fixture: baseData merges E5:F6")
+    // Partly overlapping (F6:G7), wholly inside (A1:H8) and wholly covering (E5 alone)
+    for range <- Seq("F6:G7", "A1:H8", "E5") do
+      val out = sheetAfter(Workbook(baseData), Edit.Clear(area(range), ClearWhat.styles))
+      assert(out.mergedRanges.isEmpty, s"$range still merged: ${out.mergedRanges}")
+      assertEquals(out.comments, baseData.comments)
+    // A contents clear still keeps it
+    val kept = sheetAfter(Workbook(baseData), Edit.Clear(area("E5"), ClearWhat.contents))
+    assertEquals(kept.mergedRanges, merged)
   }
 
   // ========== style & layout ==========
@@ -475,7 +500,7 @@ class EditInterpreterSpec extends FunSuite:
     )
     assertEquals(s.getComment(a1("B1")).map(_.text.toPlainText), Some("note"))
     assertEquals(s.getComment(a1("A2")), None)
-    assertEquals(s(a1("A1")).hyperlink, Some("https://example.com"))
+    assertEquals(s(a1("A1")).hyperlink, Some(Hyperlink("https://example.com")))
     val cleared = sheetAfter(Workbook(s), Edit.Hyperlink(loc("A1"), None))
     assertEquals(cleared(a1("A1")).hyperlink, None)
     assertEquals(

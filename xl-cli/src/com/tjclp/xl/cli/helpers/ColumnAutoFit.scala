@@ -30,7 +30,7 @@ object ColumnAutoFit:
    */
   def withEvaluatedCaches(sheet: Sheet, wb: Workbook, columns: Iterable[Column]): Sheet =
     val wanted = columns.toSet
-    val uncached: Set[ARef] = sheet.cells.valuesIterator.collect {
+    val uncached: Set[ARef] = sheet.cells.iterator.collect {
       case cell if wanted.contains(cell.ref.col) && isUncachedFormula(cell.value) => cell.ref
     }.toSet
     if uncached.isEmpty then sheet

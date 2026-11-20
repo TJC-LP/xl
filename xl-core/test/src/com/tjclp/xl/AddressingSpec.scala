@@ -68,6 +68,31 @@ class AddressingSpec extends ScalaCheckSuite:
     }
   }
 
+  property("ARef packing is a bijection on all Int pairs, off-grid cells included (#891)") {
+    forAll { (col: Int, row: Int) =>
+      val ref = ARef(Column.from0(col), Row.from0(row))
+      assertEquals((ref.col.index0, ref.row.index0), (col, row))
+      true
+    }
+  }
+
+  test("ARef: every cell of a 2000 x 512 grid hashes apart (#891)") {
+    // With row << 32 | col a Long hashes as row ^ col: one hash per anti-diagonal, 2,048 distinct
+    // hashes for these 1,024,000 cells, buckets of 512 keys in every Map[ARef, _]
+    val hashes = new java.util.HashSet[Int]()
+    for
+      row <- 0 until 2000
+      col <- 0 until 512
+    do hashes.add(ARef.from0(col, row).##)
+    assertEquals(hashes.size, 2000 * 512)
+    // and across Excel's last rows and columns
+    val far = for
+      row <- (Row.MaxIndex0 - 300) to Row.MaxIndex0
+      col <- (Column.MaxIndex0 - 300) to Column.MaxIndex0
+    yield ARef.from0(col, row).##
+    assert(far.distinct.size > far.size * 99 / 100, s"${far.distinct.size} of ${far.size}")
+  }
+
   property("ARef.toA1 and parse are inverses") {
     forAll { (ref: ARef) =>
       val a1 = ref.toA1

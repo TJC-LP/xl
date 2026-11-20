@@ -390,14 +390,6 @@ class StyleSpec extends ScalaCheckSuite:
     }
   }
 
-  test("Font.withUnderline Boolean bridge maps true -> Single, false -> None (deprecated)") {
-    // 0.18.0 migration bridge (GH-423): external 0.x callers keep compiling
-    @annotation.nowarn("cat=deprecation")
-    def viaBridge(u: Boolean): Font = Font.default.withUnderline(u)
-    assertEquals(viaBridge(true).underline, Underline.Single)
-    assertEquals(viaBridge(false).underline, Underline.None)
-  }
-
   test("Underline token/fromToken are inverse over all ST_UnderlineValues") {
     Underline.values.foreach { u =>
       assertEquals(Underline.fromToken(Underline.token(u)), Some(u))

@@ -585,24 +585,43 @@ private[xl] object EditInterpreter:
       )
     case Edit.Clear(at, what) if !what.comments && !what.isEmpty =>
       val range = at.range
-      val contents =
-        if what.contents then
-          Patch.RemoveRange(range) +: existing.mergedRanges
-            .filter(_.intersects(range))
-            .toVector
-            .sortBy(_.toA1)
-            .map(Patch.Unmerge.apply)
+      // GH-909: a styles clear unmerges every merge the range touches (sorted for a stable patch)
+      val touched =
+        if what.styles then
+          existing.mergedRanges.filter(_.intersects(range)).toVector.sortBy(_.toA1)
         else Vector.empty
-      // Styles clear only what contents left behind: after a removal nothing in range remains.
+      val contents =
+        if what.contents && what.styles then Vector(Patch.RemoveRange(range))
+        else if what.contents then
+          // GH-890 Clear Contents: remove each cell, then restore a kept one as an empty record
+          // (its style alone, no hyperlink); merges stay.
+          existing.cells
+            .inRange(range)
+            .toVector
+            .sortBy(_.ref.toA1)
+            .flatMap { c =>
+              val restore = c.styleId match
+                case Some(id) => Vector(Patch.SetStyle(c.ref, id))
+                case None if SheetEdits.keepsRecordWhenCleared(existing, c) =>
+                  Vector(Patch.Put(c.ref, CellValue.Empty))
+                case None => Vector.empty
+              Patch.Remove(c.ref) +: restore
+            }
+        else Vector.empty
+      // Styles reset what contents left in the range (after a removal, nothing) and, GH-909, the
+      // cells of each merge that crosses the range's edge.
       val styles =
-        if what.styles && !what.contents then
-          existing.cells.keys
-            .filter(range.contains)
+        if what.styles then
+          val crossing = SheetEdits.crossingMerges(range, touched)
+          existing.cells.refs
+            .filter(ref =>
+              if range.contains(ref) then !what.contents else crossing.exists(_.contains(ref))
+            )
             .toVector
             .sortBy(_.toA1)
             .map(Patch.ClearStyle.apply)
         else Vector.empty
-      Some(Patch.Batch(contents ++ styles))
+      Some(Patch.Batch(contents ++ styles ++ touched.map(Patch.Unmerge.apply)))
     case Edit.Style(at, overlay, mode)
         if overlay.validate.isRight && !(overlay.isEmpty && mode == StyleMode.Merge) =>
       Some(

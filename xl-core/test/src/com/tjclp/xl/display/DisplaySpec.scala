@@ -591,7 +591,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"C1", CellValue.Formula("='Data'!A1*2", Some(CellValue.Number(BigDecimal("0.6")))))
       .style(ref"C1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -608,7 +607,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"B2", CellValue.Formula("SUM(A1:A3)"))
       .style(ref"B2", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy with
       def format(formula: String, sheet: Sheet): String = s"positionless:$formula"
@@ -648,7 +646,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("1000"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -663,7 +660,6 @@ class DisplaySpec extends ScalaCheckSuite:
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("0.6"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given Sheet = mySheet
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
@@ -683,7 +679,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("1000000"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -698,7 +693,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"B1", BigDecimal("0.75"))
       .style(ref"B1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -727,7 +721,6 @@ class DisplaySpec extends ScalaCheckSuite:
       .put(ref"A1", BigDecimal("1000"))
       .put(ref"A2", "Product")
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Currency))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -745,7 +738,6 @@ class DisplaySpec extends ScalaCheckSuite:
     given Sheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("0"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Custom("0.0%_);(0.0%)")))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -763,7 +755,6 @@ class DisplaySpec extends ScalaCheckSuite:
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("0.85"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Percent))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -779,7 +770,6 @@ class DisplaySpec extends ScalaCheckSuite:
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("0"))
       .style(ref"A1", CellStyle.default.withNumFmt(NumFmt.Custom(houseCode)))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 
@@ -807,7 +797,6 @@ class DisplaySpec extends ScalaCheckSuite:
 
     val mySheet = Sheet(name = SheetName.unsafe("Test"))
       .put(ref"A1", BigDecimal("100"))
-      .unsafe
 
     given FormulaDisplayStrategy = FormulaDisplayStrategy.default
 

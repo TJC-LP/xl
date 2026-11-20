@@ -683,7 +683,10 @@ as a formula typed into a new Excel 365 cell (top-left of its array); pass
 `sheet.evaluateForRangePerCell(range)` (also `(range, clock, workbook)`, since 0.24.0) is the
 total, per-cell evaluation behind `xl view --eval`: a `RangeEvalResult(values, failures, blocked)`
 where one failing formula costs only itself and its dependents, with `isClean` and a one-line
-`summary`. `evaluateForRange` and `evaluateWithDependencyCheck` keep their fail-fast semantics.
+`summary`. For every formula of a sheet use `Workbook(sheet).recalculate()` (cycles are reported per
+cell in `errors`, never a failed call); the fail-fast `evaluateForRange` and
+`evaluateWithDependencyCheck` were removed in
+[#891](https://github.com/TJC-LP/xl/issues/891).
 
 ### Inspect a workbook: `wb.describe`, `wb.audit`, `QualifiedGraph` (since 0.20.0)
 

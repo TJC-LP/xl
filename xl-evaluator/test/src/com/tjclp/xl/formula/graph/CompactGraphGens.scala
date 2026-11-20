@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.graph
 import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.{ARef, Column, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 import org.scalacheck.Gen
 
@@ -125,13 +125,10 @@ object CompactGraphGens:
     def genSheetCells(name: String): Gen[Sheet] =
       val positions = for r <- 1 to rows; c <- 0 until Cols yield (r, c)
       Gen
-        .sequence[Vector[Option[(ARef, Cell)]], Option[(ARef, Cell)]](positions.map { (r, c) =>
-          genCell(r, c).map(_.map { v =>
-            val ref = ARef.from0(c, r - 1)
-            ref -> Cell(ref, v)
-          })
+        .sequence[Vector[Option[Cell]], Option[Cell]](positions.map { (r, c) =>
+          genCell(r, c).map(_.map(v => Cell(ARef.from0(c, r - 1), v)))
         })
-        .map(cells => Sheet(SheetName.unsafe(name), cells = cells.flatten.toMap))
+        .map(cells => Sheet(SheetName.unsafe(name), cells = CellStore.from(cells.flatten)))
 
   /** A random three-sheet book of `rows` rows with the names its formulas read. */
   def genWorkbookOf(rows: Int): Gen[Workbook] =
@@ -155,8 +152,7 @@ object CompactGraphGens:
     val names = formulas.map(_._1).distinct.toVector
     Workbook(names.map { name =>
       val cells = bySheet.getOrElse(name, Nil).map { (_, a1, text) =>
-        val ref = ARef.parse(a1).getOrElse(ARef.from0(0, 0))
-        ref -> Cell(ref, CellValue.Formula(text))
+        Cell(ARef.parse(a1).getOrElse(ARef.from0(0, 0)), CellValue.Formula(text))
       }
-      Sheet(SheetName.unsafe(name), cells = cells.toMap)
+      Sheet(SheetName.unsafe(name), cells = CellStore.from(cells))
     })

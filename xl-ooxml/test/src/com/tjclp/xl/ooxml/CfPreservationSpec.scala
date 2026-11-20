@@ -368,8 +368,8 @@ class CfPreservationSpec extends FunSuite:
     val (_, wb) = readFixture("condformat.xlsx")
     val cfModel = wb.sheets(0).conditionalFormats
     val withNew = wb
-      .insertSheet(0, Sheet(SheetName.unsafe("Fresh")).put(ref"A1", CellValue.Text("hi")))
-      .fold(err => fail(s"insertSheet failed: $err"), identity)
+      .insertAt(0, Sheet(SheetName.unsafe("Fresh")).put(ref"A1", CellValue.Text("hi")))
+      .fold(err => fail(s"insertAt failed: $err"), identity)
     val out = writeTo(withNew, "insert-sheet")
     val back = reread(out)
     assertEquals(back.sheets.size, 2)

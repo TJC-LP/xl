@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.XLResult
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.eval.{IterativeCalc, IterativeMode, RecalcOptions}
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
@@ -344,12 +345,12 @@ class SpillReferenceSpec extends FunSuite:
       val book = excelSpillBook(reader)
       val sheet = book.sheets.head
       assertEquals(
-        sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+        sheet.evalAll(Clock.system, Some(book)).map(_.get(ref"C1")),
         Right(Some(n(15))),
         reader
       )
       assertEquals(
-        sheet.evaluateForRange(CellRange(ref"C1", ref"C1"), Clock.system, Some(book)),
+        sheet.evalRange(CellRange(ref"C1", ref"C1"), Clock.system, Some(book)),
         Right(Map(ref"C1" -> n(15))),
         reader
       )
@@ -396,7 +397,7 @@ class SpillReferenceSpec extends FunSuite:
     assertEquals(c1(book.recalculate(RecalcOptions(parallelism = 4)).workbook), sum, "∥")
     val sheet = book.sheets.head
     assertEquals(
-      sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+      sheet.evalAll(Clock.system, Some(book)).map(_.get(ref"C1")),
       Right(Some(n(6)))
     )
   }
@@ -537,7 +538,7 @@ class SpillReferenceSpec extends FunSuite:
         )
       }
       assertEquals(
-        sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+        sheet.evalAll(Clock.system, Some(book)).map(_.get(ref"C1")),
         Right(Some(expected)),
         s"$label (sheet fold)"
       )
@@ -636,7 +637,7 @@ class SpillReferenceSpec extends FunSuite:
       book.recalculateAfterEdit(SheetName.unsafe("Sheet1"), Set(ref"B1"), RecalcOptions())
     assertEquals(c1(targeted.workbook), sum, "targeted")
     assertEquals(
-      sheet.evaluateWithDependencyCheck(Clock.system, Some(book)).map(_.get(ref"C1")),
+      sheet.evalAll(Clock.system, Some(book)).map(_.get(ref"C1")),
       Right(Some(n(6)))
     )
   }

@@ -330,7 +330,7 @@ class PoiComparisonBenchmark {
     wb.sheets
       .find(_.name.value == "Data")
       .map { dataSheet =>
-        dataSheet.cells.valuesIterator.collect {
+        dataSheet.cells.iterator.collect {
           case cell if cell.ref.col == colA =>
             cell.value match
               case CellValue.Number(n) => n.toDouble

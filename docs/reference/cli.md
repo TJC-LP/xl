@@ -117,8 +117,9 @@ xl batch --schema                                  # JSON Schema of the batch do
 > (`xl -Xmx64g -f big.xlsx --max-size 0 audit`; the JAR takes the JVM's own `java -Xmx64g -jar
 > xl.jar …`). `--max-size` below 0 is a usage error (exit 2), not "unlimited". An in-memory load
 > needs many times its uncompressed XML.
-> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric or
-> short-text cells need 16–20× their worksheet XML (346 MB of sheet XML loads in 6 GB, not in 5);
+> Measured with the reader on 1,000,000-row books (smallest heap that loads): dense numeric cells
+> need 16–18× their worksheet XML (324 MB of sheet XML loads in 5 GB, not in 4.9), and short-text
+> cells needed 16× when last measured, before the cell store;
 > the wide text rows of the 0.21.0 dogfood book needed 33–41× (1.09 GB of sheet XML, 36–45 GB of
 > heap); long text costs only 2–3× the bytes of `sharedStrings.xml` (380 MB of mostly strings loads
 > in 1.75 GB). Large files belong to `--stream`. When `--max-size` is lifted, the load is sized from
@@ -777,7 +778,7 @@ pictures, conditionalFormats, dataValidations, hiddenRows, hiddenCols` and the t
 
 ---
 
-### `xl audit [--fail-on-findings]`
+### `xl audit [--fail-on-findings] [--skip-data-tables]`
 
 Every reason a number can be wrong, bucketed in one pass over the loaded workbook.
 
@@ -796,7 +797,10 @@ readers), `External references`
 interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
 evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in
 the note; what an edit leaves behind on a book Excel never recomputes tables in; `dataTableStale`
-in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs),
+in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs; the
+re-evaluation can cost many recalculations on a large circular model, and `--skip-data-tables`
+leaves the note out — `dataTableCheck` is `"skipped"` instead of `"checked"` and text mode prints
+`Stale data tables: not checked`; being a note, it never changes `clean` or `findings`),
 `Calculation` (the file's calcPr, when it has one).
 
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
@@ -810,6 +814,7 @@ with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode print
 xl -f model.xlsx audit
 xl -f model.xlsx -s Summary audit
 xl -f model.xlsx --json audit --fail-on-findings | jq '.data.errorCells, .data.cycles'
+xl -f model.xlsx audit --fail-on-findings --skip-data-tables   # fast gate on a data-table model
 ```
 
 **Output**:
@@ -1377,12 +1382,16 @@ Clear cell contents, styles, or comments from a range.
 | `--comments` | flag | No | false | Clear comments only |
 
 **Behavior**:
-- **Default** (no flags): Clears cell contents only
-- **`--all`**: Clears everything (contents, styles, comments)
-- **`--styles`**: Clears formatting but keeps contents and comments
+- **Default** (no flags): Clears cell contents only, like Excel's Clear Contents: values,
+  formulas and hyperlinks go, while number formats, fonts, fills, borders and merges stay (GH-886)
+- **`--all`**: Clears everything (contents, styles, comments), removes the cells, and unmerges
+  any merged region that overlaps the range
+- **`--styles`**: Clears formatting but keeps contents and comments; like Excel's Clear Formats,
+  it also unmerges any merged region that overlaps the range and resets that whole region's
+  formatting (GH-894)
 - **`--comments`**: Clears comments but keeps contents and styles
 - Flags can be combined: `--styles --comments` clears both
-- Merged regions overlapping the cleared range are automatically unmerged
+- Only `--all` and `--styles` unmerge; use `unmerge` to unmerge without clearing
 - Dynamic arrays (GH-714): clearing an anchor clears its whole spill; the cells of a spill whose
   anchor lies outside the range keep their values, as in Excel, while the rest of the range is
   cleared, with a `SPILL_CELLS_SKIPPED` warning naming the anchor and the ranges kept
@@ -2458,11 +2467,12 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 
 Two rows worth spelling out:
 
-- `view --eval` evaluates **cell by cell**: the window's formulas and their same-sheet precedents
-  evaluate in dependency order (a formula precedent on another sheet is read from its cached value,
-  or computed when it has none — run `xl recalc` to refresh a whole book), and a formula that
-  cannot evaluate (a circular reference inside that closure,
-  a missing sheet, an unsupported function) no longer sinks the render. Every other formula shows
+- `view --eval` evaluates **cell by cell**: the window's formulas and their precedents, on the
+  window's sheet and on every other sheet, evaluate in dependency order, so the window shows what
+  `xl recalc` would write in those cells even when the file's caches are stale (after
+  `--no-recalc`). A formula that cannot evaluate (a circular reference inside that closure,
+  a missing sheet, an unsupported function) no longer sinks the render; when it lies on another
+  sheet the warning names it there. Every other formula shows
   its live value; the failing cell and the formulas that depend on it — which are not evaluated,
   so no stale cache is mixed in — show exactly what the file holds (the cached value, or the
   formula text / JSON `value: null` when uncached). One stderr warning names them, located at the

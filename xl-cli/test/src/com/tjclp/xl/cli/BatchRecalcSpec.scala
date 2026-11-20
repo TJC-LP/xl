@@ -2345,9 +2345,10 @@ class BatchRecalcSpec extends FunSuite:
         .put(ref"B1", CellValue.Formula("C1+B2"))
         .put(ref"B2", CellValue.Formula("$A$1*(C1+B1)/2"))
         // This independent self-referencing oscillator exhausts the 20-round budget under any
-        // sweep; it lies outside the cone.
-        .put(ref"D1", CellValue.Formula("1-D1"))
-        .put(ref"D2", CellValue.Formula("D1*2"))
+        // sweep; it lies outside the cone. It holds values (#891: a formula holding none joins
+        // every edit's cone, as Excel computes every formula)
+        .put(ref"D1", CellValue.Formula("1-D1", Some(CellValue.Number(BigDecimal("0.5")))))
+        .put(ref"D2", CellValue.Formula("D1*2", Some(CellValue.Number(BigDecimal(1)))))
     ).withCalcPr(
       com.tjclp.xl.workbooks.CalcPr(
         iterativeCalculation = true,

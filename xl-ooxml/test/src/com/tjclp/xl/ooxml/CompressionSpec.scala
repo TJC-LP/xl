@@ -40,7 +40,7 @@ class CompressionSpec extends FunSuite:
         cRef -> s"Row $row with more repetitive content"
       )
     }
-    val sheet = initial.sheets(0).put(cells*).unsafe
+    val sheet = initial.sheets(0).put(cells*)
     val wb = initial
       .update(initial.sheets(0).name, _ => sheet)
       .getOrElse(fail("Failed to create workbook"))
@@ -114,7 +114,7 @@ class CompressionSpec extends FunSuite:
     val cells = (1 to 100).map { row =>
       ARef(Column.from1(1), Row.from1(row)) -> s"Row $row"
     }
-    val sheet = initial.sheets(0).put(cells*).unsafe
+    val sheet = initial.sheets(0).put(cells*)
     val wb = initial
       .update(initial.sheets(0).name, _ => sheet)
       .getOrElse(fail("Failed to create workbook"))

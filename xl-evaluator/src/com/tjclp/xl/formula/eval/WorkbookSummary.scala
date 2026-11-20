@@ -71,7 +71,7 @@ object WorkbookSummary:
     )
 
   private def summarize(wb: Workbook, sheet: Sheet, index: Int): SheetSummary =
-    val (formulas, uncached) = sheet.cells.valuesIterator.foldLeft((0, 0)) { case ((f, u), cell) =>
+    val (formulas, uncached) = sheet.cells.iterator.foldLeft((0, 0)) { case ((f, u), cell) =>
       cell.value match
         case CellValue.Formula(_, None, _) => (f + 1, u + 1)
         case CellValue.Formula(_, Some(_), _) => (f + 1, u)
@@ -87,7 +87,7 @@ object WorkbookSummary:
       uncachedFormulas = uncached,
       mergedRanges = sheet.mergedRanges.size,
       comments = sheet.comments.size,
-      hyperlinks = sheet.cells.valuesIterator.count(_.hyperlink.isDefined),
+      hyperlinks = sheet.cells.iterator.count(_.hyperlink.isDefined),
       freeze = sheet.freezePane,
       tabColor = sheet.tabColor,
       autoFilter = sheet.autoFilter.collect { case AutoFilterState.Ranged(range) => range },

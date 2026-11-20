@@ -472,6 +472,25 @@ class WorkbookAuditSpec extends FunSuite:
     )
   }
 
+  test("#891: a fixed-column VLOOKUP over a table holding its own cell is no cycle, as in recalc") {
+    // B2 looks up through A1:C3, which contains B2, but a fixed column-3 lookup reads only the key
+    // column A and the result column C (#504): recalc evaluates it, so the audit reports no cycle
+    val wb = Workbook(
+      Vector(
+        sheetWith(
+          "S",
+          "A1" -> num(1),
+          "C1" -> num(10),
+          "A2" -> num(2),
+          "B2" -> cachedFormula("VLOOKUP(1,A1:C3,3,FALSE)", 10),
+          "C2" -> num(20)
+        )
+      )
+    )
+    assertEquals(WorkbookAudit.of(wb).cycles, Vector.empty)
+    assertEquals(wb.recalculate().errors, Vector.empty)
+  }
+
   test("cycles are in workbook order too, not the graph's dependency-first order") {
     // First's cycle READS Second's cycle, so the SCC condensation puts Second's component first;
     // the audit lists First's first, by the position of its earliest member.

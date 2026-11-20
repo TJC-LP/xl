@@ -10,7 +10,7 @@ import java.util.zip.{ZipEntry, ZipFile, ZipInputStream, ZipOutputStream}
 import cats.effect.{IO, unsafe}
 import com.tjclp.xl.{Workbook, Sheet, given}
 import com.tjclp.xl.addressing.{ARef, Column, Row}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.extensions.style
 import com.tjclp.xl.cli.commands.{
   CommentCommands,
@@ -404,7 +404,8 @@ class StreamingWriteSpec extends FunSuite:
           .sheets
           .head
           .cells
-          .collect { case (ref, cell) =>
+          .iterator
+          .collect { case cell @ Cell(ref, _, _, _) =>
             cell.value match
               case CellValue.Formula(expr, _, _) => Some(ref.toA1 -> expr)
               case _ => None

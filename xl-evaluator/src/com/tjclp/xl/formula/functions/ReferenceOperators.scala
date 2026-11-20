@@ -133,8 +133,7 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
 
     def map(args: Operand)(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: com.tjclp.xl.CellRange => com.tjclp.xl.CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): Operand = args match
       case Left(location) => Left(mapRange(location))
       case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[Any]])
@@ -678,7 +677,6 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
   private def operandOf(value: ArgValue): Option[Operand] = value match
     case ArgValue.Range(location) => Some(Left(location))
     case ArgValue.Expr(expr) => Some(Right(expr.asInstanceOf[TExpr[Any]]))
-    case ArgValue.Cells(_) => None
 
   /** The bounding range of a range whose operands denote fixed cells, on each sheet it may be. */
   private def boundingEdges(
@@ -801,6 +799,24 @@ private[formula] object ReferenceOperators extends FunctionSpecsBase:
         Envelope.Exact(Vector(leaf), false)
       )
     case Right(expr) => expressionEnvelope(expr, shapeOf, at)
+
+  /**
+   * #755: the one static range a reference-returning call denotes before it is evaluated, for the
+   * formula at `at`: INDEX at positions that fold ([[indexEnvelope]], Excel's 0 the whole axis:
+   * `INDEX(A:A,0)` is `A:A`), and a `:` range whose operands are such (`A1:INDEX(A:A,1048576)` is
+   * `A1:A1048576`). None when only evaluation knows it (OFFSET, INDIRECT, XLOOKUP, a position read
+   * from a cell), or when it denotes several areas or none.
+   */
+  private[formula] def exactReference(
+    call: TExpr.Call[?],
+    at: Option[ARef]
+  ): Option[(Option[SheetName], CellRange)] =
+    expressionEnvelope(call, staticShape, at) match
+      case Envelope.Exact(Vector(leaf), _) => Some(leaf)
+      // a range's two operands are its corners: it reads their bounding range
+      case exact @ Envelope.Exact(_, _) if RangeOperatorCall.unapply(call).isDefined =>
+        asArea(exact).map((sheet, range, _) => (sheet, range))
+      case _ => None
 
   private def expressionEnvelope(
     expr: TExpr[?],

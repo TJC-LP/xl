@@ -149,12 +149,6 @@ final case class Workbook(
       acc.put(sheet)
     }
 
-  /** Add sheet at end; a name already used (in any case) is [[XLError.DuplicateSheet]]. */
-  @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
-  def addSheet(sheet: Sheet): XLResult[Workbook] =
-    if hasSheetNamed(sheet.name) then Left(XLError.DuplicateSheet(sheet.name.value))
-    else Right(copy(sheets = sheets :+ sheet))
-
   /**
    * Whether a sheet other than `except` already carries `name` — compared the way Excel compares
    * sheet names, case-insensitively: a book with tabs `S` and `s` is one Excel refuses to open
@@ -404,24 +398,6 @@ final case class Workbook(
           case None => Some(dn)
           case Some(idx) => remap(idx).map(newIdx => dn.copy(localSheetId = Some(newIdx)))
       })
-
-  // ========== Deprecated Methods (Removed in v0.3.0) ==========
-
-  @deprecated("Use put(sheet) instead (add-or-replace semantic)", "0.2.0")
-  def insertSheet(index: Int, sheet: Sheet): XLResult[Workbook] =
-    insertAt(index, sheet)
-
-  @deprecated("Use remove(name) instead", "0.2.0")
-  def removeSheet(name: SheetName): XLResult[Workbook] =
-    remove(name)
-
-  @deprecated("Use removeAt(index) instead", "0.2.0")
-  def removeSheet(index: Int): XLResult[Workbook] =
-    removeAt(index)
-
-  @deprecated("Use rename(oldName, newName) instead", "0.2.0")
-  def renameSheet(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
-    rename(oldName, newName)
 
   /**
    * Set active sheet index.

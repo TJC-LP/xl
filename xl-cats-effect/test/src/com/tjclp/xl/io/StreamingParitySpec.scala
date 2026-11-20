@@ -8,7 +8,7 @@ import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.addressing.SheetName
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.ooxml.XlsxReader
 import com.tjclp.xl.sheets.Sheet
@@ -70,10 +70,10 @@ class StreamingParitySpec extends CatsEffectSuite:
 
   /** (1-based row, 0-based col) -> value, excluding Empty (streaming never emits Empty). */
   private def inMemoryValues(sheet: Sheet): Map[(Int, Int), CellValue] =
-    sheet.cells.collect {
-      case (ref, cell) if cell.value != CellValue.Empty =>
+    sheet.cells.iterator.collect {
+      case cell @ Cell(ref, _, _, _) if cell.value != CellValue.Empty =>
         (ref.row.index1, ref.col.index0) -> cell.value
-    }
+    }.toMap
 
   private def streamedValues(path: Path, sheetName: String): IO[Map[(Int, Int), CellValue]] =
     excel
@@ -208,7 +208,7 @@ class StreamingParitySpec extends CatsEffectSuite:
       val sheet = wb.sheets(0)
       // .iterator: collecting pairs straight from the Map would build a
       // Map[Int, Int] and collapse rows
-      val inMemoryStyleIdx = sheet.cells.iterator.flatMap { case (ref, cell) =>
+      val inMemoryStyleIdx = sheet.cells.iterator.flatMap { case cell @ Cell(ref, _, _, _) =>
         cell.styleId
           .filter(_ => cell.value != CellValue.Empty)
           .map(sid => (ref.row.index1, ref.col.index0) -> sid.value)

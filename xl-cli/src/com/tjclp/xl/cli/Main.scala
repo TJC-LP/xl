@@ -46,8 +46,10 @@ import com.tjclp.xl.ooxml.lint.{LintSeverity, WorkbookLint}
 import com.tjclp.xl.cli.raster.{
   BatikRasterizer,
   CairoSvg,
+  HostOs,
   ImageMagick,
   NativeImage,
+  RasterInstall,
   RasterizerChain,
   Resvg,
   RsvgConvert
@@ -1154,18 +1156,32 @@ bucket; -s restricts the cell buckets to one sheet.
 Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
 book with the report kept, so a CI lane can gate on it.
 
+The stale-data-table note re-evaluates each data table's corner at sampled inputs; on a large
+circular model that costs many recalculations. --skip-data-tables leaves it out, and the report
+says it was not checked (JSON data.dataTableCheck: "skipped"). It is a note, never a finding, so
+skipping it never changes clean or findings.
+
 USAGE:
   xl -f model.xlsx audit
   xl -f model.xlsx -s Summary audit
   xl -f model.xlsx --json audit --fail-on-findings   # data.clean, data.findings, one array per bucket
+  xl -f model.xlsx audit --fail-on-findings --skip-data-tables   # a fast gate on a data-table model
 """
 
   private val failOnFindingsOpt: Opts[Boolean] =
     Opts.flag("fail-on-findings", "Exit 1 (AUDIT_FINDINGS) when the audit has findings").orFalse
 
+  private val skipDataTablesOpt: Opts[Boolean] =
+    Opts
+      .flag(
+        "skip-data-tables",
+        "Leave out the stale-data-table note (no data-table corner is re-evaluated)"
+      )
+      .orFalse
+
   val auditCmd: Opts[CliCommand] =
     Opts.subcommand("audit", auditHelp) {
-      failOnFindingsOpt.map(CliCommand.Audit.apply)
+      (failOnFindingsOpt, skipDataTablesOpt).mapN(CliCommand.Audit.apply)
     }
 
   private val depsHelp = """Trace one cell's precedents and dependents, hop by hop.
@@ -2481,7 +2497,9 @@ EXAMPLES:
       val anyAvailable = rows.exists(_.status == "available")
       val payload = mode match
         case OutputMode.Text =>
-          Payload.text(renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage))
+          Payload.text(
+            renderRasterizerText(rows, anyAvailable, NativeImage.inNativeImage, HostOs.isMacOS)
+          )
         case OutputMode.Json =>
           Payload.Json(
             ujson.Obj(
@@ -2526,7 +2544,8 @@ EXAMPLES:
           resvgAvail = resvgAvail,
           imageMagickAvail = imageMagickAvail,
           imageMagickDiag = imageMagickDiag,
-          nativeImage = NativeImage.inNativeImage
+          nativeImage = NativeImage.inNativeImage,
+          macOS = HostOs.isMacOS
         )
     }
 
@@ -2543,7 +2562,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean = HostOs.isMacOS
   ): (String, Boolean) =
     val rows = rasterizerRows(
       batikAvail,
@@ -2552,10 +2572,11 @@ EXAMPLES:
       resvgAvail,
       imageMagickAvail,
       imageMagickDiag,
-      nativeImage
+      nativeImage,
+      macOS
     )
     val anyAvailable = batikAvail || cairoAvail || rsvgAvail || resvgAvail || imageMagickAvail
-    (renderRasterizerText(rows, anyAvailable, nativeImage), anyAvailable)
+    (renderRasterizerText(rows, anyAvailable, nativeImage, macOS), anyAvailable)
 
   /** The rows of the table, in display order. */
   private def rasterizerRows(
@@ -2565,7 +2586,8 @@ EXAMPLES:
     resvgAvail: Boolean,
     imageMagickAvail: Boolean,
     imageMagickDiag: String,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): Vector[RasterizerRow] =
     // Batik - the default backend; "unavailable" when AWT not present (native image)
     val batikStatus = if batikAvail then "available" else "unavailable"
@@ -2580,7 +2602,7 @@ EXAMPLES:
 
     // rsvg-convert
     val rsvgStatus = if rsvgAvail then "available" else "missing"
-    val rsvgNote = if rsvgAvail then "librsvg2-bin" else "Not in PATH"
+    val rsvgNote = if rsvgAvail then RasterInstall.rsvgConvertPackage(macOS) else "Not in PATH"
 
     // resvg
     val resvgStatus = if resvgAvail then "available" else "missing"
@@ -2610,7 +2632,8 @@ EXAMPLES:
   private def renderRasterizerText(
     rows: Vector[RasterizerRow],
     anyAvailable: Boolean,
-    nativeImage: Boolean
+    nativeImage: Boolean,
+    macOS: Boolean
   ): String =
     val sb = new StringBuilder
     sb.append("SVG Rasterizer Status\n")
@@ -2630,12 +2653,16 @@ EXAMPLES:
         sb.append("This is the native binary: the bundled Batik backend needs AWT and can\n")
         sb.append("never work here - install one of the external tools below.\n")
       sb.append("\nInstall one of:\n")
+      // GH-866: on macOS one brew command gives a working backend, so it leads
+      val rsvg = f"  ${RasterInstall.rsvgConvertCommand(macOS)}%-30s # rsvg-convert, fast\n"
+      if macOS then sb.append(rsvg)
       sb.append("  pip install cairosvg           # Python, most portable\n")
-      sb.append("  apt install librsvg2-bin       # rsvg-convert, fast\n")
+      if !macOS then sb.append(rsvg)
       sb.append(
         "  cargo install resvg            # or prebuilt: github.com/linebender/resvg/releases\n"
       )
-      sb.append("  apt install imagemagick        # then pass --rasterizer imagemagick\n")
+      val imageMagick = f"${RasterInstall.imageMagick(macOS)}%-30s"
+      sb.append(s"  $imageMagick # then pass --rasterizer imagemagick\n")
 
     sb.toString
 
@@ -3053,11 +3080,11 @@ EXAMPLES:
 
       // Audit and deps (ADR-017 §2.10) analyze the loaded workbook: never under --stream — the
       // refusal comes from the verb table before the parser runs (Cli.run, Schema.streamRefusal)
-      case CliCommand.Audit(failOnFindings) =>
+      case CliCommand.Audit(failOnFindings, skipDataTables) =>
         for
           wb <- readWorkbook(excel, filePath, readerConfig)
           sheet <- defaultSheet(wb, sheetNameOpt, cmd, mode, warn)
-          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode)
+          payload <- InspectCommands.audit(wb, sheet, failOnFindings, mode, skipDataTables)
         yield payload
 
       case CliCommand.Deps(refStr, direction, depth, expand) =>
@@ -3806,7 +3833,7 @@ EXAMPLES:
     // The inspection verbs are dispatched in execute() (typed payloads) — never reach here
     case CliCommand.Describe(_) =>
       IO.raiseError(new Exception("Internal: describe is dispatched in execute"))
-    case CliCommand.Audit(_) =>
+    case CliCommand.Audit(_, _) =>
       IO.raiseError(new Exception("Internal: audit is dispatched in execute"))
     case CliCommand.Deps(_, _, _, _) =>
       IO.raiseError(new Exception("Internal: deps is dispatched in execute"))
@@ -3990,8 +4017,13 @@ EXAMPLES:
         emit(Outcome.failed(verb, CliError.fromThrowable(failure)), mode, io)
       )
 
-  /** Replace `target` atomically when supported, with the JDK-prescribed total fallback. */
+  /**
+   * Replace `target` atomically when supported, with the JDK-prescribed total fallback. The
+   * owner-only staging file first takes the mode `target` should have (GH-868): the umask's for a
+   * new output, the replaced file's own otherwise.
+   */
   private[cli] def replaceAtomically(source: Path, target: Path): IO[Unit] =
+    val mode = IO.blocking(com.tjclp.xl.ooxml.OutputFileMode.prepare(source, target))
     val atomic =
       IO.blocking(
         Files.move(
@@ -4003,7 +4035,7 @@ EXAMPLES:
       ).void
     val fallback =
       IO.blocking(Files.move(source, target, StandardCopyOption.REPLACE_EXISTING)).void
-    atomicMoveOrFallback(atomic, fallback)
+    mode *> atomicMoveOrFallback(atomic, fallback)
 
   /** Isolated for deterministic coverage of providers that reject `ATOMIC_MOVE`. */
   private[cli] def atomicMoveOrFallback(atomic: IO[Unit], fallback: IO[Unit]): IO[Unit] =

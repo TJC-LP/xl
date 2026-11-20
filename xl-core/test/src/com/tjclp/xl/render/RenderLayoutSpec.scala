@@ -69,7 +69,6 @@ class RenderLayoutSpec extends FunSuite:
   test("SVG: text spills over empty neighbours that carry a fill, each keeping its own fill") {
     val sheet = Sheet("T")
       .put(ref"A1" -> long)
-      .unsafe
       .withCellStyle(ref"B1", yellow)
       .withCellStyle(ref"C1", yellow)
       .withCellStyle(ref"D1", yellow)
@@ -109,7 +108,6 @@ class RenderLayoutSpec extends FunSuite:
     val sheet = Sheet("T")
       .put(ref"C1" -> long)
       .put(ref"D1" -> "x")
-      .unsafe
       .withCellStyle(ref"C1", aligned(HAlign.Right))
       .withCellStyle(ref"A1", yellow)
 
@@ -127,7 +125,6 @@ class RenderLayoutSpec extends FunSuite:
   test("SVG: centred text spills both ways, staying centred on its own cell") {
     val sheet = Sheet("T")
       .put(ref"C1" -> long)
-      .unsafe
       .withCellStyle(ref"C1", aligned(HAlign.Center))
 
     val svg = sheet.toSvg(ref"A1:E1")
@@ -139,7 +136,6 @@ class RenderLayoutSpec extends FunSuite:
     val sheet = Sheet("T")
       .put(ref"B1" -> "x")
       .put(ref"C1" -> long)
-      .unsafe
       .withCellStyle(ref"C1", aligned(HAlign.Center))
 
     val svg = sheet.toSvg(ref"A1:E1")
@@ -150,7 +146,6 @@ class RenderLayoutSpec extends FunSuite:
   test("SVG: the render window's edge bounds a leftward spill") {
     val sheet = Sheet("T")
       .put(ref"D1" -> long)
-      .unsafe
       .withCellStyle(ref"D1", aligned(HAlign.Right))
 
     val svg = sheet.toSvg(ref"B1:D1")
@@ -164,7 +159,6 @@ class RenderLayoutSpec extends FunSuite:
       .put(ref"A1" -> 1234567890123.0)
       .put(ref"A2" -> long)
       .put(ref"A3" -> long)
-      .unsafe
       .withCellStyle(ref"A2", wrap)
       .withCellStyle(ref"B1", yellow)
       .merge(merge)
@@ -202,7 +196,6 @@ class RenderLayoutSpec extends FunSuite:
   test("HTML: text spills over a filled empty neighbour, which keeps its own cell and fill") {
     val sheet = Sheet("T")
       .put(ref"A1" -> long)
-      .unsafe
       .withCellStyle(ref"B1", yellow)
 
     val html = sheet.toHtml(ref"A1:D1")
@@ -222,7 +215,6 @@ class RenderLayoutSpec extends FunSuite:
   test("HTML: right-aligned text spills left; centred text spills both ways, centred on its cell") {
     val right = Sheet("T")
       .put(ref"C1" -> long)
-      .unsafe
       .withCellStyle(ref"C1", aligned(HAlign.Right))
     val rightStyle = spillStyle(right.toHtml(ref"A1:D1")).getOrElse(fail("no right spill"))
     // D1 is empty too, but right-aligned text never spills to its right
@@ -231,7 +223,6 @@ class RenderLayoutSpec extends FunSuite:
 
     val centre = Sheet("T")
       .put(ref"C1" -> long)
-      .unsafe
       .withCellStyle(ref"C1", aligned(HAlign.Center))
     val centreStyle = spillStyle(centre.toHtml(ref"A1:E1")).getOrElse(fail("no centre spill"))
     assertEquals(
@@ -272,7 +263,6 @@ class RenderLayoutSpec extends FunSuite:
       .put(ref"A3" -> long)
       .put(ref"C3" -> "C3")
       .put(ref"A5" -> long)
-      .unsafe
       .withCellStyle(ref"A3", aligned(HAlign.Center))
       .withCellStyle(ref"A5", aligned(HAlign.Right))
       .merge(merged("A1:B1"))
@@ -376,7 +366,6 @@ class RenderLayoutSpec extends FunSuite:
     List(HAlign.General, HAlign.Left, HAlign.Right, HAlign.Center).foreach { h =>
       val sheet = Sheet("T")
         .put(ref"C1" -> long)
-        .unsafe
         .withCellStyle(ref"C1", aligned(h))
         .withCellStyle(ref"B1", yellow)
       val (clipX, clipW) = clipRect(sheet.toSvg(ref"A1:E1"), "C1").getOrElse(fail(s"$h: clip"))
@@ -394,7 +383,6 @@ class RenderLayoutSpec extends FunSuite:
       .put(ref"A2" -> "fourteen")
       .put(ref"A3" -> "eighteen")
       .put(ref"A4" -> "twenty-four")
-      .unsafe
       .withCellStyle(ref"A1", sized(11))
       .withCellStyle(ref"A2", sized(14))
       .withCellStyle(ref"A3", sized(18))
@@ -407,7 +395,6 @@ class RenderLayoutSpec extends FunSuite:
     val sheet = Sheet("T")
       .put(ref"A1" -> "big")
       .put(ref"A2" -> "big")
-      .unsafe
       .withCellStyle(ref"A1", sized(24))
       .withCellStyle(ref"A2", sized(24))
       .setRowProperties(Row.from0(0), RowProperties(height = Some(12.0)))
@@ -421,7 +408,6 @@ class RenderLayoutSpec extends FunSuite:
       .put(ref"A1" -> "small")
       .put(ref"H1" -> "outside the window")
       .put(ref"A2", CellValue.RichText(RichText(TextRun("small "), big)))
-      .unsafe
       .withCellStyle(ref"H1", sized(18))
     assertEquals(RenderUtils.calculateRowHeights(sheet, ref"A1:C2"), Vector(31, 42))
   }
@@ -430,14 +416,12 @@ class RenderLayoutSpec extends FunSuite:
     val merge = CellRange.parse("A1:B2").toOption.getOrElse(fail("range"))
     val merged = Sheet("T")
       .put(ref"A1" -> "merged title")
-      .unsafe
       .withCellStyle(ref"A1", sized(24))
       .merge(merge)
     assertEquals(RenderUtils.calculateRowHeights(merged, ref"A1:B2"), Vector(20, 20))
 
     val tallDefault = Sheet("T")
       .put(ref"A1" -> "title")
-      .unsafe
       .withCellStyle(ref"A1", sized(18))
       .copy(defaultRowHeight = Some(30.0))
     assertEquals(RenderUtils.calculateRowHeights(tallDefault, ref"A1:A2"), Vector(40, 40))
@@ -454,7 +438,6 @@ class RenderLayoutSpec extends FunSuite:
       .put(ref"A1" -> "base font, styled")
       .put(ref"A2" -> "base font, unstyled")
       .put(ref"A3" -> "larger")
-      .unsafe
       .withCellStyle(ref"A1", arial10)
       .withCellStyle(ref"A3", arial14)
     assertEquals(RenderUtils.calculateRowHeights(sheet, ref"A1:A3"), Vector(17, 17, 25))
@@ -469,7 +452,6 @@ class RenderLayoutSpec extends FunSuite:
       .copy(styleRegistry = registry)
       .put(ref"A1" -> "Quarterly gyp")
       .put(ref"A2" -> "bold")
-      .unsafe
       .withCellStyle(ref"A1", calibri18.withAlign(Align(vertical = VAlign.Bottom)))
       .withCellStyle(ref"A2", calibri18.withFont(calibri18.font.withBold(true)))
     assertEquals(RenderUtils.calculateRowHeights(sheet, ref"A1:A2"), Vector(31, 31))
@@ -485,7 +467,6 @@ class RenderLayoutSpec extends FunSuite:
     val wrap = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("T")
       .put(ref"A1" -> "one two three four five six seven eight nine ten")
-      .unsafe
       .withCellStyle(ref"A1", wrap)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(8.0)))
 
@@ -504,7 +485,7 @@ class RenderLayoutSpec extends FunSuite:
   }
 
   test("SVG: the row header and the cells follow the autofitted height") {
-    val sheet = Sheet("T").put(ref"A1" -> "Title").unsafe.withCellStyle(ref"A1", sized(18))
+    val sheet = Sheet("T").put(ref"A1" -> "Title").withCellStyle(ref"A1", sized(18))
     val svg = sheet.toSvg(ref"A1:B2", showLabels = true)
     val header = RenderUtils.HeaderHeight
     assert(
@@ -525,7 +506,7 @@ class RenderLayoutSpec extends FunSuite:
 
   test("SVG: an autofitted 18pt bottom-aligned line sits fully inside its row") {
     val title = sized(18).withAlign(Align(vertical = VAlign.Bottom))
-    val sheet = Sheet("T").put(ref"A1" -> "Quarterly gyp").unsafe.withCellStyle(ref"A1", title)
+    val sheet = Sheet("T").put(ref"A1" -> "Quarterly gyp").withCellStyle(ref"A1", title)
     val svg = sheet.toSvg(ref"A1:A1")
     val fontPx = 24 // 18pt
     val baseline = baselineUnder(svg, "A1").getOrElse(fail(s"no text: $svg"))
@@ -537,7 +518,6 @@ class RenderLayoutSpec extends FunSuite:
     val sheet = Sheet("T")
       .put(ref"A1" -> "Title")
       .put(ref"A2" -> "body")
-      .unsafe
       .withCellStyle(ref"A1", sized(18))
     val html = sheet.toHtml(ref"A1:B2", showLabels = true)
     val heights =

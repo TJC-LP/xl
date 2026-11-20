@@ -133,7 +133,7 @@ class PrecedentNodesLawSpec extends ScalaCheckSuite:
           .find(_.name == r.sheet)
           .fold(Set.empty[QualifiedRef]) { sheet =>
             sheet.cells.iterator.collect {
-              case (ref, cell) if r.range.contains(ref) && holds(cell.value) =>
+              case cell @ Cell(ref, _, _, _) if r.range.contains(ref) && holds(cell.value) =>
                 QualifiedRef(sheet.name, ref)
             }.toSet
           }

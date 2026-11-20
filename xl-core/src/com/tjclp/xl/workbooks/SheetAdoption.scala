@@ -13,19 +13,17 @@ private[workbooks] object SheetAdoption:
       refuse(sheet, "sheet does not match a member of the supplied source workbook")
     else if destination == from then Right(destination)
     else
-      // Filter first: only the few affected cells are sorted into row-major order
-      val affected = sheet.cells.toVector
-        .flatMap { case (ref, cell) =>
+      val affected = sheet.cells.iterator
+        .flatMap { cell =>
           cell.value match
             case CellValue.Formula(expression, _, _) =>
               val ordinals = FormulaStorage.externalOrdinals(expression).toVector.sorted
               Option.when(ordinals.nonEmpty)(
-                (ref, s"${ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})")
+                s"${cell.ref.toA1}: $expression (external ordinals ${ordinals.mkString(", ")})"
               )
             case _ => None
         }
-        .sortBy { case (ref, _) => (ref.row.index0, ref.col.index0) }
-        .map(_._2)
+        .toVector
       if affected.nonEmpty then
         refuse(
           sheet,

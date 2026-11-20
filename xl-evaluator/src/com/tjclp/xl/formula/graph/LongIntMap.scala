@@ -5,9 +5,8 @@ package com.tjclp.xl.formula.graph
  * table (#767).
  *
  * Keys hash through the SplitMix64 finaliser, so packed cell keys (sheet, row, column) spread over
- * the table however their bits are laid out; `ARef`'s own `row ^ col` hash puts one cell per column
- * in each bucket. [[indexOf]] neither boxes nor allocates. The arrays are filled once by
- * [[LongIntMap.from]] and never written afterwards.
+ * the table however their bits are laid out. [[indexOf]] neither boxes nor allocates. The arrays
+ * are filled once by [[LongIntMap.from]] and never written afterwards.
  */
 private[formula] final class LongIntMap private (
   keys: Array[Long],

@@ -123,7 +123,7 @@ styledSheet.evaluateCell(ref"C1") match
     println(s"✓ C1 = $value  // Conditional based on B1")
   case Left(error) =>
     println(s"⚠️  C1 needs dependency evaluation (expected): ${error.message.take(80)}...")
-    println(s"    Use evaluateWithDependencyCheck() for formulas with formula dependencies")
+    println(s"    Use Workbook(sheet).recalculate() for formulas with formula dependencies")
 
 println()
 
@@ -135,16 +135,16 @@ println("=" * 70)
 println("STEP 5: Bulk Evaluation with Dependency Checking")
 println("=" * 70)
 
-styledSheet.evaluateWithDependencyCheck() match
-  case Right(results) =>
-    println("✓ All formulas evaluated successfully!")
-    println(s"  Total formulas: ${results.size}")
-    println("\nResults:")
-    results.toSeq.sortBy(_._1.toString).foreach { case (ref, value) =>
-      println(s"  $ref = $value")
-    }
-  case Left(error) =>
-    println(s"✗ Evaluation error: ${error.message}")
+val recalculated = Workbook(styledSheet).recalculate()
+if recalculated.isClean then
+  val results = recalculated.evaluated.getOrElse(styledSheet.name, Map.empty)
+  println("✓ All formulas evaluated successfully!")
+  println(s"  Total formulas: ${results.size}")
+  println("\nResults:")
+  results.toSeq.sortBy(_._1.toString).foreach { case (ref, value) =>
+    println(s"  $ref = $value")
+  }
+else recalculated.errors.foreach(error => println(s"✗ Evaluation error: ${error.render}"))
 
 println()
 
@@ -168,12 +168,12 @@ println("  B1: =C1*2")
 println("  C1: =A1+5  // Creates cycle: A1 → B1 → C1 → A1")
 println()
 
-cyclicSheet.evaluateWithDependencyCheck() match
-  case Right(results) =>
-    println("✗ Unexpected success (should have detected cycle)")
-  case Left(error) =>
-    println("✓ Circular reference detected!")
-    println(s"  Error: ${error.message}")
+// A cycle never fails the recalculation: each member is reported as a per-cell error
+val cyclicResult = Workbook(cyclicSheet).recalculate()
+if cyclicResult.isClean then println("✗ Unexpected success (should have detected cycle)")
+else
+  println("✓ Circular reference detected!")
+  cyclicResult.errors.foreach(error => println(s"  Error: ${error.render}"))
 
 println()
 
@@ -185,30 +185,28 @@ println("=" * 70)
 println("STEP 6: Dependency Analysis")
 println("=" * 70)
 
-// Build dependency graph
-val graph = DependencyGraph.fromSheet(sheet)
+// Build the workbook's dependency graph
+val graph = QualifiedGraph.of(Workbook(sheet))
+def at(a1: ARef): QualifiedRef = QualifiedRef(sheet.name, a1)
+def cells(refs: Iterable[QualifiedRef]): String =
+  QualifiedGraph.sorted(refs).map(_.ref.toA1).mkString(", ")
 
-// Check for cycles (should be none)
-DependencyGraph.detectCycles(graph) match
-  case Right(_) =>
-    println("✓ No circular references detected")
-  case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
+// Check for cycles (should be none): a cyclic strongly connected component is a circular reference
+val cycles = graph.sccs.filter(_.cyclic)
+if cycles.isEmpty then println("✓ No circular references detected")
+else cycles.foreach(cycle => println(s"✗ Circular reference: ${cells(cycle.members)}"))
 
-// Get topological evaluation order
-DependencyGraph.topologicalSort(graph) match
-  case Right(order) =>
-    println(s"✓ Evaluation order: ${order.map(_.toA1).mkString(" → ")}")
-  case Left(error) =>
-    println(s"✗ Cannot sort due to cycle")
+// Evaluation order: the components, dependency-first
+if cycles.isEmpty then
+  println(s"✓ Evaluation order: ${graph.sccs.flatMap(_.members).map(_.ref.toA1).mkString(" → ")}")
 
 // Query precedents (cells B1 depends on)
-val b1Precedents = DependencyGraph.precedents(graph, ref"B1")
-println(s"✓ B1 depends on: ${b1Precedents.map(_.toA1).mkString(", ")}")
+val b1Precedents = graph.precedentsOf(at(ref"B1"))
+println(s"✓ B1 depends on: ${cells(b1Precedents)}")
 
 // Query dependents (cells that depend on A1)
-val a1Dependents = DependencyGraph.dependents(graph, ref"A1")
-println(s"✓ Cells depending on A1: ${a1Dependents.map(_.toA1).mkString(", ")}")
+val a1Dependents = graph.dependentsOf(at(ref"A1"))
+println(s"✓ Cells depending on A1: ${cells(a1Dependents)}")
 
 println()
 
@@ -225,7 +223,7 @@ println("""
 ✓ Handle errors gracefully with Either types (no exceptions!)
 ✓ Detect circular references automatically
 ✓ Evaluate all formulas safely with dependency checking
-✓ Analyze dependencies (precedents/dependents) with DependencyGraph
+✓ Analyze dependencies (precedents/dependents) with QualifiedGraph
 
 Next Steps:
 - Explore financial_model.sc for business use cases

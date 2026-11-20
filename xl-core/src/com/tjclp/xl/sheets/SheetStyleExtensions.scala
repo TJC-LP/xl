@@ -21,17 +21,17 @@ object styleSyntax:
       val cell = sheet(ref).withStyle(styleId)
       sheet.copy(
         styleRegistry = newRegistry,
-        cells = sheet.cells.updated(ref, cell)
+        cells = sheet.cells.updated(cell)
       )
 
     /** Apply a CellStyle to all cells in a range. */
     @annotation.targetName("withRangeStyleExt")
     def withRangeStyle(range: CellRange, style: CellStyle): Sheet =
       val (newRegistry, styleId) = sheet.styleRegistry.register(style)
-      val updatedCells = range.cells.foldLeft(sheet.cells) { (cells, ref) =>
-        val cell = cells.getOrElse(ref, Cell.empty(ref)).withStyle(styleId)
-        cells.updated(ref, cell)
-      }
+      // one merge into the store (#891): a write per cell copies its row each time
+      val updatedCells = sheet.cells.putAll(
+        range.cells.map(ref => sheet.cells.get(ref).getOrElse(Cell.empty(ref)).withStyle(styleId))
+      )
       sheet.copy(
         styleRegistry = newRegistry,
         cells = updatedCells

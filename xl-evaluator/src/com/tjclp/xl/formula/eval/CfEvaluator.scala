@@ -614,7 +614,7 @@ object CfEvaluator:
       read(ref) match
         case Right(value) => Right(numeric(value))
         case Left(err) =>
-          val formula = sheet(ref).value match
+          val formula = sheet.cells.valueAt(ref) match
             case CellValue.Formula(expression, _, _) => expression
             case _ => ref.toA1
           // the reader words a parse failure as a cross-sheet one: parse again for the plain words
@@ -645,7 +645,7 @@ object CfEvaluator:
           None,
           None
         )
-      val readings = sheet.cells.keysIterator
+      val readings = sheet.cells.refs
         .filter(block.covers)
         .toVector
         .sortBy(ref => (ref.row.index0, ref.col.index0))

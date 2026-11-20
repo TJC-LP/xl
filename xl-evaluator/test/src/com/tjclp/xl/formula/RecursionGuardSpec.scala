@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import munit.FunSuite
 
@@ -213,7 +214,7 @@ class RecursionGuardSpec extends FunSuite:
       assertTooDeep(formula)
       assert(sheet.evaluateFormula(formula).isLeft)
       val stored = sheet.put(ARef.from1(2, 2), CellValue.Formula(formula.drop(1), None))
-      assert(stored.evaluateWithDependencyCheck().isLeft)
+      assert(stored.evalAll().isLeft)
     }
   }
 

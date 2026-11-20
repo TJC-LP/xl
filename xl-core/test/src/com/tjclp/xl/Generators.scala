@@ -97,9 +97,8 @@ object Generators:
       ref <- genARef
       value <- genCellValue
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
-      comment <- Gen.option(Gen.alphaNumStr)
-      hyperlink <- Gen.option(Gen.alphaNumStr.map(s => s"https://example.com/$s"))
-    yield Cell(ref, value, styleId, comment, hyperlink)
+      hyperlink <- Gen.option(Gen.alphaNumStr.map(s => Hyperlink(s"https://example.com/$s")))
+    yield Cell(ref, value, styleId, hyperlink)
 
   /** Generate column properties */
   val genColumnProperties: Gen[ColumnProperties] =
@@ -131,7 +130,7 @@ object Generators:
       merged <- Gen.listOfN(numMerged, genCellRange)
     yield Sheet(
       name = name,
-      cells = cells.map(c => c.ref -> c).toMap,
+      cells = CellStore.from(cells),
       mergedRanges = merged.toSet
     )
 
@@ -1076,7 +1075,10 @@ object Generators:
         value <- genRichCellValue
         style <- Gen.frequency(2 -> Gen.const(None), 2 -> genCellStyle.map(Some.apply))
         comment <- Gen.frequency(3 -> Gen.const(None), 1 -> genComment.map(Some.apply))
-        hyperlink <- Gen.frequency(4 -> Gen.const(None), 1 -> genHyperlink.map(Some.apply))
+        hyperlink <- Gen.frequency(
+          4 -> Gen.const(None),
+          1 -> genHyperlink.map(t => Some(Hyperlink(t)))
+        )
       yield (ref, value, style, comment, hyperlink)
     for
       name <- genSheetName
@@ -1103,7 +1105,7 @@ object Generators:
     yield
       val withCells = entries.foldLeft(Sheet(name)) {
         case (sheet, (ref, value, style, comment, hyperlink)) =>
-          val withCell = sheet.put(Cell(ref, value, None, None, hyperlink))
+          val withCell = sheet.put(Cell(ref, value, None, hyperlink))
           val styled = style.fold(withCell)(s => withCell.withCellStyle(ref, s))
           comment.fold(styled)(c => styled.comment(ref, c))
       }

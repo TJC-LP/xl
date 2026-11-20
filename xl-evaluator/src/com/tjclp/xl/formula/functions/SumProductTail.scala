@@ -11,31 +11,60 @@ import com.tjclp.xl.sheets.Sheet
  * of them, so it is blank in every argument and adds the same product. SUMPRODUCT reads the
  * arguments once over one such row ([[Tail.line]]) and adds `count` × that product to the trimmed
  * sum, so `SUMPRODUCT(--(A:A=""))` counts every blank row, as Excel does.
+ *
+ * GH-746: the same holds for a range that reaches the sheet's last row (column) but starts below
+ * row 1 (column A): `A2:A1048576` keeps its start and loses the blank rows below the shared end.
  */
 private[formula] object SumProductTail:
 
   /**
-   * What the bound dropped: how many rows (columns), along which axis, and how to read any one of
-   * them, a one-row (one-column) range in place of each whole column (row).
+   * Whether the shared bound trims `range` along rows: any range reaching the last row, or with
+   * `edges = false` only a whole column (the rule before GH-746, which SUMPRODUCT falls back to).
    */
-  final case class Tail(count: Long, alongRows: Boolean, line: CellRange => CellRange):
-    /** How many rows (columns) the bound kept: the extent the trimmed arguments have. */
-    def kept: Long = (if alongRows then Row.MaxIndex0 + 1 else Column.MaxIndex0 + 1).toLong - count
+  def trimsRows(range: CellRange, edges: Boolean): Boolean =
+    if edges then RangeEdges.reachesLastRow(range) else range.isFullColumn
 
-    /** Whether `range` runs the whole trimmed axis. */
-    def spans(range: CellRange): Boolean = if alongRows then range.isFullColumn else range.isFullRow
+  /** [[trimsRows]] along columns: a range reaching the last column, or only a whole row. */
+  def trimsColumns(range: CellRange, edges: Boolean): Boolean =
+    if edges then RangeEdges.reachesLastColumn(range) else range.isFullRow
+
+  /**
+   * What the bound dropped: how many rows (columns), along which axis, how many it kept of each
+   * range that reaches the edge (the extent the trimmed arguments have), and how to read any one of
+   * them, a one-row (one-column) range in place of each range that reaches the edge.
+   */
+  final case class Tail(
+    count: Long,
+    kept: Long,
+    alongRows: Boolean,
+    edges: Boolean,
+    line: CellRange => CellRange
+  ):
+    /**
+     * Whether the bound trims `range` along the trimmed axis, over more than one row (column): the
+     * one-row line itself never is, even when it is the sheet's last row.
+     */
+    def spans(range: CellRange): Boolean =
+      if alongRows then trimsRows(range, edges) && range.height > 1
+      else trimsColumns(range, edges) && range.width > 1
 
   /**
    * The tail of SUMPRODUCT's `ranges` under its shared bounds (the kept rows, the kept columns):
-   * None when nothing was dropped, or when whole columns and whole rows mix (the dropped cells then
-   * form no whole rows).
+   * None when nothing was dropped, when whole columns and whole rows mix (the dropped cells then
+   * form no whole rows), or when the ranges reaching the edge start at different rows (columns):
+   * those are different heights, so no single kept extent stands for all of them.
    */
   def of(
     ranges: List[CellRange],
-    bounds: (Option[(Row, Row)], Option[(Column, Column)])
+    bounds: (Option[(Row, Row)], Option[(Column, Column)]),
+    edges: Boolean = true
   ): Option[Tail] =
-    val columns = ranges.exists(_.isFullColumn)
-    val rows = ranges.exists(_.isFullRow)
+    val columns = ranges.exists(trimsRows(_, edges))
+    val rows = ranges.exists(trimsColumns(_, edges))
+    // the one start the edge ranges share along the axis, if they share one
+    def commonStart(starts: List[Int]): Option[Int] = starts.distinct match
+      case List(start) => Some(start)
+      case _ => None
     // the first index outside the kept [lo, hi], and how many of `total` lie outside it
     def outside(kept: Option[(Int, Int)], total: Int): Option[(Int, Long)] =
       kept match
@@ -45,29 +74,35 @@ private[formula] object SumProductTail:
           Option.when(dropped > 0L)((if lo > 0 then 0 else hi + 1, dropped))
     if columns == rows then None
     else if columns then
-      outside(bounds._1.map((lo, hi) => (lo.index0, hi.index0)), Row.MaxIndex0 + 1).map {
-        (blank, dropped) =>
-          Tail(
-            dropped,
-            alongRows = true,
-            r =>
-              if r.isFullColumn then
-                CellRange(ARef.from0(r.colStart.index0, blank), ARef.from0(r.colEnd.index0, blank))
-              else r
-          )
-      }
+      val total = Row.MaxIndex0 + 1
+      for
+        start <- commonStart(ranges.filter(trimsRows(_, edges)).map(_.rowStart.index0))
+        (blank, dropped) <- outside(bounds._1.map((lo, hi) => (lo.index0, hi.index0)), total)
+      yield Tail(
+        dropped,
+        total.toLong - dropped - start,
+        alongRows = true,
+        edges,
+        r =>
+          if trimsRows(r, edges) then
+            CellRange(ARef.from0(r.colStart.index0, blank), ARef.from0(r.colEnd.index0, blank))
+          else r
+      )
     else
-      outside(bounds._2.map((lo, hi) => (lo.index0, hi.index0)), Column.MaxIndex0 + 1).map {
-        (blank, dropped) =>
-          Tail(
-            dropped,
-            alongRows = false,
-            r =>
-              if r.isFullRow then
-                CellRange(ARef.from0(blank, r.rowStart.index0), ARef.from0(blank, r.rowEnd.index0))
-              else r
-          )
-      }
+      val total = Column.MaxIndex0 + 1
+      for
+        start <- commonStart(ranges.filter(trimsColumns(_, edges)).map(_.colStart.index0))
+        (blank, dropped) <- outside(bounds._2.map((lo, hi) => (lo.index0, hi.index0)), total)
+      yield Tail(
+        dropped,
+        total.toLong - dropped - start,
+        alongRows = false,
+        edges,
+        r =>
+          if trimsColumns(r, edges) then
+            CellRange(ARef.from0(blank, r.rowStart.index0), ARef.from0(blank, r.rowEnd.index0))
+          else r
+      )
 
   /**
    * The volatile functions that draw anew on every evaluation (RAND, RANDBETWEEN): reading the
@@ -82,6 +117,39 @@ private[formula] object SumProductTail:
   /** Whether `spec` draws: volatile, and not one of the [[ClockReads]]. */
   def draws(spec: FunctionSpec[?]): Boolean =
     spec.flags.volatile && !ClockReads.contains(spec.name.toUpperCase)
+
+  /**
+   * #755: a computed reference whose range is known before evaluation, written as that range
+   * ([[ReferenceOperators.exactReference]]): `INDEX(A:A,0)` as `A:A`, `A1:INDEX(A:A,1048576)` as
+   * `A1:A1048576`. SUMPRODUCT trims such a reference to the shared extent as it trims the written
+   * range (`constrainComputedRange`), so the plan reads it the same way and moves it onto the blank
+   * line. Other computed references (OFFSET, INDIRECT, XLOOKUP) are None and stay as they are, so
+   * an argument reading a whole column only through one has no tail.
+   *
+   * The positions are folded for cell A1: only ROW() and COLUMN() read the formula's own cell, so a
+   * call that reads either stays computed (`INDEX(A:A,ROW()):A1048576` is not `A1:A1048576` in C5).
+   * Both callers rely on this, [[plan]] and SUMPRODUCT's range collection.
+   */
+  private def written(call: TExpr.Call[?]): Option[TExpr[?]] =
+    if !ReferenceOperators.isReferenceShape(call) ||
+      WorkbookAudit.callsWhere(call, (_, _) => false, _.flags.boundsReferenceAxis)
+    then None
+    else
+      ReferenceOperators
+        .exactReference(call, Some(ARef.from0(0, 0)))
+        .map((sheet, range) =>
+          sheet.fold[TExpr[?]](TExpr.RangeRef(range))(TExpr.SheetRange(_, range))
+        )
+
+  /**
+   * #755: `expr` with each computed reference [[written]] as its range, only where SUMPRODUCT's
+   * trimming reaches ([[TExpr.transformRanges]]: operators, selectors, lifted slots). Inside a
+   * range slot (`SUM(INDEX(B:B,0))`) the call stays: it is one fixed reference there, as
+   * `SUM(B:B)`. So does a LET binding, which the body may read in a range slot
+   * (`LET(t,INDEX(B:B,0),--(A:A<MAX(t)))`).
+   */
+  private[formula] def writtenReferences[A](expr: TExpr[A]): TExpr[A] =
+    TExpr.transformRanges(expr, (_, range) => range, written)
 
   /**
    * The arguments to read over the blank line, decided before anything is evaluated: each
@@ -125,12 +193,15 @@ private[formula] object SumProductTail:
     val lines = args.map {
       case Left(location) => (spansLocation(location), Left(location))
       case Right(expr) =>
-        val line = TExpr.transformRanges(expr, (_, r) => tail.line(r))
-        (
-          readsLineOnly(expr, line) && !WorkbookAudit.callsWhere(expr, drawsViaName, draws) &&
-            !WorkbookAudit.callsWhere(expr, (_, _) => false, _.flags.boundsReferenceAxis),
-          Right(line)
-        )
+        // #755: a computed reference with a known range reads as that range; the replacements are
+        // plain ranges in the positions the walk reaches, so the line is the written form's
+        val writtenExpr = writtenReferences(expr)
+        val line = TExpr.transformRanges(writtenExpr, (_, r) => tail.line(r))
+        val readsLine = readsLineOnly(writtenExpr, line)
+        val drawsNone = !WorkbookAudit.callsWhere(expr, drawsViaName, draws)
+        val readsNoPosition =
+          !WorkbookAudit.callsWhere(expr, (_, _) => false, _.flags.boundsReferenceAxis)
+        (readsLine && drawsNone && readsNoPosition, Right(line))
     }
     Option.when(trimmedExtent.toLong == tail.kept && lines.forall(_._1))(lines.map(_._2))
 
@@ -138,11 +209,11 @@ private[formula] object SumProductTail:
    * The tail SUMPRODUCT adds to its trimmed sum: [[of]] its ranges under their shared bounds,
    * [[plan]]ned against the trimmed arguments' shape (`trimmedRows` × `trimmedCols`), then the
    * planned arguments read over the blank line, multiplied element-wise, summed and counted once
-   * per dropped row. 0 when there is no tail, the plan declines, or the line does not come back as
-   * one row (column) at the trimmed width. Each range location resolves once (`resolve`); `line`
-   * reads a planned expression as SUMPRODUCT reads an argument, `rangeArray` a range location on
-   * the line, `shape` an array's rows × columns, and `sumOfProducts` sums the products over a
-   * shape.
+   * per dropped row. None when there is no tail, the plan declines, or the line does not come back
+   * as one row (column) at the trimmed width: SUMPRODUCT then keeps the trimmed sum, or (GH-746)
+   * reads an edge range's every row. Each range location resolves once (`resolve`); `line` reads a
+   * planned expression as SUMPRODUCT reads an argument, `rangeArray` a range location on the line,
+   * `shape` an array's rows × columns, and `sumOfProducts` sums the products over a shape.
    */
   def sum[A](
     ranges: List[CellRange],
@@ -155,10 +226,11 @@ private[formula] object SumProductTail:
     line: TExpr[Any] => Either[EvalError, A],
     rangeArray: (Sheet, CellRange) => A,
     shape: A => (Int, Int),
-    sumOfProducts: (List[A], Int, Int) => Either[EvalError, BigDecimal]
-  ): Either[EvalError, BigDecimal] =
-    val none: Either[EvalError, BigDecimal] = Right(BigDecimal(0))
-    of(ranges, bounds).fold(none) { tail =>
+    sumOfProducts: (List[A], Int, Int) => Either[EvalError, BigDecimal],
+    edges: Boolean = true
+  ): Either[EvalError, Option[BigDecimal]] =
+    val none: Either[EvalError, Option[BigDecimal]] = Right(None)
+    of(ranges, bounds, edges).fold(none) { tail =>
       val located: Map[TExpr.RangeLocation, (Sheet, CellRange)] =
         args
           .collect { case Left(loc) => loc }
@@ -195,7 +267,8 @@ private[formula] object SumProductTail:
                 (if tail.alongRows then
                    lineRows == 1 && (trimmedRows == 0 || lineCols == trimmedCols)
                  else lineCols == 1 && (trimmedCols == 0 || lineRows == trimmedRows))
-            if aligned then sumOfProducts(lines, lineRows, lineCols).map(_ * BigDecimal(tail.count))
+            if aligned then
+              sumOfProducts(lines, lineRows, lineCols).map(p => Some(p * BigDecimal(tail.count)))
             else none
           }
       }

@@ -46,7 +46,7 @@ element like any Excel error, and IFERROR/ISERROR see each one.
 ## Promotion sites (exhaustive)
 
 1. `SheetEvaluator.evaluateFormulaWith` — funnels every `evaluateFormula` overload,
-   `evaluateCell`, `evaluateWithDependencyCheck`, `wb.evaluateFormula`, `recalculate`, and the
+   `evaluateCell`, `wb.evaluateFormula`, `recalculate`, and the
    CLI. Headline: `sheet.evaluateFormula("=1/0") == Right(CellValue.Error(Div0))`.
 2. `SheetEvaluator.evaluateArrayFormulaImpl` — an error result spills a 1×1 `CellValue.Error`
    at the origin.

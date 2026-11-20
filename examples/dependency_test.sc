@@ -39,8 +39,11 @@ Excel.write(wb, outPath)
 println(s"Created: $outPath (with cached formula values)")
 
 // Also show the dependency graph
-val graph = DependencyGraph.fromSheet(sheet)
+val graph = QualifiedGraph.of(wb)
+def at(a1: ARef): QualifiedRef = QualifiedRef(sheet.name, a1)
+def cells(refs: Iterable[QualifiedRef]): String =
+  QualifiedGraph.sorted(refs).map(_.ref.toA1).mkString(", ")
 println("\nDependency Graph:")
-println(s"  A1 dependents: ${graph.dependents.getOrElse(ref"A1", Set.empty).map(_.toA1).mkString(", ")}")
-println(s"  C1 dependencies: ${graph.dependencies.getOrElse(ref"C1", Set.empty).map(_.toA1).mkString(", ")}")
-println(s"  D1 dependencies: ${graph.dependencies.getOrElse(ref"D1", Set.empty).map(_.toA1).mkString(", ")}")
+println(s"  A1 dependents: ${cells(graph.dependentsOf(at(ref"A1")))}")
+println(s"  C1 dependencies: ${cells(graph.precedentsOf(at(ref"C1")))}")
+println(s"  D1 dependencies: ${cells(graph.precedentsOf(at(ref"D1")))}")
