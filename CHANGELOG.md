@@ -196,6 +196,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`view --eval` says when an iterated cycle did not converge** (#917): in a book with iterative
+  calculation on, a window over a cycle with no cached values shows what an iterative
+  recalculation computes, but dropped its verdict: a cycle that ran out of rounds showed its
+  last-round values with no notice, and `--strict` exited 0, where `recalc` warns and
+  `recalc --strict` exits 1. The window now prints one `NOT_CONVERGED` warning in `recalc`'s
+  words and gates under `--strict` (`RECALC_GATE`). It covers the cycles the window depends
+  on; when one of those cells is an `INDIRECT` or `OFFSET`, whose targets are not known ahead,
+  every unconverged cycle of the book is named. Library: `RangeEvalResult.unconverged` (a new field with a default, so `copy`
+  and `unapply` change shape) and `unconvergedVerdict`; `SccReport.unconvergedVerdict` is the
+  shared wording.
+
 - **The library's styles clear unmerges too, like Excel's Clear Formats** (#909):
   `Sheet.clearRange(range, ClearWhat.styles)` and `Edit.Clear(at, ClearWhat.styles)` now unmerge
   every merged region the range touches (inside it, partly overlapping it, or wholly covering it)
