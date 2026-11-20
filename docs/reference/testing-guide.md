@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 recorded **10,367 cases**: 10,367 passed, 0 failed (MUnit reported none ignored).
+**Current Status**: the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 recorded **10,398 cases**: 10,398 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 (10,367 passed, 0 failed, none ignored). Counts include skipped cases.
+As of the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 (10,398 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4499 |
-| xl-core | 1925 |
-| xl-ooxml | 1478 |
+| xl-evaluator | 4508 |
+| xl-core | 1935 |
+| xl-ooxml | 1484 |
 | xl-cli | 2025 |
 | xl-cats-effect | 220 |
 | xl-agent | 153 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 67 |
-| **Total** | **10,367** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 73 |
+| **Total** | **10,398** |
 
 
 ## Test Quality Metrics
