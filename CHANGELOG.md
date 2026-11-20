@@ -44,12 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells however wide the row is. It is keyed by each cell's own `ref`, has
   value equality (equal cells at equal references, however the store was built) and iterates
   row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
-  change. Migrating:
+  change. Single-cell writes are slower than on the `Map` (about 1.5× on 20-column rows, about 3×
+  on 500-column rows: a `put` copies the row's leaf, or its 256-column band); bulk writes
+  (`putAll`, `Sheet.withValues`, the builder) are not: see "Sheet cell storage" in
+  `docs/reference/performance-guide.md`. Java-serialized `ARef`s and sheets are not portable
+  across this version: the `ARef` packing changed and the store has its own serial form (its
+  cells, rebuilt through the builder on reading). Migrating:
   - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
     macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
   - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
     `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
     traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+    The five `Map` names (`keys`, `keySet`, `keysIterator`, `values`, `valuesIterator`) remain as
+    deprecated forwarders (since 0.27.0) so such code compiles with a warning: views over the
+    store, row-major, nothing copied. No other `Map` method is kept (`map`, `filter`, `foreach`,
+    `toMap`, `(ref, cell)` tuples: go through `iterator`). A script that must compile against
+    both 0.26.0 and this version can read through `sheet.cellsSorted`/`rowsSorted` and
+    `cells.get(ref)`, which did not change.
   - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
     `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
     `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
