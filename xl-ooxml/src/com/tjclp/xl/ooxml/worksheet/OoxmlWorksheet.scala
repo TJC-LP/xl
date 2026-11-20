@@ -92,11 +92,11 @@ case class OoxmlWorksheet(
       SaxSerializable:
 
   /**
-   * Preserved/generated child elements re-emitted into the regenerated worksheet. Used only to
-   * collect namespace bindings (GH-291), so emission order is irrelevant; preservedKnown is
-   * label-sorted for determinism.
+   * Preserved/generated child elements re-emitted into the regenerated worksheet. Used to collect
+   * namespace bindings and relationship references (GH-291, GH-895), so emission order is
+   * irrelevant; preservedKnown is label-sorted for determinism.
    */
-  private def preservedChildElems: Seq[Elem] =
+  private[ooxml] def preservedChildElems: Seq[Elem] =
     Seq(
       sheetPr,
       dimension,
@@ -423,6 +423,37 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     legacyDrawingRelId: String = "rId2",
     cellMetadata: ArrayMode.Dynamic => Option[Int] = FormulaKindCodec.noCellMetadata
   ): OoxmlWorksheet =
+    val hyperlinks = buildHyperlinksElem(collectHyperlinks(sheet))
+      .orElse(preservedMetadata.flatMap(_.preservedKnown.get("hyperlinks")))
+    fromDomainWithPlannedHyperlinks(
+      sheet,
+      sst,
+      styleRemapping,
+      preservedMetadata,
+      tableParts,
+      escapeFormulas,
+      drawingRef,
+      condFmt,
+      dataValidations,
+      legacyDrawingRelId,
+      cellMetadata,
+      hyperlinks
+    )
+
+  private[ooxml] def fromDomainWithPlannedHyperlinks(
+    sheet: Sheet,
+    sst: Option[SharedStrings],
+    styleRemapping: Map[Int, Int],
+    preservedMetadata: Option[OoxmlWorksheet],
+    tableParts: Option[Elem],
+    escapeFormulas: Boolean,
+    drawingRef: Option[Elem],
+    condFmt: Option[Seq[Elem]],
+    dataValidations: Option[Option[Elem]],
+    legacyDrawingRelId: String,
+    cellMetadata: ArrayMode.Dynamic => Option[Int],
+    hyperlinks: Option[Elem]
+  ): OoxmlWorksheet =
     // GH-558: the domain `sheet.rowProperties` is authoritative for every row attribute the reader
     // models (s/customFormat, ht/customHeight, hidden, outlineLevel, collapsed). A structural edit
     // remaps rowProperties, so a source row's copy of those attributes is stale at its ORIGINAL
@@ -568,12 +599,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
         val endRef = ARef.from0(maxCol, maxRow)
         elem("dimension", "ref" -> s"${startRef.toA1}:${endRef.toA1}")()
 
-    // GH-235: build <hyperlinks> from Cell.hyperlink (model-driven). External links also get
-    // matching sheet .rels from the writer via the same rIdHL{n} scheme (collectHyperlinks).
-    val hyperlinksMap: Map[String, Elem] =
-      buildHyperlinksElem(collectHyperlinks(sheet))
-        .map(e => Map("hyperlinks" -> e))
-        .getOrElse(Map.empty)
+    val hyperlinksMap = hyperlinks.iterator.map(e => "hyperlinks" -> e).toMap
 
     // If preservedMetadata is provided, use its metadata fields; otherwise use defaults (None)
     // (a generated legacyDrawing/hyperlinks element carries its own r: binding, which emission
@@ -631,7 +657,10 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.rootScope,
           // GH-232 preserve inline elements + GH-235 model-driven hyperlinks (overrides any raw)
           // + GH-429 autoFilter overlay (Ranged replaces @ref, Remove strips, None passthrough)
-          overlayAutoFilter(preserved.preservedKnown, sheet.autoFilter) ++ hyperlinksMap
+          overlayAutoFilter(
+            preserved.preservedKnown - "hyperlinks",
+            sheet.autoFilter
+          ) ++ hyperlinksMap
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain
