@@ -10,7 +10,7 @@ Apply a 5% price increase to column C of every workbook in a directory, in place
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -21,7 +21,8 @@ val files = Files.list(dir).iterator.asScala.filter(_.toString.endsWith(".xlsx")
 files.foreach { path =>
   Excel.modify(path.toString) { wb =>
     wb.sheets.foldLeft(wb) { (acc, sheet) =>
-      val bumped = sheet.cells.keys
+      val bumped = sheet.cellsSorted
+        .map(_.ref)
         .filter(r => r.col.index0 == 2 && r.row.index0 > 0) // column C, skip header
         .foldLeft(Patch.empty) { (p, r) =>
           sheet.readTypedOpt[BigDecimal](r) match
@@ -42,7 +43,7 @@ Read rows into case classes; collect per-cell validation failures into a new Iss
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 final case class Order(id: Int, customer: String, amount: BigDecimal)
@@ -76,7 +77,7 @@ Three-year projection with growth formulas; fail the script if any formula error
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val header = CellStyle.default.bold.size(12.0).center
@@ -111,7 +112,7 @@ Stack the data rows of every input file under one header.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -122,17 +123,12 @@ val files = Files.list(Paths.get("monthly")).iterator.asScala
 val (combined, _) = files.foldLeft((Sheet("Combined").put(ref"A1", "Source"), 1)) {
   case ((acc, nextRow), path) =>
     val src = Excel.read(path.toString).sheets.headOption.getOrElse(sys.exit(1))
-    val dataRefs = src.cells.keys.filter(_.row.index0 > 0).toList // skip per-file header
-    val byRow = dataRefs.groupBy(_.row.index0).toList.sortBy(_._1)
-    byRow.zipWithIndex.foldLeft((acc, nextRow)) { case ((s, row), ((_, refs), i)) =>
-      val tagged = refs.foldLeft(
+    val byRow = src.rowsSorted.filter((row, _) => row.index0 > 0) // skip per-file header
+    byRow.zipWithIndex.foldLeft((acc, nextRow)) { case ((s, row), ((_, cells), i)) =>
+      val tagged = cells.foldLeft(
         s.put(ref"A1".down(row + i), path.getFileName.toString)
-      ) { (s2, srcRef) =>
-        srcRef.col.index0 match
-          case c =>
-            src.cells.get(srcRef).map(_.value) match
-              case Some(v) => s2.put(ref"A1".down(row + i).right(c + 1), v)
-              case None => s2
+      ) { (s2, cell) =>
+        s2.put(ref"A1".down(row + i).right(cell.col.index0 + 1), cell.value)
       }
       (tagged, row)
     } match
@@ -147,7 +143,7 @@ println(s"combined ${files.size} files, ${combined.cells.size} cells")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -176,7 +172,7 @@ println("✓ filtered (constant memory)")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val before = Excel.read("before.xlsx")
@@ -184,11 +180,12 @@ val after = Excel.read("after.xlsx")
 
 val sheetNames = (before.sheets.map(_.name) ++ after.sheets.map(_.name)).distinct
 val diffs = sheetNames.flatMap { name =>
-  val b = before.sheets.find(_.name == name).map(_.cells).getOrElse(Map.empty)
-  val a = after.sheets.find(_.name == name).map(_.cells).getOrElse(Map.empty)
-  (b.keySet ++ a.keySet).toList.sortBy(r => (r.row.index0, r.col.index0)).flatMap { ref =>
-    val left = b.get(ref).map(_.value)
-    val right = a.get(ref).map(_.value)
+  val b = before.sheets.find(_.name == name)
+  val a = after.sheets.find(_.name == name)
+  val refs = (b.toList ++ a.toList).flatMap(_.cellsSorted).map(_.ref).distinct
+  refs.sortBy(r => (r.row.index0, r.col.index0)).flatMap { ref =>
+    val left = b.flatMap(_.cells.get(ref)).map(_.value)
+    val right = a.flatMap(_.cells.get(ref)).map(_.value)
     if left == right then None
     else Some(s"${name.value}!${ref.toA1}: ${left.getOrElse("∅")} → ${right.getOrElse("∅")}")
   }
@@ -204,7 +201,7 @@ else
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -232,7 +229,7 @@ cell ships a cached value for `data_only` readers, pandas, and Excel-before-reca
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 
 val reps = List(("Alice", 120000.0), ("Bob", 98000.0), ("Carol", 143500.0))
@@ -267,7 +264,7 @@ frozen header, a list-dropdown data validation, and a provenance comment — no 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.25.0
+//> using dep com.tjclp::xl:0.26.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.SheetView // SheetView lives one import deeper than the prelude
 

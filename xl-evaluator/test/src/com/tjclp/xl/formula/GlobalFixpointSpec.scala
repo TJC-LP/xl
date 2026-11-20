@@ -211,10 +211,12 @@ class GlobalFixpointSpec extends FunSuite:
         .put(aref(s"${c}4"), formula(s"=${c}1-${c}3")) // end (cyclic)
     }
     // Poison every formula cache: a wavefront engine needs one pass per SCC to burn this off.
-    val poisoned = withCells.cells.foldLeft(withCells) { case (s, (r, cell)) =>
-      cell.value match
-        case f @ CellValue.Formula(_, _, _) => s.put(r, f.copy(cachedValue = Some(num(staleCache))))
-        case _ => s
+    val poisoned = withCells.cells.iterator.foldLeft(withCells) {
+      case (s, cell @ Cell(r, _, _, _)) =>
+        cell.value match
+          case f @ CellValue.Formula(_, _, _) =>
+            s.put(r, f.copy(cachedValue = Some(num(staleCache))))
+          case _ => s
     }
     Workbook(poisoned)
 

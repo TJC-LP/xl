@@ -360,7 +360,6 @@ class RenderUtilsSpec extends ScalaCheckSuite:
       .put(ref"A3" -> 1234567.9)
       .put(ref"B3" -> "wrapped text over several lines")
       .put(ref"C3", CellValue.Formula("A1+1", None))
-      .unsafe
       .withCellStyle(ref"A1", acct)
       .withCellStyle(ref"B1", date)
       .withCellStyle(ref"A3", left)

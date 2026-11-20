@@ -703,3 +703,11 @@ class BatchPutSpec extends FunSuite:
     )
     assertEquals(ok.ops.size, 3)
   }
+
+  test("GH-669: batch putf accepts qualified plain table columns in every shape") {
+    List(
+      """[{"op":"putf","ref":"D1","value":"=SUM(Table1[Col])"}]""",
+      """[{"op":"putf","ref":"D1:D3","value":"=COUNTIF(Table1[Col],1)","from":"D1"}]""",
+      """[{"op":"putf","ref":"D1:D2","values":["=SUM(Table1[Col])","=ROWS(Table1[Col])"]}]"""
+    ).foreach(json => assert(parseOk(json).ops.nonEmpty))
+  }

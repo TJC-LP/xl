@@ -5,7 +5,7 @@ import scala.annotation.tailrec
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.{XLError, XLResult}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.styles.{CellStyle, StyleRegistry}
 import com.tjclp.xl.tables.{TableAutoFilter, TableSpec}
 
@@ -72,7 +72,7 @@ object rowSyntax:
       resolveColumns(codec.headers, present, headerRow).flatMap { columns =>
         val firstRow = headerRow.index0 + 1
         val colSet = columns.toSet
-        val lastRow = sheet.cells.valuesIterator
+        val lastRow = sheet.cells.iterator
           .filter(c => c.row.index0 >= firstRow && colSet.contains(c.col) && c.nonEmpty)
           .map(_.row.index0)
           .maxOption
@@ -94,7 +94,7 @@ object rowSyntax:
      * errors and uncached formulas are skipped. Distinct from a page header (`PageSetup`).
      */
     def columnHeaders(row: Row): Vector[(Column, String)] =
-      sheet.cells.valuesIterator
+      sheet.cells.iterator
         .filter(_.row.index0 == row.index0)
         .flatMap(c => headerText(c.effectiveValue).map(text => (c.col, text)))
         .toVector
@@ -267,7 +267,7 @@ object rowSyntax:
       }
     }
 
-  private type WriteState = (Map[ARef, Cell], StyleRegistry)
+  private type WriteState = (CellStore, StyleRegistry)
 
   private def writeRecord(
     state: WriteState,
@@ -299,10 +299,10 @@ object rowSyntax:
       case _ =>
         val cell = existing.fold(Cell(ref, value))(_.withValue(value))
         hint match
-          case None => (cells.updated(ref, cell), registry)
+          case None => (cells.updated(cell), registry)
           case Some(codecStyle) =>
             val merged = existing.flatMap(_.styleId).flatMap(registry.get) match
               case Some(current) => Sheet.mergeStyles(current, codecStyle)
               case None => codecStyle
             val (nextRegistry, styleId) = registry.register(merged)
-            (cells.updated(ref, cell.withStyle(styleId)), nextRegistry)
+            (cells.updated(cell.withStyle(styleId)), nextRegistry)

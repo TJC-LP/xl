@@ -4,7 +4,12 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
-import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry, ReferenceOperators}
+import com.tjclp.xl.formula.functions.{
+  ArgValue,
+  FunctionRegistry,
+  ReferenceOperators,
+  TableColumnReferences
+}
 import com.tjclp.xl.formula.parser.FormulaParser
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -80,8 +85,8 @@ private[xl] object ImplicitIntersection:
     val limit = math.max(budget, 0)
     def candidate(name: SheetName, ref: ARef): Option[(Sheet, ARef, String)] =
       sheets.get(name).flatMap { sheet =>
-        sheet.cells.get(ref).map(_.value) match
-          case Some(CellValue.Formula(text, _, _: FormulaKind.Normal))
+        sheet.cells.valueAt(ref) match
+          case CellValue.Formula(text, _, _: FormulaKind.Normal)
               if known(name -> ref) || FormulaParser.parse(s"=$text").exists(mayDiverge) =>
             Some((sheet, ref, text))
           case _ => None
@@ -158,6 +163,8 @@ private[xl] object ImplicitIntersection:
     case _: TExpr.RangeRef | _: TExpr.SheetRange | _: TExpr.ExternalRange | _: TExpr.NameRef |
         _: TExpr.SheetNameRef =>
       true
+    // GH-669: a table column is a multi-cell reference like `B3:B5`, though carried as a call
+    case TableColumnReferences.Ref(_) => true
     case TExpr.Lit(value) =>
       value match
         case _: ArrayResult => true
@@ -183,7 +190,7 @@ private[xl] object ImplicitIntersection:
       ReferenceOperators.isOperatorCall(call) ||
       call.spec.argSpec.toValues(call.args).exists {
         case ArgValue.Expr(arg) => mayDiverge(arg)
-        case _: ArgValue.Range | _: ArgValue.Cells => false
+        case _: ArgValue.Range => false
       }
 
   /** Numbers compare by value, Empty reads 0, anything else by equality (errors by code). */

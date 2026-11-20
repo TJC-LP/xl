@@ -321,6 +321,77 @@ sheet.put(newCells)
 - XL write: **4.5x faster, 80x less memory**
 - XL read: **4.4x faster, 80x less memory**
 
+### Sheet cell storage: `CellStore` against the `Map` it replaced (#891)
+
+`Sheet.cells` is a `CellStore` (a row-radix trie of struct-of-arrays rows) where it used to be a
+`Map[ARef, Cell]`. `SheetCellsBenchmark` measures both through the public `Sheet` API, so the same
+source runs on either side of the swap (the one line that differs is full iteration:
+`valuesIterator` on the map, `iterator` on the store).
+
+```bash
+./mill xl-benchmarks.runJmh -f 1 -wi 3 -i 5 -p shape=dense20,wide500 -p size=100000 \
+  'SheetCellsBenchmark\.(getHit|getMiss|iterateAll|usedRange|singlePut|putChain10k|randomPuts5k|buildSorted|buildUnsorted)$'
+```
+
+100,000 cells per sheet, in rows of 20 columns (`dense20`) or 500 (`wide500`); average time per
+operation, with JMH's 99.9% error. Measured 2026-11-19 on an Apple M4 Max (JDK 25, G1) **while
+other builds were using the machine**: four runs per side, interleaved, and the load average moved
+between 7 and 86 across them. The table gives each side's best run and, in brackets, its worst, so
+the spread is visible; the ratio compares the best runs, since interference only adds time. Treat
+a ratio within about 15% of 1 as no difference, and rerun on a quiet machine before quoting any
+of this.
+
+| Operation | Shape | Unit | `Map`: best run (worst) | `CellStore`: best run (worst) | Store / Map |
+|---|---|---|---|---|---|
+| `getHit` | dense20 | ns | 23.5 ±0.336 (to 45.8) | 12.3 ±0.399 (to 24.1) | 0.52× |
+| `getHit` | wide500 | ns | 24.0 ±0.298 (to 59.2) | 16.0 ±0.459 (to 38.4) | 0.66× |
+| `getMiss` | dense20 | ns | 11.5 ±0.628 (to 29.1) | 7.26 ±0.075 (to 12.6) | 0.63× |
+| `getMiss` | wide500 | ns | 10.6 ±0.592 (to 27.0) | 4.10 ±0.031 (to 6.99) | 0.39× |
+| `iterateAll` | dense20 | µs | 2,992 ±2,316 (to 10,734) | 744 ±92.2 (to 2,653) | 0.25× |
+| `iterateAll` | wide500 | µs | 2,782 ±317 (to 10,617) | 532 ±12.2 (to 2,086) | 0.19× |
+| `usedRange` | dense20 | µs | 3,105 ±790 (to 25,515) | 0.027 ±0.001 (to 0.388) | 1/115,305 |
+| `usedRange` | wide500 | µs | 2,795 ±1,238 (to 29,021) | 0.022 ±0.000 (to 0.277) | 1/126,408 |
+| `singlePut` | dense20 | ns | 80.5 ±1.40 (to 559) | 118 ±1.57 (to 243) | **1.47×** |
+| `singlePut` | wide500 | ns | 75.4 ±1.62 (to 458) | 232 ±1.22 (to 1,294) | **3.07×** |
+| `putChain10k` | dense20 | µs | 1,482 ±175 (to 6,320) | 1,728 ±11.5 (to 3,438) | **1.17×** |
+| `putChain10k` | wide500 | µs | 1,412 ±624 (to 6,594) | 1,626 ±18.0 (to 3,090) | **1.15×** |
+| `randomPuts5k` | dense20 | µs | 778 ±136 (to 2,914) | 867 ±43.5 (to 1,884) | **1.11×** |
+| `randomPuts5k` | wide500 | µs | 757 ±55.1 (to 3,259) | 1,551 ±105 (to 4,337) | **2.05×** |
+| `buildSorted` | dense20 | ms | 20.3 ±1.69 (to 42.9) | 20.5 ±2.01 (to 51.9) | 1.01× |
+| `buildSorted` | wide500 | ms | 18.4 ±2.98 (to 40.3) | 20.0 ±0.372 (to 61.9) | **1.08×** |
+| `buildUnsorted` | dense20 | ms | 20.2 ±2.75 (to 47.4) | 35.4 ±1.82 (to 62.3) | **1.75×** |
+| `buildUnsorted` | wide500 | ms | 22.5 ±2.96 (to 44.8) | 39.1 ±0.361 (to 79.6) | **1.74×** |
+
+Reads are faster everywhere: a lookup is index arithmetic on the row and column bits instead of a
+hash and an equality test, iteration walks arrays, and `usedRange` reads the trie's summaries
+instead of scanning every cell.
+
+**Where the store is slower** (bold): single-cell writes. A `put` copies the row's leaf (or, in a
+row of more than 64 cells, the 256-column band it lands in) and the path above it, where the map
+copied one small trie node per level. On 20-column rows that is 1.1× to 1.5× the map's cost; on
+500-column rows a single `put` is about 3× and 5,000 random puts 2×. `buildSorted` and
+`buildUnsorted` are folds of 100,000 single `put`s, not builder runs: in row-major order they match
+the map, in shuffled order they cost about 1.75× on both shapes. Code that writes many cells should
+not fold single `put`s: `Sheet.withValues`, `CellStore.putAll` and `CellStore.from` /
+`CellStore.newBuilder` build each row once.
+
+The builder is the bulk path (the worksheet reader uses it), and it is not what the JMH rows above
+measure. 2,000,000 cells in row-major order, same machine and caveat (`ThreadMXBean` allocation;
+the smallest SerialGC heap that completes, less the 236 MiB the input cells need; best build time
+of five, over three JVMs):
+
+| Building 2M cells | Allocated per cell | Heap beyond the input | Build time |
+|---|---|---|---|
+| `Map.newBuilder`, 8 or 20 columns | 213 B | 136 MiB | 563–1,101 ms |
+| `CellStore.newBuilder`, 8 columns | 13.8 B | 32 MiB | 17–18 ms |
+| `CellStore.newBuilder`, 20 columns | 19.0 B | 40 MiB | 19–30 ms |
+| `CellStore.newBuilder`, 8 columns, shuffled input | 63.7 B | 72 MiB (of 244) | 323–375 ms |
+
+Loading a 1,000,000 × 8 numeric workbook with `XlsxReader.read` (G1, the smallest `-Xmx` in 64 MiB
+steps) needs 5,120 MiB on the store, where the map needed 5,696 MiB (decimals) and 5,632 MiB
+(integers). Most of what remains is the parsed worksheet, which stays live while the store is
+built from it; see the memory notes on `--max-size` in the [CLI reference](cli.md).
+
 ### Recalculation benchmark (#767)
 
 `xl-evaluator.perf` (sources in `xl-evaluator/test-perf`) builds a synthetic freight-loads workbook

@@ -73,7 +73,7 @@ class SharedStringsLoadSpec extends CatsEffectSuite:
       // the same two strings the loaded sheet holds (three cells, two distinct texts)
       assertEquals(
         expected.sheets
-          .flatMap(_.cells.values.map(_.value))
+          .flatMap(_.cells.iterator.map(_.value))
           .collect { case CellValue.Text(t) =>
             t
           }

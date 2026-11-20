@@ -100,6 +100,13 @@ case "$MILL_VERSION" in
 esac
 
 MILL="${MILL_FINAL_DOWNLOAD_FOLDER}/$MILL_VERSION$ARTIFACT_SUFFIX"
+XL_LAUNCHER_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+. "$XL_LAUNCHER_ROOT/scripts/verify-download.sh"
+XL_MILL_SHA=$(xl_expected_sha256 "$XL_LAUNCHER_ROOT/scripts/launcher-checksums.txt" "$MILL_VERSION$ARTIFACT_SUFFIX") || {
+  echo "No committed checksum for Mill $MILL_VERSION$ARTIFACT_SUFFIX; update launcher-checksums.txt deliberately" >&2
+  exit 1
+}
+
 
 # If not already downloaded, download it
 if [ ! -s "${MILL}" ] || [ "$MILL_TEST_DRY_RUN_LAUNCHER_SCRIPT" = "1" ] ; then
@@ -153,6 +160,7 @@ if [ ! -s "${MILL}" ] || [ "$MILL_TEST_DRY_RUN_LAUNCHER_SCRIPT" = "1" ] ; then
   echo "Downloading mill ${MILL_VERSION} from ${MILL_DOWNLOAD_URL} ..." 1>&2
   curl -f -L -o "${MILL_TEMP_DOWNLOAD_FILE}" "${MILL_DOWNLOAD_URL}"
 
+  xl_verify_sha256 "$XL_MILL_SHA" "$MILL_TEMP_DOWNLOAD_FILE" || exit 1
   chmod +x "${MILL_TEMP_DOWNLOAD_FILE}"
 
   mkdir -p "${MILL_FINAL_DOWNLOAD_FOLDER}"
@@ -161,6 +169,8 @@ if [ ! -s "${MILL}" ] || [ "$MILL_TEST_DRY_RUN_LAUNCHER_SCRIPT" = "1" ] ; then
   unset MILL_TEMP_DOWNLOAD_FILE
   unset MILL_DOWNLOAD_SUFFIX
 fi
+
+xl_verify_sha256 "$XL_MILL_SHA" "$MILL" || exit 1
 
 MILL_FIRST_ARG=""
 if [ "$1" = "--bsp" ] || [ "${1#"-i"}" != "$1" ] || [ "$1" = "--interactive" ] || [ "$1" = "--no-server" ] || [ "$1" = "--no-daemon" ] || [ "$1" = "--repl" ] || [ "$1" = "--help" ] ; then

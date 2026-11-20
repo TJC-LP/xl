@@ -32,7 +32,7 @@ class ComparisonSemanticsSpec extends FunSuite:
         case b: Boolean => CellValue.Bool(b)
         case d: java.time.LocalDate => CellValue.DateTime(d.atStartOfDay())
         case _ => CellValue.Text(value.toString)
-      s.put(ref, cv).unsafe
+      s.put(ref, cv)
     }
 
   private def evalAs[A](formula: String, sheet: Sheet): Either[String, A] =

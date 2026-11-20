@@ -125,7 +125,7 @@ class OoxmlGenerativeRoundTripSpec extends ScalaCheckSuite:
       .put(Cell(ref"A1", CellValue.Text("héllo <world> & \"friends\"")))
       .put(Cell(ref"B2", CellValue.Number(BigDecimal("1E20"))))
       .put(Cell(ref"C3", CellValue.Formula("SUM(A1:B2)", Some(CellValue.Number(BigDecimal(7))))))
-      .put(Cell(ref"D4", CellValue.Bool(true), None, None, Some("https://example.com/x")))
+      .put(Cell(ref"D4", CellValue.Bool(true), None, Some(Hyperlink("https://example.com/x"))))
       .put(Cell(ref"E5", CellValue.DateTime(java.time.LocalDateTime.of(2026, 6, 10, 12, 30, 0))))
       .put(Cell(ref"F6", CellValue.Empty))
       .withCellStyle(ref"A1", style)

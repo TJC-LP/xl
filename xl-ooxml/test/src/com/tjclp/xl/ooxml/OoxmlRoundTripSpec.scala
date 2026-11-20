@@ -755,12 +755,12 @@ class OoxmlRoundTripSpec extends FunSuite:
     assertEquals(actual.sheets.size, expected.sheets.size, "Sheet count mismatch after round-trip")
     expected.sheets.zip(actual.sheets).foreach { case (expSheet, actSheet) =>
       assertEquals(
-        actSheet.cells.keySet,
-        expSheet.cells.keySet,
+        actSheet.cells.refs.toSet,
+        expSheet.cells.refs.toSet,
         s"Cell refs mismatch in sheet ${expSheet.name.value}"
       )
-      expSheet.cells.foreach { case (ref, expCell) =>
-        val actCell = actSheet.cells(ref)
+      expSheet.cells.iterator.foreach { case expCell @ Cell(ref, _, _, _) =>
+        val actCell = actSheet.cells.get(ref).getOrElse(fail(s"missing cell $ref"))
         assertCellValueEquals(expSheet.name.value, ref, expCell.value, actCell.value)
         val expStyle = expCell.styleId.flatMap(expSheet.styleRegistry.get)
         val actStyle = actCell.styleId.flatMap(actSheet.styleRegistry.get)

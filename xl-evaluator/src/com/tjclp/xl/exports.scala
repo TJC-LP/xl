@@ -9,7 +9,7 @@ package com.tjclp.xl
  *
  * sheet.evaluateFormula("=SUM(A1:A10)")  // SheetEvaluator extension
  * FormulaParser.parse("=A1+B1")          // Parser
- * DependencyGraph.fromSheet(sheet)       // Dependency analysis
+ * QualifiedGraph.of(wb)                  // Dependency analysis
  * }}}
  */
 object formulaExports:

@@ -163,14 +163,16 @@ println("STEP 1: Evaluate All Formulas")
 println("=" * 80)
 
 val startTime = System.nanoTime()
-val results = modelWithFormatting.evaluateWithDependencyCheck() match
-  case Right(r) =>
+val recalculated = Workbook(modelWithFormatting).recalculate()
+val results =
+  if recalculated.isClean then
+    val r = recalculated.evaluated.getOrElse(modelWithFormatting.name, Map.empty)
     val endTime = System.nanoTime()
     val duration = (endTime - startTime) / 1_000_000.0
     println(s"✓ All ${r.size} formulas evaluated successfully in ${duration}ms")
     r
-  case Left(err) =>
-    println(s"✗ Evaluation error: ${err.message}")
+  else
+    recalculated.errors.foreach(err => println(s"✗ Evaluation error: ${err.render}"))
     sys.exit(1)
 
 // Replace formulas with evaluated values (for display)
@@ -262,35 +264,34 @@ println("=" * 80)
 println("STEP 2: Dependency Chain Analysis")
 println("=" * 80)
 
-val graph = DependencyGraph.fromSheet(modelWithFormatting)
+val graph = QualifiedGraph.of(Workbook(modelWithFormatting))
+def at(a1: ARef): QualifiedRef = QualifiedRef(modelWithFormatting.name, a1)
+def cells(refs: Iterable[QualifiedRef]): String =
+  QualifiedGraph.sorted(refs).map(_.ref.toA1).mkString(", ")
 
 // Check for circular references (should be none)
-DependencyGraph.detectCycles(graph) match
-  case Right(_) =>
-    println("✓ No circular references detected (model is valid)")
-  case Left(error) =>
-    println(s"✗ Circular reference: ${error.cycle.map(_.toA1).mkString(" → ")}")
+val cycles = graph.sccs.filter(_.cyclic)
+if cycles.isEmpty then println("✓ No circular references detected (model is valid)")
+else cycles.foreach(cycle => println(s"✗ Circular reference: ${cells(cycle.members)}"))
 
-// Get evaluation order
-DependencyGraph.topologicalSort(graph) match
-  case Right(order) =>
-    println(s"✓ Evaluation order: ${order.size} formulas in dependency order")
-    println(s"  First 5: ${order.take(5).map(_.toA1).mkString(" → ")}")
-    println(s"  Last 5: ${order.takeRight(5).map(_.toA1).mkString(" → ")}")
-  case Left(error) =>
-    println(s"✗ Cannot sort due to cycle")
+// Get evaluation order: the strongly connected components, dependency-first
+if cycles.isEmpty then
+  val order = graph.sccs.flatMap(_.members).map(_.ref)
+  println(s"✓ Evaluation order: ${order.size} formulas in dependency order")
+  println(s"  First 5: ${order.take(5).map(_.toA1).mkString(" → ")}")
+  println(s"  Last 5: ${order.takeRight(5).map(_.toA1).mkString(" → ")}")
 
 println()
 
 // Analyze Net Income dependencies
 println("Net Income (B16) dependency chain:")
-val b16Precedents = DependencyGraph.precedents(graph, ref"B16")
-println(s"  Direct dependencies: ${b16Precedents.map(_.toA1).mkString(", ")}")
+val b16Precedents = graph.precedentsOf(at(ref"B16"))
+println(s"  Direct dependencies: ${cells(b16Precedents)}")
 
-// Show which cells would be affected if revenue changed
-val revenueImpact = DependencyGraph.dependents(graph, ref"B3")
+// Show which cells would be affected if revenue changed (transitively)
+val revenueImpact = QualifiedGraph.sorted(graph.dependents(at(ref"B3"), 0).flatten)
 println(s"\nCells impacted by B3 (2024 Revenue): ${revenueImpact.size} cells")
-println(s"  Examples: ${revenueImpact.take(5).map(_.toA1).mkString(", ")}")
+println(s"  Examples: ${revenueImpact.take(5).map(_.ref.toA1).mkString(", ")}")
 
 println()
 

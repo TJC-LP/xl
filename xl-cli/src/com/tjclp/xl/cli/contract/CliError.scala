@@ -1,7 +1,9 @@
 package com.tjclp.xl.cli.contract
 
-import java.nio.file.NoSuchFileException
+import java.nio.file.{NoSuchFileException, Path, Paths}
 
+import scala.jdk.CollectionConverters.*
+import scala.util.Try
 import scala.util.control.NoStackTrace
 
 import cats.effect.ExitCode
@@ -58,6 +60,30 @@ final class CliSignal(val payload: Payload, val error: CliError)
     with NoStackTrace
 
 object CliError:
+
+  /**
+   * GH-870: an `IO_READ` whose location is a relative path also names where that path resolved —
+   * `<message> (resolved to <absolute> from working directory <cwd>)` — so a run from the wrong
+   * directory says where xl looked. The location keeps the path as given; an absolute path, an
+   * `IO_READ` with no file, and every other code are returned unchanged. A `.` segment is dropped,
+   * since it cannot change which file is meant (`./model.xlsx` reads as `<cwd>/model.xlsx`). `..`
+   * is kept rather than collapsed: through a symlinked directory a lexical `..` would name a
+   * different file from the one the OS opened. A relative path that still carries a root on Windows
+   * (`\model.xlsx`, `C:model.xlsx`) resolves from that root, so the drive is kept; one that cannot
+   * be made absolute here (`D:model.xlsx` with the working directory on another drive) is returned
+   * unchanged rather than shown as resolved. Applying it twice adds the suffix once. `cwd` is a
+   * parameter so the rule stays pure; the runner passes the process's working directory.
+   */
+  def resolvingInputPath(e: CliError, cwd: Path): CliError =
+    val suffix = for
+      at <- e.location if e.code == ErrorCode.IO_READ
+      file <- at.file
+      path <- Try(Paths.get(file)).toOption if !path.isAbsolute
+      start = Option(path.getRoot).fold(cwd)(cwd.resolve)
+      shown = path.iterator.asScala.filterNot(_.toString == ".").foldLeft(start)(_.resolve(_))
+      if shown.isAbsolute
+    yield s" (resolved to $shown from working directory $cwd)"
+    suffix.filterNot(e.message.endsWith).fold(e)(s => e.copy(message = e.message + s))
 
   /**
    * The projection from the domain: `code = e.code`, `hint = e.hint`, `candidates = e.candidates`.

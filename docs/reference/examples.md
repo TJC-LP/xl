@@ -150,8 +150,8 @@ Formula system in 5 minutes (pure import):
 **Key APIs shown**:
 - `FormulaParser.parse("=SUM(A1:A10)")`
 - `sheet.evaluateCell(ref)`
-- `sheet.evaluateWithDependencyCheck()`
-- `DependencyGraph.detectCycles(graph)`
+- `Workbook(sheet).recalculate()` (cycles reported per cell in `.errors`)
+- `QualifiedGraph.of(wb).sccs.filter(_.cyclic)`
 
 ### Financial Modeling
 

@@ -52,7 +52,6 @@ class HtmlRendererSpec extends FunSuite:
         ref"A2" -> "A2",
         ref"B2" -> "B2"
       )
-      .unsafe
 
     val html = sheet.toHtml(ref"A1:B2")
     assert(html.contains("<table"))
@@ -120,7 +119,6 @@ class HtmlRendererSpec extends FunSuite:
 
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Header")
-      .unsafe
       .withCellStyle(ref"A1", headerStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = true)
@@ -133,7 +131,6 @@ class HtmlRendererSpec extends FunSuite:
     val boldStyle = CellStyle.default.withFont(Font.default.withBold(true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Bold")
-      .unsafe
       .withCellStyle(ref"A1", boldStyle)
 
     val html = sheet.toHtml(ref"A1:A1", includeStyles = false)
@@ -172,7 +169,6 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: escapes comment tooltip content (HTML + quotes)") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "value")
-      .unsafe
       .comment(
         ref"A1",
         com.tjclp.xl.cells.Comment
@@ -194,7 +190,6 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: number cells") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> BigDecimal("123.45"))
-      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("123.45"))
@@ -203,7 +198,6 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: boolean cells") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> true)
-      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     assert(html.contains("TRUE"), "Excel uses uppercase TRUE/FALSE")
@@ -212,7 +206,6 @@ class HtmlRendererSpec extends FunSuite:
   test("toHtml: date cells") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> java.time.LocalDate.of(2025, 11, 10))
-      .unsafe
 
     val html = sheet.toHtml(ref"A1:A1")
     // Date is formatted with NumFmt.Date style (M/d/yy format)
@@ -239,7 +232,6 @@ class HtmlRendererSpec extends FunSuite:
         ref"A2" -> "Expenses",
         ref"B2" -> BigDecimal("750000")
       )
-      .unsafe
       .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(12.0))) // 101px
 
     val html = sheet.toHtml(ref"A1:B2")
@@ -267,7 +259,6 @@ class HtmlRendererSpec extends FunSuite:
     val style = CellStyle.default.withFont(maliciousFont)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -282,7 +273,6 @@ class HtmlRendererSpec extends FunSuite:
     val style = CellStyle.default.withFont(fontWithCR)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -305,7 +295,6 @@ class HtmlRendererSpec extends FunSuite:
     val style = CellStyle.default.withFont(fontWithNull)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -319,7 +308,6 @@ class HtmlRendererSpec extends FunSuite:
     val style = CellStyle.default.withFont(fontWithQuotes)
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Test")
-      .unsafe
       .withCellStyle(ref"A1", style)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -345,7 +333,6 @@ class HtmlRendererSpec extends FunSuite:
         ref"A1" -> "Metric",
         ref"B1" -> "Change"
       )
-      .unsafe
       .withRangeStyle(ref"A1:B1", headerStyle)
       .put(ref"A2", CellValue.Text("Revenue"))
       .put(ref"B2", CellValue.RichText(positive))
@@ -482,7 +469,6 @@ class HtmlRendererSpec extends FunSuite:
     val indentStyle = CellStyle.default.withAlign(Align(indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Indented")
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -497,7 +483,6 @@ class HtmlRendererSpec extends FunSuite:
     val noIndent = CellStyle.default.withAlign(Align(indent = 0))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Normal")
-      .unsafe
       .withCellStyle(ref"A1", noIndent)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -512,7 +497,6 @@ class HtmlRendererSpec extends FunSuite:
     val maxIndent = CellStyle.default.withAlign(Align(indent = 15))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Max indent")
-      .unsafe
       .withCellStyle(ref"A1", maxIndent)
 
     val html = sheet.toHtml(ref"A1:A1")
@@ -658,7 +642,6 @@ class HtmlRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> "This is a long text that would normally overflow")
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
@@ -768,7 +751,6 @@ class HtmlRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> "L", ref"B1" -> "R")
-      .unsafe
       .withCellStyle(ref"A1", thickRight)
       .withCellStyle(ref"B1", thinLeft)
 
@@ -831,7 +813,6 @@ class HtmlRendererSpec extends FunSuite:
     val rightStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Right))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 987654321.0)
-      .unsafe
       .withCellStyle(ref"A1", rightStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
@@ -857,7 +838,6 @@ class HtmlRendererSpec extends FunSuite:
     val wrapStyle = CellStyle.default.withAlign(Align(wrapText = true))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", wrapStyle)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0)))
 
@@ -925,7 +905,6 @@ class HtmlRendererSpec extends FunSuite:
     val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", leftStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(9.0))) // 77px
@@ -940,7 +919,6 @@ class HtmlRendererSpec extends FunSuite:
       CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0))) // 101px
@@ -954,7 +932,6 @@ class HtmlRendererSpec extends FunSuite:
     val leftStyle = CellStyle.default.withAlign(Align(horizontal = HAlign.Left))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 42.0)
-      .unsafe
       .withCellStyle(ref"A1", leftStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
@@ -968,7 +945,6 @@ class HtmlRendererSpec extends FunSuite:
       CellStyle.default.withAlign(Align(horizontal = HAlign.Left, indent = 2))
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", indentStyle)
       .put(ref"B1" -> "x")
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(12.0)))
@@ -1049,7 +1025,6 @@ class HtmlRendererSpec extends FunSuite:
       val textFmt = CellStyle.default.withNumFmt(fmt)
       val sheet = Sheet("Test")
         .put(ref"A1" -> 1234567.9)
-        .unsafe
         .withCellStyle(ref"A1", textFmt)
         .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
 
@@ -1069,7 +1044,6 @@ class HtmlRendererSpec extends FunSuite:
     )
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", acct)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(4.0))) // 37px
 
@@ -1086,7 +1060,6 @@ class HtmlRendererSpec extends FunSuite:
     val colWidth = columnBetween("0.12", "0.123456789", leftDecimal.font)
     val sheet = Sheet("Test")
       .put(ref"A1" -> 0.123456789)
-      .unsafe
       .withCellStyle(ref"A1", leftDecimal)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1104,7 +1077,6 @@ class HtmlRendererSpec extends FunSuite:
     val colWidth = columnBetween("1234.5", "$1,234.50", leftCurrency.font)
     val sheet = Sheet("Test")
       .put(ref"A1" -> 1234.5)
-      .unsafe
       .withCellStyle(ref"A1", leftCurrency)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1124,7 +1096,6 @@ class HtmlRendererSpec extends FunSuite:
     val colWidth = columnBetween("Div0", "#DIV/0!", left.font)
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Error(CellError.Div0))
-      .unsafe
       .withCellStyle(ref"A1", left)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(colWidth)))
 
@@ -1143,7 +1114,6 @@ class HtmlRendererSpec extends FunSuite:
       .put(ref"A1" -> 1234567.9)
       .put(ref"A2" -> 1234567.9)
       .put(ref"A3" -> 1234567.9)
-      .unsafe
       .withCellStyle(ref"A1", left)
       .withCellStyle(ref"A2", center)
       .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(3.0))) // 29px

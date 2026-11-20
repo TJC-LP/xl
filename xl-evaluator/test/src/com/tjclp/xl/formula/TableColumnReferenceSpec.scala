@@ -1,0 +1,453 @@
+package com.tjclp.xl.formula
+
+import com.tjclp.xl.{*, given}
+import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.eval.StructuralEditor
+import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.EvalAllSyntax.*
+import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, QualifiedGraph}
+import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
+import com.tjclp.xl.tables.{TableColumn, TableSpec}
+import com.tjclp.xl.unsafe.*
+
+import munit.FunSuite
+
+class TableColumnReferenceSpec extends FunSuite:
+  private def num(n: Int): CellValue = CellValue.Number(BigDecimal(n))
+  private val table = TableSpec(
+    "Internal",
+    "Table1",
+    ref"B2:C6",
+    Vector(TableColumn(1, "Col"), TableColumn(2, "Other Column")),
+    showTotalsRow = true
+  )
+  private val data = Sheet("Data")
+    .withTable(table)
+    .put(
+      ref"B2" -> 900,
+      ref"C2" -> 900,
+      ref"B3" -> 1,
+      ref"B5" -> 3,
+      ref"C3" -> 10,
+      ref"C4" -> 20,
+      ref"C5" -> 30,
+      ref"B6" -> 1000,
+      ref"C6" -> 1000
+    )
+  private def cached(wb: Workbook, sheet: String, ref: ARef): Option[CellValue] =
+    wb(SheetName.unsafe(sheet)).toOption.flatMap { s =>
+      s(ref).value match
+        case CellValue.Formula(_, cache, _) => cache
+        case value => Some(value)
+    }
+
+  test("GH-669: qualified table column is accepted by the formula gate") {
+    val parsed = FormulaParser.parse("=SUM(Table1[Col])")
+    assert(parsed.isRight, parsed.toString)
+    assertEquals(data.evaluateFormula("=SUM(Table1[Col])"), Right(num(4)))
+  }
+
+  for formula -> expected <- List(
+      "SUM(Table1[Col])" -> 4,
+      "SUMPRODUCT(Table1[Col],Table1[Other Column])" -> 100,
+      "SUMPRODUCT(Table1[Col]*2)" -> 8,
+      "COUNT(Table1[Col])" -> 2,
+      "COUNTBLANK(Table1[Col])" -> 1,
+      "COUNTIF(Table1[Col],\">1\")" -> 1,
+      "SUMIFS(Table1[Other Column],Table1[Col],\">1\")" -> 30,
+      "SUMIF(Table1[Col],\">0\",Table1[Other Column])" -> 40,
+      "ROWS(Table1[Col])" -> 3,
+      "COLUMNS(Table1[Col])" -> 1,
+      "ROW(INDEX(Table1[Col],1))" -> 3,
+      "SUM(INDEX(Table1[Col],0))" -> 4,
+      "SUM(OFFSET(Table1[Col],0,1))" -> 60,
+      "LET(r,Table1[Col],COUNTIF(r,\">1\"))" -> 1,
+      "SUM(IF(TRUE,Table1[Col],C3:C5))" -> 4,
+      "SUM((Table1[Col],C3:C5))" -> 64,
+      "SUM((Table1[Col] B4:B5))" -> 3
+    )
+  do
+    test(s"GH-669: reference consumer $formula") {
+      assertEquals(data.evaluateFormula(formula), Right(num(expected)))
+    }
+
+  test("GH-669: lookup uses formula displayName and folds table/column case") {
+    assertEquals(data.evaluateFormula("SUM(tAbLe1[cOL])"), Right(num(4)))
+    assertEquals(data.evaluateFormula("SUM(Internal[Col])"), Right(CellValue.Error(CellError.Ref)))
+  }
+
+  test("GH-669: workbook lookup finds the table on another sheet") {
+    val wb = Workbook(Sheet("Reader"), data)
+    assertEquals(wb.evaluateFormula("SUM(Table1[Other Column])", "Reader"), Right(num(60)))
+    assertEquals(wb.evaluateFormula("COUNTIF(Table1[Col],\">1\")", "Reader"), Right(num(1)))
+  }
+
+  test("GH-669: direct array has the declared height and blank positions") {
+    val result = data.evaluateArrayFormula("Table1[Col]", ref"F1").toOption.get
+    assertEquals(result._2, ref"F1:F3")
+    assertEquals(result._1(ref"F1").value, num(1))
+    assertEquals(result._1(ref"F2").value, CellValue.Empty)
+    assertEquals(result._1(ref"F3").value, num(3))
+  }
+
+  test("GH-669: plain cell implicit intersection follows table geometry") {
+    assertEquals(data.evaluateFormula("Table1[Col]", currentCell = Some(ref"F5")), Right(num(3)))
+    assertEquals(
+      data.evaluateFormula("Table1[Col]", currentCell = Some(ref"F8")),
+      Right(CellValue.Error(CellError.Value))
+    )
+  }
+
+  test("GH-669: referenced errors propagate through aggregate and range-only slots") {
+    val errors = data.put(ref"B4", CellValue.Error(CellError.Div0))
+    assertEquals(errors.evaluateFormula("SUM(Table1[Col])"), Right(CellValue.Error(CellError.Div0)))
+    assertEquals(
+      errors.evaluateFormula("INDEX(Table1[Col],2)"),
+      Right(CellValue.Error(CellError.Div0))
+    )
+  }
+
+  for formula <- List("SUM(Missing[Col])", "COUNTIF(Table1[Missing],1)") do
+    test(s"GH-669: unresolved metadata is a reference error: $formula") {
+      assertEquals(data.evaluateFormula(formula), Right(CellValue.Error(CellError.Ref)))
+    }
+
+  test("GH-669: folded duplicate tables refuse an exact-spelling preference") {
+    val duplicate = Sheet("Other").withTable(table.copy(name = "Other", displayName = "TABLE1"))
+    val wb = Workbook(data, duplicate)
+    assertEquals(
+      wb.evaluateFormula("SUM(Table1[Col])", "Data"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+  }
+
+  for invalid <- List(
+      table.copy(columns = Vector(TableColumn(1, "Col"), TableColumn(2, "COL"))),
+      table.copy(columns = Vector(TableColumn(1, "Col"))),
+      table.copy(range = ref"B2:C2", showTotalsRow = false),
+      table.copy(range = ref"B2:C3"),
+      table.copy(range = ref"B1048576:C1048576", showTotalsRow = false),
+      table.copy(range = ref"B1:C1", showHeaderRow = false)
+    )
+  do
+    test(s"GH-669: invalid/empty metadata never normalizes into data: $invalid") {
+      assertEquals(
+        data.withTable(invalid).evaluateFormula("SUM(Table1[Col])"),
+        Right(CellValue.Error(CellError.Ref))
+      )
+    }
+
+  test("GH-669: hidden header and totals flags define data boundaries") {
+    val noHeader = table.copy(showHeaderRow = false, showTotalsRow = false)
+    assertEquals(data.withTable(noHeader).evaluateFormula("ROWS(Table1[Col])"), Right(num(5)))
+    assertEquals(data.withTable(noHeader).evaluateFormula("SUM(Table1[Col])"), Right(num(1904)))
+  }
+
+  test("GH-669: identifiers round-trip and survive copy, structural shift and sheet rename") {
+    val text = "COUNTIF(tAbLe1[Other Column],\">0\")"
+    val parsed = FormulaParser.parse(text).toOption.get
+    assertEquals(FormulaPrinter.printFileForm(parsed), text)
+    assertEquals(FormulaParser.parse(FormulaPrinter.print(parsed)), Right(parsed))
+    assertEquals(FormulaPrinter.printFileForm(FormulaShifter.shift(parsed, 3, 4)), text)
+    assertEquals(
+      FormulaPrinter.printFileForm(
+        FormulaShifter.shiftStructural(parsed, true, "Data", true, 0, 1)
+      ),
+      text
+    )
+    assertEquals(
+      FormulaPrinter.printFileForm(
+        FormulaShifter.renameSheet(parsed, SheetName.unsafe("Data"), SheetName.unsafe("New"))
+      ),
+      text
+    )
+    assert(DependencyGraph.containsCellReferences(parsed))
+  }
+
+  test("GH-669: the graph orders table formulas and detects a table self-cycle") {
+    val sheet = data
+      .put(ref"B3", CellValue.Formula("C3+1", Some(num(99))))
+      .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(-1))))
+    // the declared reads, ranges unexpanded (the expanded view lists only occupied cells: B4 is
+    // empty)
+    val declared = QualifiedGraph
+      .of(Workbook(sheet))
+      .declaredPrecedentsOf(DependencyGraph.QualifiedRef(sheet.name, ref"A1"))
+    assertEquals(
+      declared.flatMap {
+        case QualifiedGraph.Node.Cell(cell) => Vector(cell.ref)
+        case QualifiedGraph.Node.Range(range) => range.range.cells.toVector
+      }.toSet,
+      Set(ref"B3", ref"B4", ref"B5")
+    )
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(14))
+    val cycle = data.put(ref"B3", CellValue.Formula("SUM(Table1[Col])"))
+    assert(cycle.cyclicCells.nonEmpty)
+  }
+
+  test("GH-669: workbook graph and dirty recalc refresh table precedents first") {
+    val source = data.put(ref"B3", CellValue.Formula("C3+1", Some(num(99))))
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(-1))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(num(-2))))
+    val wb = Workbook(reader, source)
+    val result = wb.recalculate()
+    assertEquals(result.errors, Vector.empty)
+    assertEquals(cached(result.workbook, "Reader", ref"A1"), Some(num(14)))
+    val updated =
+      result.workbook.put(result.workbook(SheetName.unsafe("Data")).toOption.get.put(ref"C3", 20))
+    val dirty = updated.afterEdit(SheetName.unsafe("Data"), Set(ref"C3"))
+    assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(24)))
+    assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(48)))
+  }
+
+  test("GH-669: resizing and removing table metadata is observed by explicit recalculation") {
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(999))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(num(999))))
+    val wb = Workbook(reader, data).recalculate().workbook
+    val smaller = wb.put(data.withTable(table.copy(range = ref"B2:C5"))).recalculate().workbook
+    assertEquals(cached(smaller, "Reader", ref"A1"), Some(num(1)))
+    assertEquals(cached(smaller, "Reader", ref"A2"), Some(num(2)))
+    val removed = smaller.put(data.removeTable("Internal")).recalculate().workbook
+    assertEquals(cached(removed, "Reader", ref"A1"), Some(CellValue.Error(CellError.Ref)))
+    assertEquals(cached(removed, "Reader", ref"A2"), Some(CellValue.Error(CellError.Ref)))
+  }
+
+  test("GH-669: structural edits preserve table text, invalidate caches and follow moved rows") {
+    val reader = Sheet("Reader").put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(999))))
+    val wb = Workbook(reader, data)
+    val shifted = StructuralEditor.insertRowsChecked(wb, data.name, 3, 1).unsafe
+    assertEquals(cached(shifted, "Reader", ref"A1"), None)
+    assertEquals(cached(shifted.recalculate().workbook, "Reader", ref"A1"), Some(num(4)))
+  }
+
+  for text <- List(
+      "[@Col]",
+      "[Col]",
+      "Table1[@Col]",
+      "Table1[#All]",
+      "Table1[#Headers]",
+      "Table1[#Totals]",
+      "Table1[[Col]]",
+      "Table1[[Col]:[Other]]",
+      "Table1[Col:Other]",
+      "Table1['#Col]",
+      "Table1[]",
+      "SUM(Sheet1:Sheet3!A1)",
+      "LAMBDA(x,x+1)(2)"
+    )
+  do
+    test(s"GH-669: excluded grammar remains refused: $text") {
+      assert(FormulaParser.parse(text).isLeft, text)
+    }
+
+  for position <- List(ref"F5", ref"F8") do
+    test(s"GH-669: lifted table references match explicit data ranges at ${position.toA1}") {
+      val plain = data.evaluateFormula("SUM(ABS(B3:B5))", currentCell = Some(position))
+      assertEquals(
+        data.evaluateFormula("SUM(ABS(Table1[Col]))", currentCell = Some(position)),
+        plain
+      )
+    }
+
+  test("GH-669: range-refusing lifted slots distinguish references from values") {
+    assertEquals(
+      data.evaluateFormula("EOMONTH(Table1[Col],0)", currentCell = Some(ref"F5")),
+      data.evaluateFormula("EOMONTH(B3:B5,0)", currentCell = Some(ref"F5"))
+    )
+  }
+
+  for name <- List("NOT", "TRUE", "FALSE", "SUM") do
+    test(s"GH-669: a table name $name precedes keyword/function interpretation") {
+      val sheet = data.withTable(table.copy(displayName = name))
+      assertEquals(sheet.evaluateFormula(s"SUM($name[Col])"), Right(num(4)))
+    }
+
+  test("GH-669: resized SUMIF table targets read fresh formula cells beyond the column") {
+    val sheet = data
+      .put(ref"C7", 1)
+      .put(ref"B7", CellValue.Formula("C7+10", Some(num(999))))
+      .put(ref"A1", CellValue.Formula("""SUMIF(C3:C7,">0",Table1[Col])""", Some(num(-1))))
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(1015))
+    val wb = Workbook(sheet).recalculate()
+    assertEquals(cached(wb.workbook, "Data", ref"A1"), Some(num(1015)))
+  }
+
+  test("GH-669: resized table target edges expose the same cycles as explicit ranges") {
+    def cycle(formula: String): Sheet = data
+      .put(ref"C7", 1)
+      .put(ref"B7", CellValue.Formula("A1+1", Some(num(999))))
+      .put(ref"A1", CellValue.Formula(formula, Some(num(1))))
+    val explicit = cycle("""SUMIF(C3:C7,">0",B3:B5)""")
+    assert(explicit.cyclicCells.nonEmpty)
+    val structured = cycle("""SUMIF(C3:C7,">0",Table1[Col])""")
+    assert(structured.cyclicCells.nonEmpty)
+  }
+
+  for (criteria, cycleCell, expectedCycle) <- List(
+      ("C3:C7", ref"B7", true),
+      ("C3:C3", ref"B5", false)
+    )
+  do
+    test(s"GH-669: resized workbook target $criteria has exactly the needed cycle edges") {
+      val sheet = data
+        .put(ref"C7", 1)
+        .put(cycleCell, CellValue.Formula("A1+1", Some(num(999))))
+        .put(ref"A1", CellValue.Formula(s"""SUMIF($criteria,">0",Table1[Col])""", Some(num(1))))
+      assertEquals(CompactGraph.build(Workbook(sheet)).cyclicFormulas.nonEmpty, expectedCycle)
+      assertEquals(sheet.cyclicCells.nonEmpty, expectedCycle)
+    }
+
+  test("GH-669: table criteria shape resizes a literal SUMIF target in both graphs") {
+    val sheet = data
+      .put(ref"C5", CellValue.Formula("A1+1", Some(num(999))))
+      .put(ref"A1", CellValue.Formula("""SUMIF(Table1[Col],">0",C3)""", Some(num(1))))
+    assert(sheet.cyclicCells.nonEmpty)
+    assert(CompactGraph.build(Workbook(sheet)).cyclicFormulas.nonEmpty)
+  }
+
+  test("GH-669: table scheduling prefilter ignores quotes, externals and excluded selectors") {
+    import com.tjclp.xl.formula.functions.TableColumnReferences
+    List("SUM(Table1[Col])", "COUNTIF(tAbLe1[Other Column],1)").foreach(text =>
+      assert(TableColumnReferences.mayContain(text), text)
+    )
+    List(
+      "\"Table1[Col]\"",
+      "'Table1[Col]'!A1",
+      "[1]Other!A1",
+      "Table1[[#Headers],[Col]]",
+      "Table1[@Col]",
+      "Table1[Col:Other]",
+      "Table1[]"
+    ).foreach(text => assert(!TableColumnReferences.mayContain(text), text))
+  }
+
+  test("GH-669: criteria-function table slots resolve statically, so they are not dynamic") {
+    val readers = data
+      .put(ref"E1", CellValue.Formula("SUMIF(Table1[Col],\">0\")"))
+      .put(ref"E2", CellValue.Formula("COUNTIF(Table1[Col],\">0\")"))
+      .put(ref"E3", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])"))
+      .put(ref"E4", CellValue.Formula("SUM(Table1[Col])"))
+      .put(ref"E5", CellValue.Formula("COUNTIF(OFFSET(B3,0,0,3,1),\">0\")"))
+    // only the genuinely computed OFFSET range stays dynamic
+    assertEquals(readers.dynamicRefs, Set(ref"E5"))
+    assertEquals(
+      DependencyGraph.dynamicCells(Workbook(Sheet("Reader"), readers)).map(_.ref),
+      Set(ref"E5")
+    )
+  }
+
+  test("GH-669: dirty recalc refreshes static table criteria readers on both sheets") {
+    val source = data.put(ref"E1", CellValue.Formula("SUMIF(Table1[Col],\">0\")", Some(num(-1))))
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+      .put(ref"A2", CellValue.Formula("SUMIF(Data!B3:B5,\">0\",Table1[Other Column])"))
+    val wb = Workbook(reader, source).recalculate().workbook
+    assertEquals(cached(wb, "Data", ref"E1"), Some(num(4)))
+    assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
+    assertEquals(cached(wb, "Reader", ref"A2"), Some(num(40)))
+    val edited = wb.put(wb(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 5))
+    val dirty = edited.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
+    assertEquals(cached(dirty, "Data", ref"E1"), Some(num(9)))
+    assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
+    assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(60)))
+  }
+
+  test("GH-669: the table index follows each workbook value, never a previous one") {
+    val reader = Sheet("Reader")
+    val first = Workbook(reader, data)
+    assertEquals(first.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+    // a different workbook value: renamed table, then a second copy making the name ambiguous
+    val renamed =
+      Workbook(reader, data.removeTable("Internal").withTable(table.copy(displayName = "Sales")))
+    assertEquals(
+      renamed.evaluateFormula("SUM(Table1[Col])", "Reader"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+    assertEquals(renamed.evaluateFormula("SUM(Sales[Col])", "Reader"), Right(num(4)))
+    val twice = Workbook(reader.withTable(table.copy(name = "Copy", range = ref"E2:F6")), data)
+    assertEquals(
+      twice.evaluateFormula("SUM(Table1[Col])", "Reader"),
+      Right(CellValue.Error(CellError.Ref))
+    )
+    // and back to the first value
+    assertEquals(first.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+  }
+
+  test("GH-669: indexed lookup folds case exactly as equalsIgnoreCase") {
+    for (displayName, spelled) <- List("Ünits", "üNITS") -> List("ünits") match
+        case (names, spells) => names.flatMap(n => spells.map(s => (n, s)))
+    do
+      val wb = Workbook(
+        Sheet("Reader"),
+        data.removeTable("Internal").withTable(table.copy(displayName = displayName))
+      )
+      assertEquals(
+        wb.evaluateFormula(s"SUM($spelled[Col])", "Reader"),
+        Right(num(4)),
+        s"$displayName vs $spelled"
+      )
+  }
+
+  test("GH-669: alternating workbooks each keep resolving their own tables") {
+    val reader = Sheet("Reader")
+    val a = Workbook(reader, data)
+    val b =
+      Workbook(reader, data.removeTable("Internal").withTable(table.copy(displayName = "Sales")))
+    for _ <- 1 to 3 do
+      assertEquals(a.evaluateFormula("SUM(Table1[Col])", "Reader"), Right(num(4)))
+      assertEquals(b.evaluateFormula("SUM(Sales[Col])", "Reader"), Right(num(4)))
+      assertEquals(
+        b.evaluateFormula("SUM(Table1[Col])", "Reader"),
+        Right(CellValue.Error(CellError.Ref))
+      )
+  }
+
+  test("GH-669: sheet-level dirty recalc refreshes a static table criteria reader") {
+    val sheet = data
+      .put(ref"E1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+      .put(ref"E2", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])", Some(num(-1))))
+    val fresh = sheet.afterEdit(Set(ref"B3"))
+    val edited = fresh.put(ref"B4", 5).afterEdit(Set(ref"B4"))
+    def value(s: Sheet, at: ARef) = s(at).value match
+      case CellValue.Formula(_, cache, _) => cache
+      case other => Some(other)
+    assertEquals(value(edited, ref"E1"), Some(num(3)))
+    assertEquals(value(edited, ref"E2"), Some(num(60)))
+  }
+
+  test("GH-669: inserting a row inside a table refreshes table criteria readers") {
+    val reader = Sheet("Reader")
+      .put(ref"A1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
+    val wb = Workbook(reader, data).recalculate().workbook
+    assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
+    // 0-based 3 is row 4, inside the table's data rows B3:B5
+    val inserted = StructuralEditor.insertRowsChecked(wb, SheetName.unsafe("Data"), 3, 1).unsafe
+    val withValue = inserted.put(inserted(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 7))
+    val dirty = withValue.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
+    assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
+  }
+
+  test("GH-669: a table column in an intersecting position gets the implicit-intersection check") {
+    import com.tjclp.xl.formula.eval.ImplicitIntersection
+    def diverges(text: String) =
+      FormulaParser.parse(text).fold(e => fail(e.toString), ImplicitIntersection.mayDiverge)
+    assert(diverges("Table1[Col]*2"))
+    assert(diverges("SUM(ABS(Table1[Col]))"))
+    assert(diverges("Table1[Col]"))
+    // a range slot takes the reference whole in both modes
+    assert(!diverges("COUNTIF(Table1[Col],\">0\")"))
+    val wb = Workbook(
+      data
+        .put(ref"F4", CellValue.Formula("Table1[Col]*2"))
+        .put(ref"F5", CellValue.Formula("SUM(Table1[Col])"))
+    )
+    val report = ImplicitIntersection.check(
+      wb,
+      Iterator(data.name -> ref"F4", data.name -> ref"F5"),
+      Clock.system
+    )
+    // SUM gives one value either way, so only the broadcast product is reported
+    assertEquals(report.hits.map(_.cell), Vector(ref"F4"))
+  }

@@ -118,7 +118,7 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
   /** The formulas whose cache `uncacheReaders` dropped. */
   private def uncached(before: Workbook, after: Workbook): Set[(Int, ARef)] =
     before.sheets.zipWithIndex.flatMap { (sheet, s) =>
-      sheet.cells.keys.collect {
+      sheet.cells.refs.collect {
         case ref if (sheet(ref).value, after.sheets(s)(ref).value) match
               case (CellValue.Formula(_, Some(_), _), CellValue.Formula(_, None, _)) => true
               case _ => false
@@ -134,7 +134,8 @@ class UncacheReadersSpec extends FunSuite with ScalaCheckSuite:
       def named(cells: Set[(Int, ARef)]): List[String] =
         cells.toList.map((s, ref) => s"${names(s)}!${ref.toA1}").sorted
       val formulas = before.sheets.flatMap(sheet =>
-        sheet.cells.toList.flatMap((ref, cell) =>
+        sheet.cells.iterator.toList.flatMap(cell =>
+          val ref = cell.ref
           cell.value match
             case CellValue.Formula(text, _, _) => List(s"${sheet.name.value}!${ref.toA1} $text")
             case _ => Nil

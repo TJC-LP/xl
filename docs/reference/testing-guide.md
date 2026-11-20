@@ -1,10 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-#741 reconciliation (2026-11-05): the full suite at `3365d726`, integrating the published
-extraction with main `db2b91d5`, recorded 10,016 cases: 10,012 passed, 0 failures/errors and
-4 optional-tool skips. Counts below are observed from that run, not inferred from earlier totals.
-
-**Current validation**: #741 at `3365d726` against main `db2b91d5` on 2026-11-05 recorded **10,016 cases**: 10,012 passed, 0 failures/errors, 4 skipped.
+**Current Status**: the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 recorded **10,398 cases**: 10,398 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -272,7 +268,7 @@ index-off matcher calls, and a 30 s wall-clock backstop. See the recalculation b
 A performance regression is pinned by a work counter or a structural count, never by wall time:
 `__.test` runs on a shared 4-core CI runner beside several other test JVMs, where a 2 s build can
 take 6 s, so a wall-clock threshold can only flake (#843). The counters are `RecalcCounters`
-(`RangeLookups` and `RangeLookupWork` for the formula graph's range index, `UsedRangeScans`,
+(`RangeLookups` and `RangeLookupWork` for the formula graph's range index,
 `GraphEdges`, `MatcherCalls`, ...), read through `RecalcCounters.create()` with
 `WorkbookEvaluator.recalculateCounted` or `DependencyGraph.fromWorkbookFormulaGraph(wb, counters)`;
 structural counts are reports such as `ImplicitIntersection.Report` and `ReadCommands.UncacheTrace`.
@@ -285,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As observed for #741 at `3365d726` against main `db2b91d5`, 2026-11-05 (10,012 passed, 0 failures/errors, 4 skipped). Counts include skipped cases.
+As of the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 (10,398 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4296 |
-| xl-core | 1875 |
-| xl-ooxml | 1446 |
-| xl-cli | 1969 |
-| xl-cats-effect | 217 |
-| xl-agent | 147 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 66 |
-| **Total** | **10,016** |
+| xl-evaluator | 4508 |
+| xl-core | 1935 |
+| xl-ooxml | 1484 |
+| xl-cli | 2025 |
+| xl-cats-effect | 220 |
+| xl-agent | 153 |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 73 |
+| **Total** | **10,398** |
 
 
 ## Test Quality Metrics

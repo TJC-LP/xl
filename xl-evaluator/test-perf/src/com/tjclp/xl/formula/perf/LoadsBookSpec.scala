@@ -8,7 +8,7 @@ class LoadsBookSpec extends FunSuite:
 
   private def formulaCells(built: LoadsBook.Built): Int =
     built.workbook.sheets.iterator
-      .map(_.cells.valuesIterator.count(_.value match
+      .map(_.cells.iterator.count(_.value match
         case _: CellValue.Formula => true
         case _ => false))
       .sum

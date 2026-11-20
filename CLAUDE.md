@@ -79,7 +79,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 **Addressing** (`xl-core/src/com/tjclp/xl/addressing/`):
 - `Column`, `Row` → opaque Int (zero-overhead)
-- `ARef` → opaque Long (64-bit packed: `(row << 32) | col`)
+- `ARef` → opaque Long (64-bit packed: `(row << 32) | (col ^ (row << 14))`, so its hash spreads; #891)
 - `CellRange(start, end)` → normalized, inclusive range
 
 **Domain** (`xl-core/src/com/tjclp/xl/`):
@@ -101,7 +101,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,016)
+./mill __.test             # Run all tests (10,398)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -119,7 +119,7 @@ make install-jar           # Portable: assembly JAR + wrapper → ~/.local/bin/x
 
 ### Remote sessions (Claude Code on the web, routines, `@claude` mentions on GitHub)
 
-The sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli or GraalVM. `.claude/settings.json` runs `scripts/remote-setup.sh` on SessionStart; when `CLAUDE_CODE_REMOTE=true` it provisions JDK 25 and scala-cli through Coursier, exports `JAVA_HOME`/`PATH` for the session, and prints a summary into context. There, `make install-jar` replaces `make install`, worktrees and `gtr` are unnecessary (the sandbox clone is isolated), and personal memory is absent: everything a session must know lives in this file, `.claude/rules/`, and `.claude/skills/`. Details, the environment setup script, and a Docker rehearsal: `docs/reference/remote-sessions.md`.
+The sandbox is Ubuntu 24.04 with OpenJDK 21 and no scala-cli or GraalVM. `.claude/settings.json` runs `scripts/remote-setup.sh` on SessionStart; when `CLAUDE_CODE_REMOTE=true` it provisions JDK 25 and scala-cli through Coursier, pre-fetches the build's dependencies (retrying Maven Central's intermittent HTTP 429s; a later `Failed to download … 429` just needs a rerun), exports `JAVA_HOME`/`PATH` for the session, and prints a summary into context. There, `make install-jar` replaces `make install`, worktrees and `gtr` are unnecessary (the sandbox clone is isolated), and personal memory is absent: everything a session must know lives in this file, `.claude/rules/`, and `.claude/skills/`. Details, the environment setup script, and a Docker rehearsal: `docs/reference/remote-sessions.md`.
 
 ## xl-agent Benchmark Runner
 
@@ -323,7 +323,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) auto-detects the latest release from GitHub API—no version placeholders to maintain. The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.26.0; its installer (`reference/INSTALL.md`) verifies the binary against that release's `SHA256SUMS` and keeps the inline v0.25.0 digests only as the legacy fallback for the release that predates manifests (keep that version and its digests together). The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -342,7 +342,7 @@ All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtM
 ### 1. Opaque Types
 ```scala
 opaque type Column = Int   // Cannot mix Int as Column
-opaque type ARef = Long    // Packed: (row << 32) | col
+opaque type ARef = Long    // Packed: (row << 32) | (col ^ (row << 14))
 ```
 
 ### 2. Monoid Composition
@@ -387,7 +387,8 @@ sheet.style("B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
 ```scala
 // SheetEvaluator extension methods available from com.tjclp.xl.{*, given}
 sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
-sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
+Workbook(sheet).recalculate()               // RecalcResult: evaluated values + per-cell errors (cycles isolated)
+QualifiedGraph.of(wb).precedentsOf(QualifiedRef(sheetName, ref"B1")) // dependency questions
 ```
 
 **Functions**: the registry (`FunctionRegistry.all`, macro-collected from the `FunctionSpecs*` traits) plus `LET` (lexical bindings; a parser-level special form, not in the registry). The complete list with arity, argument slots and flags is generated from the code: `xl functions --json` or `docs/reference/generated/functions.md`. Do not maintain a count or a list by hand.
@@ -408,9 +409,13 @@ sheet.toHtml(ref"A1:B10")  // HTML table with inline CSS
 
 ### ARef Packing
 ```scala
-// Pack: (row << 32) | (col & 0xFFFFFFFF)
+// Pack: (row << 32) | ((col ^ (row << 14)) & 0xFFFFFFFF)   unpack: col = low ^ (row << 14)
 // Valid: Column 0-16383 (A-XFD), Row 0-1048575 (1-1048576)
 ```
+The XOR is for hashing (#891): a `Long` hashes as `high ^ low`, which for `(row << 32) | col` is
+`row ^ col`, one hash per anti-diagonal of the sheet. Inside the grid the low word is
+`row << 14 | col`, so packed values still order row-major; the packing is a bijection on all `Int`
+pairs, off-grid refs included. Never decode the `Long` by hand: use `ref.row` / `ref.col`.
 
 ### Style Deduplication
 Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitting cells.
@@ -420,18 +425,14 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 ## Testing
 
-#741 reconciliation (2026-11-05): the full suite at `3365d726`, integrating the published
-extraction with main `db2b91d5`, recorded 10,016 cases: 10,012 passed, 0 failures/errors and
-4 optional-tool skips. Counts below are observed from that run, not inferred from earlier totals.
-
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,016 test cases** by module: xl-evaluator (4296), xl-core (1875), xl-ooxml (1446), xl-cli (1969), xl-cats-effect (217), xl-agent (147), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,398 test cases** (the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19; 10,398 passed, none ignored) by module: xl-evaluator (4508), xl-core (1935), xl-ooxml (1484), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (73). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,016 test cases)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,398 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

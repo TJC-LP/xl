@@ -22,7 +22,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, "Hello").unsafe // String auto-converts
+    val updated = sheet.put(ref, "Hello") // String auto-converts
     assertEquals(updated(ref).value, CellValue.Text("Hello"))
   }
 
@@ -32,7 +32,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 42).unsafe // Int auto-converts
+    val updated = sheet.put(ref, 42) // Int auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(42)))
   }
 
@@ -42,7 +42,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, 3.14159).unsafe // Double auto-converts
+    val updated = sheet.put(ref, 3.14159) // Double auto-converts
     assertEquals(updated(ref).value, CellValue.Number(BigDecimal(3.14159)))
   }
 
@@ -52,7 +52,7 @@ class ElegantSyntaxSpec extends FunSuite:
     val sheet = emptySheet
     val ref = ARef.from1(1, 1)
 
-    val updated = sheet.put(ref, true).unsafe // Boolean auto-converts
+    val updated = sheet.put(ref, true) // Boolean auto-converts
     assertEquals(updated(ref).value, CellValue.Bool(true))
   }
 
@@ -67,7 +67,6 @@ class ElegantSyntaxSpec extends FunSuite:
       .put(ref"A2", "Laptop")
       .put(ref"B2", 999.99)
       .put(ref"C2", true)
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Product"))
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal(999.99)))
@@ -85,7 +84,6 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"B1" -> "Age",
         ref"C1" -> "Active"
       )
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Name"))
     assertEquals(sheet(ref"B1").value, CellValue.Text("Age"))
@@ -103,7 +101,6 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"D1" -> true,
         ref"E1" -> BigDecimal(1000)
       )
-      .unsafe
 
     assertEquals(sheet(ref"A1").value, CellValue.Text("Product"))
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal(42)))
@@ -130,7 +127,6 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"B3" -> 25,
         ref"C3" -> 19.99
       )
-      .unsafe
 
     assertEquals(sheet.cellCount, 9)
     assertEquals(sheet(ref"A2").value, CellValue.Text("Laptop"))
@@ -220,7 +216,7 @@ class ElegantSyntaxSpec extends FunSuite:
     import com.tjclp.xl.macros.ref
     import com.tjclp.xl.macros.money
 
-    val sheet = emptySheet.put(ref"A1", money"$$1,234.56").unsafe
+    val sheet = emptySheet.put(ref"A1", money"$$1,234.56")
 
     assertEquals(sheet(ref"A1").value, CellValue.Number(BigDecimal("1234.56")))
   }
@@ -236,7 +232,6 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"A2" -> "Growth",
         ref"B2" -> percent"15.5%" // Preserves Percent format
       )
-      .unsafe
 
     assertEquals(sheet(ref"B1").value, CellValue.Number(BigDecimal("10000.00")))
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("0.155")))
@@ -271,7 +266,6 @@ class ElegantSyntaxSpec extends FunSuite:
         ref"B3" -> money"$$150,000.00",
         ref"C3" -> percent"20.0%"
       )
-      .unsafe
 
     assertEquals(sheet.cellCount, 9)
     assertEquals(sheet(ref"B2").value, CellValue.Number(BigDecimal("125000.00")))

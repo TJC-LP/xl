@@ -144,13 +144,14 @@ object ArrayArithmetic:
    * #750: a range's values in array mode, at the range's full shape, read in time and memory
    * proportional to the smaller of the range and the sheet's populated cells.
    *
-   * A range with no more positions than the sheet has cells is read position by position, as always
-   * (a bounded `$A$2:$A$50` never scans the sheet). A larger one (`R:KHI`, `A:XFD`, the generous
-   * `INDEX($A$1:$A$100000,0)`) is read from the other side: one pass over the sheet's cell keys
-   * finds the box of populated cells inside it, only that box is read, and every other position is
-   * the array's Empty fill, which reads exactly as an absent cell does. Every formula cell the
-   * range holds is populated, so it lies in the box and is evaluated as before. The box found for a
-   * (sheet, range) is kept in the pass memo when there is one.
+   * A range that [[readsPositionally]] (no more positions than the sheet has cells, and at least
+   * half of them inside the sheet's extent) is read position by position, as always (a bounded
+   * `$A$2:$A$50` never scans the sheet). Any other (`R:KHI`, `A:XFD`, the generous
+   * `INDEX($A$1:$A$100000,0)`, a whole column of a large sheet) is read from the other side: one
+   * pass over the stored cells inside it finds the box of populated cells, only that box is read,
+   * and every other position is the array's Empty fill, which reads exactly as an absent cell does.
+   * Every formula cell the range holds is populated, so it lies in the box and is evaluated as
+   * before.
    *
    * Only cells that hold a value widen the box: a style-only record (kept in `Sheet.cells` as
    * Empty, the rule `QualifiedGraph` and the streaming reader use) reads as Empty, exactly as the
@@ -175,14 +176,10 @@ object ArrayArithmetic:
       val positional = memo.fold(RangeRead.Auto)(_.rangeRead) match
         case RangeRead.Dense => true
         case RangeRead.Sparse => false
-        case RangeRead.Auto => area <= sheet.cells.size.toLong
+        case RangeRead.Auto => readsPositionally(range, sheet)
       if positional then rangeToMatrixEval(range, readCell).map(ArrayResult(_))
       else
-        val found =
-          memo.fold(populatedBox(range, sheet))(
-            _.populatedBox(sheet, range)(populatedBox(range, sheet))
-          )
-        found match
+        populatedBox(range, sheet) match
           case None => Right(ArrayResult.constant(height, width, CellValue.Empty))
           case Some(box) =>
             val boxArea = box.height.toLong * box.width.toLong
@@ -209,20 +206,47 @@ object ArrayArithmetic:
               }
 
   /**
+   * Whether array mode reads `range` position by position rather than through its populated box:
+   * when it has no more positions than the sheet has cells, and at least half of them lie inside
+   * the sheet's extent or there are no more than [[TinyRange]] of them (#891).
+   *
+   * The first condition is the one #750 set, and the refusal bound in [[readRange]] rests on it: a
+   * range it sends to the box can be refused there, one it keeps positional never is. The sheet's
+   * cell count stood in, there, for the cells the range can hold. The store's extent says where
+   * they can be, so the second condition sends a range that mostly lies past the data (`A:A` on a
+   * sheet of more than 1,048,576 cells, `A1:A5000` over 100 rows) to its box as well. That read is
+   * never more work than the positional one: the pass that finds the box visits only stored cells
+   * inside the range, all of them in `range ∩ extent`, and the box lies in it too, so both together
+   * touch at most twice that many positions, which is at most the range's own.
+   *
+   * Both reads give the same values at every position (the sparse-equals-dense laws), so the choice
+   * is one of cost alone. The extent is read from the store's summaries, not scanned, but that is
+   * still a walk down the trie (about 30 ns on a 2M-cell sheet, where the count is one field), and
+   * a plain cell's reference in a value position comes through here as a one-cell range. So a tiny
+   * range keeps the one comparison it always cost: a box has next to nothing to save there.
+   */
+  private[formula] def readsPositionally(range: CellRange, sheet: Sheet): Boolean =
+    val area = range.cellCount
+    area <= sheet.cells.size.toLong &&
+    (area <= TinyRange || sheet.cells.extent
+      .flatMap(range.intersect)
+      .exists(_.cellCount * 2 > area))
+
+  /** The most positions a range is read position by position without consulting the extent. */
+  private[formula] final val TinyRange = 8L
+
+  /**
    * The smallest range holding every cell of `sheet` inside `range` that holds a value (a
    * style-only record, stored as Empty, reads as the Empty fill does): one scan of the cells.
    */
-  private def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
-    val r0 = range.rowStart.index0
-    val r1 = range.rowEnd.index0
-    val c0 = range.colStart.index0
-    val c1 = range.colEnd.index0
-    sheet.cells.iterator
-      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { case (acc, (at, cell)) =>
+  private[formula] def populatedBox(range: CellRange, sheet: Sheet): Option[CellRange] =
+    sheet.cells
+      .inRange(range)
+      .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, cell) =>
+        val at = cell.ref
         val r = at.row.index0
         val c = at.col.index0
-        if r < r0 || r > r1 || c < c0 || c > c1 then acc
-        else if !holdsValue(cell.value) then acc
+        if !holdsValue(cell.value) then acc
         else
           Some(acc.fold((r, r, c, c)) { case (top, bottom, left, right) =>
             (math.min(top, r), math.max(bottom, r), math.min(left, c), math.max(right, c))
@@ -263,6 +287,22 @@ object ArrayArithmetic:
     right: ArrayOperand,
     op: BinaryOp
   ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = false)
+
+  /** Built-in evaluator operators are deterministic; public callbacks remain eagerly stored. */
+  private[formula] def broadcastPure(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
+    broadcastWithFill(left, right, op, pureFill = true)
+
+  private def broadcastWithFill(
+    left: ArrayOperand,
+    right: ArrayOperand,
+    op: BinaryOp,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayOperand.Scalar | ArrayOperand.Array] =
     (left, right) match
       // scalar * scalar -> scalar (fast path)
       case (ArrayOperand.Scalar(l), ArrayOperand.Scalar(r)) =>
@@ -270,15 +310,17 @@ object ArrayArithmetic:
 
       // scalar * array -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Scalar(s), ArrayOperand.Array(arr)) =>
-        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op).map(ArrayOperand.Array(_))
+        broadcastArrays(ArrayResult.single(CellValue.Number(s)), arr, op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * scalar -> the scalar broadcasts as a 1x1 array (keeps operand order for op)
       case (ArrayOperand.Array(arr), ArrayOperand.Scalar(s)) =>
-        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op).map(ArrayOperand.Array(_))
+        broadcastArrays(arr, ArrayResult.single(CellValue.Number(s)), op, pureFill)
+          .map(ArrayOperand.Array(_))
 
       // array * array -> broadcast with dimension matching
       case (ArrayOperand.Array(l), ArrayOperand.Array(r)) =>
-        broadcastArrays(l, r, op).map(ArrayOperand.Array(_))
+        broadcastArrays(l, r, op, pureFill).map(ArrayOperand.Array(_))
 
   /**
    * GH-335: Excel's total order for the comparison operators, shared by the scalar and
@@ -361,7 +403,22 @@ object ArrayArithmetic:
     right: ArrayResult,
     op: Int => Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    orderedCompareWithFill(left, right, op, pureFill = false)
+
+  private[formula] def broadcastOrderedComparePure(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean
+  ): Either[EvalError, ArrayResult] =
+    orderedCompareWithFill(left, right, op, pureFill = true)
+
+  private def orderedCompareWithFill(
+    left: ArrayResult,
+    right: ArrayResult,
+    op: Int => Boolean,
+    pureFill: Boolean
+  ): Either[EvalError, ArrayResult] =
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       val l = elements.headOption.getOrElse(CellValue.Empty)
       val r = elements.lift(1).getOrElse(CellValue.Empty)
       carriedError(l).orElse(carriedError(r)) match
@@ -391,10 +448,10 @@ object ArrayArithmetic:
       case Right(scalar) =>
         // Array vs scalar - compare each element to the scalar
         val scalarCV = anyToCellValue(scalar)
-        Right(left.mapPure(cv => equalityElement(cv, scalarCV, negate)))
+        Right(left.mapPureLazy(cv => equalityElement(cv, scalarCV, negate)))
       case Left(rightArr) =>
         // Array vs array - broadcast
-        broadcastN(Vector(left, rightArr)) { elements =>
+        broadcastN(Vector(left, rightArr), pureFill = true) { elements =>
           Right(
             equalityElement(
               elements.headOption.getOrElse(CellValue.Empty),
@@ -614,9 +671,10 @@ object ArrayArithmetic:
   private def broadcastArrays(
     left: ArrayResult,
     right: ArrayResult,
-    op: BinaryOp
+    op: BinaryOp,
+    pureFill: Boolean
   ): Either[EvalError, ArrayResult] =
-    broadcastN(Vector(left, right)) { elements =>
+    broadcastN(Vector(left, right), pureFill = pureFill) { elements =>
       applyOpCarrying(
         elements.headOption.getOrElse(CellValue.Empty),
         elements.lift(1).getOrElse(CellValue.Empty),
@@ -738,15 +796,44 @@ object ArrayArithmetic:
    * whole row, both padded) is computed cell by cell when the result is at most
    * [[ArrayResult.MaxCells]] cells, and otherwise over the smallest rectangle that leaves a fill by
    * one axis outside it, refused when that rectangle is past [[ArrayResult.MaxBoxCells]] (and past
-   * the operands' boxes together).
+   * the operands' boxes together). `pureFill` permits non-memoizing axis storage only for
+   * deterministic arithmetic/comparison operators; generic lifted calls retain eager execution.
    */
-  private[formula] def broadcastN(operands: Vector[ArrayResult], perCell: Boolean = false)(
+  private[formula] def broadcastN(
+    operands: Vector[ArrayResult],
+    perCell: Boolean = false,
+    pureFill: Boolean = false
+  )(
     elem: Vector[CellValue] => Either[EvalError, CellValue]
   ): Either[EvalError, ArrayResult] =
     val outRows = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.rows))
     val outCols = operands.foldLeft(1)((acc, op) => broadcastExtent(acc, op.cols))
     val outCells = outRows.toLong * outCols.toLong
+    // Count operand reads, not just depth: reusing the same LET value on both sides doubles
+    // its deferred work. Saturation also keeps a wide call from overflowing the estimate.
+    val readCost = operands.foldLeft(1) { (cost, operand) =>
+      math.min(ArrayResult.MaxLazyReadCost + 1, cost + operand.lazyReadCost)
+    }
     if outRows <= 0 || outCols <= 0 then Right(ArrayResult.empty)
+    else if pureFill && !perCell && readCost <= ArrayResult.MaxLazyReadCost &&
+      operands.forall(_.isDense) && operands.exists(_.hasLazyDenseBox)
+    then
+      // Validate in row-major order, just like computeBox. Known-pure operators may then
+      // recompute a cell without storing the full result; public callbacks never enter here.
+      def value(r: Int, c: Int) = elem(operands.map(op => getWithBroadcastCV(op, r, c)))
+      val failure = (0 until outRows).iterator
+        .flatMap { r =>
+          (0 until outCols).iterator.map(c => value(r, c))
+        }
+        .collectFirst { case Left(err) => err }
+      failure match
+        case Some(err) => Left(err)
+        case None =>
+          Right(
+            ArrayResult.lazyDense(outRows, outCols, readCost)((r, c) =>
+              value(r, c).fold(_ => CellValue.Empty, identity)
+            )
+          )
     else
       val whole = BroadcastPlan(0, outRows, 0, outCols, FillAxis.Const, Vector.empty)
       def cellByCell: Either[EvalError, BroadcastPlan] =

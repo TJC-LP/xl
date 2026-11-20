@@ -330,3 +330,31 @@ class AggregateMemoSpec extends FunSuite:
       memo.stats,
       Evaluator.AggregateMemoStats(hits = readers - 1, fills = 1, bypasses = 0, entries = 1)
     )
+
+  test("#891: an uncached data-table record in the range bypasses the memo"):
+    // the record is tagged as a data table whether or not it holds a cache, so the sheet-level
+    // "holds an uncached formula" filter must count that tag too
+    val a1 = ARef.from0(0, 0)
+    val kind: com.tjclp.xl.cells.FormulaKind.DataTable = com.tjclp.xl.cells.FormulaKind.DataTable(
+      com.tjclp.xl.addressing.CellRange(a1, ARef.from0(1, 1)),
+      dt2D = false,
+      dtr = false,
+      r1 = None,
+      r2 = None
+    )
+    val unseeded = Sheet(dataName).put(a1, CellValue.dataTable(kind))
+    val seeded = Sheet(dataName).put(a1, CellValue.dataTable(kind, Some(num(9))))
+    val output = Sheet(outputName).put(a1, formula("=SUM(Data!A1:A1)"))
+    val memo = new Evaluator.AggregateMemo
+    val evaluator = Evaluator.recalculationInstance(Rng.system, memo)
+    def eval(data: Sheet): Either[XLError, CellValue] =
+      SheetEvaluator.evaluateCellWithEvaluator(
+        output,
+        a1,
+        evaluator,
+        Clock.system,
+        Some(Workbook(data, output))
+      )
+    assertEquals(eval(unseeded), Right(num(0)))
+    assertEquals(memo.stats.bypasses, 1L, memo.stats.toString)
+    assertEquals(eval(seeded), Right(num(9)))

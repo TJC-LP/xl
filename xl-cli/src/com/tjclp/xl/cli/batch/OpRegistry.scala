@@ -327,7 +327,8 @@ object OpRegistry:
     streamable = false,
     cliVerb = Some("clear"),
     since = "0.9.6",
-    doc = "Clear a range: contents by default (unmerging overlaps), or styles/comments/all.",
+    doc =
+      "Clear a range: contents by default (formatting and merges kept), or styles/comments/all.",
     example = ujson.Obj(
       "op" -> ujson.Str("clear"),
       "range" -> ujson.Str("A1:B10"),

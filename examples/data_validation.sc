@@ -51,7 +51,7 @@ val dataSheet = Sheet("Data")
   .put(ref"C3", fx"=AVERAGE(A1:A5)")
 
 println("Data validation results:")
-val validationResults = dataSheet.evaluateWithDependencyCheck().toOption.get
+val validationResults = Workbook(dataSheet).recalculate().evaluated(dataSheet.name)
 
 validationResults.filter(_._1.col == ref"B1".col).toSeq.sortBy(_._1.row.index1).foreach { case (validationRef, value) =>
   val scoreRef = ARef.from1(1, validationRef.row.index1)  // Column A (index 1)
@@ -99,12 +99,12 @@ println("  Expected rows: 5")
 println("  Data cells: A1=100, A2=200, A3=(empty), A4=400, A5=500")
 println()
 
-incompleteSheet.evaluateWithDependencyCheck() match
-  case Right(missingResults) =>
-    println(s"  Actual count: ${missingResults(ref"B2")}")
-    println(s"  Status: ${missingResults(ref"B3")}")
-  case Left(error) =>
-    println(s"  Evaluation error: ${error.message}")
+val missingCheck = Workbook(incompleteSheet).recalculate()
+if missingCheck.isClean then
+  val missingResults = missingCheck.evaluated(incompleteSheet.name)
+  println(s"  Actual count: ${missingResults(ref"B2")}")
+  println(s"  Status: ${missingResults(ref"B3")}")
+else missingCheck.errors.foreach(error => println(s"  Evaluation error: ${error.render}"))
 println()
 
 // ============================================================================
@@ -136,11 +136,10 @@ val textSheet = Sheet("Text")
   .put(ref"C4", fx"=IF(LEN(A4)>=10, \"Valid\", \"TOO SHORT\")")
 
 println("Text normalization results:")
-val textResults = textSheet.evaluateWithDependencyCheck() match
-  case Right(r) => r
-  case Left(error) =>
-    println(s"Error evaluating text formulas: ${error.message}")
-    Map.empty[ARef, CellValue]
+val textCheck = Workbook(textSheet).recalculate()
+textCheck.errors.foreach(error => println(s"Error evaluating text formulas: ${error.render}"))
+val textResults: Map[ARef, CellValue] =
+  if textCheck.isClean then textCheck.evaluated.getOrElse(textSheet.name, Map.empty) else Map.empty
 
 if textResults.nonEmpty then
   (1 to 4).foreach { row =>

@@ -58,8 +58,10 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       // A cell that holds no value — a style-only record — is not occupied: the streaming reader
       // never emits one, and `search` has nothing to match in it. Row-major order over a hash map
       // means a sort; the key is one primitive per cell
-      val ordered = s.cells.toVector
-        .filter { (_, cell) => InMemorySource.holdsValue(cell) }
+      val ordered = s.cells.iterator
+        .filter(InMemorySource.holdsValue)
+        .map(cell => cell.ref -> cell)
+        .toVector
         .sortBy { (ref, _) => InMemorySource.rowMajor(ref) }
       val merges = InMemorySource.MergeIndex(s.mergedRanges)
       val hidden = InMemorySource.HiddenLines(s)
@@ -106,7 +108,7 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       CellDetail(
         record,
         s.getComment(ref),
-        cell.flatMap(_.hyperlink),
+        cell.flatMap(_.hyperlink).map(_.target),
         Some(declared),
         Some(listed(graph.dependentsOf(current)))
       )
@@ -312,7 +314,7 @@ object InMemorySource:
    * only; another producer's `<dimension>` is whatever it wrote, see `StreamingSource`.)
    */
   def dimension(sheet: Sheet): Option[CellRange] =
-    sheet.cells.keysIterator
+    sheet.cells.refs
       .foldLeft(Option.empty[(Int, Int, Int, Int)]) { (acc, ref) =>
         val (c, r) = (ref.col.index0, ref.row.index0)
         Some(acc.fold((c, r, c, r)) { case (c1, r1, c2, r2) =>

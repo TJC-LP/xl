@@ -8,6 +8,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.Dxf
 import com.tjclp.xl.styles.color.Color
 import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /**
@@ -31,7 +32,7 @@ class StructuralCfSpec extends FunSuite:
 
   test("insertRows shifts Expression formulas AND the block envelope together") {
     val s = new Sheet(name = S).conditionalFormat(ref"A5:A9", CfRule.expression("$B5>$C5", dxf))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2.typedConditionalFormats.flatMap(_.ranges.map(_.toA1)), Vector("A7:A11"))
     rules(s2) match
@@ -44,7 +45,9 @@ class StructuralCfSpec extends FunSuite:
       ref"D1:D9",
       CfRule.between("$B$1", "$C$1", dxf)
     )
-    val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 0, count = 1) // drop col A
+    val r = StructuralEditor
+      .deleteColumnsChecked(Workbook(Vector(s)), S, at = 0, count = 1)
+      .unsafe // drop col A
     rules(sheetNamed(r, "S")) match
       case Vector(CfRule.CellIs(CfOperator.Between, f1, f2, _, _, _)) =>
         assertEquals((f1, f2), ("$A$1", Some("$B$1")))
@@ -56,7 +59,9 @@ class StructuralCfSpec extends FunSuite:
       ref"D1:D9",
       CfRule.cellIs(CfOperator.GreaterThan, "$B$1", dxf)
     )
-    val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1) // drop col B
+    val r = StructuralEditor
+      .deleteColumnsChecked(Workbook(Vector(s)), S, at = 1, count = 1)
+      .unsafe // drop col B
     rules(sheetNamed(r, "S")) match
       case Vector(CfRule.CellIs(_, f1, _, d, p, _)) =>
         assertEquals(f1, "#REF!")
@@ -82,7 +87,7 @@ class StructuralCfSpec extends FunSuite:
         2
       )
     )
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 3)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 3).unsafe
     rules(sheetNamed(r, "S")) match
       case Vector(cs: CfRule.ColorScale, db: CfRule.DataBar) =>
         assertEquals(cs.min.cfvo, Cfvo.Formula("MIN($B$4:$B$12)"))
@@ -93,7 +98,7 @@ class StructuralCfSpec extends FunSuite:
 
   test("Text rules carry no stored formula: text unchanged, envelope shifts") {
     val s = new Sheet(name = S).conditionalFormat(ref"A5:A9", CfRule.containsText("x", dxf))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2.typedConditionalFormats.flatMap(_.ranges.map(_.toA1)), Vector("A6:A10"))
     rules(s2) match
@@ -105,12 +110,14 @@ class StructuralCfSpec extends FunSuite:
     val data = new Sheet(name = SheetName.unsafe("Data"))
     val view = new Sheet(name = SheetName.unsafe("View"))
       .conditionalFormat(ref"A1:A9", CfRule.expression("Data!$A$5>0", dxf))
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(data, view)),
-      SheetName.unsafe("Data"),
-      at = 0,
-      count = 2
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(data, view)),
+        SheetName.unsafe("Data"),
+        at = 0,
+        count = 2
+      )
+      .unsafe
     rules(sheetNamed(r, "View")) match
       case Vector(CfRule.Expression(f, _, _, _)) => assertEquals(f, "Data!$A$7>0")
       case other => fail(s"expected Expression, got $other")
@@ -138,7 +145,7 @@ class StructuralCfSpec extends FunSuite:
           )
         )
       )
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     // GH-429: the block-level sqref envelope moves textually; the payload body — declaration
     // prologue included — is untouched
@@ -161,7 +168,7 @@ class StructuralCfSpec extends FunSuite:
       ref"A1:A9",
       CfRule.Expression("NOT A FORMULA ((", Some(dxf), 1)
     )
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     rules(sheetNamed(r, "S")) match
       case Vector(CfRule.Expression(f, _, _, _)) => assertEquals(f, "NOT A FORMULA ((")
       case other => fail(s"expected Expression, got $other")

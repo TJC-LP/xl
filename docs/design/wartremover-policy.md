@@ -124,7 +124,7 @@ private def parseARef(s: String): ARef =
 opaque type ARef = Long
 
 private def pack(col: Int, row: Int): ARef =
-  val packed = (row.toLong << 32) | (col.toLong & 0xFFFFFFFFL)
+  val packed = (row.toLong << 32) | ((col ^ (row << 14)).toLong & 0xFFFFFFFFL)
   packed.asInstanceOf[ARef]  // Safe: opaque type implementation detail
 ```
 

@@ -27,12 +27,6 @@ trait FunctionSpecsBase:
   protected given cellValueExpr: ArgSpec[TExpr[CellValue]] = ArgSpec.expr[CellValue]
   protected given dateExpr: ArgSpec[TExpr[LocalDate]] = ArgSpec.expr[LocalDate]
   protected given rangeLocation: ArgSpec[TExpr.RangeLocation] = ArgSpec.rangeLocation
-  @deprecated(
-    "Use rangeLocation (ArgSpec[TExpr.RangeLocation]) instead — see ArgSpec.cellRange",
-    "0.18.0"
-  )
-  @annotation.nowarn("cat=deprecation") // forwarder must keep referencing the deprecated given
-  protected given cellRange: ArgSpec[CellRange] = ArgSpec.cellRange
 
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   protected given anyExpr: ArgSpec[TExpr[Any]] with
@@ -80,8 +74,7 @@ trait FunctionSpecsBase:
       args: TExpr[Any]
     )(
       mapExpr: TExpr[?] => TExpr[?],
-      mapRange: TExpr.RangeLocation => TExpr.RangeLocation,
-      mapCells: CellRange => CellRange
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
     ): TExpr[Any] =
       mapExpr(args).asInstanceOf[TExpr[Any]]
 
@@ -286,15 +279,11 @@ trait FunctionSpecsBase:
         .flatMap(at => extractRangeAsMatrixEval(CellRange(at, at), target, ctx).map(ArrayResult(_)))
 
   /**
-   * Sheet bounds shared by references, lookups and aggregates (#747). The pass scans once per sheet
-   * and structural generation; outside an active pass bounds are read from this snapshot.
+   * Sheet bounds shared by references, lookups and aggregates (#747): the cell store's summaries
+   * answer them without a scan (#891).
    */
   protected def usedRangeOf(ctx: EvalContext, sheet: com.tjclp.xl.sheets.Sheet): Option[CellRange] =
-    ctx.aggregateMemo.flatMap(_.passCache) match
-      case Some(passCache) => passCache.usedRange(sheet)
-      case None =>
-        ctx.counters.increment(RecalcCounters.Counter.UsedRangeScans)
-        sheet.usedRange
+    sheet.usedRange
 
   /**
    * The values of a reference a function returns (INDEX, XLOOKUP, the `:` operator), at the
@@ -344,7 +333,7 @@ trait FunctionSpecsBase:
    * 93.5 s to 0.27 s); `ComputedReferenceSpec` pins this predicate.
    */
   private[formula] def readsUsedRange(reference: CellRange): Boolean =
-    reference.rowEnd.index0 == Row.MaxIndex0 || reference.colEnd.index0 == Column.MaxIndex0
+    RangeEdges.reachesEdge(reference)
 
   /**
    * A reference's values at its full shape, as array mode reads a range: position by position when
@@ -619,7 +608,7 @@ trait FunctionSpecsBase:
       if i >= stored then Right(CellValue.Empty)
       else
         val ref = at(i)
-        sheet(ref).value match
+        sheet.cells.valueAt(ref) match
           case CellValue.Formula(_, None, _) =>
             lookupCellValue(read(ref))
           case CellValue.Formula(_, Some(cached), _) => Right(cached)

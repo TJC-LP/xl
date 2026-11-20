@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.ast.RangeForm
 import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.sheets.Sheet
@@ -219,18 +220,13 @@ class RangeOperatorSpec extends FunSuite:
     refused("=SUM(A1:INDEX(A:A,FOO(1)))") match
       case ParseError.UnknownFunction("FOO", _, _) => ()
       case other => fail(s"A1:INDEX(A:A,FOO(1)): $other")
-    // a computed reference in a typed range slot names the call it is (follow-up: #723)
+    // GH-723: these computed references now parse in typed range slots.
     List(
-      ("=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)", "SUMIF", "the range operator `:`"),
-      ("=VLOOKUP(1,OFFSET(A1,0,0,3,2),2,FALSE)", "VLOOKUP", "OFFSET(…)"),
-      ("=MATCH(1,XLOOKUP(1,A1:A3,B1:C3),0)", "MATCH", "XLOOKUP(…)"),
-      ("=SUMIF(INDEX(A:A,0),\">1\")", "SUMIF", "INDEX(…)")
-    ).foreach { (formula, fn, named) =>
-      refused(formula) match
-        case ParseError.InvalidArguments(`fn`, _, _, actual) =>
-          assert(actual.contains("computed reference") && actual.contains(named), actual)
-        case other => fail(s"$formula: $other")
-    }
+      "=SUMIF(A1:INDEX(A:A,3),\">1\",B1:B3)",
+      "=VLOOKUP(1,OFFSET(A1,0,0,3,2),2,FALSE)",
+      "=MATCH(1,XLOOKUP(1,A1:A3,B1:C3),0)",
+      "=SUMIF(INDEX(A:A,0),\">1\")"
+    ).foreach(formula => assert(FormulaParser.parse(formula).isRight, formula))
   }
 
   test("GH-713: lexical ranges keep their exact tree and form") {
@@ -382,10 +378,9 @@ class RangeOperatorSpec extends FunSuite:
 
   test("GH-713: B10 =SUM(A1:INDEX(A:A,COUNTA(A:A))) is static and follows an edit in A") {
     val placed = sheet1.put(ref"B10", CellValue.Formula("SUM(A1:INDEX(A:A,COUNTA(A:A)))", None))
-    assert(!DependencyGraph.dynamicCells(placed).contains(ref"B10"))
-    val graph = DependencyGraph.fromSheet(placed)
-    assert(DependencyGraph.detectCycles(graph).isRight)
-    assert(DependencyGraph.precedents(graph, ref"B10").contains(ref"A3"))
+    assert(!placed.dynamicRefs.contains(ref"B10"))
+    assertEquals(placed.cyclicCells, Set.empty[ARef])
+    assert(placed.precedentsOf(ref"B10").contains(ref"A3"))
     assertEquals(
       placed.evaluateCell(ref"B10", Clock.system, Some(book.put(placed))),
       Right(N("6"))
@@ -396,8 +391,8 @@ class RangeOperatorSpec extends FunSuite:
 
   test("GH-713: C5 =SUM(B1:INDEX(D:D,3)) is dynamic and not circular") {
     val placed = sheet1.put(ref"C5", CellValue.Formula("SUM(B1:INDEX(D:D,3))", None))
-    assert(DependencyGraph.dynamicCells(placed).contains(ref"C5"))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(placed)).isRight)
+    assert(placed.dynamicRefs.contains(ref"C5"))
+    assertEquals(placed.cyclicCells, Set.empty[ARef])
     // B1:D3: 60 + 600 (C1:C3) — D is blank
     assertEquals(
       placed.evaluateCell(ref"C5", Clock.system, Some(book.put(placed))),
@@ -453,7 +448,7 @@ class RangeOperatorSpec extends FunSuite:
     val placed = lookalikes.zipWithIndex.foldLeft(sheet1) { case (s, (text, i)) =>
       s.put(ARef.from1(8, i + 1), CellValue.Formula(text, None))
     }
-    assertEquals(DependencyGraph.dynamicCells(placed), Set.empty[ARef])
+    assertEquals(placed.dynamicRefs, Set.empty[ARef])
     // the token after a range's end is the operator's again: `B2:C3:Sheet1!Start` is a range
     assert(functions.ReferenceOperators.mayContainComputedRange("SUM(B2:C3:Sheet1!Start)"))
     assert(DependencyGraph.containsDynamicReference(parsed("=SUM(B2:C3:Sheet1!Start)")))
@@ -500,8 +495,8 @@ class RangeOperatorSpec extends FunSuite:
     val placed =
       named.put(sheet1.put(ref"H1", CellValue.Formula("SUM(OtherTop:OtherBottom)", None)))
     val h1 = DependencyGraph.QualifiedRef(sheet1Name, ref"H1")
-    val (edges, _) = DependencyGraph.fromWorkbookBounded(placed)
-    assert(edges(h1).contains(DependencyGraph.QualifiedRef(otherName, ref"A2")), edges(h1))
+    val edges = QualifiedGraph.of(placed).precedentsOf(h1)
+    assert(edges.contains(DependencyGraph.QualifiedRef(otherName, ref"A2")), edges)
     def cached(wb: Workbook): Option[CellValue] =
       wb(sheet1Name).toOption.flatMap(_.cells.get(ref"H1")).map(_.value) match
         case Some(CellValue.Formula(_, value, _)) => value
@@ -524,7 +519,7 @@ class RangeOperatorSpec extends FunSuite:
         s.put(at, CellValue.Formula(text, None))
       }
       .put(ref"I4", CellValue.Formula("SUM(A1:A3)", None))
-    assertEquals(DependencyGraph.dynamicCells(placed), Set(ref"I1", ref"I2", ref"I3"))
+    assertEquals(placed.dynamicRefs, Set(ref"I1", ref"I2", ref"I3"))
     val trace = DependencyGraph.dynamicCellsTraced(Workbook(Vector(placed)))
     assertEquals(trace.cells.map(_.ref), Set(ref"I1", ref"I2", ref"I3"))
     assertEquals(trace.parses, 1)
@@ -557,7 +552,7 @@ class RangeOperatorSpec extends FunSuite:
     val placed = sheet1
       .put(ref"D1", N("2"))
       .put(ref"E1", CellValue.Formula("SUM(A1:INDEX(A:A,D1))", None))
-    assert(!DependencyGraph.dynamicCells(placed).contains(ref"E1"))
+    assert(!placed.dynamicRefs.contains(ref"E1"))
     def cached(wb: Workbook): Option[CellValue] =
       wb(name).toOption.flatMap(_.cells.get(ref"E1")).map(_.value) match
         case Some(CellValue.Formula(_, value, _)) => value
@@ -577,7 +572,7 @@ class RangeOperatorSpec extends FunSuite:
     // the running total above B5 reads B1:B4 only: INDEX's position folds to 4 for its reader,
     // so its edges are B4 and the range's B1:B4, not the whole array B:B (IndexReaderEnvelopeSpec)
     val placed = sheet1.put(ref"B5", CellValue.Formula("SUM(B1:INDEX(B:B,ROW()-1))", None))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(placed)).isRight)
+    assertEquals(placed.cyclicCells, Set.empty[ARef])
   }
 
   test("GH-713: a cross-sheet computed range through the workbook graph, covered and not") {
@@ -591,8 +586,8 @@ class RangeOperatorSpec extends FunSuite:
       other.put(ref"B10", CellValue.Formula("SUM(Sheet1!A1:INDEX(Sheet1!A:A,3))", None))
     )
     assert(!DependencyGraph.dynamicCells(covered).contains(at(otherName, "B10")))
-    val (edges, _) = DependencyGraph.fromWorkbookBounded(covered)
-    assert(edges(at(otherName, "B10")).contains(at(sheet1Name, "A3")), edges(at(otherName, "B10")))
+    val edges = QualifiedGraph.of(covered).precedentsOf(at(otherName, "B10"))
+    assert(edges.contains(at(sheet1Name, "A3")), edges)
     val settled = covered.recalculate().workbook
     def b10(wb: Workbook): Option[CellValue] =
       wb(otherName).toOption.flatMap(_.cells.get(ref"B10")).map(_.value) match

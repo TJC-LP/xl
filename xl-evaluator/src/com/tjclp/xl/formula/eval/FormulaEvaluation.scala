@@ -211,15 +211,23 @@ private[formula] object FormulaEvaluation:
         .left
         .map(e => FormulaEvaluationError.Failed(ParseError.toXLError(e, formula)))
       bounds = tempSheet.usedRange
-      reads = ValueDependencies.Reader(bounds, Some(tempSheet.name))
+      metadataReads = ValueDependencies.Names(tempBook)
+      reads = ValueDependencies.Reader(
+        bounds,
+        Some(tempSheet.name),
+        names = Some(metadataReads),
+        current = Some(tempSheet.name),
+        resolveDefinedNames = false
+      )
       targetDeps = bounds.fold(Set.empty[ARef])(_ => reads.reads(expr, at))
       closure = valueReadClosure(tempSheet, reads, targetDeps)
-      _ <- at.flatMap(cycleThrough(tempSheet.name, closure, expr, targetDeps, _)) match
+      _ <- at.flatMap(position =>
+        cycleThrough(tempSheet.name, closure, expr, targetDeps, position, metadataReads)
+      ) match
         case Some(cycle) => Left(cyclic(EvalError.CircularRef(cycle), formula))
         case None => Right(())
-      graph = closure.graph
       formulaDeps = closure.reached.filter(ref =>
-        tempSheet(ref).value match
+        tempSheet.cells.valueAt(ref) match
           case _: CellValue.Formula => true
           case _ => false
       )
@@ -227,7 +235,7 @@ private[formula] object FormulaEvaluation:
         if formulaDeps.isEmpty then Right(List.empty[ARef])
         else
           DependencyGraph
-            .topologicalSort(graph)
+            .orderOf(tempSheet.name, closure.edges)
             .map(_.filter(formulaDeps.contains))
             .left
             .map(cyclic(_, formula))
@@ -262,14 +270,14 @@ private[formula] object FormulaEvaluation:
    * `formulas` holds each parse, so the cycle search does not parse again.
    */
   private final case class ValueReads(
-    graph: DependencyGraph,
+    edges: Map[ARef, Set[ARef]],
     reached: Set[ARef],
     formulas: Map[ARef, TExpr[?]]
   )
 
   /**
    * The dependency graph `eval` (positioned or not) and `evala` order by, built from `roots` (the
-   * formula's own reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
+   * formula's own reads) out. A whole-sheet structural graph will not do, for three reasons:
    *   - its edges are structural. ROW(D5), ROWS(A:A), or a LET name that ROW inspects, make an edge
    *     to cells whose values are never read. A formula that inspects its own address, or a
    *     precedent that inspects the placement, would look circular, and the closure would be
@@ -280,8 +288,8 @@ private[formula] object FormulaEvaluation:
    *     walk parses and extracts each formula in the closure once, sharing one range cache, and
    *     touches nothing else.
    *
-   * Like `fromSheet`, a data table's cells are value sources, not nodes (GH-430), and a formula
-   * that does not parse is a node with no edges.
+   * As in the recalculation graph, a data table's cells are value sources, not nodes (GH-430), and
+   * a formula that does not parse is a node with no edges.
    */
   private def valueReadClosure(
     sheet: Sheet,
@@ -296,15 +304,11 @@ private[formula] object FormulaEvaluation:
       formulas: Map[ARef, TExpr[?]]
     ): ValueReads =
       val visit = frontier -- reached
-      if visit.isEmpty then
-        val formulaEdges =
-          edges.toList.flatMap((ref, deps) => deps.filter(edges.contains).map(_ -> ref))
-        val dependents = formulaEdges.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
-        ValueReads(DependencyGraph(edges, dependents), reached, formulas)
+      if visit.isEmpty then ValueReads(edges, reached, formulas)
       else
         val (nextEdges, nextFormulas, next) =
           visit.foldLeft((edges, formulas, Set.empty[ARef])) { case ((e, f, n), ref) =>
-            sheet(ref).value match
+            sheet.cells.valueAt(ref) match
               case CellValue.Formula(_, _, _: FormulaKind.DataTable) => (e, f, n)
               case CellValue.Formula(text, _, _) =>
                 FormulaParser.parse(text) match
@@ -334,9 +338,16 @@ private[formula] object FormulaEvaluation:
     closure: ValueReads,
     expr: TExpr[?],
     targetDeps: Set[ARef],
-    at: ARef
+    at: ARef,
+    metadata: ValueDependencies.Names
   ): Option[List[ARef]] =
-    val only = ValueDependencies.Reader(Some(CellRange(at, at)), Some(home))
+    val only = ValueDependencies.Reader(
+      Some(CellRange(at, at)),
+      Some(home),
+      names = Some(metadata),
+      current = Some(home),
+      resolveDefinedNames = false
+    )
     def reads(e: TExpr[?], from: ARef): Boolean = only.reads(e, Some(from)).contains(at)
     def readsBack(ref: ARef): Boolean = closure.formulas.get(ref).exists(reads(_, ref))
     // Invariant: every root's parent is `at`, and `at` itself has none, so walking parents back
@@ -353,9 +364,8 @@ private[formula] object FormulaEvaluation:
         case None =>
           val (next, reached) = frontier.foldLeft((Vector.empty[ARef], parent)) {
             case ((acc, seen), ref) =>
-              closure.graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
-                case ((a, s), dep) =>
-                  if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
+              closure.edges.getOrElse(ref, Set.empty).foldLeft((acc, seen)) { case ((a, s), dep) =>
+                if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
               }
           }
           if next.isEmpty then None else search(next, reached)
@@ -463,7 +473,7 @@ private[formula] object FormulaEvaluation:
         node,
         NameToken
           .findAllIn(text)
-          .exists(token => names.keys.contains(token.toLowerCase(java.util.Locale.ROOT)))
+          .exists(names.containsToken)
       )
 
     // every formula that could read a sheet other than its own, gathered in one pass over the
@@ -475,7 +485,8 @@ private[formula] object FormulaEvaluation:
       val qualifying = mutable.HashMap.empty[String, mutable.ArrayBuffer[(Int, ARef, String)]]
       val naming = mutable.ArrayBuffer.empty[(Int, ARef, String)]
       sheets.indices.foreach { at =>
-        sheets(at).cells.foreach { (ref, cell) =>
+        sheets(at).cells.iterator.foreach { cell =>
+          val ref = cell.ref
           cell.value match
             // GH-430: a data table's cells are pinned value sources
             case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
@@ -510,7 +521,8 @@ private[formula] object FormulaEvaluation:
           val read = readerOn(at).readRanges(expr, Some(ref)).toVector
           if read.nonEmpty then readers.register(idOf((at, ref)), read)
         }
-      sheets(target).cells.foreach { (ref, cell) =>
+      sheets(target).cells.iterator.foreach { cell =>
+        val ref = cell.ref
         cell.value match
           // GH-430: a data table's cells are pinned value sources
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()

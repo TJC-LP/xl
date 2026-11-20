@@ -1,0 +1,104 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended"
+  ],
+  "enabledManagers": [
+    "custom.regex",
+    "github-actions",
+    "pre-commit"
+  ],
+  "automerge": false,
+  "pre-commit": {
+    "enabled": true
+  },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)(build|package)\\.mill$/"
+      ],
+      "matchStrings": [
+        "mvn\"(?<group>[A-Za-z0-9_.-]+):(?<artifact>[A-Za-z0-9_.-]+):(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
+      ],
+      "depNameTemplate": "{{{group}}}:{{{artifact}}}",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)(build|package)\\.mill$/"
+      ],
+      "matchStrings": [
+        "mvn\"(?<group>[A-Za-z0-9_.-]+)::(?<artifact>[A-Za-z0-9_.-]+):(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
+      ],
+      "depNameTemplate": "{{{group}}}:{{{artifact}}}_3",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/(^|/)(build|package)\\.mill$/"
+      ],
+      "matchStrings": [
+        "mvn\"(?<group>[A-Za-z0-9_.-]+):::(?<artifact>[A-Za-z0-9_.-]+):(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
+      ],
+      "depNameTemplate": "{{{group}}}:{{{artifact}}}_3.9.0",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^build\\.mill$/"
+      ],
+      "matchStrings": [
+        "val scala3Version = \"(?<currentValue>[0-9.]+)\""
+      ],
+      "depNameTemplate": "org.scala-lang:scala3-compiler_3",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^xl-benchmarks/package\\.mill$/"
+      ],
+      "matchStrings": [
+        "(?:^|\\r\\n|\\r|\\n)[ \\t]*def jmhCoreVersion = \"(?<currentValue>[0-9][A-Za-z0-9_.+-]*)\""
+      ],
+      "depNameTemplate": "org.openjdk.jmh:jmh-core",
+      "datasourceTemplate": "maven",
+      "versioningTemplate": "maven"
+    },
+    {
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.mill-version$/"
+      ],
+      "matchStrings": [
+        "^(?<currentValue>[0-9.]+)\\s*$"
+      ],
+      "depNameTemplate": "com-lihaoyi/mill",
+      "datasourceTemplate": "github-releases",
+      "extractVersionTemplate": "^v?(?<version>[0-9.]+)$",
+      "versioningTemplate": "semver"
+    }
+  ],
+  "packageRules": [
+    {
+      "matchManagers": [
+        "github-actions"
+      ],
+      "pinDigests": true
+    },
+    {
+      "matchPackageNames": [
+        "org.scala-lang:scala3-compiler_3"
+      ],
+      "allowedVersions": "/^3\\.9\\./"
+    }
+  ]
+}

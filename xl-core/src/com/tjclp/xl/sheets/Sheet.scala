@@ -71,7 +71,7 @@ import scala.util.boundary, boundary.break
  */
 final case class Sheet(
   name: SheetName,
-  cells: Map[ARef, Cell] = Map.empty,
+  cells: CellStore = CellStore.empty,
   mergedRanges: Set[CellRange] = Set.empty,
   columnProperties: Map[Column, ColumnProperties] = Map.empty,
   rowProperties: Map[Row, RowProperties] = Map.empty,
@@ -92,7 +92,7 @@ final case class Sheet(
 
   /** Get cell at reference (returns empty cell if not present) */
   def apply(ref: ARef): Cell =
-    cells.getOrElse(ref, Cell.empty(ref))
+    cells.get(ref).getOrElse(Cell.empty(ref))
 
   /** Get cell at A1 notation */
   def apply(a1: String): XLResult[Cell] =
@@ -122,24 +122,11 @@ final case class Sheet(
     cells.contains(ref)
 
   /**
-   * Put cell at reference (always succeeds - Cell is pre-validated).
-   *
-   * If the deprecated `Cell.comment` field is set, it is converted into the sheet-level comment
-   * store ([[comments]], the store the OOXML writer serializes) as a plain-text comment without
-   * author, and the field is cleared on the stored cell. Previously the field silently vanished on
-   * write (GH-295); an existing sheet comment at the same ref is overwritten (last write wins). A
-   * cell without the field set never touches [[comments]].
+   * Put cell at reference (always succeeds - Cell is pre-validated). Comments are not part of the
+   * cell: they live in [[comments]] (see `comment`).
    */
-  @annotation.nowarn("cat=deprecation") // write-through shim for the deprecated Cell.comment field
   def put(cell: Cell): Sheet =
-    cell.comment match
-      case Some(text) =>
-        copy(
-          cells = cells.updated(cell.ref, cell.copy(comment = None)),
-          comments = comments.updated(cell.ref, Comment.plainText(text))
-        )
-      case None =>
-        copy(cells = cells.updated(cell.ref, cell))
+    copy(cells = cells.updated(cell))
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // PURE cell/merge/property/freeze shifting along one axis. Formula-reference rewriting is layered
@@ -196,7 +183,7 @@ final case class Sheet(
     val propIndices =
       if rowAxis then rowProperties.keysIterator.map(_.index0)
       else columnProperties.keysIterator.map(_.index0)
-    ((cells.keysIterator ++ comments.keysIterator ++ drawingRefs ++ freezeRefs).map(axisOf)
+    ((cells.refs ++ comments.keysIterator ++ drawingRefs ++ freezeRefs).map(axisOf)
       ++ propIndices).maxOption
 
   /**
@@ -207,7 +194,10 @@ final case class Sheet(
    * are remapped (dropped cells removed), row/column properties shifted, merged ranges and freeze
    * panes split/clamped/dropped, all on the active axis only.
    */
-  private def shiftAxis(rowAxis: Boolean, at: Int, count: Int, deleting: Boolean): Sheet =
+  private def shiftAxis(rowAxis: Boolean, at: Int, requested: Int, deleting: Boolean): Sheet =
+    // `at + count` must stay an Int: a count past the end of the axis removes or moves no more
+    // than one that reaches it
+    val count = math.min(requested, Int.MaxValue - math.max(at, 0))
     // Index transform on the active axis. None = the index was deleted.
     def idx(i: Int): Option[Int] =
       if !deleting then Some(if i >= at then i + count else i)
@@ -219,11 +209,9 @@ final case class Sheet(
     def rebuild(ref: ARef, newIdx: Int): ARef =
       if rowAxis then ARef.from0(ref.col.index0, newIdx) else ARef.from0(newIdx, ref.row.index0)
 
-    val newCells = cells.flatMap { case (ref, cell) =>
-      idx(axisOf(ref)).map { ni =>
-        val nr = rebuild(ref, ni); nr -> cell.copy(ref = nr)
-      }
-    }
+    // the store re-keys its rows (or each row's columns) in place of a rebuild (#891)
+    val (from, by) = if deleting then (at + count, -count) else (at, count)
+    val newCells = if rowAxis then cells.shiftRows(from, by) else cells.shiftCols(from, by)
     val newComments = comments.flatMap { case (ref, c) =>
       idx(axisOf(ref)).map(ni => rebuild(ref, ni) -> c)
     }
@@ -379,7 +367,7 @@ final case class Sheet(
     }
 
     copy(
-      cells = newCells ++ headerStamps,
+      cells = newCells.putAll(headerStamps.iterator.map(_._2)),
       comments = newComments,
       rowProperties = newRowProps,
       columnProperties = newColProps,
@@ -395,10 +383,15 @@ final case class Sheet(
 
   /** Put CellValue at reference (always succeeds - CellValue is pre-validated) */
   def put(ref: ARef, value: CellValue): Sheet =
-    val updatedCell = cells.get(ref) match
-      case Some(existing) => existing.withValue(value)
-      case None => Cell(ref, value)
-    put(updatedCell)
+    copy(cells = cells.updatedValue(ref, value))
+
+  /**
+   * This sheet with `values(i)` at `refs(i)`, as a fold of [[put]] over the pairs in order (a later
+   * pair wins at a shared reference), in one rebuild of the cell store (#891). Existing cells keep
+   * their style and hyperlink.
+   */
+  def withValues(refs: IArray[ARef], values: IArray[CellValue]): Sheet =
+    if refs.isEmpty then this else copy(cells = cells.withValues(refs, values))
 
   /**
    * Put a single value at reference.
@@ -505,10 +498,10 @@ final case class Sheet(
         val (newRegistry, styleId) = styleRegistry.register(mergedStyle)
         copy(
           styleRegistry = newRegistry,
-          cells = cells.updated(ref, updatedCell.withStyle(styleId))
+          cells = cells.updated(updatedCell.withStyle(styleId))
         )
       case None =>
-        copy(cells = cells.updated(ref, updatedCell))
+        copy(cells = cells.updated(updatedCell))
 
   /**
    * Batch put with mixed value types and automatic style inference.
@@ -653,9 +646,9 @@ final case class Sheet(
     styled: Iterable[(ARef, StyleId)],
     newRegistry: StyleRegistry
   ): Sheet =
-    val baseCells = this.cells ++ builtCells.iterator.map(cell => cell.ref -> cell)
+    val baseCells = this.cells.putAll(builtCells)
     val finalCells = styled.foldLeft(baseCells) { case (cs, (ref, styleId)) =>
-      cs.get(ref).fold(cs)(cell => cs.updated(ref, cell.withStyle(styleId)))
+      cs.get(ref).fold(cs)(cell => cs.updated(cell.withStyle(styleId)))
     }
     copy(styleRegistry = newRegistry, cells = finalCells)
 
@@ -685,13 +678,13 @@ final case class Sheet(
 
   /** Remove all cells in range */
   def removeRange(range: CellRange): Sheet =
-    // Use range.contains() instead of materializing to Set - O(n) where n = existing cells
-    // This avoids iterating 1M+ cells for full column/row references like A:A or 1:1
-    copy(cells = cells.filterNot((ref, _) => range.contains(ref)))
+    // The store drops the range's rows' cells without visiting positions: full column/row
+    // references like A:A or 1:1 never materialize their 1M+ positions.
+    copy(cells = cells.removedIn(range))
 
   /** Get all cells in a range */
   def getRange(range: CellRange): Iterable[Cell] =
-    range.cells.flatMap(ref => cells.get(ref)).toSeq
+    cells.inRange(range).toSeq
 
   /** Merge cells in range */
   def merge(range: CellRange): Sheet =
@@ -1028,47 +1021,13 @@ final case class Sheet(
 
   /** Get all non-empty cells */
   def nonEmptyCells: Iterable[Cell] =
-    cells.values.filter(_.nonEmpty)
+    cells.iterator.filter(_.nonEmpty).toVector
 
-  /** Get used range (bounding box of all non-empty cells) */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  def usedRange: Option[CellRange] =
-    // This is a hot derived query during formula evaluation. A tuple fold allocates one tuple per
-    // cell (gigabytes across repeated range formulas); invocation-local primitives keep the
-    // immutable Sheet API while making the scan allocation-free. Keep the non-empty predicate
-    // inline too: an Iterator.filter adapter adds measurable virtual-call overhead on large sheets.
-    val cellsIterator = cells.valuesIterator
-    var found = false
-    var minCol = 0
-    var minRow = 0
-    var maxCol = 0
-    var maxRow = 0
-    while cellsIterator.hasNext do
-      val cell = cellsIterator.next()
-      if cell.nonEmpty then
-        val ref = cell.ref
-        val col = ref.col.index0
-        val row = ref.row.index0
-        if found then
-          if col < minCol then minCol = col
-          if row < minRow then minRow = row
-          if col > maxCol then maxCol = col
-          if row > maxRow then maxRow = row
-        else
-          found = true
-          minCol = col
-          minRow = row
-          maxCol = col
-          maxRow = row
-
-    if !found then None
-    else
-      Some(
-        CellRange(
-          ARef.from0(minCol, minRow),
-          ARef.from0(maxCol, maxRow)
-        )
-      )
+  /**
+   * Get used range (bounding box of all non-empty cells). Read from the store's summaries, not a
+   * scan: O(trie height).
+   */
+  def usedRange: Option[CellRange] = cells.usedRange
 
   /** Freeze panes at the given cell (rows above and columns left are frozen). */
   def freezeAt(ref: ARef): Sheet = copy(freezePane = Some(FreezePane.At(ref)))
@@ -1127,7 +1086,7 @@ final case class Sheet(
 
   /** Clear all cells */
   def clearCells: Sheet =
-    copy(cells = Map.empty)
+    copy(cells = CellStore.empty)
 
   /** Clear all merged ranges */
   def clearMerged: Sheet =
@@ -1145,11 +1104,8 @@ final case class Sheet(
    *   A new Sheet with styles cleared from cells in the range
    */
   def clearStylesInRange(range: CellRange): Sheet =
-    // Use filter + reconstruct pattern for performance:
-    // Only modify cells within the range, avoiding reconstruction of unaffected entries
-    val (inRange, outsideRange) = cells.partition((ref, _) => range.contains(ref))
-    val clearedInRange = inRange.view.mapValues(cell => cell.copy(styleId = None)).toMap
-    copy(cells = outsideRange ++ clearedInRange)
+    // Only the range's cells are visited and rewritten; every other row is shared.
+    copy(cells = cells.putAll(cells.inRange(range).map(_.copy(styleId = None)).toVector))
 
   /**
    * Clear comments from cells in range.
@@ -1227,7 +1183,7 @@ final case class Sheet(
   ): XLResult[Sheet] =
     SheetEdits.sort(this, range, keys, hasHeader)
 
-  /** Clear contents (unmerging overlapping merges), styles and/or comments in `range`. */
+  /** Clear contents, styles and/or comments in `range`; a styles clear unmerges what it touches. */
   def clearRange(range: CellRange, what: ClearWhat): Sheet = SheetEdits.clear(this, range, what)
 
   /** The width `col` needs for its formatted content, in Excel character units (GH-156). */
@@ -1576,7 +1532,7 @@ object Sheet:
   def apply(name: SheetName): Sheet =
     Sheet(
       name,
-      Map.empty,
+      CellStore.empty,
       Set.empty,
       Map.empty,
       Map.empty,

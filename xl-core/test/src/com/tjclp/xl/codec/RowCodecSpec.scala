@@ -750,7 +750,7 @@ class RowCodecSpec extends ScalaCheckSuite:
     val order = Order(7, "Acme", 2, BigDecimal("1.50"), Some("rush"))
     assertEquals(renamed.write(order), base.write(order))
     val cells =
-      right(Sheet("W").putRows(ref"A1", Vector(order))).sheet.cells.values.toVector
+      right(Sheet("W").putRows(ref"A1", Vector(order))).sheet.cells.iterator.toVector
         .sortBy(_.col.index0)
     assertEquals(renamed.read(cells), base.read(cells))
     assertEquals(renamed.read(cells), Right(order): Either[RowCodecError, Order])

@@ -101,7 +101,9 @@ enum CliCommand derives CanEqual:
   )
   // Inspect (ADR-017 §2.10, read-only): orient, find every reason a number is wrong, trace one
   case Describe(full: Boolean) // metadata only unless --full (then the loaded WorkbookSummary)
-  case Audit(failOnFindings: Boolean) // exit 1 AUDIT_FINDINGS when asked and the book is dirty
+  // exit 1 AUDIT_FINDINGS when asked and the book is dirty; #891: skipDataTables drops the
+  // stale-data-table note (it re-evaluates each table's corner) and the report says so
+  case Audit(failOnFindings: Boolean, skipDataTables: Boolean = false)
   // deps <ref> [--direction] [--depth] [--expand]; expand lists a precedent range's cells
   case Deps(ref: String, direction: Direction, depth: Depth, expand: Boolean)
   // Analyze
@@ -257,7 +259,7 @@ enum CliCommand derives CanEqual:
    * at all: `recalc`, the sheet-structure verbs and `name`.
    */
   def takesSheet: Boolean = this match
-    case Sheets(_) | Names | Search(_, _, _, _) | Describe(_) | Audit(_) | Recalc(_, _) |
+    case Sheets(_) | Names | Search(_, _, _, _) | Describe(_) | Audit(_, _) | Recalc(_, _) |
         AddSheet(_, _, _) | RemoveSheet(_) | RenameSheet(_, _) | MoveSheet(_, _, _, _) |
         CopySheet(_, _) | Name(_) | Diff(_, _, _, _) | Lint(_) =>
       false
@@ -333,7 +335,7 @@ enum CliCommand derives CanEqual:
     case Stats(_) => "stats"
     case _: Filter => "filter"
     case Describe(_) => "describe"
-    case Audit(_) => "audit"
+    case Audit(_, _) => "audit"
     case Deps(_, _, _, _) => "deps"
     case Eval(_, _, _) => "eval"
     case EvalArray(_, _, _) => "evala"

@@ -279,12 +279,17 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
       val targeted = book.recalculateAfterEdit(name, Set(edited), RecalcOptions()).workbook
       val full = book.recalculate().workbook
       def caches(wb: Workbook): Map[ARef, Option[CellValue]] =
-        wb(name).fold(e => fail(e.message), identity).cells.collect {
-          case (at, cell) if cell.value.isInstanceOf[CellValue.Formula] =>
-            at -> (cell.value match
-              case CellValue.Formula(_, cached, _) => cached
-              case _ => None)
-        }
+        wb(name)
+          .fold(e => fail(e.message), identity)
+          .cells
+          .iterator
+          .collect {
+            case cell @ Cell(at, _, _, _) if cell.value.isInstanceOf[CellValue.Formula] =>
+              at -> (cell.value match
+                case CellValue.Formula(_, cached, _) => cached
+                case _ => None)
+          }
+          .toMap
       assertEquals(
         caches(targeted),
         caches(full),
@@ -526,7 +531,11 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     assertEquals(
       Evaluator.referenceFunctions,
       referencing ++ Set("IF", "IFS", "CHOOSE", "SWITCH") ++
-        Set(functions.ReferenceOperators.IntersectionName, functions.ReferenceOperators.RangeName)
+        Set(
+          functions.ReferenceOperators.IntersectionName,
+          functions.ReferenceOperators.RangeName,
+          functions.TableColumnReferences.Name
+        )
     )
     assertEquals(
       functions.ReferenceOperators.selectingFunctions,
@@ -542,7 +551,7 @@ class ReferenceOperatorLawsSpec extends ScalaCheckSuite:
     )
     assertEquals(
       functions.ArgSpec.computedReferenceCalls,
-      referencing + functions.ReferenceOperators.RangeName
+      referencing + functions.ReferenceOperators.RangeName + functions.TableColumnReferences.Name
     )
     // neither operator is registered, nor reachable by name
     List(
