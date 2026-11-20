@@ -412,6 +412,10 @@ final case class Workbook(
 
   // ========== Sheet Visibility ==========
 
+  // Listing the visibility of every tab uses its exact name. Build this set once so the listing
+  // stays linear even when only a few tabs have entries in sheetStates.
+  private lazy val exactSheetNames = sheets.iterator.map(_.name).toSet
+
   /**
    * Get sheet visibility state.
    *
@@ -420,6 +424,7 @@ final case class Workbook(
    */
   def getSheetState(name: SheetName): Option[String] =
     if metadata.sheetStates.isEmpty then None
+    else if exactSheetNames.contains(name) then metadata.sheetStates.get(name).flatten
     else sheetIndexOf(name).toOption.flatMap(i => metadata.sheetStates.get(sheets(i).name).flatten)
 
   /**
