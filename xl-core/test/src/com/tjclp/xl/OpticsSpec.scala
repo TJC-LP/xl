@@ -81,9 +81,9 @@ class OpticsSpec extends FunSuite:
 
     val sheet = emptySheet.put(ref"A1", CellValue.Text("test"))
     val composed = sheetCells.andThen(
-      Lens[Map[ARef, Cell], Cell](
+      Lens[CellStore, Cell](
         get = _.get(ref"A1").getOrElse(Cell.empty(ref"A1")),
-        set = (c, m) => m + (c.ref -> c)
+        set = (c, m) => m.updated(c)
       )
     )
 
@@ -148,7 +148,7 @@ class OpticsSpec extends FunSuite:
     val cells = sheetCells.get(sheet)
 
     assertEquals(cells.size, 1)
-    assertEquals(cells(ref"A1").value, CellValue.Text("test"))
+    assertEquals(cells.get(ref"A1").map(_.value), Some(CellValue.Text("test")))
   }
 
   test("Optics.cellValue accesses and modifies value") {
@@ -284,10 +284,11 @@ class OpticsSpec extends FunSuite:
       ref = ref"A1",
       value = CellValue.Text("test"),
       styleId = Some(StyleId(3)),
-      comment = Some("Note"),
-      hyperlink = Some("https://example.com")
+      hyperlink = Some(Hyperlink("https://example.com"))
     )
-    val sheet = emptySheet.put(originalCell)
+    val sheet = emptySheet
+      .put(originalCell)
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note"))
 
     val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Text(_) => CellValue.Text("changed")
@@ -297,13 +298,12 @@ class OpticsSpec extends FunSuite:
     val cell = updated(ref"A1")
     assertEquals(cell.value, CellValue.Text("changed"))
     assertEquals(cell.styleId, Some(StyleId(3)))
-    // GH-295: put(cell) (the lens setter) converts the legacy comment field into Sheet.comments
-    assertEquals(cell.comment, None)
+    // The lens setter (put(cell)) leaves the sheet-level comment store alone
     assertEquals(
       updated.getComment(ref"A1"),
       Some(com.tjclp.xl.cells.Comment.plainText("Note"))
     )
-    assertEquals(cell.hyperlink, Some("https://example.com"))
+    assertEquals(cell.hyperlink, Some(Hyperlink("https://example.com")))
   }
 
   test("focus DSL works with pattern matching") {
@@ -362,11 +362,11 @@ class OpticsSpec extends FunSuite:
 
     // Get all cells, transform them, set back
     val cells = sheetCells.get(sheet)
-    val doubled = cells.view.mapValues { c =>
+    val doubled = CellStore.from(cells.iterator.map { c =>
       c.value match
         case CellValue.Number(n) => c.withValue(CellValue.Number(n * 2))
         case _ => c
-    }.toMap
+    })
 
     val updated = sheetCells.set(doubled, sheet)
 

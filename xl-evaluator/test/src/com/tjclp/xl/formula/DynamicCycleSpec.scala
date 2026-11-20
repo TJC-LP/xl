@@ -110,7 +110,7 @@ class DynamicCycleSpec extends FunSuite:
   test("#829: a dynamic reader of a static cycle member re-enters the member (the CI shape)") {
     // A5 = SUM(A1:INDEX(A:A,ROW())) reads itself through the static graph (#743: INDEX at ROW()
     // reads one cell), so Tarjan reports it; B1 reads it at run time, recurses into its range and
-    // meets A5 again. This is the book shape RecalcEngineParitySpec found nondeterministic.
+    // meets A5 again. This is the book shape the #767 engine parity laws found nondeterministic.
     val sheet = (1 to 4)
       .foldLeft(Sheet(S))((s, r) => s.put(ARef.from0(0, r - 1), num(r)))
       .put(ref"A5", formula("=SUM(A1:INDEX(A:A,ROW()))"))

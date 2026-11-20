@@ -437,7 +437,7 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
     // Group cells by row
     // Optimization: Use TreeMap for auto-sorted grouping (avoids O(n log n) sort after groupBy)
     import scala.collection.immutable.TreeMap
-    val cellsByRow = sheet.cells.values
+    val cellsByRow = sheet.cells.iterator.toVector
       .groupBy(_.ref.row.index1) // 1-based row index
       .to(TreeMap) // Auto-sorted by key
       .toSeq

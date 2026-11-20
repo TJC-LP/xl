@@ -98,6 +98,20 @@ object MemoryGuard:
    * where it loads (MemoryGuardSpec holds each shape to its band), while nyc1m's 14.2 GiB lower
    * estimate refuses it on the native image's 8 GB. Under the upper band every measured load but
    * nyc1m's completes (it needed up to 41×, the residual the typed `RESOURCE_LIMIT` covers).
+   *
+   * Re-measured for #891, when a sheet's cells moved from a `Map` to the row-radix `CellStore` and
+   * its builder stopped holding a slot per cell while it builds. Two 1,000,000 × 8 numeric books
+   * written by the library itself, `XlsxReader.read` (permissive config), HotSpot 25, G1, the
+   * smallest `-Xmx` in 64 MiB steps:
+   * {{{
+   * book (1,000,000 rows)    sheet XML   Map: loads (fails)   CellStore: loads (fails)
+   * 8 decimals, 80000.07     324 MiB     5696m (5632m)        5120m (5056m)
+   * 8 integers below 1000    286 MiB     5632m (5568m)        5120m (5056m)
+   * }}}
+   * The store loads both in about 0.5 GiB less: 15.8× and 17.9× the sheet XML, where the map needed
+   * 17.6× and 19.7×. The largest failing heaps are 15.6× and 17.7×, still above [[sheetLower]], and
+   * the upper band is untouched, so the coefficients stand. What is left is mostly not the cells:
+   * the parsed worksheet stays live while the store is built from it.
    */
   val sheetLower: Int = 14
   val sheetUpper: Int = 30

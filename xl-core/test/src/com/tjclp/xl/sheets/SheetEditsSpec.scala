@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{ArrayMode, Cell, CellValue, Comment, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, Cell, CellValue, Comment, FormulaKind, Hyperlink}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.ops.{ClearWhat, ColSpan, Edit, FormulaSupport, OffGridRef, RowSpan}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
@@ -449,7 +449,9 @@ class SheetEditsSpec extends FunSuite:
     val s = Sheet(name)
       .put(a1("A1"), num(1))
       .put(a1("C3"), num(3))
-      .put(Cell(a1("B3"), CellValue.Text("site"), hyperlink = Some("https://example.com")))
+      .put(
+        Cell(a1("B3"), CellValue.Text("site"), hyperlink = Some(Hyperlink("https://example.com")))
+      )
       .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Percent))
       .withCellStyle(a1("B3"), CellStyle.default.withNumFmt(NumFmt.Percent))
       .comment(a1("A1"), Comment.plainText("note", None))
@@ -486,7 +488,7 @@ class SheetEditsSpec extends FunSuite:
       .setRowProperties(Row.from1(2), RowProperties(styleId = pct))
       .setColumnProperties(Column.from0(2), ColumnProperties(styleId = pct))
       .put(a1("A1"), num(1))
-      .put(Cell(a1("A2"), num(2), hyperlink = Some("https://example.com")))
+      .put(Cell(a1("A2"), num(2), hyperlink = Some(Hyperlink("https://example.com"))))
       .put(a1("C1"), num(3))
     val out = s.clearRange(rng("A1:C2"), ClearWhat.contents)
     // A record with no style stops A2 and C1 taking their row's or column's Percent format

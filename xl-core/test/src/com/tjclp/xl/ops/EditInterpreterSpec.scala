@@ -3,7 +3,7 @@ package com.tjclp.xl.ops
 import java.time.LocalDate
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellValue, Comment}
+import com.tjclp.xl.cells.{CellValue, Comment, Hyperlink}
 import com.tjclp.xl.codec.CellCodec.given
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.{AutoFilterState, FreezePane, PageSetup, Sheet}
@@ -387,7 +387,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(out(a1("A1")).value, CellValue.Empty)
     assertEquals(out(a1("A1")).styleId, currency)
     // Unstyled cells go; the comment and the E5:F6 merge stay
-    assertEquals(out.cells.keySet, Set(a1("A1")))
+    assertEquals(out.cells.refs.toSet, Set(a1("A1")))
     assertEquals(out.mergedRanges, baseData.mergedRanges)
     assertEquals(out.comments, baseData.comments)
   }
@@ -500,7 +500,7 @@ class EditInterpreterSpec extends FunSuite:
     )
     assertEquals(s.getComment(a1("B1")).map(_.text.toPlainText), Some("note"))
     assertEquals(s.getComment(a1("A2")), None)
-    assertEquals(s(a1("A1")).hyperlink, Some("https://example.com"))
+    assertEquals(s(a1("A1")).hyperlink, Some(Hyperlink("https://example.com")))
     val cleared = sheetAfter(Workbook(s), Edit.Hyperlink(loc("A1"), None))
     assertEquals(cleared(a1("A1")).hyperlink, None)
     assertEquals(

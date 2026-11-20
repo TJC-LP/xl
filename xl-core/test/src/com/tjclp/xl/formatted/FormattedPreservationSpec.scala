@@ -18,7 +18,7 @@ class FormattedPreservationSpec extends FunSuite:
     val sheet = Sheet("Test")
 
     // Use batch put with money literal
-    val updated = sheet.put(ref"A1" -> money"$$1,234.56").unsafe
+    val updated = sheet.put(ref"A1" -> money"$$1,234.56")
 
     // Verify cell has the value
     val cell = updated(ref"A1")
@@ -46,7 +46,7 @@ class FormattedPreservationSpec extends FunSuite:
   test("date literal preserves Date format in batch put") {
     val sheet = Sheet("Test")
 
-    val updated = sheet.put(ref"A1" -> date"2025-11-10").unsafe
+    val updated = sheet.put(ref"A1" -> date"2025-11-10")
 
     val cell = updated(ref"A1")
     cell.value match
@@ -66,7 +66,7 @@ class FormattedPreservationSpec extends FunSuite:
   test("percent literal preserves Percent format in batch put") {
     val sheet = Sheet("Test")
 
-    val updated = sheet.put(ref"A1" -> percent"15.5%").unsafe
+    val updated = sheet.put(ref"A1" -> percent"15.5%")
 
     val cell = updated(ref"A1")
     cell.value match
@@ -100,7 +100,6 @@ class FormattedPreservationSpec extends FunSuite:
         ref"D1" -> BigDecimal("999.99"), // Plain BigDecimal (auto Decimal format)
         ref"E1" -> date"2025-11-10" // Formatted Date
       )
-      .unsafe
 
     // Verify A1 (plain String) has no specific format
     val cellA1 = updated(ref"A1")
@@ -139,7 +138,7 @@ class FormattedPreservationSpec extends FunSuite:
     val sheet = Sheet("Test")
 
     // Test accounting format (negative shown as parentheses)
-    val updated = sheet.put(ref"A1" -> accounting"$$(999.99)").unsafe
+    val updated = sheet.put(ref"A1" -> accounting"$$(999.99)")
 
     // Verify value is negative
     val cell = updated(ref"A1")
@@ -174,7 +173,6 @@ class FormattedPreservationSpec extends FunSuite:
         ref"A3" -> "Date",
         ref"B3" -> reportDate // Variable, not literal
       )
-      .unsafe
 
     // Verify Currency format is preserved for money variable
     val cellB1 = updated(ref"B1")

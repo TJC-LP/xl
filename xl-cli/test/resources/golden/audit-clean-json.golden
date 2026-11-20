@@ -24,6 +24,7 @@ audit
     "unresolvedReaders": [],
     "calcPr": null,
     "iterativeCycles": [],
+    "dataTableCheck": "checked",
     "dataTableStale": []
   },
   "warnings": [],

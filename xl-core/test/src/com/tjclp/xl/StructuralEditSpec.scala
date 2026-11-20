@@ -271,3 +271,16 @@ class StructuralEditSpec extends ScalaCheckSuite:
     val s = Sheet("S").copy(mergedRanges = Set(CellRange(ref"A1", ref"A1048576")))
     assertEquals(s.maxPopulatedIndex(rowAxis = true), None)
   }
+
+  test("#891: a delete count past Int.MaxValue keeps the cells before the cut in place") {
+    import com.tjclp.xl.cells.Comment
+    val rows = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"A10", num(2))
+      .comment(ref"A1", Comment.plainText("note"))
+      .deleteRows(5, Int.MaxValue)
+    assertEquals(rows.cells.refs.toList, List(ref"A1"))
+    assertEquals(rows.comments.keys.toList, List(ref"A1"))
+    val cols = Sheet("S").put(ref"A1", num(1)).put(ref"J1", num(2)).deleteColumns(5, Int.MaxValue)
+    assertEquals(cols.cells.refs.toList, List(ref"A1"))
+  }

@@ -235,7 +235,7 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
         ref,
         baseData(ref).value,
         baseData(ref).styleId,
-        hyperlink = Some("https://example.com")
+        hyperlink = Some(com.tjclp.xl.cells.Hyperlink("https://example.com"))
       )
     )
     val e = Edit.Clear(Area(None, CellRange(ref, ref)), ClearWhat.contents)

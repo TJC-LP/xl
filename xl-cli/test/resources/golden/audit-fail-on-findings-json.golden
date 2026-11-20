@@ -58,6 +58,7 @@ audit
         "Calc!F1"
       ]
     ],
+    "dataTableCheck": "checked",
     "dataTableStale": []
   },
   "warnings": [],

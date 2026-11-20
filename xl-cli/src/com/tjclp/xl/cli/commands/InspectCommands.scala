@@ -291,9 +291,10 @@ object InspectCommands:
     wb: Workbook,
     sheetOpt: Option[Sheet],
     failOnFindings: Boolean,
-    mode: OutputMode
+    mode: OutputMode,
+    skipDataTables: Boolean = false
   ): IO[Payload] =
-    val whole = WorkbookAudit.of(wb)
+    val whole = WorkbookAudit.of(wb, Clock.system, checkDataTables = !skipDataTables)
     val audit = sheetOpt.fold(whole)(sheet => whole.restrictTo(sheet.name))
     val payload = mode match
       case OutputMode.Json => Payload.Json(auditJson(audit))
@@ -340,6 +341,8 @@ object InspectCommands:
       "calcPr" -> calcPrJson(audit.calcPr),
       // a note, not a finding: the book declares iterative calculation, so its cycles are intended
       "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members))),
+      // #891: whether the note below ran ("skipped" under --skip-data-tables, its list then empty)
+      "dataTableCheck" -> ujson.Str(if audit.dataTablesChecked then "checked" else "skipped"),
       // #678, a note: interiors whose caches disagree with the corner re-evaluated at their inputs
       "dataTableStale" -> ujson.Arr.from(audit.staleDataTables.map { t =>
         ujson.Obj(
@@ -383,6 +386,8 @@ object InspectCommands:
             one(s"$where  ${t.render}")
           }
         ) ++
+        (if audit.dataTablesChecked then Vector.empty
+         else Vector("Stale data tables: not checked (--skip-data-tables)")) ++
         section("Volatile", audit.volatile.map(q => one(q.toString))) ++
         section("Dynamic", audit.dynamic.map(q => one(q.toString))) ++
         section("External references", audit.externalRefs.map(q => one(q.toString))) ++

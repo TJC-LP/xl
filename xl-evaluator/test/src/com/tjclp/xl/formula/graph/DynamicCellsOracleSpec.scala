@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.graph
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.eval.Evaluator
 import com.tjclp.xl.formula.functions.FunctionRegistry
@@ -86,7 +86,7 @@ class DynamicCellsOracleSpec extends ScalaCheckSuite:
         }
 
     wb.sheets.iterator.flatMap { sheet =>
-      sheet.cells.iterator.flatMap { case (ref, cell) =>
+      sheet.cells.iterator.flatMap { case cell @ Cell(ref, _, _, _) =>
         cell.value match
           case CellValue.Formula(text, _, _) if tokens.exists(upper(text).contains) =>
             FormulaParser.parse(text) match

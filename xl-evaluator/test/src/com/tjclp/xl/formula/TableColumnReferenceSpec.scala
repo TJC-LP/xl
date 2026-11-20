@@ -3,10 +3,12 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.StructuralEditor
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.EvalAllSyntax.*
+import com.tjclp.xl.formula.graph.{CompactGraph, DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.formula.printer.{FormulaPrinter, FormulaShifter}
 import com.tjclp.xl.tables.{TableColumn, TableSpec}
+import com.tjclp.xl.unsafe.*
 
 import munit.FunSuite
 
@@ -162,17 +164,25 @@ class TableColumnReferenceSpec extends FunSuite:
     assert(DependencyGraph.containsCellReferences(parsed))
   }
 
-  test("GH-669: sheet graph orders table formulas and detects a table self-cycle") {
+  test("GH-669: the graph orders table formulas and detects a table self-cycle") {
     val sheet = data
       .put(ref"B3", CellValue.Formula("C3+1", Some(num(99))))
       .put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(-1))))
+    // the declared reads, ranges unexpanded (the expanded view lists only occupied cells: B4 is
+    // empty)
+    val declared = QualifiedGraph
+      .of(Workbook(sheet))
+      .declaredPrecedentsOf(DependencyGraph.QualifiedRef(sheet.name, ref"A1"))
     assertEquals(
-      DependencyGraph.fromSheet(sheet).dependencies(ref"A1"),
+      declared.flatMap {
+        case QualifiedGraph.Node.Cell(cell) => Vector(cell.ref)
+        case QualifiedGraph.Node.Range(range) => range.range.cells.toVector
+      }.toSet,
       Set(ref"B3", ref"B4", ref"B5")
     )
-    assertEquals(sheet.evaluateWithDependencyCheck().toOption.get(ref"A1"), num(14))
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(14))
     val cycle = data.put(ref"B3", CellValue.Formula("SUM(Table1[Col])"))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(cycle)).isLeft)
+    assert(cycle.cyclicCells.nonEmpty)
   }
 
   test("GH-669: workbook graph and dirty recalc refresh table precedents first") {
@@ -186,7 +196,7 @@ class TableColumnReferenceSpec extends FunSuite:
     assertEquals(cached(result.workbook, "Reader", ref"A1"), Some(num(14)))
     val updated =
       result.workbook.put(result.workbook(SheetName.unsafe("Data")).toOption.get.put(ref"C3", 20))
-    val dirty = updated.recalculateDependents(SheetName.unsafe("Data"), Set(ref"C3"))
+    val dirty = updated.afterEdit(SheetName.unsafe("Data"), Set(ref"C3"))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(24)))
     assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(48)))
   }
@@ -207,7 +217,7 @@ class TableColumnReferenceSpec extends FunSuite:
   test("GH-669: structural edits preserve table text, invalidate caches and follow moved rows") {
     val reader = Sheet("Reader").put(ref"A1", CellValue.Formula("SUM(Table1[Col])", Some(num(999))))
     val wb = Workbook(reader, data)
-    val shifted = StructuralEditor.insertRows(wb, data.name, 3, 1)
+    val shifted = StructuralEditor.insertRowsChecked(wb, data.name, 3, 1).unsafe
     assertEquals(cached(shifted, "Reader", ref"A1"), None)
     assertEquals(cached(shifted.recalculate().workbook, "Reader", ref"A1"), Some(num(4)))
   }
@@ -259,7 +269,7 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"C7", 1)
       .put(ref"B7", CellValue.Formula("C7+10", Some(num(999))))
       .put(ref"A1", CellValue.Formula("""SUMIF(C3:C7,">0",Table1[Col])""", Some(num(-1))))
-    assertEquals(sheet.evaluateWithDependencyCheck().toOption.get(ref"A1"), num(1015))
+    assertEquals(sheet.evalAll().toOption.get(ref"A1"), num(1015))
     val wb = Workbook(sheet).recalculate()
     assertEquals(cached(wb.workbook, "Data", ref"A1"), Some(num(1015)))
   }
@@ -270,9 +280,9 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"B7", CellValue.Formula("A1+1", Some(num(999))))
       .put(ref"A1", CellValue.Formula(formula, Some(num(1))))
     val explicit = cycle("""SUMIF(C3:C7,">0",B3:B5)""")
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(explicit)).isLeft)
+    assert(explicit.cyclicCells.nonEmpty)
     val structured = cycle("""SUMIF(C3:C7,">0",Table1[Col])""")
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(structured)).isLeft)
+    assert(structured.cyclicCells.nonEmpty)
   }
 
   for (criteria, cycleCell, expectedCycle) <- List(
@@ -285,21 +295,16 @@ class TableColumnReferenceSpec extends FunSuite:
         .put(ref"C7", 1)
         .put(cycleCell, CellValue.Formula("A1+1", Some(num(999))))
         .put(ref"A1", CellValue.Formula(s"""SUMIF($criteria,">0",Table1[Col])""", Some(num(1))))
-      val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
-      assertEquals(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty, expectedCycle)
-      assertEquals(
-        DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft,
-        expectedCycle
-      )
+      assertEquals(CompactGraph.build(Workbook(sheet)).cyclicFormulas.nonEmpty, expectedCycle)
+      assertEquals(sheet.cyclicCells.nonEmpty, expectedCycle)
     }
 
   test("GH-669: table criteria shape resizes a literal SUMIF target in both graphs") {
     val sheet = data
       .put(ref"C5", CellValue.Formula("A1+1", Some(num(999))))
       .put(ref"A1", CellValue.Formula("""SUMIF(Table1[Col],">0",C3)""", Some(num(1))))
-    assert(DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).isLeft)
-    val (graph, _) = DependencyGraph.fromWorkbookFormulaGraph(Workbook(sheet))
-    assert(DependencyGraph.qualifiedCyclicNodes(graph).nonEmpty)
+    assert(sheet.cyclicCells.nonEmpty)
+    assert(CompactGraph.build(Workbook(sheet)).cyclicFormulas.nonEmpty)
   }
 
   test("GH-669: table scheduling prefilter ignores quotes, externals and excluded selectors") {
@@ -326,7 +331,7 @@ class TableColumnReferenceSpec extends FunSuite:
       .put(ref"E4", CellValue.Formula("SUM(Table1[Col])"))
       .put(ref"E5", CellValue.Formula("COUNTIF(OFFSET(B3,0,0,3,1),\">0\")"))
     // only the genuinely computed OFFSET range stays dynamic
-    assertEquals(DependencyGraph.dynamicCells(readers), Set(ref"E5"))
+    assertEquals(readers.dynamicRefs, Set(ref"E5"))
     assertEquals(
       DependencyGraph.dynamicCells(Workbook(Sheet("Reader"), readers)).map(_.ref),
       Set(ref"E5")
@@ -343,7 +348,7 @@ class TableColumnReferenceSpec extends FunSuite:
     assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
     assertEquals(cached(wb, "Reader", ref"A2"), Some(num(40)))
     val edited = wb.put(wb(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 5))
-    val dirty = edited.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    val dirty = edited.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
     assertEquals(cached(dirty, "Data", ref"E1"), Some(num(9)))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
     assertEquals(cached(dirty, "Reader", ref"A2"), Some(num(60)))
@@ -403,8 +408,8 @@ class TableColumnReferenceSpec extends FunSuite:
     val sheet = data
       .put(ref"E1", CellValue.Formula("COUNTIF(Table1[Col],\">0\")", Some(num(-1))))
       .put(ref"E2", CellValue.Formula("SUMIF(B3:B5,\">0\",Table1[Other Column])", Some(num(-1))))
-    val fresh = sheet.recalculateDependents(Set(ref"B3"))
-    val edited = fresh.put(ref"B4", 5).recalculateDependents(Set(ref"B4"))
+    val fresh = sheet.afterEdit(Set(ref"B3"))
+    val edited = fresh.put(ref"B4", 5).afterEdit(Set(ref"B4"))
     def value(s: Sheet, at: ARef) = s(at).value match
       case CellValue.Formula(_, cache, _) => cache
       case other => Some(other)
@@ -418,9 +423,9 @@ class TableColumnReferenceSpec extends FunSuite:
     val wb = Workbook(reader, data).recalculate().workbook
     assertEquals(cached(wb, "Reader", ref"A1"), Some(num(2)))
     // 0-based 3 is row 4, inside the table's data rows B3:B5
-    val inserted = StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), 3, 1)
+    val inserted = StructuralEditor.insertRowsChecked(wb, SheetName.unsafe("Data"), 3, 1).unsafe
     val withValue = inserted.put(inserted(SheetName.unsafe("Data")).toOption.get.put(ref"B4", 7))
-    val dirty = withValue.recalculateDependents(SheetName.unsafe("Data"), Set(ref"B4"))
+    val dirty = withValue.afterEdit(SheetName.unsafe("Data"), Set(ref"B4"))
     assertEquals(cached(dirty, "Reader", ref"A1"), Some(num(3)))
   }
 

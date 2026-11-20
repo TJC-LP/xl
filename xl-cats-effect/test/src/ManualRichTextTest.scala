@@ -70,7 +70,6 @@ object ManualRichTextTest extends IOApp.Simple:
         ref"A14" -> "Revenue ($M):",
         ref"B14" -> BigDecimal("1250.50")
       )
-      .unsafe
 
     val workbook = Workbook(Vector(report))
 

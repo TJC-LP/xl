@@ -378,9 +378,9 @@ private[xl] object SheetEdits:
       val dataRange = Option.when(dataRowStart <= rowEnd)(
         CellRange(ARef.from0(colStart, dataRowStart), ARef.from0(colEnd, rowEnd))
       )
-      val blocked = sheet.cells.valuesIterator
+      val blocked = sheet.cells.iterator
         .collect {
-          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _, _)
+          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _)
               if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 &&
                 dataRange.exists(_.intersects(arr.ref)) =>
             cell.ref -> arr.ref
@@ -447,7 +447,7 @@ private[xl] object SheetEdits:
                   Right(cachedOpt.getOrElse(CellValue.Empty))
                 case v => Right(v)
             else shifted(cell.value, newRef, 0, rowDelta).map(_._1)
-          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, None, cell.hyperlink)))
+          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, cell.hyperlink)))
         }
     }
 
@@ -502,13 +502,13 @@ private[xl] object SheetEdits:
    * default style ([[keepsRecordWhenCleared]]).
    */
   private def clearContentsKeepingStyles(sheet: Sheet, range: CellRange): Sheet =
-    sheet.copy(cells = sheet.cells.flatMap { (ref, cell) =>
-      if !range.contains(ref) then Some(ref -> cell)
-      else
-        Option.when(keepsRecordWhenCleared(sheet, cell))(
-          ref -> cell.copy(value = CellValue.Empty, hyperlink = None)
-        )
-    })
+    // the store walks the range and merges the kept records back once (#891)
+    val kept = sheet.cells
+      .inRange(range)
+      .filter(keepsRecordWhenCleared(sheet, _))
+      .map(_.copy(value = CellValue.Empty, hyperlink = None))
+      .toVector
+    sheet.copy(cells = sheet.cells.removedIn(range).putAll(kept))
 
   /**
    * Whether a contents clear keeps `cell` as an empty record: it has a style, or its row or column
@@ -546,7 +546,7 @@ private[xl] object SheetEdits:
    * contributes nothing (GH-613) — evaluate or recalculate first when the fit must reflect it.
    */
   def autoFitWidth(sheet: Sheet, col: Column): Double =
-    fitWidth(sheet, sheet.cells.valuesIterator.filter(_.ref.col == col).toVector)
+    fitWidth(sheet, sheet.cells.iterator.filter(_.ref.col == col).toVector)
 
   /**
    * [[autoFitWidth]] for every column of `columns`, in order, from ONE pass over the sheet's cells:
@@ -555,7 +555,7 @@ private[xl] object SheetEdits:
    * without cells gets [[DefaultColumnWidth]]; a repeated column is reported each time.
    */
   def autoFitWidths(sheet: Sheet, columns: Iterable[Column]): Vector[(Column, Double)] =
-    val byColumn: Map[Column, Vector[Cell]] = sheet.cells.valuesIterator.toVector.groupBy(_.ref.col)
+    val byColumn: Map[Column, Vector[Cell]] = sheet.cells.iterator.toVector.groupBy(_.ref.col)
     columns.iterator
       .map(col => col -> fitWidth(sheet, byColumn.getOrElse(col, Vector.empty)))
       .toVector

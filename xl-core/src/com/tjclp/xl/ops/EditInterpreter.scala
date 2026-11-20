@@ -595,8 +595,8 @@ private[xl] object EditInterpreter:
         else if what.contents then
           // GH-890 Clear Contents: remove each cell, then restore a kept one as an empty record
           // (its style alone, no hyperlink); merges stay.
-          existing.cells.values
-            .filter(c => range.contains(c.ref))
+          existing.cells
+            .inRange(range)
             .toVector
             .sortBy(_.ref.toA1)
             .flatMap { c =>
@@ -613,7 +613,7 @@ private[xl] object EditInterpreter:
       val styles =
         if what.styles then
           val crossing = SheetEdits.crossingMerges(range, touched)
-          existing.cells.keys
+          existing.cells.refs
             .filter(ref =>
               if range.contains(ref) then !what.contents else crossing.exists(_.contains(ref))
             )

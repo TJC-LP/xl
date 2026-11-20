@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{Anchor, CellRange}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.{DependencyGraph, QualifiedGraph}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.formula.eval.{SheetEvaluator, WorkbookEvaluator}
@@ -188,13 +188,11 @@ class ExternalRefSpec extends ScalaCheckSuite:
     val sheet = Sheet(SheetName.unsafe("S"))
       .put(d1, formula("=SUM([2]Book1!A1:A2)"))
       .put(e1, formula("=SUM(D1)+1"))
-    val graph = DependencyGraph.fromSheet(sheet)
-    assertEquals(DependencyGraph.precedents(graph, d1), Set.empty[ARef])
-    assertEquals(DependencyGraph.precedents(graph, e1), Set(d1))
-
-    val (deps, _) = DependencyGraph.fromWorkbookBounded(Workbook(sheet))
+    val deps = QualifiedGraph.of(Workbook(sheet)).dependencies
     val qd1 = DependencyGraph.QualifiedRef(SheetName.unsafe("S"), d1)
+    val qe1 = DependencyGraph.QualifiedRef(SheetName.unsafe("S"), e1)
     assertEquals(deps.get(qd1), Some(Set.empty[DependencyGraph.QualifiedRef]))
+    assertEquals(deps.get(qe1), Some(Set(qd1)))
 
   // ==================== Recalculate: cache pinning ====================
 

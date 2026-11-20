@@ -59,9 +59,9 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
 
   private def cells(wb: Workbook): Vector[String] =
     wb.sheets.flatMap { sheet =>
-      sheet.cells.toVector
-        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
-        .map((ref, cell) => s"${sheet.name.value}!${ref.toA1}=${render(cell.value)}")
+      sheet.cells.iterator.toVector
+        .sortBy(cell => (cell.ref.row.index0, cell.ref.col.index0))
+        .map(cell => s"${sheet.name.value}!${cell.ref.toA1}=${render(cell.value)}")
     }
 
   private def exactlySame(a: RecalcResult, b: RecalcResult, label: String): Prop =

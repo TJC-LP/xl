@@ -201,7 +201,7 @@ class RecalcCountersLawSpec extends ScalaCheckSuite:
       val off = RecalcOptions(clock = clock, iterative = IterativeMode.Off)
       val sequential = graph(recalculateCounted(book, off, _))
       val formulas = book.sheets.iterator
-        .map(_.cells.valuesIterator.count(_.value match
+        .map(_.cells.iterator.count(_.value match
           case _: CellValue.Formula => true
           case _ => false))
         .sum

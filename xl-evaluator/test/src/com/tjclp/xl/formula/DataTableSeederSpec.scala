@@ -297,6 +297,153 @@ class DataTableSeederSpec extends FunSuite:
 
   // ===== GH-453: circular books — seeding honors the book's CalcPr / an explicit IterativeCalc =====
 
+  // #891: the recalculation graph narrows VLOOKUP/HLOOKUP to the key strip and the strip its
+  // selector picks. A selector held in a table INPUT is substituted by the what-if pass, so every
+  // strip must stay in the corner's cone or the other axis seeds the strips the graph left out
+  // stale. Excel: interior(row j, column k) = lookup with selector k while the other input is j.
+  private def selectorTable(corner: String, cells: (String, String)*): Workbook =
+    val kind: FormulaKind.DataTable = FormulaKind.DataTable(
+      range("G5:I6"),
+      dt2D = true,
+      dtr = false,
+      r1 = Some(aref("K1")),
+      r2 = Some(aref("J1"))
+    )
+    val base: Sheet = Sheet("S")
+      .put(ref"J1", num(5))
+      .put(ref"K1", num(2))
+      .put(ref"F4", CellValue.Formula(corner))
+      .put(ref"G4", num(2))
+      .put(ref"H4", num(3))
+      .put(ref"I4", num(4))
+      .put(ref"F5", num(1))
+      .put(ref"F6", num(3))
+      .put(ref"G5", CellValue.dataTable(kind, None))
+    Workbook(cells.foldLeft(base) { case (sheet: Sheet, (a1, text)) =>
+      sheet.put(aref(a1), text.toIntOption.fold[CellValue](CellValue.Formula(text))(num))
+    })
+
+  private def seededInterior(wb: Workbook): Vector[Option[BigDecimal]] =
+    val settled = wb.recalculate().workbook
+    val seeded = settled.seedDataTablesReport().fold(err => fail(s"seed failed: $err"), identity)
+    assertEquals(seeded.warnings, Vector.empty)
+    val sheet = sheetNamed(seeded.workbook, "S")
+    Vector("G5", "H5", "I5", "G6", "H6", "I6").map(a1 => interiorNum(sheet, aref(a1)))
+
+  private val selectorExpected: Vector[Option[BigDecimal]] =
+    Vector(2, 20, 200, 6, 60, 600).map(n => Some(BigDecimal(n)))
+
+  test("#891: a VLOOKUP whose column selector is a table input seeds every selected column") {
+    val wb = selectorTable(
+      "VLOOKUP(2,A10:D11,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "J1*1",
+      "C10" -> "J1*10",
+      "D10" -> "J1*100",
+      "A11" -> "2",
+      "B11" -> "J1*2",
+      "C11" -> "J1*20",
+      "D11" -> "J1*200"
+    )
+    assertEquals(seededInterior(wb), selectorExpected)
+  }
+
+  test("#891: a selector held in a table input still narrows the lookup for recalculation") {
+    // Excel (checked): B1 sits inside its own table and reads C1 through K1 = 3; that is not a
+    // circular reference, and the table over K1 computes. Only seeding reads the lookup whole.
+    val kind: FormulaKind.DataTable = colKind("F10:F11", "K1")
+    val sheet: Sheet = Sheet("S")
+      .put(ref"A1", num(1))
+      .put(ref"C1", num(7))
+      .put(ref"K1", num(3))
+      .put(ref"B1", CellValue.Formula("VLOOKUP(1,A1:C1,K1,FALSE)"))
+      .put(ref"F9", CellValue.Formula("B1"))
+      .put(ref"E10", num(3))
+      .put(ref"E11", num(1))
+      .put(ref"F10", CellValue.dataTable(kind, None))
+    val recalculated = Workbook(sheet).recalculate()
+    assertEquals(recalculated.errors, Vector.empty)
+    assertEquals(interiorNum(sheetNamed(recalculated.workbook, "S"), ref"B1"), Some(BigDecimal(7)))
+    val seeded = recalculated.workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+    // Seeding reads the lookup whole, so it sees B1 inside B1's own table and refuses the table
+    // with a warning. Excel computes it (9 and 1 after C1 := 9): a known gap, never a wrong value.
+    assert(
+      seeded.warnings.exists {
+        case _: SeedTableWarning.CircularNotIterated => true
+        case _ => false
+      },
+      seeded.warnings.toString
+    )
+    assertEquals(interiorNum(sheetNamed(seeded.workbook, "S"), ref"F10"), None)
+  }
+
+  test("#891: the audit re-derives a selector table as seeding does (no stale note)") {
+    // the audit hands seeding the recalculation graph, which narrowed the lookup on K1: seeding
+    // must set that graph aside, or the correct caches below are reported stale
+    val wb = selectorTable(
+      "VLOOKUP(2,A10:D11,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "J1*1",
+      "C10" -> "J1*10",
+      "D10" -> "J1*100",
+      "A11" -> "2",
+      "B11" -> "J1*2",
+      "C11" -> "J1*20",
+      "D11" -> "J1*200"
+    )
+    val seeded = wb
+      .recalculate()
+      .workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+      .workbook
+    val audit = com.tjclp.xl.formula.eval.WorkbookAudit.of(seeded)
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
+  test("#891: a volatile strip the selector can reach exempts the table from the stale note") {
+    // K1 = 2 picks column B today, so the narrowed recalculation graph does not see RAND() in
+    // column C; the table substitutes K1 = 3 and draws it (the draw depends on the other input,
+    // so the what-if pass re-evaluates it). The exemption must ask the graph the
+    // what-if pass uses, or a freshly seeded table is reported stale on every run.
+    val wb = selectorTable(
+      "VLOOKUP(2,A10:D11,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "J1*1",
+      "C10" -> "J1*RAND()",
+      "D10" -> "J1*100",
+      "A11" -> "2",
+      "B11" -> "J1*2",
+      "C11" -> "J1*RAND()",
+      "D11" -> "J1*200"
+    )
+    val seeded = wb
+      .recalculate()
+      .workbook
+      .seedDataTablesReport()
+      .fold(err => fail(s"seed failed: $err"), identity)
+      .workbook
+    val audit = com.tjclp.xl.formula.eval.WorkbookAudit.of(seeded)
+    assertEquals(audit.staleDataTables, Vector.empty)
+  }
+
+  test("#891: an HLOOKUP whose row selector is a table input seeds every selected row") {
+    val wb = selectorTable(
+      "HLOOKUP(2,A10:B13,K1,FALSE)",
+      "A10" -> "1",
+      "B10" -> "2",
+      "A11" -> "J1*1",
+      "B11" -> "J1*2",
+      "A12" -> "J1*10",
+      "B12" -> "J1*20",
+      "A13" -> "J1*100",
+      "B13" -> "J1*200"
+    )
+    assertEquals(seededInterior(wb), selectorExpected)
+  }
+
   /**
    * Canonical circular fixture: C1=100 (plain), B1=C1+B2, B2=$A$1*(C1+B1)/2 (declared-cycle
    * average-balance idiom over rate input A1), corner F9=IFERROR(B1/2,0), 1-var column table

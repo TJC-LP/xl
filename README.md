@@ -129,10 +129,10 @@ val sheet = Sheet("Model")
     "A4" -> fx"=A3 * 1.1"
   )
 
-// Evaluate all formulas (with cycle detection)
-sheet.evaluateWithDependencyCheck() match
-  case Right(results) => // Map[ARef, CellValue] of computed values
-  case Left(error)    => // Circular reference detected
+// Evaluate all formulas in dependency order (total: a cycle is reported per cell, not thrown)
+val result = Workbook(sheet).recalculate()
+result.evaluated(sheet.name) // Map[ARef, CellValue] of computed values
+result.errors                // Vector[CellEvalError] — cycle members read "Circular reference"
 ```
 
 **Functions**: SUM, AVERAGE, MIN, MAX, COUNT, IF, AND, OR, VLOOKUP, XLOOKUP, SUMIF, COUNTIF, NPV, IRR, TODAY, DATE, and [more](docs/STATUS.md).

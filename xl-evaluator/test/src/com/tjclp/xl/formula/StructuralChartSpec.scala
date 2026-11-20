@@ -10,6 +10,7 @@ import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.styles.units.Emu
 import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.unsafe.*
 
 /**
  * GH-222: StructuralEditor shifts typed-chart references ACROSS sheets (a chart on Dash tracking
@@ -34,7 +35,7 @@ class StructuralChartSpec extends FunSuite:
 
   test("cross-sheet chart refs shift when the data sheet gains rows") {
     val wb = Workbook(Vector(Sheet(data), Sheet(dash).addChart(chart, anchor)))
-    val edited = StructuralEditor.insertRows(wb, data, at = 0, count = 2)
+    val edited = StructuralEditor.insertRowsChecked(wb, data, at = 0, count = 2).unsafe
     val c = chartOf(edited.sheets(1))
     assertEquals(c.series(0).values, DataRef(data, ref"B4:B7"))
     assertEquals(c.series(0).categories, Some(DataRef(data, ref"A4:A7")))
@@ -43,14 +44,14 @@ class StructuralChartSpec extends FunSuite:
 
   test("cross-sheet delete fully covering the values drops the series") {
     val wb = Workbook(Vector(Sheet(data), Sheet(dash).addChart(chart, anchor)))
-    val edited = StructuralEditor.deleteRows(wb, data, at = 0, count = 10)
+    val edited = StructuralEditor.deleteRowsChecked(wb, data, at = 0, count = 10).unsafe
     assertEquals(chartOf(edited.sheets(1)).series, Vector.empty)
   }
 
   test("edited sheet's own charts shift exactly once (no double-shift)") {
     val selfHosted = Sheet(data).addChart(chart, anchor)
     val wb = Workbook(Vector(selfHosted, Sheet(dash).addChart(chart, anchor)))
-    val edited = StructuralEditor.insertRows(wb, data, at = 0, count = 3)
+    val edited = StructuralEditor.insertRowsChecked(wb, data, at = 0, count = 3).unsafe
     // both the self-hosted and the cross-sheet chart land on the SAME shifted refs
     assertEquals(chartOf(edited.sheets(0)).series(0).values, DataRef(data, ref"B5:B8"))
     assertEquals(chartOf(edited.sheets(1)).series(0).values, DataRef(data, ref"B5:B8"))
@@ -70,6 +71,6 @@ class StructuralChartSpec extends FunSuite:
       Vector(Series(DataRef(other, ref"B2:B5"), None, None))
     )
     val wb = Workbook(Vector(Sheet(data), Sheet(dash).addChart(crossChart, anchor), Sheet(other)))
-    val edited = StructuralEditor.insertColumns(wb, data, at = 0, count = 4)
+    val edited = StructuralEditor.insertColumnsChecked(wb, data, at = 0, count = 4).unsafe
     assertEquals(chartOf(edited.sheets(1)), crossChart)
   }

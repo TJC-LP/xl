@@ -26,6 +26,19 @@ class SharedStringsSpec extends FunSuite:
     assertEquals(sst.strings.size, 2, "uniqueCount should be 2")
   }
 
+  test("fromWorkbook numbers strings in row-major first-reference order (#891)") {
+    // 40 x 30 distinct strings put in reverse; the table must not follow the cell map's hash order
+    val refs = for
+      row <- 0 until 40
+      col <- 0 until 30
+    yield com.tjclp.xl.addressing.ARef.from0(col, row)
+    val sheet = refs.reverse.foldLeft(Sheet("Test")) { (acc, r) =>
+      acc.put(r, CellValue.Text(r.toA1))
+    }
+    val sst = SharedStrings.fromWorkbook(Workbook(Vector(sheet)))
+    assertEquals(sst.strings.toVector, refs.map(r => Left(r.toA1)).toVector)
+  }
+
   test("toXml emits correct count and uniqueCount") {
     val sheet = Sheet("Test")
       .put(ref"A1", CellValue.Text("Alpha"))

@@ -109,15 +109,15 @@ object WorkbookEquivalence:
 
   private def sheetDiff(expected: Sheet, actual: Sheet): List[String] =
     val name = expected.name.value
-    val refDiffs = keySetDiff(name, "cell refs", expected.cells.keySet, actual.cells.keySet)
+    val refDiffs = keySetDiff(name, "cell refs", expected.cells.refs.toSet, actual.cells.refs.toSet)
     val cellDiffs =
-      expected.cells.keySet
-        .intersect(actual.cells.keySet)
+      expected.cells.refs.toSet
+        .intersect(actual.cells.refs.toSet)
         .toList
         .sortBy(_.toA1)
         .flatMap { ref =>
-          val exp = expected.cells(ref)
-          val act = actual.cells(ref)
+          val exp = expected(ref) // ref is stored on both sides (the intersection)
+          val act = actual(ref)
           valueDiff(name, ref, exp.value, act.value).toList ++
             styleDiff(name, ref, expected, exp, actual, act).toList ++
             hyperlinkDiff(name, ref, exp, act).toList
