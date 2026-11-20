@@ -48,13 +48,19 @@ private[formula] object EvalPosition:
  * prefix count of stripped rows.
  */
 private[formula] final class Readiness private (
-  columns: Map[(SheetName, Int), Readiness.Column]
+  columns: Map[(SheetName, Int), Readiness.Column],
+  val positionFree: Boolean
 ):
-  /** Whether rows `r0..r1` of `col` on `sheet` are final for a reader at `at`. */
+  /**
+   * Whether rows `r0..r1` of `col` on `sheet` are final for a reader at `at`. A position-free
+   * readiness ([[Readiness.fixpoint]]) answers for every reader, positioned or not.
+   */
   def allows(sheet: SheetName, col: Int, r0: Int, r1: Int, at: EvalPosition): Boolean =
-    if !at.isDefined then false
+    if !at.isDefined && !positionFree then false
     else if r0 > r1 then true
-    else columns.get((sheet, col)).forall(_.allows(r0, r1, at.slot))
+    else
+      val slot = if at.isDefined then at.slot else Int.MaxValue
+      columns.get((sheet, col)).forall(_.allows(r0, r1, slot))
 
 private[formula] object Readiness:
 
@@ -91,15 +97,29 @@ private[formula] object Readiness:
    * evaluate (a stripped cell that is also evaluated counts as evaluated).
    */
   def build(slots: Map[QualifiedRef, Int], stripped: Set[QualifiedRef]): Readiness =
+    new Readiness(columns(slots, stripped), positionFree = false)
+
+  /**
+   * #891: the readiness of one iterative fixpoint, whose members are the only cells that change
+   * while it runs (every other cell of its sheets is fixed for its duration). A box holding a
+   * member is never final; every other box is final for every reader, at any position. An uncached
+   * formula still refuses its box when it is copied (the reader scans, which evaluates it).
+   */
+  def fixpoint(members: Iterable[QualifiedRef]): Readiness =
+    new Readiness(columns(Map.empty, members.toSet), positionFree = true)
+
+  private def columns(
+    slots: Map[QualifiedRef, Int],
+    stripped: Set[QualifiedRef]
+  ): Map[(SheetName, Int), Column] =
     val entries =
       slots.iterator.map((q, slot) => (q, slot, false)) ++
         stripped.iterator.filterNot(slots.contains).map(q => (q, -1, true))
-    val columns = entries.toVector
+    entries.toVector
       .groupBy((q, _, _) => (q.sheet, q.ref.col.index0))
       .view
       .mapValues(members => column(members.map((q, slot, s) => (q.ref.row.index0, slot, s))))
       .toMap
-    new Readiness(columns)
 
   @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   private def column(members: Vector[(Int, Int, Boolean)]): Column =
@@ -334,7 +354,9 @@ private[formula] final class PassCache(
   def slice(sheet: Sheet, col: Int, a: Int, b: Int, at: EvalPosition): SliceAnswer =
     readiness.get() match
       case scala.None => SliceAnswer.Ineligible
-      case Some(_) if !at.isDefined || a > b => SliceAnswer.Ineligible
+      case Some(_) if a > b => SliceAnswer.Ineligible
+      case Some(deferred) if !at.isDefined && !deferred.value.positionFree =>
+        SliceAnswer.Ineligible
       case Some(deferred) =>
         val name = sheet.name
         val gen = generation(name)
@@ -423,6 +445,15 @@ private[formula] final class PassCache(
         covering.merge((sheet.name, col), Vector(slice), (known, more) => known ++ more)
         counters.increment(RecalcCounters.Counter.SlicesBuilt)
         Some(slice)
+
+  /**
+   * The slices built so far, in no particular order. Test-only: law specs read it to check which
+   * rows a pass copied; evaluation never does.
+   */
+  def builtSlices: Vector[ColumnSlice] =
+    val all = Vector.newBuilder[ColumnSlice]
+    covering.forEach((_, built) => all ++= built)
+    all.result()
 
   // ----- equality indexes and candidates -----
 

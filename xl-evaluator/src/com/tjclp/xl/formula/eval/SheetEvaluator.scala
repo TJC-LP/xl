@@ -603,7 +603,7 @@ object SheetEvaluator:
     clock: Clock,
     workbook: Option[Workbook]
   )(parse: (String, Evaluator) => XLResult[TExpr[?]]): XLResult[CellOutcome] =
-    sheet(ref).value match
+    sheet.cells.valueAt(ref) match
       case value @ CellValue.Formula(expr, _, kind) =>
         // #790: one parse of the cell serves both the pin check and the evaluation
         lazy val cellEvaluator = evaluator

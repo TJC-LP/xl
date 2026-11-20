@@ -427,6 +427,63 @@ private[formula] final class CompactGraph private (
     }
     acc.toMap
 
+  /**
+   * #891: [[DependencyGraph.withinComponentOrder]] over formula ids, with the reads among `members`
+   * taken from this graph exactly as [[memberPrecedents]] takes them (walking only `members`'
+   * component when they share one). Formula ids are in grid order, so the members ascending are the
+   * kernel's local ids; one stamp set replaces a visited set per member. Returns formula ids.
+   */
+  def withinComponentOrder(members: BitSet): Array[Int] = sweepOrder(members)._1
+
+  /**
+   * [[withinComponentOrder]] with the scratch its walk allocated, for the pins that hold that
+   * scratch to the size of the component (a book of many small cycles orders each one, so scratch
+   * sized to the graph makes the pass quadratic). Test-only.
+   */
+  private[formula] def withinComponentOrderMeasured(members: BitSet): (Array[Int], SweepScratch) =
+    sweepOrder(members)
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def sweepOrder(members: BitSet): (Array[Int], SweepScratch) =
+    val ids = members.toArray
+    val n = ids.length
+    var i = 0
+    val compOf = components.compOf
+    val memberComps = members.iterator.map(compOf(_)).distinct.take(2).toVector
+    val only = memberComps match
+      case Vector(c) => c
+      case _ => -1
+    // scratch sized to the component: a book of many small cycles orders each for its own cost
+    val seen = new StampSet(n)
+    val pending = new IntBuf(16)
+    val src = new IntBuf(math.max(16, n))
+    val dst = new IntBuf(math.max(16, n))
+    i = 0
+    while i < n do
+      val u = ids(i)
+      pending.clear()
+      foreachSucc(u)(v => if only < 0 || compOf(v) == only then pending += v)
+      var head = 0
+      while head < pending.length do
+        val s = pending(head)
+        head += 1
+        if seen.mark(s, u) then
+          if s < formulaCount then
+            // `ids` ascends, so a member's position in it is its local id
+            val reader = if s == u then -1 else java.util.Arrays.binarySearch(ids, s)
+            if reader >= 0 then
+              src += i
+              dst += reader
+          else foreachSucc(s)(v => if only < 0 || compOf(v) == only then pending += v)
+      i += 1
+    val order = DependencyGraph.cutKahn(n, src, dst)
+    val scratch = SweepScratch(
+      members = n,
+      edges = src.length,
+      cells = seen.allocated + pending.capacity + src.capacity + dst.capacity
+    )
+    (Array.tabulate(n)(k => ids(order(k))), scratch)
+
 private[formula] object CompactGraph:
 
   /** Tarjan's result: component per node, whether each is cyclic, and the cyclic formulas. */
@@ -437,6 +494,14 @@ private[formula] object CompactGraph:
     cyclic: BitSet,
     work: Long
   )
+
+  /**
+   * What one [[CompactGraph.withinComponentOrder]] call worked with: the members it ordered, the
+   * distinct member-to-member reads it found, and the array cells its walk allocated (the visited
+   * set with every table it outgrew, the walk queue and the two edge lists). The kernel that orders
+   * them afterwards sees only `members` and `edges`, never the graph.
+   */
+  final case class SweepScratch(members: Int, edges: Int, cells: Long)
 
   /** Formulas reached by [[CompactGraph.reach]] and the edges it walked. */
   final case class Reach(formulas: BitSet, work: Long)

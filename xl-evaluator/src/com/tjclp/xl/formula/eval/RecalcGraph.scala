@@ -165,10 +165,16 @@ private[eval] final class RecalcGraph private (graph: CompactGraph, counters: Re
 
   /** `DependencyGraph.withinComponentOrder` over the reads among `members`. */
   def withinComponentOrder(members: Vector[QualifiedRef]): Vector[QualifiedRef] =
-    val reads = graph.memberPrecedents(ids(members))
-    val dependencies: Map[QualifiedRef, Set[QualifiedRef]] =
-      reads.map((reader, read) => table.qualified(reader) -> refs(read))
-    DependencyGraph.withinComponentOrder(members, dependencies)
+    val known = ids(members)
+    // #891: on formula ids when the graph knows every member (always, for a cycle's members);
+    // a member the graph does not hold has no reads, which only the general form expresses
+    if known.size == members.distinct.size then
+      graph.withinComponentOrder(known).iterator.map(table.qualified).toVector
+    else
+      val reads = graph.memberPrecedents(known)
+      val dependencies: Map[QualifiedRef, Set[QualifiedRef]] =
+        reads.map((reader, read) => table.qualified(reader) -> refs(read))
+      DependencyGraph.withinComponentOrder(members, dependencies)
 
 private[eval] object RecalcGraph:
 

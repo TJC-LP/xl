@@ -323,6 +323,34 @@ object DataTableSeeder:
         )
         .map(_.value)
 
+  /**
+   * How the iterated lane runs a cycle's fixpoint ([[WorkbookEvaluator.jacobiFixpoint]]): the
+   * evaluator of each region and whether the fixpoint shares one criteria cache (#891). Every
+   * production entry point uses [[FixpointLane.Shared]]; another lane exists only so a test can
+   * compare the seeder with and without the shared cache ([[seedReportWith]]).
+   */
+  private[eval] final case class FixpointLane(
+    roundEvaluator: (Rng, Evaluator.AggregateMemo) => Evaluator,
+    columnCache: Boolean
+  )
+
+  private[eval] object FixpointLane:
+    /** Recalculation's evaluator over the fixpoint's shared cache. */
+    val Shared: FixpointLane = FixpointLane(Evaluator.recalculationInstance(_, _), true)
+
+  /**
+   * Test-only: [[seedDataTablesReport]] with the iterated lane's fixpoints run on `lane`. Nothing
+   * outside the test sources calls it.
+   */
+  private[eval] def seedReportWith(
+    wb: Workbook,
+    clock: Clock,
+    iterative: Option[IterativeCalc],
+    lane: FixpointLane
+  ): DataTableSeedReport =
+    val (seeded, warnings) = seedWorkbook(wb, None, clock, iterative, AllCells, None, lane = lane)
+    DataTableSeedReport(seeded, warnings)
+
   /** Workbook-level graph facts shared by every group of one seeding run (GH-453). */
   private final case class CycleContext(
     graph: RecalcGraph,
@@ -346,7 +374,8 @@ object DataTableSeeder:
     iterative: Option[IterativeCalc],
     pick: CellRange => Iterator[ARef],
     built: Option[RecalcGraph] = None,
-    counters: RecalcCounters = RecalcCounters.disabled
+    counters: RecalcCounters = RecalcCounters.disabled,
+    lane: FixpointLane = FixpointLane.Shared
   ): (Workbook, Vector[SeedTableWarning]) =
     val targets: Vector[SheetName] = scope match
       case Some((name, _)) => Vector(name)
@@ -386,7 +415,7 @@ object DataTableSeeder:
               groups.foldLeft((sheet, Vector.empty[SeedTableWarning])) {
                 case ((acc, ws), (_, kind)) =>
                   val (next, w) =
-                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles, pick)
+                    seedGroup(accWb.put(acc), acc, kind, pinnedClock, iterative, cycles, pick, lane)
                   (next, ws ++ w)
               }
             // Only a real change may mark the sheet modified — a no-op seed (already-correct
@@ -418,7 +447,8 @@ object DataTableSeeder:
     clock: Clock,
     iterative: Option[IterativeCalc],
     cycles: => CycleContext,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     val interior = kind.ref
     val startRow = interior.start.row.index0
@@ -502,7 +532,8 @@ object DataTableSeeder:
                   relevantCore,
                   closure,
                   srcQ,
-                  pick
+                  pick,
+                  lane
                 )
 
   /**
@@ -774,7 +805,8 @@ object DataTableSeeder:
     relevantCore: Set[QualifiedRef],
     closure: Set[QualifiedRef],
     srcQ: Set[QualifiedRef],
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     val sheetIndex: Map[SheetName, Int] = wb.sheets.zipWithIndex.map((s, i) => s.name -> i).toMap
     sheetIndex.get(sheet.name) match
@@ -810,7 +842,8 @@ object DataTableSeeder:
             tableIdx,
             resolveCone(wb, stripped, cone.base, clock, ctx.parses),
             cone,
-            pick
+            pick,
+            lane
           )
 
   /** The interior fold of the iterated lane, once the cone and temp sheets are prepared. */
@@ -829,7 +862,8 @@ object DataTableSeeder:
     tableIdx: Int,
     prepared: ConeResolution,
     cone: WhatIfCone,
-    pick: CellRange => Iterator[ARef]
+    pick: CellRange => Iterator[ARef],
+    lane: FixpointLane
   ): (Sheet, Vector[SeedTableWarning]) =
     // The what-if substitution PINS the input cells (Excel semantics): a cycle running
     // through an input is broken there, so the inputs are never fixpoint members — they stay
@@ -886,7 +920,8 @@ object DataTableSeeder:
           parseMember,
           cone,
           probes,
-          ctx.parses
+          ctx.parses,
+          lane
         )
         computed match
           case None => (acc, fails, skips + 1, fired, named, unres, firstFailure)
@@ -963,7 +998,8 @@ object DataTableSeeder:
     parseMember: (QualifiedRef, String) => XLResult[TExpr[?]],
     cone: WhatIfCone,
     probes: Map[ARef, TExpr[?]],
-    parses: SeedParses
+    parses: SeedParses,
+    lane: FixpointLane
   ): Option[CellOutcome] =
     val (sourceRef, overlayRefs) = whatIfGeometry(kind, cellRef, input1, input2)
     sheet.cells.valueAt(sourceRef) match
@@ -991,8 +1027,9 @@ object DataTableSeeder:
           // GH-469/GH-492: the seeder stays COLD-seeded (Map.empty) on purpose — under what-if
           // substitution the loaded caches are stale by construction, the same argument `stripSet`
           // already makes above. `recalculate`'s warm start is deliberately not inherited here.
-          // The plain `Evaluator.instance` is exactly what the public `evaluateCell` path used
-          // (system rng, no memo): seeding keeps its one-shot evaluation profile.
+          // #891: each round evaluates with the same per-region memo `recalculate`'s fixpoint uses
+          // (a Jacobi round's criteria calls share one slice and index per criteria range): the
+          // memo lives one region, so the cold seeding argument is unaffected.
           val outcome =
             WorkbookEvaluator.jacobiFixpoint(
               wb,
@@ -1001,9 +1038,10 @@ object DataTableSeeder:
               iterative,
               clock,
               Rng.system,
-              rng => Evaluator.instance(rng),
+              lane.roundEvaluator,
               Map.empty,
-              parseMember
+              parseMember,
+              lane.columnCache
             )
           val results = outcome.results
           val converged = outcome.converged

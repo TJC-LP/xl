@@ -16,6 +16,7 @@ import com.tjclp.xl.formula.functions.{
   SumProductTail
 }
 import com.tjclp.xl.formula.graph.DependencyGraph
+import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.printer.FormulaPrinter
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
@@ -1104,7 +1105,7 @@ object Evaluator:
     workbookPath: Option[String],
     aggregateMemo: Option[AggregateMemo]
   ): ARef => Either[EvalError, CellValue] = at =>
-    targetSheet(at).value match
+    targetSheet.cells.valueAt(at) match
       case CellValue.Formula(_, Some(cached), _) => Right(cached)
       case CellValue.Formula(_, None, _: FormulaKind.DataTable) => Right(CellValue.Empty)
       case CellValue.Formula(expression, None, kind) =>
@@ -1492,20 +1493,48 @@ object Evaluator:
    * default; parity tests turn it off) lets evaluation reuse the graph build's formula parses
    * (#790).
    */
+  private[formula] object AggregateMemo:
+
+    /**
+     * #891: the cell-content cache one iterative fixpoint shares across all its regions (Jacobi
+     * rounds and Gauss–Seidel member evaluations). Only the fixpoint's members change while it
+     * runs, so it is armed with [[Readiness.fixpoint]]: a criteria range that holds no member and
+     * no uncached formula is copied and indexed once for the whole fixpoint instead of scanned by
+     * every call of every round. A slice pays off at a few rows here, where the same criteria
+     * columns are read thousands of times.
+     */
+    def fixpointCache(members: Iterable[QualifiedRef]): PassCache =
+      val cache = new PassCache(FixpointLimits, RecalcCounters.disabled)
+      cache.begin(Readiness.fixpoint(members))
+      cache
+
+    /** One region of a fixpoint: fresh aggregate results over the fixpoint's shared cache. */
+    def inFixpoint(cache: PassCache): AggregateMemo = new AggregateMemo(shared = Some(cache))
+
+    /** What a fixpoint's cache may hold; law specs derive their tighter budgets from it. */
+    private[formula] val FixpointLimits: PassCache.Limits =
+      PassCache.DefaultLimits.copy(minSliceRows = 16)
+
   private[formula] final class AggregateMemo(
     cachesAggregates: Boolean = true,
     val counters: RecalcCounters = RecalcCounters.disabled,
     columnCache: Boolean = true,
     limits: PassCache.Limits = PassCache.DefaultLimits,
     criteriaIndex: Boolean = true,
-    parseCache: Boolean = true
+    parseCache: Boolean = true,
+    shared: Option[PassCache] = None
   ):
     private val entries = TrieMap.empty[AggregateMemoKey, AggregateMemoEntry]
 
-    /** #767: the pass's caches; None for a memo that caches nothing or has them switched off. */
+    /**
+     * #767: the pass's caches; None for a memo that caches nothing or has them switched off. #891:
+     * a fixpoint region's memo uses its fixpoint's `shared` cache instead.
+     */
     val passCache: Option[PassCache] =
-      Option.when(cachesAggregates && columnCache)(
-        new PassCache(limits, counters, criteriaIndex, parseCache)
+      shared.orElse(
+        Option.when(cachesAggregates && columnCache)(
+          new PassCache(limits, counters, criteriaIndex, parseCache)
+        )
       )
 
     /**

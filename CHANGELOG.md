@@ -417,6 +417,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   its first argument, and an array constant was spelled out cell by cell. The call is now printed
   on the error path alone; messages and results are unchanged.
 
+- **`xl audit` on a model with data tables over a circular block takes half the time** (#891;
+  JVM, median of three serial runs against the change before it, same output: 20.8 s to 9.7 s on
+  a quiet machine, 22.0 s to 10.9 s re-measured at the final commit on a busy one; the other two
+  real workbooks are within noise). An iterative fixpoint (a circular block under
+  recalculation, and each interior cell of a data table whose corner reads one) evaluated its
+  criteria calls with nothing shared, so every SUMIFS, COUNTIFS, SUMIF and AVERAGEIFS re-read
+  its ranges row by row: 219 million row tests for one audit, over two 200-row ranges.
+  - Within one fixpoint only its member cells change, so the fixpoint keeps one set of criteria
+    columns and their equality indexes for all its rounds. A column window that holds a member
+    or a formula without a value is never kept. Aggregate results are still never shared between
+    rounds or between member evaluations.
+  - The order a cycle's members are swept in is computed on formula ids (`CompactGraph`), with
+    scratch sized to the cycle, not through a map of qualified references per member.
+
 ## [0.26.0] - 2026-11-12
 
 Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards
