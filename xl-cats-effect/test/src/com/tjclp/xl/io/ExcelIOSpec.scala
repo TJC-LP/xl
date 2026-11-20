@@ -902,6 +902,39 @@ class ExcelIOSpec extends CatsEffectSuite:
       }
   }
 
+  tempDir.test("#752: readSheetStream matches a sheet name in any case, as readSheet does") { dir =>
+    val path = dir.resolve("named-case.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val sales = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Number(1))))
+    val inventory = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Item"))))
+    excel.writeStreamsSeq(path, Seq("Sales" -> sales, "Inventory" -> inventory)) *> (
+      for
+        lower <- excel.readSheetStream(path, "inventory").compile.toVector
+        upper <- excel.readSheetStream(path, "SALES").compile.toVector
+      yield
+        assertEquals(lower.map(_.cells(0)), Vector(CellValue.Text("Item")))
+        assertEquals(upper.map(_.cells(0)), Vector(CellValue.Number(1)))
+    )
+  }
+
+  tempDir.test(
+    "#752: readSheetStream refuses a name matching case-only twins by neither spelling"
+  ) { dir =>
+    val path = dir.resolve("named-case-twins.xlsx")
+    val excel = ExcelIO.instance[IO]
+    def one(n: Int) = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Number(n))))
+    excel.writeStreamsSeq(path, Seq("Data" -> one(1), "DATA" -> one(2))) *> (
+      for
+        exact <- excel.readSheetStream(path, "DATA").compile.toVector
+        folded <- excel.readSheetStream(path, "data").compile.toVector.attempt
+      yield
+        assertEquals(exact.map(_.cells(0)), Vector(CellValue.Number(2)))
+        folded match
+          case Left(err) => assert(err.getMessage.contains("differ only by case"), err.getMessage)
+          case Right(rows) => fail(s"expected an ambiguity refusal, read $rows")
+    )
+  }
+
   tempDir.test("readStreamByIndex: handles invalid index") { dir =>
     val path = dir.resolve("invalid-index.xlsx")
     val excel = ExcelIO.instance[IO]

@@ -92,7 +92,8 @@ object DependentRecalculation:
       // #790: evaluation reuses the build's parse of each formula
       memo.passCache.foreach(_.useParses(graph.parses))
       val dynamic = DependencyGraph.dynamicCells(wb, graph.parses)
-      val seeds = modifiedRefs.map(QualifiedRef(sheetName, _))
+      val sheet = DependencyGraph.sheetCanonicaliser(wb)(sheetName)
+      val seeds = modifiedRefs.map(QualifiedRef(sheet, _))
       val affected = coneOf(wb, graph, seeds, dynamic).filter(graph.isFormula)
       val allCyclic = graph.cyclicCore
       val allBlocked = graph.dependents(allCyclic, Set.empty)
