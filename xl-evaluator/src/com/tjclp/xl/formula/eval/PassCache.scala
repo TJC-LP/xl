@@ -193,9 +193,10 @@ private[formula] object ColumnSlice:
  * #767 per-pass caches, owned by one [[Evaluator.AggregateMemo]] and living as long as it: the used
  * range of each sheet, static defined-name resolutions, parsed name bodies, [[ColumnSlice]]s (one
  * per column when the column is ready, else per requested box), and, when `criteriaIndex` is on,
- * each slice's equality index ([[EqIndex]]) and the candidate rows of criteria calls
- * ([[CriteriaCandidates]]). When `parseCache` is on, it also holds the formula parses of the pass's
- * graph build ([[FormulaParses]], #790).
+ * each slice's equality index ([[EqIndex]]) and order index ([[OrderIndex]], #920), each built on
+ * its first lookup, and the candidate rows of criteria calls ([[CriteriaCandidates]]). When
+ * `parseCache` is on, it also holds the formula parses of the pass's graph build
+ * ([[FormulaParses]], #790).
  *
  * Name caches and formula parses are valid whenever the memo caches at all: a resolution depends
  * only on the name table and the sheet list, which every entry records and checks, and a parse only
@@ -230,6 +231,7 @@ private[formula] final class PassCache(
     demands.clear()
     cachedCells.set(0L)
     indexes.clear()
+    orderIndexes.clear()
     candidateMemo.clear()
     indexBytes.set(0L)
     memoBytes.set(0L)
@@ -458,6 +460,7 @@ private[formula] final class PassCache(
   // ----- equality indexes and candidates -----
 
   private val indexes = new ConcurrentHashMap[ColumnSlice.Id, IndexEntry]()
+  private val orderIndexes = new ConcurrentHashMap[ColumnSlice.Id, OrderEntry]()
   private val candidateMemo =
     new ConcurrentHashMap[CriteriaCandidates.MemoKey, CandidatesEntry]()
   private val indexBytes = new AtomicLong(0L)
@@ -475,29 +478,45 @@ private[formula] final class PassCache(
     else indexes.computeIfAbsent(slice.id, _ => new IndexEntry(slice)).value
 
   /**
+   * #920: the order index of `slice`, built once per slice (single flight) on its first numeric
+   * window lookup. `None` when indexing is off or the index would take the pass past
+   * `maxIndexBytes`; the call then tests every row.
+   */
+  def orderIndex(slice: ColumnSlice): Option[OrderIndex] =
+    if !indexing then scala.None
+    else orderIndexes.computeIfAbsent(slice.id, _ => new OrderEntry(slice)).value
+
+  /** The rows `lookup` selects in `slice`'s index, when that index exists. */
+  private def selection(
+    slice: ColumnSlice,
+    lookup: IndexLookup
+  ): Option[CriteriaCandidates.Selection] =
+    lookup match
+      case IndexLookup.Keys(keys) =>
+        eqIndex(slice).map(index => CriteriaCandidates.Postings(index.postings(keys)))
+      case window: IndexLookup.Window => orderIndex(slice).map(_.window(window))
+
+  /**
    * The candidate offsets of a criteria call whose indexed pairs are `pairs` (each: its slice, its
-   * lookup keys and its range's first row) over `n` rows, computed once per pass for equal pairs
-   * and `n` while the budget lasts; `None` when an index is missing or every offset must be tested
+   * lookup and its range's first row) over `n` rows, computed once per pass for equal pairs and `n`
+   * while the budget lasts; `None` when an index is missing or every offset must be tested
    * ([[CriteriaCandidates.compute]]). Memoised lists hold at most half of `maxIndexBytes`, so they
    * never use the budget up before the indexes they are computed from.
    */
   def candidates(
-    pairs: List[(ColumnSlice, List[MatchKey], Int)],
+    pairs: List[(ColumnSlice, IndexLookup, Int)],
     n: Int
   ): Option[ArraySeq.ofInt] =
-    val indexed = pairs.map((slice, keys, offset) => eqIndex(slice).map((slice, keys, offset, _)))
-    if indexed.exists(_.isEmpty) then scala.None
+    val selected = pairs.map((slice, lookup, offset) =>
+      selection(slice, lookup).map(CriteriaCandidates.Pair(_, offset))
+    )
+    if selected.exists(_.isEmpty) then scala.None
     else
-      val resolved = indexed.flatten
       val key = CriteriaCandidates.MemoKey(
         n,
-        resolved.map((slice, keys, offset, _) => CriteriaCandidates.PairKey(slice.id, keys, offset))
+        pairs.map((slice, lookup, offset) => CriteriaCandidates.PairKey(slice.id, lookup, offset))
       )
-      def compute: Option[ArraySeq.ofInt] =
-        CriteriaCandidates.compute(
-          resolved.map((_, keys, offset, index) => CriteriaCandidates.Pair(index, keys, offset)),
-          n
-        )
+      def compute: Option[ArraySeq.ofInt] = CriteriaCandidates.compute(selected.flatten, n)
       val entry = candidateMemo.computeIfAbsent(key, _ => new CandidatesEntry(() => compute))
       val result = entry.value
       if !entry.charged(indexBytes, memoBytes, limits.maxIndexBytes) then
@@ -513,15 +532,24 @@ private[formula] final class PassCache(
         scala.None
       else Some(index)
 
+  /** #920: a slice's order index, built on first use and charged like an [[IndexEntry]]. */
+  private final class OrderEntry(slice: ColumnSlice):
+    lazy val value: Option[OrderIndex] =
+      val index = OrderIndex.build(slice)
+      if indexBytes.addAndGet(index.bytes) > limits.maxIndexBytes then
+        indexBytes.addAndGet(-index.bytes)
+        scala.None
+      else Some(index)
+
 private[formula] object PassCache:
 
   /**
    * Bounds on what one pass holds. `maxCachedCells` caps the cells all slices hold together; a box
    * is sliced only when it spans at least `max(minSliceRows, usedRows / sliceRowsDivisor)` rows
    * (smaller windows scan, or read a slice that covers them); a box whose column is not ready is
-   * sliced on its `boxDemand`-th request. `maxIndexBytes` caps what equality indexes and memoised
-   * candidate lists hold together, the lists at most half of it. Past a cap a call scans; results
-   * are unaffected.
+   * sliced on its `boxDemand`-th request. `maxIndexBytes` caps what equality and order indexes and
+   * memoised candidate lists hold together, the lists at most half of it. Past a cap a call scans;
+   * results are unaffected.
    */
   final case class Limits(
     maxCachedCells: Long = 64L * 1024 * 1024,

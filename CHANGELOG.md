@@ -383,6 +383,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Performance
 
+- **Relational criteria in `COUNTIFS`/`SUMIFS`/`AVERAGEIFS`/`MAXIFS`/`MINIFS` use a sorted index**
+  (#920): `">="&start`, `"<"&end`, `">70"` and the like no longer test every row. Each criteria
+  column slice gets an order index on its first numeric window lookup (number and date rows sorted
+  by value, built once per pass and charged against `PassCache.Limits.maxIndexBytes`, like the
+  equality index). The windows on one range merge into one interval, so a criterion is a binary
+  search plus the matching run. The index is a filter, never a judge: every candidate is still
+  tested with the unchanged `CriteriaMatcher.matches`, and results are unchanged. On the made-up
+  `LoadsBookMain shape=DateWindow` book (50,000 rows, 2,000 trailing 30-day `SUMIFS`), an
+  in-process recalculation went from 27.8 s, a 1.32 GB heap peak and 96.8M rows tested to
+  4.1 s, 0.53 GB and 1.9M. A native `xl recalc` of the same file went from 12.2 s to 1.5 s.
+  `RecalcCounters.CriteriaWindowOnly` still counts calls whose criteria are all windows; such
+  calls now also count as `CriteriaIndexed` when the index answers them.
+
 - **`QualifiedRef` hashes the row and the column as separate words** (#891): the derived hash
   mixed the cell as a `Long`, whose hash is `row ^ column`, so every cell on an anti-diagonal of a
   sheet collided (512 distinct hashes for a 500 x 64 sheet) and hash sets and maps of qualified
