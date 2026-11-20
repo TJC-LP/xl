@@ -26,6 +26,7 @@ import com.tjclp.xl.tables.TableSpec
 import com.tjclp.xl.ooxml.chart.{ChartCaches, OoxmlChart}
 import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
 import com.tjclp.xl.ooxml.worksheet.{
+  buildHyperlinksElem,
   collectHyperlinks,
   hyperlinkRelIds,
   hyperlinkTargets,
@@ -1590,15 +1591,6 @@ object XlsxWriter:
     val normalized = resolved.normalize().toString.replace('\\', '/')
     Option.when(normalized.startsWith("xl/"))(normalized)
 
-  /**
-   * GH-235: external-hyperlink relationships for a sheet (rIdHL{n} <-> URL), matching the
-   * worksheet.
-   */
-  private def hyperlinkRelationships(sheet: Sheet): Seq[Relationship] =
-    collectHyperlinks(sheet).filter(_.external).map { e =>
-      Relationship(e.relId, XmlUtil.relTypeHyperlink, e.target, Some("External"))
-    }
-
   /** Read the contents of a source archive entry as UTF-8 string if it exists. */
   private def readZipEntry(zip: SourceZip, entryName: String): Option[String] =
     zip.withEntry(entryName)((_, in) => new String(in.readAllBytes(), StandardCharsets.UTF_8))
@@ -2915,7 +2907,6 @@ object XlsxWriter:
           val vmlPath = vmlPathForSheet(sourceContext, sourceRelsPathOpt, idx, commentPath)
 
           val tableIds = tablesBySheet.get(idx).map(_.map(_._2)).getOrElse(Seq.empty)
-          val hlRels = hyperlinkRelationships(sheet) // GH-235
           // A first-drawing rel (rIdDr1, GH-221) when this sheet gained a fresh part.
           val drawingRelAdd = drawingPlan.sheetRelAdditions.get(idx)
           // GH-315: a sheet with preserved rels gaining its FIRST comments needs comment+VML
@@ -2934,20 +2925,31 @@ object XlsxWriter:
                   }.getOrElse(Relationships.empty)
                 )
               case _ => None
-          // GH-895: cell hyperlinks are model-driven on every write. With none left in the model,
-          // the preserved <hyperlinks> keeps only the links the reader could not put on a cell
-          // (unmodeledHyperlinksElem: range refs, unresolvable targets), and the rels keep only
-          // the hyperlink rels those links reference; a removed last cell link stays removed.
-          val keptHyperlinks: Option[scala.xml.Elem] =
-            if collectHyperlinks(sheet).nonEmpty then None // the model's element replaces it
+          // Keep the source subtrees that never became cells. Reserve their r:ids before
+          // assigning model links, so a new link cannot redirect a preserved range or MC choice.
+          val sourceRels = preservedRels.fold(Seq.empty[Relationship])(_.relationships)
+          val sourceTargets = hyperlinkTargets(sourceRels)
+          val keptHyperlinks = preservedMetadata
+            .flatMap(_.preservedKnown.get("hyperlinks"))
+            .flatMap(unmodeledHyperlinksElem(_, sourceTargets))
+          val keptIds =
+            if sourceTargets.isEmpty then keptHyperlinks.fold(Set.empty[String])(hyperlinkRelIds)
             else
-              val sourceTargets = hyperlinkTargets(preservedRels.fold(Seq.empty)(_.relationships))
-              preservedMetadata
-                .flatMap(_.preservedKnown.get("hyperlinks"))
-                .flatMap(unmodeledHyperlinksElem(_, sourceTargets))
-          val worksheetMetadata = preservedMetadata.map(m =>
-            m.copy(preservedKnown = m.preservedKnown.updatedWith("hyperlinks")(_ => keptHyperlinks))
-          )
+              preservedMetadata.iterator.flatMap { m =>
+                // A worksheet-level MC branch or extension can also refer to a hyperlink rel.
+                val remaining = m.preservedKnown.updatedWith("hyperlinks")(_ => keptHyperlinks)
+                m.copy(preservedKnown = remaining)
+                  .preservedChildElems
+                  .iterator
+                  .flatMap(hyperlinkRelIds)
+              }.toSet
+          val reservedIds =
+            keptIds ++ sourceRels.iterator.filterNot(_.`type` == XmlUtil.relTypeHyperlink).map(_.id)
+          val links = collectHyperlinks(sheet, reservedIds)
+          val hlRels = links.collect {
+            case entry if entry.external =>
+              Relationship(entry.relId, XmlUtil.relTypeHyperlink, entry.target, Some("External"))
+          }
           // GH-557: the rels are planned BEFORE the worksheet is emitted; every sheet-level r:id
           // below (<tablePart>, a generated <legacyDrawing>) derives from this plan.
           val relsPlan = planSheetRels(
@@ -2961,7 +2963,7 @@ object XlsxWriter:
             commentPath,
             vmlPath,
             sameRelsPath = sourceRelsPathOpt.contains(relsPath),
-            keptHyperlinkRelIds = keptHyperlinks.fold(Set.empty[String])(hyperlinkRelIds)
+            keptHyperlinkRelIds = keptIds
           )
           val legacyDrawingRelId = relsPlan.legacyDrawingRelId.getOrElse("rId2")
 
@@ -2999,7 +3001,7 @@ object XlsxWriter:
           // GH-375: same for data validations.
           (config.backend, preservedMetadata) match
             case (XmlBackend.SaxStax, None)
-                if sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty &&
+                if reservedIds.isEmpty && sheet.drawings.isEmpty && sheet.conditionalFormats.isEmpty &&
                   sheet.dataValidations.isEmpty =>
               writeWorksheetDirect(
                 zip,
@@ -3014,19 +3016,24 @@ object XlsxWriter:
                 metadataPlan.lookup
               )
             case _ =>
+              val modeled = buildHyperlinksElem(links)
+              val hyperlinks = (keptHyperlinks, modeled) match
+                case (Some(kept), Some(cells)) => Some(kept.copy(child = kept.child ++ cells.child))
+                case _ => keptHyperlinks.orElse(modeled)
               val ooxmlSheet =
-                OoxmlWorksheet.fromDomainWithMetadata(
+                OoxmlWorksheet.fromDomainWithPlannedHyperlinks(
                   sheet,
                   sstForSheets,
                   remapping,
-                  worksheetMetadata,
+                  preservedMetadata,
                   tablePartsXml,
                   escapeFormulas,
                   drawingPlan.drawingRefs.get(idx),
                   condFmt = Some(cfPlan.condFmtBySheet.getOrElse(idx, Seq.empty)),
                   dataValidations = Some(dvPlan.getOrElse(idx, None)),
                   legacyDrawingRelId = legacyDrawingRelId,
-                  cellMetadata = metadataPlan.lookup
+                  cellMetadata = metadataPlan.lookup,
+                  hyperlinks = hyperlinks
                 )
               writeWorksheet(zip, sheetOutputPaths(idx), ooxmlSheet, config)
 

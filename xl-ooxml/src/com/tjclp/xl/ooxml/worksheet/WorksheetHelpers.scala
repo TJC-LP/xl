@@ -96,7 +96,14 @@ private[ooxml] def usedPrefixBindings(
   def collect(e: Elem, inherited: NamespaceBinding): Vector[(String, String)] =
     val own = Option(e.scope).filterNot(_ == TopScope)
     val effectiveScope = own.getOrElse(inherited)
-    val prefixes = (Option(e.prefix).toList ++ attrPrefixes(e.attributes, Nil))
+    // MC Choice also uses prefixes as attribute *values*. They must stay bound on regeneration.
+    val required =
+      if e.label == "Choice" && Option(e.prefix).exists(p =>
+          effectiveScope.getURI(p) == XmlUtil.nsMarkupCompatibility
+        )
+      then (e \@ "Requires").split("\\s+").toList
+      else Nil
+    val prefixes = (Option(e.prefix).toList ++ attrPrefixes(e.attributes, Nil) ++ required)
       .filter(p => p.nonEmpty && p != "xml" && p != "xmlns")
     val here = prefixes.flatMap { p =>
       Option(effectiveScope.getURI(p))
@@ -349,19 +356,18 @@ private[ooxml] def isExternalHyperlink(target: String): Boolean =
  * relationship id ("rIdHL{n}") used by BOTH the `<hyperlink r:id>` attribute and the sheet .rels,
  * so the two agree without explicit plumbing (GH-235).
  */
-private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
-  val sorted = sheet.cells.iterator.toSeq
-    .filter(_.hyperlink.isDefined)
-    .sortBy(c => (c.ref.row.index0, c.ref.col.index0))
-  val relIdByRef = sorted
-    .filter(c => isExternalHyperlink(c.hyperlink.fold("")(_.target)))
-    .zipWithIndex
-    .map { case (c, i) => c.ref -> s"rIdHL${i + 1}" }
-    .toMap
-  sorted.map { c =>
-    val target = c.hyperlink.fold("")(_.target)
-    HyperlinkEntry(c.ref, target, isExternalHyperlink(target), relIdByRef.getOrElse(c.ref, ""))
-  }
+private[ooxml] def collectHyperlinks(
+  sheet: Sheet,
+  reservedIds: Set[String] = Set.empty
+): Seq[HyperlinkEntry] =
+  val ids = Iterator.from(1).map(i => s"rIdHL$i").filterNot(reservedIds)
+  sheet.cells.iterator.flatMap { cell =>
+    cell.hyperlink.map { link =>
+      val target = link.target
+      val external = isExternalHyperlink(target)
+      HyperlinkEntry(cell.ref, target, external, if external then ids.next() else "")
+    }
+  }.toVector
 
 /**
  * GH-235/GH-895: a sheet's hyperlink targets by rel id, from its rels of type
@@ -401,20 +407,20 @@ private[ooxml] def unmodeledHyperlinksElem(
   preserved: Elem,
   hyperlinkTargets: Map[String, String]
 ): Option[Elem] =
-  val kept = preserved.child.collect {
-    case e: Elem if e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isEmpty => e
+  val kept = preserved.child.filterNot {
+    case e: Elem if e.label == "hyperlink" => modeledHyperlink(e, hyperlinkTargets).isDefined
+    case _ => false
   }
-  Option.when(kept.nonEmpty)(preserved.copy(child = kept))
+  Option.when(kept.exists { case _: Elem => true; case _ => false })(preserved.copy(child = kept))
 
-/** The r:ids of the external links in a `<hyperlinks>` element (for the rels they still need). */
+/** Preserved links may be nested, e.g. in both branches of mc:AlternateContent. */
 private[ooxml] def hyperlinkRelIds(hyperlinks: Elem): Set[String] =
-  (hyperlinks \ "hyperlink").iterator.flatMap {
-    case e: Elem =>
-      e.attributes.collectFirst {
-        case a: PrefixedAttribute if a.key == "id" => a.value.text
-      }
-    case _ => None
-  }.toSet
+  hyperlinks.descendant_or_self.iterator
+    .collect { case e: Elem => e }
+    .flatMap { e =>
+      e.attributes.iterator.collect { case a: PrefixedAttribute if a.key == "id" => a.value.text }
+    }
+    .toSet
 
 /** Build a `<hyperlinks>` element from collected entries (GH-235), or None if empty. */
 private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Elem] =

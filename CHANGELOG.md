@@ -200,9 +200,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file, removing its only cell hyperlink (batch `{"op":"hyperlink","ref":"B7"}` with no target,
   a contents `clear`, or `Cell.clearHyperlink`) used to write the source's `<hyperlinks>` element
   and its relationship back, so the link returned on the next read. The writer now treats cell
-  hyperlinks as model-driven on every write: with none left it writes no `<hyperlinks>` and drops
-  the source's hyperlink relationships. A link xl reads as preserved XML rather than onto a cell
-  (a range `ref="D2:E3"`, or a target it cannot resolve) still rides through with its relationship.
+  hyperlinks as model-driven on every write: it drops removed cell links and their unused
+  relationships. Range links, unresolved targets and `mc:AlternateContent` stay with their source
+  relationships, including when a new cell hyperlink is added.
   **Behaviour change:** a removed last hyperlink no longer reappears after a save.
 
 - **The library's styles clear unmerges too, like Excel's Clear Formats** (#909):
