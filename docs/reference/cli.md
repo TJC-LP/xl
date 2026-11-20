@@ -2485,7 +2485,14 @@ Two rows worth spelling out:
   code the write verbs' `--strict` uses. The gate's message ends `; without --strict those cells
   show the file's values` and its hint reads `drop --strict to render the other cells live and
   see the failure as a warning`. The raster formats (png, jpeg, webp, pdf) never gate: under
-  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle or a
+  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. In a book whose
+  `<calcPr>` iterates, a window that depends on a cycle with no cached values shows what an
+  iterative recalculation computes; when that cycle does not converge the cells show the last
+  round's values under one `NOT_CONVERGED` warning in `recalc`'s words
+  (`Warning[NOT_CONVERGED]: Iterative calculation exhausted 100 round(s) without converging (last
+  values kept): Sheet1!A1, Sheet1!B1: exhausted 100 round(s), max |Δ| = 2`), and `--strict` gates
+  on it (`RECALC_GATE`, exit `1`) as `recalc --strict` does. With an `INDIRECT` or `OFFSET` in the
+  evaluation, whose targets are not known ahead, every unconverged cycle of the book is named. A cycle or a
   failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
   `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
   only failures in the window's closure are reported. For the pictures (html, svg and the raster
@@ -2536,7 +2543,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `NOT_CONVERGED` for an `--eval` window over a cycle that did not converge, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys

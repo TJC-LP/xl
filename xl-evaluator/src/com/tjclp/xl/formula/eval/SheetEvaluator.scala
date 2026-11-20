@@ -550,7 +550,15 @@ object SheetEvaluator:
               closure(q) && !blockedCells(q)
             }
           ),
-          blockedCells.iterator.filter(_.sheet == sheet.name).map(_.ref).toVector.sortBy(rowMajor)
+          blockedCells.iterator.filter(_.sheet == sheet.name).map(_.ref).toVector.sortBy(rowMajor),
+          // #917: the cycles the range depends on that did not converge, as recalc reports them.
+          // What a dynamic reader of the pass reads is not in the static closure, so with one in
+          // play every unconverged cycle is reported: saying too much beats a silent stale value.
+          if (targets & dynamic).nonEmpty then full.unconverged
+          else
+            full.unconverged.filter(
+              _.members.exists((name, ref) => closure(QualifiedRef(name, ref)))
+            )
         )
       def rowMajor(ref: ARef): (Int, Int) = (ref.row.index0, ref.col.index0)
       // `sheet`'s failures first and in row-major order, then other sheets' in grid order
