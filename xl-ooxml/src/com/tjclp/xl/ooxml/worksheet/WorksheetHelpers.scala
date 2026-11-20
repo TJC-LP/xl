@@ -364,15 +364,32 @@ private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
   }
 
 /**
- * GH-895: does the reader put this `<hyperlink>` on a cell? Mirrors `XlsxReader`'s
- * `cellsWithHyperlinks`: the `ref` is one cell and the link has a target, an `r:id` naming one of
- * the sheet's hyperlink rels (`hyperlinkRelIds`, type `XmlUtil.relTypeHyperlink`) or a non-empty
- * `location`. Those links live on `Cell.hyperlink`, so they are the model's to write or drop.
+ * GH-235/GH-895: a sheet's hyperlink targets by rel id, from its rels of type
+ * `XmlUtil.relTypeHyperlink`. The reader resolves `r:id`s through this map and the writer asks the
+ * same map which preserved links the reader resolved; one definition keeps the two in step.
  */
-private[ooxml] def isModeledHyperlink(e: Elem, hyperlinkRelIds: Set[String]): Boolean =
+private[ooxml] def hyperlinkTargets(
+  rels: Seq[com.tjclp.xl.ooxml.Relationship]
+): Map[String, String] =
+  rels.filter(_.`type` == XmlUtil.relTypeHyperlink).map(r => r.id -> r.target).toMap
+
+/**
+ * GH-235/GH-895: the cell and target a `<hyperlink>` puts on the model, or None when the reader
+ * leaves it unmodeled. The `ref` must be one cell, and the target is the `r:id`'s rel target
+ * (`hyperlinkTargets`) or else a non-empty `location`. `XlsxReader` populates `Cell.hyperlink` with
+ * it, and the writer treats exactly these links as the model's to write or drop, so the reader and
+ * writer can never disagree about which preserved links a cell owns.
+ */
+private[ooxml] def modeledHyperlink(
+  e: Elem,
+  hyperlinkTargets: Map[String, String]
+): Option[(ARef, String)] =
   val rid = e.attributes.collectFirst { case a: PrefixedAttribute if a.key == "id" => a.value.text }
-  val hasTarget = rid.exists(hyperlinkRelIds.contains) || (e \@ "location").nonEmpty
-  ARef.parse(e \@ "ref").isRight && hasTarget
+  val target = rid.flatMap(hyperlinkTargets.get).orElse(Option(e \@ "location").filter(_.nonEmpty))
+  for
+    ref <- ARef.parse(e \@ "ref").toOption
+    t <- target
+  yield ref -> t
 
 /**
  * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own: a range `ref`
@@ -382,10 +399,10 @@ private[ooxml] def isModeledHyperlink(e: Elem, hyperlinkRelIds: Set[String]): Bo
  */
 private[ooxml] def unmodeledHyperlinksElem(
   preserved: Elem,
-  hyperlinkRelIds: Set[String]
+  hyperlinkTargets: Map[String, String]
 ): Option[Elem] =
   val kept = preserved.child.collect {
-    case e: Elem if e.label == "hyperlink" && !isModeledHyperlink(e, hyperlinkRelIds) => e
+    case e: Elem if e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isEmpty => e
   }
   Option.when(kept.nonEmpty)(preserved.copy(child = kept))
 

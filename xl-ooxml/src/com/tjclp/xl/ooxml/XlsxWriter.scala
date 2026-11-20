@@ -25,7 +25,12 @@ import com.tjclp.xl.styles.{Border, Color, Fill}
 import com.tjclp.xl.tables.TableSpec
 import com.tjclp.xl.ooxml.chart.{ChartCaches, OoxmlChart}
 import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
-import com.tjclp.xl.ooxml.worksheet.{collectHyperlinks, hyperlinkRelIds, unmodeledHyperlinksElem}
+import com.tjclp.xl.ooxml.worksheet.{
+  collectHyperlinks,
+  hyperlinkRelIds,
+  hyperlinkTargets,
+  unmodeledHyperlinksElem
+}
 
 // Re-export writer config types for backward compatibility
 export writer.{
@@ -2936,12 +2941,10 @@ object XlsxWriter:
           val keptHyperlinks: Option[scala.xml.Elem] =
             if collectHyperlinks(sheet).nonEmpty then None // the model's element replaces it
             else
-              val sourceHyperlinkRelIds = preservedRels.fold(Set.empty[String])(
-                _.relationships.filter(_.`type` == XmlUtil.relTypeHyperlink).map(_.id).toSet
-              )
+              val sourceTargets = hyperlinkTargets(preservedRels.fold(Seq.empty)(_.relationships))
               preservedMetadata
                 .flatMap(_.preservedKnown.get("hyperlinks"))
-                .flatMap(unmodeledHyperlinksElem(_, sourceHyperlinkRelIds))
+                .flatMap(unmodeledHyperlinksElem(_, sourceTargets))
           val worksheetMetadata = preservedMetadata.map(m =>
             m.copy(preservedKnown = m.preservedKnown.updatedWith("hyperlinks")(_ => keptHyperlinks))
           )
