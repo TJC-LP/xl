@@ -7,7 +7,7 @@ import com.tjclp.xl.sheets.{DataValidation, DvKind, Sheet}
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.cf.{CfRule, Cfvo, ConditionalFormat}
-import com.tjclp.xl.error.{XLError, XLException, XLResult}
+import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -70,99 +70,12 @@ enum StructuralCachePolicy derives CanEqual:
 object StructuralEditor:
 
   /**
-   * Insert `count` rows at 0-based row index `at` on `sheet`. Throws a typed `XLException` when the
-   * edit is refused ([[insertRowsChecked]] is the total form) — the workbook is left untouched.
+   * Insert `count` rows at 0-based row index `at` on `sheet`: `Left` when the edit is refused
+   * (GH-472 out-of-bounds shift, GH-495 data-table tear) — the workbook is left untouched — `Right`
+   * with the edited workbook otherwise.
    *
    * `preserveUntouchedCaches` is the GH-503 Boolean spelling of [[StructuralCachePolicy]]: `true`
    * is `PreserveUntouched`, `false` is `Invalidate`; the `policy` overloads take the full enum.
-   */
-  def insertRows(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    preserveUntouchedCaches: Boolean = false
-  ): Workbook =
-    insertRows(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
-
-  /** [[insertRows]] under an explicit cache policy. */
-  def insertRows(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    policy: StructuralCachePolicy
-  ): Workbook =
-    orThrow(insertRowsChecked(wb, sheet, at, count, policy))
-
-  /** Delete `count` rows starting at 0-based row index `at` on `sheet`. Throws when refused. */
-  def deleteRows(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    preserveUntouchedCaches: Boolean = false
-  ): Workbook =
-    deleteRows(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
-
-  /** [[deleteRows]] under an explicit cache policy. */
-  def deleteRows(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    policy: StructuralCachePolicy
-  ): Workbook =
-    orThrow(deleteRowsChecked(wb, sheet, at, count, policy))
-
-  /**
-   * Insert `count` columns at 0-based column index `at` on `sheet`. Throws a typed `XLException`
-   * when the edit is refused ([[insertColumnsChecked]] is the total form).
-   */
-  def insertColumns(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    preserveUntouchedCaches: Boolean = false
-  ): Workbook =
-    insertColumns(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
-
-  /** [[insertColumns]] under an explicit cache policy. */
-  def insertColumns(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    policy: StructuralCachePolicy
-  ): Workbook =
-    orThrow(insertColumnsChecked(wb, sheet, at, count, policy))
-
-  /** Delete `count` columns starting at 0-based column index `at`. Throws when refused. */
-  def deleteColumns(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    preserveUntouchedCaches: Boolean = false
-  ): Workbook =
-    deleteColumns(wb, sheet, at, count, policyOf(preserveUntouchedCaches))
-
-  /** [[deleteColumns]] under an explicit cache policy. */
-  def deleteColumns(
-    wb: Workbook,
-    sheet: SheetName,
-    at: Int,
-    count: Int,
-    policy: StructuralCachePolicy
-  ): Workbook =
-    orThrow(deleteColumnsChecked(wb, sheet, at, count, policy))
-
-  /**
-   * Total form of [[insertRows]]: `Left` when the edit is refused (GH-472 out-of-bounds shift,
-   * GH-495 data-table tear), `Right` with the edited workbook otherwise. The `*Checked` family is
-   * the pure surface; the four throwing methods above are the `.unsafe` façade kept for callers
-   * that predate it.
    */
   def insertRowsChecked(
     wb: Workbook,
@@ -183,7 +96,7 @@ object StructuralEditor:
   ): XLResult[Workbook] =
     edit(wb, sheet, isRow = true, at = at, delta = count, policy)
 
-  /** Total form of [[deleteRows]]. */
+  /** Delete `count` rows starting at 0-based row index `at` on `sheet`; `Left` when refused. */
   def deleteRowsChecked(
     wb: Workbook,
     sheet: SheetName,
@@ -203,7 +116,7 @@ object StructuralEditor:
   ): XLResult[Workbook] =
     edit(wb, sheet, isRow = true, at = at, delta = -count, policy)
 
-  /** Total form of [[insertColumns]]. */
+  /** Insert `count` columns at 0-based column index `at` on `sheet`; `Left` when refused. */
   def insertColumnsChecked(
     wb: Workbook,
     sheet: SheetName,
@@ -223,7 +136,7 @@ object StructuralEditor:
   ): XLResult[Workbook] =
     edit(wb, sheet, isRow = false, at = at, delta = count, policy)
 
-  /** Total form of [[deleteColumns]]. */
+  /** Delete `count` columns starting at 0-based column index `at`; `Left` when refused. */
   def deleteColumnsChecked(
     wb: Workbook,
     sheet: SheetName,
@@ -246,9 +159,6 @@ object StructuralEditor:
   private def policyOf(preserveUntouchedCaches: Boolean): StructuralCachePolicy =
     if preserveUntouchedCaches then StructuralCachePolicy.PreserveUntouched
     else StructuralCachePolicy.Invalidate
-
-  private def orThrow(result: XLResult[Workbook]): Workbook =
-    result.fold(err => throw XLException(err), identity)
 
   private def edit(
     wb: Workbook,
@@ -972,15 +882,14 @@ object StructuralEditor:
     }
 
   /**
-   * Ergonomic workbook extensions. These are the throwing façade (a refused edit raises
-   * `XLException`); the `*Checked` methods on the object are the total form.
+   * Ergonomic workbook extensions over the `*Checked` methods: `Left` when the edit is refused.
    */
   extension (wb: Workbook)
-    def insertRowsShifted(sheet: SheetName, at: Int, count: Int): Workbook =
-      StructuralEditor.insertRows(wb, sheet, at, count)
-    def deleteRowsShifted(sheet: SheetName, at: Int, count: Int): Workbook =
-      StructuralEditor.deleteRows(wb, sheet, at, count)
-    def insertColumnsShifted(sheet: SheetName, at: Int, count: Int): Workbook =
-      StructuralEditor.insertColumns(wb, sheet, at, count)
-    def deleteColumnsShifted(sheet: SheetName, at: Int, count: Int): Workbook =
-      StructuralEditor.deleteColumns(wb, sheet, at, count)
+    def insertRowsShifted(sheet: SheetName, at: Int, count: Int): XLResult[Workbook] =
+      StructuralEditor.insertRowsChecked(wb, sheet, at, count)
+    def deleteRowsShifted(sheet: SheetName, at: Int, count: Int): XLResult[Workbook] =
+      StructuralEditor.deleteRowsChecked(wb, sheet, at, count)
+    def insertColumnsShifted(sheet: SheetName, at: Int, count: Int): XLResult[Workbook] =
+      StructuralEditor.insertColumnsChecked(wb, sheet, at, count)
+    def deleteColumnsShifted(sheet: SheetName, at: Int, count: Int): XLResult[Workbook] =
+      StructuralEditor.deleteColumnsChecked(wb, sheet, at, count)

@@ -43,10 +43,11 @@ final case class CellEvalError(
  *   error value such as #DIV/0! is a value, not a failure)
  * @param failures
  *   the formulas of the evaluation closure that could not evaluate — the range's own and the
- *   precedents outside it, cycle members inside the closure included — in row-major order
+ *   precedents outside it, on the range's sheet (in row-major order, cycle members included) and
+ *   then on other sheets (#891; each [[CellEvalError]] names its sheet)
  * @param blocked
- *   the formulas of the closure left unevaluated because a formula they depend on failed, in
- *   row-major order
+ *   the formulas of the closure on the range's sheet left unevaluated because a formula they depend
+ *   on failed, in row-major order
  */
 final case class RangeEvalResult(
   values: Map[ARef, CellValue],
@@ -565,27 +566,18 @@ object RecalcResult:
     case CellValue.Formula(_, Some(cached), _) => carriedCellError(cached)
     case _ => None
 
-  /** One cache/diagnostic contract for whole-workbook and targeted recalculation. */
+  /**
+   * [[cacheResultsWith]] that withdraws no cache downstream of a failure: for the uncached pass,
+   * which promises every cached cell stays byte-identical (GH-468), and for a pass with nothing to
+   * evaluate.
+   */
   private[eval] def cacheResults(
     wb: Workbook,
     successful: Map[SheetName, Map[ARef, CellValue]],
     failures: Vector[CellEvalError],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    cycleReports: Vector[SccReport] = Vector.empty,
     reasons: Map[QualifiedRef, String] = Map.empty
   ): RecalcResult =
-    cacheResultsWith(
-      wb,
-      successful,
-      failures,
-      (failed, pinned) =>
-        DependencyGraph.qualifiedTransitiveDependents(
-          dependents.view.mapValues(_ -- pinned).toMap,
-          failed
-        ),
-      cycleReports,
-      reasons
-    )
+    cacheResultsWith(wb, successful, failures, (_, _) => Set.empty, Vector.empty, reasons)
 
   /**
    * [[cacheResults]] with the invalidation walk supplied: `dependentsOf(failed, pinned)` is every

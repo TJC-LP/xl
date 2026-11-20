@@ -2466,11 +2466,12 @@ generated [`generated/error-codes.md`](generated/error-codes.md) (also `xl schem
 
 Two rows worth spelling out:
 
-- `view --eval` evaluates **cell by cell**: the window's formulas and their same-sheet precedents
-  evaluate in dependency order (a formula precedent on another sheet is read from its cached value,
-  or computed when it has none — run `xl recalc` to refresh a whole book), and a formula that
-  cannot evaluate (a circular reference inside that closure,
-  a missing sheet, an unsupported function) no longer sinks the render. Every other formula shows
+- `view --eval` evaluates **cell by cell**: the window's formulas and their precedents, on the
+  window's sheet and on every other sheet, evaluate in dependency order, so the window shows what
+  `xl recalc` would write in those cells even when the file's caches are stale (after
+  `--no-recalc`). A formula that cannot evaluate (a circular reference inside that closure,
+  a missing sheet, an unsupported function) no longer sinks the render; when it lies on another
+  sheet the warning names it there. Every other formula shows
   its live value; the failing cell and the formulas that depend on it — which are not evaluated,
   so no stale cache is mixed in — show exactly what the file holds (the cached value, or the
   formula text / JSON `value: null` when uncached). One stderr warning names them, located at the

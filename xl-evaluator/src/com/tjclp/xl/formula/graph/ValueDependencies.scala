@@ -176,7 +176,6 @@ private[xl] object ValueDependencies:
                 // a name read as a value does
                 case TExpr.RangeLocation.Name(name, scope) => resolved(scope, name)
                 case _ => Set.empty
-        case ArgValue.Cells(r) => if addressOnly || !localReads then Set.empty else cells(r)
 
       // Exhaustive, no wildcard: a new TExpr case is a compiler warning here, never a silent
       // structural fallback that would lose referenceOnly and own-sheet qualified reads.

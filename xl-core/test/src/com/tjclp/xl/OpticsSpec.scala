@@ -284,10 +284,11 @@ class OpticsSpec extends FunSuite:
       ref = ref"A1",
       value = CellValue.Text("test"),
       styleId = Some(StyleId(3)),
-      comment = Some("Note"),
-      hyperlink = Some("https://example.com")
+      hyperlink = Some(Hyperlink("https://example.com"))
     )
-    val sheet = emptySheet.put(originalCell)
+    val sheet = emptySheet
+      .put(originalCell)
+      .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note"))
 
     val updated = sheet.modifyValue(ref"A1") {
       case CellValue.Text(_) => CellValue.Text("changed")
@@ -297,13 +298,12 @@ class OpticsSpec extends FunSuite:
     val cell = updated(ref"A1")
     assertEquals(cell.value, CellValue.Text("changed"))
     assertEquals(cell.styleId, Some(StyleId(3)))
-    // GH-295: put(cell) (the lens setter) converts the legacy comment field into Sheet.comments
-    assertEquals(cell.comment, None)
+    // The lens setter (put(cell)) leaves the sheet-level comment store alone
     assertEquals(
       updated.getComment(ref"A1"),
       Some(com.tjclp.xl.cells.Comment.plainText("Note"))
     )
-    assertEquals(cell.hyperlink, Some("https://example.com"))
+    assertEquals(cell.hyperlink, Some(Hyperlink("https://example.com")))
   }
 
   test("focus DSL works with pattern matching") {

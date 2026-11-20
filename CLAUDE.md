@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,180)
+./mill __.test             # Run all tests (10,276)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -386,7 +386,8 @@ sheet.style("B19:D21", CellStyle.default.withNumFmt(NumFmt.Percent))
 ```scala
 // SheetEvaluator extension methods available from com.tjclp.xl.{*, given}
 sheet.evaluateFormula("=SUM(A1:A10)")      // XLResult[CellValue]
-sheet.evaluateWithDependencyCheck()         // Safe eval with cycle detection
+Workbook(sheet).recalculate()               // RecalcResult: evaluated values + per-cell errors (cycles isolated)
+QualifiedGraph.of(wb).precedentsOf(QualifiedRef(sheetName, ref"B1")) // dependency questions
 ```
 
 **Functions**: the registry (`FunctionRegistry.all`, macro-collected from the `FunctionSpecs*` traits) plus `LET` (lexical bindings; a parser-level special form, not in the registry). The complete list with arity, argument slots and flags is generated from the code: `xl functions --json` or `docs/reference/generated/functions.md`. Do not maintain a count or a list by hand.
@@ -425,12 +426,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,180 test cases** (the #891 audit-performance stack (on #893), 2026-11-18; 10,180 passed, none ignored) by module: xl-evaluator (4420), xl-core (1877), xl-ooxml (1447), xl-cli (2000), xl-cats-effect (217), xl-agent (153), xl prelude probes (66). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,276 test cases** (the #891 purge (PR A, on #896), 2026-11-19; 10,276 passed, none ignored) by module: xl-evaluator (4463), xl-core (1890), xl-ooxml (1454), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (71). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,180 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,276 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

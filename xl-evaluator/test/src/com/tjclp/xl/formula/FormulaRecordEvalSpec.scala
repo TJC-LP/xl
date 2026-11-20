@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula
 
+import com.tjclp.xl.formula.AfterEditSyntax.*
 import java.nio.file.Files
 
 import munit.FunSuite
@@ -7,13 +8,14 @@ import munit.FunSuite
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.error.XLException
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.ooxml.XlsxWriter
 import com.tjclp.xl.ooxml.lint.WorkbookLint
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.unsafe.*
 
 /**
  * GH-430 evaluator semantics for formula records:
@@ -63,15 +65,15 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(sheet.evaluateCell(ref"F2"), Right(CellValue.Empty))
   }
 
-  test("DependencyGraph.fromSheet excludes dataTable cells; formulas read them as values") {
+  test("the formula graph excludes dataTable cells; formulas read them as values") {
     val kind = dtKind("F2:G2", "A1", "A2")
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", CellValue.dataTable(kind, Some(num(42))))
       .put(ref"B3", CellValue.Formula("F2+1"))
-    val graph = DependencyGraph.fromSheet(sheet)
-    assert(!graph.dependencies.contains(ref"F2"), "dataTable cell must not be a graph node")
-    assert(graph.dependencies.contains(ref"B3"))
+    val graph = sheet.qualifiedGraph
+    assert(!graph.formulas.exists(_.ref == ref"F2"), "dataTable cell must not be a graph node")
+    assert(graph.formulas.exists(_.ref == ref"B3"))
     // A formula over the interior reads the pinned cache like any value.
     assertEquals(sheet.evaluateFormula("=F2+1"), Right(num(43)))
   }
@@ -98,13 +100,13 @@ class FormulaRecordEvalSpec extends FunSuite:
     assertEquals(out(ref"C1").value, CellValue.Formula("F2+1", Some(num(43))))
   }
 
-  test("recalculateDependents keeps the ArrayFormula kind through cache refresh (.copy)") {
+  test("afterEdit keeps the ArrayFormula kind through cache refresh (.copy)") {
     import com.tjclp.xl.formula.eval.DependentRecalculation.*
     val arr = FormulaKind.ArrayFormula(range("C1:C1"))
     val sheet = Sheet(S)
       .put(ref"A1", num(10))
       .put(ref"C1", CellValue.Formula("A1*2", Some(num(20)), arr))
-    val updated = sheet.put(ref"A1", num(100)).recalculateDependents(Set(ref"A1"))
+    val updated = sheet.put(ref"A1", num(100)).afterEdit(Set(ref"A1"))
     assertEquals(updated(ref"C1").value, CellValue.Formula("A1*2", Some(num(200)), arr))
   }
 
@@ -129,22 +131,22 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
   }
 
-  test("recalculateDependents never touches a dataTable record (pinned, not a dependent)") {
+  test("afterEdit never touches a dataTable record (pinned, not a dependent)") {
     import com.tjclp.xl.formula.eval.DependentRecalculation.*
     val tableCell = CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42)))
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", tableCell)
-    val updated = sheet.put(ref"A1", num(999)).recalculateDependents(Set(ref"A1"))
+    val updated = sheet.put(ref"A1", num(999)).afterEdit(Set(ref"A1"))
     assertEquals(updated(ref"F2").value, tableCell)
   }
 
-  test("evaluateWithDependencyCheck stays clean on a sheet carrying dataTable records") {
+  test("whole-sheet evaluation stays clean on a sheet carrying dataTable records") {
     val sheet = Sheet(S)
       .put(ref"A1", num(8))
       .put(ref"F2", CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42))))
       .put(ref"B1", CellValue.Formula("F2*2"))
-    sheet.evaluateWithDependencyCheck() match
+    sheet.evalAll() match
       case Right(values) => assertEquals(values.get(ref"B1"), Some(num(84)))
       case Left(err) => fail(s"dependency-checked eval failed: $err")
   }
@@ -154,7 +156,8 @@ class FormulaRecordEvalSpec extends FunSuite:
   test("insertRows above a data table shifts ref/r1/r2 and re-synthesizes the expression") {
     val tableCell = CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42)))
     val sheet = Sheet(S).put(ref"A1", num(8)).put(ref"A2", num(3)).put(ref"F2", tableCell)
-    val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 0, count = 1)
+    val out =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(sheet)), S, at = 0, count = 1).unsafe
     val s2 = sheetNamed(out, "S")
     assertEquals(
       s2(ref"F3").value,
@@ -181,9 +184,6 @@ class FormulaRecordEvalSpec extends FunSuite:
       .getOrElse(fail("an insert through a data-table interior must be refused"))
     assert(err.message.contains("F2:F3"), err.message)
     assert(err.message.contains("cannot change part of a data table"), err.message)
-    // The unsafe facade refuses the same way the GH-472 bounds guard does.
-    val thrown = intercept[XLException](StructuralEditor.insertRows(wb, S, at = 2, count = 1))
-    assertEquals(thrown.error, err)
     // The workbook is untouched: the record still stands, no degrade-to-constant.
     assertEquals(sheetNamed(wb, "S")(ref"F2").value, recorded)
   }
@@ -198,8 +198,6 @@ class FormulaRecordEvalSpec extends FunSuite:
       .getOrElse(fail("a delete through a data-table interior must be refused"))
     assert(err.message.contains("F2:F3"), err.message)
     assert(err.message.contains("cannot change part of a data table"), err.message)
-    val thrown = intercept[XLException](StructuralEditor.deleteRows(wb, S, at = 2, count = 1))
-    assertEquals(thrown.error, err)
     assertEquals(sheetNamed(wb, "S")(ref"F2").value, recorded)
   }
 
@@ -224,7 +222,8 @@ class FormulaRecordEvalSpec extends FunSuite:
   test("GH-495: a delete swallowing the WHOLE interior removes the table (Excel allows it)") {
     val sheet = Sheet(S).put(ref"F2", CellValue.dataTable(tearKind, Some(num(11))))
     // Rows 2-3 (index0 1..2) cover F2:F3 entirely — deleting a whole data table is legal.
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 1, count = 2)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 1, count = 2).unsafe
     val s2 = sheetNamed(out, "S")
     assert(!s2.contains(ref"F2"), "the record cell rode the deleted band out")
     val survivors = s2.cells.values.toVector.collect {
@@ -237,14 +236,16 @@ class FormulaRecordEvalSpec extends FunSuite:
     // Malformed-input path: the record lives at H1, its interior F2:F3 is deleted outright. The
     // table is gone by construction (not torn), so the orphan cell degrades to its constant.
     val sheet = Sheet(S).put(ref"H1", CellValue.dataTable(tearKind, Some(num(11))))
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 1, count = 2)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 1, count = 2).unsafe
     assertEquals(sheetNamed(out, "S")(ref"H1").value, num(11))
   }
 
   test("GH-495: a zero-count insert is a no-op, never a record-destroying tear") {
     val recorded = CellValue.dataTable(tearKind, Some(num(11)))
     val sheet = Sheet(S).put(ref"F2", recorded)
-    val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 2, count = 0)
+    val out =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(sheet)), S, at = 2, count = 0).unsafe
     assertEquals(sheetNamed(out, "S")(ref"F2").value, recorded)
   }
 
@@ -277,7 +278,8 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
     val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(7))))
     // Delete row 1 (index0 0): r1=A1 goes with it; the interior itself just shifts up.
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 0, count = 1)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 0, count = 1).unsafe
     val torn: FormulaKind.DataTable = FormulaKind.DataTable(
       range("F4:F5"),
       dt2D = true,
@@ -299,7 +301,8 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
     val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(9))))
     // Delete column B (index0 1): r2=B1 goes with it; r1=A1 sits left of the band and stands.
-    val out = StructuralEditor.deleteColumns(Workbook(Vector(sheet)), S, at = 1, count = 1)
+    val out =
+      StructuralEditor.deleteColumnsChecked(Workbook(Vector(sheet)), S, at = 1, count = 1).unsafe
     val torn: FormulaKind.DataTable = FormulaKind.DataTable(
       range("E5:E6"),
       dt2D = true,
@@ -320,7 +323,8 @@ class FormulaRecordEvalSpec extends FunSuite:
       r2 = Some(aref("B1"))
     )
     val sheet = Sheet(S).put(ref"F5", CellValue.dataTable(kind, Some(num(5))))
-    val out = StructuralEditor.deleteColumns(Workbook(Vector(sheet)), S, at = 0, count = 2)
+    val out =
+      StructuralEditor.deleteColumnsChecked(Workbook(Vector(sheet)), S, at = 0, count = 2).unsafe
     val torn: FormulaKind.DataTable = FormulaKind.DataTable(
       range("D5:D6"),
       dt2D = true,
@@ -341,7 +345,8 @@ class FormulaRecordEvalSpec extends FunSuite:
     val tableCell = CellValue.dataTable(dtKind("F5:G5", "A1", "A2"), Some(num(42)))
     val sheet = Sheet(S).put(ref"F5", tableCell)
     // Row 20 (index0 19) is below everything the record references.
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 19, count = 1)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 19, count = 1).unsafe
     assertEquals(sheetNamed(out, "S")(ref"F5").value, tableCell)
   }
 
@@ -356,14 +361,16 @@ class FormulaRecordEvalSpec extends FunSuite:
     )
     val tableCell = CellValue.dataTable(torn, Some(num(3)))
     val sheet = Sheet(S).put(ref"F5", tableCell)
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 19, count = 1)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 19, count = 1).unsafe
     assertEquals(sheetNamed(out, "S")(ref"F5").value, tableCell)
   }
 
   test("insertRows above an array anchor shifts its record ref and keeps the kind") {
     val arr = FormulaKind.ArrayFormula(range("C8:C9"))
     val sheet = Sheet(S).put(ref"C8", CellValue.Formula("=A8*2", Some(num(2)), arr))
-    val out = StructuralEditor.insertRows(Workbook(Vector(sheet)), S, at = 0, count = 1)
+    val out =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(sheet)), S, at = 0, count = 1).unsafe
     // Shifted formulas re-print equals-free and invalidate their cache because the edit can
     // change both referenced values and position-sensitive results.
     assertEquals(
@@ -377,7 +384,8 @@ class FormulaRecordEvalSpec extends FunSuite:
     val sheet = Sheet(S).put(ref"C8", CellValue.Formula("=A1*2", Some(num(2)), arr))
     // Delete row 9 (index0 8): tears C8:C9; the anchor C8 (row index0 7) survives.
     // The equals-free text survives, but the structural edit invalidates the cache.
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sheet)), S, at = 8, count = 1)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sheet)), S, at = 8, count = 1).unsafe
     assertEquals(sheetNamed(out, "S")(ref"C8").value, CellValue.Formula("A1*2", None))
   }
 
@@ -394,20 +402,24 @@ class FormulaRecordEvalSpec extends FunSuite:
 
   test("GH-714: a delete inside a dynamic array shrinks its extent and keeps the mode") {
     // delete row 10 (index0 9), strictly inside C8:C11
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 1)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sortSheet)), S, at = 9, count = 1).unsafe
     assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C10")))
   }
 
   test("GH-714: a delete band swallowing a dynamic array's end stops it at the last survivor") {
     // delete rows 10..13 (index0 9..12): the end C11 falls in the band
-    val out = StructuralEditor.deleteRows(Workbook(Vector(sortSheet)), S, at = 9, count = 4)
+    val out =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(sortSheet)), S, at = 9, count = 4).unsafe
     assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C9")))
   }
 
   test("GH-714: an insert inside a dynamic array grows it; an insert before shifts it") {
-    val grown = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 9, count = 2)
+    val grown =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(sortSheet)), S, at = 9, count = 2).unsafe
     assertEquals(kindAt(grown, ref"C8"), FormulaKind.dynamicArray(range("C8:C13")))
-    val shifted = StructuralEditor.insertRows(Workbook(Vector(sortSheet)), S, at = 0, count = 1)
+    val shifted =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(sortSheet)), S, at = 0, count = 1).unsafe
     assertEquals(kindAt(shifted, ref"C9"), FormulaKind.dynamicArray(range("C9:C12")))
   }
 
@@ -418,7 +430,8 @@ class FormulaRecordEvalSpec extends FunSuite:
       .put(ref"C10", num(3))
       .put(ref"C11", num(4))
     // insert one row at row 10 (index0 9), inside the spill
-    val out = StructuralEditor.insertRows(Workbook(Vector(spilled)), S, at = 9, count = 1)
+    val out =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(spilled)), S, at = 9, count = 1).unsafe
     val sheet = sheetNamed(out, "S")
     assertEquals(kindAt(out, ref"C8"), FormulaKind.dynamicArray(range("C8:C12")))
     assertEquals(sheet(ref"C9").value, num(2))
@@ -436,11 +449,13 @@ class FormulaRecordEvalSpec extends FunSuite:
       .put(ref"C11", num(4))
       .put(ref"C12", num(99))
     // delete row 8 (index0 7), the anchor's: C9:C11 would survive as constants at C8:C10
-    val row = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 7, 1), "S")
+    val row =
+      sheetNamed(StructuralEditor.deleteRowsChecked(Workbook(Vector(spilled)), S, 7, 1).unsafe, "S")
     Vector(ref"C8", ref"C9", ref"C10").foreach(r => assertEquals(row.cells.get(r), None, r.toA1))
     assertEquals(row(ref"C11").value, num(99))
     // a band through the anchor and part of the spill: the tail outside it goes too
-    val band = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 6, 3), "S")
+    val band =
+      sheetNamed(StructuralEditor.deleteRowsChecked(Workbook(Vector(spilled)), S, 6, 3).unsafe, "S")
     Vector(ref"C7", ref"C8").foreach(r => assertEquals(band.cells.get(r), None, r.toA1))
     assertEquals(band(ref"C9").value, num(99))
     // the column axis: B2 spills B2:D2; deleting column B empties what moves to B2:C2
@@ -452,11 +467,15 @@ class FormulaRecordEvalSpec extends FunSuite:
       .put(ref"C2", num(2))
       .put(ref"D2", num(3))
       .put(ref"E2", num(42))
-    val col = sheetNamed(StructuralEditor.deleteColumns(Workbook(Vector(across)), S, 1, 1), "S")
+    val col = sheetNamed(
+      StructuralEditor.deleteColumnsChecked(Workbook(Vector(across)), S, 1, 1).unsafe,
+      "S"
+    )
     Vector(ref"B2", ref"C2").foreach(r => assertEquals(col.cells.get(r), None, r.toA1))
     assertEquals(col(ref"D2").value, num(42))
     // a delete that keeps the anchor still only shrinks the spill (above)
-    val kept = sheetNamed(StructuralEditor.deleteRows(Workbook(Vector(spilled)), S, 9, 1), "S")
+    val kept =
+      sheetNamed(StructuralEditor.deleteRowsChecked(Workbook(Vector(spilled)), S, 9, 1).unsafe, "S")
     assertEquals(kept(ref"C9").value, num(2))
   }
 
@@ -471,7 +490,9 @@ class FormulaRecordEvalSpec extends FunSuite:
         FormulaKind.dynamicArray(CellRange(anchor, ARef.from0(2, Row.MaxIndex0)))
       )
     )
-    val out = StructuralEditor.insertRows(Workbook(Vector(edge)), S, at = Row.MaxIndex0 - 1, 1)
+    val out = StructuralEditor
+      .insertRowsChecked(Workbook(Vector(edge)), S, at = Row.MaxIndex0 - 1, 1)
+      .unsafe
     // Pinned behaviour: the extent is clamped at row 1048576, not refused and not grown off the
     // grid. The true size is the anchor's to recompute; re-spilling on recalculation is #737.
     assertEquals(
@@ -485,7 +506,7 @@ class FormulaRecordEvalSpec extends FunSuite:
       ref"C8",
       CellValue.Formula("=SUM(A1:A4*2)", Some(num(1)), FormulaKind.ArrayFormula(range("C8:C11")))
     )
-    val out = StructuralEditor.deleteRows(Workbook(Vector(cse)), S, at = 9, count = 1)
+    val out = StructuralEditor.deleteRowsChecked(Workbook(Vector(cse)), S, at = 9, count = 1).unsafe
     assertEquals(kindAt(out, ref"C8"), FormulaKind.Normal())
   }
 
@@ -528,6 +549,7 @@ class FormulaRecordEvalSpec extends FunSuite:
     val tableCell = CellValue.dataTable(dtKind("F2:G2", "A1", "A2"), Some(num(42)))
     val s = Sheet(S).put(ref"F2", tableCell)
     val o = Sheet(other).put(ref"A1", num(1))
-    val out = StructuralEditor.insertRows(Workbook(Vector(s, o)), other, at = 0, count = 2)
+    val out =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(s, o)), other, at = 0, count = 2).unsafe
     assertEquals(sheetNamed(out, "S")(ref"F2").value, tableCell)
   }

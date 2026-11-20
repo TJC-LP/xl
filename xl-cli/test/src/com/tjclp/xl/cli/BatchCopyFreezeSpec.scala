@@ -379,7 +379,8 @@ class BatchCopyFreezeSpec extends FunSuite:
     val result = runBatch(wb, wb.sheets.headOption, json)
     val s = result.sheets.headOption.getOrElse(fail("sheet missing"))
 
-    def linkAt(row: Int): Option[String] = s.cells.get(ARef.from0(0, row)).flatMap(_.hyperlink)
+    def linkAt(row: Int): Option[String] =
+      s.cells.get(ARef.from0(0, row)).flatMap(_.hyperlink).map(_.target)
     assertEquals(linkAt(0), Some("Sheet1!C3"), "leading '#' must be stripped")
     assertEquals(linkAt(1), Some("Sheet1!C3"))
     assertEquals(linkAt(2), Some("https://example.com/page#frag"), "URL fragments untouched")

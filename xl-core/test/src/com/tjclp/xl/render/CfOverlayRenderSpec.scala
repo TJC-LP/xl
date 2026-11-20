@@ -59,7 +59,6 @@ class CfOverlayRenderSpec extends ScalaCheckSuite:
       .put(ref"B2" -> "wrapped words in a narrow cell")
       .put(ref"C3", CellValue.RichText(rich))
       .put(ref"A4" -> "merged")
-      .unsafe
       .withCellStyle(ref"A2", boxed)
       .withCellStyle(ref"B2", wrap)
       .merge(CellRange(ref"A4", ref"B4"))

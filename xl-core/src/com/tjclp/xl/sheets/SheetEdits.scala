@@ -380,7 +380,7 @@ private[xl] object SheetEdits:
       )
       val blocked = sheet.cells.valuesIterator
         .collect {
-          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _, _)
+          case cell @ Cell(_, CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula), _, _)
               if arr.isDynamicArray && arr.ref.start == cell.ref && arr.ref.cellCount > 1 &&
                 dataRange.exists(_.intersects(arr.ref)) =>
             cell.ref -> arr.ref
@@ -447,7 +447,7 @@ private[xl] object SheetEdits:
                   Right(cachedOpt.getOrElse(CellValue.Empty))
                 case v => Right(v)
             else shifted(cell.value, newRef, 0, rowDelta).map(_._1)
-          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, None, cell.hyperlink)))
+          moved.map(v => s2.put(Cell(newRef, v, cell.styleId, cell.hyperlink)))
         }
     }
 

@@ -162,47 +162,10 @@ class RecalcPerfSpec extends FunSuite:
       s"a component burned its budget: ${result.cycles.map(_.rounds)}"
     )
 
-  /**
-   * GH-518 tripwire: Kahn's core (`kahnOrder`, shared by `topologicalSort` and
-   * `qualifiedTopologicalSort`) must run in time and allocation linear in the graph, not quadratic.
-   * The pre-fix formulation appended each node to an immutable-List accumulator (`acc :+ node` — a
-   * full copy per node) and rebuilt the pending queue per node (`rest ++ newlyZero`): on this
-   * 100k-cell chain that is ~5e9 cons-cell allocations, minutes of GC against a 30s budget, while
-   * the linear version finishes in milliseconds.
-   */
-  private val ChainCells = 100000
-
-  test("GH-518: topologicalSort on a 100k-cell chain is linear, ordered, and inside the budget"):
-    val refs = (0 until ChainCells).map(i => ARef.from0(0, i)).toVector
-    val dependencies: Map[ARef, Set[ARef]] =
-      (1 until ChainCells)
-        .map(i => refs(i) -> Set(refs(i - 1)))
-        .toMap
-        .updated(refs(0), Set.empty[ARef])
-    val dependents: Map[ARef, Set[ARef]] =
-      (1 until ChainCells).map(i => refs(i - 1) -> Set(refs(i))).toMap
-    val graph = DependencyGraph(dependencies, dependents)
-    val sorted = DependencyGraph.topologicalSort(graph)
-    sorted match
-      case Right(order) =>
-        assertEquals(order.size, ChainCells)
-        assertEquals(order.headOption, Some(refs(0)))
-        assertEquals(order.lastOption, Some(refs(ChainCells - 1)))
-      case Left(circular) => fail(s"expected acyclic order, got: $circular")
-
-  test("transitive dependent discovery is linear on a 100k-cell chain"):
-    val refs = (0 until ChainCells).map(i => ARef.from0(0, i)).toVector
-    val first = refs(0)
-    val last = refs(ChainCells - 1)
-    val dependents: Map[ARef, Set[ARef]] =
-      (1 until ChainCells).map(i => refs(i - 1) -> Set(refs(i))).toMap
-    val graph = DependencyGraph(Map.empty, dependents)
-
-    val reached = DependencyGraph.transitiveDependents(graph, Set(first))
-
-    assertEquals(reached.size, ChainCells - 1)
-    assert(!reached.contains(first))
-    assert(reached.contains(last))
+  // #891: the GH-518 tripwires on the sheet-level `topologicalSort` and `transitiveDependents`
+  // left with that graph; the workbook graph's linear Kahn and reachability on 100k chains are
+  // pinned by CompactGraphSpec ("a 100k-formula chain needs no call stack") and
+  // QualifiedSccOracleSpec ("a 100k-long chain and a 100k-member ring stay stack-safe").
 
   /**
    * GH-537 tripwire: a cycle member that fails every round (a host failure, not an error value)

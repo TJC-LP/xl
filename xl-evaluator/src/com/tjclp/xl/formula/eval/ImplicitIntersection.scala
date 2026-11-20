@@ -190,7 +190,7 @@ private[xl] object ImplicitIntersection:
       ReferenceOperators.isOperatorCall(call) ||
       call.spec.argSpec.toValues(call.args).exists {
         case ArgValue.Expr(arg) => mayDiverge(arg)
-        case _: ArgValue.Range | _: ArgValue.Cells => false
+        case _: ArgValue.Range => false
       }
 
   /** Numbers compare by value, Empty reads 0, anything else by equality (errors by code). */

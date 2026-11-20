@@ -423,7 +423,6 @@ object ReadCommands:
       ) match
         case Some(cycle) => IO.raiseError(cyclic(EvalError.CircularRef(cycle), formula))
         case None => IO.unit
-      graph = closure.graph
       allDeps = closure.reached
       formulaDeps = allDeps.filter(ref =>
         tempSheet(ref).value match
@@ -434,7 +433,7 @@ object ReadCommands:
         if formulaDeps.isEmpty then scala.util.Right(List.empty[ARef])
         else
           DependencyGraph
-            .topologicalSort(graph)
+            .orderOf(tempSheet.name, closure.edges)
             .map(_.filter(formulaDeps.contains))
             .left
             .map(cyclic(_, formula))
@@ -477,14 +476,14 @@ object ReadCommands:
    * `formulas` holds each parse, so the cycle search does not parse again.
    */
   private final case class ValueReads(
-    graph: DependencyGraph,
+    edges: Map[ARef, Set[ARef]],
     reached: Set[ARef],
     formulas: Map[ARef, TExpr[?]]
   )
 
   /**
    * The dependency graph `eval` (positioned or not) and `evala` order by, built from `roots` (the
-   * formula's own reads) out. `DependencyGraph.fromSheet` will not do, for three reasons:
+   * formula's own reads) out. A whole-sheet structural graph will not do, for three reasons:
    *   - its edges are structural. ROW(D5), ROWS(A:A), or a LET name that ROW inspects, make an edge
    *     to cells whose values are never read. A formula that inspects its own address, or a
    *     precedent that inspects the placement, would look circular, and the closure would be
@@ -495,8 +494,8 @@ object ReadCommands:
    *     walk parses and extracts each formula in the closure once, sharing one range cache, and
    *     touches nothing else.
    *
-   * Like `fromSheet`, a data table's cells are value sources, not nodes (GH-430), and a formula
-   * that does not parse is a node with no edges.
+   * As in the recalculation graph, a data table's cells are value sources, not nodes (GH-430), and
+   * a formula that does not parse is a node with no edges.
    */
   private def valueReadClosure(
     sheet: Sheet,
@@ -511,11 +510,7 @@ object ReadCommands:
       formulas: Map[ARef, TExpr[?]]
     ): ValueReads =
       val visit = frontier -- reached
-      if visit.isEmpty then
-        val formulaEdges =
-          edges.toList.flatMap((ref, deps) => deps.filter(edges.contains).map(_ -> ref))
-        val dependents = formulaEdges.groupMap(_._1)(_._2).view.mapValues(_.toSet).toMap
-        ValueReads(DependencyGraph(edges, dependents), reached, formulas)
+      if visit.isEmpty then ValueReads(edges, reached, formulas)
       else
         val (nextEdges, nextFormulas, next) =
           visit.foldLeft((edges, formulas, Set.empty[ARef])) { case ((e, f, n), ref) =>
@@ -575,9 +570,8 @@ object ReadCommands:
         case None =>
           val (next, reached) = frontier.foldLeft((Vector.empty[ARef], parent)) {
             case ((acc, seen), ref) =>
-              closure.graph.dependencies.getOrElse(ref, Set.empty).foldLeft((acc, seen)) {
-                case ((a, s), dep) =>
-                  if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
+              closure.edges.getOrElse(ref, Set.empty).foldLeft((acc, seen)) { case ((a, s), dep) =>
+                if dep == at || s.contains(dep) then (a, s) else (a :+ dep, s.updated(dep, ref))
               }
           }
           if next.isEmpty then None else search(next, reached)

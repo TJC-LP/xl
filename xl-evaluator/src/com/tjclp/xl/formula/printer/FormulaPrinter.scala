@@ -313,7 +313,6 @@ object FormulaPrinter:
             case TExpr.RangeLocation.Computed(expr) => printExpr(expr, precedence = 0, sep)
             case location => formatLocation(location)
           },
-          cellRange = formatRange,
           separator = sep
         )
         call.spec.render(call.args, printer)
@@ -578,8 +577,7 @@ object FormulaPrinter:
       case call: TExpr.Call[?] =>
         val printer = ArgPrinter(
           expr = expr => printWithTypes(expr),
-          location = formatLocation,
-          cellRange = formatRange
+          location = formatLocation
         )
         s"Call(${call.spec.name}, ${call.spec.argSpec.render(call.args, printer).mkString(", ")})"
       case TExpr.Let(bindings, body) =>

@@ -13,14 +13,14 @@ import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.Font
 
 /**
- * Integration tests for writeFast (SAX/StAX backend) functionality.
+ * Integration tests for the SAX/StAX write backend (`WriterConfig(backend = XmlBackend.SaxStax)`).
  *
  * These tests verify that the streaming write backend produces valid XLSX files that can be read
  * back with all data intact. This addresses PR feedback about benchmarks not verifying output
  * correctness.
  *
- * writeFast uses XmlBackend.SaxStax for better performance on large files. These tests ensure the
- * SAX backend produces functionally equivalent output to the default (Scala XML) backend.
+ * These tests ensure the SAX backend produces functionally equivalent output to the default (Scala
+ * XML) backend.
  */
 @SuppressWarnings(Array("org.wartremover.warts.OptionPartial", "org.wartremover.warts.IterableOps"))
 class WriteFastSpec extends FunSuite:
@@ -34,14 +34,14 @@ class WriteFastSpec extends FunSuite:
       .sorted(java.util.Comparator.reverseOrder())
       .forEach(Files.delete)
 
-  // Configuration for SAX/StAX backend (what writeFast uses internally)
+  // Configuration for the SAX/StAX backend
   val saxConfig: WriterConfig = WriterConfig.default.copy(backend = XmlBackend.SaxStax)
 
   // ============================================================================
   // Basic Functionality Tests
   // ============================================================================
 
-  test("writeFast produces valid xlsx readable by XlsxReader") {
+  test("SaxStax write produces valid xlsx readable by XlsxReader") {
     val sheet = Sheet("Test")
       .put(ref"A1" -> "Header", ref"B1" -> 123, ref"C1" -> BigDecimal("99.99"))
       .put(ref"A2" -> "Data", ref"B2" -> 456, ref"C2" -> BigDecimal("50.00"))
@@ -49,11 +49,11 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("basic-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     // Read back and verify
     val readResult = XlsxReader.read(outputPath)
-    assert(readResult.isRight, s"Read after writeFast failed: $readResult")
+    assert(readResult.isRight, s"Read after SaxStax write failed: $readResult")
 
     readResult.foreach { readWb =>
       assertEquals(readWb.sheets.size, 1)
@@ -64,7 +64,7 @@ class WriteFastSpec extends FunSuite:
     }
   }
 
-  test("writeFast and write produce functionally equivalent output") {
+  test("SaxStax write and write produce functionally equivalent output") {
     val sheet = Sheet("Comparison")
       .put(ref"A1" -> "Test", ref"B1" -> 100)
       .put(ref"A2" -> 123.456, ref"B2" -> true)
@@ -78,7 +78,7 @@ class WriteFastSpec extends FunSuite:
     val fastResult = XlsxWriter.writeWith(wb, fastPath, saxConfig)
     val defaultResult = XlsxWriter.writeWith(wb, defaultPath, WriterConfig.default)
 
-    assert(fastResult.isRight, s"writeFast failed: $fastResult")
+    assert(fastResult.isRight, s"SaxStax write failed: $fastResult")
     assert(defaultResult.isRight, s"write failed: $defaultResult")
 
     // Read both back
@@ -104,7 +104,7 @@ class WriteFastSpec extends FunSuite:
   // Data Type Tests
   // ============================================================================
 
-  test("writeFast preserves all cell value types") {
+  test("SaxStax write preserves all cell value types") {
     val today = LocalDate.of(2025, 6, 15)
     val now = LocalDateTime.of(2025, 6, 15, 14, 30, 0)
 
@@ -121,7 +121,7 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("types-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     val readResult = XlsxReader.read(outputPath)
     assert(readResult.isRight, s"Read failed: $readResult")
@@ -150,7 +150,7 @@ class WriteFastSpec extends FunSuite:
     }
   }
 
-  test("writeFast preserves formulas") {
+  test("SaxStax write preserves formulas") {
     val sheet = Sheet("Formulas")
       .put(ref"A1" -> CellValue.Number(BigDecimal(10)))
       .put(ref"A2" -> CellValue.Number(BigDecimal(20)))
@@ -159,7 +159,7 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("formulas-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     val readResult = XlsxReader.read(outputPath)
     assert(readResult.isRight, s"Read failed: $readResult")
@@ -174,7 +174,7 @@ class WriteFastSpec extends FunSuite:
     }
   }
 
-  test("writeFast preserves formula cached DateTime as Excel serial with t=\"n\" (GH-378)") {
+  test("SaxStax write preserves formula cached DateTime as Excel serial with t=\"n\" (GH-378)") {
     // Jan 1, 2000 noon = serial 36526.5 exactly
     val cached = LocalDateTime.of(2000, 1, 1, 12, 0, 0)
     val sheet = Sheet("Formulas")
@@ -184,7 +184,7 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("formula-cached-datetime-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     // Raw XML: the formula cell must carry t="n" and the cached serial in <v>
     val zip = new ZipFile(outputPath.toFile)
@@ -216,7 +216,7 @@ class WriteFastSpec extends FunSuite:
   // Multi-Sheet Tests
   // ============================================================================
 
-  test("writeFast handles multiple sheets") {
+  test("SaxStax write handles multiple sheets") {
     val sheet1 = Sheet("Data").put(ref"A1" -> "Sheet 1")
     val sheet2 = Sheet("Summary").put(ref"A1" -> "Sheet 2")
     val sheet3 = Sheet("Analysis").put(ref"A1" -> "Sheet 3")
@@ -224,7 +224,7 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("multi-sheet-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     val readResult = XlsxReader.read(outputPath)
     assert(readResult.isRight, s"Read failed: $readResult")
@@ -241,7 +241,7 @@ class WriteFastSpec extends FunSuite:
   // Style Tests
   // ============================================================================
 
-  test("writeFast preserves cell styles") {
+  test("SaxStax write preserves cell styles") {
     val boldStyle = CellStyle.default.withFont(Font("Arial", 12.0, bold = true))
     val sheet = Sheet("Styles")
       .put(ref"A1" -> "Bold text")
@@ -250,7 +250,7 @@ class WriteFastSpec extends FunSuite:
 
     val outputPath = tempDir.resolve("styles-fast.xlsx")
     val writeResult = XlsxWriter.writeWith(wb, outputPath, saxConfig)
-    assert(writeResult.isRight, s"writeFast failed: $writeResult")
+    assert(writeResult.isRight, s"SaxStax write failed: $writeResult")
 
     val readResult = XlsxReader.read(outputPath)
     assert(readResult.isRight, s"Read failed: $readResult")

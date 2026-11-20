@@ -84,7 +84,7 @@ class ExternalRefCliSpec extends FunSuite:
 
   test("putf: preserves the Excel-written cache of untouched external cells on recalc") {
     // A2 depends on A1; D1 is an external-formula cell with an Excel-written cache. Writing A1
-    // triggers recalculateDependents — the external cell's cache must survive verbatim.
+    // triggers the after-edit recalculation — the external cell's cache must survive verbatim.
     val sheet = Sheet("Data")
       .put(ARef.from0(0, 0), CellValue.Number(BigDecimal(1)))
       .put(ARef.from0(0, 1), CellValue.Formula("=A1*2", None))

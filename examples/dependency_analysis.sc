@@ -6,9 +6,9 @@
  * XL Formula System - Dependency Analysis Example
  *
  * This example demonstrates advanced dependency graph features:
- * - Build dependency graphs from formula cells
- * - Detect circular references with precise cycle paths
- * - Compute topological evaluation order
+ * - Build the workbook dependency graph (QualifiedGraph.of)
+ * - Detect circular references (strongly connected components)
+ * - List the evaluation order (dependency-first components)
  * - Query precedents and dependents for impact analysis
  * - Visualize formula relationships
  *
@@ -57,46 +57,41 @@ println("  Level 3: D1=C1*C2")
 println("  Aggregate: E1=SUM(A1:D1)")
 println()
 
-// Build dependency graph
-val graph1 = DependencyGraph.fromSheet(complexSheet)
+// Build the dependency graph of the workbook (cross-sheet, bounded: a range expands only to its
+// occupied cells)
+val book1 = Workbook(complexSheet)
+val graph1 = QualifiedGraph.of(book1)
+def at(sheet: Sheet, a1: ARef): QualifiedRef = QualifiedRef(sheet.name, a1)
+def cells(refs: Iterable[QualifiedRef]): String =
+  QualifiedGraph.sorted(refs).map(_.ref.toA1).mkString(", ")
 
 println("Dependency Analysis:")
-println(s"  Total formula cells: ${graph1.dependencies.size}")
+println(s"  Total formula cells: ${graph1.formulas.size}")
 println(s"  Total dependency edges: ${graph1.dependencies.values.map(_.size).sum}")
 println()
 
-// Topological sort
-DependencyGraph.topologicalSort(graph1) match
-  case Right(order) =>
-    println(s"✓ Evaluation order (${order.size} formulas):")
-    println(s"  ${order.map(_.toA1).mkString(" → ")}")
-  case Left(error) =>
-    println(s"✗ Cycle detected: ${error.cycle.map(_.toA1).mkString(" → ")}")
+// Evaluation order: the strongly connected components, dependency-first
+val components = graph1.sccs
+if components.exists(_.cyclic) then
+  println(s"✗ Cycle detected: ${cells(components.filter(_.cyclic).flatMap(_.members))}")
+else
+  println(s"✓ Evaluation order (${components.size} formulas):")
+  println(s"  ${components.flatMap(_.members).map(_.ref.toA1).mkString(" → ")}")
 
 println()
 
 // Impact analysis: What happens if A1 changes?
-val a1Impact = DependencyGraph.dependents(graph1, ref"A1")
+val a1Impact = graph1.dependentsOf(at(complexSheet, ref"A1"))
 println(s"Impact of changing A1:")
-println(s"  Direct dependents: ${a1Impact.map(_.toA1).mkString(", ")}")
+println(s"  Direct dependents: ${cells(a1Impact)}")
 
-// Find all transitive dependents using iterative BFS (avoids scala-cli opaque type issues)
-val transitiveImpact: Set[String] = {
-  var visited = Set.empty[String]
-  var queue = a1Impact.map(_.toA1).toList
-  while queue.nonEmpty do
-    val current = queue.head
-    queue = queue.tail
-    if !visited.contains(current) then
-      visited = visited + current
-      // Get next level of dependents
-      ARef.parse(current).toOption.foreach { ref =>
-        val nextLevel = DependencyGraph.dependents(graph1, ref)
-        queue = queue ++ nextLevel.map(_.toA1).filterNot(visited.contains)
-      }
-  visited
+// All transitive dependents, layer by layer (depth 0 = unbounded)
+val impactLayers = graph1.dependents(at(complexSheet, ref"A1"), 0)
+impactLayers.zipWithIndex.foreach { (layer, i) =>
+  println(s"  ${i + 1} hop(s) away: ${cells(layer)}")
 }
-println(s"  Transitive dependents: ${transitiveImpact.mkString(", ")}")
+val transitiveImpact: Set[ARef] = impactLayers.flatten.map(_.ref).toSet
+println(s"  Transitive dependents: ${cells(impactLayers.flatten)}")
 println(s"  Total cells affected: ${transitiveImpact.size}")
 
 println()
@@ -116,13 +111,13 @@ val cycle2 = Sheet("Cycle2")
   .put(ref"A1", fx"=B1+10")
   .put(ref"B1", fx"=A1*2")
 
-val graph2 = DependencyGraph.fromSheet(cycle2)
-DependencyGraph.detectCycles(graph2) match
-  case Right(_) =>
+val graph2 = QualifiedGraph.of(Workbook(cycle2))
+graph2.sccs.filter(_.cyclic) match
+  case Vector() =>
     println("  ✗ No cycle detected (unexpected)")
-  case Left(error) =>
+  case cycles =>
     println(s"  ✓ Circular reference detected!")
-    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
+    cycles.foreach(cycle => println(s"    Cycle members: ${cells(cycle.members)}"))
 
 println()
 
@@ -134,14 +129,14 @@ val cycle4 = Sheet("Cycle4")
   .put(ref"C1", fx"=D1+1")
   .put(ref"D1", fx"=A1+1")
 
-val graph3 = DependencyGraph.fromSheet(cycle4)
-DependencyGraph.detectCycles(graph3) match
-  case Right(_) =>
+val graph3 = QualifiedGraph.of(Workbook(cycle4))
+graph3.sccs.filter(_.cyclic) match
+  case Vector() =>
     println("  ✗ No cycle detected (unexpected)")
-  case Left(error) =>
+  case cycles =>
     println(s"  ✓ Circular reference detected!")
-    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
-    println(s"    Cycle length: ${error.cycle.size - 1} nodes")
+    cycles.foreach(cycle => println(s"    Cycle members: ${cells(cycle.members)}"))
+    println(s"    Cycle length: ${cycles.map(_.members.size).sum} nodes")
 
 println()
 
@@ -150,13 +145,13 @@ println("Test Case 3: Self-loop (A1 → A1)")
 val selfLoop = Sheet("SelfLoop")
   .put(ref"A1", fx"=A1+1")
 
-val graph4 = DependencyGraph.fromSheet(selfLoop)
-DependencyGraph.detectCycles(graph4) match
-  case Right(_) =>
+val graph4 = QualifiedGraph.of(Workbook(selfLoop))
+graph4.sccs.filter(_.cyclic) match
+  case Vector() =>
     println("  ✗ No cycle detected (unexpected)")
-  case Left(error) =>
+  case cycles =>
     println(s"  ✓ Self-reference detected!")
-    println(s"    Cycle: ${error.cycle.map(_.toA1).mkString(" → ")}")
+    cycles.foreach(cycle => println(s"    Cycle: ${cells(cycle.members)}"))
 
 println()
 
@@ -168,13 +163,13 @@ val rangeCycle = Sheet("RangeCycle")
   .put(ref"B5", fx"=A1*2")  // Creates cycle!
   .put(ref"B10", 20)
 
-val graph5 = DependencyGraph.fromSheet(rangeCycle)
-DependencyGraph.detectCycles(graph5) match
-  case Right(_) =>
+val graph5 = QualifiedGraph.of(Workbook(rangeCycle))
+graph5.sccs.filter(_.cyclic) match
+  case Vector() =>
     println("  ✗ No cycle detected (unexpected)")
-  case Left(error) =>
+  case cycles =>
     println(s"  ✓ Cycle through range detected!")
-    println(s"    Cycle path: ${error.cycle.map(_.toA1).mkString(" → ")}")
+    cycles.foreach(cycle => println(s"    Cycle members: ${cells(cycle.members)}"))
 
 println()
 
@@ -189,20 +184,22 @@ println()
 
 // Use the complex sheet from Scenario 1
 println("Analyzing precedents (cells this cell depends on):")
-println(s"  D1 precedents: ${DependencyGraph.precedents(graph1, ref"D1").map(_.toA1)}")
-println(s"  C1 precedents: ${DependencyGraph.precedents(graph1, ref"C1").map(_.toA1)}")
-println(s"  B1 precedents: ${DependencyGraph.precedents(graph1, ref"B1").map(_.toA1)}")
+println(s"  D1 precedents: ${cells(graph1.precedentsOf(at(complexSheet, ref"D1")))}")
+println(s"  C1 precedents: ${cells(graph1.precedentsOf(at(complexSheet, ref"C1")))}")
+println(s"  B1 precedents: ${cells(graph1.precedentsOf(at(complexSheet, ref"B1")))}")
 println()
 
 println("Analyzing dependents (cells that depend on this cell):")
-println(s"  B1 dependents: ${DependencyGraph.dependents(graph1, ref"B1").map(_.toA1)}")
-println(s"  C1 dependents: ${DependencyGraph.dependents(graph1, ref"C1").map(_.toA1)}")
-println(s"  D1 dependents: ${DependencyGraph.dependents(graph1, ref"D1").map(_.toA1)}")
+println(s"  B1 dependents: ${cells(graph1.dependentsOf(at(complexSheet, ref"B1")))}")
+println(s"  C1 dependents: ${cells(graph1.dependentsOf(at(complexSheet, ref"C1")))}")
+println(s"  D1 dependents: ${cells(graph1.dependentsOf(at(complexSheet, ref"D1")))}")
 println()
 
-// Find cells with most dependents (potential bottlenecks)
-val dependentCounts = graph1.dependents.map { case (ref, deps) => ref -> deps.size }
-val mostImpactful = dependentCounts.toSeq.sortBy(-_._2).take(3)
+// Find cells with most (transitive) dependents (potential bottlenecks)
+val dependentCounts = complexSheet.cells.keys.toSeq.map { ref =>
+  ref.toA1 -> graph1.dependents(at(complexSheet, ref), 0).flatten.size
+}
+val mostImpactful = dependentCounts.sortBy((a1, count) => (-count, a1)).take(3)
 println("Most impactful cells (most dependents):")
 mostImpactful.foreach { case (ref, count) =>
   println(s"  $ref: $count dependents")
@@ -227,23 +224,18 @@ println()
 // Create modified sheet
 val modifiedSheet = complexSheet.put(ref"A1", 150)
 
-// Evaluate both versions
-val originalResults = complexSheet.evaluateWithDependencyCheck().toOption.get
-val modifiedResults = modifiedSheet.evaluateWithDependencyCheck().toOption.get
+// Recalculate both versions (cycles would be reported per cell in `.errors`, never thrown)
+val originalResults = Workbook(complexSheet).recalculate().evaluated(complexSheet.name)
+val modifiedResults = Workbook(modifiedSheet).recalculate().evaluated(modifiedSheet.name)
 
 // Show changes
 println("Impact of changing A1 from 100 to 150:")
-transitiveImpact.toSeq.sorted.foreach { refStr =>
-  // Parse string back to ARef for map lookup
-  ARef.parse(refStr).toOption.foreach { ref =>
-    val oldVal = originalResults.get(ref)
-    val newVal = modifiedResults.get(ref)
-    (oldVal, newVal) match
-      case (Some(CellValue.Number(o)), Some(CellValue.Number(n))) =>
-        val delta = n - o
-        println(f"  $refStr: ${o.toDouble}%.0f → ${n.toDouble}%.0f (Δ ${delta.toDouble}%+.0f)")
-      case _ => ()
-  }
+transitiveImpact.toSeq.sortBy(r => (r.row.index0, r.col.index0)).foreach { ref =>
+  (originalResults.get(ref), modifiedResults.get(ref)) match
+    case (Some(CellValue.Number(o)), Some(CellValue.Number(n))) =>
+      val delta = n - o
+      println(f"  ${ref.toA1}: ${o.toDouble}%.0f → ${n.toDouble}%.0f (Δ ${delta.toDouble}%+.0f)")
+    case _ => ()
 }
 
 println()
@@ -296,11 +288,11 @@ println("=" * 80)
 println("SUMMARY: Dependency Analysis Capabilities")
 println("=" * 80)
 println("""
-✓ Build dependency graphs from formula cells (O(V+E))
-✓ Detect circular references with precise cycle paths (Tarjan's SCC)
-✓ Compute topological evaluation order (Kahn's algorithm)
-✓ Query precedents (cells this cell depends on) - O(1) lookups
-✓ Query dependents (cells that depend on this cell) - O(1) lookups
+✓ Build the cross-sheet dependency graph (QualifiedGraph.of)
+✓ Detect circular references (strongly connected components, Tarjan's SCC)
+✓ List the dependency-first evaluation order (the SCC condensation)
+✓ Query precedents (cells this cell depends on), directly or in layers
+✓ Query dependents (cells that depend on this cell), directly or in layers
 ✓ Extract dependencies from TExpr AST programmatically
 ✓ Perform impact analysis (what-if scenarios)
 ✓ Find bottleneck cells (most dependents)
@@ -315,10 +307,9 @@ Use Cases:
 - Incremental calculation (only re-evaluate affected cells)
 
 Technical Details:
-- Tarjan's SCC: O(V+E) with early exit on first cycle
-- Kahn's algorithm: O(V+E) topological sort
-- Adjacency lists: O(1) precedent/dependent queries
-- Handles 10k formula cells in <10ms
+- Tarjan's SCC: O(V+E), iterative (no stack overflow on deep chains)
+- Ranges expand only to their occupied cells (SUM(A:A) never enumerates 1M cells)
+- An empty cell inside a summed range still reports the sum as its dependent
 
 🎯 Perfect for: DevOps, testing, meta-programming, formula validation
 """)

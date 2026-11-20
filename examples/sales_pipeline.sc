@@ -117,7 +117,8 @@ val pipelineWithFormatting = pipeline
   .style(ref"D16:D18", percentStyle)  // Quota attainment
 
 println("Building sales pipeline model...")
-val pipelineResults = pipelineWithFormatting.evaluateWithDependencyCheck(clock).toOption.get
+val pipelineResults =
+  Workbook(pipelineWithFormatting).recalculate(clock).evaluated(pipelineWithFormatting.name)
 println(s"✓ ${pipelineResults.size} formulas evaluated successfully")
 println()
 

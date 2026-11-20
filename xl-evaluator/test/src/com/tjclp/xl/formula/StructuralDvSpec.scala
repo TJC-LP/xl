@@ -5,6 +5,7 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.formula.eval.StructuralEditor
 import com.tjclp.xl.sheets.{DataValidation, DvKind, DvOperator, Sheet}
 import com.tjclp.xl.workbooks.Workbook
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /**
@@ -28,7 +29,7 @@ class StructuralDvSpec extends FunSuite:
   test("an absolute list source shifts with the rows it points at") {
     val s = new Sheet(name = S)
       .withDataValidation(ref"B2:B10", DataValidation.list("$Z$5:$Z$7"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(dvKinds(s2), Vector(DvKind.List("$Z$7:$Z$9")))
     // the sqref envelope moved too (core layer)
@@ -38,7 +39,7 @@ class StructuralDvSpec extends FunSuite:
   test("an inline list literal rides verbatim (string literals are data, not refs)") {
     val s = new Sheet(name = S)
       .withDataValidation(ref"H5:H10", DataValidation.list("\"yes,no\""))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 1, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 1, count = 2).unsafe
     assertEquals(dvKinds(sheetNamed(r, "S")), Vector(DvKind.List("\"yes,no\"")))
     assertEquals(
       sheetNamed(r, "S").typedDataValidations.flatMap(_.ranges.map(_.toA1)),
@@ -49,7 +50,9 @@ class StructuralDvSpec extends FunSuite:
   test("a fully-deleted list source degrades the formula text to #REF! (entry kept)") {
     val s = new Sheet(name = S)
       .withDataValidation(ref"B20:B30", DataValidation.list("$Z$5:$Z$7"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 4, count = 3) // rows 5-7
+    val r = StructuralEditor
+      .deleteRowsChecked(Workbook(Vector(s)), S, at = 4, count = 3)
+      .unsafe // rows 5-7
     assertEquals(dvKinds(sheetNamed(r, "S")), Vector(DvKind.List("#REF!")))
   }
 
@@ -58,7 +61,13 @@ class StructuralDvSpec extends FunSuite:
     val data = new Sheet(name = SheetName.unsafe("Data"))
       .withDataValidation(ref"C2:C9", DataValidation.list("Lists!$A$5:$A$8"))
     val r = StructuralEditor
-      .insertRows(Workbook(Vector(lists, data)), SheetName.unsafe("Lists"), at = 0, count = 3)
+      .insertRowsChecked(
+        Workbook(Vector(lists, data)),
+        SheetName.unsafe("Lists"),
+        at = 0,
+        count = 3
+      )
+      .unsafe
     assertEquals(dvKinds(sheetNamed(r, "Data")), Vector(DvKind.List("Lists!$A$8:$A$11")))
     // the envelope on Data did NOT move (the edit was on Lists)
     assertEquals(
@@ -79,7 +88,7 @@ class StructuralDvSpec extends FunSuite:
         """<dataValidation type="custom" sqref="G1"><formula1>$F$5</formula1></dataValidation>"""
       )
     )
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(
       dvKinds(s2),
@@ -108,6 +117,12 @@ class StructuralDvSpec extends FunSuite:
       // Non-canonical spelling (lowercase call, extra spaces): a reprint would rewrite it.
       .withDataValidation(ref"C2:C9", DataValidation.custom("C2 < sum($F$5:$F$9)"))
     val r = StructuralEditor
-      .insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), at = 0, count = 3)
+      .insertRowsChecked(
+        Workbook(Vector(data, report)),
+        SheetName.unsafe("Data"),
+        at = 0,
+        count = 3
+      )
+      .unsafe
     assertEquals(dvKinds(sheetNamed(r, "Report")), Vector(DvKind.Custom("C2 < sum($F$5:$F$9)")))
   }

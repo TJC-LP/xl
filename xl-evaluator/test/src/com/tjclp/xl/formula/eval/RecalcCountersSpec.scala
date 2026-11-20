@@ -97,29 +97,11 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(snap(Counter.NameParses), 1L)
     Vector(
       Counter.VirtualNodes,
-      Counter.RangeLookups,
-      Counter.RangeLookupWork,
       Counter.CriteriaIndexed,
       Counter.CriteriaNotIndexable,
       Counter.SlicesBuilt,
       Counter.ScanFallbacks
     ).foreach(c => assertEquals(snap(c), 0L, c.toString))
-  }
-
-  test("the legacy engine counts formula-to-formula edges and no virtual work") {
-    val counters = RecalcCounters.create()
-    recalculateCounted(book, options, counters, RecalcEngine.Legacy)
-    val snap = counters.snapshot
-    assertEquals(snap(Counter.GraphNodes), 5L)
-    // Out!A5 reads Out!A1 and Out!A2; the criteria calls read constants only
-    assertEquals(snap(Counter.GraphEdges), 2L)
-    // the per-cell graph looked up three distinct ranges (Data!A1:A5, which `rng` and SUMIF's
-    // defaulted sum range share, Data!B1:B5, Data!A:A), each once; Data holds no formula, so no
-    // index entry was examined
-    assertEquals(snap(Counter.RangeLookups), 3L)
-    assertEquals(snap(Counter.RangeLookupWork), 0L)
-    Vector(Counter.VirtualNodes, Counter.RangeNodes, Counter.GraphWork)
-      .foreach(c => assertEquals(snap(c), 0L, c.toString))
   }
 
   test("parallel and uncached passes count the same work") {
@@ -144,12 +126,6 @@ class RecalcCountersSpec extends FunSuite:
     }
   }
 
-  test("#790: the legacy engine keeps no parse, so evaluation parses each formula again") {
-    val counters = RecalcCounters.create()
-    recalculateCounted(book, options, counters, RecalcEngine.Legacy)
-    assertEquals(counters.snapshot(Counter.FormulaParses), 10L)
-  }
-
   test("#790: an iterative pass reuses the build's parses for the members of a cycle") {
     // A1 = B1/2+1 and B1 = A1/2+1 converge to 2; the fixpoint evaluates both members
     val cycle = Workbook(
@@ -165,10 +141,6 @@ class RecalcCountersSpec extends FunSuite:
     assertEquals(counters.snapshot(Counter.FormulaParses), 2L)
     assertSame(result, cycle.recalculate(iterative))
     assert(result.converged)
-    // the legacy engine keeps no parse: the fixpoint parses both members again, and counts it
-    val legacy = RecalcCounters.create()
-    recalculateCounted(cycle, iterative, legacy, RecalcEngine.Legacy)
-    assertEquals(legacy.snapshot(Counter.FormulaParses), 4L)
   }
 
   test("#790: the external-reference pin check shares the parse that evaluates the cell") {
@@ -196,10 +168,6 @@ class RecalcCountersSpec extends FunSuite:
       cells.get(ref(2, 0)).map(_.value),
       Some(CellValue.Formula("[1]Other!A1", Some(num(7))))
     )
-    // the legacy engine parses each formula in its build and once more to pin-check and evaluate
-    val legacy = RecalcCounters.create()
-    recalculateCounted(book, options, legacy, RecalcEngine.Legacy)
-    assertEquals(legacy.snapshot(Counter.FormulaParses), 102L)
   }
 
   test("phases are timed when measured, and the disabled instance never records anything") {

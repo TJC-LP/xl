@@ -288,7 +288,7 @@ class NonWorksheetSheetSpec extends FunSuite:
   test("GH-785: adding a worksheet keeps the macro sheet's entry and allocates a fresh sheetId") {
     val source = fixture(macroSheet)
     val wb =
-      read(source).addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+      read(source).put(Sheet(SheetName.unsafe("New")))
     val output = write(wb)
     assertEquals(
       sheetEntries(output),
@@ -380,7 +380,7 @@ class NonWorksheetSheetSpec extends FunSuite:
   test("GH-785: a worksheet may not take the macro sheet's name") {
     val source = fixture(macroSheet)
     val wb =
-      read(source).addSheet(Sheet(SheetName.unsafe("OTHER"))).fold(e => fail(e.message), identity)
+      read(source).put(Sheet(SheetName.unsafe("OTHER")))
     val output = Files.createTempFile("gh785-out", ".xlsm")
     val result = XlsxWriter.write(wb, output)
     assert(result.isLeft, s"expected the write to fail, got $result")
@@ -393,7 +393,7 @@ class NonWorksheetSheetSpec extends FunSuite:
     val wb = read(source)
     assertEquals(wb.sheetNames.map(_.value), Seq("Data", "Data2"))
     assertEquals(wb.metadata.definedNames.find(_.name == "Local").flatMap(_.localSheetId), Some(1))
-    val edited = wb.addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+    val edited = wb.put(Sheet(SheetName.unsafe("New")))
     val output = write(edited)
     assertEquals(sheetEntries(output).map(_._1), Vector("Other", "Data", "Data2", "New"))
     val written = names(output)

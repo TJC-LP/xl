@@ -21,130 +21,28 @@ import com.tjclp.xl.sheets.Sheet
 import scala.annotation.{nowarn, tailrec}
 
 /**
- * Dependency graph for formula cells.
- *
- * Represents the dependency relationships between cells containing formulas. Each node is a cell
- * reference (ARef), and each directed edge A → B means cell A depends on cell B (A uses B's value).
- *
- * Supports:
- *   - Cycle detection using Tarjan's strongly connected components algorithm
- *   - Topological sorting using Kahn's algorithm for correct evaluation order
- *   - Precedent/dependent queries for impact analysis
- *
- * Design principles:
- *   - Pure functional (no mutations, all operations return new data)
- *   - Total error handling (cycles reported via Either)
- *   - O(V + E) complexity for graph algorithms
- *   - O(1) lookups for precedent/dependent queries (Map-based adjacency lists)
- *
- * Example:
- * {{{
- * // Sheet with formulas: A1="=B1+C1", B1="=10", C1="=20"
- * val graph = DependencyGraph.fromSheet(sheet)
- * graph.precedents(ref"A1") // Set(B1, C1)
- * graph.dependents(ref"B1") // Set(A1)
- *
- * // Detect cycles
- * DependencyGraph.detectCycles(graph) // Right(()) - no cycles
- *
- * // Get evaluation order
- * DependencyGraph.topologicalSort(graph) // Right(List(B1, C1, A1))
- * }}}
+ * Formula dependency analysis: the reference extractors every graph builder shares
+ * ([[extractQualifiedDependencies]], [[extractDependencies]]), the dynamic-reference and
+ * unresolved-name classifications, the workbook-level condensation ([[qualifiedSccOrder]],
+ * [[withinComponentOrder]]) over dense ids, and the declared-reads index behind `QualifiedGraph`.
+ * Recalculation orders with the compact graph (`CompactGraph`); #891 removed the per-sheet graph
+ * (`fromSheet`, `topologicalSort`, `detectCycles`) and its hash-map engines.
  */
-final case class DependencyGraph(
-  // Forward edges: ref → cells this ref depends on
-  dependencies: Map[ARef, Set[ARef]],
-  // Reverse edges: ref → cells that depend on this ref
-  dependents: Map[ARef, Set[ARef]]
-)
-
 object DependencyGraph:
   private def depsFromArgValues(
     values: List[ArgValue],
     exprDeps: TExpr[?] => Set[ARef],
-    rangeDeps: TExpr.RangeLocation => Set[ARef],
-    cellRangeDeps: CellRange => Set[ARef]
+    rangeDeps: TExpr.RangeLocation => Set[ARef]
   ): Set[ARef] =
     values.foldLeft(Set.empty[ARef]) { (acc, value) =>
       val next = value match
         case ArgValue.Expr(expr) => exprDeps(expr)
         case ArgValue.Range(TExpr.RangeLocation.Computed(expr)) => exprDeps(expr)
         case ArgValue.Range(range) => rangeDeps(range)
-        case ArgValue.Cells(range) => cellRangeDeps(range)
       // Preserve a memoized range Set when it is the first argument. Besides avoiding a needless
       // rebuild, this lets every one-range aggregate in a graph share the exact cached expansion.
       if acc.isEmpty then next else if next.isEmpty then acc else acc ++ next
     }
-
-  private def boundedCells(range: CellRange, bounds: Option[CellRange]): Set[ARef] =
-    bounds match
-      case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
-      case None => range.cells.toSet
-
-  /**
-   * Build dependency graph from Sheet.
-   *
-   * Iterates through all cells, extracts references from Formula cells, and constructs the
-   * dependency graph. Non-formula cells (constants, text, etc.) are ignored.
-   *
-   * @param sheet
-   *   The sheet to analyze
-   * @return
-   *   Dependency graph with nodes for all formula cells and edges for all references
-   *
-   * Example:
-   * {{{
-   * val sheet = Sheet.empty
-   *   .put(ref"A1", fx"=B1+C1")
-   *   .put(ref"B1", CellValue.Number(10))
-   *   .put(ref"C1", fx"=D1*2")
-   *
-   * val graph = DependencyGraph.fromSheet(sheet)
-   * // graph.dependencies = Map(A1 -> Set(B1, C1), C1 -> Set(D1))
-   * // graph.dependents = Map(B1 -> Set(A1), C1 -> Set(A1), D1 -> Set(C1))
-   * }}}
-   */
-  def fromSheet(sheet: Sheet): DependencyGraph =
-    // Get bounds once for all extractions - constrains full column/row ranges
-    val bounds = sheet.usedRange
-    // GH-522: formulas commonly reuse the same driver range. Expand each geometric range once for
-    // the whole sheet build (anchors affect dragging, not dependency membership).
-    val rangeCache =
-      scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
-
-    val formulaCells = sheet.cells.flatMap { case (ref, cell) =>
-      cell.value match
-        // GH-430: dataTable-kind cells never enter the graph — their TABLE(...) display text is
-        // not evaluable (guaranteed-failing parse) and their cache is pinned, so they are pure
-        // value sources, not computation nodes.
-        case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
-        case CellValue.Formula(expression, _, _) => Some(ref -> expression)
-        case _ => None
-    }
-
-    // Build forward edges (dependencies) - use bounded extraction to avoid 1M+ cells
-    val dependencies = formulaCells.map { case (ref, formulaStr) =>
-      val deps = FormulaParser.parse(formulaStr) match
-        case scala.util.Right(expr) =>
-          extractDependenciesBoundedCached(expr, bounds, rangeCache, Some(ref), Some(sheet))
-        case scala.util.Left(_) => Set.empty[ARef] // Parse error: no dependencies
-      ref -> deps
-    }.toMap
-
-    // Build reverse edges with one mutable set per precedent, then freeze once. Growing an
-    // immutable Set for every edge recreates the N×range-size allocation this build avoids above.
-    val reverse = scala.collection.mutable.HashMap.empty[
-      ARef,
-      scala.collection.mutable.LinkedHashSet[ARef]
-    ]
-    dependencies.foreach { case (ref, deps) =>
-      deps.foreach { dep =>
-        reverse.getOrElseUpdate(dep, scala.collection.mutable.LinkedHashSet.empty) += ref
-      }
-    }
-    val dependents = reverse.iterator.map((ref, refs) => ref -> refs.toSet).toMap
-
-    DependencyGraph(dependencies, dependents)
 
   /**
    * Check if an expression contains any cell references.
@@ -182,7 +80,6 @@ object DependencyGraph:
           .exists {
             case ArgValue.Expr(e) => containsCellReferences(e)
             case ArgValue.Range(_) => true
-            case ArgValue.Cells(_) => true
           }
 
       // Binary operators - check both sides
@@ -264,7 +161,6 @@ object DependencyGraph:
           case ArgValue.Range(TExpr.RangeLocation.Name(name, scope)) =>
             resolveName(name, scope)
           case ArgValue.Range(_) => false
-          case ArgValue.Cells(_) => false
         }
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
@@ -313,7 +209,10 @@ object DependencyGraph:
    * verdict is the node's own, never one computed partway down another reader's path — and every
    * name costs one step however many readers and paths reach it.
    */
-  private[xl] def unresolvedReaders(workbook: Workbook): Set[QualifiedRef] =
+  private[xl] def unresolvedReaders(
+    workbook: Workbook,
+    parses: FormulaParses = FormulaParses.none
+  ): Set[QualifiedRef] =
     val positions =
       workbook.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap
     val resolve = NameWalk.resolver(workbook)
@@ -370,106 +269,18 @@ object DependencyGraph:
                 // Closed-workbook external caches are pinned by the explicit evaluation contract.
                 val external = text.contains('[') &&
                   com.tjclp.xl.formula.eval.SheetEvaluator.pinnedExternalCache(cell.value).isDefined
-                !external && parse(text).fold(true)(expressionUnknown(_, sheet.name))
+                !external && parses
+                  .parse(sheet.name, ref, text)
+                  .toOption
+                  .fold(true)(expressionUnknown(_, sheet.name))
               case _ => false
             ) =>
           QualifiedRef(sheet.name, ref)
       }
     }.toSet
 
-  /**
-   * GH-606: the dirty cone of an edit — every formula whose cached value the edit may have changed,
-   * shared by `DependentRecalculation.recalculateAfterEdit` and the CLI's cone-scoped writes so the
-   * two cannot drift.
-   *
-   * Roots are the edited cells, every dynamic (INDIRECT/OFFSET) reader (GH-274: the static graph
-   * cannot see what their text resolves to) and every unresolved reader whose textual reach is
-   * [[ReferenceScan.Reach.Unbounded]]. The closure adds their transitive dependents through the
-   * symbolic index. Unresolved readers with a bounded reach (GH-507 readers the parser rejects, or
-   * that reach a name whose definition it rejects) join only when an area of theirs contains a cell
-   * of the closure — an edited cell or a formula already dirty — and the closure is recomputed
-   * until no reader joins: a blind reader of a blind reader's cell is dirty through the second
-   * reader's membership, and parseable readers of a newly dirty blind cell follow through the
-   * index. A reader outside the cone is provably unaffected: nothing its text can name changed
-   * value, so its cache — Excel's, usually — stays. Inside the cone it is evaluated like any other
-   * formula, fails, and is withdrawn and reported.
-   *
-   * Structural edits do not use this cone: `StructuralEditor` keeps treating every unresolved
-   * reader as stale, because a shift rewrites reference TEXT, which a blind reader cannot receive.
-   */
-  private[xl] def editCone(
-    workbook: Workbook,
-    seeds: Set[QualifiedRef],
-    index: QualifiedDependencyIndex,
-    dynamic: Set[QualifiedRef]
-  ): Set[QualifiedRef] =
-    val reaches = ReferenceScan.reaches(workbook, unresolvedReaders(workbook))
-    val unbounded = reaches.collect { case (reader, ReferenceScan.Reach.Unbounded) => reader }.toSet
-    val bounded = reaches.toVector.collect { case (reader, areas: ReferenceScan.Reach.Areas) =>
-      reader -> (areas: ReferenceScan.Reach)
-    }
-    val roots = seeds ++ dynamic ++ unbounded
-
-    @tailrec
-    def close(
-      closure: Set[QualifiedRef],
-      pending: Vector[(QualifiedRef, ReferenceScan.Reach)]
-    ): Set[QualifiedRef] =
-      val cellsBySheet =
-        closure
-          .groupMap(_.sheet)(_.ref)
-          .map((sheet, cells) => sheet -> ReferenceScan.SheetCells.of(cells))
-      val (joining, waiting) = pending
-        .filterNot((reader, _) => closure.contains(reader))
-        .partition((_, reach) => reach.touches(cellsBySheet))
-      if joining.isEmpty then closure
-      else
-        val readers = joining.iterator.map(_._1).toSet
-        // dependents of a union are the union of dependents: extend rather than recompute
-        close(closure ++ readers ++ index.transitiveDependents(readers), waiting)
-
-    close(roots ++ index.transitiveDependents(roots), bounded)
-
   def containsDynamicReference[A](expr: TExpr[A]): Boolean =
     containsDynamicReferenceResolved(expr, (_, _) => false)
-
-  /**
-   * GH-274: Find all formula cells in the sheet bearing dynamic references (INDIRECT et al).
-   *
-   * A case-insensitive substring pre-filter over dynamicDeps-flagged names, and
-   * [[CriteriaRangeResize.mayResizeThroughName]] for a SUMIF or AVERAGEIF that may resize through a
-   * named or LET range, run before parsing. Only resize geometry known at evaluation alone needs
-   * dynamic scheduling: here, with no workbook, that is a LET name (a defined name resolves to
-   * nothing and reads nothing); literal ranges remain static, and SUMIFS/AVERAGEIFS never resize.
-   * Formulas that fail to parse are not dynamic (matching `fromSheet`, where they contribute no
-   * edges).
-   */
-  def dynamicCells(sheet: Sheet): Set[ARef] =
-    val names = FunctionRegistry.dynamicFunctionNames
-    // The verdict depends on the text alone, and formulas repeat (fill-down of absolute
-    // references, copied blocks), so each distinct text is scanned, and parsed, once per call.
-    val verdicts = scala.collection.mutable.HashMap.empty[String, Boolean]
-    def dynamic(expression: String): Boolean =
-      verdicts.getOrElseUpdate(
-        expression, {
-          val text = expression.toUpperCase(java.util.Locale.ROOT)
-          // GH-713: a computed range (`B1:INDEX(D:D,3)`) its edges do not cover is dynamic too
-          (names.exists(text.contains) ||
-            CriteriaRangeResize.mayResizeThroughName(expression, text) ||
-            TableColumnReferences.mayContain(expression) || ReferenceOperators
-              .mayContainComputedRange(expression) ||
-            com.tjclp.xl.formula.functions.ReferenceFunctionNames
-              .mayContainComputingCall(expression, text)) &&
-          FormulaParser.parse(expression).exists(containsDynamicReference)
-        }
-      )
-    sheet.cells.iterator.collect {
-      case (ref, cell) if (cell.value match
-            case CellValue.Formula(expression, _, _) => dynamic(expression)
-            case _ => false
-          ) =>
-        ref
-    }.toSet
 
   /**
    * GH-520: workbook-aware dynamic classification, including parseable defined-name chains.
@@ -689,30 +500,6 @@ object DependencyGraph:
     DynamicCellsTrace(cells, parses, classifications)
 
   /**
-   * GH-274: A dynamic cell set closed under "depends on me": the cells themselves plus every
-   * transitive static dependent. `transitiveDependents` excludes its seeds, so the union is
-   * required. This is the bucket `deferDynamic` moves to the end of evaluation order.
-   */
-  def dynamicClosure(graph: DependencyGraph, dynamic: Set[ARef]): Set[ARef] =
-    dynamic ++ transitiveDependents(graph, dynamic)
-
-  /**
-   * GH-274: Stable partition of a topological order — non-closure cells first, closure cells last,
-   * relative order preserved within each part.
-   *
-   * Lemma (order preservation): if `order` is a valid topological order of the graph and `closure`
-   * is dependent-closed (contains every static dependent of each of its members), the result is
-   * also a valid topological order. For any edge u-depends-on-v: if u and v are in the same part,
-   * their relative order is preserved (stable partition); if u is deferred and v is not, v sits in
-   * the front part, before u; v deferred with u not deferred is impossible — u depends on v, so u
-   * is a dependent of v and dependent-closure would have pulled u into the closure. Property-tested
-   * in DependencyGraphSpec.
-   */
-  def deferDynamic(order: List[ARef], closure: Set[ARef]): List[ARef] =
-    if closure.isEmpty then order
-    else order.filterNot(closure.contains) ++ order.filter(closure.contains)
-
-  /**
    * Check if an expression contains any **unqualified** cell references.
    *
    * GH-210: Fully-qualified references (SheetRef, SheetPolyRef, SheetRange, CrossSheet aggregates)
@@ -768,7 +555,6 @@ object DependencyGraph:
                 case TExpr.RangeLocation.Binding(_) => false
                 case TExpr.RangeLocation.Computed(e) => containsUnqualifiedCellReferences(e)
                 case TExpr.RangeLocation.Error(_, _) => false
-            case ArgValue.Cells(_) => true
           }
 
       // Binary operators - check both sides
@@ -868,8 +654,7 @@ object DependencyGraph:
             reader
           ),
           go(_, inner),
-          _.localCells,
-          _.cells.toSet
+          _.localCells
         )
 
       // Recursive cases (binary operators)
@@ -911,562 +696,6 @@ object DependencyGraph:
       case TExpr.Missing => Set.empty
       case TExpr.DateToSerial(dateExpr) => go(dateExpr)
       case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
-
-  /**
-   * Extract all cell references from TExpr, bounded by the sheet's used range.
-   *
-   * This optimized version constrains full column/row references (like A:A or 1:1) to the
-   * intersection with bounds, avoiding iteration over 1M+ cells. Use this when building dependency
-   * graphs from sheets.
-   *
-   * @param expr
-   *   The expression to analyze
-   * @param bounds
-   *   Optional bounding range (typically sheet.usedRange) to constrain full ranges
-   * @return
-   *   Set of all cell references used in the expression, bounded by the given range
-   */
-  def extractDependenciesBounded[A](expr: TExpr[A], bounds: Option[CellRange]): Set[ARef] =
-    extractDependenciesBoundedCached(
-      expr,
-      bounds,
-      scala.collection.mutable.HashMap.empty[(ARef, ARef), Set[ARef]]
-    )
-
-  @nowarn("msg=Unreachable case")
-  private def extractDependenciesBoundedCached[A](
-    expr: TExpr[A],
-    bounds: Option[CellRange],
-    rangeCache: scala.collection.mutable.HashMap[(ARef, ARef), Set[ARef]],
-    reader: Option[ARef] = None,
-    tableSheet: Option[Sheet] = None
-  ): Set[ARef] =
-    // Helper to bound a CellRange
-    def boundRange(range: CellRange): Set[ARef] =
-      rangeCache.getOrElseUpdate(
-        (range.start, range.end),
-        bounds match
-          case Some(b) => range.intersect(b).map(_.cells.toSet).getOrElse(Set.empty)
-          case None => range.cells.toSet
-      )
-
-    def recurse[B](child: TExpr[B]): Set[ARef] =
-      extractDependenciesBoundedCached(child, bounds, rangeCache, reader, tableSheet)
-
-    def tableRange(location: TExpr.RangeLocation): Option[CellRange] = location match
-      case TExpr.RangeLocation.Computed(TableColumnReferences.Ref(column)) =>
-        tableSheet
-          .flatMap(sheet => TableColumnReferences.resolve(column, sheet, None).toOption)
-          .map(_.range)
-      case _ => None
-
-    def localCells(location: TExpr.RangeLocation): Set[ARef] = location match
-      case TExpr.RangeLocation.Computed(expr) => recurse(expr)
-      case TExpr.RangeLocation.Local(range, _) => boundRange(range)
-      case _ => Set.empty
-
-    expr match
-      // Single cell reference
-      case TExpr.Ref(at, _, _) => Set(at)
-
-      // Polymorphic reference (type resolved at evaluation time)
-      case TExpr.PolyRef(at, _) => Set(at)
-
-      // Cross-sheet references return Set.empty in same-sheet dependency extraction.
-      case TExpr.SheetRef(_, _, _, _) => Set.empty
-      case TExpr.SheetPolyRef(_, _, _) => Set.empty
-      case TExpr.SheetRange(_, _, _) => Set.empty
-      // GH-353: external-workbook refs target cells OUTSIDE the workbook — no edges ever
-      case TExpr.ExternalRef(_, _, _, _) => Set.empty
-      case TExpr.ExternalRange(_, _, _, _) => Set.empty
-      case TExpr.RangeRef(range, _) => boundRange(range)
-
-      // Recursive cases (binary operators)
-      // GH-680: a chain's left spine in one loop, not one recursion per operator
-      case chain @ (_: TExpr.Add | _: TExpr.Sub | _: TExpr.Mul | _: TExpr.Div | _: TExpr.Pow |
-          _: TExpr.Concat | _: TExpr.Eq[?] | _: TExpr.Neq[?] | _: TExpr.Lt[?] | _: TExpr.Lte[?] |
-          _: TExpr.Gt[?] | _: TExpr.Gte[?]) =>
-        BinarySpine.operandList(chain).foldLeft(Set.empty[ARef])(_ ++ recurse(_))
-      case TExpr.ToInt(expr) => recurse(expr)
-      case TExpr.UnaryPlus(expr) => recurse(expr)
-      case TExpr.Percent(expr) => recurse(expr)
-      case TExpr.Aggregate(_, location) => localCells(location)
-
-      case TableColumnReferences.Ref(column) =>
-        tableSheet
-          .flatMap(sheet => TableColumnReferences.resolve(column, sheet, None).toOption)
-          .fold(Set.empty[ARef])(ref => boundRange(ref.range))
-
-      case call: TExpr.Call[?] =>
-        // GH-631: SUMIF/AVERAGEIF read their third argument resized to their first
-        // GH-669: an intersection of static locations depends only on the cells they share
-        // #743: INDEX at a position folded for the reader reads its selected cells alone
-        val inner = ReferenceOperators.operandReader(call, ReferenceOperators.staticShape, reader)
-        depsFromArgValues(
-          ReferenceOperators.callDependencyValues(
-            call,
-            CriteriaRangeResize.resizedArgs(
-              call.spec.name,
-              call.spec.argSpec.toValues(call.args),
-              shapeOf = location => location.staticRange.orElse(tableRange(location)),
-              targetOf =
-                location => tableRange(location).fold(location)(TExpr.RangeLocation.Local(_))
-            ),
-            ReferenceOperators.staticShape,
-            reader
-          ),
-          extractDependenciesBoundedCached(_, bounds, rangeCache, inner, tableSheet),
-          localCells,
-          boundRange
-        )
-
-      // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
-      case TExpr.Let(bindings, body) =>
-        bindings.foldLeft(recurse(body)) { case (acc, (_, value)) =>
-          acc ++ recurse(value)
-        }
-      case TExpr.BindingRef(_) => Set.empty
-      case TExpr.CoercedBindingRef(_, _) => Set.empty
-      // GH-384: name targets live behind workbook metadata this sheet-level walk cannot see —
-      // no intra-sheet edges (consistent with cross-sheet refs; the qualified extractor resolves).
-      // GH-394: sheet-qualified names likewise — NOTE this means an edit to a name's TARGET does
-      // not trigger sheet-level targeted recalc of name users; the workbook-level qualified
-      // extractor below carries the real edges.
-      case TExpr.NameRef(_) => Set.empty
-      case TExpr.SheetNameRef(_, _) => Set.empty
-
-      // GH-306: runtime coercion wrapper — transparent for analysis
-      case TExpr.Coerced(inner, _) => recurse(inner)
-
-      // Literals and nullary functions (no dependencies)
-      case TExpr.Lit(_) => Set.empty
-
-      case TExpr.ErrorLit(_, _) => Set.empty
-      case TExpr.Missing => Set.empty
-      case TExpr.DateToSerial(dateExpr) => recurse(dateExpr)
-      case TExpr.DateTimeToSerial(dtExpr) => recurse(dtExpr)
-
-  /**
-   * Get cells this cell depends on (precedents).
-   *
-   * Returns the set of cells whose values are used in calculating this cell's value. If the cell
-   * has no formula or is not in the graph, returns empty set.
-   *
-   * @param graph
-   *   The dependency graph
-   * @param ref
-   *   The cell reference to query
-   * @return
-   *   Set of cells this cell depends on (may be empty)
-   *
-   * Example:
-   * {{{
-   * // A1 = "=B1+C1"
-   * precedents(graph, ref"A1") // Set(B1, C1)
-   * precedents(graph, ref"B1") // Set() - B1 is a constant
-   * }}}
-   */
-  def precedents(graph: DependencyGraph, ref: ARef): Set[ARef] =
-    graph.dependencies.getOrElse(ref, Set.empty)
-
-  /**
-   * Get cells that depend on this cell (dependents).
-   *
-   * Returns the set of cells that use this cell's value in their calculations. If no cells depend
-   * on this cell, returns empty set.
-   *
-   * @param graph
-   *   The dependency graph
-   * @param ref
-   *   The cell reference to query
-   * @return
-   *   Set of cells that depend on this cell (may be empty)
-   *
-   * Example:
-   * {{{
-   * // A1 = "=B1+C1", D1 = "=B1*2"
-   * dependents(graph, ref"B1") // Set(A1, D1)
-   * dependents(graph, ref"A1") // Set() - nothing depends on A1
-   * }}}
-   */
-  def dependents(graph: DependencyGraph, ref: ARef): Set[ARef] =
-    graph.dependents.getOrElse(ref, Set.empty)
-
-  /**
-   * Compute transitive dependencies for a set of cells.
-   *
-   * Given a set of starting cells, returns all cells that are directly or transitively depended
-   * upon. This is useful for targeted evaluation - to evaluate only formulas in a range, we need to
-   * also evaluate all cells they depend on (recursively).
-   *
-   * @param graph
-   *   The dependency graph to traverse
-   * @param refs
-   *   The starting cell references
-   * @return
-   *   Set of all cells that the starting cells depend on (transitively)
-   *
-   * Example:
-   * {{{
-   * // A1="=B1+C1", B1="=D1", C1="=10", D1="=20"
-   * // transitiveDependencies(graph, Set(A1))
-   * // Returns: Set(B1, C1, D1) - all cells A1 depends on directly or indirectly
-   * }}}
-   */
-  @scala.annotation.tailrec
-  def transitiveDependencies(
-    graph: DependencyGraph,
-    refs: Set[ARef],
-    visited: Set[ARef] = Set.empty
-  ): Set[ARef] =
-    val toVisit = refs -- visited
-    if toVisit.isEmpty then visited
-    else
-      // Get direct dependencies of all cells in toVisit
-      val directDeps = toVisit.flatMap(ref => graph.dependencies.getOrElse(ref, Set.empty))
-      // Recurse with direct deps as new frontier
-      transitiveDependencies(graph, directDeps, visited ++ toVisit)
-
-  /**
-   * Compute transitive dependents (reverse of transitiveDependencies).
-   *
-   * Returns all cells that depend on the given cells, directly or transitively. Used for eager
-   * recalculation - when cell X changes, find all formulas to recalculate.
-   *
-   * @param graph
-   *   The dependency graph to traverse
-   * @param refs
-   *   The starting cell references (modified cells)
-   * @return
-   *   Set of all cells that depend on the starting cells (transitively), excluding the starting
-   *   refs themselves
-   *
-   * Example:
-   * {{{
-   * // A1="=10", B1="=A1*2", C1="=B1+5"
-   * // transitiveDependents(graph, Set(A1))
-   * // Returns: Set(B1, C1) - all cells affected when A1 changes
-   * }}}
-   */
-  def transitiveDependents(
-    graph: DependencyGraph,
-    refs: Set[ARef]
-  ): Set[ARef] =
-    transitiveDependentsOf(graph.dependents, refs)
-
-  /**
-   * Reverse-reachability core shared by the sheet-level and workbook-level (qualified) variants —
-   * generic in the node type (GH-346). Excludes the starting refs from the result.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.While"))
-  private def transitiveDependentsOf[K](
-    dependents: Map[K, Set[K]],
-    originalRefs: Set[K]
-  ): Set[K] =
-    // A persistent-Set frontier looks elegant but is catastrophically expensive on deep graphs:
-    // every round rebuilds `frontier -- visited` and `visited ++ frontier`. A 100k linear cone can
-    // therefore perform billions of hash probes. Keep mutation invocation-local and freeze once.
-    val visited = scala.collection.mutable.HashSet.empty[K]
-    val pending = scala.collection.mutable.ArrayDeque.empty[K]
-    originalRefs.foreach { ref =>
-      visited += ref
-      pending.append(ref)
-    }
-    while pending.nonEmpty do
-      val ref = pending.removeHead()
-      dependents.getOrElse(ref, Set.empty).foreach { dependent =>
-        if visited.add(dependent) then pending.append(dependent)
-      }
-    visited --= originalRefs
-    visited.toSet
-
-  /**
-   * Iterative Tarjan SCC engine shared by `cyclicNodes` and its qualified (workbook-level)
-   * counterparts — generic in the node type (GH-346).
-   *
-   * Uses an explicit work stack instead of recursion: `recalculate` promises totality, and a deep
-   * linear dependency chain (e.g. 100k sequential formulas) must not throw StackOverflowError.
-   * Invokes `onScc` for every completed component in Tarjan pop order (deepest member first,
-   * component root last).
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def foreachSccOf[K](dependencies: Map[K, Set[K]])(onScc: List[K] => Unit): Unit =
-    final class Frame(val node: K, val successors: Iterator[K])
-
-    var nextIndex = 0
-    val indices = scala.collection.mutable.HashMap.empty[K, Int]
-    val lowLinks = scala.collection.mutable.HashMap.empty[K, Int]
-    val stack = scala.collection.mutable.ArrayBuffer.empty[K]
-    val onStack = scala.collection.mutable.HashSet.empty[K]
-    val frames = scala.collection.mutable.ArrayBuffer.empty[Frame]
-    indices.sizeHint(dependencies.size)
-    lowLinks.sizeHint(dependencies.size)
-    stack.sizeHint(dependencies.size)
-    onStack.sizeHint(dependencies.size)
-    frames.sizeHint(dependencies.size)
-
-    def push(v: K): Unit =
-      indices(v) = nextIndex
-      lowLinks(v) = nextIndex
-      nextIndex += 1
-      stack += v
-      onStack += v
-      frames += new Frame(v, dependencies.getOrElse(v, Set.empty).iterator)
-
-    dependencies.keySet.foreach { root =>
-      if !indices.contains(root) then
-        push(root)
-        while frames.nonEmpty do
-          val frame = frames(frames.length - 1)
-          if frame.successors.hasNext then
-            val successor = frame.successors.next()
-            if !indices.contains(successor) then push(successor)
-            else if onStack.contains(successor) then
-              lowLinks(frame.node) = math.min(lowLinks(frame.node), indices(successor))
-          else
-            frames.remove(frames.length - 1)
-            val node = frame.node
-            if lowLinks(node) == indices(node) then
-              val members = List.newBuilder[K]
-              var complete = false
-              while !complete do
-                val member = stack.remove(stack.length - 1)
-                onStack -= member
-                members += member
-                complete = member == node
-              onScc(members.result())
-            if frames.nonEmpty then
-              val parent = frames(frames.length - 1).node
-              lowLinks(parent) = math.min(lowLinks(parent), lowLinks(node))
-    }
-
-  private def foreachScc(graph: DependencyGraph)(onScc: List[ARef] => Unit): Unit =
-    foreachSccOf(graph.dependencies)(onScc)
-
-  /**
-   * Return the first actual directed cycle encountered inside `nodes`.
-   *
-   * SCC membership alone is insufficient for diagnostics: Tarjan pop order is not necessarily an
-   * edge path when a component branches. Likewise, following one successor from a Kahn remainder
-   * can begin downstream of a cycle, so blindly appending the first visited node may invent a
-   * closing edge. This explicit-stack DFS records the active path and closes a cycle only on a back
-   * edge to an active ancestor. Every adjacent pair in the result is therefore an edge in
-   * `dependencies`, the first and last nodes are equal, and no interior node is repeated.
-   *
-   * Roots and successors are ordered by `key`, making the diagnostic a function of the graph's
-   * value rather than Map/Set construction order. All mutation is invocation-local and the returned
-   * path is immutable.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
-  private def firstCycleOf[K, O: Ordering](
-    dependencies: Map[K, Set[K]],
-    nodes: Set[K],
-    key: K => O
-  ): Option[List[K]] =
-    // State: absent = unseen, 1 = active (gray), 2 = complete (black).
-    val states = scala.collection.mutable.HashMap.empty[K, Int]
-    val activePath = scala.collection.mutable.ArrayBuffer.empty[K]
-    val activeIndices = scala.collection.mutable.HashMap.empty[K, Int]
-    states.sizeHint(nodes.size)
-    activePath.sizeHint(nodes.size)
-    activeIndices.sizeHint(nodes.size)
-    var frames = List.empty[(K, List[K])]
-    var found = Option.empty[List[K]]
-
-    def push(node: K): Unit =
-      states(node) = 1
-      activeIndices(node) = activePath.size
-      activePath += node
-      val successors =
-        dependencies
-          .getOrElse(node, Set.empty)
-          .iterator
-          .filter(nodes.contains)
-          .toList
-          .sortBy(key)
-      frames = (node, successors) :: frames
-
-    val roots = nodes.toList.sortBy(key).iterator
-    while roots.hasNext && found.isEmpty do
-      val root = roots.next()
-      if !states.contains(root) then
-        push(root)
-        while frames.nonEmpty && found.isEmpty do
-          frames match
-            case (node, successor :: rest) :: tail =>
-              frames = (node, rest) :: tail
-              states.get(successor) match
-                case None => push(successor)
-                case Some(1) =>
-                  activeIndices.get(successor) match
-                    case Some(start) =>
-                      found = Some(activePath.iterator.drop(start).toList :+ successor)
-                    case None => () // impossible for an active node; remain total if state corrupts
-                case Some(_) => ()
-            case (node, Nil) :: tail =>
-              frames = tail
-              states(node) = 2
-              activeIndices -= node
-              if activePath.nonEmpty then activePath.remove(activePath.size - 1)
-            case Nil => () // unreachable: guarded by frames.nonEmpty
-
-    found
-
-  /**
-   * Detect circular references using an explicit-stack depth-first search.
-   *
-   * A circular reference occurs when a cell's formula depends (directly or transitively) on its own
-   * value. For example: A1="=B1", B1="=C1", C1="=A1" forms a cycle.
-   *
-   * The explicit DFS is O(V + E), stops at the first back edge, and is stack-safe on deep
-   * dependency chains. Canonical diagnostic ordering adds sorting proportional to the visited roots
-   * and successor sets.
-   *
-   * @param graph
-   *   The dependency graph to analyze
-   * @return
-   *   Left(CircularRef) if a cycle is detected (includes cycle path), Right(()) if acyclic
-   *
-   * Example:
-   * {{{
-   * // No cycle: A1="=10", B1="=A1+5"
-   * detectCycles(graph) // Right(())
-   *
-   * // Cycle: A1="=B1", B1="=A1"
-   * detectCycles(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
-   * }}}
-   */
-  def detectCycles(graph: DependencyGraph): Either[EvalError.CircularRef, Unit] =
-    firstCycleOf(
-      graph.dependencies,
-      graph.dependencies.keySet,
-      (ref: ARef) => (ref.row.index0, ref.col.index0)
-    ) match
-      case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle))
-      case None => scala.util.Right(())
-
-  /**
-   * Collect every node that participates in a reference cycle.
-   *
-   * Unlike `detectCycles` (which fails fast on the first cycle), this identifies the complete set
-   * of cells inside strongly connected components of size > 1, plus self-loops. Used by
-   * `Workbook.recalculate` to isolate cyclic cells while still evaluating the acyclic remainder.
-   *
-   * Stack-safe: uses the iterative Tarjan engine shared with the qualified workbook-level path.
-   *
-   * @return
-   *   The set of cycle participants (empty when the graph is acyclic)
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  def cyclicNodes(graph: DependencyGraph): Set[ARef] =
-    var cyclic = Set.empty[ARef]
-    foreachScc(graph) { scc =>
-      scc match
-        case single :: Nil =>
-          if graph.dependencies.get(single).exists(_.contains(single)) then cyclic = cyclic + single
-        case multi => cyclic = cyclic ++ multi
-    }
-    cyclic
-
-  /**
-   * Kahn's-algorithm core shared by the sheet-level and workbook-level (qualified) sorts — generic
-   * in the node type (GH-346). Only nodes present in `dependencies` (formula cells) are ordered;
-   * edges to non-nodes (constants, empty cells) are ignored. Left carries the nodes that could not
-   * be ordered (cycle participants and everything downstream of them).
-   *
-   * GH-518: implemented with LOCAL mutable state behind the pure signature (the same posture as
-   * [[foreachSccOf]]). The immutable-List formulation allocated O(V²) cons cells — `acc :+ node`
-   * copies the accumulator once per node and `rest ++ newlyZero` copies the pending queue — which
-   * on a 50k-formula workbook was 81% of an entire recalculation's allocation. Iteration stays over
-   * the same collections in the same order, so the emitted order is unchanged: FIFO queue seeded in
-   * `allNodes` iteration order, newly-ready nodes appended in the iteration order of the filtered
-   * dependents set. #767: whole-workbook recalculation no longer orders with this FIFO (its seed
-   * order is the CHAMP hash order of the node set); it uses the grid-ordered
-   * [[canonicalTopologicalSort]] or `CompactGraph.kahn`, and re-lists a parallel pass's errors in
-   * that order.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.While"))
-  private def kahnOrder[K](
-    dependencies: Map[K, Set[K]],
-    dependents: Map[K, Set[K]]
-  ): Either[Set[K], List[K]] =
-    // All formula cells (only process formulas, not constants)
-    val allNodes = dependencies.keySet
-
-    // If no formula cells, early exit
-    if allNodes.isEmpty then scala.util.Right(List.empty[K])
-    else
-      // In-degree = dependencies on other formula cells only, not constants
-      val inDegree = new scala.collection.mutable.HashMap[K, Int](
-        allNodes.size * 2,
-        scala.collection.mutable.HashMap.defaultLoadFactor
-      )
-      allNodes.foreach { node =>
-        inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
-      }
-
-      // Start with nodes that have in-degree 0 (no dependencies)
-      val queue = new scala.collection.mutable.ArrayDeque[K](allNodes.size)
-      allNodes.foreach { node =>
-        if inDegree(node) == 0 then queue.append(node)
-      }
-
-      val ordered = scala.collection.mutable.ListBuffer.empty[K]
-      while queue.nonEmpty do
-        val node = queue.removeHead()
-        ordered += node
-        // Test membership inline: materializing `filter(allNodes.contains)` allocated one throwaway
-        // Set per processed formula. Iteration stays over the original Set in the same order; only
-        // successors absent from the node set are skipped.
-        dependents.getOrElse(node, Set.empty).foreach { dep =>
-          if allNodes.contains(dep) then
-            val remaining = inDegree(dep) - 1
-            inDegree(dep) = remaining
-            if remaining == 0 then queue.append(dep)
-        }
-
-      // If all nodes are processed, graph is acyclic
-      if ordered.size == allNodes.size then scala.util.Right(ordered.toList)
-      else scala.util.Left(allNodes -- ordered)
-
-  /**
-   * Topological sort using Kahn's algorithm.
-   *
-   * Returns a linear ordering of cells such that for every dependency A → B, cell B appears before
-   * cell A in the ordering. This ensures formulas are evaluated in the correct order (dependencies
-   * before dependents).
-   *
-   * Uses Kahn's algorithm which runs in O(V + E) time. The algorithm maintains a queue of nodes
-   * with in-degree 0 and processes them in order, removing edges as it goes.
-   *
-   * @param graph
-   *   The dependency graph to sort
-   * @return
-   *   Left(CircularRef) if a cycle is detected, Right(evaluation order) if acyclic
-   *
-   * Example:
-   * {{{
-   * // A1="=B1+C1", B1="=10", C1="=20"
-   * topologicalSort(graph) // Right(List(B1, C1, A1))
-   *
-   * // A1="=B1", B1="=A1" (cycle)
-   * topologicalSort(graph) // Left(EvalError.CircularRef(List(A1, B1, A1)))
-   * }}}
-   */
-  def topologicalSort(graph: DependencyGraph): Either[EvalError.CircularRef, List[ARef]] =
-    kahnOrder(graph.dependencies, graph.dependents) match
-      case scala.util.Right(order) => scala.util.Right(order)
-      case scala.util.Left(remainingNodes) =>
-        // Kahn's remainder can include nodes merely downstream of a cycle. Reconstruct only from a
-        // real back edge, so the diagnostic never invents an edge from the cycle to that tail.
-        val cycle =
-          firstCycleOf(
-            graph.dependencies,
-            remainingNodes,
-            (ref: ARef) => (ref.row.index0, ref.col.index0)
-          )
-            .getOrElse(List.empty)
-        scala.util.Left(EvalError.CircularRef(cycle))
 
   // ===== Cross-Sheet Dependency Tracking =====
 
@@ -1515,185 +744,6 @@ object DependencyGraph:
      * every CLI listing already uses.
      */
     val gridOrdering: Ordering[QualifiedRef] = QualifiedGraph.byPosition
-
-  /**
-   * Build dependency graph from Workbook (cross-sheet aware).
-   *
-   * Iterates through all sheets and cells, extracting references from Formula cells and
-   * constructing a workbook-level dependency graph. Cross-sheet references are properly tracked
-   * using QualifiedRef.
-   *
-   * @param workbook
-   *   The workbook to analyze
-   * @return
-   *   Dependency graph with QualifiedRef nodes covering all sheets
-   *
-   * Example:
-   * {{{
-   * // Sheet1!A1 = "=Sheet2!B1", Sheet2!B1 = 10
-   * val graph = DependencyGraph.fromWorkbook(workbook)
-   * // graph contains: QualifiedRef(Sheet1, A1) -> Set(QualifiedRef(Sheet2, B1))
-   * }}}
-   */
-  def fromWorkbook(
-    workbook: com.tjclp.xl.workbooks.Workbook
-  ): Map[QualifiedRef, Set[QualifiedRef]] =
-    // GH-522: expand any (sheet, range) once per build — see memoizedCells
-    val cellsFor = memoizedCells(unboundedQualifiedCells)
-    val nameRanges = NameRanges.empty
-    workbook.sheets.flatMap { sheet =>
-      sheet.cells.flatMap { case (cellRef, cell) =>
-        cell.value match
-          // GH-430: dataTable-kind cells are pinned value sources, never computation nodes
-          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
-          case CellValue.Formula(expression, _, _) =>
-            val deps = FormulaParser.parse(expression) match
-              case scala.util.Right(expr) =>
-                extractQualifiedDependencies(
-                  expr,
-                  sheet.name,
-                  cellsFor,
-                  Some(workbook),
-                  nameRanges = nameRanges,
-                  reader = Some(cellRef)
-                )
-              case scala.util.Left(_) => Set.empty[QualifiedRef]
-            Some(QualifiedRef(sheet.name, cellRef) -> deps)
-          case _ => None
-      }
-    }.toMap
-
-  /**
-   * GH-346: workbook-level dependency graph with ranges bounded by each TARGET sheet's used range —
-   * the qualified analog of `fromSheet`'s bounded extraction (a full-column reference must not
-   * enumerate 1M+ cells). Single refs stay exact. Ranges over sheets absent from the workbook (or
-   * empty ones) contribute no edges: they cannot affect evaluation order, and the referencing
-   * formula still errors per cell on evaluation.
-   *
-   * Returns forward edges (ref → its dependencies) and reverse edges (ref → its dependents), which
-   * together drive `qualifiedTopologicalSort`.
-   */
-  def fromWorkbookBounded(
-    workbook: com.tjclp.xl.workbooks.Workbook
-  ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
-    val bounds: Map[SheetName, Option[CellRange]] =
-      workbook.sheets.map(s => s.name -> s.usedRange).toMap
-    // GH-522: expand any (sheet, range) once per build — see memoizedCells
-    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
-      bounds.get(sheet) match
-        case Some(Some(b)) =>
-          range.intersect(b) match
-            case Some(clipped) => clipped.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-            case None => Set.empty
-        case _ => Set.empty // empty or missing sheet: nothing to depend on
-    }
-
-    val nameRanges = NameRanges.empty
-    val dependencies = workbook.sheets.flatMap { sheet =>
-      sheet.cells.flatMap { case (cellRef, cell) =>
-        cell.value match
-          // GH-430: dataTable-kind cells are pinned value sources, never computation nodes
-          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
-          case CellValue.Formula(expression, _, _) =>
-            val deps = FormulaParser.parse(expression) match
-              case scala.util.Right(expr) =>
-                extractQualifiedDependencies(
-                  expr,
-                  sheet.name,
-                  cellsFor,
-                  Some(workbook),
-                  nameRanges = nameRanges,
-                  reader = Some(cellRef)
-                )
-              case scala.util.Left(_) => Set.empty[QualifiedRef]
-            Some(QualifiedRef(sheet.name, cellRef) -> deps)
-          case _ => None
-      }
-    }.toMap
-
-    (dependencies, reverseEdges(dependencies))
-
-  /**
-   * Build the formula-to-formula graph needed by whole-workbook recalculation.
-   *
-   * The public dependency graph records every referenced cell because impact analysis must answer
-   * "which formulas read this edited constant?" Whole-book topological evaluation asks a much
-   * narrower question: "which FORMULAS must run before this formula?" Materializing constant cells
-   * in that graph is pure waste. On a common financial-model shape — 9,900 formulas sharing
-   * `SUM($A$1:$A$5000)` over a constant driver column — the value-preserving graph has no range
-   * edges at all, while [[fromWorkbookBounded]] retains and repeatedly traverses 49.5 million.
-   *
-   * Range lookup searches the target sheet's formula cells by column and row ([[FormulaColumns]])
-   * and is memoized by range. Single-cell references are filtered against the same formula-node set
-   * after name resolution. Consequently this graph is exactly `fromWorkbookBounded` with every
-   * non-formula successor removed, without first allocating those successors. Formula evaluation
-   * itself is unchanged and still reads the complete ranges from the workbook snapshot.
-   *
-   * This representation is intentionally internal: dirty-cone callers still need the public graph
-   * (or, ultimately, a symbolic point/range index) to discover formulas affected by edited values.
-   *
-   * #767: `counters` times each formula parse as the `Parse` phase and records the graph's node and
-   * edge counts, plus the range lookups the build resolved (`RangeLookups`, one per distinct range)
-   * and the index entries they examined (`RangeLookupWork`, linear in the lookups and the formula
-   * cells found, never in the sheet's formulas: #743); the disabled default does none of it.
-   */
-  private[formula] def fromWorkbookFormulaGraph(
-    workbook: com.tjclp.xl.workbooks.Workbook,
-    counters: RecalcCounters = RecalcCounters.disabled
-  ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
-    val formulas: Vector[(QualifiedRef, String)] = workbook.sheets.flatMap { sheet =>
-      sheet.cells.flatMap { case (cellRef, cell) =>
-        cell.value match
-          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
-          case CellValue.Formula(expression, _, _) =>
-            Some(QualifiedRef(sheet.name, cellRef) -> expression)
-          case _ => None
-      }
-    }
-    val formulaNodes = formulas.iterator.map(_._1).toSet
-    val formulaColumns: Map[SheetName, FormulaColumns] =
-      formulas.groupMap(_._1.sheet)(_._1.ref).view.mapValues(FormulaColumns(_)).toMap
-    // counted at the memo miss, not inside the memo: a build that stopped sharing expansions
-    // (GH-522) would count one lookup per reader again
-    val cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = memoizedCells { (sheet, range) =>
-      counters.increment(RecalcCounters.Counter.RangeLookups)
-      formulaColumns.get(sheet) match
-        case Some(columns) =>
-          val examined = counters.tally(RecalcCounters.Counter.RangeLookupWork)
-          val cells = columns.within(range, examined).map(ref => QualifiedRef(sheet, ref)).toSet
-          examined.flush()
-          cells
-        case None => Set.empty
-    }
-
-    val canonicalSheet = sheetCanonicaliser(workbook)
-    val nameRanges = NameRanges.empty
-    val dependencies = formulas.iterator.map { case (ref, expression) =>
-      counters.increment(RecalcCounters.Counter.FormulaParses)
-      val deps = counters.time(RecalcCounters.Phase.Parse)(FormulaParser.parse(expression)) match
-        case scala.util.Right(expr) =>
-          extractQualifiedDependencies(
-            expr,
-            ref.sheet,
-            cellsFor,
-            Some(workbook),
-            preciseLookups = true,
-            canonicalSheet = canonicalSheet,
-            nameRanges = nameRanges,
-            reader = Some(ref.ref)
-          )
-            .filter(formulaNodes.contains)
-        case scala.util.Left(_) => Set.empty[QualifiedRef]
-      ref -> deps
-    }.toMap
-
-    if counters.enabled then
-      counters.add(RecalcCounters.Counter.GraphNodes, dependencies.size.toLong)
-      counters.add(
-        RecalcCounters.Counter.GraphEdges,
-        dependencies.valuesIterator.map(_.size.toLong).sum
-      )
-    (dependencies, reverseEdges(dependencies))
 
   /** One declared range and the formulas that read it. */
   private[xl] final case class QualifiedRangeDependents(
@@ -1811,23 +861,12 @@ object DependencyGraph:
     QualifiedDependencyIndex(points, ranges)
 
   /**
-   * GH-346: every node participating in a reference cycle of the workbook-level graph — the
-   * qualified analog of `cyclicNodes`, sharing the iterative (stack-safe) Tarjan engine. Detects
-   * cycles that span sheets, which per-sheet analysis cannot see.
-   */
-  def qualifiedCyclicNodes(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Set[QualifiedRef] =
-    val csr = QualifiedCsr.of(dependencies)
-    csr.components.cyclic.iterator.map(csr.nodes.qualified).toSet
-
-  /**
    * GH-492: one node of the SCC condensation of the workbook-level graph.
    *
    * `members` is sorted by [[QualifiedRef.gridKey]] (sheet name, row, column) — the deterministic
    * member order the Jacobi fixpoint needs (values are order-independent under Jacobi, but error
    * vectors, report members and seeded-RNG draw order are not). `cyclic` is true for a multi-node
-   * component or a self-looping singleton, matching [[qualifiedCyclicNodes]] exactly.
+   * component or a self-looping singleton.
    *
    * No `derives CanEqual`: [[QualifiedRef]] does not derive it.
    */
@@ -1844,13 +883,13 @@ object DependencyGraph:
    * This is what lets one iterative recalculation reach the workbook's GLOBAL fixpoint: walking the
    * condensation once (acyclic components evaluate, cyclic components fixpoint) guarantees every
    * precedent is a freshly computed value before anything reads it, so no read can fall back to a
-   * loaded cache. `qualifiedCyclicNodes` flattens the same Tarjan run into an undifferentiated
-   * `Set` and is kept for the callers that only need the membership test.
+   * loaded cache.
    *
-   * Laws (property-tested in DependencyGraphSpec):
+   * Laws (property-tested in DependencyGraphSpec and, against a hash-map Tarjan oracle,
+   * QualifiedSccOracleSpec):
    *   - partition — `flatMap(_.members).toSet == dependencies.keySet`, no duplicates
    *   - order — for every edge u → v with different components, index(scc(v)) < index(scc(u))
-   *   - cyclic-view — `filter(_.cyclic).flatMap(_.members).toSet == qualifiedCyclicNodes(deps)`
+   *   - cyclic — a component is cyclic exactly when it has two members or one reads itself
    *   - determinism — depends only on the graph's VALUE, never on Map/Set iteration order
    *
    * Runs in O(V + E + C log C). Only nodes present in `dependencies` (formula cells) are ordered:
@@ -1864,6 +903,25 @@ object DependencyGraph:
     SccKernel
       .condensation(csr.size, csr.size, csr.succOff, csr.succDst, csr.components)
       .map((members, cyclic) => Scc(members.iterator.map(csr.nodes.qualified).toVector, cyclic))
+
+  /**
+   * #891: the formulas of one sheet's read map `edges` (each formula and the cells it reads) in a
+   * dependency-first order — the condensation of [[qualifiedSccOrder]], so ties break in grid order
+   * — or `CircularRef` naming the first cyclic component's members when one exists. Cells that are
+   * not keys are leaves. For a small closure (the CLI's `eval`), over dense ids and arrays.
+   */
+  private[xl] def orderOf(
+    sheet: SheetName,
+    edges: Map[ARef, Set[ARef]]
+  ): Either[EvalError.CircularRef, List[ARef]] =
+    val qualified =
+      edges.map((ref, reads) => QualifiedRef(sheet, ref) -> reads.map(QualifiedRef(sheet, _)))
+    val components = qualifiedSccOrder(qualified)
+    components.find(_.cyclic) match
+      case Some(cycle) =>
+        val members = cycle.members.iterator.map(_.ref).toList
+        scala.util.Left(EvalError.CircularRef(members ++ members.headOption.toList))
+      case None => scala.util.Right(components.iterator.flatMap(_.members).map(_.ref).toList)
 
   /**
    * #891: a workbook-level dependency map as dense ids and one CSR edge array, the input of
@@ -2016,148 +1074,9 @@ object DependencyGraph:
         d += 1
     out.result()
 
-  /**
-   * GH-346: transitive dependents over the workbook-level reverse edges (excludes the starting
-   * refs) — the qualified analog of `transitiveDependents`.
-   */
-  def qualifiedTransitiveDependents(
-    dependents: Map[QualifiedRef, Set[QualifiedRef]],
-    refs: Set[QualifiedRef]
-  ): Set[QualifiedRef] =
-    transitiveDependentsOf(dependents, refs)
-
-  /**
-   * GH-453: transitive PRECEDENTS over the workbook-level graph (excludes the starting refs) — the
-   * same generic reachability BFS run over the FORWARD edge map instead of the reverse one. Used by
-   * the data-table seeder to gate a table's source formula on the cyclic core.
-   */
-  def qualifiedTransitivePrecedents(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
-    refs: Set[QualifiedRef]
-  ): Set[QualifiedRef] =
-    transitiveDependentsOf(dependencies, refs)
-
-  /**
-   * GH-346: Kahn order over the workbook-level graph. Left carries the nodes that could not be
-   * ordered (cycle participants and their downstream); callers that prune cycles first only reach
-   * Left as a defensive-totality path.
-   */
-  def qualifiedTopologicalSort(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Either[Set[QualifiedRef], List[QualifiedRef]] =
-    kahnOrder(dependencies, dependents)
-
-  /**
-   * #767: the canonical evaluation order of the workbook-level graph — Kahn's algorithm whose ready
-   * set is a min-heap in grid order ([[QualifiedRef.gridKey]]), i.e. the lexicographically smallest
-   * topological order. Its result is a function of the graph's value, never of Map/Set iteration
-   * order; `CompactGraph.kahn` emits the same order. Left carries the nodes it could not order.
-   * `RecalcEngine.Legacy` orders with it.
-   */
-  @SuppressWarnings(Array("org.wartremover.warts.While"))
-  private[formula] def canonicalTopologicalSort(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]],
-    dependents: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Either[Set[QualifiedRef], List[QualifiedRef]] =
-    val allNodes = dependencies.keySet
-    val inDegree = scala.collection.mutable.HashMap.empty[QualifiedRef, Int]
-    allNodes.foreach { node =>
-      inDegree(node) = dependencies.getOrElse(node, Set.empty).count(allNodes.contains)
-    }
-    val ready = new java.util.PriorityQueue[QualifiedRef](
-      math.max(1, allNodes.size),
-      QualifiedRef.gridOrdering
-    )
-    allNodes.foreach(node => if inDegree(node) == 0 then ready.add(node))
-    val ordered = scala.collection.mutable.ListBuffer.empty[QualifiedRef]
-    while !ready.isEmpty do
-      val node = ready.poll()
-      ordered += node
-      dependents.getOrElse(node, Set.empty).foreach { dep =>
-        if allNodes.contains(dep) then
-          val remaining = inDegree(dep) - 1
-          inDegree(dep) = remaining
-          if remaining == 0 then ready.add(dep)
-      }
-    if ordered.size == allNodes.size then scala.util.Right(ordered.toList)
-    else scala.util.Left(allNodes -- ordered)
-
   /** Unbounded range expansion — the original `fromWorkbook` semantics. */
   private val unboundedQualifiedCells: (SheetName, CellRange) => Set[QualifiedRef] =
     (sheet, range) => range.cells.map(ref => QualifiedRef(sheet, ref)).toSet
-
-  /**
-   * GH-522: expand any given (sheet, range) exactly once per graph build.
-   *
-   * A financial-model shape — many formulas each aggregating the same driver column — expanded the
-   * SAME range once per referencing formula: 9,900 × `SUM($A$1:$A$5000)` built ~50M QualifiedRefs
-   * (54 GB of a 135 GB recalc's allocation) where 5,000 suffice. The memo makes every referencing
-   * formula share one immutable Set instance; correctness is untouched because expansion is a pure
-   * function of (sheet, range) within one build (bounds are computed once up front and never change
-   * mid-build). The captured mutable map is intentionally build-local and unsynchronized: callers
-   * must invoke the returned closure only from the single graph-building thread.
-   */
-  /**
-   * One sheet's formula cells by column, columns and each column's rows ascending, so the formula
-   * cells inside a range cost two binary searches per covered column plus the cells found. A scan
-   * of every formula per distinct range made a column of running totals, each reading its own
-   * `B1:B{r}`, quadratic in the rows (#743).
-   */
-  private final class FormulaColumns(
-    columns: scala.collection.immutable.ArraySeq[Int],
-    rowsOf: Map[Int, scala.collection.immutable.ArraySeq[Int]]
-  ):
-    /**
-     * The formula cells inside `range`, counting every column and row entry the walk reads into
-     * `examined` (the first entry past the range included): the work of one lookup, which a scan of
-     * the sheet's formulas would make proportional to the sheet instead.
-     */
-    def within(range: CellRange, examined: RecalcCounters.Tally): Iterator[ARef] =
-      val firstCol = range.colStart.index0
-      val lastCol = range.colEnd.index0
-      val firstRow = range.rowStart.index0
-      val lastRow = range.rowEnd.index0
-      Iterator
-        .range(columns.search(firstCol).insertionPoint, columns.length)
-        .map { i =>
-          examined.increment()
-          columns(i)
-        }
-        .takeWhile(_ <= lastCol)
-        .flatMap { col =>
-          val rows = rowsOf.getOrElse(col, scala.collection.immutable.ArraySeq.empty[Int])
-          Iterator
-            .range(rows.search(firstRow).insertionPoint, rows.length)
-            .map { j =>
-              examined.increment()
-              rows(j)
-            }
-            .takeWhile(_ <= lastRow)
-            .map(row => ARef.from0(col, row))
-        }
-
-  private object FormulaColumns:
-    def apply(refs: Vector[ARef]): FormulaColumns =
-      val rowsOf = refs
-        .groupMap(_.col.index0)(_.row.index0)
-        .view
-        .mapValues(rows => scala.collection.immutable.ArraySeq.from(rows.distinct.sorted))
-        .toMap
-      new FormulaColumns(
-        scala.collection.immutable.ArraySeq.from(rowsOf.keys.toVector.sorted),
-        rowsOf
-      )
-
-  private def memoizedCells(
-    expand: (SheetName, CellRange) => Set[QualifiedRef]
-  ): (SheetName, CellRange) => Set[QualifiedRef] =
-    // Anchors affect formula dragging, never the cells a dependency range denotes. Keying by the
-    // normalized endpoints lets `$A$1:$A$5000`, `A1:A5000`, and mixed-anchor spellings share the
-    // same expansion within one graph build.
-    val cache =
-      scala.collection.mutable.HashMap.empty[(SheetName, ARef, ARef), Set[QualifiedRef]]
-    (sheet, range) => cache.getOrElseUpdate((sheet, range.start, range.end), expand(sheet, range))
 
   /**
    * GH-522: set union that iterates the smaller side into the larger — `Set(oneRef) ++ rangeSet`
@@ -2172,35 +1091,12 @@ object DependencyGraph:
     if a.size < b.size && b.size > 4 then b ++ a else a ++ b
 
   /**
-   * GH-522: reverse-edge map built with a local mutable accumulator. The immutable foldLeft
-   * allocated a fresh outer-Map node chain per edge — 50M times on the shape above (8.5 GB). The A
-   * mutable insertion-ordered set per precedent also avoids building one intermediate immutable Set
-   * per edge. Each set receives refs in the identical sequence as the fold it replaces, then
-   * freezes through the ordinary immutable Set builder, so its observable iteration order is
-   * unchanged. The outer map's iteration order is deliberately not a contract; every consumer
-   * performs keyed lookup or set membership.
-   */
-  private[formula] def reverseEdges(
-    dependencies: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Map[QualifiedRef, Set[QualifiedRef]] =
-    val acc = scala.collection.mutable.HashMap.empty[
-      QualifiedRef,
-      scala.collection.mutable.LinkedHashSet[QualifiedRef]
-    ]
-    dependencies.foreach { case (ref, deps) =>
-      deps.foreach { dep =>
-        acc.getOrElseUpdate(dep, scala.collection.mutable.LinkedHashSet.empty) += ref
-      }
-    }
-    acc.iterator.map((ref, refs) => ref -> refs.toSet).toMap
-
-  /**
    * Extract all qualified cell references from TExpr.
    *
    * Similar to extractDependencies but returns QualifiedRef to track cross-sheet references.
    * Same-sheet references are qualified with the current sheet name. Range expansion is delegated
    * to `cellsFor` so workbook-level callers can bound ranges by the TARGET sheet's used range
-   * (GH-346) — the qualified analog of `extractDependenciesBounded`; single refs stay exact.
+   * (GH-346); single refs stay exact.
    *
    * @param expr
    *   The expression to analyze
@@ -2258,6 +1154,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef] = unboundedQualifiedCells,
     workbook: Option[Workbook] = None,
     preciseLookups: Boolean = false,
+    whatIfSelector: Option[QualifiedRef => Boolean] = None,
     canonicalSheet: SheetName => SheetName = identity,
     nameRanges: NameRanges = NameRanges.empty,
     parseName: String => Option[TExpr[?]] = text => FormulaParser.parse(text).toOption,
@@ -2280,6 +1177,7 @@ object DependencyGraph:
         cellsFor,
         workbook,
         preciseLookups,
+        whatIfSelector,
         canonicalSheet,
         nameRanges,
         if depth == 0 then reader else None
@@ -2358,6 +1256,7 @@ object DependencyGraph:
     cellsFor: (SheetName, CellRange) => Set[QualifiedRef],
     workbook: Option[Workbook],
     preciseLookups: Boolean,
+    whatIfSelector: Option[QualifiedRef => Boolean],
     canonicalSheet: SheetName => SheetName,
     nameRanges: NameRanges,
     reader: Option[ARef]
@@ -2403,11 +1302,16 @@ object DependencyGraph:
         case n: BigDecimal if n.isValidInt => Some(n.toInt)
         case _ => None
       def cell(sheet: SheetName, ref: ARef): Option[Int] =
-        workbook.flatMap(_(sheet).toOption).flatMap { target =>
-          target(ref).value match
-            case CellValue.Number(n) => number(n)
-            case _ => None // a cached formula may change during this generation
-        }
+        // `whatIfSelector` answers for a selector cell a data table substitutes: true when the
+        // caller's graph must not fold it (the what-if pass would select a strip the graph never
+        // ordered or recomputed)
+        if whatIfSelector.exists(_(QualifiedRef(sheet, ref))) then None
+        else
+          workbook.flatMap(_(sheet).toOption).flatMap { target =>
+            target(ref).value match
+              case CellValue.Number(n) => number(n)
+              case _ => None // a cached formula may change during this generation
+          }
       expr match
         case TExpr.Lit(value) => number(value)
         case TExpr.ToInt(inner) => fixedIndex(inner)
@@ -2547,7 +1451,6 @@ object DependencyGraph:
               case ArgValue.Range(_) if index == 1 && selected.isDefined =>
                 union(acc, selected.getOrElse(Set.empty))
               case ArgValue.Range(range) => union(acc, locCells(range))
-              case ArgValue.Cells(range) => union(acc, cellsFor(currentSheet, range))
           }
 
         // GH-193: LET — union of binding-value and body dependencies; BindingRef has none
@@ -2580,35 +1483,3 @@ object DependencyGraph:
         case TExpr.DateTimeToSerial(dtExpr) => go(dtExpr)
 
     go(expr)
-
-  /**
-   * Detect circular references across sheets using an explicit-stack depth-first search.
-   *
-   * Similar to detectCycles but works with QualifiedRef to detect cycles that span multiple sheets.
-   * A cross-sheet cycle occurs when cells across different sheets form a circular dependency (e.g.,
-   * Sheet1!A1 = Sheet2!B1, Sheet2!B1 = Sheet1!A1).
-   *
-   * @param graph
-   *   The cross-sheet dependency graph from fromWorkbook
-   * @return
-   *   Left(CircularRef) if cycle detected, Right(()) if acyclic
-   *
-   * Example:
-   * {{{
-   * val graph = DependencyGraph.fromWorkbook(workbook)
-   * DependencyGraph.detectCrossSheetCycles(graph) match
-   *   case Left(err) => println(s"Circular reference: $err")
-   *   case Right(_) => println("No cycles")
-   * }}}
-   */
-  def detectCrossSheetCycles(
-    graph: Map[QualifiedRef, Set[QualifiedRef]]
-  ): Either[EvalError.CircularRef, Unit] =
-    firstCycleOf(
-      graph,
-      graph.keySet,
-      (q: QualifiedRef) => (q.sheet.value, q.ref.row.index0, q.ref.col.index0)
-    ) match
-      // CircularRef predates QualifiedRef and therefore retains its sheetless public payload.
-      case Some(cycle) => scala.util.Left(EvalError.CircularRef(cycle.map(_.ref)))
-      case None => scala.util.Right(())

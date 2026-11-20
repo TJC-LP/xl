@@ -6,6 +6,7 @@ import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import com.tjclp.xl.formula.eval.{StructuralCachePolicy, StructuralEditor}
+import com.tjclp.xl.unsafe.*
 import munit.FunSuite
 
 /**
@@ -27,7 +28,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", formulaCell("=A5"))
       .put(ref"B2", formulaCell("=A1"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, formulaCell("A6")) // A5 (row 4 >= 2) -> A6
     assertEquals(s2(ref"B2").value, formulaCell("A1")) // A1 (row 0 < 2) unchanged
@@ -35,7 +36,7 @@ class StructuralFormulaSpec extends FunSuite:
 
   test("insert rows moves the formula cell itself and still rewrites refs") {
     val s = new Sheet(name = S).put(ref"B5", formulaCell("=A1"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B6").value, formulaCell("A1")) // cell B5 (row 4) -> B6; ref A1 unchanged
     assert(!s2.contains(ref"B5"))
@@ -43,7 +44,7 @@ class StructuralFormulaSpec extends FunSuite:
 
   test("delete rows: ref into the deleted band becomes the #REF! literal") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("=A3"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     // A3 = row index 2 = the deleted row; GH-629: the formula stays a formula, as Excel writes it
     assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("#REF!"))
   }
@@ -53,24 +54,24 @@ class StructuralFormulaSpec extends FunSuite:
   test("GH-629: delete-rows rewrites the deleted reference, not the whole formula") {
     val s = new Sheet(name = S)
       .put(ref"C5", CellValue.Formula("A1+B3", Some(CellValue.Number(BigDecimal(7)))))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     // row 1 deleted: A1 is gone, B3 moves up to B2, the cell itself moves to C4; cache withdrawn
     assertEquals(sheetNamed(r, "S")(ref"C4").value, CellValue.Formula("#REF!+B2", None))
   }
 
   test("GH-629: delete-cols rewrites a deleted argument inside a call") {
     val s = new Sheet(name = S).put(ref"Z1", formulaCell("COUNTIF($A:$A,B1)"))
-    val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1)
+    val r = StructuralEditor.deleteColumnsChecked(Workbook(Vector(s)), S, at = 1, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"Y1").value, formulaCell("COUNTIF($A:$A,#REF!)"))
   }
 
   test("GH-629: a deleted range in a range slot is SUM(#REF!); other arguments survive") {
     val s = new Sheet(name = S).put(ref"D1", formulaCell("SUM(A1:A2)+SUM(B1:B2)"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 0, count = 2).unsafe
     // both ranges lie entirely in the deleted band; the cell moves up two rows... no: it is on
     // row 1, which is deleted — so pin the shape on a formula outside the band instead
     val s2 = new Sheet(name = S).put(ref"D5", formulaCell("SUM(A1:A2)+SUM(B3:B4)"))
-    val r2 = StructuralEditor.deleteRows(Workbook(Vector(s2)), S, at = 0, count = 2)
+    val r2 = StructuralEditor.deleteRowsChecked(Workbook(Vector(s2)), S, at = 0, count = 2).unsafe
     assertEquals(sheetNamed(r2, "S")(ref"D3").value, formulaCell("SUM(#REF!)+SUM(B1:B2)"))
     assert(!sheetNamed(r, "S").contains(ref"D1"))
   }
@@ -80,7 +81,9 @@ class StructuralFormulaSpec extends FunSuite:
     val report = new Sheet(name = SheetName.unsafe("Report"))
       .put(ref"B1", CellValue.Formula("Data!A1*2", Some(CellValue.Number(BigDecimal(2)))))
     val r =
-      StructuralEditor.deleteRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 0, 1)
+      StructuralEditor
+        .deleteRowsChecked(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 0, 1)
+        .unsafe
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, CellValue.Formula("#REF!*2", None))
   }
 
@@ -88,7 +91,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", CellValue.Number(5))
       .put(ref"C5", formulaCell("A1+B3"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     val edited = sheetNamed(r, "S")
     assertEquals(edited.evaluateFormula("=#REF!+B2"), Right(CellValue.Error(CellError.Ref)))
     assertEquals(edited.evaluateCell(ref"C4"), Right(CellValue.Error(CellError.Ref)))
@@ -96,33 +99,34 @@ class StructuralFormulaSpec extends FunSuite:
 
   test("delete rows: refs after the band shift up") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("=A5"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("A4")) // A5 (row 4) -> A4
   }
 
   test("delete rows: a range straddling the deletion shrinks") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("=SUM(A1:A10)"))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("SUM(A1:A9)"))
   }
 
   test("insert then delete the same band is identity on formula refs") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("=A5"))
-    val inserted = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
-    val restored = StructuralEditor.deleteRows(inserted, S, at = 2, count = 2)
+    val inserted =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 2).unsafe
+    val restored = StructuralEditor.deleteRowsChecked(inserted, S, at = 2, count = 2).unsafe
     assertEquals(sheetNamed(restored, "S")(ref"B1").value, formulaCell("A5"))
   }
 
   test("insert columns shifts column refs at/after the insertion point") {
     val s = new Sheet(name = S).put(ref"A1", formulaCell("=C1"))
-    val r = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 1, count = 1)
+    val r = StructuralEditor.insertColumnsChecked(Workbook(Vector(s)), S, at = 1, count = 1).unsafe
     // C1 (col 2 >= 1) -> D1; cell A1 (col 0 < 1) stays put
     assertEquals(sheetNamed(r, "S")(ref"A1").value, formulaCell("D1"))
   }
 
   test("delete columns: ref into the deleted band becomes the #REF! literal") {
     val s = new Sheet(name = S).put(ref"A1", formulaCell("=C1"))
-    val r = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.deleteColumnsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     // C1 = col index 2 = the deleted column
     assertEquals(sheetNamed(r, "S")(ref"A1").value, formulaCell("#REF!"))
   }
@@ -132,7 +136,9 @@ class StructuralFormulaSpec extends FunSuite:
     val report =
       new Sheet(name = SheetName.unsafe("Report")).put(ref"B1", formulaCell("=Data!A5"))
     val r =
-      StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 2, 1)
+      StructuralEditor
+        .insertRowsChecked(Workbook(Vector(data, report)), SheetName.unsafe("Data"), 2, 1)
+        .unsafe
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("Data!A6"))
   }
 
@@ -141,7 +147,9 @@ class StructuralFormulaSpec extends FunSuite:
     val report = new Sheet(name = SheetName.unsafe("Report")).put(ref"B1", formulaCell("=Data!A5"))
     // Edit Report (not Data); the cross-ref to Data must not move.
     val r =
-      StructuralEditor.insertRows(Workbook(Vector(data, report)), SheetName.unsafe("Report"), 2, 1)
+      StructuralEditor
+        .insertRowsChecked(Workbook(Vector(data, report)), SheetName.unsafe("Report"), 2, 1)
+        .unsafe
     assertEquals(sheetNamed(r, "Report")(ref"B1").value, formulaCell("Data!A5"))
   }
 
@@ -151,11 +159,12 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", formulaCell("A1048576"))
       .put(ref"C1", formulaCell("XFD1"))
-    val rows = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val rows = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     // the formula cell itself moved to B2; its ref had no home past the edge (GH-629: the
     // reference is the #REF! literal; the formula stays a formula)
     assertEquals(sheetNamed(rows, "S")(ref"B2").value, formulaCell("#REF!"))
-    val cols = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 0, count = 1)
+    val cols =
+      StructuralEditor.insertColumnsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     assertEquals(sheetNamed(cols, "S")(ref"D1").value, formulaCell("#REF!"))
   }
 
@@ -163,10 +172,11 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", formulaCell("SUM(A10:A1048576)"))
       .put(ref"C1", formulaCell("SUM(A1048570:A1048576)"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, formulaCell("SUM(A12:A1048576)")) // end pinned at the max
-    val voided = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 10)
+    val voided =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 10).unsafe
     // the formula cell itself moved to C11; its range START passed the edge -> SUM(#REF!)
     assertEquals(sheetNamed(voided, "S")(ref"C11").value, formulaCell("SUM(#REF!)"))
   }
@@ -175,7 +185,7 @@ class StructuralFormulaSpec extends FunSuite:
 
   test("GH-427: rewrite prints the model's equals-free form (no '=' lands in <f>)") {
     val s = new Sheet(name = S).put(ref"B1", formulaCell("A5*2")) // file-canonical form
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"B1").value, formulaCell("A6*2"))
   }
 
@@ -184,7 +194,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", CellValue.Formula("A5*2", cached))
       .put(ref"B2", CellValue.Formula("A1*3", cached)) // refs above the cut: position unchanged
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, CellValue.Formula("A6*2", None))
     // Default (unflagged) behaviour is unchanged: B2's cache drops even though nothing it reads
@@ -200,7 +210,8 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"A1", CellValue.Number(BigDecimal(2)))
       .put(ref"B2", CellValue.Formula("A1*3", cached)) // reads A1, above the cut
     val r = StructuralEditor
-      .insertRows(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+      .insertRowsChecked(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+      .unsafe
     assertEquals(sheetNamed(r, "S")(ref"B2").value, CellValue.Formula("A1*3", cached))
   }
 
@@ -211,7 +222,8 @@ class StructuralFormulaSpec extends FunSuite:
     val cached = Some(CellValue.Number(BigDecimal(30)))
     val s = new Sheet(name = S).put(ref"C30", CellValue.Formula("ROW()", cached))
     val r = StructuralEditor
-      .insertRows(Workbook(Vector(s)), S, at = 19, count = 1, preserveUntouchedCaches = true)
+      .insertRowsChecked(Workbook(Vector(s)), S, at = 19, count = 1, preserveUntouchedCaches = true)
+      .unsafe
     assertEquals(sheetNamed(r, "S")(ref"C31").value, CellValue.Formula("ROW()", None))
   }
 
@@ -221,7 +233,8 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"A25", CellValue.Number(BigDecimal(5)))
       .put(ref"C1", CellValue.Formula("A25*2", cached)) // reads a cell the insert MOVES
     val r = StructuralEditor
-      .insertRows(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+      .insertRowsChecked(Workbook(Vector(s)), S, at = 20, count = 1, preserveUntouchedCaches = true)
+      .unsafe
     // A25 moved to A26, so the reference is rewritten — a changed question, no cache carried.
     assertEquals(sheetNamed(r, "S")(ref"C1").value, CellValue.Formula("A26*2", None))
   }
@@ -234,7 +247,8 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"A3", CellValue.Number(BigDecimal(3)))
       .put(ref"C1", CellValue.Formula("SUM(A1:A3)", cached))
     val r = StructuralEditor
-      .deleteRows(Workbook(Vector(s)), S, at = 1, count = 1, preserveUntouchedCaches = true)
+      .deleteRowsChecked(Workbook(Vector(s)), S, at = 1, count = 1, preserveUntouchedCaches = true)
+      .unsafe
     assertEquals(sheetNamed(r, "S")(ref"C1").value, CellValue.Formula("SUM(A1:A2)", None))
   }
 
@@ -255,7 +269,9 @@ class StructuralFormulaSpec extends FunSuite:
         ref"G1",
         CellValue.Formula("F1+1", cachedNum(11))
       ) // static dependent of the dynamic cell
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 20, count = 1, policy = carry)
+    val r = StructuralEditor
+      .insertRowsChecked(Workbook(Vector(s)), S, at = 20, count = 1, policy = carry)
+      .unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"C1").value, CellValue.Formula("A26*2", cachedNum(777)))
     assertEquals(s2(ref"C31").value, CellValue.Formula("ROW()", cachedNum(30)))
@@ -294,11 +310,18 @@ class StructuralFormulaSpec extends FunSuite:
     val expected = caches(wb)
     assertEquals(expected.size, 15, "premise: the fixture carries 15 formula cells")
     val edits = List(
-      "insert rows" -> StructuralEditor.insertRows(wb, target, at = 4, count = 2, policy = carry),
-      "delete rows" -> StructuralEditor.deleteRows(wb, target, at = 4, count = 2, policy = carry),
+      "insert rows" -> StructuralEditor
+        .insertRowsChecked(wb, target, at = 4, count = 2, policy = carry)
+        .unsafe,
+      "delete rows" -> StructuralEditor
+        .deleteRowsChecked(wb, target, at = 4, count = 2, policy = carry)
+        .unsafe,
       "insert cols" -> StructuralEditor
-        .insertColumns(wb, target, at = 0, count = 1, policy = carry),
-      "delete cols" -> StructuralEditor.deleteColumns(wb, target, at = 2, count = 1, policy = carry)
+        .insertColumnsChecked(wb, target, at = 0, count = 1, policy = carry)
+        .unsafe,
+      "delete cols" -> StructuralEditor
+        .deleteColumnsChecked(wb, target, at = 2, count = 1, policy = carry)
+        .unsafe
     )
     edits.foreach { case (label, edited) =>
       assertEquals(caches(edited), expected, s"$label changed the multiset of cached values")
@@ -335,24 +358,30 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"C30", CellValue.Formula("ROW()", cachedNum(30))) // relocated: dropped under both
     val wb = Workbook(Vector(s))
     assertEquals(
-      StructuralEditor.insertRows(wb, S, at = 20, count = 1),
-      StructuralEditor.insertRows(
-        wb,
-        S,
-        at = 20,
-        count = 1,
-        policy = StructuralCachePolicy.Invalidate
-      )
+      StructuralEditor.insertRowsChecked(wb, S, at = 20, count = 1).unsafe,
+      StructuralEditor
+        .insertRowsChecked(
+          wb,
+          S,
+          at = 20,
+          count = 1,
+          policy = StructuralCachePolicy.Invalidate
+        )
+        .unsafe
     )
     assertEquals(
-      StructuralEditor.insertRows(wb, S, at = 20, count = 1, preserveUntouchedCaches = true),
-      StructuralEditor.insertRows(
-        wb,
-        S,
-        at = 20,
-        count = 1,
-        policy = StructuralCachePolicy.PreserveUntouched
-      )
+      StructuralEditor
+        .insertRowsChecked(wb, S, at = 20, count = 1, preserveUntouchedCaches = true)
+        .unsafe,
+      StructuralEditor
+        .insertRowsChecked(
+          wb,
+          S,
+          at = 20,
+          count = 1,
+          policy = StructuralCachePolicy.PreserveUntouched
+        )
+        .unsafe
     )
     assertEquals(
       StructuralEditor
@@ -367,10 +396,10 @@ class StructuralFormulaSpec extends FunSuite:
         )
     )
     // and the two older policies still differ from CarryForward exactly where GH-503 says
-    val kept = sheetNamed(StructuralEditor.insertRows(wb, S, 20, 1, carry), "S")
+    val kept = sheetNamed(StructuralEditor.insertRowsChecked(wb, S, 20, 1, carry).unsafe, "S")
     assertEquals(kept(ref"C1").value, CellValue.Formula("A26*2", cachedNum(10)))
     assertEquals(kept(ref"C31").value, CellValue.Formula("ROW()", cachedNum(30)))
-    val narrowed = sheetNamed(StructuralEditor.insertRows(wb, S, 20, 1, true), "S")
+    val narrowed = sheetNamed(StructuralEditor.insertRowsChecked(wb, S, 20, 1, true).unsafe, "S")
     assertEquals(narrowed(ref"B2").value, CellValue.Formula("A1*3", cachedNum(6)))
     assertEquals(narrowed(ref"C1").value, CellValue.Formula("A26*2", None))
     assertEquals(narrowed(ref"C31").value, CellValue.Formula("ROW()", None))
@@ -395,7 +424,9 @@ class StructuralFormulaSpec extends FunSuite:
       .withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
       .withDefinedName("Outer", "Blind")
     val r =
-      StructuralEditor.deleteRows(wb, SheetName.unsafe("Data"), at = 1, count = 1, policy = carry)
+      StructuralEditor
+        .deleteRowsChecked(wb, SheetName.unsafe("Data"), at = 1, count = 1, policy = carry)
+        .unsafe
     val o = sheetNamed(r, "Other")
     assertEquals(o(ref"B2").value, CellValue.Formula("SUM(Outer)", None))
     assertEquals(o(ref"B3").value, CellValue.Formula("B2*2", None))
@@ -417,7 +448,9 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"E30", CellValue.Formula("A1*2", cachedNum(777))) // resolvable, relocates, carried
     val wb = Workbook(data).withDefinedName("Blind", "Data!$A$1:$A$3,Data!$A$8:$A$10")
     val r =
-      StructuralEditor.insertRows(wb, SheetName.unsafe("Data"), at = 5, count = 1, policy = carry)
+      StructuralEditor
+        .insertRowsChecked(wb, SheetName.unsafe("Data"), at = 5, count = 1, policy = carry)
+        .unsafe
     val d = sheetNamed(r, "Data")
     assertEquals(d(ref"C31").value, CellValue.Formula("SUM(Blind)", None))
     assertEquals(d(ref"D31").value, CellValue.Formula("C31*2", None))
@@ -444,13 +477,15 @@ class StructuralFormulaSpec extends FunSuite:
     val other = Sheet("Other")
       .put(ref"A1", CellValue.Formula("S!C1*2", cachedNum(70))) // two-hop, cross-sheet
       .put(ref"A2", CellValue.Formula("S!D1+1", cachedNum(11))) // reads a provably unchanged cell
-    val r = StructuralEditor.deleteRows(
-      Workbook(s, other),
-      S,
-      at = 1,
-      count = 1,
-      policy = StructuralCachePolicy.PreserveUntouched
-    )
+    val r = StructuralEditor
+      .deleteRowsChecked(
+        Workbook(s, other),
+        S,
+        at = 1,
+        count = 1,
+        policy = StructuralCachePolicy.PreserveUntouched
+      )
+      .unsafe
     val edited = sheetNamed(r, "S")
     assertEquals(edited(ref"B1").value, CellValue.Formula("SUM(A1:A1)", None))
     assertEquals(edited(ref"C1").value, CellValue.Formula("B1+#REF!", None))
@@ -462,7 +497,9 @@ class StructuralFormulaSpec extends FunSuite:
     // and CarryForward — the library-only policy — is exactly what LibreOffice cannot be trusted
     // with: it keeps the 15 and the 35 by design, for a caller who controls the reader.
     val carried = sheetNamed(
-      StructuralEditor.deleteRows(Workbook(s, other), S, at = 1, count = 1, policy = carry),
+      StructuralEditor
+        .deleteRowsChecked(Workbook(s, other), S, at = 1, count = 1, policy = carry)
+        .unsafe,
       "S"
     )
     assertEquals(carried(ref"B1").value, CellValue.Formula("SUM(A1:A1)", cachedNum(15)))
@@ -478,7 +515,7 @@ class StructuralFormulaSpec extends FunSuite:
         ref"C1",
         CellValue.Formula("SUM(A1:A3)", Some(CellValue.Number(BigDecimal(6))))
       )
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 1, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 1, count = 1).unsafe
     assertEquals(
       sheetNamed(r, "S")(ref"C1").value,
       CellValue.Formula("SUM(A1:A2)", None)
@@ -488,14 +525,14 @@ class StructuralFormulaSpec extends FunSuite:
   test("moving a position-sensitive formula invalidates its cached result") {
     val s = new Sheet(name = S)
       .put(ref"B2", CellValue.Formula("ROW()", Some(CellValue.Number(BigDecimal(2)))))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"B3").value, CellValue.Formula("ROW()", None))
   }
 
   test("GH-427: a fully-deleted reference still degrades to #REF! (cache dropped)") {
     val s = new Sheet(name = S)
       .put(ref"B1", CellValue.Formula("A3", Some(CellValue.Number(BigDecimal(7)))))
-    val r = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     assertEquals(sheetNamed(r, "S")(ref"B1").value, CellValue.Formula("#REF!", None))
   }
 
@@ -505,7 +542,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", formulaCell("=INDIRECT(\"A5\")")) // text is data — frozen (Excel parity)
       .put(ref"C1", formulaCell("=INDIRECT(A5)")) // the A5 ARGUMENT is a real ref — shifts
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, formulaCell("INDIRECT(\"A5\")"))
     assertEquals(s2(ref"C1").value, formulaCell("INDIRECT(A6)"))
@@ -523,7 +560,7 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"G1", formulaCell("=E13/(E12*E14)"))
     val before = Workbook(Vector(s)).evaluateFormula("=E13/(E12*E14)", "S")
     assertEquals(before, Right(num(1)))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"G1").value, formulaCell("E15/(E14*E16)"))
     assertEquals(r.evaluateFormula("=E15/(E14*E16)", "S"), before)
@@ -537,7 +574,7 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"G1", formulaCell("=E12/((E13+E14)/2)"))
     val before = Workbook(Vector(s)).evaluateFormula("=E12/((E13+E14)/2)", "S")
     assertEquals(before, Right(num(2)))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"G1").value, formulaCell("E14/((E15+E16)/2)"))
     assertEquals(r.evaluateFormula("=E14/((E15+E16)/2)", "S"), before)
@@ -549,7 +586,7 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"E13", num(2))
       .put(ref"E14", num(4))
       .put(ref"G1", formulaCell("=IF(ROUND(E12-(E13+E14),0)=0,\"Yes\",\"No\")"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 2)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 2).unsafe
     val s2 = sheetNamed(r, "S")
     // GH-484: the rewrite reprints in Excel's bare-comma file form
     assertEquals(
@@ -569,7 +606,8 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"E14", num(2))
     val b = new Sheet(name = SheetName.unsafe("B"))
       .put(ref"B1", formulaCell("=A!E13/(A!E12*A!E14)"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(a, b)), SheetName.unsafe("A"), 2, 2)
+    val r =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(a, b)), SheetName.unsafe("A"), 2, 2).unsafe
     assertEquals(sheetNamed(r, "B")(ref"B1").value, formulaCell("A!E15/(A!E14*A!E16)"))
     assertEquals(r.evaluateFormula("=A!E15/(A!E14*A!E16)", "B"), Right(num(1)))
   }
@@ -585,12 +623,14 @@ class StructuralFormulaSpec extends FunSuite:
         ref"B3",
         CellValue.Formula("IF(A1,1,0)", cached)
       ) // would canonicalize to ", " if reprinted
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(data, other, report)),
-      SheetName.unsafe("Data"),
-      at = 0,
-      count = 3
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(data, other, report)),
+        SheetName.unsafe("Data"),
+        at = 0,
+        count = 3
+      )
+      .unsafe
     val rep = sheetNamed(r, "Report")
     // Text AND cached values ride untouched: the sheet does not participate in the edit.
     assertEquals(rep(ref"B1").value, CellValue.Formula("C1/(A1*D1)", cached))
@@ -605,12 +645,14 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"X1", CellValue.Formula("Alpha!A1", Some(num(10)))) // hop 1: names Alpha
       .put(ref"Y1", CellValue.Formula("X1*2", Some(num(20)))) // hop 2: never names Alpha
       .put(ref"Z1", CellValue.Formula("A1*3", Some(num(9)))) // independent control
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(alpha, beta)),
-      SheetName.unsafe("Alpha"),
-      at = 0,
-      count = 1
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(alpha, beta)),
+        SheetName.unsafe("Alpha"),
+        at = 0,
+        count = 1
+      )
+      .unsafe
     val out = sheetNamed(r, "Beta")
     // Hop 1 participates: rewritten and uncached (existing behavior).
     assertEquals(out(ref"X1").value, CellValue.Formula("Alpha!A2", None))
@@ -629,12 +671,14 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"D1", CellValue.Formula("C1+1", Some(num(21)))) // hop 3: local ref only
       .put(ref"C2", num(5))
       .put(ref"E1", CellValue.Formula("C2*2", Some(num(10)))) // independent control
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(alpha, beta, gamma)),
-      SheetName.unsafe("Alpha"),
-      at = 0,
-      count = 2
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(alpha, beta, gamma)),
+        SheetName.unsafe("Alpha"),
+        at = 0,
+        count = 2
+      )
+      .unsafe
     val out = sheetNamed(r, "Gamma")
     assertEquals(sheetNamed(r, "Beta")(ref"B1").value, CellValue.Formula("Alpha!A3", None))
     assertEquals(out(ref"C1").value, CellValue.Formula("Beta!B1*2", None))
@@ -648,12 +692,14 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"X1", CellValue.Formula("INDIRECT(\"Alpha!A1\")", Some(num(10))))
       .put(ref"Y1", CellValue.Formula("X1*2", Some(num(20))))
       .put(ref"Z1", CellValue.Formula("1+2", Some(num(3))))
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(alpha, beta)),
-      SheetName.unsafe("Alpha"),
-      at = 0,
-      count = 1
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(alpha, beta)),
+        SheetName.unsafe("Alpha"),
+        at = 0,
+        count = 1
+      )
+      .unsafe
     val out = sheetNamed(r, "Beta")
     // INDIRECT text is data and stays byte-identical, but now resolves to the newly empty A1.
     assertEquals(out(ref"X1").value, CellValue.Formula("INDIRECT(\"Alpha!A1\")", None))
@@ -666,12 +712,14 @@ class StructuralFormulaSpec extends FunSuite:
     val report = new Sheet(name = SheetName.unsafe("Report"))
       .put(ref"B1", CellValue.Formula("Data!A5*2", Some(num(7)))) // participates: rewritten
       .put(ref"B2", CellValue.Formula("\"Data\"&C1", Some(CellValue.Text("Datax")))) // text only
-    val r = StructuralEditor.insertRows(
-      Workbook(Vector(data, report)),
-      SheetName.unsafe("Data"),
-      at = 2,
-      count = 1
-    )
+    val r = StructuralEditor
+      .insertRowsChecked(
+        Workbook(Vector(data, report)),
+        SheetName.unsafe("Data"),
+        at = 2,
+        count = 1
+      )
+      .unsafe
     val rep = sheetNamed(r, "Report")
     assertEquals(rep(ref"B1").value, CellValue.Formula("Data!A6*2", None))
     // Mentions "Data" only inside a string literal: the AST gate proves non-participation.
@@ -685,7 +733,7 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"B1", formulaCell("IF(A5=1,1,0)"))
       .put(ref"B2", formulaCell("SUMIF(A1:A10,\">2\",C1:C10)"))
-    val r = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val r = StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val s2 = sheetNamed(r, "S")
     assertEquals(s2(ref"B1").value, formulaCell("IF(A6=1,1,0)"))
     assertEquals(s2(ref"B2").value, formulaCell("SUMIF(A1:A11,\">2\",C1:C11)"))
@@ -698,12 +746,14 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"A5", formulaCell("SUM(E:E)"))
       .put(ref"B5", formulaCell("COUNTIF($E:$E,A5)"))
       .put(ref"C5", formulaCell("SUM(A:C)"))
-    val inserted = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 2, count = 3)
+    val inserted =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 2, count = 3).unsafe
     val si = sheetNamed(inserted, "S")
     assertEquals(si(ref"A8").value, formulaCell("SUM(E:E)"))
     assertEquals(si(ref"B8").value, formulaCell("COUNTIF($E:$E,A8)"))
     assertEquals(si(ref"C8").value, formulaCell("SUM(A:C)"))
-    val deleted = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val deleted =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 0, count = 2).unsafe
     val sd = sheetNamed(deleted, "S")
     assertEquals(sd(ref"A3").value, formulaCell("SUM(E:E)"))
     assertEquals(sd(ref"B3").value, formulaCell("COUNTIF($E:$E,A3)"))
@@ -716,19 +766,22 @@ class StructuralFormulaSpec extends FunSuite:
       .put(ref"A2", formulaCell("SUM(A:C)"))
       .put(ref"A3", formulaCell("SUM($E:$E)"))
     // insert before E: E:E -> F:F (anchors do not matter for structural edits); A:C widens
-    val inserted = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 2, count = 1)
+    val inserted =
+      StructuralEditor.insertColumnsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val si = sheetNamed(inserted, "S")
     assertEquals(si(ref"A1").value, formulaCell("SUM(F:F)"))
     assertEquals(si(ref"A2").value, formulaCell("SUM(A:D)"))
     assertEquals(si(ref"A3").value, formulaCell("SUM($F:$F)"))
     // delete column E entirely: SUM(#REF!); A:C untouched
-    val deletedE = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 4, count = 1)
+    val deletedE =
+      StructuralEditor.deleteColumnsChecked(Workbook(Vector(s)), S, at = 4, count = 1).unsafe
     val se = sheetNamed(deletedE, "S")
     assertEquals(se(ref"A1").value, formulaCell("SUM(#REF!)"))
     assertEquals(se(ref"A2").value, formulaCell("SUM(A:C)"))
     assertEquals(se(ref"A3").value, formulaCell("SUM(#REF!)"))
     // delete column B inside A:C: narrows to A:B; E:E moves left to D:D
-    val deletedB = StructuralEditor.deleteColumns(Workbook(Vector(s)), S, at = 1, count = 1)
+    val deletedB =
+      StructuralEditor.deleteColumnsChecked(Workbook(Vector(s)), S, at = 1, count = 1).unsafe
     val sb = sheetNamed(deletedB, "S")
     assertEquals(sb(ref"A1").value, formulaCell("SUM(D:D)"))
     assertEquals(sb(ref"A2").value, formulaCell("SUM(A:B)"))
@@ -738,27 +791,31 @@ class StructuralFormulaSpec extends FunSuite:
     val s = new Sheet(name = S)
       .put(ref"A1", formulaCell("SUM(3:3)"))
       .put(ref"B1", formulaCell("SUM($3:$10)"))
-    val insertedRows = StructuralEditor.insertRows(Workbook(Vector(s)), S, at = 0, count = 2)
+    val insertedRows =
+      StructuralEditor.insertRowsChecked(Workbook(Vector(s)), S, at = 0, count = 2).unsafe
     val sr = sheetNamed(insertedRows, "S")
     assertEquals(sr(ref"A3").value, formulaCell("SUM(5:5)"))
     assertEquals(sr(ref"B3").value, formulaCell("SUM($5:$12)"))
-    val insertedCols = StructuralEditor.insertColumns(Workbook(Vector(s)), S, at = 0, count = 1)
+    val insertedCols =
+      StructuralEditor.insertColumnsChecked(Workbook(Vector(s)), S, at = 0, count = 1).unsafe
     val sc = sheetNamed(insertedCols, "S")
     assertEquals(sc(ref"B1").value, formulaCell("SUM(3:3)"))
     assertEquals(sc(ref"C1").value, formulaCell("SUM($3:$10)"))
-    val deletedRow3 = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 2, count = 1)
+    val deletedRow3 =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 2, count = 1).unsafe
     val sd = sheetNamed(deletedRow3, "S")
     assertEquals(sd(ref"A1").value, formulaCell("SUM(#REF!)"))
     assertEquals(sd(ref"B1").value, formulaCell("SUM($3:$9)"))
-    val deletedInside = StructuralEditor.deleteRows(Workbook(Vector(s)), S, at = 4, count = 2)
+    val deletedInside =
+      StructuralEditor.deleteRowsChecked(Workbook(Vector(s)), S, at = 4, count = 2).unsafe
     assertEquals(sheetNamed(deletedInside, "S")(ref"B1").value, formulaCell("SUM($3:$8)"))
   }
 
   test("GH-612: a defined name over a whole column survives a row insert unchanged") {
     val s = new Sheet(name = S).put(ref"A1", formulaCell("SUM(col)"))
     val wb = Workbook(Vector(s)).withDefinedName("col", "S!$E:$E")
-    val r = StructuralEditor.insertRows(wb, S, at = 0, count = 3)
+    val r = StructuralEditor.insertRowsChecked(wb, S, at = 0, count = 3).unsafe
     assertEquals(r.metadata.definedNames.map(_.formula), Vector("S!$E:$E"))
-    val c = StructuralEditor.insertColumns(wb, S, at = 0, count = 1)
+    val c = StructuralEditor.insertColumnsChecked(wb, S, at = 0, count = 1).unsafe
     assertEquals(c.metadata.definedNames.map(_.formula), Vector("S!$F:$F"))
   }
