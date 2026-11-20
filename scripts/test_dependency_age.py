@@ -175,6 +175,12 @@ class ReviewFollowupTests(unittest.TestCase):
         steps = age.re.findall(r'(?m)^      - (?:name|uses): (.+)$', job)
         self.assertEqual(2, len(steps), steps)  # checkout + the age policy
         self.assertTrue(steps[0].startswith('actions/checkout@'), steps)
+        [gate] = [j for j in jobs if j.startswith('plugin-version:')]
+        self.assertIn('needs: dependency-age', gate)
+        self.assertIn('if: ${{ always() }}', gate)
+        self.assertIn('AGE_RESULT: ${{ needs.dependency-age.result }}', gate)
+        self.assertTrue(gate.split('      - name: ')[-1].lstrip().startswith('Require the dependency age policy'))
+        self.assertIn('test "$AGE_RESULT" = success', gate)
 
     # Renovate derives the full-cross suffix from build.mill's Scala version.
     def test_full_cross_dependencies_follow_the_scala_version(self):

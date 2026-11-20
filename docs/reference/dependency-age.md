@@ -3,7 +3,9 @@
 `python3 scripts/dependency_age.py` checks the direct Maven declarations in tracked
 Mill files, the Scala compiler, and the Mill-versioned JMH build plugin. CI runs
 its offline regression tests and the live check in their own `dependency-age` job,
-so a Maven Central outage cannot skip the release-version gates. It uses Maven Central POM
+and `plugin-version` runs its version checks even if that lookup fails. Its final step requires
+`dependency-age` to succeed, so branch rules that require `plugin-version` also enforce age.
+The age check uses Maven Central POM
 `Last-Modified` timestamps, not a vulnerability database or proof of maintenance.
 A missing/invalid timestamp, missing artifact or failed network request fails the
 check. A pin older than 365 days needs a dated reason on its declaration line:
@@ -33,9 +35,12 @@ literals, plus `github-actions` and explicitly enabled `pre-commit`. There is no
 native `mill` manager in the verified Renovate 44.221.1 source. Custom extraction
 uses Scala binary suffix `_3`. The full-cross (`:::`) compiler-plugin suffix is read
 from `build.mill`'s `scala3Version` with a `combination` match, which supports one
-full-cross dependency, in `build.mill` only; the age check enforces that. The Scala
-compiler and the wartremover plugin update in one "Scala 3.9 toolchain" PR. Scala
-updates are restricted to 3.9 LTS.
+full-cross dependency, in `build.mill` only; the age check enforces that. Renovate groups available updates for the current Scala compiler and
+wartremover artifact in one "Scala 3.9 toolchain" PR. When a PR changes the Scala patch,
+check Maven Central for `org.wartremover:wartremover_<proposed scala3Version>`. Select a
+plugin version published for that suffix, update its pin if needed, refresh the lock, and
+run the build before merging. If the artifact is unavailable, the compiler bump must wait.
+Scala updates are restricted to 3.9 LTS.
 Mill version updates are proposed from its official releases. Automerge is off.
 
 Retain SHA-pinned Actions and frozen hook revisions. Hooks must use the
