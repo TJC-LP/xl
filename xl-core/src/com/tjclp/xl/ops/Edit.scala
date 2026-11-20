@@ -62,7 +62,9 @@ enum Edit derives CanEqual:
 
   /**
    * Clear contents, styles and/or comments in `at`. Contents alone is Excel's Clear Contents
-   * (styles and merges stay, GH-890); contents with styles removes the cells and unmerges overlaps.
+   * (styles and merges stay, GH-890); contents with styles removes the cells. Any clear with styles
+   * unmerges every merge `at` touches and resets the styles of each whole merge, as Excel's Clear
+   * Formats does (GH-909).
    */
   case Clear(at: Area, what: ClearWhat)
 

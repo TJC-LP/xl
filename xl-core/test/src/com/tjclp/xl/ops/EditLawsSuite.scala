@@ -186,6 +186,48 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
     assert(viaEdit.exists(s => !s.mergedRanges.contains(merged)), "the edit side unmerges")
   }
 
+  // GH-909: a styles clear over a styled merge it only partly overlaps: the patch side must reset
+  // the merge's cells outside the range and unmerge it, as the edit side does.
+  private def styledMerge: Sheet =
+    import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+    val bold = com.tjclp.xl.styles.CellStyle.default
+      .withFont(com.tjclp.xl.styles.CellStyle.default.font.withBold(true))
+    CellRange
+      .parse("E5:F6")
+      .fold(e => fail(e), identity)
+      .cells
+      .foldLeft(baseData)((s, ref) => s.withCellStyle(ref, bold))
+
+  for (label, what) <- Seq(
+      "styles" -> ClearWhat.styles,
+      "contents with styles" -> ClearWhat(contents = true, styles = true, comments = false)
+    )
+  do
+    test(s"GH-909: a $label clear partly over a styled merge lowers exactly") {
+      val sheet = styledMerge
+      val merged = CellRange.parse("E5:F6").fold(e => fail(e), identity)
+      val range = CellRange.parse("F6:G7").fold(e => fail(e), identity)
+      val e = Edit.Clear(Area(None, range), what)
+      val viaPatch = Edit.lower(e, sheet).map(Patch.applyPatch(sheet, _))
+      val viaEdit = sheetOf(run(Workbook(sheet), Vector(e), Scope.of(data)), data).toOption
+      assert(viaPatch.isDefined, s"a $label clear lowers")
+      assertEquals(viaPatch, viaEdit)
+      assert(viaEdit.exists(s => !s.mergedRanges.contains(merged)), "the edit side unmerges")
+      val e5 = com.tjclp.xl.addressing.ARef.from0(4, 4)
+      assertEquals(viaEdit.flatMap(_.cells.get(e5)).flatMap(_.styleId), None)
+    }
+
+  test("GH-909: Patch.ClearStyle on a merged cell has no exact desugaring") {
+    val sheet = styledMerge
+    val e5 = com.tjclp.xl.addressing.ARef.from0(4, 4)
+    assertEquals(Patch.toEdits(Patch.ClearStyle(e5), sheet), None)
+    val a1 = com.tjclp.xl.addressing.ARef.from0(0, 0)
+    val p = Patch.ClearStyle(a1)
+    val viaEdits =
+      Patch.toEdits(p, sheet).map(es => sheetOf(run(Workbook(sheet), es, Scope.of(data)), data))
+    assertEquals(viaEdits, Some(Right(Patch.applyPatch(sheet, p))))
+  }
+
   test("GH-890: a contents clear of a styled hyperlink cell lowers exactly") {
     val ref = com.tjclp.xl.addressing.ARef.from0(0, 0)
     val linked = baseData.put(

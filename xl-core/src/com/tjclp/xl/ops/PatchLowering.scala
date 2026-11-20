@@ -49,7 +49,11 @@ private[xl] object PatchLowering:
       Option.when(!overlay.isEmpty)(Vector(Edit.Style(cell(ref), overlay, StyleMode.Merge)))
 
     case Patch.ClearStyle(ref) =>
-      Option.when(sheet.contains(ref))(Vector(Edit.Clear(cell(ref), ClearWhat.styles)))
+      // A styles clear of a merged cell also unmerges it and resets the whole merge (GH-909), so
+      // ClearStyle on a merged cell has no exact desugaring.
+      Option.when(sheet.contains(ref) && !sheet.isMerged(ref))(
+        Vector(Edit.Clear(cell(ref), ClearWhat.styles))
+      )
 
     case Patch.Merge(range) => Some(Vector(Edit.Merge(area(range))))
     case Patch.Unmerge(range) => Some(Vector(Edit.Unmerge(area(range))))
