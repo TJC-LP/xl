@@ -428,6 +428,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **10,398 test cases** (the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19; 10,398 passed, none ignored) by module: xl-evaluator (4508), xl-core (1935), xl-ooxml (1484), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (73). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
+
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
