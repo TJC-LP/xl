@@ -2491,8 +2491,9 @@ Two rows worth spelling out:
   round's values under one `NOT_CONVERGED` warning in `recalc`'s words
   (`Warning[NOT_CONVERGED]: Iterative calculation exhausted 100 round(s) without converging (last
   values kept): Sheet1!A1, Sheet1!B1: exhausted 100 round(s), max |Δ| = 2`), and `--strict` gates
-  on it (`RECALC_GATE`, exit `1`) as `recalc --strict` does. With an `INDIRECT` or `OFFSET` in the
-  evaluation, whose targets are not known ahead, every unconverged cycle of the book is named. A cycle or a
+  on it (`RECALC_GATE`, exit `1`) as `recalc --strict` does. When a cell the window
+  depends on is an `INDIRECT` or `OFFSET`, whose targets are not known ahead, every unconverged
+  cycle of the book is named; one the window does not reach names nothing. A cycle or a
   failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
   `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
   only failures in the window's closure are reported. For the pictures (html, svg and the raster

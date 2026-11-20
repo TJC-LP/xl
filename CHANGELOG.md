@@ -202,8 +202,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   last-round values with no notice, and `--strict` exited 0, where `recalc` warns and
   `recalc --strict` exits 1. The window now prints one `NOT_CONVERGED` warning in `recalc`'s
   words and gates under `--strict` (`RECALC_GATE`). It covers the cycles the window depends
-  on; with an `INDIRECT` or `OFFSET` in play, whose targets are not known ahead, every
-  unconverged cycle of the book is named. Library: `RangeEvalResult.unconverged` (a new field with a default, so `copy`
+  on; when one of those cells is an `INDIRECT` or `OFFSET`, whose targets are not known ahead,
+  every unconverged cycle of the book is named. Library: `RangeEvalResult.unconverged` (a new field with a default, so `copy`
   and `unapply` change shape) and `unconvergedVerdict`; `SccReport.unconvergedVerdict` is the
   shared wording.
 

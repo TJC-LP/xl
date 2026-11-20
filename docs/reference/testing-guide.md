@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #917 `view --eval` convergence warning, 2026-11-20 recorded **10,410 cases**: 10,410 passed, 0 failed (MUnit reported none ignored).
+**Current Status**: the #917 `view --eval` convergence warning, 2026-11-20 recorded **10,426 cases**: 10,426 passed, 0 failed (MUnit reported none ignored).
 
 ## Test Infrastructure
 
@@ -281,18 +281,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #917 `view --eval` convergence warning, 2026-11-20 (10,410 passed, 0 failed, none ignored). Counts include skipped cases.
+As of the #917 `view --eval` convergence warning, 2026-11-20 (10,426 passed, 0 failed, none ignored). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4514 |
-| xl-core | 1935 |
+| xl-evaluator | 4519 |
+| xl-core | 1945 |
 | xl-ooxml | 1484 |
-| xl-cli | 2031 |
+| xl-cli | 2032 |
 | xl-cats-effect | 220 |
 | xl-agent | 153 |
 | xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 73 |
-| **Total** | **10,410** |
+| **Total** | **10,426** |
 
 
 ## Test Quality Metrics

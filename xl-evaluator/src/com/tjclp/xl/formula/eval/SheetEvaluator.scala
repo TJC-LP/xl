@@ -552,9 +552,11 @@ object SheetEvaluator:
           ),
           blockedCells.iterator.filter(_.sheet == sheet.name).map(_.ref).toVector.sortBy(rowMajor),
           // #917: the cycles the range depends on that did not converge, as recalc reports them.
-          // What a dynamic reader of the pass reads is not in the static closure, so with one in
-          // play every unconverged cycle is reported: saying too much beats a silent stale value.
-          if (targets & dynamic).nonEmpty then full.unconverged
+          // What a dynamic reader reads is not in the static closure, so with one in the closure
+          // every unconverged cycle is reported: saying too much beats a silent stale value. One
+          // the range does not reach (the widened `targets` hold every one of this sheet) cannot
+          // change what the range shows, and reports nothing.
+          if (closure & dynamic).nonEmpty then full.unconverged
           else
             full.unconverged.filter(
               _.members.exists((name, ref) => closure(QualifiedRef(name, ref)))

@@ -225,6 +225,22 @@ class IteratingWindowSpec extends FunSuite:
     assertEquals(shown.unconverged, full.unconverged)
   }
 
+  test("a cell downstream of the INDIRECT that reads the unconverged cycle reports it") {
+    val wb = diverging("C1" -> f("INDIRECT(\"A1\")*2"), "D1" -> f("C1+1"))
+    val only = CellRange.parse("D1:D1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged, wb.recalculate(clock, calc).unconverged)
+  }
+
+  test("an INDIRECT the window does not read does not make it report the cycle") {
+    val wb =
+      diverging("C1" -> f("2*3"), "Z9" -> f("INDIRECT(\"A1\")*2"), "Y9" -> f("OFFSET(C1,0,0)"))
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged, Vector.empty)
+    assertEquals(shown.values, Map(at("C1") -> n(6)))
+  }
+
   test("a cycle on another sheet, read only through INDIRECT, is reported") {
     val wb = iterating(
       Workbook(sheet("S", "C1" -> f("INDIRECT(\"T!A1\")*2")))
