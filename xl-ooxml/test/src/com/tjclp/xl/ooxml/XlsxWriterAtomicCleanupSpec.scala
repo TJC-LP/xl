@@ -28,22 +28,24 @@ class XlsxWriterAtomicCleanupSpec extends FunSuite:
     finally listing.close()
 
   /**
-   * A cell map that raises an `OutOfMemoryError` the moment serialisation iterates it WHILE the
-   * writer's temp file exists — the only way to raise a real `Error` inside the atomic write, and
-   * self-verifying: `sawTemp` records that the path under test was reached.
+   * A row-properties map that raises an `OutOfMemoryError` the moment serialisation iterates it
+   * WHILE the writer's temp file exists — the only way to raise a real `Error` inside the atomic
+   * write, and self-verifying: `sawTemp` records that the path under test was reached. (The trap
+   * sat in `cells` while that was a `Map`; `CellStore` is final, so it moved to the row properties,
+   * which the sheet emitter also walks for every sheet it writes.)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var")) // a test probe
   final class SerialisationTrap(dir: Path)
-      extends scala.collection.immutable.AbstractMap[ARef, Cell]:
+      extends scala.collection.immutable.AbstractMap[Row, RowProperties]:
     @volatile var sawTemp: Boolean = false
-    def iterator: Iterator[(ARef, Cell)] =
+    def iterator: Iterator[(Row, RowProperties)] =
       if tempFiles(dir).nonEmpty then
         sawTemp = true
         throw new OutOfMemoryError("test: serialisation")
       else Iterator.empty
-    def get(key: ARef): Option[Cell] = None
-    def removed(key: ARef): Map[ARef, Cell] = this
-    def updated[V1 >: Cell](key: ARef, value: V1): Map[ARef, V1] = this
+    def get(key: Row): Option[RowProperties] = None
+    def removed(key: Row): Map[Row, RowProperties] = this
+    def updated[V1 >: RowProperties](key: Row, value: V1): Map[Row, V1] = this
 
   test("an Error while serialising leaves no .xl-*.tmp beside the destination (GH-636)") {
     val dir = Files.createTempDirectory("xl-atomic-cleanup-")
@@ -56,7 +58,7 @@ class XlsxWriterAtomicCleanupSpec extends FunSuite:
     // Read back WITH a source context and modify the sheet: the surgical, atomic write path
     val read = XlsxReader.read(source).fold(e => fail(e.message), identity)
     val trap = new SerialisationTrap(dir)
-    val trapped = read.put(read.sheets(0).copy(cells = trap))
+    val trapped = read.put(read.sheets(0).copy(rowProperties = trap))
     // munit's intercept lets a fatal Error through: catch it by hand
     val thrown =
       try

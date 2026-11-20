@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.CellValue
+import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.graph.{DependencyGraph, ReferenceScan}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -58,7 +58,7 @@ object DependentRecalculation:
   private def uncachedFormulas(wb: Workbook): Set[QualifiedRef] =
     wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if WorkbookEvaluator.isUncachedEvaluable(cell.value) =>
+        case cell @ Cell(ref, _, _, _) if WorkbookEvaluator.isUncachedEvaluable(cell.value) =>
           QualifiedRef(sheet.name, ref)
       }
     }.toSet
@@ -100,8 +100,8 @@ object DependentRecalculation:
       val skipped = cyclic ++ allBlocked.intersect(affected)
 
       def expression(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(text, _, _)) => text
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(text, _, _) => text
           case _ => q.ref.toA1
 
       val cycleErrors = skipped.toVector

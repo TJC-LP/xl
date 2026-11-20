@@ -72,7 +72,7 @@ object NaiveGraphs:
 
     val nameRanges = DependencyGraph.NameRanges.empty
     val dependencies = workbook.sheets.flatMap { sheet =>
-      sheet.cells.flatMap { case (cellRef, cell) =>
+      sheet.cells.iterator.flatMap { case cell @ Cell(cellRef, _, _, _) =>
         cell.value match
           // GH-430: dataTable-kind cells are pinned value sources, never computation nodes
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
@@ -122,7 +122,7 @@ object NaiveGraphs:
     counters: RecalcCounters = RecalcCounters.disabled
   ): (Map[QualifiedRef, Set[QualifiedRef]], Map[QualifiedRef, Set[QualifiedRef]]) =
     val formulas: Vector[(QualifiedRef, String)] = workbook.sheets.flatMap { sheet =>
-      sheet.cells.flatMap { case (cellRef, cell) =>
+      sheet.cells.iterator.flatMap { case cell @ Cell(cellRef, _, _, _) =>
         cell.value match
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
           case CellValue.Formula(expression, _, _) =>

@@ -130,7 +130,7 @@ object Generators:
       merged <- Gen.listOfN(numMerged, genCellRange)
     yield Sheet(
       name = name,
-      cells = cells.map(c => c.ref -> c).toMap,
+      cells = CellStore.from(cells),
       mergedRanges = merged.toSet
     )
 

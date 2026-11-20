@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import java.util.regex.Pattern
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.graph.{DependencyGraph, FormulaParses}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
@@ -595,8 +595,8 @@ object RecalcResult:
     parses: FormulaParses = FormulaParses.none
   ): RecalcResult =
     def formulaText(q: QualifiedRef): String =
-      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expression, _, _)) => expression
+      wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(expression, _, _) => expression
         case _ => q.ref.toA1
 
     val failedRefs = failures.iterator.map(e => QualifiedRef(e.sheet, e.ref)).toSet
@@ -607,7 +607,7 @@ object RecalcResult:
       else
         val pinned = wb.sheets.iterator.flatMap { sheet =>
           sheet.cells.iterator.collect {
-            case (ref, cell)
+            case cell @ Cell(ref, _, _, _)
                 if SheetEvaluator
                   .pinnedCache(cell.value, parses.parse(sheet.name, ref, _))
                   .isDefined =>
@@ -653,17 +653,22 @@ object RecalcResult:
           case CellValue.Formula(_, Some(_), _) => true
           case _ => false
       )
-      evaluated.getOrElse(orig.name, Map.empty).foldLeft((cleared, invalidated)) {
-        case ((s, changed), (ref, computed)) =>
-          s.cells.get(ref).map(_.value) match
-            // GH-430: a data-table cache is never rewritten by recalculation — pinned
-            // evaluation echoes it, and an uncached record must stay uncached, not gain
-            // a synthetic Some(Empty).
-            case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => (s, changed)
-            case Some(f @ CellValue.Formula(_, cached, _)) if !cached.contains(computed) =>
-              (s.put(ref, f.copy(cachedValue = Some(computed))), true)
-            case _ => (s, changed)
+      // one store rebuild per sheet (#891): collect the rewritten records, then write them at once
+      val refs = IArray.newBuilder[ARef]
+      val values = IArray.newBuilder[CellValue]
+      evaluated.getOrElse(orig.name, Map.empty).foreach { (ref, computed) =>
+        cleared.cells.valueAt(ref) match
+          // GH-430: a data-table cache is never rewritten by recalculation — pinned
+          // evaluation echoes it, and an uncached record must stay uncached, not gain
+          // a synthetic Some(Empty).
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
+          case f @ CellValue.Formula(_, cached, _) if !cached.contains(computed) =>
+            refs += ref
+            values += f.copy(cachedValue = Some(computed))
+          case _ => ()
       }
+      val rewritten = refs.result()
+      (cleared.withValues(rewritten, values.result()), invalidated || rewritten.nonEmpty)
     }
 
     // Reinstall changed sheets via Workbook.put — not copy — so the surgical-write

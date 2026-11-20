@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
@@ -356,11 +356,13 @@ object SheetEvaluator:
     def formulasOf(target: Sheet): Iterator[QualifiedRef] =
       target.cells.iterator
         .collect {
-          case (ref, cell) if isFormula(cell.value) => QualifiedRef(target.name, ref)
+          case cell if isFormula(cell.value) => QualifiedRef(target.name, cell.ref)
         }
         .filter(graph.isFormula)
     val rangeFormulaCells = sheet.cells.iterator.collect {
-      case (ref, cell) if isFormula(cell.value) && covered(ref) && graph.isFormula(at(ref)) => ref
+      case cell @ Cell(ref, _, _, _)
+          if isFormula(cell.value) && covered(ref) && graph.isFormula(at(ref)) =>
+        ref
     }.toSet
     if rangeFormulaCells.isEmpty then RangeEvalResult(Map.empty, Vector.empty, Vector.empty)
     else
@@ -1049,8 +1051,8 @@ object SheetEvaluator:
    * Every other cell becomes the plain value, as before.
    */
   private[xl] def threadComputed(sheet: Sheet, ref: ARef, value: CellValue): Sheet =
-    sheet.cells.get(ref).map(_.value) match
-      case Some(f: CellValue.Formula) =>
+    sheet.cells.valueAt(ref) match
+      case f: CellValue.Formula =>
         value match
           // only an uncached record handed back by reference (`IFERROR(X1,0)` over an X1 not yet
           // evaluated; `cellResult` unwraps cached ones): the value is unknown, so the cell stays
@@ -1064,8 +1066,8 @@ object SheetEvaluator:
    * does unless the cell holds a formula record, whose cache alone it rewrites.
    */
   private[eval] def threadChangesStructure(sheet: Sheet, ref: ARef): Boolean =
-    sheet.cells.get(ref).map(_.value) match
-      case Some(_: CellValue.Formula) => false
+    sheet.cells.valueAt(ref) match
+      case _: CellValue.Formula => false
       case _ => true
 
   /**
@@ -1079,15 +1081,19 @@ object SheetEvaluator:
    * overlays computed results on the original sheet.
    */
   private[eval] def stripFormulaCaches(sheet: Sheet, refs: Set[ARef]): Sheet =
-    refs.foldLeft(sheet) { (s, r) =>
-      s.cells.get(r).map(_.value) match
+    val at = IArray.newBuilder[ARef]
+    val stripped = IArray.newBuilder[CellValue]
+    refs.foreach { r =>
+      sheet.cells.valueAt(r) match
         // GH-430: a DataTable cache is the sole source of truth. Graph analysis normally keeps
         // these records out of the dynamic bucket; keep this guard as structural safety.
-        case Some(CellValue.Formula(_, Some(_), _: FormulaKind.DataTable)) => s
-        case Some(f @ CellValue.Formula(_, Some(_), _)) =>
-          s.put(r, f.copy(cachedValue = None))
-        case _ => s
+        case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => ()
+        case f @ CellValue.Formula(_, Some(_), _) =>
+          at += r
+          stripped += f.copy(cachedValue = None)
+        case _ => ()
     }
+    sheet.withValues(at.result(), stripped.result())
 
   /**
    * Convert EvalError to XLError for integration.

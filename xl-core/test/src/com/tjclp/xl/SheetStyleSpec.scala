@@ -191,7 +191,7 @@ class SheetStyleSpec extends FunSuite:
       .copy(cells = {
         val cell = Sheet("Test")(ref"A1")
           .withHyperlink("https://example.com")
-        Map(ref"A1" -> cell)
+        CellStore.of(cell)
       })
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Important note"))
       .put(ref"A1", CellValue.Text("Updated Link"))

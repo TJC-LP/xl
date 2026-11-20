@@ -13,7 +13,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, SheetName}
-import com.tjclp.xl.cells.{CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -500,7 +500,8 @@ object WorkbookEvaluator:
     val counters = memo.counters
     val uncached: Set[QualifiedRef] = wb.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if isUncachedEvaluable(cell.value) => QualifiedRef(sheet.name, ref)
+        case cell @ Cell(ref, _, _, _) if isUncachedEvaluable(cell.value) =>
+          QualifiedRef(sheet.name, ref)
       }
     }.toSet
     if uncached.isEmpty then RecalcResult.cacheResults(wb, Map.empty, Vector.empty)
@@ -513,8 +514,8 @@ object WorkbookEvaluator:
       memo.passCache.foreach(_.useParses(graph.parses))
 
       def formulaText(q: QualifiedRef): String =
-        wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-          case Some(CellValue.Formula(expr, _, _)) => expr
+        wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+          case CellValue.Formula(expr, _, _) => expr
           case _ => q.ref.toA1
 
       val (cyclicCore, blocked) = counters.time(RecalcCounters.Phase.Tarjan) {
@@ -672,8 +673,8 @@ object WorkbookEvaluator:
     generationMemo.passCache.foreach(_.useParses(graph.parses))
 
     def formulaText(q: QualifiedRef): String =
-      wb(q.sheet).toOption.flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(expr, _, _)) => expr
+      wb(q.sheet).toOption.fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(expr, _, _) => expr
         case _ => q.ref.toA1
 
     // GH-346: cycle isolation on the WORKBOOK-level graph — same-sheet and cross-sheet cycles
@@ -1302,8 +1303,8 @@ object WorkbookEvaluator:
     members: List[(QualifiedRef, Int, String)]
   ): Map[QualifiedRef, CellValue] =
     members.flatMap { (q, idx, _) =>
-      baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-        case Some(CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _)) => Some(q -> cached)
+      baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+        case CellValue.Formula(_, Some(cached @ CellValue.Number(_)), _) => Some(q -> cached)
         case _ => None
     }.toMap
 
@@ -1397,8 +1398,8 @@ object WorkbookEvaluator:
     val kinds: Map[QualifiedRef, FormulaKind] =
       members.map { (q, idx, _) =>
         val kind: FormulaKind =
-          baseSheets.lift(idx).flatMap(_.cells.get(q.ref)).map(_.value) match
-            case Some(CellValue.Formula(_, _, k)) => k
+          baseSheets.lift(idx).fold(CellValue.Empty)(_.cells.valueAt(q.ref)) match
+            case CellValue.Formula(_, _, k) => k
             case _ => FormulaKind.Normal()
         q -> kind
       }.toMap
@@ -1455,6 +1456,9 @@ object WorkbookEvaluator:
             )
           }
 
+    // the members of each sheet, so a round overlays a sheet's members in one store rebuild (#891)
+    val membersBySheet = members.groupBy(_._2).toVector.sortBy(_._1)
+
     @annotation.tailrec
     def loop(round: Int, prev: Map[QualifiedRef, CellValue]): FixpointOutcome =
       // Evaluation-local observation of the existing effect capability: all evaluators in this
@@ -1465,8 +1469,10 @@ object WorkbookEvaluator:
         def nextDouble(): Double =
           drewRandomness = true
           rng.nextDouble()
-      val overlaid = members.foldLeft(baseSheets) { case (sheets, (q, idx, text)) =>
-        sheets.updated(idx, sheets(idx).put(q.ref, overlay(q, text, prev.get(q))))
+      val overlaid = membersBySheet.foldLeft(baseSheets) { case (sheets, (idx, onSheet)) =>
+        val refs = IArray.from(onSheet.map(_._1.ref))
+        val values = IArray.from(onSheet.map((q, _, text) => overlay(q, text, prev.get(q))))
+        sheets.updated(idx, sheets(idx).withValues(refs, values))
       }
       val results: Map[QualifiedRef, Either[XLError, CellValue]] = iterative.scheme match
         case IterationScheme.Jacobi =>

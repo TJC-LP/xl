@@ -1466,9 +1466,9 @@ object WriteCommands:
     after.sheets.iterator
       .map { sheet =>
         previous.get(sheet.name) match
-          case None => sheet.name -> sheet.cells.keySet
+          case None => sheet.name -> sheet.cells.refs.toSet
           case Some(old) =>
-            val refs = (old.cells.keySet ++ sheet.cells.keySet).filter { r =>
+            val refs = (old.cells.refs.toSet ++ sheet.cells.refs.toSet).filter { r =>
               old.cells.get(r).map(_.value) != sheet.cells.get(r).map(_.value)
             }
             sheet.name -> refs
@@ -1580,7 +1580,7 @@ object WriteCommands:
   ): StructuralCaches =
     def cachedCells(wb: Workbook, keep: (SheetName, ARef) => Boolean): Int =
       wb.sheets.iterator.map { sheet =>
-        sheet.cells.iterator.count { case (ref, cell) =>
+        sheet.cells.iterator.count { case cell @ Cell(ref, _, _, _) =>
           cell.value match
             case CellValue.Formula(_, Some(_), _: FormulaKind.DataTable) => false
             case CellValue.Formula(_, Some(_), _) => keep(sheet.name, ref)
@@ -1588,7 +1588,7 @@ object WriteCommands:
         }
       }.sum
     val preserved = edited.sheets.iterator.map { sheet =>
-      sheet.cells.iterator.count { case (_, cell) =>
+      sheet.cells.iterator.count { case cell =>
         cell.value match
           case CellValue.Formula(_, Some(_), _) => true
           case _ => false

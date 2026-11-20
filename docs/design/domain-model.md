@@ -59,7 +59,7 @@ object SheetName:
 
 ### Invariants
 - `CellRange` is normalized (start <= end by row, then col).
-- `Sheet` stores a sparse `Map[ARef, Cell]`; missing keys mean `CellValue.Empty`.
+- `Sheet` stores its cells sparsely in a `CellStore` (a persistent row-radix trie keyed by the cell's own `ref`, iterated row-major; #891); an absent reference means `CellValue.Empty`.
 - `Workbook.sheets` keeps names unique and preserves ordering.
 
 ## Values & Formulas
@@ -174,7 +174,7 @@ final case class Cell(
 
 final case class Sheet(
   name: SheetName,
-  cells: Map[ARef, Cell] = Map.empty,
+  cells: CellStore = CellStore.empty,
   mergedRanges: Set[CellRange] = Set.empty,
   columnProperties: Map[Column, ColumnProperties] = Map.empty,
   rowProperties: Map[Row, RowProperties] = Map.empty,

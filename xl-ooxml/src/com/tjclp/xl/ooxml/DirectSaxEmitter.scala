@@ -146,7 +146,7 @@ object DirectSaxEmitter:
    */
   private def emitDimension(writer: SaxWriter, sheet: Sheet): Unit =
     if sheet.cells.nonEmpty then
-      val refs = sheet.cells.keys.toSeq
+      val refs = sheet.cells.refs.toSeq
       val minCol = refs.map(_.col.index0).minOption.getOrElse(0)
       val maxCol = refs.map(_.col.index0).maxOption.getOrElse(0)
       val minRow = refs.map(_.row.index0).minOption.getOrElse(0)
@@ -223,7 +223,7 @@ object DirectSaxEmitter:
   ): Unit =
     writer.startElement("sheetData")
 
-    val sortedCells = sheet.cells.values.toArray
+    val sortedCells = sheet.cells.iterator.toArray
     if sortedCells.length > 1 then Arrays.sort(sortedCells, cellComparator)
 
     val rowProps = sheet.rowProperties.iterator.map { case (row, props) =>

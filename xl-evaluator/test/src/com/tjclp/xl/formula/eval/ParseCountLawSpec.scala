@@ -283,7 +283,7 @@ class ParseCountLawSpec extends ScalaCheckSuite:
   property("recalculate-with-cone over one graph equals `recalculate` and `editCone`") {
     Prop.forAll(CompactGraphGens.genWorkbook) { wb =>
       val seeds = wb.sheets.iterator.flatMap { sheet =>
-        sheet.cells.keysIterator.take(2).map(QualifiedRef(sheet.name, _))
+        sheet.cells.refs.take(2).map(QualifiedRef(sheet.name, _))
       }.toSet
       val (result, cone) = recalculateWithEditCone(wb, clock, None, seeds)
       Prop.all(

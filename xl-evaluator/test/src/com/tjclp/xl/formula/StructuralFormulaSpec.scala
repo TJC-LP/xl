@@ -304,7 +304,7 @@ class StructuralFormulaSpec extends FunSuite:
     val target = SheetName.unsafe("Data")
     def caches(w: Workbook): Seq[Option[CellValue]] =
       w.sheets
-        .flatMap(_.cells.values.map(_.value))
+        .flatMap(_.cells.iterator.map(_.value))
         .collect { case CellValue.Formula(_, cached, _) => cached }
         .sortBy(_.toString)
     val expected = caches(wb)

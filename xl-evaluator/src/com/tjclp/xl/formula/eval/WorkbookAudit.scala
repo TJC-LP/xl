@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
 import com.tjclp.xl.formula.functions.{ArgValue, FunctionRegistry}
@@ -201,7 +201,7 @@ object WorkbookAudit:
     val parses = recalcGraph.parses
     val viaName = volatileNames(wb)
     val scanned: Vector[Finding] = wb.sheets.iterator.flatMap { sheet =>
-      sheet.cells.iterator.flatMap { (ref, cell) =>
+      sheet.cells.iterator.flatMap { case cell @ Cell(ref, _, _, _) =>
         classify(
           QualifiedRef(sheet.name, ref),
           cell.value,

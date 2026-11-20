@@ -516,8 +516,8 @@ class ClearCommandSpec extends FunSuite:
       .withCellStyle(b7, link)
     val linked = sheet.copy(cells =
       sheet.cells
-        .updated(b7, sheet.cells(b7).withHyperlink("https://example.com/"))
-        .updated(c7, sheet.cells(c7).withHyperlink("https://example.com/"))
+        .updated(sheet(b7).withHyperlink("https://example.com/"))
+        .updated(sheet(c7).withHyperlink("https://example.com/"))
     )
     CellCommands
       .clear(

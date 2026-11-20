@@ -471,7 +471,7 @@ class ReferenceOperatorsSpec extends FunSuite:
     val path = TestFixtures.copyToTemp("reference-operators-lo.xlsx")
     val read = XlsxReader.read(path).fold(e => fail(e.message), identity)
     val sheet = read.sheets.headOption.getOrElse(fail("no sheet"))
-    val formulas = sheet.cells.values.toList.flatMap { cell =>
+    val formulas = sheet.cells.iterator.toList.flatMap { cell =>
       cell.value match
         case CellValue.Formula(text, Some(cached), _) => List((cell.ref, text, cached))
         case _ => Nil

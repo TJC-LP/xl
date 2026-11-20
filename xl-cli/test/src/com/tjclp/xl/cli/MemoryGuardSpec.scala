@@ -456,29 +456,31 @@ class MemoryGuardSpec extends CatsEffectSuite:
   }
 
   /**
-   * A cell map that raises an `OutOfMemoryError` the moment serialisation iterates it WHILE the
-   * writer's temp file exists: a real `Error` inside the atomic write, self-verifying via
-   * `sawTemp`.
+   * A row-properties map that raises an `OutOfMemoryError` the moment serialisation iterates it
+   * WHILE the writer's temp file exists: a real `Error` inside the atomic write, self-verifying via
+   * `sawTemp`. (It sat in `cells` while that was a `Map`; `CellStore` is final.)
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var")) // a test probe
   final class SerialisationTrap(directory: Path)
-      extends scala.collection.immutable.AbstractMap[ARef, Cell]:
+      extends scala.collection.immutable.AbstractMap[Row, RowProperties]:
     @volatile var sawTemp: Boolean = false
-    def iterator: Iterator[(ARef, Cell)] =
+    def iterator: Iterator[(Row, RowProperties)] =
       if tempFiles(directory).unsafeRunSync().nonEmpty then
         sawTemp = true
         throw new OutOfMemoryError("test: serialisation")
       else Iterator.empty
-    def get(key: ARef): Option[Cell] = None
-    def removed(key: ARef): Map[ARef, Cell] = this
-    def updated[V1 >: Cell](key: ARef, value: V1): Map[ARef, V1] = this
+    def get(key: Row): Option[RowProperties] = None
+    def removed(key: Row): Map[Row, RowProperties] = this
+    def updated[V1 >: RowProperties](key: Row, value: V1): Map[Row, V1] = this
 
   test("writer: an OutOfMemoryError while serialising is RESOURCE_LIMIT and leaves no .xl-*.tmp") {
     for
       source <- fixture("book.xlsx")
       read <- IO.fromEither(XlsxReader.read(source).left.map(e => new Exception(e.message)))
       trap = new SerialisationTrap(dir())
-      trapped = read.put(read.sheets(0).copy(cells = trap)) // modified: the atomic write path
+      trapped = read.put(
+        read.sheets(0).copy(rowProperties = trap)
+      ) // modified: the atomic write path
       out = dir().resolve("trapped-out.xlsx")
       attempt <- MemoryGuard.writer.writeWith(trapped, out, WriterConfig.default).attempt
       leftovers <- tempFiles(dir())

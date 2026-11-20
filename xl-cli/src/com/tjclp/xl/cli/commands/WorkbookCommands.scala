@@ -27,7 +27,7 @@ object WorkbookCommands:
     val sheetStats = wb.sheets.map { s =>
       val usedRange = s.usedRange
       val cellCount = s.cells.size
-      val formulaCount = s.cells.values.count(_.isFormula)
+      val formulaCount = s.cells.iterator.count(_.isFormula)
       (s.name.value, usedRange, cellCount, formulaCount)
     }
     IO.pure(Markdown.renderSheetList(sheetStats))
@@ -45,7 +45,7 @@ object WorkbookCommands:
       val obj =
         InspectCommands.sheetHeader(s.name.value, idx + 1, wb.getSheetState(s.name), s.usedRange)
       obj("cells") = ujson.Num(s.cells.size)
-      obj("formulas") = ujson.Num(s.cells.values.count(_.isFormula))
+      obj("formulas") = ujson.Num(s.cells.iterator.count(_.isFormula))
       obj
     }))
 

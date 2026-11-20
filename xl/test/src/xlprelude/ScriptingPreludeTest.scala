@@ -309,7 +309,7 @@ class ScriptingPreludeTest extends FunSuite:
     val result = Excel.writeRecalculated(Workbook(sheet), path.toString)
     assert(!result.isClean)
     assertEquals(result.errors.map(_.ref.toA1), Vector("A2"))
-    val cells = Excel.read(path.toString).sheets.headOption.map(_.cells).getOrElse(Map.empty)
+    val cells = Excel.read(path.toString).sheets.headOption.map(_.cells).getOrElse(CellStore.empty)
     cells.get(ref"A3").map(_.value) match
       case Some(CellValue.Formula(_, Some(CellValue.Number(n)), _)) =>
         assertEquals(n, BigDecimal(6))
@@ -556,7 +556,63 @@ class ScriptingPreludeTest extends FunSuite:
     )
     // Bounded steps compose with the patch DSL without an Either in the loop body
     val patch = ref"A1".tryDown(2).fold(Patch.empty)(_ := "third row")
-    assertEquals(Sheet("Nav").put(patch).cells.keySet, Set(ref"A3"))
+    assertEquals(Sheet("Nav").put(patch).cells.refs.toSet, Set(ref"A3"))
+
+  // The deprecated Map-shaped accessors are the subject here.
+  @annotation.nowarn("cat=deprecation")
+  private def legacyCellAccessors(): Unit =
+    val before = Sheet("L").put(ref"B2", 2).put(ref"A1", "a").put(ref"C1", 3)
+    val after = before.put(ref"D4", 4)
+    // Map.keys / values: traversed more than once, as code written against the Map does
+    val keys: Iterable[ARef] = before.cells.keys
+    assertEquals(keys.toList, List(ref"A1", ref"C1", ref"B2"))
+    assertEquals(keys.size, 3)
+    assertEquals(keys.filter(_.row.index0 == 0).map(_.toA1).toList, List("A1", "C1"))
+    val values: Iterable[Cell] = before.cells.values
+    assertEquals(values.map(_.ref).toList, keys.toList)
+    assertEquals(values.count(_.value != CellValue.Empty), 3)
+    assertEquals(before.cells.keysIterator.toList, keys.toList)
+    assertEquals(before.cells.valuesIterator.map(_.ref).toList, keys.toList)
+    // Map.keySet: a real set (the diff recipe's union has no duplicates)
+    val keySet: Set[ARef] = before.cells.keySet
+    assert(keySet.contains(ref"B2") && !keySet(ref"Z9"))
+    assertEquals(keySet, Set(ref"A1", ref"B2", ref"C1"))
+    assertEquals((before.cells.keySet ++ after.cells.keySet).size, 4)
+    assertEquals(after.cells.keySet -- before.cells.keySet, Set(ref"D4"))
+    assertEquals(keySet + ref"Z9" - ref"A1", Set(ref"B2", ref"C1", ref"Z9"))
+    assertEquals(Sheet("E").cells.keySet, Set.empty[ARef])
+
+  test("#891: the Map-shaped accessors of Sheet.cells still answer, deprecated"):
+    legacyCellAccessors()
+
+  test("#891: Sheet.cells is a CellStore usable from a script, and the lookup macros expand"):
+    val sheet = Sheet("Store").put(ref"B2", 2).put(ref"A1", "a").put(ref"C1", 3)
+    val store: CellStore = sheet.cells
+    assertEquals(store.size, 3)
+    assertEquals(sheet.cells.get(ref"B2").map(_.value), Some(CellValue.Number(BigDecimal(2))))
+    assertEquals(sheet.cells.get(ref"Z9"), None)
+    // Row-major iteration: rows ascending, then columns
+    assertEquals(sheet.cells.iterator.map(_.ref.toA1).toList, List("A1", "C1", "B2"))
+    assertEquals(sheet.cells.refs.toList, List(ref"A1", ref"C1", ref"B2"))
+    // Construction from outside the package: of / from / empty / newBuilder, value equality
+    val built: CellStore =
+      CellStore.of(Cell(ref"A1", CellValue.Text("a")), Cell(ref"B2", CellValue.Number(1)))
+    assertEquals(built.size, 2)
+    assertEquals(CellStore.from(built.iterator.toVector.reverse), built)
+    val b = CellStore.newBuilder
+    b += Cell(ref"A1", CellValue.Text("a"))
+    assertEquals(b.result().size, 1)
+    assertEquals(Sheet("E").cells, CellStore.empty)
+    assertEquals(
+      Sheet("Copy").copy(cells = built).cells.get(ref"A1").map(_.value),
+      Some(CellValue.Text("a"))
+    )
+    // The cell-lookup macros expand to `sheet.cells` reads at this (external) call site
+    assertEquals(sheet.cell("B2").map(_.value), Some(CellValue.Number(BigDecimal(2))))
+    assertEquals(sheet.range("A1:C1").map(_.ref.toA1), List("A1", "C1"))
+    assertEquals(sheet.get("C1").map(_.ref.toA1), List("C1"))
+    val dynamic = "A1"
+    assertEquals(sheet.cell(dynamic).map(_.value), Some(CellValue.Text("a")))
 
   test("GH-430: a data-table record authors from scratch through the prelude and round-trips"):
     // FormulaKind must resolve through the prelude export alone (export-forwarder landmine
@@ -582,7 +638,7 @@ class ScriptingPreludeTest extends FunSuite:
     val path = java.nio.file.Files.createTempDirectory("xl-prelude-dt").resolve("records.xlsx")
     Excel.write(Workbook(sheet), path.toString)
     val loaded = Excel.read(path.toString)
-    val cells = loaded.sheets.headOption.map(_.cells).getOrElse(Map.empty)
+    val cells = loaded.sheets.headOption.map(_.cells).getOrElse(CellStore.empty)
     assertEquals(cells.get(ref"F2").map(_.value), Some(anchor))
     cells.get(ref"G2").map(_.value) match
       case Some(CellValue.Formula(expr, cached, k: FormulaKind.DataTable)) =>
@@ -735,9 +791,10 @@ class ScriptingPreludeTest extends FunSuite:
     assertEquals(dirty.audit.isClean, false)
     assertEquals(dirty.audit.cycles.map(_.members.size), Vector(1))
     // Cell.isUncachedFormula: the formula above has never been recalculated
-    val loopCell: Cell = dirty.sheets.flatMap(_.cells.values).headOption.getOrElse(fail("no cell"))
+    val loopCell: Cell =
+      dirty.sheets.flatMap(_.cells.iterator).headOption.getOrElse(fail("no cell"))
     assert(loopCell.isUncachedFormula)
-    assert(wb.sheets.flatMap(_.cells.values).forall(!_.isUncachedFormula))
+    assert(wb.sheets.flatMap(_.cells.iterator).forall(!_.isUncachedFormula))
     // an intentional circular model (iterative calculation declared, caches present) is clean;
     // its cycle is reported as a note
     val model = Workbook(

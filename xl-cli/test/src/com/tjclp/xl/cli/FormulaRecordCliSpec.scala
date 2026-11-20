@@ -5,7 +5,7 @@ import munit.FunSuite
 import java.nio.file.{Files, Path}
 
 import cats.effect.{IO, unsafe}
-import com.tjclp.xl.{CellRange, Sheet, Workbook}
+import com.tjclp.xl.{CellRange, CellStore, Sheet, Workbook}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.commands.{DiffCommands, WriteCommands}
@@ -379,7 +379,7 @@ class FormulaRecordCliSpec extends FunSuite:
       assert(sheetXml.contains("<v>42</v>"), sheetXml)
 
       val reread = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
-      val cells = reread.sheets.headOption.map(_.cells).getOrElse(Map.empty)
+      val cells = reread.sheets.headOption.map(_.cells).getOrElse(CellStore.empty)
       assertEquals(
         cells.get(aref("F2")).map(_.value),
         Some(CellValue.dataTable(tableKind, Some(num(42))))

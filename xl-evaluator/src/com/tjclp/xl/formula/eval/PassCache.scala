@@ -205,7 +205,6 @@ private[formula] final class PassCache(
    */
   def begin(ready: => Readiness): Unit =
     generations.clear()
-    usedRanges.clear()
     slices.clear()
     covering.clear()
     demands.clear()
@@ -236,23 +235,6 @@ private[formula] final class PassCache(
   def structureChanged(sheet: SheetName): Unit =
     generationCell(sheet).incrementAndGet()
     ()
-
-  private val usedRanges = new ConcurrentHashMap[(SheetName, Long), UsedRange]()
-
-  /**
-   * `sheet.usedRange`, scanned once per sheet and structural generation while the pass is active
-   * (every scan counts as a `UsedRangeScans`), and on every call otherwise.
-   */
-  def usedRange(sheet: Sheet): Option[CellRange] =
-    if !active then scanUsedRange(sheet)
-    else
-      usedRanges
-        .computeIfAbsent((sheet.name, generation(sheet.name)), _ => UsedRange(scanUsedRange(sheet)))
-        .range
-
-  private def scanUsedRange(sheet: Sheet): Option[CellRange] =
-    counters.increment(RecalcCounters.Counter.UsedRangeScans)
-    sheet.usedRange
 
   // ----- formula parses -----
 
@@ -362,7 +344,7 @@ private[formula] final class PassCache(
         existing match
           case Some(found) => SliceAnswer.Use(found)
           case scala.None =>
-            val used = usedRange(sheet)
+            val used = sheet.usedRange
             val usedRows = used.fold(0)(_.height)
             val threshold = math.max(limits.minSliceRows, usedRows / limits.sliceRowsDivisor)
             if b - a + 1 < threshold then SliceAnswer.Small
@@ -427,11 +409,10 @@ private[formula] final class PassCache(
       var i = 0
       var complete = true
       while complete && i < n do
-        sheet.cells.get(ARef.from0(col, r0 + i)).map(_.value) match
-          case scala.None => values(i) = CellValue.Empty
-          case Some(CellValue.Formula(_, scala.None, _)) => complete = false
-          case Some(CellValue.Formula(_, Some(cached), _)) => values(i) = cached
-          case Some(value) => values(i) = value
+        sheet.cells.valueAt(ARef.from0(col, r0 + i)) match
+          case CellValue.Formula(_, scala.None, _) => complete = false
+          case CellValue.Formula(_, Some(cached), _) => values(i) = cached
+          case value => values(i) = value
         i += 1
       if !complete then
         cachedCells.addAndGet(-n.toLong)
@@ -544,8 +525,6 @@ private[formula] object PassCache:
 
     /** The workbook's sheet of this name. */
     case Book(sheet: SheetName)
-
-  private final case class UsedRange(range: Option[CellRange])
 
   /** A [[Readiness]] built once, on first use; a lazy val is safe to share between waves. */
   private final class Deferred(build: () => Readiness):

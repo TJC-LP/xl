@@ -35,6 +35,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a
+  persistent row-radix trie whose rows keep their cells in parallel arrays (value, style and
+  hyperlink side by side), so a cell costs roughly 12-17 bytes of overhead instead of about 60,
+  a lookup is a few shifts with no hashing, and every node carries summaries: `usedRange` reads
+  them in O(height) instead of scanning every cell. A row of more than 64 cells that spans
+  several 256-column bands keeps one leaf per band, so a single-cell write copies at most 256
+  cells however wide the row is. It is keyed by each cell's own `ref`, has
+  value equality (equal cells at equal references, however the store was built) and iterates
+  row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
+  change. Single-cell writes are slower than on the `Map` (about 1.5× on 20-column rows, about 3×
+  on 500-column rows: a `put` copies the row's leaf, or its 256-column band); bulk writes
+  (`putAll`, `Sheet.withValues`, the builder) are not: see "Sheet cell storage" in
+  `docs/reference/performance-guide.md`. Java-serialized `ARef`s and sheets are not portable
+  across this version: the `ARef` packing changed and the store has its own serial form (its
+  cells, rebuilt through the builder on reading). Migrating:
+  - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
+    macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
+  - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
+    `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
+    traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+    The five `Map` names (`keys`, `keySet`, `keysIterator`, `values`, `valuesIterator`) remain as
+    deprecated forwarders (since 0.27.0) so such code compiles with a warning: views over the
+    store, row-major, nothing copied. No other `Map` method is kept (`map`, `filter`, `foreach`,
+    `toMap`, `(ref, cell)` tuples: go through `iterator`). A script that must compile against
+    both 0.26.0 and this version can read through `sheet.cellsSorted`/`rowsSorted` and
+    `cells.get(ref)`, which did not change.
+  - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
+    `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
+    `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
+    `removedIn(range)`.
+  - `Optics.sheetCells` is a `Lens[Sheet, CellStore]`. `CellStore` is exported from
+    `com.tjclp.xl.{*, given}` and the scripting prelude.
+  - `Sheet.withValues(refs, values)` writes many values in one store rebuild. Row and column
+    inserts and deletes re-key the store instead of rebuilding it.
+  - `RecalcCounters.Counter.UsedRangeScans` is removed with the per-pass used-range memo it
+    counted: the store's summaries answer `usedRange` without a scan.
+
 - **Breaking: long-deprecated API is removed** (#891).
   - `Workbook.addSheet`, `insertSheet`, both `removeSheet` and `renameSheet` (deprecated since
     0.2.0): use `put`, `insertAt` (which refuses a duplicate name, as `addSheet` did), `remove` and
@@ -357,6 +394,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   17.0 s to 7.2 s. What remains on
   the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
   `--skip-data-tables` (under Added) audits it in 2.6 s.
+
+- **Building a `CellStore` from sorted cells streams it 32 rows at a time** (#891): the builder
+  kept several arrays with a slot per cell and held them all while assembling the store, so
+  loading a numeric workbook peaked higher than on the `Map` although the finished store is a
+  seventh of the size. A cell that sorts after the last one now goes straight into its row
+  group, and only finished groups are kept; a cell out of order is buffered, sorted and merged
+  at the end (last write still wins). A 2M-cell build in 8 columns allocates 13.8 bytes a cell
+  where it allocated 133, and a 1M x 8 numeric workbook loads in a 5,120 MiB heap where the
+  `Map` needed 5,696. The built store is unchanged.
+
+- **Array mode reads a range that lies mostly past the data through its populated box** (#891):
+  a range was read position by position whenever it had no more positions than the sheet had
+  cells, which on a sheet of more than 1,048,576 cells sent a whole column down that path (a
+  million reads for a column whose data ends at row 60,000). The rule now also asks that at
+  least half of the range lie inside the sheet's extent, which the store answers from its
+  summaries. SUMPRODUCT's choice for a raw range beside a sparse argument uses the same rule.
+  Values are unchanged.
 
 - **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
   `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed

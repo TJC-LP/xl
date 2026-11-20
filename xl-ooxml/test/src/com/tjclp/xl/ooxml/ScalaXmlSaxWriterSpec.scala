@@ -4,13 +4,13 @@ import munit.FunSuite
 import scala.xml.XML
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 
 class ScalaXmlSaxWriterSpec extends FunSuite:
 
   test("ScalaXmlSaxWriter builds Elem equivalent to toXml for simple sheet") {
     val cell = Cell(ARef(Column.from0(0), Row.from0(0)), CellValue.Number(BigDecimal(10)))
-    val sheet = Sheet(SheetName.unsafe("Sheet1"), Map(cell.ref -> cell))
+    val sheet = Sheet(SheetName.unsafe("Sheet1"), CellStore.of(cell))
     val ws = OoxmlWorksheet.fromDomain(sheet)
 
     val writer = ScalaXmlSaxWriter()
@@ -27,7 +27,7 @@ class ScalaXmlSaxWriterSpec extends FunSuite:
 
   test("ScalaXmlSaxWriter preserves xml:space on inline strings") {
     val cell = Cell(ARef(Column.from0(0), Row.from0(0)), CellValue.Text("  spaced"))
-    val sheet = Sheet(SheetName.unsafe("Sheet1"), Map(cell.ref -> cell))
+    val sheet = Sheet(SheetName.unsafe("Sheet1"), CellStore.of(cell))
     val ws = OoxmlWorksheet.fromDomain(sheet)
 
     val writer = ScalaXmlSaxWriter()

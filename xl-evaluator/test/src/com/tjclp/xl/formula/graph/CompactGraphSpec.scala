@@ -7,7 +7,7 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{Cell, CellValue}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.formula.parser.FormulaParser
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 import munit.ScalaCheckSuite
 import org.scalacheck.Prop
@@ -365,7 +365,7 @@ class CompactGraphSpec extends ScalaCheckSuite:
           ARef.from0(3, r - 1) -> CellValue.Formula(s"SUM($$C$$2:C$r)")
         )
       }
-      Sheet(SheetName.unsafe("Run"), cells = cells.map((ref, v) => ref -> Cell(ref, v)).toMap)
+      Sheet(SheetName.unsafe("Run"), cells = CellStore.from(cells.map((ref, v) => Cell(ref, v))))
     }))
     val g = CompactGraph.build(wb)
     val log2 = 32 - Integer.numberOfLeadingZeros(n)
@@ -384,10 +384,12 @@ class CompactGraphSpec extends ScalaCheckSuite:
   test("a 100k-formula chain needs no call stack") {
     val n = 100000
     val cells = (1 to n).map { r =>
-      val ref = ARef.from0(0, r - 1)
-      ref -> Cell(ref, CellValue.Formula(if r == 1 then "1" else s"A${r - 1}+1"))
+      Cell(ARef.from0(0, r - 1), CellValue.Formula(if r == 1 then "1" else s"A${r - 1}+1"))
     }
-    val g = CompactGraph.build(Workbook(Vector(Sheet(SheetName.unsafe("S"), cells = cells.toMap))))
+    val g =
+      CompactGraph.build(
+        Workbook(Vector(Sheet(SheetName.unsafe("S"), cells = CellStore.from(cells))))
+      )
     assertEquals(g.cyclicFormulas, BitSet.empty)
     assertEquals(g.kahn(BitSet.empty).formulaOrder.toVector, (0 until n).toVector)
     assertEquals(g.reach(BitSet(0), BitSet.empty).formulas.size, n - 1)

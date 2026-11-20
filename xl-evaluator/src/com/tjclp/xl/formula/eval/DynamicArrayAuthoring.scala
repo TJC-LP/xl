@@ -6,7 +6,7 @@ import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.DependencyGraph
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.sheets.styleSyntax.{getCellStyle, withCellStyle}
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -292,7 +292,7 @@ private[xl] object DynamicArrayAuthoring:
    * writes to one sheet (a batch) computes this once and keeps it current instead of rescanning.
    */
   def spillsOf(sheet: Sheet): Vector[Spill] =
-    sheet.cells.valuesIterator
+    sheet.cells.iterator
       .flatMap(cell =>
         cell.value match
           case CellValue.Formula(text, _, arr: FormulaKind.ArrayFormula)
@@ -383,22 +383,22 @@ private[xl] object DynamicArrayAuthoring:
       )
     val keep = (r: ARef) => kept.exists(_.kept.exists(_.contains(r)))
     val emptied = (r: ARef) => targeted(r) && !keep(r)
-    val result =
+    val remaining =
       if keepFormatting then
         // GH-897: a released spill cell that `clearValues` dropped (no style, no hyperlink) gets
         // a bare record too when its row or column is styled, inside the ranges or not
         val pinned = cleared.iterator
           .filter(r => !released.cells.contains(r) && inStyledBand(sheet, r))
-          .flatMap(r => sheet.cells.get(r).map(c => r -> c.copy(value = CellValue.Empty)))
-        released.copy(cells = released.cells.flatMap { (r, cell) =>
-          if !emptied(r) then Some(r -> cell)
+          .flatMap(r => sheet.cells.get(r).map(_.copy(value = CellValue.Empty)))
+        CellStore.from(released.cells.iterator.flatMap { cell =>
+          if !emptied(cell.ref) then Some(cell)
           else
-            Option.when(cell.styleId.isDefined || inStyledBand(sheet, r))(
-              r -> cell.copy(value = CellValue.Empty, hyperlink = None)
+            Option.when(cell.styleId.isDefined || inStyledBand(sheet, cell.ref))(
+              cell.copy(value = CellValue.Empty, hyperlink = None)
             )
         } ++ pinned)
-      else released.copy(cells = released.cells.filterNot((r, _) => emptied(r)))
-    ContentsCleared(result, cleared, kept)
+      else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
+    ContentsCleared(released.copy(cells = remaining), cleared, kept)
 
   /**
    * Whether `r`'s row or column carries a default style (`<row s= customFormat="1">` or `<col
@@ -476,8 +476,8 @@ private[xl] object DynamicArrayAuthoring:
    * legacy (CSE) extent is left alone: its cells are the user's to clear.
    */
   private def clearOwnSpill(sheet: Sheet, anchor: ARef): (Sheet, Set[ARef]) =
-    sheet.cells.get(anchor).map(_.value) match
-      case Some(CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula))
+    sheet.cells.valueAt(anchor) match
+      case CellValue.Formula(_, _, arr: FormulaKind.ArrayFormula)
           if arr.isDynamicArray && arr.ref.start == anchor =>
         val children = arr.ref.cells
           .filter(_ != anchor)
@@ -497,7 +497,7 @@ private[xl] object DynamicArrayAuthoring:
     val cells = refs.foldLeft(sheet.cells) { (acc, r) =>
       acc.get(r) match
         case Some(cell) if cell.styleId.isDefined || cell.hyperlink.isDefined =>
-          acc.updated(r, cell.withValue(CellValue.Empty))
+          acc.updated(cell.withValue(CellValue.Empty))
         case Some(_) => acc.removed(r)
         case None => acc
     }
@@ -522,7 +522,7 @@ private[xl] object DynamicArrayAuthoring:
       .filter(r => sheet.cells.get(r).exists(_.value != CellValue.Empty))
       .toVector
     lazy val merges = sheet.mergedRanges.filter(_.intersects(extent)).toVector.sortBy(rowMajor)
-    lazy val arrays = sheet.cells.valuesIterator
+    lazy val arrays = sheet.cells.iterator
       .filterNot(cell => replaced(cell.ref))
       .flatMap(cell =>
         cell.value match

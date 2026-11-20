@@ -48,7 +48,7 @@ class DefinedNameWalkSpec extends FunSuite:
     val graph = CompactGraph.build(wb)
     wb.sheets.iterator.flatMap { sheet =>
       val sheetId = graph.nodes.sheetOf(sheet.name)
-      sheet.cells.keysIterator.map(QualifiedRef(sheet.name, _)).filter { cell =>
+      sheet.cells.refs.map(QualifiedRef(sheet.name, _)).filter { cell =>
         val readers = Set.newBuilder[QualifiedRef]
         graph.foreachReaderOfCell(sheetId, cell.ref.row.index0, cell.ref.col.index0)(n =>
           readers += graph.nodes.qualified(n)

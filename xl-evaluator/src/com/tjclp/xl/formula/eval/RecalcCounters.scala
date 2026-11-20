@@ -116,12 +116,6 @@ private[formula] object RecalcCounters:
      */
     case ScanFallbacks
 
-    /**
-     * `Sheet.usedRange` scans made to bound whole-column or whole-row ranges and to size slices; a
-     * pass scans each sheet once per structural generation.
-     */
-    case UsedRangeScans
-
     /** Defined-name bodies parsed during evaluation; a pass parses each distinct body once. */
     case NameParses
 

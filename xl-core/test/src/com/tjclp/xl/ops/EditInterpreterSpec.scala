@@ -387,7 +387,7 @@ class EditInterpreterSpec extends FunSuite:
     assertEquals(out(a1("A1")).value, CellValue.Empty)
     assertEquals(out(a1("A1")).styleId, currency)
     // Unstyled cells go; the comment and the E5:F6 merge stay
-    assertEquals(out.cells.keySet, Set(a1("A1")))
+    assertEquals(out.cells.refs.toSet, Set(a1("A1")))
     assertEquals(out.mergedRanges, baseData.mergedRanges)
     assertEquals(out.comments, baseData.comments)
   }

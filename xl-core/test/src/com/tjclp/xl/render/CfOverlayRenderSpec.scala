@@ -169,7 +169,7 @@ class CfOverlayRenderSpec extends ScalaCheckSuite:
   }
 
   test("SVG: a painted unstyled cell keeps the unstyled 15px text of its neighbours") {
-    assert(plain.cells.values.forall(_.styleId.isEmpty), "precondition: nothing styled")
+    assert(plain.cells.iterator.forall(_.styleId.isEmpty), "precondition: nothing styled")
     val svg =
       plain.toSvg(range, overlay(ref"B2" -> paint(Dxf.font(DxfFont(color = Some(darkRed))))))
     assert(textAttrs(svg, "B2").exists(_.contains("""font-size="15px"""")), svg)

@@ -263,7 +263,7 @@ object DependencyGraph:
 
     workbook.sheets.iterator.flatMap { sheet =>
       sheet.cells.iterator.collect {
-        case (ref, cell) if (cell.value match
+        case cell @ Cell(ref, _, _, _) if (cell.value match
               case CellValue.Formula(_, _, _: FormulaKind.DataTable) => false
               case CellValue.Formula(text, _, _) =>
                 // Closed-workbook external caches are pinned by the explicit evaluation contract.
@@ -487,7 +487,7 @@ object DependencyGraph:
       )
     val cells =
       workbook.sheets.iterator.flatMap { sheet =>
-        sheet.cells.iterator.flatMap { case (ref, cell) =>
+        sheet.cells.iterator.flatMap { case cell @ Cell(ref, _, _, _) =>
           cell.value match
             case CellValue.Formula(expression, _, _) if candidate(expression) =>
               buildParses.get(sheet.name, ref, expression).orElse(parse(expression)) match
@@ -813,7 +813,7 @@ object DependencyGraph:
     val canonicalSheet = sheetCanonicaliser(workbook)
     val nameRanges = NameRanges.empty
     workbook.sheets.foreach { sheet =>
-      sheet.cells.foreach { case (cellRef, cell) =>
+      sheet.cells.iterator.foreach { case cell @ Cell(cellRef, _, _, _) =>
         cell.value match
           case CellValue.Formula(_, _, _: FormulaKind.DataTable) => ()
           case CellValue.Formula(expression, _, _) =>

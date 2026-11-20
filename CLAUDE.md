@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,276)
+./mill __.test             # Run all tests (10,366)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -251,7 +251,7 @@ xl -Xmx32g -f huge.xlsx --max-size 0 audit         # Raise the native image's 8 
 
 **Streaming limitations**: `--stream` covers the reads (`search`, `stats`, `bounds`, `view` in markdown/csv/json — `--limit 0` streams the whole sheet row by row — `cell`, `filter`, `describe`, `sheets`, `names`, `lint`) and the writes (`put`, `putf`, `style`, and `batch` for streamable ops); it never recalculates. Every verb's answer to the flag is published as `stream` (`o1` | `backend` | `refused`) in `xl schema --json`; the refused ones (`audit`, `deps`, `diff`, `eval`, `evala`, `new`, `functions`, `rasterizers`, `schema`, plus `describe --full`, `sheets --stats`, `view --eval`, the styled renders) fail `UNSUPPORTED_IN_STREAM` before any read. Under `--stream`, `--max-size` bounds the shared-string table (the one part held in memory; default 100 MB, `0` unlimited).
 
-**`--max-size` lifts the security limit, not the heap** (#636): the native binary is built with an 8 GB heap ceiling (`-R:MaxHeapSize=8g` in `xl-cli/package.mill`), raised by `-Xmx<size>` (consumed anywhere on the command line; put it before `-f` to be safe: `xl -Xmx64g -f …`; JAR: `java -Xmx64g -jar`); `--max-size` below 0 is a usage error. Measured on 1M-row books, an in-memory load needs 16–20× its worksheet XML for dense cells (346 MB loads in 6 GB, not 5), 33–41× for wide text rows (the dogfood book: 1.09 GB of XML, 36–45 GB of heap) and 2–3× the `sharedStrings.xml` bytes for long text — so stream large files. With `--max-size` lifted, `MemoryGuard` (xl-cli) sizes the load from the zip's central directory before parsing: a lower estimate (`14 × sheet XML + 2 × SST`) above the heap is refused as `RESOURCE_LIMIT` (exit 3); an upper estimate (`30 × sheet + 3 × SST`) above it proceeds under a `MEMORY_PRESSURE` warning; a load, recalculation, `view --eval` evaluation, render or serialisation that then exhausts the heap is `RESOURCE_LIMIT` too, with the `--stream`/`-Xmx` hint — never a raw `OutOfMemoryError` (residuals: an OOM raised first on another fiber, e.g. `recalc --parallel`, can still be fatal; non-heap OOMs carry the heap wording).
+**`--max-size` lifts the security limit, not the heap** (#636): the native binary is built with an 8 GB heap ceiling (`-R:MaxHeapSize=8g` in `xl-cli/package.mill`), raised by `-Xmx<size>` (consumed anywhere on the command line; put it before `-f` to be safe: `xl -Xmx64g -f …`; JAR: `java -Xmx64g -jar`); `--max-size` below 0 is a usage error. Measured on 1M-row books, an in-memory load needs 16–18× its worksheet XML for dense numeric cells (324 MB loads in 5 GB, not 4.9), 33–41× for wide text rows (the dogfood book: 1.09 GB of XML, 36–45 GB of heap) and 2–3× the `sharedStrings.xml` bytes for long text — so stream large files. With `--max-size` lifted, `MemoryGuard` (xl-cli) sizes the load from the zip's central directory before parsing: a lower estimate (`14 × sheet XML + 2 × SST`) above the heap is refused as `RESOURCE_LIMIT` (exit 3); an upper estimate (`30 × sheet + 3 × SST`) above it proceeds under a `MEMORY_PRESSURE` warning; a load, recalculation, `view --eval` evaluation, render or serialisation that then exhausts the heap is `RESOURCE_LIMIT` too, with the `--stream`/`-Xmx` hint — never a raw `OutOfMemoryError` (residuals: an OOM raised first on another fiber, e.g. `recalc --parallel`, can still be fatal; non-heap OOMs carry the heap wording).
 
 See `docs/design/smart-streaming.md` for future enhancements.
 
@@ -426,12 +426,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,276 test cases** (the #891 purge (PR A, on #896), 2026-11-19; 10,276 passed, none ignored) by module: xl-evaluator (4463), xl-core (1890), xl-ooxml (1454), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (71). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,366 test cases** (the #891 CellStore (PR B, on #898), 2026-11-19; 10,366 passed, none ignored) by module: xl-evaluator (4476), xl-core (1935), xl-ooxml (1484), xl-cli (2025), xl-cats-effect (220), xl-agent (153), xl prelude probes (73). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,276 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,366 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

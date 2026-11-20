@@ -47,7 +47,7 @@ class AfterEditAttackSpec extends FunSuite:
 
   private def cellsOf(wb: Workbook): Map[QualifiedRef, CellValue] =
     wb.sheets.iterator
-      .flatMap(s => s.cells.iterator.map((ref, c) => QualifiedRef(s.name, ref) -> c.value))
+      .flatMap(s => s.cells.iterator.map(c => QualifiedRef(s.name, c.ref) -> c.value))
       .toMap
 
   private def cached(value: Option[CellValue]): Option[CellValue] =
