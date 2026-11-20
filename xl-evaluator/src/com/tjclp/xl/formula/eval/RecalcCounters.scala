@@ -63,8 +63,8 @@ private[formula] object RecalcCounters:
 
   /**
    * What a pass counts. Every criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a
-   * call with no indexed criterion also counts once as `CriteriaWindowOnly` or
-   * `CriteriaNotIndexable`.
+   * call whose criteria are all numeric windows also counts once as `CriteriaWindowOnly`, and a
+   * call with no criterion an index can look up as `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -85,16 +85,20 @@ private[formula] object RecalcCounters:
      */
     case GraphWork
 
-    /** Criteria calls that tested only the candidate rows of the equality index. */
+    /**
+     * Criteria calls that tested only the candidate rows of the criteria indexes (equality, #767;
+     * order, #920).
+     */
     case CriteriaIndexed
 
     /**
      * Criteria calls whose criteria are all numeric windows (`>`, `>=`, `<`, `<=` against a
-     * number), so no equality index applies.
+     * number). Since #920 the order index answers them; such a call also counts as
+     * `CriteriaIndexed` when it tested only the index's candidates.
      */
     case CriteriaWindowOnly
 
-    /** Criteria calls with no indexed criterion that are not window-only. */
+    /** Criteria calls with no criterion that the equality or order index can look up. */
     case CriteriaNotIndexable
 
     /**

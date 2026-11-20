@@ -6,7 +6,6 @@ import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.ast.ExprValue
 import com.tjclp.xl.richtext.RichText
-import munit.ScalaCheckSuite
 import org.scalacheck.{Gen, Prop}
 
 /**
@@ -23,33 +22,7 @@ import org.scalacheck.{Gen, Prop}
  * Seeds follow the law-fuzz convention (GH-308): fixed by default, random under
  * `XL_ROUNDTRIP_RANDOM_SEED=true`, replayable with `-Dxl.roundtrip.seed=<printed seed>`.
  */
-class CriteriaIndexSpec extends ScalaCheckSuite:
-
-  private val minSuccess: Int =
-    sys.props
-      .get("xl.roundtrip.minSuccess")
-      .orElse(sys.env.get("XL_ROUNDTRIP_MIN_SUCCESS"))
-      .flatMap(_.toIntOption)
-      .getOrElse(500)
-
-  private val explicitSeed: Option[org.scalacheck.rng.Seed] =
-    sys.props.get("xl.roundtrip.seed").flatMap { raw =>
-      raw.toLongOption
-        .map(org.scalacheck.rng.Seed.apply)
-        .orElse(org.scalacheck.rng.Seed.fromBase64(raw).toOption)
-    }
-
-  private val randomSeed: Boolean =
-    explicitSeed.isEmpty &&
-      sys.env.get("XL_ROUNDTRIP_RANDOM_SEED").exists(_.equalsIgnoreCase("true"))
-
-  override def scalaCheckTestParameters: org.scalacheck.Test.Parameters =
-    val base = super.scalaCheckTestParameters.withMinSuccessfulTests(minSuccess)
-    if randomSeed then
-      val seed = org.scalacheck.rng.Seed.random()
-      println(s"[law-fuzz] random seed for this run: ${seed.toBase64} (#767 criteria index)")
-      base.withInitialSeed(seed)
-    else base.withInitialSeed(explicitSeed.getOrElse(org.scalacheck.rng.Seed(20261014L)))
+class CriteriaIndexSpec extends LawFuzzSuite("#767 criteria index", 20261014L):
 
   // ---------- edge-biased pools ----------
 
@@ -636,11 +609,14 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     val cache = passCache(PassCache.DefaultLimits)
     val s = sliceOf(cache)
     val keys = List(MatchKey.Text("k7"))
-    val first = cache.candidates(List((s, keys, 0)), 600)
+    val first = cache.candidates(List((s, IndexLookup.Keys(keys), 0)), 600)
     assertEquals(first.map(_.length), Some(20))
-    assert(cache.candidates(List((s, keys, 0)), 600).zip(first).exists(_ eq _))
+    assert(cache.candidates(List((s, IndexLookup.Keys(keys), 0)), 600).zip(first).exists(_ eq _))
     // the same bucket under another window is another list
-    assertEquals(cache.candidates(List((s, keys, 100)), 300).map(_.length), Some(10))
+    assertEquals(
+      cache.candidates(List((s, IndexLookup.Keys(keys), 100)), 300).map(_.length),
+      Some(10)
+    )
     assert(cache.eqIndex(s).zip(cache.eqIndex(s)).exists(_ eq _), "the index is built once")
   }
 
@@ -648,19 +624,19 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     val keys = List(MatchKey.Text("k7"))
     val tight = passCache(PassCache.DefaultLimits.copy(maxIndexBytes = 64L))
     assertEquals(tight.eqIndex(sliceOf(tight)), None)
-    assertEquals(tight.candidates(List((sliceOf(tight), keys, 0)), 600), None)
+    assertEquals(tight.candidates(List((sliceOf(tight), IndexLookup.Keys(keys), 0)), 600), None)
     val off = passCache(PassCache.DefaultLimits, index = false)
     assert(!off.indexing)
-    assertEquals(off.candidates(List((sliceOf(off), keys, 0)), 600), None)
+    assertEquals(off.candidates(List((sliceOf(off), IndexLookup.Keys(keys), 0)), 600), None)
     // a budget that holds the index but not the memo: candidates are computed every time
     val indexBytes = EqIndex.build(sliceOf(passCache(PassCache.DefaultLimits))).bytes
     // a candidate list of 20 rows is charged 144 bytes
     val noMemo = passCache(PassCache.DefaultLimits.copy(maxIndexBytes = indexBytes + 100L))
     val s = sliceOf(noMemo)
     assert(noMemo.eqIndex(s).isDefined, "the index fits")
-    val again = noMemo.candidates(List((s, keys, 0)), 600)
+    val again = noMemo.candidates(List((s, IndexLookup.Keys(keys), 0)), 600)
     assertEquals(again.map(_.length), Some(20))
-    assert(!noMemo.candidates(List((s, keys, 0)), 600).zip(again).exists(_ eq _))
+    assert(!noMemo.candidates(List((s, IndexLookup.Keys(keys), 0)), 600).zip(again).exists(_ eq _))
   }
 
   test("memoised candidate lists never use up the budget an index needs") {
@@ -681,7 +657,7 @@ class CriteriaIndexSpec extends ScalaCheckSuite:
     val keys = List(MatchKey.Text("k7"))
     // distinct windows of column A, each its own memoised list, well past the budget
     (0 until 300).foreach(offset =>
-      assert(cache.candidates(List((a, keys, offset)), 300).isDefined)
+      assert(cache.candidates(List((a, IndexLookup.Keys(keys), offset)), 300).isDefined)
     )
     assert(cache.eqIndex(sliceAt(cache, 1)).isDefined, "the second column's index was refused")
   }
