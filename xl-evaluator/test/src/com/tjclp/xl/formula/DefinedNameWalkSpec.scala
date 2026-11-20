@@ -6,8 +6,14 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.formula.eval.{DependentRecalculation, NameWalk, WorkbookAudit}
-import com.tjclp.xl.formula.eval.DependentRecalculation.recalculateDependents
-import com.tjclp.xl.formula.graph.{DependencyGraph, NameChanges, QualifiedGraph, ReferenceScan}
+import com.tjclp.xl.formula.AfterEditSyntax.*
+import com.tjclp.xl.formula.graph.{
+  CompactGraph,
+  DependencyGraph,
+  NameChanges,
+  QualifiedGraph,
+  ReferenceScan
+}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
@@ -33,6 +39,23 @@ class DefinedNameWalkSpec extends FunSuite:
 
   /** Generous: the shapes run in milliseconds; the walks this pins took hours or overflowed. */
   private val BudgetMs = 30000L
+
+  /**
+   * The occupied cells `reader` reads in the recalculation graph ([[CompactGraph]], the walker
+   * recalc orders by), found from the read side: every cell whose direct readers include it.
+   */
+  private def compactReads(wb: Workbook, reader: QualifiedRef): Set[QualifiedRef] =
+    val graph = CompactGraph.build(wb)
+    wb.sheets.iterator.flatMap { sheet =>
+      val sheetId = graph.nodes.sheetOf(sheet.name)
+      sheet.cells.refs.map(QualifiedRef(sheet.name, _)).filter { cell =>
+        val readers = Set.newBuilder[QualifiedRef]
+        graph.foreachReaderOfCell(sheetId, cell.ref.row.index0, cell.ref.col.index0)(n =>
+          readers += graph.nodes.qualified(n)
+        )
+        readers.result().contains(reader)
+      }
+    }.toSet
 
   /**
    * Run `body` on a fresh thread with a 1MB stack, the JVM default on Linux x64, rather than the
@@ -135,9 +158,9 @@ class DefinedNameWalkSpec extends FunSuite:
       assertEquals(graph.precedentsOf(a2), Set.empty[QualifiedRef])
       assertEquals(graph.precedentsOf(a1), Set.empty[QualifiedRef])
       assertEquals(graph.dependents(b1, 0), Vector(Vector(a3)))
-      val edges = DependencyGraph.fromWorkbook(wb)
-      assertEquals(edges.get(a3), Some(Set(b1)))
-      assertEquals(edges.get(a1), Some(Set.empty[QualifiedRef]))
+      // the recalculation graph agrees
+      assertEquals(compactReads(wb, a3), Set(b1))
+      assertEquals(compactReads(wb, a1), Set.empty[QualifiedRef])
 
       // recalc: past the cap is a per-cell error naming the chain, within it a value
       val result = wb.recalculate()
@@ -215,7 +238,7 @@ class DefinedNameWalkSpec extends FunSuite:
       val wb = lazyDeepName(body)
       val sheet = wb(S).fold(err => fail(err.message), identity)
       val edited = wb.put(sheet.put(at("B1"), num(7)))
-      val result = edited.recalculateDependents(S, Set(at("B1")))
+      val result = edited.afterEdit(S, Set(at("B1")))
       assertEquals(cached(result, q(S, "A1")), Some(num(7)))
       assertEquals(cached(result, q(S, "C1")), Some(num(8)))
     }
@@ -253,7 +276,7 @@ class DefinedNameWalkSpec extends FunSuite:
       assertEquals(DependencyGraph.unresolvedReaders(steady), Set.empty[QualifiedRef])
       assertEquals(DependencyGraph.dynamicCells(steady), Set.empty[QualifiedRef])
       assertEquals(QualifiedGraph.of(steady).precedentsOf(a1), Set(b1))
-      assertEquals(DependencyGraph.fromWorkbook(steady).get(a1), Some(Set(b1)))
+      assertEquals(compactReads(steady, a1), Set(b1))
       val reach = ReferenceScan.reach(steady, S, s"=${lvl(1)}+1")
       assertNotEquals(reach, ReferenceScan.Reach.Unbounded)
       assert(reach.touches(Map(S -> ReferenceScan.SheetCells.of(Set(at("B1"))))), reach)
@@ -285,7 +308,7 @@ class DefinedNameWalkSpec extends FunSuite:
     val (a1, b1) = (q(S, "A1"), q(S, "B1"))
     onSmallStack {
       assertEquals(QualifiedGraph.of(wb).precedentsOf(a1), Set(b1))
-      assertEquals(DependencyGraph.fromWorkbook(wb).get(a1), Some(Set(b1)))
+      assertEquals(compactReads(wb, a1), Set(b1))
       val audit = WorkbookAudit.of(wb)
       assertEquals(audit.dynamic, Vector(a1))
       assertEquals(audit.unresolvedReaders, Vector.empty)
@@ -349,7 +372,7 @@ class DefinedNameWalkSpec extends FunSuite:
       val graph = QualifiedGraph.of(wb)
       assertEquals(graph.precedentsOf(a1), Set(q(T, "B1")))
       assertEquals(graph.precedentsOf(a2), Set(q(T, "B1"), q(T, "B2")))
-      assertEquals(DependencyGraph.fromWorkbook(wb).get(a1), Some(Set(q(T, "B1"))))
+      assertEquals(compactReads(wb, a1), Set(q(T, "B1")))
 
       // the audit and dynamic classification see what T's definitions call
       val audit = WorkbookAudit.of(wb)

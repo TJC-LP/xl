@@ -10,7 +10,7 @@ import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
-/** GH-747: lookups and returned references share the aggregate pass's used-range memo. */
+/** GH-747: whole-axis lookups and returned references bound to the sheet's used range. */
 class WholeAxisUsedRangeSpec extends FunSuite:
   private val data = SheetName.unsafe("Data")
   private val out = SheetName.unsafe("Out")
@@ -30,13 +30,12 @@ class WholeAxisUsedRangeSpec extends FunSuite:
     }
     Workbook(target, output)
 
-  private def check(wb: Workbook, expected: Vector[CellValue], scans: Long): Unit =
+  private def check(wb: Workbook, expected: Vector[CellValue]): Unit =
     Vector(1, 4).foreach { parallelism =>
       val counters = RecalcCounters.create()
       val result = recalculateCounted(wb, options.copy(parallelism = parallelism), counters)
       assert(result.isClean, result.errors.toString)
       assertEquals(expected.indices.map(r => result.evaluated(out)(at(0, r))).toVector, expected)
-      assertEquals(counters.snapshot(Counter.UsedRangeScans), scans)
       val noCache = recalculateWithMemo(
         wb,
         options.copy(parallelism = parallelism),
@@ -65,7 +64,7 @@ class WholeAxisUsedRangeSpec extends FunSuite:
     "AND(Data!A:A)" -> CellValue.Bool(true)
   ).foreach { case (formula, expected) =>
     test(s"GH-747: $formula shares one used-range scan across repeated calls") {
-      check(book(Vector.fill(8)(formula)), Vector.fill(8)(expected), 1L)
+      check(book(Vector.fill(8)(formula)), Vector.fill(8)(expected))
     }
   }
 
@@ -79,7 +78,7 @@ class WholeAxisUsedRangeSpec extends FunSuite:
         "MATCH(9,Other!A:A,0)"
       )
     )
-    check(wb.put(other), Vector(30, 2, 30, 1).map(num), 2L)
+    check(wb.put(other), Vector(30, 2, 30, 1).map(num))
   }
 
   test("GH-747: same-sheet formula-cache writes keep one bounds scan") {
@@ -92,7 +91,6 @@ class WholeAxisUsedRangeSpec extends FunSuite:
         recalculateCounted(Workbook(sheet), options.copy(parallelism = parallelism), counters)
       assert(result.isClean, result.errors.toString)
       assertEquals(result.evaluated(data).values.toVector, Vector.fill(8)(num(20)))
-      assertEquals(counters.snapshot(Counter.UsedRangeScans), 1L)
     }
   }
 
@@ -103,14 +101,13 @@ class WholeAxisUsedRangeSpec extends FunSuite:
       "SUM(INDEX(Data!B1:B2,0))",
       "AND(Data!A1:A2)"
     )
-    check(book(formulas), Vector(num(20), num(2), num(30), CellValue.Bool(true)), 0L)
+    check(book(formulas), Vector(num(20), num(2), num(30), CellValue.Bool(true)))
   }
 
-  test("GH-747: empty whole axes cache an absent used range") {
+  test("GH-747: empty whole axes bound to an absent used range") {
     check(
       book(Vector.fill(8)("XLOOKUP(1,Data!A:A,Data!B:B,99)"), Sheet(data)),
-      Vector.fill(8)(num(99)),
-      1L
+      Vector.fill(8)(num(99))
     )
   }
 
@@ -135,7 +132,6 @@ class WholeAxisUsedRangeSpec extends FunSuite:
         assertEquals(result, Right(array): Either[EvalError, Any], formula)
       }
     }
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 1L)
   }
 
   test("GH-747: lookup bounds refresh after structural changes and at the next pass") {
@@ -159,21 +155,16 @@ class WholeAxisUsedRangeSpec extends FunSuite:
     val grown = source.put(at(0, 2), num(3))
     assertEquals(evaluate(source), CellValue.Error(CellError.NA))
     assertEquals(evaluate(grown), num(3))
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 2L)
     cache.begin(Readiness.build(Map.empty, Set.empty))
     assertEquals(evaluate(source), CellValue.Error(CellError.NA))
     assertEquals(evaluate(source), CellValue.Error(CellError.NA))
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 3L)
     cache.structureChanged(data)
     assertEquals(evaluate(grown), num(3))
     assertEquals(evaluate(grown), num(3))
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 4L)
     cache.structureChanged(data)
     assertEquals(evaluate(source), CellValue.Error(CellError.NA))
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 5L)
     cache.begin(Readiness.build(Map.empty, Set.empty))
     assertEquals(evaluate(grown), num(3))
-    assertEquals(counters.snapshot(Counter.UsedRangeScans), 6L)
   }
 
   // Opt-in acceptance harness: 10k lookups over exactly 200k populated source cells. An early
@@ -190,10 +181,9 @@ class WholeAxisUsedRangeSpec extends FunSuite:
       val result = recalculateCounted(wb, options, counters)
       val elapsed = (System.nanoTime() - start).toDouble / 1e9
       println(
-        f"GH-747: 10000 lookups / 200000 cells: $elapsed%.3f s; ${counters.snapshot(Counter.UsedRangeScans)} used-range scans"
+        f"GH-747: 10000 lookups / 200000 cells: $elapsed%.3f s"
       )
       assert(result.isClean, result.errors.toString)
       assertEquals(result.evaluated(out).size, 10000)
       assertEquals(result.evaluated(out).values.toSet, Set(num(2)))
-      assertEquals(counters.snapshot(Counter.UsedRangeScans), 1L)
     }

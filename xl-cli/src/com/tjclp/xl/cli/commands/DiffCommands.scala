@@ -371,7 +371,7 @@ object DiffCommands:
     a.text.toPlainText == b.text.toPlainText && a.author == b.author
 
   private def hyperlinks(sheet: Sheet): Map[ARef, String] =
-    sheet.cells.flatMap((ref, cell) => cell.hyperlink.map(ref -> _))
+    sheet.cells.iterator.flatMap(cell => cell.hyperlink.map(h => cell.ref -> h.target)).toMap
 
   // ==========================================================================
   // Sheet structure
@@ -696,11 +696,14 @@ object DiffCommands:
 
   /** Cells that carry information: value, non-default resolved style, or hyperlink. */
   private def nonTrivialCells(sheet: Sheet): Map[ARef, Cell] =
-    sheet.cells.filter { (_, cell) =>
-      cell.value != CellValue.Empty ||
-      resolvedStyleKey(cell, sheet) != CellStyle.default.canonicalKey ||
-      cell.hyperlink.isDefined
-    }
+    sheet.cells.iterator
+      .filter { cell =>
+        cell.value != CellValue.Empty ||
+        resolvedStyleKey(cell, sheet) != CellStyle.default.canonicalKey ||
+        cell.hyperlink.isDefined
+      }
+      .map(cell => cell.ref -> cell)
+      .toMap
 
   /** Canonical key of the RESOLVED style (registry lookup; missing = default). */
   private def resolvedStyleKey(cell: Cell, sheet: Sheet): String =

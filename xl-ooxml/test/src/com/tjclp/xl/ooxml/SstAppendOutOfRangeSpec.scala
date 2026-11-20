@@ -235,7 +235,7 @@ class SstAppendOutOfRangeSpec extends FunSuite:
 </xm:macrosheet>"""
     val source = fixture(sheet2Index = "3", macroSheet = Some(macroXml), sstCount = 4)
     val edited =
-      read(source).addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+      read(source).put(Sheet(SheetName.unsafe("New")))
     val output = Files.createTempFile("gh784-out", ".xlsx")
     XlsxWriter.write(edited, output).fold(err => fail(s"Write failed: $err"), identity)
 
@@ -265,7 +265,7 @@ class SstAppendOutOfRangeSpec extends FunSuite:
       sheet2Xml = Some(sheet2)
     )
     val edited =
-      read(source).addSheet(Sheet(SheetName.unsafe("New"))).fold(e => fail(e.message), identity)
+      read(source).put(Sheet(SheetName.unsafe("New")))
     val output = Files.createTempFile("gh784-out", ".xlsx")
     XlsxWriter.write(edited, output).fold(err => fail(s"Write failed: $err"), identity)
 

@@ -7,7 +7,6 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.cli.contract.OffGridHit
 import com.tjclp.xl.formula.SheetEvaluator
-import com.tjclp.xl.formula.eval.DependentRecalculation.*
 import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, EvalFormulaSupport}
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.sheets.Sheet
@@ -182,9 +181,9 @@ object CopyOps:
     // record always pastes its cached constant (GH-430) and needs no evaluator phase.
     val liveFormulas: Vector[(ARef, String, Option[CellValue])] =
       sourceRange.cells.toVector.flatMap { src =>
-        sourceSheet.cells.get(src).map(_.value) match
-          case Some(CellValue.Formula(_, _, _: FormulaKind.DataTable)) => None
-          case Some(CellValue.Formula(expr, cached, _)) => Some((src, expr, cached))
+        sourceSheet.cells.valueAt(src) match
+          case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
+          case CellValue.Formula(expr, cached, _) => Some((src, expr, cached))
           case _ => None
       }
 
@@ -212,9 +211,14 @@ object CopyOps:
         if valuesOnly || !cacheCopiedFormulas || liveFormulas.isEmpty then materialized
         else populateFormulaCaches(materialized, wb, liveFormulas.map((src, _, _) => targetOf(src)))
       val wbWithCopied = wb.put(cached)
+      // #891: the public after-edit seam every write ends with: the targeted pass, or on a book
+      // whose calcPr iterates the full iterative recalculation (a targeted pass would strip the
+      // cycle's warm caches). Its errors reach the run's end-of-edit recalculation summary.
       val result =
         if recalcDependents then
-          wbWithCopied.recalculateDependents(cached.name, targetRange.cells.toSet ++ release)
+          wbWithCopied
+            .recalculateAfterEdit(cached.name, targetRange.cells.toSet ++ release, RecalcOptions())
+            .workbook
         else wbWithCopied
       (result, OffGridHit.of(targetSheet.name, offGrid))
     }
@@ -236,9 +240,9 @@ object CopyOps:
     @tailrec
     def loop(currentSheet: Sheet, passesRemaining: Int): Sheet =
       val nextSheet = refs.foldLeft(currentSheet) { (s, ref) =>
-        s.cells.get(ref).map(_.value) match
+        s.cells.valueAt(ref) match
           // the pasted record keeps its kind: a single-cell array formula stays one
-          case Some(formula: CellValue.Formula) =>
+          case formula: CellValue.Formula =>
             val cached =
               SheetEvaluator.evaluateCell(s)(ref, workbook = Some(wb.put(s))).toOption
             s.put(ref, formula.copy(cachedValue = cached))

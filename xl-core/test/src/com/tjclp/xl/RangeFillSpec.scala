@@ -56,7 +56,7 @@ class RangeFillSpec extends ScalaCheckSuite:
     val patch = (for refType <- ref"A1:B$end" yield refType := true).getOrElse(Patch.empty)
     val sheet = emptySheet.put(patch)
     assertEquals(sheet.cells.size, 6)
-    assert(sheet.cells.values.forall(_.value == CellValue.Bool(true)))
+    assert(sheet.cells.iterator.forall(_.value == CellValue.Bool(true)))
   }
 
   test("compile-time range literal supports := directly") {

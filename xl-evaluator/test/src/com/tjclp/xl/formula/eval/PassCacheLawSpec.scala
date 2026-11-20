@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import java.time.LocalDateTime
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.eval.RecalcCounters.Counter
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
@@ -81,9 +81,9 @@ class PassCacheLawSpec extends ScalaCheckSuite:
 
   private def cells(wb: Workbook): Vector[String] =
     wb.sheets.flatMap { sheet =>
-      sheet.cells.toVector
-        .sortBy((ref, _) => (ref.row.index0, ref.col.index0))
-        .map((ref, cell) => s"${sheet.name.value}!${ref.toA1}=${render(cell.value)}")
+      sheet.cells.iterator.toVector
+        .sortBy(cell => (cell.ref.row.index0, cell.ref.col.index0))
+        .map(cell => s"${sheet.name.value}!${cell.ref.toA1}=${render(cell.value)}")
     }
 
   private def exactlySame(on: RecalcResult, off: RecalcResult, label: String): Prop =
@@ -320,6 +320,141 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
+  // ---------- #891: the window evaluation (`view --eval`) is a pass over its closure ----------
+
+  /** Every formula cell of the stale book's sheets, as one window per sheet. */
+  private val windows: Vector[(Int, CellRange)] =
+    Vector(0 -> s"F1:H$Last", 1 -> "B1:D30").map { (sheet, a1) =>
+      sheet -> CellRange.parse(a1).fold(e => fail(e.toString), identity)
+    }
+
+  private def window(wb: Workbook, sheet: Int, range: CellRange, memo: Evaluator.AggregateMemo) =
+    SheetEvaluator.evaluateForRangesPerCellWithMemo(
+      wb.sheets(sheet),
+      Vector(range),
+      clock,
+      Some(wb),
+      memo
+    )
+
+  property("stale-cache law: a window evaluated with the caches on equals off and uncached") {
+    Prop.forAll(genStaleBook) { book =>
+      Prop.all(windows.map { (sheet, range) =>
+        val on = window(book.workbook, sheet, range, cachesOn())
+        val off = window(book.workbook, sheet, range, cachesOff())
+        // no column cache and no aggregate memo: every formula evaluated on its own
+        val bare =
+          window(book.workbook, sheet, range, new Evaluator.AggregateMemo(cachesAggregates = false))
+        def shown(result: RangeEvalResult) =
+          (result.values.toVector.sortBy(_._1.toA1).map((ref, v) => ref.toA1 -> render(v)), result)
+        Prop.all(
+          Prop(shown(on) == shown(off)) :| s"sheet $sheet on/off\n$on\n$off",
+          Prop(shown(on) == shown(bare)) :| s"sheet $sheet on/bare\n$on\n$bare"
+        )
+      }*)
+    }
+  }
+
+  property("a clean window over the stale book shows what a full recalculation computes") {
+    // the other sheet's caches are stale too: the window computes its precedents there (#891)
+    Prop.forAll(genStaleBook) { book =>
+      val full = recalculateWithMemo(book.workbook, sequential(), cachesOff())
+      Prop.all(windows.map { (sheet, range) =>
+        val result = window(book.workbook, sheet, range, cachesOn())
+        val name = book.workbook.sheets(sheet).name
+        val expected =
+          full.evaluated.getOrElse(name, Map.empty).filter((ref, _) => range.contains(ref))
+        // every value a window shows is the recalculation's, clean or not; a clean one shows all
+        Prop(result.values.forall((ref, value) => expected.get(ref).contains(value))) :|
+          s"sheet $sheet shown\nwindow ${result.values}\nrecalc $expected" &&
+          Prop(!result.isClean || result.values == expected) :|
+          s"sheet $sheet\nwindow ${result.values}\nrecalc $expected"
+      }*)
+    }
+  }
+
+  property("an iterating stale book's window shows what the iterative recalculation computes") {
+    // the cyclic books hold an uncached member (Out!D2) beside stale caches everywhere: a window
+    // that evaluated the member on demand read those caches (review of #891)
+    val calcPr = com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true)
+    Prop.forAll(genStaleBook) { book =>
+      val wb =
+        book.workbook.copy(metadata = book.workbook.metadata.copy(calcPr = Some(calcPr)))
+      val full = WorkbookEvaluator.recalculate(wb)(clock, IterativeCalc.fromCalcPr(calcPr))
+      val failed = full.errors.iterator.map(e => (e.sheet, e.ref)).toSet
+      Prop.all(windows.map { (sheet, range) =>
+        val name = wb.sheets(sheet).name
+        val expected = full.evaluated
+          .getOrElse(name, Map.empty)
+          .filter((ref, _) => range.contains(ref) && !failed((name, ref)))
+        val on = window(wb, sheet, range, cachesOn())
+        val bare = window(wb, sheet, range, new Evaluator.AggregateMemo(cachesAggregates = false))
+        Prop(on == bare) :| s"sheet $sheet on/bare\n$on\n$bare" &&
+        Prop(on.values == expected) :|
+          s"sheet $sheet cyclic ${book.cyclic}\nwindow ${on.values}\nrecalc $expected"
+      }*)
+    }
+  }
+
+  property("no window cell is both shown and unevaluated, iterating or not, cached cycle or not") {
+    // review of #891: a cached cycle's member was stripped by the dynamic bucket, and a failure
+    // behind a cached cycle blocked a cell that had already been computed off the cycle's caches
+    val calcPr = com.tjclp.xl.workbooks.CalcPr(iterativeCalculation = true)
+    Prop.forAll(
+      genStaleBook,
+      Gen.oneOf(true, false),
+      Gen.oneOf(true, false),
+      Gen.oneOf(true, false)
+    ) { (book, iterate, cacheMember, breakFeeder) =>
+      val base = book.workbook
+      val out0 = base.sheets(1)
+      // the cyclic books' one uncached member, given a (stale) cache
+      val out1 = out0.cells.get(at("D2")).map(_.value) match
+        case Some(CellValue.Formula(text, None, kind)) if cacheMember =>
+          out0.put(at("D2"), CellValue.Formula(text, Some(num(-5)), kind))
+        case _ => out0
+      // a formula that cannot evaluate, feeding the helper column the cycle runs through
+      val data0 = base.sheets(0)
+      val broken =
+        if breakFeeder then data0.put(at("A2"), CellValue.Formula("Missing!Z9+1", None))
+        else data0
+      // a probe that reads one cycle member (Data!G2, cached -1) and nothing else
+      val data1 = broken.put(at("H1"), CellValue.Formula("G2+0", None))
+      val edited = base.put(data1).put(out1)
+      val wb =
+        if iterate then edited.copy(metadata = edited.metadata.copy(calcPr = Some(calcPr)))
+        else edited
+      Prop.all(windows.map { (sheet, range) =>
+        val shown = window(wb, sheet, range, cachesOn())
+        val name = wb.sheets(sheet).name
+        val unevaluated =
+          shown.blocked.toSet ++ shown.failures.filter(_.sheet == name).map(_.ref)
+        val clue =
+          s"sheet $sheet iterate $iterate cached $cacheMember broken $breakFeeder\n$shown"
+        // a fully cached cycle is pinned: its reader shows the member's saved value whatever
+        // fails behind the cycle and whatever reads dynamically inside it
+        val pinnedProbe =
+          sheet != 0 || !(book.cyclic && iterate && cacheMember) ||
+            shown.values.get(at("H1")).contains(num(-1))
+        Prop((shown.values.keySet & unevaluated).isEmpty) :| clue &&
+        Prop(pinnedProbe) :| s"probe H1\n$clue"
+      }*)
+    }
+  }
+
+  property("the window law is not vacuous: clean windows, slices built, each formula parsed once") {
+    Prop.forAll(genStaleBook) { book =>
+      val counters = RecalcCounters.create()
+      val result = window(book.workbook, 1, windows(1)._2, cachesOn(counters))
+      val snap = counters.snapshot
+      Prop.all(
+        Prop(book.cyclic || result.isClean) :| s"an acyclic book fails: ${result.summary}",
+        Prop(book.cyclic || snap(Counter.SlicesBuilt) > 0L) :| s"no slice built: ${snap.render}",
+        Prop(snap(Counter.FormulaParses) == snap(Counter.GraphNodes)) :| snap.render
+      )
+    }
+  }
+
   property("the stale-cache law is not vacuous: its acyclic books build slices") {
     // a cycle through F blocks every reader of F, so only acyclic books must slice
     Prop.forAll(genStaleBook) { book =>
@@ -441,7 +576,6 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       // F2:F301 (the whole column bounds to the same rows); F2:F100 is below the threshold
       assertEquals(snap(Counter.SlicesBuilt), 1L)
       assertEquals(snap(Counter.ScanFallbacks), 0L)
-      assertEquals(snap(Counter.UsedRangeScans), 1L)
     }
   }
 
@@ -451,7 +585,7 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       .update(
         out,
         s =>
-          s.cells.foldLeft(s) { case (acc, (ref, cell)) =>
+          s.cells.iterator.foldLeft(s) { case (acc, cell @ Cell(ref, _, _, _)) =>
             cell.value match
               case f: CellValue.Formula => acc.put(ref, f.copy(cachedValue = None))
               case _ => acc
@@ -488,26 +622,13 @@ class PassCacheLawSpec extends ScalaCheckSuite:
     }
   }
 
-  test("used-range scans: at most one per sheet and structural generation") {
-    val counters = RecalcCounters.create()
-    recalculateWithMemo(wrongCaches, sequential(), cachesOn(counters))
-    assert(counters.snapshot(Counter.UsedRangeScans) <= wrongCaches.sheets.size.toLong)
-  }
-
-  test("a structural change re-scans the used range; a formula cache write does not") {
-    val cache = new PassCache(eager, RecalcCounters.disabled)
+  test("a formula cache write leaves the populated cells alone; a value write may change them") {
     val sheet = Sheet(data).put(at("A1"), num(1)).put(at("A3"), CellValue.Formula("A1"))
-    // inactive: every call scans
-    assertEquals(cache.usedRange(sheet).map(_.toA1), Some("A1:A3"))
-    cache.begin(Readiness.build(Map.empty, Set.empty))
-    assertEquals(cache.usedRange(sheet).map(_.toA1), Some("A1:A3"))
-    val grown = sheet.put(at("B9"), num(2))
-    // same generation: the recorded range stands (a pass never grows a sheet without saying so)
-    assertEquals(cache.usedRange(grown).map(_.toA1), Some("A1:A3"))
     assert(SheetEvaluator.threadChangesStructure(sheet, at("B9")))
     assert(!SheetEvaluator.threadChangesStructure(sheet, at("A3")))
-    cache.structureChanged(data)
-    assertEquals(cache.usedRange(grown).map(_.toA1), Some("A1:B9"))
+    // the store's bounds are its own summaries: always those of the sheet at hand (#891)
+    assertEquals(sheet.usedRange.map(_.toA1), Some("A1:A3"))
+    assertEquals(sheet.put(at("B9"), num(2)).usedRange.map(_.toA1), Some("A1:B9"))
   }
 
   test("running windows build one slice per column, never one per window") {
@@ -781,7 +902,7 @@ class PassCacheLawSpec extends ScalaCheckSuite:
       val counters = RecalcCounters.create()
       recalculateUncachedWithMemo(book, sequential(), cachesOn(counters))
       val hasUncachedInData = book.sheets.exists(s =>
-        s.name != out && s.cells.valuesIterator.exists(_.value match
+        s.name != out && s.cells.iterator.exists(_.value match
           case CellValue.Formula(_, None, _) => true
           case _ => false)
       )

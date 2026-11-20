@@ -79,10 +79,7 @@ object CairoSvg extends Rasterizer:
         findInvocation.flatMap {
           case None =>
             IO.raiseError(
-              RasterError.RasterizerNotFound(
-                name,
-                "Install: pip install cairosvg"
-              )
+              RasterError.RasterizerNotFound(name, RasterInstall.hintFor(name))
             )
 
           case Some((cmd, prefix)) =>

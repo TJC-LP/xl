@@ -104,7 +104,8 @@ shows `putf … --from B2` but `putfCmd` is `(refArg, formulasArg)` with no `--f
   extension methods with default arguments must not be reached through a wildcard export
   (`exports.scala:62-65`, `SheetEvaluator.scala:376-378`) — `recalculateDependents(modifiedRefs,
   workbook = None, clock = Clock.system)` at `DependentRecalculation.scala:166-170` is why
-  `DependentRecalculation` is exported as an object only.
+  `DependentRecalculation` is exported as an object only. (#891 removed `recalculateDependents`;
+  `wb.recalculateAfterEdit` is the targeted entry point.)
 - Test net: 742 `test(`/`property(` sites in xl-cli; only `MainSpec:1375`, `InPlaceSpec:304`,
   `LintCommandSpec:210` and `BatchRecalcSpec:558/569` parse real argv; zero xl-cli tests assert
   `Error:` on stdout; exit-code pins are `MainSpec:1447,1475,1477,1536,1537` (strict → 1),

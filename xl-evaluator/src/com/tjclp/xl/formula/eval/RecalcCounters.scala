@@ -62,10 +62,9 @@ private[formula] final class RecalcCounters private (val enabled: Boolean):
 private[formula] object RecalcCounters:
 
   /**
-   * What a pass counts. The legacy graph (`RecalcEngine.Legacy`) has no virtual or range nodes and
-   * does not count `GraphWork`; only it counts `RangeLookups` and `RangeLookupWork`. Every criteria
-   * call counts once as `CriteriaIndexed` or `CriteriaScan`; a call with no indexed criterion also
-   * counts once as `CriteriaWindowOnly` or `CriteriaNotIndexable`.
+   * What a pass counts. Every criteria call counts once as `CriteriaIndexed` or `CriteriaScan`; a
+   * call with no indexed criterion also counts once as `CriteriaWindowOnly` or
+   * `CriteriaNotIndexable`.
    */
   enum Counter derives CanEqual:
     /** Formula nodes of the recalculation graph. */
@@ -82,23 +81,9 @@ private[formula] object RecalcCounters:
 
     /**
      * Edges walked by the compact graph's passes: Tarjan, Kahn's in-degree count and order, and the
-     * reachability walks (blocked cells, the dynamic bucket, invalidation). 0 for the legacy graph.
+     * reachability walks (blocked cells, the dynamic bucket, invalidation).
      */
     case GraphWork
-
-    /**
-     * Distinct (sheet, range) lookups the per-cell formula graph (`RecalcEngine.Legacy`, targeted
-     * recalculation) resolved against its formula-cell index: one per memo miss, so every formula
-     * sharing a driver range costs one (GH-522). 0 for the compact graph.
-     */
-    case RangeLookups
-
-    /**
-     * Index entries those lookups examined: every column and row position the binary-searched walk
-     * read, the first one past the range included. Linear in the lookups plus the formula cells
-     * found, never in the sheet's formulas (#743). 0 for the compact graph.
-     */
-    case RangeLookupWork
 
     /** Criteria calls that tested only the candidate rows of the equality index. */
     case CriteriaIndexed
@@ -130,12 +115,6 @@ private[formula] object RecalcCounters:
      * of them held no cache, or the cell budget was spent.
      */
     case ScanFallbacks
-
-    /**
-     * `Sheet.usedRange` scans made to bound whole-column or whole-row ranges and to size slices; a
-     * pass scans each sheet once per structural generation.
-     */
-    case UsedRangeScans
 
     /** Defined-name bodies parsed during evaluation; a pass parses each distinct body once. */
     case NameParses

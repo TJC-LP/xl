@@ -33,7 +33,7 @@ class ConditionalFunctionsSpec extends FunSuite:
         case n: BigDecimal => CellValue.Number(n)
         case b: Boolean => CellValue.Bool(b)
         case _ => CellValue.Text(value.toString)
-      s.put(ref, cv).unsafe
+      s.put(ref, cv)
     }
 
   // Helper to parse and evaluate a formula

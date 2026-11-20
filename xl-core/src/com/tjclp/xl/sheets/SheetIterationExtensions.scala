@@ -17,7 +17,7 @@ object iterationSyntax:
      *   Vector of cells sorted by (row, column)
      */
     def cellsSorted: Vector[Cell] =
-      sheet.cells.values.toVector.sortBy(c => (c.row.index0, c.col.index0))
+      sheet.cells.iterator.toVector.sortBy(c => (c.row.index0, c.col.index0))
 
     /**
      * Get cells grouped by row, sorted by row index.
@@ -28,7 +28,7 @@ object iterationSyntax:
      *   Vector of (row, cells) pairs sorted by row index
      */
     def rowsSorted: Vector[(Row, Vector[Cell])] =
-      sheet.cells.values
+      sheet.cells.iterator.toVector
         .groupBy(_.row)
         .toVector
         .sortBy(_._1.index0)
@@ -43,7 +43,7 @@ object iterationSyntax:
      *   Vector of (column, cells) pairs sorted by column index
      */
     def columnsSorted: Vector[(Column, Vector[Cell])] =
-      sheet.cells.values
+      sheet.cells.iterator.toVector
         .groupBy(_.col)
         .toVector
         .sortBy(_._1.index0)

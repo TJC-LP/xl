@@ -162,7 +162,7 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
     assert(applied > samples.size / 2, s"only $applied of ${samples.size} lowerable edits applied")
   }
 
-  test("lowering coherence pins the Clear→unmerge branch: a contents clear over a merged range") {
+  test("GH-890: lowering coherence for a contents clear over a merged range keeps the merge") {
     val range = CellRange.parse("E4:E5").fold(e => fail(e), identity)
     val merged = CellRange.parse("E5:F6").fold(e => fail(e), identity)
     assert(baseData.mergedRanges.contains(merged), "fixture: baseData merges E5:F6")
@@ -171,8 +171,95 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
     val viaEdit = sheetOf(run(Workbook(baseData), Vector(e), Scope.of(data)), data).toOption
     assert(viaPatch.isDefined, "a contents clear lowers")
     assertEquals(viaPatch, viaEdit)
+    assert(viaPatch.exists(_.mergedRanges.contains(merged)), "the patch side keeps the merge")
+  }
+
+  test("lowering coherence pins the Clear→unmerge branch: contents with styles over a merge") {
+    val range = CellRange.parse("E4:E5").fold(e => fail(e), identity)
+    val merged = CellRange.parse("E5:F6").fold(e => fail(e), identity)
+    val e = Edit.Clear(Area(None, range), ClearWhat.all.copy(comments = false))
+    val viaPatch = Edit.lower(e, baseData).map(Patch.applyPatch(baseData, _))
+    val viaEdit = sheetOf(run(Workbook(baseData), Vector(e), Scope.of(data)), data).toOption
+    assert(viaPatch.isDefined, "a contents-and-styles clear lowers")
+    assertEquals(viaPatch, viaEdit)
     assert(viaPatch.exists(s => !s.mergedRanges.contains(merged)), "the patch side unmerges")
     assert(viaEdit.exists(s => !s.mergedRanges.contains(merged)), "the edit side unmerges")
+  }
+
+  // GH-909: a styles clear over a styled merge it only partly overlaps: the patch side must reset
+  // the merge's cells outside the range and unmerge it, as the edit side does.
+  private def styledMerge: Sheet =
+    import com.tjclp.xl.sheets.styleSyntax.withCellStyle
+    val bold = com.tjclp.xl.styles.CellStyle.default
+      .withFont(com.tjclp.xl.styles.CellStyle.default.font.withBold(true))
+    CellRange
+      .parse("E5:F6")
+      .fold(e => fail(e), identity)
+      .cells
+      .foldLeft(baseData)((s, ref) => s.withCellStyle(ref, bold))
+
+  for (label, what) <- Seq(
+      "styles" -> ClearWhat.styles,
+      "contents with styles" -> ClearWhat(contents = true, styles = true, comments = false)
+    )
+  do
+    test(s"GH-909: a $label clear partly over a styled merge lowers exactly") {
+      val sheet = styledMerge
+      val merged = CellRange.parse("E5:F6").fold(e => fail(e), identity)
+      val range = CellRange.parse("F6:G7").fold(e => fail(e), identity)
+      val e = Edit.Clear(Area(None, range), what)
+      val viaPatch = Edit.lower(e, sheet).map(Patch.applyPatch(sheet, _))
+      val viaEdit = sheetOf(run(Workbook(sheet), Vector(e), Scope.of(data)), data).toOption
+      assert(viaPatch.isDefined, s"a $label clear lowers")
+      assertEquals(viaPatch, viaEdit)
+      assert(viaEdit.exists(s => !s.mergedRanges.contains(merged)), "the edit side unmerges")
+      val e5 = com.tjclp.xl.addressing.ARef.from0(4, 4)
+      assertEquals(viaEdit.flatMap(_.cells.get(e5)).flatMap(_.styleId), None)
+    }
+
+  test("GH-909: Patch.ClearStyle on a merged cell has no exact desugaring") {
+    val sheet = styledMerge
+    val e5 = com.tjclp.xl.addressing.ARef.from0(4, 4)
+    assertEquals(Patch.toEdits(Patch.ClearStyle(e5), sheet), None)
+    val a1 = com.tjclp.xl.addressing.ARef.from0(0, 0)
+    val p = Patch.ClearStyle(a1)
+    val viaEdits =
+      Patch.toEdits(p, sheet).map(es => sheetOf(run(Workbook(sheet), es, Scope.of(data)), data))
+    assertEquals(viaEdits, Some(Right(Patch.applyPatch(sheet, p))))
+  }
+
+  test("GH-890: a contents clear of a styled hyperlink cell lowers exactly") {
+    val ref = com.tjclp.xl.addressing.ARef.from0(0, 0)
+    val linked = baseData.put(
+      com.tjclp.xl.cells.Cell(
+        ref,
+        baseData(ref).value,
+        baseData(ref).styleId,
+        hyperlink = Some(com.tjclp.xl.cells.Hyperlink("https://example.com"))
+      )
+    )
+    val e = Edit.Clear(Area(None, CellRange(ref, ref)), ClearWhat.contents)
+    val viaPatch = Edit.lower(e, linked).map(Patch.applyPatch(linked, _))
+    val viaEdit = sheetOf(run(Workbook(linked), Vector(e), Scope.of(data)), data).toOption
+    assert(viaPatch.isDefined, "a contents clear lowers")
+    assertEquals(viaPatch, viaEdit)
+    assertEquals(viaEdit.flatMap(_.cells.get(ref)).flatMap(_.hyperlink), None)
+    assertEquals(viaEdit.flatMap(_.cells.get(ref)).flatMap(_.styleId), baseData(ref).styleId)
+  }
+
+  test("GH-890/GH-897: a contents clear in a styled row lowers exactly") {
+    val styleId = baseData(com.tjclp.xl.addressing.ARef.from0(0, 0)).styleId
+    val row = com.tjclp.xl.addressing.Row.from1(2)
+    val banded =
+      baseData.setRowProperties(row, com.tjclp.xl.sheets.RowProperties(styleId = styleId))
+    val range = CellRange.parse("A2:D2").fold(e => fail(e), identity)
+    val e = Edit.Clear(Area(None, range), ClearWhat.contents)
+    val viaPatch = Edit.lower(e, banded).map(Patch.applyPatch(banded, _))
+    val viaEdit = sheetOf(run(Workbook(banded), Vector(e), Scope.of(data)), data).toOption
+    assert(viaPatch.isDefined, "a contents clear lowers")
+    assertEquals(viaPatch, viaEdit)
+    val b2 = com.tjclp.xl.addressing.ARef.from0(1, 1)
+    assertEquals(viaEdit.flatMap(_.cells.get(b2)), Some(com.tjclp.xl.cells.Cell(b2)))
   }
 
   property("desugar coherence: Patch.toEdits(p, sheet) applied equals Patch.applyPatch(sheet, p)") {

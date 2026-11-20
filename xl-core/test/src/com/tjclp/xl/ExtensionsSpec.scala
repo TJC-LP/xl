@@ -26,7 +26,7 @@ import munit.FunSuite
 class ExtensionsSpec extends FunSuite:
 
   // Test fixture
-  val baseSheet = Sheet("Test").unsafe
+  val baseSheet = Sheet("Test")
   val testStyle = CellStyle.default.bold
 
   // ========== String-Based put() - Unstyled (9 types) ==========
@@ -563,7 +563,7 @@ class ExtensionsSpec extends FunSuite:
     val sheet = baseSheet.put("A1", LocalDate.of(2025, 11, 19))
 
     val aRef = ref"A1"
-    val cell = sheet.cells(aRef)
+    val cell = sheet.cells.get(aRef).getOrElse(fail("Missing cell"))
     assert(cell.styleId.isDefined, "Cell should have style")
     val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
     val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
@@ -575,7 +575,7 @@ class ExtensionsSpec extends FunSuite:
     val sheet = baseSheet.put("A1", BigDecimal("123.45"))
 
     val aRef = ref"A1"
-    val cell = sheet.cells(aRef)
+    val cell = sheet.cells.get(aRef).getOrElse(fail("Missing cell"))
     assert(cell.styleId.isDefined)
     val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
     val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
@@ -588,7 +588,7 @@ class ExtensionsSpec extends FunSuite:
     val sheet = baseSheet.put("A1", LocalDate.of(2025, 11, 19), boldStyle)
 
     val aRef = ref"A1"
-    val cell = sheet.cells(aRef)
+    val cell = sheet.cells.get(aRef).getOrElse(fail("Missing cell"))
     val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
     val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
     // Verify both bold and Date format applied
@@ -604,7 +604,7 @@ class ExtensionsSpec extends FunSuite:
     val sheet = templated.put("A1", BigDecimal("123.45"))
 
     val aRef = ref"A1"
-    val cell = sheet.cells(aRef)
+    val cell = sheet.cells.get(aRef).getOrElse(fail("Missing cell"))
     val styleId = cell.styleId.getOrElse(fail("Missing styleId"))
     val style = sheet.styleRegistry.get(styleId).getOrElse(fail("Missing style"))
     assert(style.font.bold, "Template bold style should remain")

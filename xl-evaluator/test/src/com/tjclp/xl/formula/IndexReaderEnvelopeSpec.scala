@@ -3,10 +3,10 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
-import com.tjclp.xl.formula.eval.{RecalcCounters, RecalcEngine, RecalcOptions, WorkbookEvaluator}
+import com.tjclp.xl.formula.eval.{RecalcCounters, RecalcOptions, WorkbookEvaluator}
 import com.tjclp.xl.formula.functions.{FunctionSpec, ReferenceOperators}
 import com.tjclp.xl.formula.functions.ReferenceOperators.{Envelope, Operand}
-import com.tjclp.xl.formula.graph.CompactGraph
+import com.tjclp.xl.formula.graph.{CompactGraph, QualifiedGraph}
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.workbooks.Workbook
@@ -36,29 +36,26 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
   private def sheetOf(cells: (String, CellValue)*): Sheet =
     cells.foldLeft(Sheet(name))((s, c) => s.put(at(c._1), c._2))
 
-  /** The formula cells every graph finds cyclic, the same in each (a mismatch fails here). */
-  private def cyclic(sheet: Sheet): Set[QualifiedRef] =
-    val wb = Workbook(Vector(sheet))
-    val bySheet =
-      DependencyGraph.detectCycles(DependencyGraph.fromSheet(sheet)).fold(_ => true, _ => false)
-    val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
-    val (formulaGraph, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
-    val legacy = DependencyGraph.qualifiedCyclicNodes(formulaGraph)
+  /**
+   * The formula cells both workbook graphs find cyclic — the recalculation graph and the inspection
+   * graph (`deps`, `audit`) — the same in each (a mismatch fails here).
+   */
+  private def cyclic(wb: Workbook): Set[QualifiedRef] =
     val compactGraph = CompactGraph.build(wb)
     val compact = compactGraph.cyclicFormulas.iterator.map(compactGraph.nodes.qualified).toSet
-    assertEquals(compact, legacy, "compact vs legacy")
-    assertEquals(DependencyGraph.qualifiedCyclicNodes(bounded), legacy, "bounded vs legacy")
-    assertEquals(bySheet, legacy.nonEmpty, "sheet graph vs legacy")
-    legacy
+    val inspection = QualifiedGraph.of(wb).sccs.filter(_.cyclic).flatMap(_.members).toSet
+    assertEquals(inspection, compact, "inspection vs recalculation graph")
+    compact
 
-  private def recalc(sheet: Sheet, engine: RecalcEngine): Map[ARef, CellValue] =
+  private def cyclic(sheet: Sheet): Set[QualifiedRef] = cyclic(Workbook(Vector(sheet)))
+
+  private def recalc(sheet: Sheet): Map[ARef, CellValue] =
     val result = WorkbookEvaluator.recalculateCounted(
       Workbook(Vector(sheet)),
       RecalcOptions(),
-      RecalcCounters.disabled,
-      engine
+      RecalcCounters.disabled
     )
-    assertEquals(result.errors, Vector.empty, s"$engine errors")
+    assertEquals(result.errors, Vector.empty, "errors")
     result.evaluated.getOrElse(name, Map.empty)
 
   private val issue: Sheet =
@@ -72,15 +69,13 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
 
   test("#743: B5 = SUM(B1:INDEX(B:B,ROW()-1)) is acyclic in every graph and sums B1:B4") {
     assertEquals(cyclic(issue), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      assertEquals(recalc(issue, engine).get(at("B5")), Some(N(10)), engine.toString)
-    }
+    assertEquals(recalc(issue).get(at("B5")), Some(N(10)))
   }
 
   test("#743: the edges are B1:B4, in the workbook graph and the edit-cone index") {
     val wb = Workbook(Vector(issue))
-    val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
-    assertEquals(bounded(q("B5")), Set("B1", "B2", "B3", "B4").map(q))
+    // B1:B5 all hold values, so an over-read (B:B) would list B5 itself
+    assertEquals(QualifiedGraph.of(wb).precedentsOf(q("B5")), Set("B1", "B2", "B3", "B4").map(q))
     // an edit to B4 reaches B5 through its edges; one to B6 (outside its read) does not
     val index = DependencyGraph.fromWorkbookDependencyIndex(wb)
     assertEquals(index.transitiveDependents(Set(q("B4"))), Set(q("B5")))
@@ -103,11 +98,9 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       "D3" -> F("INDEX($A$3:$Z$3,1,COLUMN()-1)*2")
     )
     assertEquals(cyclic(row), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      val values = recalc(row, engine)
-      assertEquals(values.get(at("C3")), Some(N(11)), engine.toString)
-      assertEquals(values.get(at("D3")), Some(N(22)), engine.toString)
-    }
+    val values = recalc(row)
+    assertEquals(values.get(at("C3")), Some(N(11)))
+    assertEquals(values.get(at("D3")), Some(N(22)))
   }
 
   test("#743: a 1,000-row running-total column computes with no cycle") {
@@ -121,30 +114,21 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
           .put(ARef.from1(3, r), F("MAX(C$1:INDEX(C:C,ROW()-1))+1"))
     }
     assertEquals(cyclic(sheet), Set.empty[QualifiedRef])
-    RecalcEngine.values.foreach { engine =>
-      val values = recalc(sheet, engine)
-      assertEquals(values.get(ARef.from1(2, rows)), Some(N(rows * (rows + 1) / 2)), s"$engine B")
-      assertEquals(values.get(ARef.from1(3, rows)), Some(N(rows)), s"$engine C")
-      assertEquals(values.get(ARef.from1(2, 500)), Some(N(500 * 501 / 2)), s"$engine B500")
-    }
+    val values = recalc(sheet)
+    assertEquals(values.get(ARef.from1(2, rows)), Some(N(rows * (rows + 1) / 2)), "B")
+    assertEquals(values.get(ARef.from1(3, rows)), Some(N(rows)), "C")
+    assertEquals(values.get(ARef.from1(2, 500)), Some(N(500 * 501 / 2)), "B500")
   }
 
   test("#743 limit: INDEX under a `:` operand not fixed for the reader, or in a name, keeps B:B") {
     // Excel gives 10 for both; xl still reports the whole array, so both are (false) cycles. A
     // `:` whose operand is CHOOSE is classified without a reader, and a name body is expanded once
     // for every reader, so neither folds ROW(). LIMITATIONS.md states both.
-    def legacyCyclic(wb: Workbook): Set[QualifiedRef] =
-      val (formulaGraph, _) = DependencyGraph.fromWorkbookFormulaGraph(wb)
-      val legacy = DependencyGraph.qualifiedCyclicNodes(formulaGraph)
-      val compactGraph = CompactGraph.build(wb)
-      val compact = compactGraph.cyclicFormulas.iterator.map(compactGraph.nodes.qualified).toSet
-      assertEquals(compact, legacy, "compact vs legacy")
-      legacy
     val choose = issue.put(at("B5"), F("SUM(B1:CHOOSE(1,INDEX(B:B,ROW()-1)))"))
-    assertEquals(legacyCyclic(Workbook(Vector(choose))), Set(q("B5")))
+    assertEquals(cyclic(choose), Set(q("B5")))
     val named = Workbook(Vector(issue.put(at("B5"), F("SUM(B1:prev)"))))
       .withDefinedName("prev", "INDEX(S!$B:$B,ROW()-1)")
-    assertEquals(legacyCyclic(named), Set(q("B5")))
+    assertEquals(cyclic(named), Set(q("B5")))
   }
 
   // ===== laws =====
@@ -279,11 +263,17 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       val dynamic = DependencyGraph.containsDynamicReference(expr)
       val placed = grid.put(host, F(formula))
       val wb = Workbook(Vector(placed))
-      val sheetEdges = DependencyGraph.fromSheet(placed).dependencies.getOrElse(host, Set.empty)
-      val (bounded, _) = DependencyGraph.fromWorkbookBounded(wb)
-      val qualified = bounded.getOrElse(QualifiedRef(name, host), Set.empty).map(_.ref)
-      assert(dynamic || read.subsetOf(sheetEdges), s"$formula at $host: sheet $sheetEdges")
-      assert(dynamic || read.subsetOf(qualified), s"$formula at $host: workbook $qualified")
+      // the workbook graph's declared reads, cells and ranges unexpanded (an empty cell counts)
+      val declared = QualifiedGraph.of(wb).declaredPrecedentsOf(QualifiedRef(name, host))
+      def covers(cell: ARef): Boolean = declared.exists {
+        case QualifiedGraph.Node.Cell(c) => c == QualifiedRef(name, cell)
+        case QualifiedGraph.Node.Range(r) => r.sheet == name && r.range.contains(cell)
+      }
+      def within(outer: CellRange): Boolean = declared.forall {
+        case QualifiedGraph.Node.Cell(c) => c.sheet == name && outer.contains(c.ref)
+        case QualifiedGraph.Node.Range(r) => r.sheet == name && holds(outer, r.range)
+      }
+      assert(dynamic || read.forall(covers), s"$formula at $host: workbook $declared")
       // the value reads the CLI's cycle check takes hold them too (a dynamic range's are found at
       // run time)
       val reads =
@@ -292,7 +282,7 @@ class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
       // a range of cells INDEX picks by position is static, with no edge outside what it reads
       if !formula.contains(",IF(") && !formula.contains("+") && !formula.contains("XLOOKUP") then
         assert(!dynamic, formula)
-        assertEquals(sheetEdges, read, s"$formula at $host")
+        assert(within(box), s"$formula at $host: workbook $declared")
       true
     }
   }

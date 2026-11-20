@@ -128,13 +128,12 @@ class ComputedReferenceSpec extends FunSuite:
     assertEquals(at("SUMPRODUCT(INDEX(tcol,0)*B:B)"), Right(number(3)))
   }
 
-  test("a computed edge range that starts below row 1 gets no shared extent (pinned, #746)") {
-    // A1:A10 = 1, B1:B10 = 1..10. `B5:INDEX(B:B,1048576)` computes B5:B1048576, which is not a
-    // whole column, so SUMPRODUCT gives it no shared extent; it stops at B's used rows, unlike a
-    // written A5:A1048576 (all its rows) or a shared-bounded A:A — the lengths differ. Bounding it
-    // like a whole column would not help (the written range beside it keeps its height); the fix
-    // bounds edge ranges, written and computed, the same way: #746. LibreOffice 24.2.7 answers
-    // 45, 45, 55 and 45.
+  test("a computed edge range that starts below row 1 lines up with the same rows (#746)") {
+    // A1:A10 = 1, B1:B10 = 1..10. `B5:INDEX(B:B,1048576)` computes B5:B1048576, rows 5 to the
+    // sheet's last. Against a written A5:A1048576 (the same rows) it lines up: 45. Against A:A it
+    // does not: 1048576 rows times 1048572, which Excel pads with #N/A (checked by hand; the shape
+    // mismatch does not depend on the data). LibreOffice 24.2.7 answers 45 there, so its value is
+    // not Excel's.
     val f = (1 to 10).foldLeft(Sheet(SheetName.unsafe("F"))) { (acc, r) =>
       acc.put(ARef.from1(1, r), number(1)).put(ARef.from1(2, r), number(r))
     }
@@ -145,21 +144,99 @@ class ComputedReferenceSpec extends FunSuite:
       at("SUMPRODUCT((A:A>0)*(B5:INDEX(B:B,1048576)))"),
       Right(CellValue.Error(CellError.NA))
     )
-    assertEquals(
-      at("SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))"),
-      Right(CellValue.Error(CellError.NA))
-    )
+    // #746: the same rows (5 to the last) on both sides line up
+    assertEquals(at("SUMPRODUCT((A5:A1048576>0)*(B5:INDEX(B:B,1048576)))"), Right(number(45)))
     // a computed whole column takes the extent; alone, the edge range is just its data
     assertEquals(at("SUMPRODUCT((A:A>0)*(B1:INDEX(B:B,1048576)))"), Right(number(55)))
     assertEquals(at("SUMPRODUCT(B5:INDEX(B:B,1048576))"), Right(number(45)))
   }
 
-  test("an edge-reaching range that starts below row 1 gets no shared extent (pinned gap)") {
-    // A2:A4 = 1,2,3 and B2:B4 = 10,20,30. A range reaching row 1048576 but not starting at row 1
-    // is not a whole column, so SUMPRODUCT gives it no shared extent: written, A2:A1048576 keeps
-    // all its rows, while INDEX over B2:B1048576 stops at the used rows — the shapes differ.
-    // LibreOffice 24.2.7 answers 140 for both. This predates GH-713 (0.23.1 gives the same
-    // #N/A and #VALUE!); docs/LIMITATIONS.md lists it, and #746 tracks the fix.
+  test("an edge-reaching range that starts below row 1 lines up with INDEX(…,0) (#746)") {
+    // A2:A4 = 1,2,3 and B2:B4 = 10,20,30. A2:A1048576 and B2:B1048576 both run from row 2 to the
+    // sheet's last row, so they have the same shape and SUMPRODUCT pairs them row by row: 140.
+    // LibreOffice 24.2.7 (the issue's reporter) and Excel (checked by hand) both answer 140; xl
+    // 0.25.0 gave #N/A and #VALUE!, bounding the computed INDEX but not the written range.
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))"), Right(number(140)))
+    // what already lined up keeps its answer: whole columns, INDEX on both sides, two written
+    // edge ranges
+    assertEquals(at("SUMPRODUCT(A:A*INDEX(B:B,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(INDEX(A2:A1048576,0)*INDEX(B2:B1048576,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576,B2:B1048576)"), Right(number(140)))
+    // shapes that genuinely differ stay #VALUE!, as in Excel: 1048575 rows against 1048576
+    assertEquals(at("SUMPRODUCT(A2:A1048576,B:B)"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(
+      at("SUMPRODUCT(A2:A1048576,INDEX(B:B,0))"),
+      Right(CellValue.Error(CellError.Value))
+    )
+  }
+
+  test("edge ranges keep their own start, so different heights stay different (#746)") {
+    // the data starts at row 2 and the formula sits below it, so the used range starts at row 2
+    // too: trimming A:A at the top would give it B2:B1048576's rows. Excel: #VALUE! and #N/A
+    // (1048576 rows against 1048575), checked by hand.
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H9", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H9", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(at("SUMPRODUCT(A:A,B2:B1048576)"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(at("SUMPRODUCT(A:A*INDEX(B2:B1048576,0))"), Right(CellValue.Error(CellError.NA)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))"), Right(number(140)))
+  }
+
+  test("trimming an edge range keeps its blank rows and its neighbours (#746)") {
+    // A2:A4 = 1,2,3 and B2:B4 = 10,20,30, the formula at H1. Values Excel gives for the same grid.
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H1", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
+    // the blank rows past the data still count: 1048575 rows, 3 filled
+    assertEquals(at("SUMPRODUCT(--(A2:A1048576=\"\"))"), Right(number(1048572)))
+    assertEquals(
+      at("SUMPRODUCT(--(A2:A1048576=\"\"),--(B2:B1048576=\"\"))"),
+      Right(number(1048572))
+    )
+    assertEquals(at("COUNTIF(A2:A1048576,\"\")"), Right(number(1048572)))
+    assertEquals(at("COUNTIFS(A2:A1048576,\"\",B2:B1048576,\"\")"), Right(number(1048572)))
+    assertEquals(at("SUMIFS(B2:B1048576,A2:A1048576,\">1\")"), Right(number(50)))
+    // a range of the same height that stops short of the edge is a row off: A3*B2 + A4*B3. No
+    // range is trimmed then, so the two stay paired row by row
+    assertEquals(at("SUMPRODUCT(A2:A1048576,B1:B1048575)"), Right(number(80)))
+    // where the blank tail cannot be added back (ROW over the range, a whole column in a range
+    // slot beside it), every row is read, as before #746: rows 5..1048576 sum to 549756338166,
+    // and COUNTIF(C:C,"x") is 1 for each of the 1048572 blank rows
+    assertEquals(
+      at("SUMPRODUCT((A2:A1048576=\"\")*ROW(A2:A1048576))"),
+      Right(CellValue.Number(BigDecimal("549756338166")))
+    )
+    val withC = e
+      .put(ref"C1", CellValue.Text("x"))
+      .put(
+        ref"H1",
+        CellValue.Formula(
+          "SUMPRODUCT((A2:A1048576=\"\")*COUNTIF(C:C,\"x\"))",
+          None
+        )
+      )
+    assertEquals(
+      withC.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(withC)))),
+      Right(number(1048572))
+    )
+  }
+
+  test("an error over an edge range's blank rows stands; RAND keeps the pre-#746 sum (#746)") {
+    // A2:A4 = 1,2,3, the formula at H1. 1/blank is #DIV/0! in Excel for every blank row; the
+    // tail cannot be added (ROW over the range), and the full read's error is Excel's answer
     val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
       case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
     }
@@ -167,17 +244,68 @@ class ComputedReferenceSpec extends FunSuite:
       val placed = e.put(ref"H1", CellValue.Formula(formula, None))
       placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed))))
     assertEquals(
-      at("SUMPRODUCT(A2:A1048576*INDEX(B2:B1048576,0))"),
-      Right(CellValue.Error(CellError.NA))
+      at("SUMPRODUCT((1/A2:A1048576)*ROW(A2:A1048576))"),
+      Right(CellValue.Error(CellError.Div0))
+    )
+    // RAND gets no blank tail; the argument is summed once over every row: each blank row counts
+    assertEquals(at("SUMPRODUCT((A2:A1048576=\"\")*(RAND()>=0))"), Right(number(1048572)))
+    // a lookup range in MATCH's slot computes no reference: MATCH of a blank is #N/A in Excel, so
+    // the full read's #N/A is the answer, not a misalignment
+    val withC = (1 to 3).foldLeft(e)((acc, r) => acc.put(ARef.from1(3, r), number(r)))
+    val placed = withC.put(
+      ref"H1",
+      CellValue.Formula("SUMPRODUCT(MATCH(A2:A1048576,C:C,0)*ROW(A2:A1048576))", None)
     )
     assertEquals(
-      at("SUMPRODUCT(A2:A1048576,INDEX(B2:B1048576,0))"),
-      Right(CellValue.Error(CellError.Value))
+      placed.evaluateCell(ref"H1", Clock.system, Some(Workbook(Vector(placed)))),
+      Right(CellValue.Error(CellError.NA))
     )
-    // what does line up: whole columns, or INDEX on both sides (two written edge ranges do too,
-    // at a million cells each — left out to keep this suite fast)
-    assertEquals(at("SUMPRODUCT(A:A*INDEX(B:B,0))"), Right(number(140)))
-    assertEquals(at("SUMPRODUCT(INDEX(A2:A1048576,0)*INDEX(B2:B1048576,0))"), Right(number(140)))
+  }
+
+  test("OFFSET, INDIRECT, names, FILTER and SORT beside an edge range sum every row (#746)") {
+    // A2:A4 = 1,2,3 and B2:B4 = 10,20,30, the formula at H1. These references are not bounded with
+    // the written edge range, so SUMPRODUCT reads every row of both: 140, as Excel and xl 0.25.0
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("E"))) {
+      case (acc, (r, a, b)) => acc.put(ARef.from1(1, r), number(a)).put(ARef.from1(2, r), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"H1", CellValue.Formula(formula, None))
+      val wb = Workbook(Vector(placed))
+        .withDefinedName("colB", "E!$B$2:$B$1048576")
+        .withDefinedName("idxB", "INDEX(E!$B$2:$B$1048576,0)")
+      placed.evaluateCell(ref"H1", Clock.system, Some(wb))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*OFFSET(B2,0,0,1048575))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576,OFFSET(B2,0,0,1048575))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*INDIRECT(\"B2:B1048576\"))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*colB)"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576,colB)"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*idxB)"), Right(number(140)))
+    // FILTER and SORT return every row of the range they are given
+    assertEquals(at("SUMPRODUCT(A2:A1048576*FILTER(B2:B1048576,TRUE))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(A2:A1048576*SORT(B2:B1048576))"), Right(number(140)))
+    // ... even when the same range is also read as a value beside them
+    assertEquals(
+      at("SUMPRODUCT(A2:A1048576*B2:B1048576*FILTER(B2:B1048576,TRUE))"),
+      Right(number(3600))
+    )
+    assertEquals(at("SUMPRODUCT(B2:B1048576*SORT(B2:B1048576))"), Right(number(1400)))
+  }
+
+  test("an edge range across columns lines up with INDEX over the same columns (#746)") {
+    // the column twin of the row cases: B2:D2 = 1,2,3 and B3:D3 = 10,20,30, the formula at A9.
+    // B2:XFD2 and B3:XFD3 run from column B to the sheet's last column: 16383 columns each
+    val e = List((2, 1, 10), (3, 2, 20), (4, 3, 30)).foldLeft(Sheet(SheetName.unsafe("C"))) {
+      case (acc, (c, a, b)) => acc.put(ARef.from1(c, 2), number(a)).put(ARef.from1(c, 3), number(b))
+    }
+    def at(formula: String): XLResult[CellValue] =
+      val placed = e.put(ref"A9", CellValue.Formula(formula, None))
+      placed.evaluateCell(ref"A9", Clock.system, Some(Workbook(Vector(placed))))
+    assertEquals(at("SUMPRODUCT(B2:XFD2*INDEX(B3:XFD3,1,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(B2:XFD2,INDEX(B3:XFD3,1,0))"), Right(number(140)))
+    assertEquals(at("SUMPRODUCT(--(B2:XFD2=\"\"))"), Right(number(16380)))
+    assertEquals(at("COUNTIF(B2:XFD2,\"\")"), Right(number(16380)))
+    // 16383 columns against a whole row's 16384 stay #VALUE!
+    assertEquals(at("SUMPRODUCT(B2:XFD2,3:3)"), Right(CellValue.Error(CellError.Value)))
   }
 
   test("a large computed reference reads only its populated cells, at its full shape") {

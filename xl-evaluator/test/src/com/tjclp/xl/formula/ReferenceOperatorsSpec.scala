@@ -3,6 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.eval.ArrayResult
 import com.tjclp.xl.formula.functions.ReferenceOperators
 import com.tjclp.xl.ooxml.{TestFixtures, XlsxReader, XlsxWriter}
@@ -282,8 +283,7 @@ class ReferenceOperatorsSpec extends FunSuite:
     assert(!TExpr.containsExternalRef(parsed("=SUM((A1,A2))")))
     // C3: =SUM(A1:C3 A1:A3) reads A1:A3 only — not circular
     val placed = sheet1.put(ref"C3", CellValue.Formula("SUM(A1:C3 A1:A3)", None))
-    val graph = DependencyGraph.fromSheet(placed)
-    assert(DependencyGraph.detectCycles(graph).isRight)
+    assertEquals(placed.cyclicCells, Set.empty[ARef])
     assertEquals(
       placed.evaluateCell(ref"C3", Clock.system, Some(book.put(placed))),
       Right(N("6"))
@@ -471,7 +471,7 @@ class ReferenceOperatorsSpec extends FunSuite:
     val path = TestFixtures.copyToTemp("reference-operators-lo.xlsx")
     val read = XlsxReader.read(path).fold(e => fail(e.message), identity)
     val sheet = read.sheets.headOption.getOrElse(fail("no sheet"))
-    val formulas = sheet.cells.values.toList.flatMap { cell =>
+    val formulas = sheet.cells.iterator.toList.flatMap { cell =>
       cell.value match
         case CellValue.Formula(text, Some(cached), _) => List((cell.ref, text, cached))
         case _ => Nil

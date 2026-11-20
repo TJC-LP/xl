@@ -660,7 +660,7 @@ object RenderUtils:
     val merges = sheet.mergedRanges.filter { m =>
       m.start.row.index0 <= endRow && m.end.row.index0 >= startRow
     }
-    sheet.cells.valuesIterator.foldLeft(Map.empty[Int, Int]) { (acc, cell) =>
+    sheet.cells.iterator.foldLeft(Map.empty[Int, Int]) { (acc, cell) =>
       val r = cell.ref.row.index0
       if r < startRow || r > endRow then acc
       else

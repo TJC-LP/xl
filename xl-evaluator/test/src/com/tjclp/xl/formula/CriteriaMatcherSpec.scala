@@ -228,9 +228,16 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(!matches(cell, Compare(CompareOp.Neq, BigDecimal(50))))
   }
 
-  test("matches: comparison with text containing number") {
+  test("matches: comparison skips text containing a number (#798)") {
     val cell = CellValue.Text("150")
-    assert(matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
+    assert(!matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
+    assert(!matches(cell, Compare(CompareOp.Lte, BigDecimal(200))))
+  }
+
+  test("matches: comparison reads a formula's cached number, not its numeric text (#798)") {
+    val crit = Compare(CompareOp.Gte, BigDecimal(4))
+    assert(matches(CellValue.Formula("2+2", Some(CellValue.Number(BigDecimal(4)))), crit))
+    assert(!matches(CellValue.Formula("\"4\"", Some(CellValue.Text("4"))), crit))
   }
 
   test("matches: comparison with non-numeric text fails") {
@@ -238,11 +245,12 @@ class CriteriaMatcherSpec extends FunSuite:
     assert(!matches(cell, Compare(CompareOp.Gt, BigDecimal(100))))
   }
 
-  test("matches: comparison with boolean (TRUE=1, FALSE=0)") {
+  test("matches: comparison skips booleans (#798)") {
     val trueCell = CellValue.Bool(true)
     val falseCell = CellValue.Bool(false)
-    assert(matches(trueCell, Compare(CompareOp.Gt, BigDecimal(0))))
-    assert(!matches(falseCell, Compare(CompareOp.Gt, BigDecimal(0))))
+    assert(!matches(trueCell, Compare(CompareOp.Gt, BigDecimal(0))))
+    assert(!matches(falseCell, Compare(CompareOp.Gte, BigDecimal(0))))
+    assert(!matches(trueCell, Compare(CompareOp.Lt, BigDecimal(4))))
   }
 
   test("matches: comparison with empty cell fails") {

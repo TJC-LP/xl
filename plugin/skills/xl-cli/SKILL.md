@@ -96,7 +96,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Task | Verb | Notes |
 |------|------|-------|
 | Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
-| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI |
+| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI; `--skip-data-tables` drops the slow stale-data-table note |
 | Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all`, `--expand`; a range precedent is ONE node (`Data!A:A  range, 9357 occupied cells (12 formulas)`), `--expand` lists its cells |
 | One cell: value, style, comment, direct deps | `cell <ref>` | `Dependencies` lists a range as one entry (`B1:B3`, `Data!A:A`) |
 | Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
@@ -210,8 +210,8 @@ edit into a batch heredoc (`<<'EOF'`), where nothing needs escaping.
 CSS (fonts, fills, number formats) with no rasterizer; `svg` is pure vector, no backend either;
 `png`/`jpeg`/`webp`/`pdf` need `--raster-output <path>` and a rasterizer — `xl rasterizers` lists
 what is available (the native binary needs one external tool: `pip install cairosvg` or
-`apt install librsvg2-bin`; the chain tries them in that order and falls through to the next on a
-failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
+`apt install librsvg2-bin` — `brew install librsvg` on macOS; the chain tries them in that order
+and falls through to the next on a failure). Since 0.23.1 the rsvg-convert backend pipes the SVG with no `-` positional, which
 librsvg 2.5x (Debian/Ubuntu) rejected as a filename ([#664](https://github.com/TJC-LP/xl/issues/664));
 on an older `xl`, or when every backend fails, `--rasterizer imagemagick` renders png/jpeg/webp
 (ImageMagick is never tried automatically) and `soffice --headless --convert-to pdf file.xlsx`

@@ -85,8 +85,8 @@ private[xl] object ImplicitIntersection:
     val limit = math.max(budget, 0)
     def candidate(name: SheetName, ref: ARef): Option[(Sheet, ARef, String)] =
       sheets.get(name).flatMap { sheet =>
-        sheet.cells.get(ref).map(_.value) match
-          case Some(CellValue.Formula(text, _, _: FormulaKind.Normal))
+        sheet.cells.valueAt(ref) match
+          case CellValue.Formula(text, _, _: FormulaKind.Normal)
               if known(name -> ref) || FormulaParser.parse(s"=$text").exists(mayDiverge) =>
             Some((sheet, ref, text))
           case _ => None
@@ -190,7 +190,7 @@ private[xl] object ImplicitIntersection:
       ReferenceOperators.isOperatorCall(call) ||
       call.spec.argSpec.toValues(call.args).exists {
         case ArgValue.Expr(arg) => mayDiverge(arg)
-        case _: ArgValue.Range | _: ArgValue.Cells => false
+        case _: ArgValue.Range => false
       }
 
   /** Numbers compare by value, Empty reads 0, anything else by equality (errors by code). */

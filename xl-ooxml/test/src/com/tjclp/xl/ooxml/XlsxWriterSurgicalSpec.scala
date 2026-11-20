@@ -306,7 +306,6 @@ class XlsxWriterSurgicalSpec extends FunSuite:
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("Note", Some("Author")))
     val sheet2 = Sheet("Sheet2")
       .put(ref"A1" -> "Data")
-      .unsafe
 
     val initialWb = Workbook(Vector(sheet1, sheet2))
     val sourcePath = Files.createTempFile("comments-source", ".xlsx")
@@ -491,7 +490,6 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val sheet1 = Sheet("Sheet1")
       .put(ref"A1" -> "First cell")
       .put(ref"B1" -> "Second cell")
-      .unsafe
       .comment(ref"A1", com.tjclp.xl.cells.Comment.plainText("First comment", Some("Author1")))
     val wb1 = Workbook(Vector(sheet1))
 
@@ -1017,7 +1015,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // Read workbook and add a new sheet
     val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
-    val newSheet = Sheet("NewSheet").put(ref"A1" -> "New Data").unsafe
+    val newSheet = Sheet("NewSheet").put(ref"A1" -> "New Data")
     val withNewSheet = wb.put(newSheet)
 
     // Verify metadata is marked as modified (fix #1)
@@ -1095,13 +1093,13 @@ class XlsxWriterSurgicalSpec extends FunSuite:
 
     // Read, add sheet, write, read, add another sheet, write
     val wb1 = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
-    val withFirst = wb1.put(Sheet("Second").put(ref"A1" -> "Second Sheet").unsafe)
+    val withFirst = wb1.put(Sheet("Second").put(ref"A1" -> "Second Sheet"))
 
     val temp1 = Files.createTempFile("chained-1", ".xlsx")
     XlsxWriter.write(withFirst, temp1).fold(err => fail(s"Write 1 failed: $err"), identity)
 
     val wb2 = XlsxReader.read(temp1).fold(err => fail(s"Read 2 failed: $err"), identity)
-    val withSecond = wb2.put(Sheet("Third").put(ref"A1" -> "Third Sheet").unsafe)
+    val withSecond = wb2.put(Sheet("Third").put(ref"A1" -> "Third Sheet"))
 
     val temp2 = Files.createTempFile("chained-2", ".xlsx")
     XlsxWriter.write(withSecond, temp2).fold(err => fail(s"Write 2 failed: $err"), identity)
@@ -1121,7 +1119,7 @@ class XlsxWriterSurgicalSpec extends FunSuite:
     val source = createWorkbookWith2Sheets()
 
     val wb = XlsxReader.read(source).fold(err => fail(s"Read failed: $err"), identity)
-    val newSheet = Sheet("First").put(ref"A1" -> "I'm first now").unsafe
+    val newSheet = Sheet("First").put(ref"A1" -> "I'm first now")
     val withInsert = wb.insertAt(0, newSheet).fold(err => fail(s"Insert failed: $err"), identity)
 
     val output = Files.createTempFile("insert-at-test", ".xlsx")

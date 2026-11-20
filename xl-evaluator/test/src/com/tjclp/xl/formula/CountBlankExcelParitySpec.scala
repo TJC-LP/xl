@@ -4,6 +4,7 @@ import munit.FunSuite
 
 import com.tjclp.xl.addressing.{CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.formula.EvalAllSyntax.*
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.formula.eval.WorkbookEvaluator.*
 import com.tjclp.xl.richtext.{RichText, TextRun}
@@ -113,7 +114,7 @@ class CountBlankExcelParitySpec extends FunSuite:
 
   test("#731: a sheet recalculation counts the \"\" of formulas it has not cached yet") {
     val sheet = data(cached = false).put(ref"E1", CellValue.Formula("COUNTBLANK(A1:A14)", None))
-    assertEquals(sheet.evaluateWithDependencyCheck().map(_.get(ref"E1")), Right(Some(num(5))))
+    assertEquals(sheet.evalAll().map(_.get(ref"E1")), Right(Some(num(5))))
   }
 
   // ===== Item 3: an argument that is not a reference is #VALUE! =====
@@ -168,7 +169,7 @@ class CountBlankExcelParitySpec extends FunSuite:
     )
     assertEquals(spillSheet.evaluateFormula("=COUNTA(D1#)"), Right(num(3)))
     val recalc = spillSheet.put(ref"F1", CellValue.Formula("COUNTBLANK(D1#)", None))
-    assertEquals(recalc.evaluateWithDependencyCheck().map(_.get(ref"F1")), Right(Some(num(1))))
+    assertEquals(recalc.evalAll().map(_.get(ref"F1")), Right(Some(num(1))))
   }
 
   test("#731: an uncached spill counts its \"\" elements; a blank element spills as 0") {
