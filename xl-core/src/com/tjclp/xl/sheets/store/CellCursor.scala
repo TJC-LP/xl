@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets.store
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.sheets.CellStore
 import com.tjclp.xl.styles.units.StyleId
 
@@ -100,7 +100,7 @@ private[xl] final class CellCursor private (
 
   /** The hyperlink; "" when [[hasLink]] is false. */
   def link: String = cells.linkAt(pos)
-  def hyperlink: Option[String] = if hasLink then Some(link) else None
+  def hyperlink: Option[Hyperlink] = if hasLink then Some(Hyperlink(link)) else None
 
   /** The current cell as a [[Cell]] (allocates). */
   def cell: Cell = Cell(ref, value, styleId, hyperlink)

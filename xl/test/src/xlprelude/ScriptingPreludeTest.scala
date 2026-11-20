@@ -558,6 +558,33 @@ class ScriptingPreludeTest extends FunSuite:
     val patch = ref"A1".tryDown(2).fold(Patch.empty)(_ := "third row")
     assertEquals(Sheet("Nav").put(patch).cells.refs.toSet, Set(ref"A3"))
 
+  // The deprecated Map-shaped accessors are the subject here.
+  @annotation.nowarn("cat=deprecation")
+  private def legacyCellAccessors(): Unit =
+    val before = Sheet("L").put(ref"B2", 2).put(ref"A1", "a").put(ref"C1", 3)
+    val after = before.put(ref"D4", 4)
+    // Map.keys / values: traversed more than once, as code written against the Map does
+    val keys: Iterable[ARef] = before.cells.keys
+    assertEquals(keys.toList, List(ref"A1", ref"C1", ref"B2"))
+    assertEquals(keys.size, 3)
+    assertEquals(keys.filter(_.row.index0 == 0).map(_.toA1).toList, List("A1", "C1"))
+    val values: Iterable[Cell] = before.cells.values
+    assertEquals(values.map(_.ref).toList, keys.toList)
+    assertEquals(values.count(_.value != CellValue.Empty), 3)
+    assertEquals(before.cells.keysIterator.toList, keys.toList)
+    assertEquals(before.cells.valuesIterator.map(_.ref).toList, keys.toList)
+    // Map.keySet: a real set (the diff recipe's union has no duplicates)
+    val keySet: Set[ARef] = before.cells.keySet
+    assert(keySet.contains(ref"B2") && !keySet(ref"Z9"))
+    assertEquals(keySet, Set(ref"A1", ref"B2", ref"C1"))
+    assertEquals((before.cells.keySet ++ after.cells.keySet).size, 4)
+    assertEquals(after.cells.keySet -- before.cells.keySet, Set(ref"D4"))
+    assertEquals(keySet + ref"Z9" - ref"A1", Set(ref"B2", ref"C1", ref"Z9"))
+    assertEquals(Sheet("E").cells.keySet, Set.empty[ARef])
+
+  test("#891: the Map-shaped accessors of Sheet.cells still answer, deprecated"):
+    legacyCellAccessors()
+
   test("#891: Sheet.cells is a CellStore usable from a script, and the lookup macros expand"):
     val sheet = Sheet("Store").put(ref"B2", 2).put(ref"A1", "a").put(ref"C1", 3)
     val store: CellStore = sheet.cells

@@ -354,12 +354,12 @@ private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
     .filter(_.hyperlink.isDefined)
     .sortBy(c => (c.ref.row.index0, c.ref.col.index0))
   val relIdByRef = sorted
-    .filter(c => isExternalHyperlink(c.hyperlink.getOrElse("")))
+    .filter(c => isExternalHyperlink(c.hyperlink.fold("")(_.target)))
     .zipWithIndex
     .map { case (c, i) => c.ref -> s"rIdHL${i + 1}" }
     .toMap
   sorted.map { c =>
-    val target = c.hyperlink.getOrElse("")
+    val target = c.hyperlink.fold("")(_.target)
     HyperlinkEntry(c.ref, target, isExternalHyperlink(target), relIdByRef.getOrElse(c.ref, ""))
   }
 

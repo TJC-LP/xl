@@ -44,12 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells however wide the row is. It is keyed by each cell's own `ref`, has
   value equality (equal cells at equal references, however the store was built) and iterates
   row-major (rows, then columns), where the `Map` iterated in hash order. Written bytes do not
-  change. Migrating:
+  change. Single-cell writes are slower than on the `Map` (about 1.5× on 20-column rows, about 3×
+  on 500-column rows: a `put` copies the row's leaf, or its 256-column band); bulk writes
+  (`putAll`, `Sheet.withValues`, the builder) are not: see "Sheet cell storage" in
+  `docs/reference/performance-guide.md`. Java-serialized `ARef`s and sheets are not portable
+  across this version: the `ARef` packing changed and the store has its own serial form (its
+  cells, rebuilt through the builder on reading). Migrating:
   - `cells.get(ref)`, `contains`, `size`, `isEmpty`/`nonEmpty` are unchanged; the cell-lookup
     macros (`sheet.cell("A1")`, `range`, `get`) and `sheet(ref)` work as before.
   - `cells.values`/`valuesIterator` → `cells.iterator` (it yields `Cell`; the ref is `cell.ref`);
     `cells.keys`/`keySet`/`keysIterator` → `cells.refs` (`.toSet` for a set); a `(ref, cell)`
     traversal → `cells.iterator` with `cell.ref`; a range's cells → `cells.inRange(range)`.
+    The five `Map` names (`keys`, `keySet`, `keysIterator`, `values`, `valuesIterator`) remain as
+    deprecated forwarders (since 0.27.0) so such code compiles with a warning: views over the
+    store, row-major, nothing copied. No other `Map` method is kept (`map`, `filter`, `foreach`,
+    `toMap`, `(ref, cell)` tuples: go through `iterator`). A script that must compile against
+    both 0.26.0 and this version can read through `sheet.cellsSorted`/`rowsSorted` and
+    `cells.get(ref)`, which did not change.
   - Building: `Map(ref -> cell, …)`/`.toMap` → `CellStore.of(cell, …)`/`CellStore.from(cells)`/
     `CellStore.newBuilder`; `Map.empty` → `CellStore.empty`; `updated(ref, cell)`/`+` →
     `updated(cell)`; `removed(ref)` stays; `++` → `putAll(cells)`; dropping a range →
@@ -68,6 +79,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `Cell.comment`, `withComment` and `clearComment` (deprecated since 0.12.1) and the `Sheet.put`
     shim that moved a cell comment into `sheet.comments`: `Cell` is `Cell(ref, value, styleId,
     hyperlink)`; comments live in `sheet.comments` (`sheet.comment(ref, …)`).
+  - `Cell.hyperlink` is an `Option[Hyperlink]`, no longer an `Option[String]`. The comment was
+    `Cell`'s fourth parameter, so `Cell(ref, value, None, Some("review note"))` (a comment until
+    now, compiled with a deprecation warning) would otherwise still compile and silently write a
+    hyperlink; it is now a type error. `Hyperlink` is an opaque type over the target string,
+    exported from `com.tjclp.xl.{*, given}` and the scripting prelude: build one with
+    `Hyperlink("https://…")`, read the text with `.target`. Migration: `hyperlink = Some(url)`
+    becomes `hyperlink = Some(Hyperlink(url))`, and `cell.hyperlink` reads become
+    `cell.hyperlink.map(_.target)`; `cell.withHyperlink(url: String)` and `clearHyperlink` are
+    unchanged (a `withHyperlink(Hyperlink)` overload stores the link as given). A file that
+    wildcard-imports the edit cases beside the library (`import Edit.*`) now sees two `Hyperlink`s
+    and must write `Edit.Hyperlink(at, target)`; that case keeps its `Option[String]` target.
+    Written workbooks and CLI output are byte-identical.
   - `Font.withUnderline(Boolean)` (0.18.0): use the `Underline` enum.
   - The identity `Sheet.unsafe`.
   - `ArgSpec.cellRange` (0.18.0) with the `ArgValue.Cells` slot it alone produced: `ArgSpec.map`
@@ -136,6 +159,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   no readers, so a cycle or a dependent could be missed. The seeder now asks the recalculation
   graph (case-insensitive sheets, every range, #504's precise lookups), which also walks upstream
   now (`CompactGraph.precedentClosure`). No change on the 60-book corpus beyond NOW() cells.
+  The audit's volatility exemption asks the same graph the what-if pass uses: a table whose
+  lookup column is chosen by one of its own inputs is exempt when any column that input can
+  select draws RAND()/NOW() in the table's cone, not only the column selected today.
 
 - **One graph and one parse of each formula per operation, beyond `recalc`** (#891). `recalc
   --tables` built a second recalculation graph to seed the tables, and `batch`, `name add|rm` and
@@ -196,6 +222,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an iterative recalculation of the book and costs one: the window used to fail such a cell with
   "Circular reference … read again while its own evaluation is in progress", or compute it from
   its precedents' stale caches.
+  When every member holds a value, the cycle is a source of those values and nothing else: a
+  formula that only feeds the cycle is not evaluated for the window, a failure behind the cycle
+  does not block a cell that reads it, and a member that reads through INDIRECT keeps its value
+  (a member downstream of one lost its cache and was recomputed once, out of the cycle).
 
 - **`clear --styles` unmerges, like Excel's Clear Formats** (#894): `clear <range> --styles`
   and the batch op `{"op":"clear","range":"A1","styles":true}` now unmerge every merged region

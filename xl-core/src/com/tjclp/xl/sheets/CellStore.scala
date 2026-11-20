@@ -3,7 +3,7 @@ package com.tjclp.xl.sheets
 import scala.util.hashing.MurmurHash3
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.sheets.store.{
   Band,
   BandedRow,
@@ -51,13 +51,18 @@ import com.tjclp.xl.styles.units.StyleId
  *
  * Every reference is accepted, including ones off Excel's grid (negative, or beyond row 1,048,576
  * or column XFD); nothing here fails or throws.
+ *
+ * '''Serialization.''' Java-serializable, as the `Map` it replaced was: the stream holds the cells
+ * in order, not the trie, and reading it rebuilds the store through [[CellStore.Builder]], so a
+ * deserialized store is the canonical one (equal to the one written, same layout). The form is this
+ * version's: nothing is promised across versions.
  */
 // Local loops over the trie's arrays (the house style for flat-array code, see SccKernel).
 @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
 final class CellStore private (
   private[xl] val root: Entry,
   private[xl] val height: Int
-):
+) extends Serializable:
   import CellStore.*
 
   // ----- reads -----
@@ -88,7 +93,12 @@ final class CellStore private (
     else
       val m = c.meta(p)
       Some(
-        Cell(ref, c.values(p), Meta.style(m), if Meta.hasLink(m) then Some(c.links(p)) else None)
+        Cell(
+          ref,
+          c.values(p),
+          Meta.style(m),
+          if Meta.hasLink(m) then Some(Hyperlink(c.links(p))) else None
+        )
       )
 
   /** The value at `ref`, Empty when no cell is stored there. Allocates nothing. */
@@ -102,16 +112,42 @@ final class CellStore private (
     val p = posIn(c, ref)
     if p < 0 then None else Meta.style(c.meta(p))
 
-  def hyperlinkAt(ref: ARef): Option[String] =
+  def hyperlinkAt(ref: ARef): Option[Hyperlink] =
     val c = cellsAt(ref)
     val p = posIn(c, ref)
-    if p < 0 || !Meta.hasLink(c.meta(p)) then None else Some(c.links(p))
+    if p < 0 || !Meta.hasLink(c.meta(p)) then None else Some(Hyperlink(c.links(p)))
 
   /** Every stored cell, row-major (see the class notes for the order off the grid). */
   def iterator: Iterator[Cell] = cellsOf(CellCursor.all(this))
 
   /** Every stored reference, row-major. */
   def refs: Iterator[ARef] = refsOf(CellCursor.all(this))
+
+  // ----- the `Map` this store replaced: its commonest reads, kept as deprecated forwarders -----
+  //
+  // Each is a view over the store (nothing is copied, no map or set is built) and goes row-major.
+
+  /** The stored references, as `Map.keys` gave them: a re-traversable view over [[refs]]. */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs", "0.27.0")
+  def keys: Iterable[ARef] = new CellStore.RefSet(this)
+
+  /**
+   * The stored references as a set, as `Map.keySet` gave them: a view whose `contains` is this
+   * store's and whose elements are [[refs]]. Like the map's key set it copies only when it is added
+   * to or removed from (`a.keySet ++ b.keySet` builds one ordinary set).
+   */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs (refs.toSet for a set)", "0.27.0")
+  def keySet: Set[ARef] = new CellStore.RefSet(this)
+
+  @deprecated("Sheet.cells is a CellStore, not a Map: use refs", "0.27.0")
+  def keysIterator: Iterator[ARef] = refs
+
+  /** The stored cells, as `Map.values` gave them: a re-traversable view over [[iterator]]. */
+  @deprecated("Sheet.cells is a CellStore, not a Map: use iterator", "0.27.0")
+  def values: Iterable[Cell] = new CellStore.CellView(this)
+
+  @deprecated("Sheet.cells is a CellStore, not a Map: use iterator", "0.27.0")
+  def valuesIterator: Iterator[Cell] = iterator
 
   /**
    * The stored cells inside `range`, row-major. Only stored cells are visited, never the empty
@@ -131,7 +167,7 @@ final class CellStore private (
    * Whether some stored cell's value tag is in `tagMask` (a union of [[CellStore.tagBit]]s, e.g.
    * [[CellStore.FormulaTags]]). Reads the root summary: O(1).
    */
-  def hasTag(tagMask: Int): Boolean = (root.tagMask & tagMask) != 0
+  private[xl] def hasTag(tagMask: Int): Boolean = (root.tagMask & tagMask) != 0
 
   private def box(minCol: Int, maxCol: Int, valuedOnly: Boolean): CellRange =
     val shift = 5 * (height - 1)
@@ -158,7 +194,7 @@ final class CellStore private (
   /** This store with `cell` stored at `cell.ref`, replacing whatever was there. */
   def updated(cell: Cell): CellStore =
     val meta = Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined)
-    val link = cell.hyperlink.getOrElse("")
+    val link = cell.hyperlink.fold("")(_.target)
     modifyRow(
       cell.ref.row.index0,
       row => StoredRow.set(row, cell.ref.col.index0, meta, cell.value, link)
@@ -223,7 +259,7 @@ final class CellStore private (
    * and hyperlinks are kept. Rows (and whole subtrees) where `f` changes nothing, by reference, are
    * shared; `this` when nothing changes.
    */
-  def transformValues(tagMask: Int)(f: CellValue => CellValue): CellStore =
+  private[xl] def transformValues(tagMask: Int)(f: CellValue => CellValue): CellStore =
     if (root.tagMask & tagMask) == 0 then this
     else
       val skip = (e: Entry) => (e.tagMask & tagMask) == 0
@@ -307,6 +343,13 @@ final class CellStore private (
   /** Every structural invariant, or a description of the first one broken (for the law specs). */
   private[xl] def checkInvariants: Either[String, Unit] = CellStore.check(this)
 
+  /**
+   * Java serialization writes this store's cells (`CellStore.Serialized`) in its place, the
+   * serialization-proxy pattern: the trie's nodes are never written, so none of them needs a serial
+   * form, and no stream can produce a store the builder would not.
+   */
+  private def writeReplace(): AnyRef = new CellStore.Serialized(iterator.toArray)
+
   override def equals(that: Any): Boolean = that match
     case other: CellStore =>
       (this eq other) || (height == other.height && Trie.same(root, other.root))
@@ -344,32 +387,32 @@ object CellStore:
 
   // ----- value tags (for hasTag / transformValues) -----
 
-  final val TagEmpty = Meta.Empty
-  final val TagText = Meta.Text
-  final val TagRichText = Meta.RichText
-  final val TagNumber = Meta.Number
-  final val TagBool = Meta.Bool
-  final val TagDateTime = Meta.DateTime
-  final val TagFormulaUncached = Meta.FormulaUncached
-  final val TagFormulaCached = Meta.FormulaCached
-  final val TagFormulaDataTable = Meta.FormulaDataTable
-  final val TagError = Meta.Error
+  private[xl] final val TagEmpty = Meta.Empty
+  private[xl] final val TagText = Meta.Text
+  private[xl] final val TagRichText = Meta.RichText
+  private[xl] final val TagNumber = Meta.Number
+  private[xl] final val TagBool = Meta.Bool
+  private[xl] final val TagDateTime = Meta.DateTime
+  private[xl] final val TagFormulaUncached = Meta.FormulaUncached
+  private[xl] final val TagFormulaCached = Meta.FormulaCached
+  private[xl] final val TagFormulaDataTable = Meta.FormulaDataTable
+  private[xl] final val TagError = Meta.Error
 
   /** The mask bit of one tag. */
-  def tagBit(tag: Int): Int = 1 << tag
+  private[xl] def tagBit(tag: Int): Int = 1 << tag
 
   /** Every formula tag: uncached, cached and data-table. */
-  final val FormulaTags: Int =
+  private[xl] final val FormulaTags: Int =
     (1 << Meta.FormulaUncached) | (1 << Meta.FormulaCached) | (1 << Meta.FormulaDataTable)
 
   /** Every tag. */
-  final val AllTags: Int = (1 << 10) - 1
+  private[xl] final val AllTags: Int = (1 << 10) - 1
 
   /**
    * The tag of a value: Empty 0, Text 1, RichText 2, Number 3, Bool 4, DateTime 5, Formula 6..8,
    * Error 9.
    */
-  def tagOf(value: CellValue): Int = Meta.tagOf(value)
+  private[xl] def tagOf(value: CellValue): Int = Meta.tagOf(value)
 
   // ----- construction -----
 
@@ -381,6 +424,34 @@ object CellStore:
   def from(cells: IterableOnce[Cell]): CellStore = newBuilder.addAll(cells).result()
 
   def newBuilder: Builder = new Builder
+
+  /**
+   * A store's serial form: its cells, row-major. `readResolve` rebuilds the store from them, so the
+   * empty store reads back as [[empty]] itself and any other as the builder lays it out.
+   */
+  @SerialVersionUID(1L)
+  private final class Serialized(private val cells: Array[Cell]) extends Serializable:
+    private def readResolve(): AnyRef = if cells.isEmpty then empty else from(cells)
+
+  /** The legacy `keys`/`keySet`: the store's references as a set, read through the store. */
+  private final class RefSet(store: CellStore) extends scala.collection.immutable.AbstractSet[ARef]:
+    def iterator: Iterator[ARef] = store.refs
+    def contains(ref: ARef): Boolean = store.contains(ref)
+    override def size: Int = store.size
+    override def knownSize: Int = store.size
+    override def isEmpty: Boolean = store.isEmpty
+    // growing or shrinking leaves the view for an ordinary set, as a map's key set does
+    def incl(ref: ARef): Set[ARef] =
+      if store.contains(ref) then this else Set.from(store.refs) + ref
+    def excl(ref: ARef): Set[ARef] =
+      if store.contains(ref) then Set.from(store.refs) - ref else this
+
+  /** The legacy `values`: the store's cells, re-traversable. */
+  private final class CellView(store: CellStore) extends scala.collection.AbstractIterable[Cell]:
+    def iterator: Iterator[Cell] = store.iterator
+    override def size: Int = store.size
+    override def knownSize: Int = store.size
+    override def isEmpty: Boolean = store.isEmpty
 
   private def normalized(root: Entry, height: Int): CellStore =
     val (r, h) = Trie.shrink(root, height)
@@ -463,7 +534,7 @@ object CellStore:
         orderKey(cell.ref.row.index0, cell.ref.col.index0),
         Meta.of(cell.value, cell.styleId, cell.hyperlink.isDefined),
         cell.value,
-        cell.hyperlink.getOrElse("")
+        cell.hyperlink.fold("")(_.target)
       )
       this
 

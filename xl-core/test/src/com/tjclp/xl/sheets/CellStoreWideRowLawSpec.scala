@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange}
-import com.tjclp.xl.cells.{Cell, CellValue}
+import com.tjclp.xl.cells.{Cell, CellValue, Hyperlink}
 import com.tjclp.xl.sheets.store.{Band, BandedRow, Entry, Node, RowLeaf}
 import com.tjclp.xl.styles.units.StyleId
 import munit.ScalaCheckSuite
@@ -330,8 +330,8 @@ object CellStoreWideRowLawSpec:
 
   private val genStyle: Gen[Option[StyleId]] =
     Gen.frequency(5 -> Gen.const(None), 1 -> Gen.oneOf(1, -1).map(i => Some(StyleId(i))))
-  private val genLink: Gen[Option[String]] =
-    Gen.frequency(12 -> Gen.const(None), 1 -> Gen.const(Some("Sheet1!A1")))
+  private val genLink: Gen[Option[Hyperlink]] =
+    Gen.frequency(12 -> Gen.const(None), 1 -> Gen.const(Some(Hyperlink("Sheet1!A1"))))
 
   val genWideCell: Gen[Cell] =
     for ref <- genWideRef; v <- genBlockValue; s <- genStyle; l <- genLink yield Cell(ref, v, s, l)

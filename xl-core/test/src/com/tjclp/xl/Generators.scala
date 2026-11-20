@@ -97,7 +97,7 @@ object Generators:
       ref <- genARef
       value <- genCellValue
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
-      hyperlink <- Gen.option(Gen.alphaNumStr.map(s => s"https://example.com/$s"))
+      hyperlink <- Gen.option(Gen.alphaNumStr.map(s => Hyperlink(s"https://example.com/$s")))
     yield Cell(ref, value, styleId, hyperlink)
 
   /** Generate column properties */
@@ -1075,7 +1075,10 @@ object Generators:
         value <- genRichCellValue
         style <- Gen.frequency(2 -> Gen.const(None), 2 -> genCellStyle.map(Some.apply))
         comment <- Gen.frequency(3 -> Gen.const(None), 1 -> genComment.map(Some.apply))
-        hyperlink <- Gen.frequency(4 -> Gen.const(None), 1 -> genHyperlink.map(Some.apply))
+        hyperlink <- Gen.frequency(
+          4 -> Gen.const(None),
+          1 -> genHyperlink.map(t => Some(Hyperlink(t)))
+        )
       yield (ref, value, style, comment, hyperlink)
     for
       name <- genSheetName

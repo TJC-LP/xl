@@ -243,7 +243,7 @@ object SheetCellsBenchmark {
       ARef.from0(col, row),
       value,
       if i % 20 == 0 then Some(StyleId(i % 13)) else None,
-      if i % 100 == 0 then Some(s"https://example.com/$i") else None
+      if i % 100 == 0 then Some(Hyperlink(s"https://example.com/$i")) else None
     )
   }
 

@@ -17,6 +17,9 @@ object Cell:
 /**
  * Cell with value and optional metadata.
  *
+ * `hyperlink` is a [[Hyperlink]], not a `String`: the fourth parameter was once the cell comment,
+ * and `Cell(ref, value, None, Some("a note"))` must not compile into a link (#891).
+ *
  * Cell comments are not part of the cell: they live in the sheet-level store (`Sheet.comments`,
  * written by `Sheet.comment(ref, Comment...)`), which is what the OOXML writer serializes.
  */
@@ -24,7 +27,7 @@ final case class Cell(
   ref: ARef,
   value: CellValue = CellValue.Empty,
   styleId: Option[StyleId] = None,
-  hyperlink: Option[String] = None
+  hyperlink: Option[Hyperlink] = None
 ):
   /** Get cell column */
   def col: Column = this.ref.col
@@ -51,7 +54,11 @@ final case class Cell(
    * but the OOXML `location` attribute wants no '#'. External URLs start with a scheme, so their
    * fragments (`https://x/page#s`) are untouched.
    */
-  def withHyperlink(url: String): Cell = copy(hyperlink = Some(url.stripPrefix("#")))
+  def withHyperlink(url: String): Cell = copy(hyperlink = Some(Hyperlink(url.stripPrefix("#"))))
+
+  /** Set the hyperlink to `link` exactly as it stands (no `#` normalisation; the writer strips). */
+  @annotation.targetName("withHyperlinkValue")
+  def withHyperlink(link: Hyperlink): Cell = copy(hyperlink = Some(link))
 
   /** Clear hyperlink */
   def clearHyperlink: Cell = copy(hyperlink = None)
