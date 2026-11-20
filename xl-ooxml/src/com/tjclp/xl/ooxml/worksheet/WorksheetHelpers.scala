@@ -364,15 +364,28 @@ private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
   }
 
 /**
- * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own — the
- * `<hyperlink>` children whose `ref` is not a single cell (a range such as `B7:C8`, which Excel
- * writes for a link over a multi-cell selection). The reader puts every single-cell link on its
- * `Cell.hyperlink`, so those children are the model's to write or drop; a range link has no cell to
- * live on and rides through as preserved XML. None when nothing unmodeled is left.
+ * GH-895: does the reader put this `<hyperlink>` on a cell? Mirrors `XlsxReader`'s
+ * `cellsWithHyperlinks`: the `ref` is one cell and the link has a target, an `r:id` naming one of
+ * the sheet's hyperlink rels (`hyperlinkRelIds`, type `XmlUtil.relTypeHyperlink`) or a non-empty
+ * `location`. Those links live on `Cell.hyperlink`, so they are the model's to write or drop.
  */
-private[ooxml] def unmodeledHyperlinksElem(preserved: Elem): Option[Elem] =
+private[ooxml] def isModeledHyperlink(e: Elem, hyperlinkRelIds: Set[String]): Boolean =
+  val rid = e.attributes.collectFirst { case a: PrefixedAttribute if a.key == "id" => a.value.text }
+  val hasTarget = rid.exists(hyperlinkRelIds.contains) || (e \@ "location").nonEmpty
+  ARef.parse(e \@ "ref").isRight && hasTarget
+
+/**
+ * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own: a range `ref`
+ * (`B7:C8`, which Excel writes for a link over a multi-cell selection) or a link whose target the
+ * reader cannot resolve (an ISO Strict rel type, say). Those have no `Cell.hyperlink` and ride
+ * through as preserved XML. None when nothing unmodeled is left.
+ */
+private[ooxml] def unmodeledHyperlinksElem(
+  preserved: Elem,
+  hyperlinkRelIds: Set[String]
+): Option[Elem] =
   val kept = preserved.child.collect {
-    case e: Elem if e.label == "hyperlink" && ARef.parse(e \@ "ref").isLeft => e
+    case e: Elem if e.label == "hyperlink" && !isModeledHyperlink(e, hyperlinkRelIds) => e
   }
   Option.when(kept.nonEmpty)(preserved.copy(child = kept))
 

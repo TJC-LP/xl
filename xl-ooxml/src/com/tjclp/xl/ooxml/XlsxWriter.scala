@@ -626,9 +626,9 @@ object XlsxWriter:
         )
         val preservedVmlRelId =
           source.relationships.find(_.`type` == XmlUtil.relTypeVmlDrawing).map(_.id)
-        // GH-895: once the model has no hyperlinks left, a source hyperlink rel is stale unless a
-        // preserved range link (unmodeledHyperlinksElem) still points at it; stale ones force the
-        // merge that drops them, so a removed last link does not ship its rel.
+        // GH-895: with no external links generated, a source hyperlink rel is stale unless a
+        // preserved unmodeled link (unmodeledHyperlinksElem) still points at it; stale ones force
+        // the merge that drops them, so a removed last link does not ship its rel.
         def isStaleHyperlinkRel(rel: Relationship): Boolean =
           rel.`type` == XmlUtil.relTypeHyperlink && !keptHyperlinkRelIds.contains(rel.id)
         val staleHyperlinkRels = hlRels.isEmpty && source.relationships.exists(isStaleHyperlinkRel)
@@ -2929,6 +2929,22 @@ object XlsxWriter:
                   }.getOrElse(Relationships.empty)
                 )
               case _ => None
+          // GH-895: cell hyperlinks are model-driven on every write. With none left in the model,
+          // the preserved <hyperlinks> keeps only the links the reader could not put on a cell
+          // (unmodeledHyperlinksElem: range refs, unresolvable targets), and the rels keep only
+          // the hyperlink rels those links reference; a removed last cell link stays removed.
+          val keptHyperlinks: Option[scala.xml.Elem] =
+            if collectHyperlinks(sheet).nonEmpty then None // the model's element replaces it
+            else
+              val sourceHyperlinkRelIds = preservedRels.fold(Set.empty[String])(
+                _.relationships.filter(_.`type` == XmlUtil.relTypeHyperlink).map(_.id).toSet
+              )
+              preservedMetadata
+                .flatMap(_.preservedKnown.get("hyperlinks"))
+                .flatMap(unmodeledHyperlinksElem(_, sourceHyperlinkRelIds))
+          val worksheetMetadata = preservedMetadata.map(m =>
+            m.copy(preservedKnown = m.preservedKnown.updatedWith("hyperlinks")(_ => keptHyperlinks))
+          )
           // GH-557: the rels are planned BEFORE the worksheet is emitted; every sheet-level r:id
           // below (<tablePart>, a generated <legacyDrawing>) derives from this plan.
           val relsPlan = planSheetRels(
@@ -2942,14 +2958,7 @@ object XlsxWriter:
             commentPath,
             vmlPath,
             sameRelsPath = sourceRelsPathOpt.contains(relsPath),
-            // GH-895: the rels of the range links that ride through when no cell links are left
-            keptHyperlinkRelIds =
-              if hlRels.nonEmpty then Set.empty
-              else
-                preservedMetadata
-                  .flatMap(_.preservedKnown.get("hyperlinks"))
-                  .flatMap(unmodeledHyperlinksElem)
-                  .fold(Set.empty[String])(hyperlinkRelIds)
+            keptHyperlinkRelIds = keptHyperlinks.fold(Set.empty[String])(hyperlinkRelIds)
           )
           val legacyDrawingRelId = relsPlan.legacyDrawingRelId.getOrElse("rId2")
 
@@ -3007,7 +3016,7 @@ object XlsxWriter:
                   sheet,
                   sstForSheets,
                   remapping,
-                  preservedMetadata,
+                  worksheetMetadata,
                   tablePartsXml,
                   escapeFormulas,
                   drawingPlan.drawingRefs.get(idx),

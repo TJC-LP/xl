@@ -630,13 +630,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
           preserved.rootAttributes,
           preserved.rootScope,
           // GH-232 preserve inline elements + GH-235 model-driven hyperlinks (overrides any raw)
-          // + GH-429 autoFilter overlay (Ranged replaces @ref, Remove strips, None passthrough).
-          // GH-895: when the model has no hyperlinks left, the preserved element keeps only the
-          // links the model cannot own (range refs), so removing a sheet's last cell link sticks.
-          overlayAutoFilter(
-            preserved.preservedKnown.updatedWith("hyperlinks")(_.flatMap(unmodeledHyperlinksElem)),
-            sheet.autoFilter
-          ) ++ hyperlinksMap
+          // + GH-429 autoFilter overlay (Ranged replaces @ref, Remove strips, None passthrough)
+          overlayAutoFilter(preserved.preservedKnown, sheet.autoFilter) ++ hyperlinksMap
         )
       case None =>
         // No preserved metadata - create minimal worksheet with cols from domain

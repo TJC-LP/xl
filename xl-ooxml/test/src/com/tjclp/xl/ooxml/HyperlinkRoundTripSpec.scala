@@ -236,3 +236,47 @@ class HyperlinkRoundTripSpec extends FunSuite:
     assert(!rels.contains("example.com"), s"the removed link's rel must not ship:\n$rels")
     Files.deleteIfExists(src)
   }
+
+  test("GH-895: a cell link the reader cannot resolve survives an edit, with its rel") {
+    // ISO 29500 Strict names the hyperlink rel type under purl.oclc.org; the reader resolves only
+    // the transitional type, so B7's link loads onto no cell and must ride through as XML.
+    val written = Files.createTempFile("hl-strict-gen", ".xlsx")
+    val seed = Workbook(
+      Sheet("Summary")
+        .put(Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/"))
+    )
+    XlsxWriter.write(seed, written).fold(e => fail(s"write failed: $e"), identity)
+    val src = Files.createTempFile("hl-strict", ".xlsx")
+    val in = new ZipFile(written.toFile)
+    val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(src))
+    try
+      in.entries().asIterator().forEachRemaining { e =>
+        val bytes = in.getInputStream(e).readAllBytes()
+        val body =
+          if e.getName == "xl/worksheets/_rels/sheet1.xml.rels" then
+            new String(bytes, "UTF-8")
+              .replace(XmlUtil.relTypeHyperlink, strictHyperlinkRelType)
+              .getBytes("UTF-8")
+          else bytes
+        out.putNextEntry(new java.util.zip.ZipEntry(e.getName))
+        out.write(body)
+        out.closeEntry()
+      }
+    finally
+      out.close()
+      in.close()
+      Files.deleteIfExists(written)
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = wb("Summary").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet(ref"B7").hyperlink, None, "precondition: the reader leaves B7 unmodeled")
+
+    val edited = wb.put(sheet.put(Cell(ref"A1", CellValue.Text("edit"))))
+    val (_, sheetXml, relsXml) = writeAndReopen(edited)
+    assert(sheetXml.contains("""<hyperlink ref="B7""""), s"B7's link must survive:\n$sheetXml")
+    val rels = relsXml.getOrElse(fail("B7's rel must ship"))
+    assert(rels.contains("example.com"), s"B7's rel must ship:\n$rels")
+    Files.deleteIfExists(src)
+  }
+
+  private val strictHyperlinkRelType =
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink"
