@@ -78,6 +78,8 @@ object SourceContent:
  *   through this mapping, so structural edits never alias a sheet to another sheet's part (GH-315).
  *   Empty for contexts built before the mapping existed — consumers fall back to index-based naming
  *   in that case.
+ * @param preservedSheetNames
+ *   Non-worksheet tabs retained in the source package. Their names are reserved on write.
  * @param definedNamesAsRead
  *   The `metadata.definedNames` vector exactly as the reader assembled it (GH-470, post print-name
  *   extraction) — the baseline [[reconciledWith]] compares against to detect defined-name edits
@@ -94,7 +96,8 @@ final case class SourceContext(
   drawingSnapshots: Map[SheetName, Vector[Drawing]] = Map.empty,
   chartSnapshots: Map[SheetName, Vector[ChartSnapshot]] = Map.empty,
   sheetPathMapping: Map[SheetName, String] = Map.empty,
-  definedNamesAsRead: Option[Vector[DefinedName]] = None
+  definedNamesAsRead: Option[Vector[DefinedName]] = None,
+  preservedSheetNames: Set[SheetName] = Set.empty
 ) derives CanEqual:
 
   /** True when no workbook modifications have been recorded. */

@@ -41,8 +41,11 @@ private[workbooks] object SheetAdoption:
         sheet.conditionalFormats.nonEmpty || sheet.dataValidations.nonEmpty
       then
         refuse(sheet, "tables, drawings, conditional formats and validations are not yet supported")
-      else if destination.sheets.exists(_.name.value.equalsIgnoreCase(sheet.name.value)) then
-        Left(XLError.DuplicateSheet(sheet.name.value))
+      else if destination.sheets.exists(_.name.value.equalsIgnoreCase(sheet.name.value)) ||
+        destination.sourceContext.exists(
+          _.preservedSheetNames.exists(_.value.equalsIgnoreCase(sheet.name.value))
+        )
+      then Left(XLError.DuplicateSheet(sheet.name.value))
       else
         // Visibility lives in workbook metadata keyed by name, not on the sheet. Write the source
         // state explicitly (None = visible) so a stale destination entry for this name is replaced.

@@ -62,7 +62,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-- `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
+- In the unreleased source build, `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
   source-free modeled sheets. It refuses external-workbook ordinal formulas (including ordinals
   already valid in the destination), foreign source-backed sheets, tables/drawings/conditional
   formats/validations, case-insensitive name collisions, and differing workbook default fonts or theme palettes. The unchanged sheet must belong to

@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+- **Binary change:** `SourceContext` gains a defaulted `preservedSheetNames` field so adoption
+  can detect collisions with chart, dialog and macro tabs kept in the source file. Recompile
+  callers that construct or pattern-match the context.
 - **Explicit conservative sheet adoption** (part of #526): `Workbook.adopt(sheet, from)` refuses
   external-reference rebinding, foreign source-backed transfers, unsupported sheet payloads and
   name collisions and incompatible default-font/theme contexts. Source-free simple sheets retain their model and styles; raw `put` is unchanged.
