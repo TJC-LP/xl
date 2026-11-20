@@ -432,3 +432,17 @@ class OrderIndexSpec extends LawFuzzSuite("#920 order index", 20261120L):
     val bytes = OrderIndex.build(sliceOf(passCache(PassCache.DefaultLimits))).bytes
     assert(bytes >= 8L * 600, bytes.toString)
   }
+
+  test("a mixed lookup keeps the equality candidates when its order index exceeds the budget") {
+    val full = passCache(PassCache.DefaultLimits)
+    val eqBytes = full.eqIndex(sliceOf(full)).fold(fail("no equality index"))(_.bytes)
+    val cache = passCache(PassCache.DefaultLimits.copy(maxIndexBytes = eqBytes + 1024L))
+    val s = sliceOf(cache)
+    val q = CriteriaMatcher.parse(ExprValue.Number(BigDecimal(1)))
+    val eq = IndexLookup.Keys(CriteriaKeys.lookup(q).getOrElse(fail("no key")))
+    val w = IndexLookup.Window(Some(bound("0", false)), None)
+    val expected = cache.candidates(List((s, eq, 0)), 600)
+    assertEquals(expected.map(_.length), Some(10))
+    assertEquals(cache.orderIndex(s), None)
+    assertEquals(cache.candidates(List((s, eq, 0), (s, w, 0)), 600), expected)
+  }

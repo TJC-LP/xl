@@ -499,7 +499,7 @@ private[formula] final class PassCache(
   /**
    * The candidate offsets of a criteria call whose indexed pairs are `pairs` (each: its slice, its
    * lookup and its range's first row) over `n` rows, computed once per pass for equal pairs and `n`
-   * while the budget lasts; `None` when an index is missing or every offset must be tested
+   * while the budget lasts. Use the indexes that fit; `None` when every offset must be tested
    * ([[CriteriaCandidates.compute]]). Memoised lists hold at most half of `maxIndexBytes`, so they
    * never use the budget up before the indexes they are computed from.
    */
@@ -507,16 +507,19 @@ private[formula] final class PassCache(
     pairs: List[(ColumnSlice, IndexLookup, Int)],
     n: Int
   ): Option[ArraySeq.ofInt] =
-    val selected = pairs.map((slice, lookup, offset) =>
-      selection(slice, lookup).map(CriteriaCandidates.Pair(_, offset))
-    )
-    if selected.exists(_.isEmpty) then scala.None
+    val indexed = pairs.flatMap { (slice, lookup, offset) =>
+      selection(slice, lookup).map { rows =>
+        CriteriaCandidates.PairKey(slice.id, lookup, offset) -> CriteriaCandidates.Pair(
+          rows,
+          offset
+        )
+      }
+    }
+    if indexed.isEmpty then scala.None
     else
-      val key = CriteriaCandidates.MemoKey(
-        n,
-        pairs.map((slice, lookup, offset) => CriteriaCandidates.PairKey(slice.id, lookup, offset))
-      )
-      def compute: Option[ArraySeq.ofInt] = CriteriaCandidates.compute(selected.flatten, n)
+      val (keys, selections) = indexed.unzip
+      val key = CriteriaCandidates.MemoKey(n, keys)
+      def compute: Option[ArraySeq.ofInt] = CriteriaCandidates.compute(selections, n)
       val entry = candidateMemo.computeIfAbsent(key, _ => new CandidatesEntry(() => compute))
       val result = entry.value
       if !entry.charged(indexBytes, memoBytes, limits.maxIndexBytes) then
