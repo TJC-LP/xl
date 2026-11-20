@@ -464,8 +464,9 @@ private[xl] object SheetEdits:
    *
    * GH-890: a contents-only clear is Excel's Clear Contents: each emptied cell keeps its style but
    * loses its hyperlink, a cell with no style is removed (unless its row or column has a default
-   * style, GH-897), and merges stay. A clear that drops the cells as well (`ClearWhat.all`) removes
-   * the cell records.
+   * style, GH-897), and merges stay. The CLI's `clear` verb (`DynamicArrayAuthoring.clearContents`,
+   * GH-886) applies the same rule through [[keepsRecordWhenCleared]] (GH-908). A clear that drops
+   * the cells as well (`ClearWhat.all`) removes the cell records.
    *
    * GH-909: any clear with `styles` is Excel's Clear Formats (or Clear All): it unmerges every
    * merged region the range touches and resets the styles of each whole merge, since Excel widens

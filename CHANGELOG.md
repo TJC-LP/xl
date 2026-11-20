@@ -264,9 +264,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The library's contents clear keeps formatting and merges too** (#890): `Sheet.clearRange(range,
   ClearWhat.contents)` and `Edit.Clear(at, ClearWhat.contents)` now make the same change as the
   CLI's `clear` (#886): each emptied cell keeps its style and loses its hyperlink, a cell with no
-  style is removed, and merged regions stay merged. One difference from the CLI for now: an
-  unstyled cell in a row or column with a default style keeps an empty record, so it does not
-  take that row's or column's format. The CLI still removes it until #897 is fixed there. A clear with `styles` as well as `contents`
+  style is removed, and merged regions stay merged. An unstyled cell in a row or column with a
+  default style keeps an empty record, so it does not take that row's or column's format, as in
+  the CLI since #897; both share one rule since #908. A clear with `styles` as well as `contents`
   (`ClearWhat.all`) still removes the cells and unmerges what the range touches; styles-only and
   comments-only clears are unchanged. `Edit.lower` lowers a contents clear to `Remove` +
   `SetStyle` per cell instead of `RemoveRange` + `Unmerge`, and `Patch.toEdits` desugars
