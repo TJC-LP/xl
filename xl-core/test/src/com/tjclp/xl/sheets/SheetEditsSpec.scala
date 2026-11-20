@@ -424,7 +424,7 @@ class SheetEditsSpec extends FunSuite:
 
   // ========== clear ==========
 
-  test("clearRange: styles and comments clear alone; all removes the cells and unmerges") {
+  test("clearRange: styles and comments clear alone; styles and all unmerge what they touch") {
     val s = Sheet(name)
       .put(a1("A1"), num(1))
       .put(a1("C3"), num(3))
@@ -435,7 +435,8 @@ class SheetEditsSpec extends FunSuite:
     val styles = s.clearRange(rng("A1:C3"), ClearWhat.styles)
     assertEquals(styles(a1("A1")).value, num(1))
     assertEquals(styles(a1("A1")).styleId, None)
-    assertEquals(styles.mergedRanges.size, 2)
+    // GH-909: A1:B2 (inside the range) is unmerged, as Clear Formats does; D1:E1 stays
+    assertEquals(styles.mergedRanges.toSet, Set(rng("D1:E1")))
     val comments = s.clearRange(rng("A1:C3"), ClearWhat.comments)
     assertEquals(comments.getComment(a1("A1")), None)
     assertEquals(comments(a1("A1")).value, num(1))
@@ -507,6 +508,77 @@ class SheetEditsSpec extends FunSuite:
     assertEquals(out.cells.get(a1("A1")), None)
     assert(out.mergedRanges.isEmpty)
     assertEquals(out.getComment(a1("A1")).map(_.text.toPlainText), Some("note"))
+  }
+
+  // GH-909: a styles clear is Excel's Clear Formats. It unmerges every merge the range touches and
+  // resets the styles of each whole merge, as the CLI's `clear --styles` does (GH-894).
+  private def boldMerge(merge: String): Sheet =
+    val bold = CellStyle.default.withFont(CellStyle.default.font.withBold(true))
+    val m = rng(merge)
+    m.cells
+      .foldLeft(Sheet(name))((s, ref) => s.withCellStyle(ref, bold))
+      .put(m.start, CellValue.Text("Title"))
+      .merge(m)
+
+  test("GH-909: a styles clear unmerges a merge inside the range and resets its styles") {
+    val out = boldMerge("B2:D2").clearRange(rng("A1:E3"), ClearWhat.styles)
+    assert(out.mergedRanges.isEmpty)
+    assertEquals(out(a1("B2")).value, CellValue.Text("Title"))
+    assertEquals(rng("B2:D2").cells.flatMap(out.cells.get).flatMap(_.styleId).toVector, Vector())
+  }
+
+  test("GH-909: the issue's repro: a styles clear of C2 unmerges B2:D2 and resets all of it") {
+    val out = boldMerge("B2:D2").clearRange(rng("C2:C2"), ClearWhat.styles)
+    assert(out.mergedRanges.isEmpty)
+    assertEquals(out(a1("B2")).value, CellValue.Text("Title"))
+    for ref <- rng("B2:D2").cells do assertEquals(out(ref).styleId, None, s"$ref")
+  }
+
+  test("GH-909: a styles clear partly overlapping a merge resets the cells outside the range too") {
+    val s = boldMerge("B2:D3")
+      .merge(rng("F1:G1"))
+      .withCellStyle(
+        a1("E5"),
+        CellStyle.default.withNumFmt(NumFmt.Percent)
+      )
+    val out = s.clearRange(rng("C3:E5"), ClearWhat.styles)
+    // B2:D3 crosses the range's edge: unmerged, and B2 (outside the range) reset too
+    assertEquals(out.mergedRanges.toSet, Set(rng("F1:G1")))
+    for ref <- rng("B2:D3").cells do assertEquals(out(ref).styleId, None, s"$ref")
+    assertEquals(out(a1("E5")).styleId, None)
+    assertEquals(out(a1("B2")).value, CellValue.Text("Title"))
+  }
+
+  test("GH-909: a styles clear wholly inside a merge unmerges it and resets the whole merge") {
+    val s = boldMerge("A1:F4").put(a1("H8"), num(1))
+    val out = s.clearRange(rng("C2:D3"), ClearWhat.styles)
+    assert(out.mergedRanges.isEmpty)
+    for ref <- rng("A1:F4").cells do assertEquals(out(ref).styleId, None, s"$ref")
+    assertEquals(out(a1("A1")).value, CellValue.Text("Title"))
+    // No record is made for an empty cell outside the merge
+    assertEquals(out.cells.keySet, rng("A1:F4").cells.toSet + a1("H8"))
+  }
+
+  test("GH-909: contents and comments clears still keep merges; styles with comments unmerges") {
+    val s = boldMerge("B2:D2").comment(a1("B2"), Comment.plainText("note", None))
+    assertEquals(s.clearRange(rng("C2:C2"), ClearWhat.contents).mergedRanges, s.mergedRanges)
+    assertEquals(s.clearRange(rng("C2:C2"), ClearWhat.comments).mergedRanges, s.mergedRanges)
+    val both =
+      s.clearRange(rng("B2:B2"), ClearWhat(contents = false, styles = true, comments = true))
+    assert(both.mergedRanges.isEmpty)
+    assertEquals(both.getComment(a1("B2")), None)
+    assertEquals(both(a1("D2")).styleId, None)
+  }
+
+  test("GH-909: contents with styles partly over a merge also resets the merge outside the range") {
+    val out = boldMerge("B2:D2")
+      .clearRange(rng("D2:D2"), ClearWhat(contents = true, styles = true, comments = false))
+    assert(out.mergedRanges.isEmpty)
+    assertEquals(out.cells.get(a1("D2")), None)
+    // The anchor keeps its value (outside the range) but not the merge's bold
+    assertEquals(out(a1("B2")).value, CellValue.Text("Title"))
+    assertEquals(out(a1("B2")).styleId, None)
+    assertEquals(out(a1("C2")).styleId, None)
   }
 
   // ========== auto-fit ==========
