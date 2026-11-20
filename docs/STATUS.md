@@ -8,6 +8,10 @@
 
 ### What Works (Production-Ready)
 
+**Unreleased**
+
+- ✅ **Library closure evaluation** (#741) — `SheetEvaluator.evaluateAt`, `evaluateWithClosure` and `evaluateArrayWithClosure` give a script what `xl eval --at` has: the placement, the value-read precedent closure, override invalidation across the book, and a cycle as `FormulaEvaluationError.Cycle` with its complete path; `clock` and `rng` pin TODAY/NOW and RAND. The CLI delegates to them.
+
 **New in 0.26.0** (2026-11-12) — criteria and lookups follow desktop Excel, deterministic dynamic cycles, one parse per formula per recalculation, and supply-chain hardening; two **Breaking** entries and two binary changes:
 - ✅ **Criteria and lookups as in desktop Excel** (#774, #773, #780, #731, #724, #775, #693) — wildcards match text only, `~` escapes and `"=op"` read as Excel reads them, `<>` criteria count error cells, MATCH/XMATCH/XLOOKUP/VLOOKUP/HLOOKUP share one exact test, rich text is text (`ISTEXT`, UNIQUE, SORT), COUNTBLANK counts empty text and takes a reference only; each is a marked behaviour change
 - ✅ **Circular references** — a cycle through a reference computed at run time (INDIRECT, OFFSET, INDEX at ROW(), `x#`) fails with the same `Circular reference through …` error on every run (#828, #829); a running total through `INDEX(…, ROW()-1)` is no longer one (#743, #745)
@@ -285,17 +289,17 @@
 
 ### Test Coverage
 
-**10,398 test cases** (the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19): 10,398 passed, 0 failed, none ignored. Counts include skipped cases.
+**10,482 test cases** ran for PR #825 at `c6925fb2` on 2026-11-20. 10,481 passed and one platform-specific ACL test skipped.
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4508 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1935 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-evaluator | 4583 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 1945 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
 | xl-ooxml | 1484 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 2025 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cli | 2023 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
 | xl-cats-effect | 220 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 73 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 74 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 
