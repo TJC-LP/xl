@@ -254,7 +254,8 @@ final case class Workbook(
    * Update the named sheet, or create it by applying f to a fresh empty sheet when absent.
    *
    * The total counterpart of `update`, parallel to `put`'s add-or-replace semantics: totality comes
-   * from create-on-missing, never from silently doing nothing.
+   * from create-on-missing. On a malformed book with ambiguous case-only twins, it leaves the
+   * workbook unchanged. Use the exact spelling to select a twin or [[update]] for a diagnostic.
    *
    * Example:
    * {{{
@@ -265,9 +266,10 @@ final case class Workbook(
    * rather than adding a tab Excel would treat as the same name.
    */
   def upsert(name: SheetName, f: Sheet => Sheet): Workbook =
-    sheetIndexOf(name).toOption match
-      case None => put(f(Sheet(name)))
-      case Some(idx) =>
+    sheetIndexOf(name) match
+      case Left(_: XLError.SheetNotFound) => put(f(Sheet(name)))
+      case Left(_) => this
+      case Right(idx) =>
         val updatedContext = sourceContext.map(_.markSheetModified(idx))
         copy(sheets = sheets.updated(idx, f(sheets(idx))), sourceContext = updatedContext)
 
@@ -417,7 +419,8 @@ final case class Workbook(
    *   None if visible (default), Some("hidden") if hidden, Some("veryHidden") if very hidden
    */
   def getSheetState(name: SheetName): Option[String] =
-    metadata.sheetStates.get(name).flatten
+    if metadata.sheetStates.isEmpty then None
+    else sheetIndexOf(name).toOption.flatMap(i => metadata.sheetStates.get(sheets(i).name).flatten)
 
   /**
    * Set sheet visibility state.

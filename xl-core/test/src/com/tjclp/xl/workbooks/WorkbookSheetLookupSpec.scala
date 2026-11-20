@@ -100,3 +100,16 @@ class WorkbookSheetLookupSpec extends FunSuite:
     assertEquals(scopeOf("summary"), Right(Some(2)))
     assert(scopeOf("data").isLeft, "a third spelling of the twins is refused")
   }
+
+  test("a case variant reads the visibility set through that alias") {
+    val alias = name("summary")
+    val hidden = wb.setSheetState(alias, Some("hidden")).fold(e => fail(e.message), identity)
+    assertEquals(hidden.getSheetState(name("Summary")), Some("hidden"))
+    assertEquals(hidden.getSheetState(alias), Some("hidden"))
+  }
+
+  test("upsert preserves a workbook when a third spelling is ambiguous") {
+    val twins = Workbook(Vector(data, Sheet("DATA"), summary))
+    val changed = twins.upsert(name("data"), _ => fail("ambiguous name invoked the update"))
+    assertEquals(changed, twins)
+  }

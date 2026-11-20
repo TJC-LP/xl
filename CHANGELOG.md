@@ -215,7 +215,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   A spelling that matches two sheets differing only by case (a book Excel refuses to save) and is
   neither of them is refused with `XLError.InvalidReference` (`INVALID_REFERENCE`) rather than
-  resolved to one of them; the exact spellings still resolve, and a defined name's scope given as
+  resolved to one of them. The total `upsert` leaves an ambiguous workbook unchanged;
+  the exact spellings still resolve, and a defined name's scope given as
   `DATA` on such a book now attaches to `DATA`, not the first tab equal to it ignoring case.
   **Behaviour change:** these lookups were `SheetNotFound` (a formula's value was an evaluation
   error, `xl -s data` and a batch op naming `data` were `SHEET_NOT_FOUND`, exit 3, and
