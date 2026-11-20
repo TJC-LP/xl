@@ -26,13 +26,17 @@ object Row:
     def index0: Int = r
     def index1: Int = r + 1
 
-/** Absolute cell reference packed into a Long: high 32 bits = row, low 32 = col. */
+/**
+ * Absolute cell reference packed into a Long: high 32 bits = row, low 32 = col XOR (row << 14).
+ * The XOR spreads the Long's `high ^ low` hash over the grid (#891).
+ */
 opaque type ARef = Long
 object ARef:
-  def apply(col: Column, row: Row): ARef = ((row.toLong) << 32) | (col.toLong & 0xffffffffL)
+  def apply(col: Column, row: Row): ARef =
+    (row.toLong << 32) | ((col ^ (row << 14)).toLong & 0xffffffffL)
   def parse(a1: String): Either[String, ARef] = ...
   extension (ref: ARef)
-    def col: Column = (ref & 0xffffffffL).toInt
+    def col: Column = ref.toInt ^ ((ref >> 32).toInt << 14)
     def row: Row    = (ref >> 32).toInt
     def toA1: String = ...
 

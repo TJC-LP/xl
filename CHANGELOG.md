@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`xl audit --skip-data-tables`** (#891): leaves out the stale-data-table note, which
+  re-evaluates each data table's corner at sampled inputs and on a large circular model costs one
+  fixpoint over the whole cyclic core per sampled cell. The JSON report now always carries
+  `dataTableCheck` (`"checked"` or `"skipped"`), and text mode prints `Stale data tables: not
+  checked` when skipped. The note is never a finding, so `clean` and `findings` do not move.
+  `WorkbookAudit.of(wb, clock, checkDataTables)` and `WorkbookAudit.dataTablesChecked` are the
+  library side. `dataTablesChecked` is a new field of the `WorkbookAudit` case class: it
+  defaults to `true`, takes part in equality, and changes the shapes of `copy` and `unapply`.
+
 - **Qualified table-column references** (part of #669): plain references such as
   `SUM(Table1[Col])` and `COUNTIF(Table1[Col],1)` evaluate as data-row references, including
   workbook table lookup, dependency ordering and formula copy/structural-edit support.
@@ -25,6 +34,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   arm, and fails to compile under `-Werror` until it has one.
 
 ### Changed
+
+- **`ARef` packs the column as `col ^ (row << 14)` in its low word** (#891): a `Long` hashes as
+  `high ^ low`, which for the old `(row << 32) | col` packing was `row ^ col`, one hash per
+  anti-diagonal of a sheet, so every `Map[ARef, _]` (every sheet's cells) scanned collision
+  buckets of up to min(rows, columns) boxed keys. The hash is now distinct for every cell of the
+  grid below row 2^18; the packing is still a bijection on all `Int` pairs (off-grid refs from
+  `shift` decode unchanged) and in-grid values still order row-major. Code that decoded the raw
+  `Long` by hand (the only in-repo case was `FormulaPrinter`) must use `ref.row` and `ref.col`.
+  The iteration order of `Map[ARef, _]` and `Set[ARef]` changes with it.
+
+- **A generated shared-string table is numbered in row-major first-reference order** (#891): it
+  followed `sheet.cells`' hash order, so the indices written into text cells depended on how
+  `ARef` hashes. Files written with a freshly generated table now number their strings
+  differently from 0.26.0 (same strings, same cells); a preserved table is unchanged.
 
 - **Breaking (0.24.0, noted late): an `Aggregator` that does not override `combineN` is O(n) in a
   sparse array's fill** (#750, #758): released in 0.24.0 without saying so. The default repeats
@@ -183,8 +206,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   mixed the cell as a `Long`, whose hash is `row ^ column`, so every cell on an anti-diagonal of a
   sheet collided (512 distinct hashes for a 500 x 64 sheet) and hash sets and maps of qualified
   cells scanned buckets of up to min(rows, columns) entries. `xl audit` on three real workbooks,
-  JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. `ARef` keys are
-  unchanged and still collide.
+  JVM, same output: 38.0 s to 17.7 s, 20.4 s to 15.3 s, 91.3 s to 81.3 s. (`ARef` keys are fixed
+  under Changed.)
+
+- **`xl audit` on real models: 206.7 s to 84.6 s, 228.6 s to 11.2 s, 92.0 s to 30.9 s** (#891;
+  the 0.26.0 release binary against a native build of this change, macOS arm64, one serial run
+  each, same findings and notes). Data-oriented rewrites, no caches:
+  - the workbook SCC condensation (`qualifiedSccOrder`, `qualifiedCyclicNodes`) numbers the
+    formula cells once in grid order and runs Tarjan and the key-minimum condensation over one
+    CSR edge array, sharing the compact graph's kernel (`SccKernel`); it rebuilt two immutable
+    `Map[Int, Set[Int]]` per edge;
+  - `withinComponentOrder` (the Gauss–Seidel sweep) runs on the same ids with an `Int` heap and a
+    cursor for the cut instead of immutable `TreeSet`s;
+  - the `ARef` hash fix above;
+  - a criteria range read cell by cell (SUMIFS and friends outside a recalculation pass) indexes
+    by offset arithmetic instead of copying the range into a `Vector` of boxed refs per call;
+  - a data table's cycle members parse once per table instead of once per sampled cell.
+  On the three books, JVM, from the `QualifiedRef` fix above: 82.3 s to 25.6 s, 14.5 s to 3.9 s,
+  17.0 s to 7.2 s. What remains on
+  the first is the stale-data-table note (64 fixpoints over a 4,930-member cycle);
+  `--skip-data-tables` (under Added) audits it in 2.6 s.
 
 - **INDEX prints its call only for an error message** (#758): INDEX quoted its call in its
   `#REF!`/`#VALUE!` messages by printing it before selecting, so every successful INDEX printed

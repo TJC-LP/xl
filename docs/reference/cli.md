@@ -777,7 +777,7 @@ pictures, conditionalFormats, dataValidations, hiddenRows, hiddenCols` and the t
 
 ---
 
-### `xl audit [--fail-on-findings]`
+### `xl audit [--fail-on-findings] [--skip-data-tables]`
 
 Every reason a number can be wrong, bucketed in one pass over the loaded workbook.
 
@@ -796,7 +796,10 @@ readers), `External references`
 interior caches disagree with its corner formula re-evaluated at each cell's input pair — the
 evaluation `xl recalc --tables` seeds with — on up to 8 sampled interior cells per table, named in
 the note; what an edit leaves behind on a book Excel never recomputes tables in; `dataTableStale`
-in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs),
+in the JSON report, each entry with its `sampled` cells and `stale` cached/recomputed pairs; the
+re-evaluation can cost many recalculations on a large circular model, and `--skip-data-tables`
+leaves the note out — `dataTableCheck` is `"skipped"` instead of `"checked"` and text mode prints
+`Stale data tables: not checked`; being a note, it never changes `clean` or `findings`),
 `Calculation` (the file's calcPr, when it has one).
 
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
@@ -810,6 +813,7 @@ with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode print
 xl -f model.xlsx audit
 xl -f model.xlsx -s Summary audit
 xl -f model.xlsx --json audit --fail-on-findings | jq '.data.errorCells, .data.cycles'
+xl -f model.xlsx audit --fail-on-findings --skip-data-tables   # fast gate on a data-table model
 ```
 
 **Output**:

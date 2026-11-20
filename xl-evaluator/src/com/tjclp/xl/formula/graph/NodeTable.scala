@@ -75,7 +75,6 @@ private[formula] object NodeTable:
    * position (only a workbook holding two sheets of one name has them) keep the later one, as the
    * legacy graph's `toMap` does.
    */
-  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def build(wb: Workbook): (NodeTable, IArray[String]) =
     val names: Vector[SheetName] = wb.sheets.map(_.name).distinct.sortBy(_.value)
     val sheetIndex: Map[SheetName, Int] = names.iterator.zipWithIndex.toMap
@@ -90,7 +89,30 @@ private[formula] object NodeTable:
           case _ => ()
       }
     }
-    val all = entries.result()
+    assemble(names, sheetIndex, entries.result())
+
+  /**
+   * #891: the table of an arbitrary set of cells — the keys of a workbook-level dependency map —
+   * numbered in grid order exactly as [[build]] numbers formula cells.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def of(cells: Iterable[QualifiedRef]): NodeTable =
+    val names: Vector[SheetName] = cells.iterator.map(_.sheet).distinct.toVector.sortBy(_.value)
+    val sheetIndex: Map[SheetName, Int] = names.iterator.zipWithIndex.toMap
+    val entries = new Array[Entry](cells.size)
+    var i = 0
+    cells.foreach { q =>
+      entries(i) = Entry(sheetIndex.getOrElse(q.sheet, -1), q.ref.row.index0, q.ref.col.index0, "")
+      i += 1
+    }
+    assemble(names, sheetIndex, entries)._1
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def assemble(
+    names: Vector[SheetName],
+    sheetIndex: Map[SheetName, Int],
+    all: Array[Entry]
+  ): (NodeTable, IArray[String]) =
     // stable: equal positions keep their input order, so the later duplicate is last
     java.util.Arrays.sort(all, gridOrder)
     val kept = Array.newBuilder[Entry]
