@@ -691,7 +691,9 @@ run-time reads through INDIRECT/OFFSET, names and uncached cross-sheet formulas.
 hide a guard read. The failure is `FormulaEvaluationError.Cycle(error, path)` or `Failed(error)`:
 `error` is the existing `XLError` diagnostic; `path` (also `cycle`, an `Option`) is the full static
 path even when the diagnostic abbreviates it, or the placement alone for a run-time read. Typed
-overrides affect the selected sheet; overriding the placement itself is refused. `clock` and `rng`
+overrides affect the selected sheet; overriding the placement itself is refused. Cell values
+added, changed or removed in a supplied sheet also invalidate readers across sheets. For
+structural changes such as resizing tables, pass the recalculated workbook. `clock` and `rng`
 (`Clock.fixedDate(…)`, `Rng.seeded(…)`) pin TODAY/NOW and RAND across the closure. Existing input
 values and caches remain unchanged.
 

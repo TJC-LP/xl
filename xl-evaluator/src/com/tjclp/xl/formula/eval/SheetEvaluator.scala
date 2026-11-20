@@ -52,7 +52,9 @@ object SheetEvaluator:
    * uncached formula, evaluates its value-read precedent closure, and checks both static cycles and
    * run-time reads of the placement (even under IFERROR). Overrides apply to this sheet and
    * invalidate their cached readers across the workbook. Overriding `at` is refused. The supplied
-   * sheet is the ambient context and replaces its namesake in the evaluation copy.
+   * sheet replaces its namesake in the evaluation copy. Added, changed and removed cell values also
+   * invalidate their cached readers. Supply a recalculated workbook for structural edits such as
+   * resized tables.
    *
    * Unlike `evaluateFormula(..., currentCell = Some(at))`, this includes closure and cycle
    * orchestration. A failure is [[FormulaEvaluationError.Cycle]], the existing XLError with the

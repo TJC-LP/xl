@@ -7,7 +7,7 @@ import com.tjclp.xl.formula.{Clock, Rng}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.graph.{DependencyGraph, ValueDependencies}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{CellStore, Sheet}
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -170,6 +170,15 @@ private[formula] object FormulaEvaluation:
           )
         case None => result.left.map(FormulaEvaluationError.Failed(_))
 
+  /** Cell edits in a supplied sheet replacement are inputs just like explicit overrides. */
+  private def changedCells(before: CellStore, after: CellStore): Set[ARef] =
+    if before eq after then Set.empty
+    else
+      val edited = after.refs.filter(ref => before.valueAt(ref) != after.valueAt(ref))
+      val removed =
+        before.refs.filter(ref => !after.contains(ref) && before.valueAt(ref) != CellValue.Empty)
+      (edited ++ removed).toSet
+
   /**
    * Apply typed overrides and invalidate their cached readers, then visit only the formula's
    * value-read closure. One evaluator carries spill results and the placement guard through the
@@ -201,9 +210,11 @@ private[formula] object FormulaEvaluation:
           )
         case None => Right(())
       applied = overrides.foldLeft(sheet) { case (s, (ref, value)) => s.put(ref, value) }
+      original = wb.sheets.find(_.name == sheet.name).fold(CellStore.empty)(_.cells)
+      changed = overrides.keySet ++ changedCells(original, sheet.cells)
+      replaced = wb.put(applied)
       tempBook =
-        if overrides.isEmpty then wb.put(applied)
-        else uncacheReaders(wb.put(applied), applied.name, overrides.keySet)
+        if changed.isEmpty then replaced else uncacheReaders(replaced, applied.name, changed)
       // always found, `put` placed it; the fallback only keeps the lookup total
       tempSheet = tempBook.sheets.find(_.name == applied.name).getOrElse(applied)
       expr <- FormulaParser
@@ -503,7 +514,15 @@ private[formula] object FormulaEvaluation:
     def readersOf(target: Int): Readers =
       val readers = Readers()
       val name = sheets(target).name
-      val bounds = sheets(target).usedRange
+      val used = sheets(target).usedRange
+      // A removed cell can fall outside the replacement sheet's extent while a cached range
+      // reader still includes its old value. None already means unbounded in ValueDependencies.
+      val bounds =
+        if name == home then
+          used.map(r =>
+            changed.foldLeft(r)((box, ref) => if box.contains(ref) then box else box.expand(ref))
+          )
+        else used
       val reader = mutable.HashMap.empty[Int, ValueDependencies.Reader]
       def readerOn(at: Int): ValueDependencies.Reader =
         reader.getOrElseUpdate(

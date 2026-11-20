@@ -128,6 +128,31 @@ class FormulaEvaluationSpec extends FunSuite:
     )
   }
 
+  test(
+    "GH-741: replacing a sheet refreshes cross-sheet readers of edited, added and removed values"
+  ) {
+    val source = sheet.put(ref"A10", 3)
+    val other = Sheet("Other")
+      .put(ref"A1", CellValue.Formula("SUM(Data!A1:A10)", Some(number(13))))
+      .put(ref"A2", CellValue.Formula("A1*2", Some(number(26))))
+    val book = Workbook(source, other)
+    for (replacement, expected) <- List(
+        source.put(ref"A1", 100) -> 206,
+        source.put(ref"A5", 7) -> 40,
+        source.remove(ref"A10") -> 20
+      )
+    do
+      assertEquals(
+        SheetEvaluator.evaluateWithClosure(book, replacement, "Other!A2"),
+        Right(number(expected))
+      )
+      assertEquals(
+        SheetEvaluator.evaluateAt(book, replacement, "Other!A2", at),
+        Right(number(expected))
+      )
+    assertEquals(other(ref"A2").effectiveValue, number(26))
+  }
+
   test("GH-741: positioned implicit intersection differs from positionless array evaluation") {
     val source = sheet.put(ref"A5", 3).put(ref"B5", 4).put(ref"B1", 2)
     assertEquals(
