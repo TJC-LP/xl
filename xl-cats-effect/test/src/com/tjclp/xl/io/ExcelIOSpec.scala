@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.attribute.PosixFilePermissions
 import java.nio.file.{FileSystems, Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
+import scala.concurrent.duration.*
 import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
@@ -27,6 +28,9 @@ import com.tjclp.xl.ooxml.{SstPolicy, WriterConfig, XlsxReader, XlsxWriter}
   )
 )
 class ExcelIOSpec extends CatsEffectSuite:
+
+  // Writing and reading the 100,000-row streaming fixture can exceed 30 s under load (#919).
+  override def munitIOTimeout: Duration = 2.minutes
 
   val tempDir: FunFixture[Path] = FunFixture[Path](
     setup = _ => Files.createTempDirectory("xl-streaming-"),

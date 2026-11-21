@@ -1,5 +1,7 @@
 package com.tjclp.xl.formula
 
+import scala.concurrent.duration.*
+
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.CellValue
@@ -23,6 +25,9 @@ import org.scalacheck.Prop.*
  */
 @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
 class IndexReaderEnvelopeSpec extends ScalaCheckSuite:
+
+  // Checking both graphs and recalculating 1,000 running totals can exceed 30 s under load (#913).
+  override val munitTimeout: Duration = 2.minutes
 
   override def scalaCheckTestParameters =
     super.scalaCheckTestParameters.withMinSuccessfulTests(200)
