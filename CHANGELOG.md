@@ -444,6 +444,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - The order a cycle's members are swept in is computed on formula ids (`CompactGraph`), with
     scratch sized to the cycle, not through a map of qualified references per member.
 
+### Testing
+
+- Five suites now allow two minutes per test for large recalculation, spill, streaming and CLI
+  fixtures that can exceed the default timeout during parallel runs (#913, #919).
+
 ## [0.26.0] - 2026-11-12
 
 Criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693): wildcards

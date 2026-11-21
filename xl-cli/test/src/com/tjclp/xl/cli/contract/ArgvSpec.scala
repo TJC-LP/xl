@@ -2,6 +2,8 @@ package com.tjclp.xl.cli.contract
 
 import java.nio.file.{Files, Path}
 
+import scala.concurrent.duration.*
+
 import cats.effect.{IO, Resource}
 import munit.CatsEffectSuite
 import munit.ScalaCheckSuite
@@ -16,6 +18,9 @@ import com.tjclp.xl.cli.{Cli, CliIO}
  * plus the first parser error — never the full subcommand dump.
  */
 class ArgvSpec extends CatsEffectSuite with ScalaCheckSuite:
+
+  // Parsing every verb with every global flag in both positions can exceed 30 s under load (#913).
+  override def munitIOTimeout: Duration = 2.minutes
 
   private val fixtures = ResourceSuiteLocalFixture(
     "argv-fixtures",
