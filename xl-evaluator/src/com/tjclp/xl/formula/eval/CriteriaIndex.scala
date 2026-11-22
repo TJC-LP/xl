@@ -445,7 +445,8 @@ private[formula] final class OrderIndex private (
    * order, so every key group strictly inside the bounds' keys matches and every group outside
    * cannot; a group whose key equals a bound's key is kept when its greatest (lower bound) or least
    * (upper bound) number lies past the bound. The run is a superset of the matching rows, exact but
-   * for a boundary group that mixes matching and non-matching numbers.
+   * for a boundary group that mixes matching and non-matching numbers. The run carries the keys of
+   * its first and last groups, so a row lies in the run exactly when its key lies between them.
    */
   def window(w: IndexLookup.Window): CriteriaCandidates.Selection =
     val a = w.lower.fold(0) { b =>
@@ -456,13 +457,8 @@ private[formula] final class OrderIndex private (
       val j = OrderIndex.lowerBoundAbove(keys, b.key)
       if j > 0 && keys(j - 1) == b.key && !b.admitsBelow(least(j - 1)) then j - 1 else j
     }
-    CriteriaCandidates.Run(
-      this,
-      keyOff(a),
-      keyOff(math.max(a, z)),
-      w.lower.fold(Double.NegativeInfinity)(_.key),
-      w.upper.fold(Double.PositiveInfinity)(_.key)
-    )
+    if a >= z then CriteriaCandidates.Run(this, keyOff(a), keyOff(a), 1.0, 0.0)
+    else CriteriaCandidates.Run(this, keyOff(a), keyOff(z), keys(a), keys(z - 1))
 
   /** Row `i` of the sorted order. */
   private[eval] def rowAt(i: Int): Int = rows(i)
@@ -512,9 +508,7 @@ private[formula] object OrderIndex:
    * deduplicated, then the rows are grouped by key with a counting sort, so each group stays
    * ascending: `O(n log n)` once per slice.
    */
-  @SuppressWarnings(
-    Array("org.wartremover.warts.Var", "org.wartremover.warts.While", "org.wartremover.warts.Null")
-  )
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
   def build(slice: ColumnSlice): OrderIndex =
     val first = slice.firstHeldRow
     val held = slice.heldRows
@@ -549,8 +543,6 @@ private[formula] object OrderIndex:
       i += 1
     val keys = java.util.Arrays.copyOf(sorted, distinct)
     val keyOff = new Array[Int](distinct + 1)
-    val least = new Array[BigDecimal](distinct)
-    val greatest = new Array[BigDecimal](distinct)
     val rank = new Array[Int](held)
     i = 0
     while i < held do
@@ -558,10 +550,6 @@ private[formula] object OrderIndex:
         val r = java.util.Arrays.binarySearch(keys, byRow(i))
         rank(i) = r
         keyOff(r + 1) += 1
-        val n = exact(i)
-        if least(r) == null || n.bigDecimal.compareTo(least(r).bigDecimal) < 0 then least(r) = n
-        if greatest(r) == null || n.bigDecimal.compareTo(greatest(r).bigDecimal) > 0 then
-          greatest(r) = n
       i += 1
     var k = 0
     while k < distinct do
@@ -575,6 +563,23 @@ private[formula] object OrderIndex:
         rows(next(rank(i))) = first + i
         next(rank(i)) += 1
       i += 1
+    // each key group is non-empty: seed its least and greatest from its first row
+    val least = new Array[BigDecimal](distinct)
+    val greatest = new Array[BigDecimal](distinct)
+    k = 0
+    while k < distinct do
+      val seed = exact(rows(keyOff(k)) - first)
+      var lo = seed
+      var hi = seed
+      var j = keyOff(k) + 1
+      while j < keyOff(k + 1) do
+        val n = exact(rows(j) - first)
+        if n.bigDecimal.compareTo(lo.bigDecimal) < 0 then lo = n
+        if n.bigDecimal.compareTo(hi.bigDecimal) > 0 then hi = n
+        j += 1
+      least(k) = lo
+      greatest(k) = hi
+      k += 1
     new OrderIndex(
       first,
       IArray.unsafeFromArray(byRow),
@@ -629,8 +634,11 @@ private[formula] object CriteriaCandidates:
 
   /**
    * #920: rows `index.rowAt(from until until)`, the run of an [[OrderIndex]] whose keys lie in
-   * `lo..hi`. The run is in key order, so listing it sorts the rows in the window (`O(k log k)` for
-   * `k` of them); keeping candidates reads each candidate's key (`O(1)` a candidate).
+   * `lo..hi` (exactly those rows). The run is in key order, so listing it sorts the rows in the
+   * window (`O(k log k)` for `k` of them); keeping candidates reads each candidate's key (`O(1)` a
+   * candidate). A run longer than the window (a short range read through a whole-column slice) is
+   * sized and listed by reading the window's `n` keys instead, so a call never costs more than its
+   * own rows.
    */
   final case class Run(index: OrderIndex, from: Int, until: Int, lo: Double, hi: Double)
       extends Selection:
@@ -640,28 +648,45 @@ private[formula] object CriteriaCandidates:
       if index.spans(offset, last) then until - from
       else
         var count = 0
-        var i = from
-        while i < until && count <= limit do
-          val row = index.rowAt(i)
-          if row >= offset && row <= last then count += 1
-          i += 1
+        if until - from > n then
+          var i = 0
+          while i < n && count <= limit do
+            if index.within(offset + i, lo, hi) then count += 1
+            i += 1
+        else
+          var i = from
+          while i < until && count <= limit do
+            val row = index.rowAt(i)
+            if row >= offset && row <= last then count += 1
+            i += 1
         count
 
     @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
     def list(offset: Int, n: Int): Array[Int] =
-      val last = offset + n - 1
-      val out = new Array[Int](until - from)
-      var w = 0
-      var i = from
-      while i < until do
-        val row = index.rowAt(i)
-        if row >= offset && row <= last then
-          out(w) = row - offset
-          w += 1
-        i += 1
-      val listed = java.util.Arrays.copyOf(out, w)
-      java.util.Arrays.sort(listed)
-      listed
+      if until - from > n then
+        val out = new Array[Int](n)
+        var w = 0
+        var i = 0
+        while i < n do
+          if index.within(offset + i, lo, hi) then
+            out(w) = i
+            w += 1
+          i += 1
+        java.util.Arrays.copyOf(out, w)
+      else
+        val last = offset + n - 1
+        val out = new Array[Int](until - from)
+        var w = 0
+        var i = from
+        while i < until do
+          val row = index.rowAt(i)
+          if row >= offset && row <= last then
+            out(w) = row - offset
+            w += 1
+          i += 1
+        val listed = java.util.Arrays.copyOf(out, w)
+        java.util.Arrays.sort(listed)
+        listed
 
     def keep(cand: Array[Int], offset: Int): Array[Int] =
       cand.filter(i => index.within(offset + i, lo, hi))

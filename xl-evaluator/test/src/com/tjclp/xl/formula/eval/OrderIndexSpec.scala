@@ -295,9 +295,19 @@ class OrderIndexSpec extends LawFuzzSuite("#920 order index", 20261120L):
         Prop(math.min(size, limit + 1) == math.min(listed.size, limit + 1)) :|
           s"size $size, listed ${listed.size}, limit $limit" &&
           Prop(
-            run.keep((0 until n).toArray, offset).toVector == inKeys.toVector
-          ) :| "kept rows differ"
+            run.keep((0 until n).toArray, offset).toVector == listed
+          ) :| "kept rows differ from the listed run"
     }
+  }
+
+  test("a short range on a long run reads only its own rows, listing exactly the run") {
+    val s = slice(0, 0, Vector.tabulate(5000)(i => CellValue.Number(BigDecimal(i % 100))))
+    val run = OrderIndex.build(s).window(IndexLookup.Window(Some(bound("10", false)), None))
+    val expected = (0 until 30).filter(i => (4000 + i) % 100 > 10).toVector
+    assertEquals(run.list(4000, 30).toVector, expected)
+    assertEquals(run.size(4000, 30, 30), expected.size)
+    assertEquals(run.size(4000, 30, 5), 6)
+    assertEquals(run.keep((0 until 30).toArray, 4000).toVector, expected)
   }
 
   // ---------- structure ----------
