@@ -39,6 +39,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+- **Binary change:** `SourceContext` gains a defaulted `preservedSheetNames` field so adoption
+  can detect collisions with chart, dialog and macro tabs kept in the source file. Recompile
+  callers that construct or pattern-match the context.
+- **Explicit conservative sheet adoption** (part of #526): `Workbook.adopt(sheet, from)` refuses
+  external-reference rebinding, foreign source-backed transfers, unsupported sheet payloads and
+  name collisions and incompatible default-font/theme contexts. Source-free simple sheets retain their model and styles; raw `put` is unchanged.
+  The sheet's hidden/veryHidden state carries over. The checks trust `from`: pass the workbook the
+  sheet was read from, since wrapping a loaded sheet in `Workbook(sheet)` hides its source.
+  **Behaviour change:** the external-reference scanner now shared with `xl lint` (#525) honours
+  the `'` escape inside structured references, so an ordinal after an escaped bracket, as in
+  `Table1['[Col])+[1]Data!A1`, is now reported as `external-ref-dangling` when it dangles.
+
 ### Changed
 
 - **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a

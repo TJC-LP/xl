@@ -122,3 +122,9 @@ object BaseImportProbe:
   val computedRangeLocation = com.tjclp.xl.formula.parser.FormulaParser
     .parse("OFFSET(A1,0,0)")
     .map(com.tjclp.xl.formula.ast.TExpr.RangeLocation.Computed(_))
+
+  // GH-526: public adoption signature must remain usable outside the library package.
+  val adoptionSheet: Sheet = Sheet("Adopted").put(ref"A1", 42)
+  val adoptionSource: Workbook = Workbook(adoptionSheet)
+  val adopted: XLResult[Workbook] =
+    Workbook("Destination").adopt(adoptionSheet, from = adoptionSource)
