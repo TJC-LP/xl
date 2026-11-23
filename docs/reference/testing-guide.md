@@ -1,11 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the #917 `view --eval` convergence warning, 2026-11-20 recorded **10,426 cases**: 10,426 passed, 0 failed (MUnit reported none ignored).
-
-Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
-`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
-The dated aggregate receipt above remains historical; final execution counts/results are recorded
-in the contribution package and fresh validation receipts, not inferred by adding source counts.
+**Current Status**: the 0.27.0 release branch, 2026-11-23 recorded **10,588 cases**: 10,587 passed, 0 failed, one platform-specific ACL test skipped.
 
 
 ## Test Infrastructure
@@ -287,18 +282,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the #917 `view --eval` convergence warning, 2026-11-20 (10,426 passed, 0 failed, none ignored). Counts include skipped cases.
+As of the 0.27.0 release branch, 2026-11-23 (10,587 passed, 0 failed, one skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4519 |
-| xl-core | 1945 |
-| xl-ooxml | 1484 |
-| xl-cli | 2032 |
-| xl-cats-effect | 220 |
+| xl-evaluator | 4616 |
+| xl-core | 1970 |
+| xl-ooxml | 1512 |
+| xl-cli | 2040 |
+| xl-cats-effect | 223 |
 | xl-agent | 153 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 73 |
-| **Total** | **10,426** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 74 |
+| **Total** | **10,588** |
 
 
 ## Test Quality Metrics

@@ -10,7 +10,7 @@ Apply a 5% price increase to column C of every workbook in a directory, in place
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -43,7 +43,7 @@ Read rows into case classes; collect per-cell validation failures into a new Iss
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 final case class Order(id: Int, customer: String, amount: BigDecimal)
@@ -77,7 +77,7 @@ Three-year projection with growth formulas; fail the script if any formula error
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val header = CellStyle.default.bold.size(12.0).center
@@ -112,7 +112,7 @@ Stack the data rows of every input file under one header.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -143,7 +143,7 @@ println(s"combined ${files.size} files, ${combined.cells.size} cells")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
@@ -172,7 +172,7 @@ println("✓ filtered (constant memory)")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val before = Excel.read("before.xlsx")
@@ -201,7 +201,7 @@ else
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -229,7 +229,7 @@ cell ships a cached value for `data_only` readers, pandas, and Excel-before-reca
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val reps = List(("Alice", 120000.0), ("Bob", 98000.0), ("Carol", 143500.0))
@@ -264,7 +264,7 @@ frozen header, a list-dropdown data validation, and a provenance comment — no 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.SheetView // SheetView lives one import deeper than the prelude
 

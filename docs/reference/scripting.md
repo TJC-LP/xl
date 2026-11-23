@@ -33,7 +33,7 @@ release bump is a mechanical substitution):
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val sheet = Sheet("Demo").put(ref"A1", "Hello").put(ref"B1", 42)
@@ -51,7 +51,7 @@ read and write is pure values.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -62,7 +62,7 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
-- In the unreleased source build, `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
+- Since 0.27.0 ([#526](https://github.com/TJC-LP/xl/issues/526)), `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
   source-free modeled sheets. It refuses external-workbook ordinal formulas (including ordinals
   already valid in the destination), foreign source-backed sheets, tables/drawings/conditional
   formats/validations, case-insensitive name collisions, and differing workbook default fonts or theme palettes. The unchanged sheet must belong to
@@ -73,6 +73,15 @@ Excel.write(updated, "output.xlsx")
   The sheet's hidden/veryHidden state in `from` is carried over. `from` is trusted: pass the
   workbook the sheet was actually read from. Wrapping a loaded sheet in a fresh `Workbook(sheet)`
   hides its source and fonts, and the guard cannot detect that.
+- `sheet.cells` is a `CellStore` since 0.27.0 ([#891](https://github.com/TJC-LP/xl/issues/891)),
+  not a `Map[ARef, Cell]`: `get(ref)`, `contains`, `size` work as before; iterate with
+  `cells.iterator` (cells in row-major order, each carrying its `ref`), list references with
+  `cells.refs`, read a block with `cells.inRange(range)`. Build with `CellStore.of(cell, …)`,
+  `CellStore.from(cells)` or `CellStore.newBuilder`; edit with `updated(cell)`, `removed(ref)`,
+  `putAll(cells)` and `removedIn(range)`. The `Map` names `keys`, `keySet`, `values`,
+  `valuesIterator` and `keysIterator` remain as deprecated forwarders. A script that must compile
+  against both 0.26.0 and 0.27.0 reads through `sheet.cellsSorted` / `rowsSorted` and
+  `cells.get(ref)`.
 - `Workbook.upsert(name, f)` is total update-or-create; `Workbook.update(name, f)` returns
   `XLResult[Workbook]` and fails if the sheet is absent. Pick by intent.
 - `Excel.modify("file.xlsx")(f)` does read → transform → write in place with atomic file
@@ -236,7 +245,7 @@ cell.asCell.map(r => sheet.put(r, total)) // String.asCell: A1 cells (ARef.parse
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val region = Seq("North", "East").mkString(" ")                     // runtime name
@@ -401,7 +410,7 @@ the batch schema).
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -435,7 +444,7 @@ println(s"wrote ${edited.sheets.size} sheets; clean: ${result.isClean}")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -481,7 +490,7 @@ throw — they are collected per cell.
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val title = CellStyle.default.bold.size(14.0).center
@@ -685,8 +694,8 @@ as a formula typed into a new Excel 365 cell (top-left of its array); pass
 ([#715](https://github.com/TJC-LP/xl/issues/715)). This low-level API does not place the formula
 or check its precedent closure for cycles.
 
-The unreleased source build provides the full `xl eval --at` behavior through
-`SheetEvaluator.evaluateAt` (GH-741). The formula comes first, the cell after, as
+Since 0.27.0 the library provides the full `xl eval --at` behavior through
+`SheetEvaluator.evaluateAt` ([#741](https://github.com/TJC-LP/xl/issues/741)). The formula comes first, the cell after, as
 `xl eval <formula> --at <ref>` reads them:
 
 ```scala
@@ -745,6 +754,7 @@ if !audit.isClean then                              // error cells, uncached/unp
   audit.errorCells.foreach((ref, err) => println(s"$ref ${err.toExcel}"))
 audit.volatile                                      // TODAY/NOW/RAND/RANDBETWEEN cells: a note, not a finding
 audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary` reports
+WorkbookAudit.of(wb, Clock.system, checkDataTables = false) // since 0.27.0: `xl audit --skip-data-tables`; `.dataTablesChecked` says which
 
 val graph = QualifiedGraph.of(wb)                   // bounded: a full-column reader expands only to occupied cells
 val b4 = QualifiedRef(SheetName.unsafe("Summary"), ref"B4")
@@ -808,7 +818,7 @@ per-cell `readTyped` loops:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import java.time.LocalDate
 
@@ -948,7 +958,7 @@ and a full-column range for the column forms: `sheet.collapseRows("E:H".asRange 
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 // Whole-row/column spans are runtime strings (the ref macro takes A1 / A1:B2 shapes) — parse them.
@@ -974,7 +984,7 @@ them explicitly:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import com.tjclp.xl.sheets.{HeaderFooter, PageMargins, PageSetup, SheetView}
 
@@ -1062,7 +1072,7 @@ the whole workbook:
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global

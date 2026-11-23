@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-23
+
+**"Bedrock storage."** `xl audit` is 3–20× faster on real models (#891): `Sheet.cells` is a
+`CellStore` row-radix trie, the legacy recalculation paths are gone in favour of one graph and one
+parse per operation, a fixpoint shares one criteria cache, and relational `*IFS` criteria use a
+sorted index (#920). The library gains `SheetEvaluator.evaluateAt` (#741), `Workbook.adopt` (#526),
+qualified table-column references (#669) and computed references in range arguments (#723). Sheet
+names resolve ignoring case as in Excel (#752), `clear` follows Excel's Clear Contents / Clear
+Formats (#886, #890, #894, #897, #909), and `view --eval` reports unconverged cycles (#917).
+Several **Breaking** entries: read the `### Changed` migration notes for `Sheet.cells` before
+upgrading.
+
 ### Added
 
 - **Library closure evaluation with placement protection** (#741):
