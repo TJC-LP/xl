@@ -220,6 +220,13 @@ private[xl] object EditInterpreter:
     def workbookLevel(result: XLResult[Workbook]): XLResult[(Workbook, Planned)] =
       result.map(next => (next, Planned(index, edit, None, Vector.empty)))
 
+    /**
+     * GH-936: an authored formula's stored text, its sheet qualifiers spelled as the workbook's own
+     * tab names (Excel respells `=sheet1!A1` as `=Sheet1!A1` on entry).
+     */
+    def authored(formula: String): String =
+      fs.canonicalSheets(formulaText(formula), wb.sheets.map(_.name))
+
     validate(edit).flatMap { _ =>
       edit match
         // ----- cell content -----
@@ -235,19 +242,20 @@ private[xl] object EditInterpreter:
 
         case Edit.PutFormula(at, formula, format) =>
           pure(at.sheet, Vector(CellRange(at.ref, at.ref)))(
-            putHinted(_, at.ref, CellValue.Formula(formulaText(formula), None), format)
+            putHinted(_, at.ref, CellValue.Formula(authored(formula), None), format)
           )
 
         case Edit.PutFormulas(at, formulas, format) =>
           pure(at.sheet, Vector(at.range)) { sheet =>
             at.range.cellsRowMajor.zip(formulas.iterator).foldLeft(sheet) { case (acc, (ref, f)) =>
-              putHinted(acc, ref, CellValue.Formula(formulaText(f), None), format)
+              putHinted(acc, ref, CellValue.Formula(authored(f), None), format)
             }
           }
 
         case Edit.DragFormula(at, formula, anchor, format) =>
           onSheet(at.sheet, Vector(at.range)) { sheet =>
-            val text = formula.trim
+            // canonical before the drag: every shifted copy then carries the tab's own spelling
+            val text = fs.canonicalSheets(formula.trim, wb.sheets.map(_.name))
             foldE(at.range.cellsRowMajor)(sheet) { (acc, ref) =>
               val colDelta = ref.col.index0 - anchor.col.index0
               val rowDelta = ref.row.index0 - anchor.row.index0
@@ -445,6 +453,9 @@ private[xl] object EditInterpreter:
    */
   private def formulaText(formula: String): String = CellValue.canonicalFormulaText(formula)
 
+  /** Whether formula text may carry a sheet qualifier (GH-936: lowering leaves those alone). */
+  private def qualified(formula: String): Boolean = formula.contains('!')
+
   /**
    * `Sheet.put` plus the hint's style step, mirroring `Sheet.putSingle`: the hint resolves against
    * the cell's current style (or the default) and the result is registered and set — so a `General`
@@ -577,9 +588,12 @@ private[xl] object EditInterpreter:
             .toVector
         )
       )
-    case Edit.PutFormula(at, formula, format) =>
+    // GH-936: a sheet-qualified formula needs the workbook's tab names (the formula support
+    // respells its qualifiers), which the kernel does not have
+    case Edit.PutFormula(at, formula, format) if !qualified(formula) =>
       Some(putPatch(existing, at.ref, CellValue.Formula(formulaText(formula), None), format))
-    case Edit.PutFormulas(at, formulas, format) if at.range.cellCount == formulas.size.toLong =>
+    case Edit.PutFormulas(at, formulas, format)
+        if at.range.cellCount == formulas.size.toLong && !formulas.exists(qualified) =>
       Some(
         Patch.Batch(
           at.range.cellsRowMajor

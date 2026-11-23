@@ -47,6 +47,26 @@ object FormulaOps:
         case Right(expr) => Right(reprint(text, FormulaShifter.renameSheet(expr, from, to)))
 
   /**
+   * GH-936: `text` with every sheet qualifier spelled as the sheet's own name among `names`, as
+   * Excel stores a formula when it is entered (`=sheet1!A1` becomes `=Sheet1!A1`, `='my data'!A1`
+   * becomes `='My Data'!A1`, `=data!rate` becomes `=Data!rate`). A qualifier resolves by
+   * [[SheetName.indexIn]]'s rule (#752); one that matches no sheet, or folds onto two tabs
+   * differing only by case, stays as typed, and an external-workbook reference (`[1]sheet1!A1`) is
+   * never touched. Total: text that needs no respelling — including text that does not parse, which
+   * the caller's own gate reports — comes back byte-identical, so a formula already in canonical
+   * form keeps its spacing and casing exactly. For newly authored formulas only: a formula read
+   * from a file is never passed through here.
+   */
+  def canonicalSheets(text: String, names: IndexedSeq[SheetName]): String =
+    if names.isEmpty || !text.contains('!') then text
+    else
+      FormulaParser.parse(text) match
+        case Left(_) => text
+        case Right(expr) =>
+          val canonical = FormulaShifter.canonicalSheets(expr, names)
+          if canonical == expr then text else reprint(text, canonical)
+
+  /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1
    * Data'!`, apostrophes doubled), case-insensitive, outside string literals. A qualifier preceded
    * by an identifier character, `]` or `'` is not a match: `MySheet1!A1` is another sheet and

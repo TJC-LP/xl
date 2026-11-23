@@ -279,3 +279,48 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(shifted("=IF(A1>0,ABS(A1),B5)", 0, -1), "=IF(#REF!>0,ABS(#REF!),B4)")
     assertEquals(shifted("=#REF!+B2", 1, 1), "=#REF!+C3")
   }
+
+  // ===== canonicalSheets (GH-936) =====
+
+  private val tabs = Vector(Sheet1, Data, Q1Data, SheetName.unsafe("O'Brien"))
+  private def canon(text: String): String = FormulaOps.canonicalSheets(text, tabs)
+
+  test("GH-936: a qualifier typed in another case is stored as the sheet's own name") {
+    assertEquals(canon("=sheet1!A1"), "=Sheet1!A1")
+    assertEquals(canon("=SHEET1!A1+1"), "=Sheet1!A1+1")
+    assertEquals(canon("=SUM(data!B1:B3)"), "=SUM(Data!B1:B3)")
+    assertEquals(canon("=SUM(DATA!A:A)"), "=SUM(Data!A:A)")
+    // the bare (equals-free) cell text keeps its form
+    assertEquals(canon("sheet1!A1"), "Sheet1!A1")
+  }
+
+  test("GH-936: quoted names stay quoted, apostrophes doubled") {
+    assertEquals(canon("='q1 data'!A1"), "='Q1 Data'!A1")
+    assertEquals(canon("='o''brien'!B2"), "='O''Brien'!B2")
+  }
+
+  test("GH-936: sheet-qualified defined names follow too") {
+    assertEquals(canon("=data!rate*2"), "=Data!rate*2")
+    assertEquals(canon("=SUMIF(data!crit,\">1\")"), "=SUMIF(Data!crit,\">1\")")
+  }
+
+  test("GH-936: unknown sheets, external refs and string literals stay as typed") {
+    assertEquals(canon("=nosuch!A1"), "=nosuch!A1")
+    assertEquals(canon("=[1]sheet1!A1"), "=[1]sheet1!A1")
+    assertEquals(canon("=INDIRECT(\"sheet1!A1\")"), "=INDIRECT(\"sheet1!A1\")")
+    // a mix: only the known qualifier changes
+    assertEquals(canon("=sheet1!A1+nosuch!B1"), "=Sheet1!A1+nosuch!B1")
+  }
+
+  test("GH-936: canonical or unqualified text comes back byte-identical, spacing and case kept") {
+    assertEquals(canon("=sum( Sheet1!A1 , 2 )"), "=sum( Sheet1!A1 , 2 )")
+    assertEquals(canon("=sum( a1 , 2 )"), "=sum( a1 , 2 )")
+    assertEquals(canon("=SUM(("), "=SUM((")
+    assertEquals(canon("=sheet1!"), "=sheet1!")
+  }
+
+  test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
+    val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
+    assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")
+    assertEquals(FormulaOps.canonicalSheets("=DATA!A1", twins), "=DATA!A1")
+  }

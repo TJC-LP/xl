@@ -32,6 +32,16 @@ trait FormulaSupport:
   ): XLResult[FormulaSupport.Shifted] =
     shift(formula, colDelta, rowDelta).map(FormulaSupport.Shifted(_, Vector.empty))
 
+  /**
+   * GH-936: `formula` with every sheet qualifier respelled as the tab it names among `sheets`
+   * (matched as a reference resolves, #752: exact, else the one tab equal ignoring case), as Excel
+   * stores a formula when it is entered — `=sheet1!A1` becomes `=Sheet1!A1`. Unknown or ambiguous
+   * qualifiers and external-workbook references stay as typed. Called for newly authored formulas
+   * only. The default returns `formula` unchanged (a text-only support cannot parse it);
+   * xl-evaluator's `EvalFormulaSupport` respells.
+   */
+  def canonicalSheets(formula: String, sheets: IndexedSeq[SheetName]): String = formula
+
   /** Insert `count` rows before `at` on `sheet`, rewriting references on every sheet. */
   def insertRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook]
 

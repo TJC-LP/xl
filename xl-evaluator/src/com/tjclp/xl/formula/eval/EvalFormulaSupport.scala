@@ -39,6 +39,10 @@ object EvalFormulaSupport extends FormulaSupport:
   ): XLResult[FormulaSupport.Shifted] =
     FormulaOps.shiftReporting(formula, colDelta, rowDelta)
 
+  /** GH-936: respell each sheet qualifier as the tab's own name, as Excel does on entry. */
+  override def canonicalSheets(formula: String, sheets: IndexedSeq[SheetName]): String =
+    FormulaOps.canonicalSheets(formula, sheets)
+
   /** The editor no-ops on a sheet the book lacks; the seam refuses instead. */
   private def onSheet(wb: Workbook, sheet: SheetName)(
     edit: => XLResult[Workbook]

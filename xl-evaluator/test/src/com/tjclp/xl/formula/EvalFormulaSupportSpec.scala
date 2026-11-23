@@ -111,3 +111,50 @@ class EvalFormulaSupportSpec extends FunSuite:
       case Left(XLError.EditFailed(1, "insert-rows", XLError.UnsupportedCapability(_, _, _))) => ()
       case other => fail(s"expected an UnsupportedCapability refusal, got $other")
   }
+
+  // ===== GH-936: authored formulas store each sheet qualifier in the tab's own spelling =====
+
+  private val Q1 = SheetName.unsafe("Q1 Data")
+  private val cased: Workbook = book.put(Sheet(Q1).put(ref"A1", num(5)))
+
+  private def storedAt(wb: XLResult[Workbook], sheet: SheetName, at: ARef): String =
+    wb.flatMap(_(sheet)).fold(e => fail(e.message), s => formulaText(s(at).value))
+
+  private def cachedAt(wb: Workbook, sheet: SheetName, at: ARef): Option[CellValue] =
+    wb(sheet).toOption.flatMap(_.cells.get(at)).map(_.value) match
+      case Some(CellValue.Formula(_, cache, _)) => cache
+      case _ => None
+
+  test("GH-936: put-formula, put-formulas and a drag respell qualifiers as the tab's name") {
+    val r = cased.editIn(Other)(
+      Edit.PutFormula(Loc(None, ref"B1"), "=data!A1+'q1 data'!A1", None),
+      Edit.PutFormulas(Area(None, ref"C1:C2"), Vector("=DATA!A1", "=SUM(data!A1:A2)"), None),
+      Edit.DragFormula(Area(None, ref"D1:D2"), "=data!A1*2", ref"D1", None)
+    )
+    assertEquals(storedAt(r, Other, ref"B1"), "Data!A1+'Q1 Data'!A1")
+    assertEquals(storedAt(r, Other, ref"C1"), "Data!A1")
+    assertEquals(storedAt(r, Other, ref"C2"), "SUM(Data!A1:A2)")
+    assertEquals(storedAt(r, Other, ref"D1"), "Data!A1*2")
+    assertEquals(storedAt(r, Other, ref"D2"), "Data!A2*2")
+  }
+
+  test("GH-936: unknown sheets and canonical text are stored as typed; evaluation is unchanged") {
+    val r = cased.editIn(Other)(
+      Edit.PutFormula(Loc(None, ref"B1"), "=nosuch!A1", None),
+      Edit.PutFormula(Loc(None, ref"B2"), "=sum( Data!A1 , 1 )", None),
+      Edit.PutFormula(Loc(None, ref"B3"), "=data!A1+1", None)
+    )
+    assertEquals(storedAt(r, Other, ref"B1"), "nosuch!A1")
+    assertEquals(storedAt(r, Other, ref"B2"), "sum( Data!A1 , 1 )")
+    assertEquals(storedAt(r, Other, ref"B3"), "Data!A1+1")
+    val recalculated = r.fold(e => fail(e.message), identity).recalculate().workbook
+    assertEquals(cachedAt(recalculated, Other, ref"B2"), Some(num(11)))
+    assertEquals(cachedAt(recalculated, Other, ref"B3"), Some(num(11)))
+  }
+
+  test("GH-936: the text-only support stores the qualifier as typed (it cannot parse)") {
+    val r = cased.editIn(Other)(Edit.PutFormula(Loc(None, ref"B1"), "=data!A1", None))(using
+      FormulaSupport.textOnly
+    )
+    assertEquals(storedAt(r, Other, ref"B1"), "data!A1")
+  }

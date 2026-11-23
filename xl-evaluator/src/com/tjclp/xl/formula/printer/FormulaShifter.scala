@@ -482,18 +482,33 @@ object FormulaShifter:
    * never mentions `b`; `!mentionsSheet(renameSheet(e, a, b), a)` for `a != b`.
    */
   def renameSheet[A](expr: TExpr[A], from: SheetName, to: SheetName): TExpr[A] =
-    if from == to then expr else renameSheetInternal(expr, from.value, to)
+    if from == to then expr
+    else mapSheets(expr, sheet => if sheet.value.equalsIgnoreCase(from.value) then to else sheet)
 
+  /**
+   * GH-936: every sheet qualifier respelled as the sheet it resolves to among `names`, by
+   * [[SheetName.indexIn]]'s rule (#752: the exact spelling, else the one sheet equal ignoring case)
+   * — what Excel does to a formula when it is entered: `=sheet1!A1` is stored as `=Sheet1!A1`. A
+   * qualifier no sheet carries, or one that folds onto two tabs differing only by case, stays as
+   * typed. Reaches the same sites as [[renameSheet]] (references, ranges, qualified defined names,
+   * qualified error literals); external-workbook references are untouched.
+   */
+  def canonicalSheets[A](expr: TExpr[A], names: IndexedSeq[SheetName]): TExpr[A] =
+    mapSheets(expr, sheet => SheetName.indexIn(names, sheet).fold(_ => sheet, names(_)))
+
+  /**
+   * Replace every sheet qualifier `s` in `expr` by `f(s)`: the sites [[renameSheet]] documents.
+   * Coordinates, anchors, local references and external-workbook references are untouched.
+   */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @nowarn("msg=Unreachable case")
-  private def renameSheetInternal[A](expr: TExpr[A], from: String, to: SheetName): TExpr[A] =
+  private def mapSheets[A](expr: TExpr[A], f: SheetName => SheetName): TExpr[A] =
     import TExpr.*
-    def target(sheet: SheetName): SheetName =
-      if sheet.value.equalsIgnoreCase(from) then to else sheet
+    def target(sheet: SheetName): SheetName = f(sheet)
     def targetQualifier(qualifier: ErrorQualifier): ErrorQualifier = qualifier match
       case ErrorQualifier.Sheet(sheet) => ErrorQualifier.Sheet(target(sheet))
       case external: ErrorQualifier.External => external
-    def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
+    def go[B](e: TExpr[B]): TExpr[B] = mapSheets(e, f)
     def goLocation(location: RangeLocation): RangeLocation = location match
       case RangeLocation.Computed(expr) => RangeLocation.Computed(go(expr))
       case RangeLocation.CrossSheet(sheet, range, form) =>
