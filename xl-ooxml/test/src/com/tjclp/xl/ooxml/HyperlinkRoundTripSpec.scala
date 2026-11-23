@@ -337,3 +337,196 @@ class HyperlinkRoundTripSpec extends FunSuite:
       assert(rels.exists(_.contains("https://example.com/")), rels.toString)
     finally Files.deleteIfExists(src)
   }
+
+  private case class SourceLink(ref: String, id: String, target: String)
+
+  private val b7 = SourceLink("B7", "sourceCell", "https://example.com/")
+  private val d2e3 = SourceLink("D2:E3", "sourceRange", "https://example.net/")
+
+  private def checkMixedLinks(links: SourceLink*): Unit =
+    val sheetPart = "xl/worksheets/sheet1.xml"
+    val relsPart = "xl/worksheets/_rels/sheet1.xml.rels"
+    val (_, seed) = readFromFile(Cell(ref"B7", CellValue.Text("Link")).withHyperlink(b7.target))
+    val elements = links.map(l => <hyperlink ref={l.ref} r:id={l.id}/>)
+    val hyperlinks = <hyperlinks xmlns:r={XmlUtil.nsRelationships}>{elements}</hyperlinks>
+    val withRefs = patchPart(seed, sheetPart)(
+      _.replaceFirst("(?s)<hyperlinks\\b[^>]*>.*?</hyperlinks>", hyperlinks.toString)
+    )
+    val relationships = links.map { link =>
+      <Relationship Id={link.id} Type={XmlUtil.relTypeHyperlink} Target={
+        link.target
+      } TargetMode="External"/>
+    }
+    val src = patchPart(withRefs, relsPart)(_ =>
+      <Relationships xmlns={XmlUtil.nsPackageRels}>{relationships}</Relationships>.toString
+    )
+
+    val expected = links.map(l => l.ref -> l.target).toMap
+    try
+      val zip = new ZipFile(src.toFile)
+      try
+        assertEquals(
+          resolvedLinks(entryText(zip, sheetPart), entryText(zip, relsPart)).sorted,
+          expected.toList.sorted
+        )
+      finally zip.close()
+      val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+      val before = wb("Summary").fold(e => fail(e.message), identity)
+      def checkModel(sheet: Sheet): Unit =
+        links.foreach { l =>
+          val anchor = l.ref.takeWhile(_ != ':')
+          val cell = sheet(anchor).fold(e => fail(e.message), identity)
+          assertEquals(cell.hyperlink, Option.unless(l.ref.contains(':'))(Hyperlink(l.target)))
+        }
+      checkModel(before)
+      val edited = wb.put(before.put(ref"A1", CellValue.Text("edit")))
+      for backend <- Seq(XmlBackend.ScalaXml, XmlBackend.SaxStax) do
+        val (after, xml, rels) = writeAndReopen(edited, WriterConfig(backend = backend))
+        assertEquals(after(ref"A1").value, CellValue.Text("edit"))
+        checkModel(after)
+        assertEquals(
+          resolvedLinks(xml, rels.getOrElse(fail("missing sheet relationships"))).sorted,
+          expected.toList.sorted
+        )
+    finally Files.deleteIfExists(src)
+
+  test("GH-912: an unrelated edit keeps B7 and the D2:E3 range hyperlink") {
+    checkMixedLinks(b7, d2e3)
+  }
+
+  test("GH-912: several cell hyperlinks survive alongside a range hyperlink") {
+    checkMixedLinks(b7, SourceLink("C9", "otherCell", "https://example.com/other"), d2e3)
+  }
+
+  test("GH-912: an unrelated edit keeps both range hyperlinks beside a cell hyperlink") {
+    checkMixedLinks(b7, d2e3, SourceLink("G5:H8", "otherRange", "https://example.net/other"))
+  }
+
+  test("GH-912: a range holding rIdHL1 cannot redirect a generated cell hyperlink") {
+    checkMixedLinks(b7, d2e3.copy(id = "rIdHL1"))
+  }
+
+  private def resolvedLinks(
+    xml: String,
+    rels: String,
+    branch: Option[String] = None
+  ): List[(String, String)] =
+    val root = XmlSecurity.parseSafe(xml, "worksheet").fold(e => fail(e.toString), identity)
+    val relRoot = XmlSecurity.parseSafe(rels, "relationships").fold(e => fail(e.toString), identity)
+    val entries = relRoot \ "Relationship"
+    val ids = entries.map(_ \@ "Id")
+    assertEquals(ids.distinct.size, ids.size, "relationship IDs must be unique")
+    val targets = entries.collect {
+      case e if (e \@ "Type") == XmlUtil.relTypeHyperlink && (e \@ "TargetMode") == "External" =>
+        (e \@ "Id") -> (e \@ "Target")
+    }.toMap
+    val container = root \ "hyperlinks"
+    assertEquals(container.size, 1)
+    val branchLinks = branch.toList.flatMap { label =>
+      val alternate =
+        (container \ "AlternateContent").headOption.getOrElse(fail("missing MC wrapper"))
+      assertEquals(alternate.namespace, XmlUtil.nsMarkupCompatibility)
+      val selected = (alternate \ label).headOption.getOrElse(fail(s"missing MC $label"))
+      if label == "Choice" then
+        assertEquals(selected.getNamespace(selected \@ "Requires"), XmlUtil.nsRelationships)
+      (selected \ "hyperlink").toList
+    }
+    val links = ((container \ "hyperlink").toList ++ branchLinks).map { e =>
+      val id =
+        e.attribute(XmlUtil.nsRelationships, "id").map(_.text).getOrElse(fail("missing r:id"))
+      (e \@ "ref", id)
+    }
+    assertEquals(
+      links.map(_._2).toSet,
+      targets.keySet,
+      "unused or unresolved hyperlink relationship"
+    )
+    links.map((ref, id) => ref -> targets(id))
+
+  private def checkRangeOverrides(sourceRef: String, inAlternateContent: Boolean = false)(
+    overrides: (String, String)*
+  ): Unit =
+    val oldUrl = "https://example.net/"
+    val (_, seed) = readFromFile(Cell(ref"D2", CellValue.Text("Range link")).withHyperlink(oldUrl))
+    val sheetPart = "xl/worksheets/sheet1.xml"
+    val relsPart = "xl/worksheets/_rels/sheet1.xml.rels"
+    val branches = if inAlternateContent then List(Some("Choice"), Some("Fallback")) else List(None)
+    val src = patchPart(seed, sheetPart) { xml =>
+      val ranged = xml.replace("""ref="D2"""", s"""ref="$sourceRef"""")
+      if !inAlternateContent then ranged
+      else
+        ranged.replaceFirst(
+          "(<hyperlink [^>]*/>)",
+          s"""<mc:AlternateContent xmlns:mc="${XmlUtil.nsMarkupCompatibility}" xmlns:feature="${XmlUtil.nsRelationships}"><mc:Choice Requires="feature">$$1</mc:Choice><mc:Fallback>$$1</mc:Fallback></mc:AlternateContent>"""
+        )
+    }
+    def cells(reference: String): List[String] =
+      val range = com.tjclp.xl.addressing.CellRange.parse(reference).fold(e => fail(e), identity)
+      assert(range.cellCount <= 9, reference)
+      range.cellsRowMajor.map(_.toA1).toList
+    try
+      val zip = new ZipFile(src.toFile)
+      try
+        branches.foreach { branch =>
+          assertEquals(
+            resolvedLinks(entryText(zip, sheetPart), entryText(zip, relsPart), branch),
+            List(sourceRef -> oldUrl)
+          )
+        }
+      finally zip.close()
+      val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+      val before = wb("Summary").fold(e => fail(e.message), identity)
+      assertEquals(before(ref"D2").hyperlink, None)
+      val edited = overrides.foldLeft(before) { case (sheet, (ref, target)) =>
+        val cell = sheet(ref).fold(e => fail(e.message), identity)
+        sheet.put(cell.withHyperlink(target))
+      }
+      val expected = cells(sourceRef).map(ref => ref -> overrides.toMap.getOrElse(ref, oldUrl))
+      for backend <- Seq(XmlBackend.ScalaXml, XmlBackend.SaxStax) do
+        val (after, xml, rels) = writeAndReopen(wb.put(edited), WriterConfig(backend = backend))
+        overrides.foreach { (ref, target) =>
+          assertEquals(
+            after(ref).fold(e => fail(e.message), identity).hyperlink,
+            Some(Hyperlink(target))
+          )
+        }
+        val coverage = branches.map { branch =>
+          val links =
+            resolvedLinks(xml, rels.getOrElse(fail("missing sheet relationships")), branch)
+          branch -> links.flatMap((reference, target) => cells(reference).map(_ -> target)).sorted
+        }
+        assertEquals(coverage, branches.map(_ -> expected.sorted), backend.toString)
+    finally Files.deleteIfExists(src)
+
+  test("GH-925: overriding the corner of a range changes only that cell's target") {
+    checkRangeOverrides("D2:E3")("D2" -> "https://example.com/")
+  }
+
+  test("GH-925: overriding an interior cell keeps the original target on all sides") {
+    checkRangeOverrides("D2:F4")("E3" -> "https://example.com/")
+  }
+
+  test("GH-925: multiple overrides inside one range each have one target") {
+    checkRangeOverrides("D2:F4")(
+      "D2" -> "https://example.com/first",
+      "F2" -> "https://example.com/second",
+      "E4" -> "https://example.com/third"
+    )
+  }
+
+  test("GH-925: replacing every cell drops the old range and its relationship") {
+    checkRangeOverrides("D2:E3")(
+      "D2" -> "https://example.com/1",
+      "E2" -> "https://example.com/2",
+      "D3" -> "https://example.com/3",
+      "E3" -> "https://example.com/4"
+    )
+  }
+
+  test("GH-925: a range without overrides keeps its coverage and relationship") {
+    checkRangeOverrides("D2:E3")()
+  }
+
+  test("GH-925: a range override excludes the cell from both MC branches") {
+    checkRangeOverrides("D2:E3", inAlternateContent = true)("D2" -> "https://example.com/")
+  }
