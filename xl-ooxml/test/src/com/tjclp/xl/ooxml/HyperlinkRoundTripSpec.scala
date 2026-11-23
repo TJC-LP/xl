@@ -1,6 +1,6 @@
 package com.tjclp.xl.ooxml
 
-import java.nio.file.Files
+import java.nio.file.{Files, Path}
 import java.util.zip.ZipFile
 
 import com.tjclp.xl.api.*
@@ -115,4 +115,225 @@ class HyperlinkRoundTripSpec extends FunSuite:
     zip.close()
     assert(relsXml.contains("page#section"), s"external rel must keep its fragment:\n$relsXml")
     Files.deleteIfExists(out)
+  }
+
+  // ===== GH-895: removing a sheet's last hyperlink sticks through a read-modify-write =====
+
+  /** Write `cells` on sheet "Summary", read it back: a workbook carrying the source's metadata. */
+  private def readFromFile(cells: Cell*): (Workbook, java.nio.file.Path) =
+    val src = Files.createTempFile("hl-src", ".xlsx")
+    val wb = Workbook(cells.foldLeft(Sheet("Summary"))(_.put(_)))
+    XlsxWriter.write(wb, src).fold(e => fail(s"write failed: $e"), identity)
+    (XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity), src)
+
+  private def clearLink(wb: Workbook, at: com.tjclp.xl.addressing.ARef): Workbook =
+    val sheet = wb("Summary").fold(e => fail(s"sheet missing: $e"), identity)
+    wb.put(sheet.put(sheet(at).clearHyperlink))
+
+  private def writeAndReopen(
+    wb: Workbook,
+    config: WriterConfig = WriterConfig()
+  ): (Sheet, String, Option[String]) =
+    val out = Files.createTempFile("hl-out", ".xlsx")
+    XlsxWriter.writeWith(wb, out, config).fold(e => fail(s"write failed: $e"), identity)
+    val sheet = XlsxReader
+      .read(out)
+      .flatMap(_("Summary"))
+      .fold(e => fail(s"reread failed: $e"), identity)
+    val zip = new ZipFile(out.toFile)
+    val sheetXml = entryText(zip, "xl/worksheets/sheet1.xml")
+    val relsName = "xl/worksheets/_rels/sheet1.xml.rels"
+    val relsXml = Option(zip.getEntry(relsName)).map(_ => entryText(zip, relsName))
+    zip.close()
+    Files.deleteIfExists(out)
+    (sheet, sheetXml, relsXml)
+
+  test("GH-895: removing a sheet's only external hyperlink drops <hyperlinks> and its rel") {
+    val (wb, src) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/")
+    )
+    val (sheet, sheetXml, relsXml) = writeAndReopen(clearLink(wb, ref"B7"))
+    assertEquals(sheet(ref"B7").hyperlink, None, "B7's hyperlink must stay removed")
+    assertEquals(sheet(ref"B7").value, CellValue.Text("Example link"), "B7 keeps its text")
+    assert(!sheetXml.contains("<hyperlinks"), s"no <hyperlinks> element expected:\n$sheetXml")
+    relsXml.foreach { rels =>
+      assert(!rels.contains("example.com"), s"the removed link's rel must not ship:\n$rels")
+    }
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-895: removing a sheet's only internal (location) hyperlink drops <hyperlinks>") {
+    val (wb, src) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Go")).withHyperlink("Summary!A1")
+    )
+    val (sheet, sheetXml, _) = writeAndReopen(clearLink(wb, ref"B7"))
+    assertEquals(sheet(ref"B7").hyperlink, None, "B7's hyperlink must stay removed")
+    assert(!sheetXml.contains("<hyperlinks"), s"no <hyperlinks> element expected:\n$sheetXml")
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-895: removing one of two hyperlinks keeps the other (and only the other)") {
+    val (wb, src) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/"),
+      Cell(ref"B8", CellValue.Text("Other link")).withHyperlink("https://example.org/")
+    )
+    val (sheet, sheetXml, relsXml) = writeAndReopen(clearLink(wb, ref"B7"))
+    assertEquals(sheet(ref"B7").hyperlink, None)
+    assertEquals(sheet(ref"B8").hyperlink, Some(Hyperlink("https://example.org/")))
+    assert(!sheetXml.contains("""ref="B7""""), s"B7 must not be linked:\n$sheetXml")
+    relsXml.foreach(rels => assert(!rels.contains("example.com"), rels))
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-895: an untouched read-write keeps the sheet's only hyperlink") {
+    val (wb, src) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/")
+    )
+    val (sheet, sheetXml, relsXml) = writeAndReopen(wb)
+    assertEquals(sheet(ref"B7").hyperlink, Some(Hyperlink("https://example.com/")))
+    assert(sheetXml.contains("<hyperlinks"), sheetXml)
+    assert(relsXml.exists(_.contains("example.com")), s"the link's rel must ship: $relsXml")
+    Files.deleteIfExists(src)
+  }
+
+  /** A source whose sheet has a cell link on B7 and a range link (unmodeled) on D2:E3. */
+  private def sourceWithRangeLink(): java.nio.file.Path =
+    val written = Files.createTempFile("hl-range-gen", ".xlsx")
+    val wb = Workbook(
+      Sheet("Summary")
+        .put(Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/"))
+        .put(Cell(ref"D2", CellValue.Text("Range link")).withHyperlink("https://example.net/"))
+    )
+    XlsxWriter.write(wb, written).fold(e => fail(s"write failed: $e"), identity)
+    // Excel writes ref="D2:E3" for a link over a multi-cell selection; xl cannot author one, so
+    // the source is patched: the reader keeps it as preserved XML, not on a cell.
+    patchPart(written, "xl/worksheets/sheet1.xml")(_.replace("""ref="D2"""", """ref="D2:E3""""))
+
+  private def patchPart(written: Path, part: String)(patch: String => String): Path =
+    val patched = Files.createTempFile("hl-source", ".xlsx")
+    val in = new ZipFile(written.toFile)
+    val out = new java.util.zip.ZipOutputStream(Files.newOutputStream(patched))
+    try
+      in.entries().asIterator().forEachRemaining { e =>
+        val bytes = in.getInputStream(e).readAllBytes()
+        val body =
+          if e.getName == part then patch(new String(bytes, "UTF-8")).getBytes("UTF-8")
+          else bytes
+        out.putNextEntry(new java.util.zip.ZipEntry(e.getName))
+        out.write(body)
+        out.closeEntry()
+      }
+    finally
+      out.close()
+      in.close()
+      Files.deleteIfExists(written)
+    patched
+
+  test("GH-895: removing the last cell link keeps a range link and its rel") {
+    val src = sourceWithRangeLink()
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val (sheet, sheetXml, relsXml) = writeAndReopen(clearLink(wb, ref"B7"))
+    assertEquals(sheet(ref"B7").hyperlink, None, "B7's hyperlink must stay removed")
+    assert(!sheetXml.contains("""ref="B7""""), s"B7 must not be linked:\n$sheetXml")
+    assert(sheetXml.contains("""ref="D2:E3""""), s"the range link must survive:\n$sheetXml")
+    val rels = relsXml.getOrElse(fail("the range link's rel must ship"))
+    assert(rels.contains("example.net"), s"the range link's rel must ship:\n$rels")
+    assert(!rels.contains("example.com"), s"the removed link's rel must not ship:\n$rels")
+    Files.deleteIfExists(src)
+  }
+
+  test("GH-895: a cell link the reader cannot resolve survives an edit, with its rel") {
+    // ISO 29500 Strict names the hyperlink rel type under purl.oclc.org; the reader resolves only
+    // the transitional type, so B7's link loads onto no cell and must ride through as XML.
+    val written = Files.createTempFile("hl-strict-gen", ".xlsx")
+    val seed = Workbook(
+      Sheet("Summary")
+        .put(Cell(ref"B7", CellValue.Text("Example link")).withHyperlink("https://example.com/"))
+    )
+    XlsxWriter.write(seed, written).fold(e => fail(s"write failed: $e"), identity)
+    val src = patchPart(written, "xl/worksheets/_rels/sheet1.xml.rels")(
+      _.replace(XmlUtil.relTypeHyperlink, strictHyperlinkRelType)
+    )
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet = wb("Summary").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet(ref"B7").hyperlink, None, "precondition: the reader leaves B7 unmodeled")
+
+    val edited = wb.put(sheet.put(Cell(ref"A1", CellValue.Text("edit"))))
+    val (_, sheetXml, relsXml) = writeAndReopen(edited)
+    assert(sheetXml.contains("""<hyperlink ref="B7""""), s"B7's link must survive:\n$sheetXml")
+    val rels = relsXml.getOrElse(fail("B7's rel must ship"))
+    assert(rels.contains("example.com"), s"B7's rel must ship:\n$rels")
+    Files.deleteIfExists(src)
+  }
+
+  private val strictHyperlinkRelType =
+    "http://purl.oclc.org/ooxml/officeDocument/relationships/hyperlink"
+
+  test("GH-895: MC Choice and Fallback retain their links, namespaces and reserved IDs") {
+    val (_, written) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Choice")).withHyperlink("https://example.com/")
+    )
+    val feature = "http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"
+    val src = patchPart(written, "xl/worksheets/sheet1.xml") { xml =>
+      xml
+        .replaceFirst(
+          "(<hyperlinks[^>]*>)",
+          s"""$$1<mc:AlternateContent xmlns:mc="${XmlUtil.nsMarkupCompatibility}" xmlns:feature="$feature"><mc:Choice Requires="feature">"""
+        )
+        .replace(
+          "</hyperlinks>",
+          """</mc:Choice><mc:Fallback><hyperlink ref="B7" location="Summary!A1"/></mc:Fallback></mc:AlternateContent></hyperlinks>"""
+        )
+    }
+    try
+      val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+      val sheet = wb("Summary").fold(e => fail(e.message), identity)
+      assertEquals(sheet(ref"B7").hyperlink, None)
+      val plain = sheet.put(Cell(ref"A1", CellValue.Text("edit")))
+      val linked =
+        plain.put(Cell(ref"A2", CellValue.Text("New")).withHyperlink("https://example.org/"))
+      for
+        backend <- Seq(XmlBackend.ScalaXml, XmlBackend.SaxStax)
+        edited <- Seq(plain, linked)
+      do
+        val (after, xml, rels) = writeAndReopen(wb.put(edited), WriterConfig(backend = backend))
+        val root = XmlSecurity.parseSafe(xml, "worksheet").fold(e => fail(e.toString), identity)
+        val choice = (root \\ "Choice").headOption.getOrElse(fail("lost MC choice"))
+        assertEquals(Option(choice.getNamespace(choice \@ "Requires")), Some(feature))
+        assertEquals((root \\ "Fallback" \ "hyperlink") \@ "location", "Summary!A1")
+        val choiceId =
+          (choice \ "hyperlink").headOption
+            .flatMap(_.attribute(XmlUtil.nsRelationships, "id"))
+            .map(_.text)
+        val relXml = XmlSecurity
+          .parseSafe(rels.getOrElse(fail("lost hyperlink rels")), "rels")
+          .fold(e => fail(e.toString), identity)
+        val entries = (relXml \ "Relationship").map(e => (e \@ "Id") -> (e \@ "Target"))
+        assertEquals(entries.map(_._1).distinct.size, entries.size)
+        assertEquals(choiceId.flatMap(entries.toMap.get), Some("https://example.com/"))
+        assertEquals(after(ref"A2").hyperlink, edited(ref"A2").hyperlink)
+    finally Files.deleteIfExists(src)
+  }
+
+  test("GH-895: an unrelated edit keeps a worksheet-level MC hyperlink relationship") {
+    val (_, written) = readFromFile(
+      Cell(ref"B7", CellValue.Text("Choice")).withHyperlink("https://example.com/")
+    )
+    val src = patchPart(written, "xl/worksheets/sheet1.xml") { xml =>
+      xml
+        .replaceFirst(
+          "(<hyperlinks[^>]*>)",
+          s"""<mc:AlternateContent xmlns:mc="${XmlUtil.nsMarkupCompatibility}" xmlns:x14="http://schemas.microsoft.com/office/spreadsheetml/2009/9/main"><mc:Choice Requires="x14">$$1"""
+        )
+        .replace("</hyperlinks>", "</hyperlinks></mc:Choice><mc:Fallback/></mc:AlternateContent>")
+    }
+    try
+      val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+      val edited = wb
+        .update("Summary", _.put(ref"A1", CellValue.Text("edit")))
+        .fold(e => fail(e.message), identity)
+      val (_, xml, rels) = writeAndReopen(edited)
+      assert(xml.contains("AlternateContent"), xml)
+      assert(rels.exists(_.contains("https://example.com/")), rels.toString)
+    finally Files.deleteIfExists(src)
   }
