@@ -11,7 +11,7 @@ committed files shape the session.
 | --- | --- | --- |
 | Instructions | `CLAUDE.md` | every session |
 | Always-on rules | `.claude/rules/workflow.md` | every session |
-| Skills (on demand) | `.claude/skills/{mill-build,xl-scala-style,xl-testing}/SKILL.md` | when relevant or invoked |
+| Skills (on demand) | `.claude/skills/{mill-build,xl-scala-style,xl-testing,xl-verify}/SKILL.md` | when relevant or invoked |
 | Commands | `.claude/commands/*.md` (`/release-prep`, `/docs-cleanup-xl`) | on invocation |
 | Permissions + hooks | `.claude/settings.json` | every session |
 | Toolchain pins | `.mill-version` (Mill 1.1.5), `.mill-jvm-version` (Temurin 25) | the `./mill` launcher |

@@ -441,7 +441,7 @@ in the contribution package and fresh validation receipts, not inferred by addin
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)
-- **Skills** (`.claude/skills/`, load on demand): `mill-build` (targeted builds/tests, Mill gotchas), `xl-scala-style` (Scala 3 idioms, compiler landmines), `xl-testing` (MUnit/ScalaCheck patterns, release gates). Always-on process rules: `.claude/rules/workflow.md`.
+- **Skills** (`.claude/skills/`, load on demand): `mill-build` (targeted builds/tests, Mill gotchas), `xl-scala-style` (Scala 3 idioms, compiler landmines), `xl-testing` (MUnit/ScalaCheck patterns, release gates), `xl-verify` (check a change at the built CLI, main vs branch, with a diff-triggered checklist). Always-on process rules: `.claude/rules/workflow.md`.
 
 ## AI Agent Workflow
 

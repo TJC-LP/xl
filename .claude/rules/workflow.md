@@ -1,7 +1,8 @@
 # Workflow rules (always loaded)
 
 Process conventions for this repo that the code cannot express. Build/test detail lives in the
-`mill-build` skill, testing patterns in `xl-testing`, Scala idioms in `xl-scala-style`.
+`mill-build` skill, testing patterns in `xl-testing`, Scala idioms in `xl-scala-style`, checking a
+change at the built CLI in `xl-verify`.
 
 - **Gates before a PR that touches the public surface** (run all four, with `set -o pipefail` so a
   piped `tail` cannot hide a failure): `./mill __.compile`, `./mill __.test`,
