@@ -95,8 +95,12 @@ enum Edit derives CanEqual:
   case SetComment(at: Loc, comment: Comment)
   case RemoveComment(at: Loc)
 
-  /** Set a hyperlink, or clear it with `None`. */
-  case Hyperlink(at: Loc, target: Option[String])
+  /**
+   * Link every cell of `at` to `target`, or clear every link in it with `None` (#932). A range is
+   * one link over the selection, as in Excel ([[Sheet.setHyperlink]]); clearing splits any range
+   * hyperlink around `at` ([[Sheet.removeHyperlinks]]).
+   */
+  case Hyperlink(at: Area, target: Option[String])
 
   /** Append one conditional-formatting block over `ranges` (priorities auto-assigned). */
   case AddConditionalFormat(

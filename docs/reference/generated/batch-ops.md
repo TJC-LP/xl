@@ -26,7 +26,7 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | `rowheight` | — | yes | no | yes | `row` | 0.1.0 | Set a row's height. |
 | `comment` | — | no | no | yes | `comment` | 0.9.6 | Add or replace a cell comment. |
 | `remove-comment` | — | no | no | yes | `remove-comment` | 0.9.6 | Remove a cell's comment. |
-| `hyperlink` | — | no | no | yes | — | 0.10.0 | Set or clear a cell hyperlink. |
+| `hyperlink` | — | no | no | yes | — | 0.10.0 | Set or clear the hyperlink of a cell or of every cell in a range. |
 | `clear` | — | no | yes | yes | `clear` | 0.9.6 | Clear a range: contents by default (formatting and merges kept), or styles/comments/all. |
 | `col-hide` | — | yes | no | yes | `col` | 0.9.6 | Hide a column. |
 | `col-show` | — | yes | no | yes | `col` | 0.9.6 | Show a hidden column. |
@@ -217,7 +217,7 @@ Remove a cell's comment.
 
 ### `hyperlink`
 
-Set or clear a cell hyperlink.
+Set or clear the hyperlink of a cell or of every cell in a range.
 
 ```json
 {"op":"hyperlink","ref":"A1","target":"https://example.com"}
@@ -227,8 +227,8 @@ Set or clear a cell hyperlink.
 | --- | --- | --- | --- | --- |
 | `op` | const "hyperlink" | yes | — | — |
 | `sheet` | string | no | — | Sheet for the op's unqualified refs: a sheet-qualified ref wins, then this key, then -s/--sheet |
-| `ref` | string | yes | — | The cell |
-| `target` | string | no | `url` | URL or internal location; omit to clear the hyperlink |
+| `ref` | string | yes | — | The cell or range; a range is one link over every cell in it |
+| `target` | string | no | `url` | URL or internal location; omit to clear the hyperlink of every cell in ref |
 
 ### `clear`
 

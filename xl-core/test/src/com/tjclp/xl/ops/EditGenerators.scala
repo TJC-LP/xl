@@ -208,7 +208,7 @@ object EditGenerators:
     for s <- genSheetOpt; c <- Gen.option(genColSpan) yield Edit.AutoFit(s, c),
     for at <- genLoc; c <- Generators.genComment yield Edit.SetComment(at, c),
     genLoc.map(Edit.RemoveComment.apply),
-    for at <- genLoc; t <- Gen.option(Generators.genHyperlink) yield Edit.Hyperlink(at, t),
+    for at <- genArea; t <- Gen.option(Generators.genHyperlink) yield Edit.Hyperlink(at, t),
     for
       s <- genSheetOpt
       ranges <- Gen.nonEmptyListOf(genGridRange).map(_.take(2).toVector)

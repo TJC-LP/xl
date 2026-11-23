@@ -2248,25 +2248,32 @@ object BatchParser:
         IO.raiseError(new Exception(s"batch comment requires single cell ref, not range: $refStr"))
     }
 
-  /** Remove a comment from a cell. */
+  /**
+   * Set or clear the hyperlink of a cell or of every cell in a range (#932). A range gets one link
+   * over the selection, as Excel applies it ([[Sheet.setHyperlink]]: one `<hyperlink ref="A1:A5">`,
+   * no cell per position); clearing removes the cells' own links and splits any range hyperlink
+   * around the range ([[Sheet.removeHyperlinks]]).
+   */
   private def applyHyperlink(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     refStr: String,
     target: Option[String]
   ): IO[Workbook] =
-    def setOn(sheetName: SheetName, ref: ARef): IO[Workbook] =
-      updateSheet(wb, sheetName)(s =>
-        s.put(target.fold(s(ref).clearHyperlink)(s(ref).withHyperlink))
-      )
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
-      case RefType.Cell(ref) =>
-        sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, ref))
-      case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, ref)
-      case _ =>
-        IO.raiseError(
-          new Exception(s"batch hyperlink requires single cell ref, not range: $refStr")
+    def setOn(sheetName: SheetName, range: CellRange): IO[Workbook] =
+      updateSheet(wb, sheetName) { s =>
+        // `#Sheet1!A1` is the authoring dialect for an internal location (GH-406)
+        target.fold(s.removeHyperlinks(range))(t =>
+          s.setHyperlink(range, Hyperlink(t.stripPrefix("#")))
         )
+      }
+    def onDefault(range: CellRange): IO[Workbook] =
+      sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, range))
+    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) => onDefault(CellRange(ref, ref))
+      case RefType.Range(range) => onDefault(range)
+      case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, CellRange(ref, ref))
+      case RefType.QualifiedRange(sheetName, range) => setOn(sheetName, range)
     }
 
   /**
