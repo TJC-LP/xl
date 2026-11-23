@@ -153,6 +153,14 @@ class FormulaEvaluationSpec extends FunSuite:
     assertEquals(other(ref"A2").effectiveValue, number(26))
   }
 
+  test("GH-741/#752: a supplied sheet replaces the tab its name resolves to ignoring case") {
+    val other = Sheet("Other").put(ref"A1", CellValue.Formula("Data!A1*2", Some(number(20))))
+    val book = Workbook(sheet, other)
+    val renamed = sheet.copy(name = SheetName.unsafe("data")).put(ref"A1", 5)
+    assertEquals(SheetEvaluator.evaluateWithClosure(book, renamed, "Other!A1"), Right(number(10)))
+    assertEquals(SheetEvaluator.evaluateAt(book, renamed, "Other!A1", at), Right(number(10)))
+  }
+
   test("GH-741: positioned implicit intersection differs from positionless array evaluation") {
     val source = sheet.put(ref"A5", 3).put(ref"B5", 4).put(ref"B1", 2)
     assertEquals(

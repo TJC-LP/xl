@@ -20,8 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   APIs report; `clock` and `rng` parameters, defaulting to the system, pin TODAY/NOW and RAND as
   `evaluateFormula(formula, clock, rng)` does. Spill detection and the placement guard read the
   evaluation copy (supplied sheet and overrides applied), so `x#` readers that only the supplied
-  sheet or an override carries are tracked. CLI output and errors, existing evaluation APIs,
-  and the cached cross-sheet limitations tracked in #729 remain unchanged.
+  sheet or an override carries are tracked. The supplied sheet replaces the tab its name
+  resolves to under `Workbook.apply`'s rule (#752), so `Sheet("data")` edits a book's `Data`.
+  CLI output, existing evaluation APIs, and the cached cross-sheet limitations tracked in #729
+  remain unchanged, with one message aside: `xl eval " =A1*2"` (whitespace before the `=`),
+  refused as before with `FORMULA_ERROR`, now quotes `'==A1*2'` at position 0 where 0.26.0
+  quoted `'= =A1*2'` at position 1.
 
 - **Date-window benchmark book** (#920): `LoadsBookMain shape=DateWindow [rows=50000]
   [formulas=2000]` (`xl-evaluator.perf`) builds a made-up book of seeded dates, amounts and regions

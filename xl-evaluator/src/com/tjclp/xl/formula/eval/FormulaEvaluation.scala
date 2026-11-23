@@ -209,9 +209,17 @@ private[formula] object FormulaEvaluation:
             )
           )
         case None => Right(())
-      applied = overrides.foldLeft(sheet) { case (s, (ref, value)) => s.put(ref, value) }
-      original = wb.sheets.find(_.name == sheet.name).fold(CellStore.empty)(_.cells)
-      changed = overrides.keySet ++ changedCells(original, sheet.cells)
+      // the supplied sheet replaces the tab its name resolves to under Workbook.apply's rule
+      // (#752: exact spelling first, then the one tab equal ignoring case), so `Sheet("data")`
+      // edits the book's `Data` rather than being added beside it
+      target <- wb(sheet.name) match
+        case Right(tab) =>
+          Right(if tab.name == sheet.name then sheet else sheet.copy(name = tab.name))
+        case Left(_: XLError.SheetNotFound) => Right(sheet)
+        case Left(error) => Left(FormulaEvaluationError.Failed(error))
+      applied = overrides.foldLeft(target) { case (s, (ref, value)) => s.put(ref, value) }
+      original = wb.sheets.find(_.name == target.name).fold(CellStore.empty)(_.cells)
+      changed = overrides.keySet ++ changedCells(original, target.cells)
       replaced = wb.put(applied)
       tempBook =
         if changed.isEmpty then replaced else uncacheReaders(replaced, applied.name, changed)
