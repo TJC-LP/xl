@@ -315,8 +315,12 @@ object OpRegistry:
     aliases = Vector.empty,
     fields = Vector(
       req("range", Range, "The range"),
-      opt("all", Bool, "Clear contents, styles and comments"),
-      opt("styles", Bool, "Clear styles only"),
+      opt("all", Bool, "Clear contents, styles and comments, and unmerge (Excel's Clear All)"),
+      opt(
+        "styles",
+        Bool,
+        "Clear styles only, like Excel's Clear Formats: unmerge every merge the range touches and reset each whole merge"
+      ),
       opt("comments", Bool, "Clear comments only")
     ),
     oneOf = Vector.empty,
