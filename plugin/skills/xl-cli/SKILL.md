@@ -96,7 +96,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Task | Verb | Notes |
 |------|------|-------|
 | Orient in an unknown workbook | `describe` (`--full` for counts) | sheets with state and dimension, defined names, date system; metadata-only, works under `--stream` |
-| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on), unresolved names; `--fail-on-findings` exits 1 for CI; `--skip-data-tables` drops the slow stale-data-table note |
+| "This number looks wrong" | `audit` | error values, uncached/unparseable formulas, cycles (notes, not findings, when iterative calculation is on and they converge; an unconverged one is a finding), unresolved names; `--fail-on-findings` exits 1 for CI; `--skip-data-tables` drops the slow stale-data-table note |
 | Where a cell's value comes from / what reads it | `deps <ref>` | `--direction precedents\|dependents\|both`, `--depth n\|all`, `--expand`; a range precedent is ONE node (`Data!A:A  range, 9357 occupied cells (12 formulas)`), `--expand` lists its cells |
 | One cell: value, style, comment, direct deps | `cell <ref>` | `Dependencies` lists a range as one entry (`B1:B3`, `Data!A:A`) |
 | Read a block | `view <range>` | `--format markdown\|json\|csv\|html\|svg\|png\|jpeg\|webp\|pdf`, `--eval`, `--formulas`, `--limit`, `--show-labels` |
@@ -284,7 +284,8 @@ never a stale number. `recalc` refreshes every cached value (`--tables` also see
 interiors). The summary names the first error-valued cells with the evaluator's reason
 (`Recalculated 3 formulas (1 error value: Data!D1 #N/A — VLOOKUP exact match not found: …)`);
 `recalc --json` lists up to ten as `errorCells` (`{ref, error, reason}`) beside
-`errorValuedCycles`.
+`errorValuedCycles` and `unconvergedCycles` (`{cells, verdict, rounds, maxChange, stalled}`; a
+non-empty list also raises one `NOT_CONVERGED` warning).
 
 ---
 

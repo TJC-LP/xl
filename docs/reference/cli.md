@@ -791,8 +791,13 @@ bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them
 formulas` — this evaluator cannot parse them, one line per cell: the formula (quoted to 80
 characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
-workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
-`cycles` holds only findings); `Unresolved names` — formulas
+workbook's calcPr enables iterative calculation and the cycle converges — `iterativeCycles` in
+the JSON report, so `cycles` holds only findings); `Unconverged cycles` (#934) — with iterative
+calculation on, a cycle that exhausts its rounds or stalls under the book's own settings, found by
+running the iterative recalculation `recalc` runs (only when the book iterates and has a cycle)
+and worded as `recalc` words it: `Unconverged cycles (n): iterative calculation <verdict>`, then
+one line per cycle (`unconvergedCycles` in the JSON report, `[{cells, verdict, rounds, maxChange,
+stalled}]`, with `unconvergedVerdict`); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve (undefined, unparseable, a cycle of names, or a
 chain more than 100 names deep, #691). **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells, directly or through defined names), `Dynamic` (INDIRECT/OFFSET
@@ -810,8 +815,8 @@ leaves the note out — `dataTableCheck` is `"skipped"` instead of `"checked"` a
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
 list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a
 cycle stays when any member is on it). Exit 0 regardless of findings; `--fail-on-findings` exits 1
-with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it with no
-`Error:` line; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
+with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it on stdout and
+its `Error:` block on stderr, #933; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
 `--stream`.
 
 ```bash

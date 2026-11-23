@@ -753,6 +753,7 @@ val audit: WorkbookAudit = wb.audit                 // buckets, each in workbook
 if !audit.isClean then                              // error cells, uncached/unparseable formulas, cycles, unresolved names
   audit.errorCells.foreach((ref, err) => println(s"$ref ${err.toExcel}"))
 audit.volatile                                      // TODAY/NOW/RAND/RANDBETWEEN cells: a note, not a finding
+audit.unconvergedCycles                             // since 0.27.1: iterative cycles that do not converge (a finding)
 audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary` reports
 WorkbookAudit.of(wb, Clock.system, checkDataTables = false) // since 0.27.0: `xl audit --skip-data-tables`; `.dataTablesChecked` says which
 

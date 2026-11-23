@@ -1148,9 +1148,10 @@ USAGE:
   private val auditHelp = """Find every reason a number can be wrong, in one pass.
 
 Findings: cached error values (#DIV/0!, #REF!, ...), uncached formulas, formulas this evaluator
-cannot parse, circular references, and readers of names that do not resolve. Notes (reported,
-never findings): volatile TODAY/NOW/RAND/RANDBETWEEN cells, dynamic INDIRECT/OFFSET readers,
-external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
+cannot parse, circular references, readers of names that do not resolve, and, when the calcPr
+enables iterative calculation, cycles that do not converge under its settings (recalc's verdict).
+Notes (reported, never findings): converging iterative cycles, volatile TODAY/NOW/RAND/RANDBETWEEN
+cells, dynamic INDIRECT/OFFSET readers, external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
 bucket; -s restricts the cell buckets to one sheet.
 
 Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
