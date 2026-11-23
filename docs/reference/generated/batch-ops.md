@@ -243,8 +243,8 @@ Clear a range: contents by default (formatting and merges kept), or styles/comme
 | `op` | const "clear" | yes | — | — |
 | `sheet` | string | no | — | Sheet for the op's unqualified refs: a sheet-qualified ref wins, then this key, then -s/--sheet |
 | `range` | string | yes | — | The range |
-| `all` | boolean | no | — | Clear contents, styles and comments |
-| `styles` | boolean | no | — | Clear styles only |
+| `all` | boolean | no | — | Clear contents, styles and comments, and unmerge (Excel's Clear All) |
+| `styles` | boolean | no | — | Clear styles only, like Excel's Clear Formats: unmerge every merge the range touches and reset each whole merge |
 | `comments` | boolean | no | — | Clear comments only |
 
 ### `col-hide`

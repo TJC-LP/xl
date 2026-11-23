@@ -1702,8 +1702,14 @@ USAGE:
     }
 
   // --- Clear command ---
-  private val clearAllOpt = Opts.flag("all", "Clear contents, styles, and comments").orFalse
-  private val clearStylesOpt = Opts.flag("styles", "Clear styles only (reset to default)").orFalse
+  private val clearAllOpt =
+    Opts.flag("all", "Clear contents, styles and comments, and unmerge (Excel's Clear All)").orFalse
+  private val clearStylesOpt = Opts
+    .flag(
+      "styles",
+      "Clear styles only, like Excel's Clear Formats: reset each touched merge's whole area to the default style and unmerge it"
+    )
+    .orFalse
   private val clearCommentsOpt = Opts.flag("comments", "Clear comments only").orFalse
 
   val clearCmd: Opts[CliCommand] =
