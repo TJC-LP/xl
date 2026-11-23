@@ -81,6 +81,18 @@ class RangeHyperlinkSpec extends ScalaCheckSuite:
     assertEquals(typed.rangeHyperlinks, Vector(d2e3))
   }
 
+  test("#931: styling covered cells, one by one or as a range, keeps the link inherited") {
+    import com.tjclp.xl.sheets.styleSyntax.{withCellStyle, withRangeStyle}
+    val bold = com.tjclp.xl.styles.CellStyle.default
+      .withNumFmt(com.tjclp.xl.styles.numfmt.NumFmt.Percent)
+    for styled <- Seq(sheet.withCellStyle(at("E2"), bold), sheet.withRangeStyle(rng("D2:E3"), bold))
+    do
+      for a1 <- Seq("D2", "E2", "D3", "E3") do
+        assertEquals(styled.cells.hyperlinkAt(at(a1)), None, a1)
+        assertEquals(styled(at(a1)).hyperlink, Some(link), a1)
+      assertEquals(styled.rangeHyperlinks, Vector(d2e3))
+  }
+
   test("#931: removeHyperlinks cuts the range and keeps the other cells linked") {
     val removed = sheet.removeHyperlinks(rng("E2:E2"))
     assertEquals(removed(at("E2")).hyperlink, None)

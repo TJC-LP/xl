@@ -167,6 +167,54 @@ class RangeHyperlinkCliSpec extends CatsEffectSuite:
       assert(!Files.exists(out), "a refused stream batch must not write")
   }
 
+  // ===== real edits over covered cells =====
+
+  private def hyperlinksElem(path: Path): String =
+    "(?s)<hyperlinks\\b.*?</hyperlinks>".r.findFirstIn(entryText(path, sheetPart)).getOrElse("")
+
+  for (label, json) <- Seq(
+      "batch style over the range" -> """[{"op":"style","range":"D2:E3","bold":true}]""",
+      "batch put into a covered cell" -> """[{"op":"put","ref":"E2","value":1}]""",
+      "batch styles-only clear" -> """[{"op":"clear","range":"E2","styles":true}]"""
+    )
+  do
+    test(s"#931: $label keeps the range link as written") {
+      val out = tmp("edit")
+      for
+        src <- rangeSource
+        r <- batch(src, out, json)
+        wb <- excel.read(out)
+      yield
+        assertEquals(r.exit, 0, r.stderr)
+        assertEquals(hyperlinksElem(out), hyperlinksElem(src))
+        val s = wb.sheets.head
+        for a1 <- List(ref"D2", ref"E2", ref"D3", ref"E3") do
+          assertEquals(s.cells.hyperlinkAt(a1), None, s"${a1.toA1} must not own the link")
+          assertEquals(s(a1).hyperlink, Some(Hyperlink(url)), a1.toA1)
+    }
+
+  for (label, args) <- Seq(
+      "the clear verb" -> List("clear", "E2"),
+      "batch clear" -> List("batch", "-")
+    )
+  do
+    test(s"#931: a contents clear through $label removes the link from the cleared cell") {
+      val out = tmp("clear")
+      for
+        src <- rangeSource
+        r <- CliHarness.run(
+          List("-f", src.toString, "-s", "Summary", "-o", out.toString) ++ args,
+          """[{"op":"clear","range":"E2"}]"""
+        )
+        wb <- excel.read(out)
+      yield
+        assertEquals(r.exit, 0, r.stderr)
+        val s = wb.sheets.head
+        assertEquals(s(ref"E2").hyperlink, None)
+        for a1 <- List(ref"D2", ref"D3", ref"E3") do
+          assertEquals(s(a1).hyperlink, Some(Hyperlink(url)), a1.toA1)
+    }
+
   // ===== round trip: write -> read -> every covered cell -> edit one -> split =====
 
   test("#931: round trip keeps the range, and clearing one covered cell splits it") {

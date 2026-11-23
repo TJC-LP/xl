@@ -333,3 +333,21 @@ class RangeHyperlinkSpec extends FunSuite:
       assertEquals(after(ref"C3").hyperlink, Some(link))
     finally Files.deleteIfExists(out)
   }
+
+  test("#931: a model range link with tooltip and display writes them, on a fresh sheet") {
+    // the path of an authored link, and of a range link on a sheet detached from its source
+    val range = CellRange.parse("B2:C4").toOption.get
+    val modeled = RangeHyperlink(range, link, Some("Docs"), Some("Docs link"))
+    val sheet = Sheet("Summary").copy(rangeHyperlinks = Vector(modeled))
+    for backend <- backends do
+      val out = write(Workbook(sheet), WriterConfig(backend = backend))
+      try
+        assertEquals(
+          hyperlinksXml(out).map(_ - "r:id"),
+          List(Map("ref" -> "B2:C4", "tooltip" -> "Docs", "display" -> "Docs link")),
+          backend
+        )
+        val (_, after) = read(out)
+        assertEquals(after.rangeHyperlinks, Vector(modeled), backend)
+      finally Files.deleteIfExists(out)
+  }
