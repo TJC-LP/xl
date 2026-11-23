@@ -79,6 +79,7 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `SHEET_AUTOSELECTED` |
 | `FLAG_IGNORED` |
 | `EVAL_FAILED` |
+| `NOT_CONVERGED` |
 | `MEMORY_PRESSURE` |
 | `NO_NUMERIC_VALUES` |
 | `OFF_GRID_REF` |

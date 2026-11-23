@@ -175,3 +175,81 @@ class IteratingWindowSpec extends FunSuite:
       assertEquals(shown.values.keySet & unevaluated, Set.empty[ARef], shown.toString)
     }
   }
+
+  // #917
+  private val calc = IterativeCalc.fromCalcPr(CalcPr(iterativeCalculation = true))
+  private def diverging(extra: (String, CellValue)*): Workbook =
+    iterating(Workbook(sheet("S", (Seq("A1" -> f("B1+1"), "B1" -> f("A1+1")) ++ extra)*)))
+
+  test("a cycle that runs out of rounds is reported on the window, in recalc's words") {
+    val wb = diverging("C1" -> f("A1*2"))
+    val full = wb.recalculate(clock, calc)
+    assert(full.unconvergedVerdict.exists(_.startsWith("exhausted")), full.summary)
+    val shown = wb.sheets(0).evaluateForRangePerCell(range, clock, Some(wb))
+    assertEquals(shown.unconverged, full.unconverged)
+    assertEquals(shown.unconvergedVerdict, full.unconvergedVerdict)
+    // the values are the last round's, as recalc keeps them, and none of them is a failure
+    assert(shown.isClean, shown.summary)
+    assertEquals(shown.values, full.evaluated(wb.sheets(0).name))
+  }
+
+  test("a window that only reads the unconverged cycle reports it too") {
+    val wb = diverging("C1" -> f("A1*2"))
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged.map(_.members.map(_._2)), Vector(Vector(at("A1"), at("B1"))))
+  }
+
+  test("a window that does not depend on the unconverged cycle reports nothing") {
+    val wb = diverging("C1" -> f("2*3"))
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged, Vector.empty)
+    assertEquals(shown.unconvergedVerdict, None)
+    assertEquals(shown.values, Map(at("C1") -> n(6)))
+  }
+
+  test("a cycle that converges reports nothing") {
+    val wb = iterating(Workbook(sheet("S", "A1" -> f("B1/2+1"), "B1" -> f("A1/2"))))
+    val shown = wb.sheets(0).evaluateForRangePerCell(range, clock, Some(wb))
+    assert(wb.recalculate(clock, calc).converged)
+    assertEquals(shown.unconverged, Vector.empty)
+  }
+
+  test("a window that reads the unconverged cycle only through INDIRECT reports it") {
+    val wb = diverging("C1" -> f("INDIRECT(\"A1\")*2"))
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val full = wb.recalculate(clock, calc)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.values.get(at("C1")), full.evaluated(wb.sheets(0).name).get(at("C1")))
+    assertEquals(shown.unconverged, full.unconverged)
+  }
+
+  test("a cell downstream of the INDIRECT that reads the unconverged cycle reports it") {
+    val wb = diverging("C1" -> f("INDIRECT(\"A1\")*2"), "D1" -> f("C1+1"))
+    val only = CellRange.parse("D1:D1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged, wb.recalculate(clock, calc).unconverged)
+  }
+
+  test("an INDIRECT the window does not read does not make it report the cycle") {
+    val wb =
+      diverging("C1" -> f("2*3"), "Z9" -> f("INDIRECT(\"A1\")*2"), "Y9" -> f("OFFSET(C1,0,0)"))
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.unconverged, Vector.empty)
+    assertEquals(shown.values, Map(at("C1") -> n(6)))
+  }
+
+  test("a cycle on another sheet, read only through INDIRECT, is reported") {
+    val wb = iterating(
+      Workbook(sheet("S", "C1" -> f("INDIRECT(\"T!A1\")*2")))
+        .put(sheet("T", "A1" -> f("B1+1"), "B1" -> f("A1+1")))
+    )
+    val only = CellRange.parse("C1:C1").fold(e => fail(e), identity)
+    val full = wb.recalculate(clock, calc)
+    val shown = wb.sheets(0).evaluateForRangePerCell(only, clock, Some(wb))
+    assertEquals(shown.values.get(at("C1")), full.evaluated(wb.sheets(0).name).get(at("C1")))
+    assertEquals(shown.unconverged, full.unconverged)
+    assert(shown.unconverged.nonEmpty)
+  }

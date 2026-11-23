@@ -53,6 +53,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the end of the public enum. A downstream exhaustive match on `RangeLocation` needs the new
   arm, and fails to compile under `-Werror` until it has one.
 
+- **Binary change:** `SourceContext` gains a defaulted `preservedSheetNames` field so adoption
+  can detect collisions with chart, dialog and macro tabs kept in the source file. Recompile
+  callers that construct or pattern-match the context.
+- **Explicit conservative sheet adoption** (part of #526): `Workbook.adopt(sheet, from)` refuses
+  external-reference rebinding, foreign source-backed transfers, unsupported sheet payloads and
+  name collisions and incompatible default-font/theme contexts. Source-free simple sheets retain their model and styles; raw `put` is unchanged.
+  The sheet's hidden/veryHidden state carries over. The checks trust `from`: pass the workbook the
+  sheet was read from, since wrapping a loaded sheet in `Workbook(sheet)` hides its source.
+  **Behaviour change:** the external-reference scanner now shared with `xl lint` (#525) honours
+  the `'` escape inside structured references, so an ordinal after an escaped bracket, as in
+  `Table1['[Col])+[1]Data!A1`, is now reported as `external-ref-dangling` when it dangles.
+
 ### Changed
 
 - **Breaking: `Sheet.cells` is a `CellStore`, not a `Map[ARef, Cell]`** (#891). `CellStore` is a
@@ -216,6 +228,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A sheet name matches its sheet ignoring case, as in Excel** (#752): `Workbook.apply(SheetName)`
+  tries the exact spelling first, then the one sheet whose name is equal ignoring case
+  (`SheetName.folded`, lower case under the root locale, the fold the dependency graph already
+  used). Every lookup of a sheet by name uses this rule:
+  - formulas: on a book with the sheet `Data`, `=data!B1`, `=SUM(DATA!A:A)`, `=INDIRECT("data!B1")`
+    and a sheet-qualified defined name `=data!rate` read `Data`; the dependency graph resolves the
+    qualifier the same way, so `xl audit` no longer lists `=data!rate` under "Unresolved names"
+    and such a cell is no longer treated as an always-dirty reader;
+  - the library: `wb.update`, `upsert`, `remove`, `delete`, `rename`, `setSheetState`, the scope of
+    `withDefinedName` / `removeDefinedName`, the Edit algebra's sheet targets (`wb.edit`,
+    `wb.editIn`), `recalculateAfterEdit`, `seedDataTables(sheetName)`, `Excel.readSheet`, and the
+    streaming readers `ExcelIO.readSheetStream`, `readSheetStreamRange` and `streamCellDetails`;
+  - the CLI: `-s`, a verb's qualified ref, the sheet verbs' arguments (`remove-sheet`,
+    `rename-sheet`, `move-sheet`, `copy-sheet`, `add-sheet --after/--before`, `sheets hide|show`),
+    and in batch JSON an op's `sheet` and `scope` keys and a target ref's qualifier, in memory and
+    under `--stream`.
+
+  A spelling that matches two sheets differing only by case (a book Excel refuses to save) and is
+  neither of them is refused with `XLError.InvalidReference` (`INVALID_REFERENCE`) rather than
+  resolved to one of them. The total `upsert` leaves an ambiguous workbook unchanged;
+  the exact spellings still resolve, and a defined name's scope given as
+  `DATA` on such a book now attaches to `DATA`, not the first tab equal to it ignoring case.
+  **Behaviour change:** these lookups were `SheetNotFound` (a formula's value was an evaluation
+  error, `xl -s data` and a batch op naming `data` were `SHEET_NOT_FOUND`, exit 3, and
+  `recalculateAfterEdit(SheetName("data"), refs, options)` refreshed nothing); they now resolve to the
+  `Data` sheet. **Behaviour change:** a batch op whose `sheet` key and ref qualifier differ only by
+  case (`"sheet": "Data"`, `"ref": "data!A1"`) was `BATCH_OP_INVALID`; it is now one sheet.
+  On a book with case-only twin tabs, a `sheet` key and qualifier that land on different tabs
+  (`"sheet": "Data"`, `"ref": "DATA!A1"`) remain `BATCH_OP_INVALID`.
+  `seedDataTables` with an unknown sheet now lists the workbook's sheets in
+  `SheetNotFound.available`, as `Workbook.apply` does. `Excel.readSheet` with a string no tab could
+  carry is `SheetNotFound`, as before. `wb.put(sheet)` still adds or replaces by exact name.
+
+- **`view --eval` says when an iterated cycle did not converge** (#917): in a book with iterative
+  calculation on, a window over a cycle with no cached values shows what an iterative
+  recalculation computes, but dropped its verdict: a cycle that ran out of rounds showed its
+  last-round values with no notice, and `--strict` exited 0, where `recalc` warns and
+  `recalc --strict` exits 1. The window now prints one `NOT_CONVERGED` warning in `recalc`'s
+  words and gates under `--strict` (`RECALC_GATE`). It covers the cycles the window depends
+  on; when one of those cells is an `INDIRECT` or `OFFSET`, whose targets are not known ahead,
+  every unconverged cycle of the book is named. Library: `RangeEvalResult.unconverged` (a new field with a default, so `copy`
+  and `unapply` change shape) and `unconvergedVerdict`; `SccReport.unconvergedVerdict` is the
+  shared wording.
+
+- Assigning a cell hyperlink inside an existing range hyperlink now gives that cell its new target
+  and keeps the original target, tooltip and display text on the remaining cells across repeated saves (#925).
 - **Removing a sheet's last hyperlink sticks in the saved file** (#895): on a sheet read from a
   file, removing its only cell hyperlink (batch `{"op":"hyperlink","ref":"B7"}` with no target,
   a contents `clear`, or `Cell.clearHyperlink`) used to write the source's `<hyperlinks>` element
@@ -485,6 +543,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     rounds or between member evaluations.
   - The order a cycle's members are swept in is computed on formula ids (`CompactGraph`), with
     scratch sized to the cycle, not through a map of qualified references per member.
+
+### Security
+
+- **Dependency age policy follow-ups** (#839): pin reasons now carry a review date
+  (`// pinned until YYYY-MM-DD: reason`) and stop exempting an old pin after it, at most a
+  year ahead. The live age check runs in its own CI job, so a Maven Central outage cannot
+  skip the release-version gates; the existing `plugin-version` check also requires the age
+  policy to pass. Renovate groups available compiler and wartremover updates using the current
+  `scala3Version`. A compiler bump needs a plugin published for the new suffix. A URL inside a block
+  comment in a `.mill` file no longer breaks the check. **Behaviour change:** an undated
+  `// pinned:` comment is now an error; the existing pins are reviewed by 2027-11-05.
+
+### Testing
+
+- Five suites now allow two minutes per test for large recalculation, spill, streaming and CLI
+  fixtures that can exceed the default timeout during parallel runs (#913, #919).
 
 ## [0.26.0] - 2026-11-12
 

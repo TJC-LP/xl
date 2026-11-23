@@ -62,6 +62,17 @@ val updated = wb
 Excel.write(updated, "output.xlsx")
 ```
 
+- In the unreleased source build, `Workbook.adopt(sheet, from = sourceWb)` is an add-only, fallible guard for simple,
+  source-free modeled sheets. It refuses external-workbook ordinal formulas (including ordinals
+  already valid in the destination), foreign source-backed sheets, tables/drawings/conditional
+  formats/validations, case-insensitive name collisions, and differing workbook default fonts or theme palettes. The unchanged sheet must belong to
+  the supplied source workbook. It preserves that sheet's model/style registry and tracks the
+  destination change. It does not merge source ZIP parts, remap names or ordinary formula
+  dependencies, or materialize cached values. Raw `put`/`update` remain low-level operations;
+  copying a loaded sheet with them can still rebind external links silently (part of #526).
+  The sheet's hidden/veryHidden state in `from` is carried over. `from` is trusted: pass the
+  workbook the sheet was actually read from. Wrapping a loaded sheet in a fresh `Workbook(sheet)`
+  hides its source and fonts, and the guard cannot detect that.
 - `Workbook.upsert(name, f)` is total update-or-create; `Workbook.update(name, f)` returns
   `XLResult[Workbook]` and fails if the sheet is absent. Pick by intent.
 - `Excel.modify("file.xlsx")(f)` does read → transform → write in place with atomic file
@@ -77,7 +88,11 @@ Excel.write(updated, "output.xlsx")
   `candidates` name the nearest, so `orExit` prints a `did you mean:` line exactly as `xl -s` does;
   a missing, corrupt or over-limit file is `Left` of the reader's own `IOError`/`ParseError`/
   `SecurityError`. (0.21.0 threw an `XLException` instead.) `wb(name)`, `wb.update`, `wb.remove`,
-  `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0).
+  `wb.rename` and `wb.setSheetState` carry the same candidates (0.22.0). All of them, the Edit
+  algebra's sheet targets and `recalculateAfterEdit` match a sheet name as Excel matches a
+  reference (#752): the exact spelling first, else the one sheet equal to it ignoring case, so
+  `wb("data")` is the tab `Data`; a spelling that folds onto two tabs differing only by case and
+  is neither of them is `InvalidReference`.
   `Excel.readMetadata(path)` (since 0.21.0) returns `LightMetadata` — sheet names, visibility,
   dimensions, defined names, the date system — without loading a cell, under the same ZIP-bomb
   limits as `Excel.read`. Since 0.26.0 ([#788](https://github.com/TJC-LP/xl/issues/788)) its

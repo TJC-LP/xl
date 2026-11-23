@@ -56,8 +56,7 @@ val sheet = Sheet("Demo").put("A1" -> 100)
 Excel.write(Workbook(sheet), "output.xlsx")
 
 // Formula evaluation (when xl-evaluator is a dependency)
-sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method (position-only if currentCell supplied)
-SheetEvaluator.evaluateAt(Workbook(sheet), sheet, "=A1*2", ref"D5") // Closure + placement/cycle checks
+sheet.evaluateFormula("=A1*2")     // SheetEvaluator extension method
 FormulaParser.parse("=SUM(A1:A10)") // Parser at package level
 
 // Display formatting
@@ -101,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,482)
+./mill __.test             # Run all tests (10,426)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -335,7 +334,7 @@ All code must pass the CI format check (`./mill mill.scalalib.scalafmt.ScalafmtM
 - ❌ Error: `null`, `.get` on Try/Either
 - ⚠️ Warning: `.head/.tail` on collections, `.get` on Option, `var`/`while`/`return` (acceptable in tests/macros)
 
-**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`. The one exception is the closure evaluation API (`SheetEvaluator.evaluateAt` and its positionless forms), whose Left is `FormulaEvaluationError`: the `XLError` plus the typed cycle path; `.left.map(_.error)` recovers the `XLResult`.
+**Error Handling**: Always use `XLResult[A] = Either[XLError, A]`
 
 ## Architecture Patterns
 
@@ -427,12 +426,18 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,482 test cases** (PR #825 at `c6925fb2` on 2026-11-20, 10,481 passed and one platform-specific ACL test skipped) by module: xl-evaluator (4583), xl-core (1945), xl-ooxml (1484), xl-cli (2023), xl-cats-effect (220), xl-agent (153), xl prelude probes (74). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,426 test cases** (the #917 `view --eval` convergence warning, 2026-11-20; 10,426 passed, none ignored) by module: xl-evaluator (4519), xl-core (1945), xl-ooxml (1484), xl-cli (2032), xl-cats-effect (220), xl-agent (153), xl prelude probes (73). See `docs/reference/testing-guide.md` for suite structure and patterns.
+
+
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,482 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,426 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

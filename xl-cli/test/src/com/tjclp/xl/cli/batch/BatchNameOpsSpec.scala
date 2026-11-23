@@ -10,8 +10,8 @@ import com.tjclp.xl.cli.contract.{CliHarness, CliRun, TestFixtures}
 /**
  * GH-462: `define-name` / `remove-name`, the batch twins of `name add` / `name rm` (`scope` is the
  * verb's `-s`). The field shape is EditSchema's (`name`, `refersTo`, `scope`); refusals are the
- * verb's, at the op index; the NAME matches case-insensitively (GH-538) while the `scope` names the
- * sheet exactly as spelled, like `-s` and every op's `sheet` key (#659 review); a `sheet` key is
+ * verb's, at the op index; the NAME matches case-insensitively (GH-538) and the `scope` matches its
+ * sheet like `-s` and every op's `sheet` key (#752: exact, else ignoring case); a `sheet` key is
  * not a scope; the ops do not stream, and changed definitions recalculate their formula readers.
  */
 class BatchNameOpsSpec extends CatsEffectSuite:
@@ -67,7 +67,7 @@ class BatchNameOpsSpec extends CatsEffectSuite:
         """[{"op":"define-name","name":"Local","refers-to":"Data!$B$2","scope":"Data"}]"""
       )
       afterAdd <- names(added)
-      // the name is matched case-insensitively (GH-538); the scope is the sheet, exactly as spelled
+      // the name is matched case-insensitively (GH-538); the scope names the sheet
       rm <- batch(
         added.toString,
         removed,
@@ -150,13 +150,13 @@ class BatchNameOpsSpec extends CatsEffectSuite:
     }
   }
 
-  test("scope names the sheet exactly as spelled: a case variant is -s's SHEET_NOT_FOUND") {
-    // #659 review: `scope` is documented as the verb's `-s`, and `-s data` on a book with `Data`
-    // is SHEET_NOT_FOUND with the sheet as its candidate; `scope` was the one sheet key in batch
-    // JSON that matched case-insensitively. One rule for every sheet key.
+  test("scope matches the sheet ignoring case, like -s and every sheet key; Nope is refused") {
+    // #752: `scope` follows the verb's `-s` and every op's `sheet` key: the exact spelling first,
+    // else the sheet equal to it ignoring case. The name is scoped to the tab's own spelling.
     val addOut = fresh("name-ops-scope-case-add.xlsx")
     val rmOut = fresh("name-ops-scope-case-rm.xlsx")
-    val scoped = fresh("name-ops-scope-case-scoped.xlsx")
+    val missingOut = fresh("name-ops-scope-case-missing.xlsx")
+    val verbOut = fresh("name-ops-scope-case-verb.xlsx")
     for
       add <- batch(
         named,
@@ -164,44 +164,43 @@ class BatchNameOpsSpec extends CatsEffectSuite:
         """[{"op":"put","sheet":"Data","ref":"A1","value":1},{"op":"define-name","name":"Loc","refersTo":"Data!$A$1","scope":"data"}]""",
         "--json"
       )
-      _ <- batch(
-        named,
-        scoped,
-        """[{"op":"define-name","name":"Loc","refersTo":"Data!$A$1","scope":"Data"}]"""
-      )
+      added <- names(addOut)
       rm <- batch(
-        scoped.toString,
+        addOut.toString,
         rmOut,
         """[{"op":"remove-name","name":"Loc","scope":"DATA"}]""",
         "--json"
       )
+      removed <- names(rmOut)
+      missing <- batch(
+        named,
+        missingOut,
+        """[{"op":"define-name","name":"Loc","refersTo":"Data!$A$1","scope":"Dat"}]""",
+        "--json"
+      )
       verb <- CliHarness.run(
-        List("-f", named, "-s", "data", "-o", addOut.toString, "--json") ++
+        List("-f", named, "-s", "data", "-o", verbOut.toString, "--json") ++
           List("name", "add", "Loc", "Data!$A$1"),
         ""
       )
+      verbNames <- names(verbOut)
     yield
-      for (run, index) <- List(add -> 2, rm -> 1) do
-        assertEquals(run.exit, 3, run.stderr)
-        val error = ujson.read(run.stdout)("error")
-        assertEquals(error("code"), ujson.Str("BATCH_OP_FAILED"))
-        assert(
-          error("message").str.contains("Sheet not found: "),
-          error("message").str
-        )
-        assert(error("message").str.contains(". Available: Data, Summary"), error("message").str)
-        assertEquals(error("candidates"), ujson.Arr(ujson.Str("Data")))
-        assertEquals(error("location")("opIndex"), ujson.Num(index))
-      assert(!Files.exists(addOut) && !Files.exists(rmOut), "a refused scope writes nothing")
-      // the verb's own refusal for the same spelling: same text, same candidates
-      assertEquals(verb.exit, 3, verb.stderr)
-      val verbError = ujson.read(verb.stdout)("error")
-      assertEquals(verbError("code"), ujson.Str("SHEET_NOT_FOUND"))
-      assertEquals(
-        verbError("message"),
-        ujson.Str("Sheet not found: data. Available: Data, Summary")
+      assertEquals(add.exit, 0, add.stderr)
+      assert(added.contains(("Loc", "Data!$A$1", ujson.Str("Data"))), added.toString)
+      assertEquals(rm.exit, 0, rm.stderr)
+      assert(!removed.exists(_._1 == "Loc"), removed.toString)
+      assertEquals(missing.exit, 3, missing.stderr)
+      val error = ujson.read(missing.stdout)("error")
+      assertEquals(error("code"), ujson.Str("BATCH_OP_FAILED"))
+      assert(
+        error("message").str.contains("Sheet not found: Dat. Available: Data, Summary"),
+        error("message").str
       )
-      assertEquals(verbError("candidates"), ujson.Arr(ujson.Str("Data")))
+      assertEquals(error("candidates"), ujson.Arr(ujson.Str("Data")))
+      assertEquals(error("location")("opIndex"), ujson.Num(1))
+      assert(!Files.exists(missingOut), "a refused scope writes nothing")
+      assertEquals(verb.exit, 0, verb.stderr)
+      assert(verbNames.contains(("Loc", "Data!$A$1", ujson.Str("Data"))), verbNames.toString)
   }
 
   test("a `sheet` key on define-name is not its scope: UNKNOWN_PROPERTY, the name stays global") {

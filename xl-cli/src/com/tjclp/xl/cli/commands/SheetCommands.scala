@@ -174,7 +174,7 @@ object SheetCommands:
           // Insert after specified sheet
           for
             afterName <- sheetName(after)
-            idx = wb.sheets.indexWhere(_.name == afterName)
+            idx = wb.sheetIndexOf(afterName).getOrElse(-1)
             _ <- IO.raiseError(sheetNotFound(after, wb)).whenA(idx < 0)
             result <- IO.fromEither(wb.insertAt(idx + 1, newSheet).left.map(domain))
           yield result
@@ -182,7 +182,7 @@ object SheetCommands:
           // Insert before specified sheet
           for
             beforeName <- sheetName(before)
-            idx = wb.sheets.indexWhere(_.name == beforeName)
+            idx = wb.sheetIndexOf(beforeName).getOrElse(-1)
             _ <- IO.raiseError(sheetNotFound(before, wb)).whenA(idx < 0)
             result <- IO.fromEither(wb.insertAt(idx, newSheet).left.map(domain))
           yield result
@@ -279,21 +279,23 @@ object SheetCommands:
     stream: Boolean = false
   ): IO[String] =
     for
-      target <- sheetName(name)
-      currentIdx = wb.sheets.indexWhere(_.name == target)
+      requested <- sheetName(name)
+      // #752: every sheet argument matches as `Workbook.apply` does (exact, else ignoring case)
+      currentIdx = wb.sheetIndexOf(requested).getOrElse(-1)
       _ <- IO.raiseError(sheetNotFound(name, wb)).whenA(currentIdx < 0)
+      target = wb.sheets(currentIdx).name
       targetIdx <- (toIndexOpt, afterOpt, beforeOpt) match
         case (Some(idx), _, _) => IO.pure(idx)
         case (_, Some(after), _) =>
           for
             afterName <- sheetName(after)
-            afterIdx = wb.sheets.indexWhere(_.name == afterName)
+            afterIdx = wb.sheetIndexOf(afterName).getOrElse(-1)
             _ <- IO.raiseError(sheetNotFound(after, wb)).whenA(afterIdx < 0)
           yield afterIdx + 1
         case (_, _, Some(before)) =>
           for
             beforeName <- sheetName(before)
-            beforeIdx = wb.sheets.indexWhere(_.name == beforeName)
+            beforeIdx = wb.sheetIndexOf(beforeName).getOrElse(-1)
             _ <- IO.raiseError(sheetNotFound(before, wb)).whenA(beforeIdx < 0)
           yield beforeIdx
         case (None, None, None) =>
@@ -328,7 +330,7 @@ object SheetCommands:
     for
       sourceSheetName <- sheetName(sourceName)
       targetSheetName <- sheetName(targetName)
-      sourceSheet <- IO.fromOption(wb.sheets.find(_.name == sourceSheetName))(
+      sourceSheet <- IO.fromOption(wb(sourceSheetName).toOption)(
         sheetNotFound(sourceName, wb)
       )
       _ <- IO

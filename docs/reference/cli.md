@@ -165,7 +165,12 @@ xl batch --schema                                  # JSON Schema of the batch do
 > the whole book instead (a `-s` given to `describe`, `names` or `sheets` is still validated: a name
 > that is not a sheet is `SHEET_NOT_FOUND`, exit 3). Streaming reads on a multi-sheet book without a
 > sheet are `SHEET_REQUIRED` too (they no longer default to the first sheet), and qualified refs
-> work under `--stream` writes.
+> work under `--stream` writes. Every sheet name the CLI takes — `-s`, a qualified ref, a sheet
+> verb's argument (`remove-sheet data`, `move-sheet --after data`), and in batch JSON an op's
+> `sheet` and `scope` keys and a ref's qualifier — matches a sheet as Excel matches a reference:
+> the exact spelling first, else the one sheet equal to it ignoring case, so `-s data` is the sheet
+> `Data` (#752). A spelling that matches two sheets differing only by case and is neither of them
+> is `INVALID_REFERENCE`.
 
 > **Streamed writes and dynamic arrays.** A `--stream` `put`, `putf` or batch content write
 > refuses cells inside a live dynamic spill (`FORMULA_ERROR`; a batch reports `BATCH_OP_FAILED`
@@ -412,9 +417,8 @@ xl -f in.xlsx -o out.xlsx -s Sheet1 name add _xlnm.Print_Titles 'Sheet1!$1:$2'
 A sheet's `_xlnm.Print_Area` / `_xlnm.Print_Titles` read from a file live in its page setup (the
 fields the scripting `PageSetup` sets; `names` still lists them from `workbook.xml`): `name add -s`
 replaces them and `name rm -s` clears them, so `-s Sheet1 name rm _xlnm.Print_Area` is the inverse
-of the `name add` above on its own output. `-s` names the sheet exactly as spelled, like every
-verb's `-s`; so does the batch twins' `scope` key (`SHEET_NOT_FOUND` with the sheet as a
-candidate for a case variant — one rule for every sheet key).
+of the `name add` above on its own output. `-s` and the batch twins' `scope` key match the sheet
+as every sheet key does: the exact spelling first, else ignoring case (#752).
 
 `name add|rm` are writes like `putf`: a changed binding recalculates the formulas that read the
 name (through aliases, named ranges, local shadows and cross-sheet references) and the summary
@@ -1766,8 +1770,10 @@ conditional formats, data validations). A dependent that mentions the sheet but 
 refuses the whole rename before anything is written: `FORMULA_ERROR` (exit 3) with `location`
 naming the cell (`sheet` and `ref`) — or the sheet alone for a conditional format or data
 validation — the parser's own diagnostic in the message and a hint to fix or replace that formula
-first. An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would reject
-`INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE` (exit 2).
+first. A sheet argument matches as `-s` does, ignoring case (`remove-sheet scratch` removes
+`Scratch`, #752). An unknown sheet on any of these verbs is `SHEET_NOT_FOUND`, a name Excel would
+reject `INVALID_SHEET_NAME`, and a `move-sheet` without `--to`/`--after`/`--before` is `USAGE`
+(exit 2).
 
 ---
 
@@ -2485,7 +2491,15 @@ Two rows worth spelling out:
   code the write verbs' `--strict` uses. The gate's message ends `; without --strict those cells
   show the file's values` and its hint reads `drop --strict to render the other cells live and
   see the failure as a warning`. The raster formats (png, jpeg, webp, pdf) never gate: under
-  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. A cycle or a
+  `--strict` they still export and print the one `EVAL_FAILED` warning, exit `0`. In a book whose
+  `<calcPr>` iterates, a window that depends on a cycle with no cached values shows what an
+  iterative recalculation computes; when that cycle does not converge the cells show the last
+  round's values under one `NOT_CONVERGED` warning in `recalc`'s words
+  (`Warning[NOT_CONVERGED]: Iterative calculation exhausted 100 round(s) without converging (last
+  values kept): Sheet1!A1, Sheet1!B1: exhausted 100 round(s), max |Δ| = 2`), and `--strict` gates
+  on it (`RECALC_GATE`, exit `1`) as `recalc --strict` does. When a cell the window
+  depends on is an `INDIRECT` or `OFFSET`, whose targets are not known ahead, every unconverged
+  cycle of the book is named; one the window does not reach names nothing. A cycle or a
   failing formula elsewhere on the sheet, outside the window's closure, affects neither — with an
   `INDIRECT` or `OFFSET` on the sheet every formula is evaluated (their targets are dynamic), but
   only failures in the window's closure are reported. For the pictures (html, svg and the raster
@@ -2536,7 +2550,7 @@ with the same seven keys every time:
 | `verb` | the subcommand path, e.g. `"view"`, `"sheets hide"`, `"cf add"` (best-effort for a usage error raised before dispatch) |
 | `version` | the `xl` version that produced the envelope |
 | `data` | the verb's payload (below) — always a JSON object; `null` on a failure |
-| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
+| `warnings` | `[{code, message}]` — the same notices text mode prints as `Warning[CODE]:` lines (`TRUNCATED`, `HIDDEN_OMITTED`, `EVAL_FAILED` for `--eval` without `--strict` or with it on a raster format, `NOT_CONVERGED` for an `--eval` window over a cycle that did not converge, `FLAG_IGNORED` for `--skip-hidden` under `--stream`, `CF_NOT_RENDERED` for a conditional-format rule a picture could not paint, `READER_WARNING`); `location` when known |
 | `error` | `null`, or `{code, message, hint, candidates, location}` — the fields of the stderr block; absent ones are `null` / `[]` |
 
 **What `data` holds.** `data` is always a JSON object (`null` on a failure). A listing verb keys

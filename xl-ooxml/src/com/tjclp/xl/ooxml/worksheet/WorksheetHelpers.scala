@@ -405,13 +405,60 @@ private[ooxml] def modeledHyperlink(
  */
 private[ooxml] def unmodeledHyperlinksElem(
   preserved: Elem,
-  hyperlinkTargets: Map[String, String]
+  hyperlinkTargets: Map[String, String],
+  sheet: Sheet
 ): Option[Elem] =
-  val kept = preserved.child.filterNot {
-    case e: Elem if e.label == "hyperlink" => modeledHyperlink(e, hyperlinkTargets).isDefined
-    case _ => false
-  }
+  // rebindUsedNamespaces puts descendant prefix bindings on the preserved subtree root.
+  def keep(node: Node, direct: Boolean): Seq[Node] = node match
+    // The reader selects direct hyperlink children by label, regardless of their prefix.
+    case e: Elem
+        if direct && e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isDefined =>
+      Nil
+    case e: Elem
+        if e.label == "hyperlink" && (Option(e.prefix).isEmpty ||
+          preserved.getNamespace(e.prefix) == nsSpreadsheetML) =>
+      CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
+    case e: Elem
+        if preserved.getNamespace(e.prefix) == XmlUtil.nsMarkupCompatibility &&
+          (e.label == "AlternateContent" || e.label == "Choice" || e.label == "Fallback") =>
+      Seq(e.copy(child = e.child.flatMap(keep(_, direct = false))))
+    case other => Seq(other)
+
+  val kept = preserved.child.flatMap(keep(_, direct = true))
   Option.when(kept.exists { case _: Elem => true; case _ => false })(preserved.copy(child = kept))
+
+/** Keep the source link on the cells for which the writer will not emit a model hyperlink. */
+private def uncoveredHyperlinks(source: Elem, range: CellRange, sheet: Sheet): Seq[Elem] =
+  val overrides = sheet.cells.inRange(range).filter(_.hyperlink.isDefined).map(_.ref).buffered
+  if !overrides.hasNext then Seq(source)
+  else
+    val fragments = Vector.newBuilder[Elem]
+    val left = range.colStart.index0
+    val right = range.colEnd.index0
+
+    def keep(fromCol: Int, fromRow: Int, toCol: Int, toRow: Int): Unit =
+      if fromCol <= toCol && fromRow <= toRow then
+        val first = ARef.from0(fromCol, fromRow)
+        val last = ARef.from0(toCol, toRow)
+        // Even E2:E2 stays a source range on reread. A bare E2 would become a model hyperlink.
+        val ref = CellRange(first, last).toA1
+        fragments += source % new UnprefixedAttribute("ref", ref, Null)
+
+    // inRange visits stored cells in row-major order. Emit full-width bands between edited rows
+    // and horizontal runs within each edited row, even for a range spanning the whole sheet.
+    var nextRow = range.rowStart.index0
+    while overrides.hasNext do
+      val row = overrides.head.row.index0
+      keep(left, nextRow, right, row - 1)
+      var nextCol = left
+      while overrides.headOption.exists(_.row.index0 == row) do
+        val col = overrides.next().col.index0
+        keep(nextCol, row, col - 1, row)
+        nextCol = col + 1
+      keep(nextCol, row, right, row)
+      nextRow = row + 1
+    keep(left, nextRow, right, range.rowEnd.index0)
+    fragments.result()
 
 /** Preserved links may be nested, e.g. in both branches of mc:AlternateContent. */
 private[ooxml] def hyperlinkRelIds(hyperlinks: Elem): Set[String] =

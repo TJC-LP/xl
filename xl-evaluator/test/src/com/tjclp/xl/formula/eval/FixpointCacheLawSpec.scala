@@ -1,5 +1,6 @@
 package com.tjclp.xl.formula.eval
 
+import scala.concurrent.duration.*
 import scala.util.Random
 
 import com.tjclp.xl.CellRange
@@ -33,6 +34,9 @@ import munit.FunSuite
  * instead of leaving the law vacuous.
  */
 class FixpointCacheLawSpec extends FunSuite:
+
+  // The fixed-seed law runs three evaluators under both iteration schemes for each case (#919).
+  override val munitTimeout: Duration = 2.minutes
 
   private val rows = 40
   // workbook order ("b", "Z") is not name order ("Z" sorts before "b")

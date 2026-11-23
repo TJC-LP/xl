@@ -377,6 +377,21 @@ class NonWorksheetSheetSpec extends FunSuite:
     cleanup(onData2, out1, onMacro, out2, out3)
   }
 
+  test("adopting a worksheet refuses a name held by a preserved tab") {
+    kinds.foreach { kind =>
+      val file = fixture(kind)
+      try
+        val destination = read(file)
+        val sheet = Sheet(SheetName.unsafe("OTHER"))
+        val from = Workbook(sheet).copy(metadata = destination.metadata)
+        assertEquals(
+          destination.adopt(sheet, from),
+          Left(com.tjclp.xl.error.XLError.DuplicateSheet("OTHER"))
+        )
+      finally cleanup(file)
+    }
+  }
+
   test("GH-785: a worksheet may not take the macro sheet's name") {
     val source = fixture(macroSheet)
     val wb =

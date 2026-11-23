@@ -2931,7 +2931,7 @@ object XlsxWriter:
           val sourceTargets = hyperlinkTargets(sourceRels)
           val keptHyperlinks = preservedMetadata
             .flatMap(_.preservedKnown.get("hyperlinks"))
-            .flatMap(unmodeledHyperlinksElem(_, sourceTargets))
+            .flatMap(unmodeledHyperlinksElem(_, sourceTargets, sheet))
           val keptIds =
             if sourceTargets.isEmpty then keptHyperlinks.fold(Set.empty[String])(hyperlinkRelIds)
             else

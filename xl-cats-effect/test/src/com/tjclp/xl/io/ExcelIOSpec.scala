@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.attribute.PosixFilePermissions
 import java.nio.file.{FileSystems, Files, Path}
 import java.util.zip.{ZipEntry, ZipInputStream, ZipOutputStream}
+import scala.concurrent.duration.*
 import scala.util.Using
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.unsafe.*
@@ -27,6 +28,9 @@ import com.tjclp.xl.ooxml.{SstPolicy, WriterConfig, XlsxReader, XlsxWriter}
   )
 )
 class ExcelIOSpec extends CatsEffectSuite:
+
+  // Writing and reading the 100,000-row streaming fixture can exceed 30 s under load (#919).
+  override def munitIOTimeout: Duration = 2.minutes
 
   val tempDir: FunFixture[Path] = FunFixture[Path](
     setup = _ => Files.createTempDirectory("xl-streaming-"),
@@ -900,6 +904,39 @@ class ExcelIOSpec extends CatsEffectSuite:
           assertEquals(last.cells(0), CellValue.Text("Item 5"))
         }
       }
+  }
+
+  tempDir.test("#752: readSheetStream matches a sheet name in any case, as readSheet does") { dir =>
+    val path = dir.resolve("named-case.xlsx")
+    val excel = ExcelIO.instance[IO]
+    val sales = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Number(1))))
+    val inventory = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Text("Item"))))
+    excel.writeStreamsSeq(path, Seq("Sales" -> sales, "Inventory" -> inventory)) *> (
+      for
+        lower <- excel.readSheetStream(path, "inventory").compile.toVector
+        upper <- excel.readSheetStream(path, "SALES").compile.toVector
+      yield
+        assertEquals(lower.map(_.cells(0)), Vector(CellValue.Text("Item")))
+        assertEquals(upper.map(_.cells(0)), Vector(CellValue.Number(1)))
+    )
+  }
+
+  tempDir.test(
+    "#752: readSheetStream refuses a name matching case-only twins by neither spelling"
+  ) { dir =>
+    val path = dir.resolve("named-case-twins.xlsx")
+    val excel = ExcelIO.instance[IO]
+    def one(n: Int) = fs2.Stream.emit(RowData(1, Map(0 -> CellValue.Number(n))))
+    excel.writeStreamsSeq(path, Seq("Data" -> one(1), "DATA" -> one(2))) *> (
+      for
+        exact <- excel.readSheetStream(path, "DATA").compile.toVector
+        folded <- excel.readSheetStream(path, "data").compile.toVector.attempt
+      yield
+        assertEquals(exact.map(_.cells(0)), Vector(CellValue.Number(2)))
+        folded match
+          case Left(err) => assert(err.getMessage.contains("differ only by case"), err.getMessage)
+          case Right(rows) => fail(s"expected an ambiguity refusal, read $rows")
+    )
   }
 
   tempDir.test("readStreamByIndex: handles invalid index") { dir =>

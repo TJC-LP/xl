@@ -52,11 +52,23 @@ final case class CellEvalError(
 final case class RangeEvalResult(
   values: Map[ARef, CellValue],
   failures: Vector[CellEvalError],
-  blocked: Vector[ARef]
+  blocked: Vector[ARef],
+  unconverged: Vector[SccReport] = Vector.empty
 ) derives CanEqual:
 
-  /** True when every formula of the evaluation closure computed a value. */
+  /**
+   * True when every formula of the evaluation closure computed a value. A cycle that ran out of
+   * rounds still computed values (the last round's, as Excel keeps them), so it does not make a
+   * result unclean: read [[unconvergedVerdict]] for that.
+   */
   def isClean: Boolean = failures.isEmpty && blocked.isEmpty
+
+  /**
+   * #917: the verdict of the cycles in [[unconverged]], in the words `recalc` uses for the same
+   * book ([[RecalcResult.unconvergedVerdict]]); `None` when every cycle the range depends on
+   * converged, or nothing iterated.
+   */
+  def unconvergedVerdict: Option[String] = SccReport.unconvergedVerdict(unconverged)
 
   /**
    * One line naming what did not evaluate — the first three failures rendered with their location,
@@ -254,6 +266,27 @@ final case class SccReport(
     else if stalled then s"stalled after $rounds round(s): a member fails every round"
     else s"exhausted $rounds round(s)"
 
+object SccReport:
+
+  /**
+   * The one verdict of a set of unconverged components (see [[RecalcResult.unconvergedVerdict]],
+   * which documents the wording): exhaustion is the headline, else the stall rounds; `None` for an
+   * empty set.
+   */
+  def unconvergedVerdict(unconverged: Vector[SccReport]): Option[String] =
+    val (stalled, exhausted) = unconverged.partition(_.stalled)
+    exhausted.map(_.rounds).maxOption match
+      case Some(budget) =>
+        Some(s"exhausted $budget round(s) without converging (last values kept)")
+      case None =>
+        val rounds = stalled.map(_.rounds)
+        (rounds.minOption, rounds.maxOption) match
+          case (Some(lo), Some(hi)) if lo == hi =>
+            Some(s"stalled after $hi round(s): a cyclic member fails every round")
+          case (Some(lo), Some(hi)) =>
+            Some(s"stalled after $lo–$hi round(s): a cyclic member fails every round")
+          case _ => None
+
 /**
  * #692: one formula cell whose computed VALUE is an Excel error, as the recalc summary and `recalc
  * --json` name it: where, which code, and — when the evaluator raised the error with a diagnostic
@@ -409,19 +442,7 @@ final case class RecalcResult(
    *     `stalled after 2 round(s): a cyclic member fails every round` — the round the stall was
    *     detected on; `2–5` when several components stalled on different rounds
    */
-  def unconvergedVerdict: Option[String] =
-    val (stalled, exhausted) = unconverged.partition(_.stalled)
-    exhausted.map(_.rounds).maxOption match
-      case Some(budget) =>
-        Some(s"exhausted $budget round(s) without converging (last values kept)")
-      case None =>
-        val rounds = stalled.map(_.rounds)
-        (rounds.minOption, rounds.maxOption) match
-          case (Some(lo), Some(hi)) if lo == hi =>
-            Some(s"stalled after $hi round(s): a cyclic member fails every round")
-          case (Some(lo), Some(hi)) =>
-            Some(s"stalled after $lo–$hi round(s): a cyclic member fails every round")
-          case _ => None
+  def unconvergedVerdict: Option[String] = SccReport.unconvergedVerdict(unconverged)
 
   /**
    * GH-492: no cell failed to evaluate AND every cyclic component reached its fixpoint — the single

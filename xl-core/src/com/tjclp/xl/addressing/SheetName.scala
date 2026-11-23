@@ -1,5 +1,9 @@
 package com.tjclp.xl.addressing
 
+import java.util.Locale
+
+import com.tjclp.xl.error.{XLError, XLResult}
+
 /** Opaque sheet name with validation */
 opaque type SheetName = String
 
@@ -52,6 +56,37 @@ object SheetName:
   def quoteForFormula(name: String): String =
     if needsQuoting(name) then s"'${name.replace("'", "''")}'" else name
 
-  extension (name: SheetName) def value: String = name
+  /**
+   * The position of the sheet `name` refers to among `names`, matched as Excel matches a
+   * reference's sheet qualifier (#752): the exact spelling first, else the one name equal to it
+   * ignoring case ([[folded]]). A name no sheet carries is [[XLError.SheetNotFound]]; a name that
+   * folds onto two or more sheets and spells none of them exactly (tabs differing only by case,
+   * which Excel refuses to save) is [[XLError.InvalidReference]] rather than a guess.
+   */
+  def indexIn(names: IndexedSeq[SheetName], name: SheetName): XLResult[Int] =
+    names.indexOf(name) match
+      case -1 =>
+        val key = name.folded
+        names.indices.filter(i => names(i).folded == key) match
+          case Seq(only) => Right(only)
+          case Seq() => Left(XLError.SheetNotFound(name, names.map(_.value).toVector))
+          case many =>
+            val spellings = many.map(i => s"'${names(i)}'").mkString(", ")
+            Left(
+              XLError.InvalidReference(
+                s"sheet name '$name' matches sheets that differ only by case ($spellings); " +
+                  "use the exact name"
+              )
+            )
+      case exact => Right(exact)
+
+  extension (name: SheetName)
+    def value: String = name
+
+    /**
+     * The case-folded key two sheet names share when Excel treats them as the same name: lower case
+     * under the root locale, so the result does not depend on the JVM's default locale.
+     */
+    def folded: String = name.toLowerCase(Locale.ROOT)
 
 end SheetName
