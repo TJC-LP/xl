@@ -1,0 +1,14 @@
+## args
+-f
+<DIR>/diverging.xlsx
+-o
+<DIR>/recalc-unconverged-strict.xlsx
+recalc
+--strict
+## exit
+1
+## stdout
+Recalculated 2 formulas; WARNING: iterative calculation exhausted 5 round(s) without converging (last values kept)
+NOT saved (--strict failure): nothing written to <DIR>/recalc-unconverged-strict.xlsx
+STRICT FAILURE (--strict): iterative calculation exhausted 5 round(s) without converging (last values kept)
+## stderr

@@ -1,0 +1,49 @@
+## args
+-f
+<DIR>/diverging.xlsx
+-o
+<DIR>/recalc-unconverged.xlsx
+--json
+recalc
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "recalc",
+  "version": "<VERSION>",
+  "data": {
+    "text": "Recalculated 2 formulas; WARNING: iterative calculation exhausted 5 round(s) without converging (last values kept)\nSaved: <DIR>/recalc-unconverged.xlsx",
+    "saved": "<DIR>/recalc-unconverged.xlsx",
+    "written": true,
+    "unconvergedCycles": [
+      {
+        "cells": [
+          "Model!A1",
+          "Model!B1"
+        ],
+        "verdict": "exhausted 5 round(s)",
+        "rounds": 5,
+        "maxChange": 32,
+        "stalled": false
+      }
+    ],
+    "errorValuedCycles": [],
+    "errorCells": []
+  },
+  "warnings": [
+    {
+      "code": "NOT_CONVERGED",
+      "message": "Iterative calculation exhausted 5 round(s) without converging (last values kept): Model!A1, Model!B1: exhausted 5 round(s), max |Δ| = 32",
+      "location": {
+        "file": null,
+        "sheet": "Model",
+        "ref": "A1",
+        "opIndex": null
+      }
+    }
+  ],
+  "error": null
+}
+## stderr

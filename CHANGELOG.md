@@ -36,6 +36,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WorkbookAudit.unconvergedVerdict`. `unconvergedCycles` is a new field of the `WorkbookAudit`
   case class: it defaults to `Vector.empty`, takes part in equality and `findings`, and changes the
   shapes of `copy` and `unapply`; `iterativeCycles` no longer lists the unconverged cycles.
+- **Behaviour change: `recalc` flags a cycle that does not converge as structured data** (#933).
+  The verdict used to live only in the text summary. `recalc` now raises one `NOT_CONVERGED`
+  warning (`Warning[NOT_CONVERGED]: …` on stderr in text mode, `warnings[]` under `--json`), in
+  the words `view --eval` already used (#917), located at the first cycle's first member, and
+  `recalc --json` always carries `data.unconvergedCycles` (`[{cells, verdict, rounds, maxChange,
+  stalled}]`, `[]` when every cycle converged), the same shape `audit --json` gives. Under
+  `--strict` the non-convergence is the gate's reason, as before, and no warning is raised.
 
 ## [0.27.0] - 2026-11-23
 

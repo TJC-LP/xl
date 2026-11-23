@@ -20,13 +20,14 @@ import com.tjclp.xl.cli.helpers.{
   StyleBuilder,
   ValueParser
 }
-import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.output.{Convergence, Format}
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
   Diagnostics,
   IntersectionHit,
+  Location,
   OffGridHit,
   Warning,
   WarningCode
@@ -1904,11 +1905,13 @@ object WriteCommands:
 
   /**
    * [[recalc]] with the typed facts its `--json` payload adds after `{text, saved, written}`:
-   * `errorValuedCycles` (#678), each converged cycle that settled on an Excel error, as its member
-   * refs, and `errorCells` (#692), the first `RecalcResult.MaxNamedErrorCells` (10) error-valued
-   * cells (the text names the first `MaxSummaryErrorCells`, 3) — `{ref, error, reason}`, `reason`
-   * null when the evaluator gave none — both always present, `[]` when there is none. A `--strict`
-   * failure carries the same facts.
+   * `unconvergedCycles` (#933), each iterative cycle that exhausted its rounds or stalled as
+   * `{cells, verdict, rounds, maxChange, stalled}` (raised as one `NOT_CONVERGED` warning too,
+   * unless `--strict` makes it the gate's reason), `errorValuedCycles` (#678), each converged cycle
+   * that settled on an Excel error, as its member refs, and `errorCells` (#692), the first
+   * `RecalcResult.MaxNamedErrorCells` (10) error-valued cells (the text names the first
+   * `MaxSummaryErrorCells`, 3) — `{ref, error, reason}`, `reason` null when the evaluator gave none
+   * — both always present, `[]` when there is none. A `--strict` failure carries the same facts.
    */
   def recalcReport(
     wb: Workbook,
@@ -1939,15 +1942,34 @@ object WriteCommands:
             val rendered =
               s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
             val facts = recalcFacts(result)
-            strictGate(policy, rendered, Some(result), warnings, warn)
+            // #933: a cycle that ran out of rounds (or stalled) is one NOT_CONVERGED warning, in
+            // the words `view --eval` uses (#917); under --strict it is the gate's reason instead
+            val convergence =
+              if policy.strict then IO.unit
+              else notConvergedWarning(result.unconverged).traverse_(warn)
+            convergence *> strictGate(policy, rendered, Some(result), warnings, warn)
               .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
               .map(_ -> facts)
           }
         }
       }
 
+  /**
+   * #933: the `NOT_CONVERGED` warning of a recalculation whose iterative cycles did not all
+   * converge, located at the first such cycle's first member; `None` when every cycle converged.
+   */
+  private def notConvergedWarning(unconverged: Vector[SccReport]): Option[Warning] =
+    Convergence.message(unconverged).map { message =>
+      val location = unconverged.headOption
+        .flatMap(_.members.headOption)
+        .map((sheet, ref) => Location(None, Some(sheet.value), Some(ref.toA1), None))
+      Warning(WarningCode.NOT_CONVERGED, message, location)
+    }
+
   private def recalcFacts(result: RecalcResult): Vector[(String, ujson.Value)] =
     Vector(
+      // #933: every cycle that exhausted its rounds or stalled, as `audit --json` lists them
+      "unconvergedCycles" -> Convergence.json(result.unconverged),
       "errorValuedCycles" -> ujson.Arr.from(result.errorValuedCycles.map { scc =>
         ujson.Arr.from(
           scc.members.map((sheet, ref) =>

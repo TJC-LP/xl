@@ -35,7 +35,8 @@ object WarningCode:
   /**
    * #917: `view --eval` showed a window that depends on a cycle whose iterative calculation did not
    * converge (it ran out of rounds, or stalled on a failing member): those cells show the last
-   * round's values, as `recalc` would write them. `--strict` makes it `RECALC_GATE`.
+   * round's values, as `recalc` would write them. #933: `recalc` raises it too when it writes such
+   * values (`data.unconvergedCycles` lists the cycles). `--strict` makes it `RECALC_GATE` in both.
    */
   val NOT_CONVERGED: String = "NOT_CONVERGED"
 
