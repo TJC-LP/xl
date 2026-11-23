@@ -246,6 +246,8 @@ class InspectCommandsSpec extends CatsEffectSuite:
           "volatile",
           "dynamic",
           "cycles",
+          "unconvergedCycles",
+          "unconvergedVerdict",
           "externalRefs",
           "unresolvedReaders",
           "calcPr",

@@ -7,7 +7,7 @@ import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.cli.{Depth, Direction}
 import com.tjclp.xl.cli.contract.{CliError, CliException, CliSignal, ErrorCode, OutputMode, Payload}
 import com.tjclp.xl.cli.helpers.{Resolve, SheetResolver}
-import com.tjclp.xl.cli.output.RendererCommon
+import com.tjclp.xl.cli.output.{Convergence, RendererCommon}
 import com.tjclp.xl.ooxml.metadata.LightMetadata
 import com.tjclp.xl.sheets.FreezePane
 import com.tjclp.xl.styles.color.Color
@@ -336,10 +336,14 @@ object InspectCommands:
       "volatile" -> refs(audit.volatile),
       "dynamic" -> refs(audit.dynamic),
       "cycles" -> ujson.Arr.from(audit.cycles.map(scc => refs(scc.members))),
+      // #934, a finding: iterative cycles that do not converge under the book's settings, in the
+      // shape `recalc --json` gives them, and recalc's one verdict
+      "unconvergedCycles" -> Convergence.json(audit.unconvergedCycles),
+      "unconvergedVerdict" -> audit.unconvergedVerdict.fold[ujson.Value](ujson.Null)(ujson.Str(_)),
       "externalRefs" -> refs(audit.externalRefs),
       "unresolvedReaders" -> refs(audit.unresolvedReaders),
       "calcPr" -> calcPrJson(audit.calcPr),
-      // a note, not a finding: the book declares iterative calculation, so its cycles are intended
+      // a note, not a finding: the book declares iterative calculation and these cycles converge
       "iterativeCycles" -> ujson.Arr.from(audit.iterativeCycles.map(scc => refs(scc.members))),
       // #891: whether the note below ran ("skipped" under --skip-data-tables, its list then empty)
       "dataTableCheck" -> ujson.Str(if audit.dataTablesChecked then "checked" else "skipped"),
@@ -374,6 +378,11 @@ object InspectCommands:
         section("Uncached formulas", audit.uncachedFormulas.map(q => one(q.toString))) ++
         section("Unparseable formulas", unparseable) ++
         section("Cycles", audit.cycles.map(scc => one(scc.members.mkString(", ")))) ++
+        // #934: headed by recalc's verdict, one line per cycle in recalc's words
+        audit.unconvergedVerdict.fold(Vector.empty[String]) { verdict =>
+          s"Unconverged cycles (${audit.unconvergedCycles.size}): iterative calculation $verdict" +:
+            audit.unconvergedCycles.map(scc => s"  ${scc.render}")
+        } ++
         section("Unresolved names", audit.unresolvedReaders.map(q => one(q.toString))) ++
         section(
           "Cycles (iterative calculation on, not a finding)",

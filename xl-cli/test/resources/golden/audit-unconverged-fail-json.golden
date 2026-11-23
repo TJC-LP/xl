@@ -1,0 +1,60 @@
+## args
+-f
+<DIR>/diverging.xlsx
+--json
+audit
+--fail-on-findings
+## exit
+1
+## stdout
+{
+  "ok": false,
+  "exitCode": 1,
+  "verb": "audit",
+  "version": "<VERSION>",
+  "data": {
+    "clean": false,
+    "findings": 1,
+    "errorCells": [],
+    "uncachedFormulas": [],
+    "unparseable": [],
+    "volatile": [],
+    "dynamic": [],
+    "cycles": [],
+    "unconvergedCycles": [
+      {
+        "cells": [
+          "Model!A1",
+          "Model!B1"
+        ],
+        "verdict": "exhausted 5 round(s)",
+        "rounds": 5,
+        "maxChange": 32,
+        "stalled": false
+      }
+    ],
+    "unconvergedVerdict": "exhausted 5 round(s) without converging (last values kept)",
+    "externalRefs": [],
+    "unresolvedReaders": [],
+    "calcPr": {
+      "iterativeCalculation": true,
+      "maxIterations": 5,
+      "maxChange": 0.001,
+      "calcMode": null,
+      "fullCalcOnLoad": null,
+      "calcId": null
+    },
+    "iterativeCycles": [],
+    "dataTableCheck": "checked",
+    "dataTableStale": []
+  },
+  "warnings": [],
+  "error": {
+    "code": "AUDIT_FINDINGS",
+    "message": "Audit: 1 finding",
+    "hint": "recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing",
+    "candidates": [],
+    "location": null
+  }
+}
+## stderr

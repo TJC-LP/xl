@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
-import com.tjclp.xl.formula.eval.WorkbookAudit
+import com.tjclp.xl.formula.eval.{IterativeCalc, WorkbookAudit}
 import com.tjclp.xl.formula.functions.FunctionRegistry
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -45,8 +45,9 @@ class WorkbookAuditSpec extends FunSuite:
         "B1" -> CellValue.Formula("A1+1", None),
         "C1" -> cachedFormula("TODAY()", 45000),
         "D1" -> cachedFormula("INDIRECT(\"A2\")", 0),
-        "E1" -> cachedFormula("F1+1", 0),
-        "F1" -> cachedFormula("E1+1", 0),
+        // #934: a cycle that converges, so the iterative twin's note stays a note
+        "E1" -> cachedFormula("F1/2+1", 0),
+        "F1" -> cachedFormula("E1/2", 0),
         "G1" -> cachedFormula("'[1]Ext'!A1", 3),
         "H1" -> cachedFormula("UNSUPPORTED(1)", 0),
         "I1" -> cachedFormula("NoSuchName*2", 0)
@@ -532,10 +533,73 @@ class WorkbookAuditSpec extends FunSuite:
     val nowhere = audit.restrictTo(SheetName.unsafe("Missing"))
     assert(nowhere.isClean)
     // the iterative twin restricts its note the same way
+    // (#934: the A1 cycle diverges, so it is an unconverged finding; the B1 cycle settles)
     val noted = WorkbookAudit.of(wb.withCalcPr(iterative))
-    assertEquals(noted.iterativeCycles.size, 2)
-    assertEquals(noted.restrictTo(SheetName.unsafe("R")).iterativeCycles, Vector.empty)
-    assertEquals(noted.restrictTo(SheetName.unsafe("P")).iterativeCycles.size, 2)
+    assertEquals(
+      noted.iterativeCycles.map(_.members.toSet),
+      Vector(Set(q("P", "B1"), q("Q", "B1")))
+    )
+    assertEquals(
+      noted.unconvergedCycles.map(_.members.toSet),
+      Vector(Set(SheetName.unsafe("P") -> a1("A1"), SheetName.unsafe("Q") -> a1("A1")))
+    )
+    val notedR = noted.restrictTo(SheetName.unsafe("R"))
+    assertEquals(notedR.iterativeCycles, Vector.empty)
+    assertEquals(notedR.unconvergedCycles, Vector.empty)
+    val notedP = noted.restrictTo(SheetName.unsafe("P"))
+    assertEquals(notedP.iterativeCycles.size, 1)
+    assertEquals(notedP.unconvergedCycles.size, 1)
+  }
+
+  /**
+   * #934's repro: `<calcPr iterate="1" iterateCount="5" iterateDelta="0.001"/>`, a diverging pair.
+   */
+  private val diverging: Workbook = Workbook(
+    Vector(sheetWith("S", "A1" -> cachedFormula("B1+1", 0), "B1" -> cachedFormula("A1*2", 0)))
+  ).withCalcPr(
+    CalcPr(
+      iterativeCalculation = true,
+      maxIterations = Some(5),
+      maxChange = Some(BigDecimal("0.001"))
+    )
+  )
+
+  test("#934: a cycle that does not converge under the book's settings is a finding") {
+    val audit = WorkbookAudit.of(diverging)
+    assertEquals(audit.iterativeCycles, Vector.empty, "it is no longer a note")
+    assertEquals(audit.unconvergedCycles.size, 1)
+    val report = audit.unconvergedCycles.headOption.getOrElse(fail("no unconverged cycle"))
+    assertEquals(
+      report.members.toSet,
+      Set(SheetName.unsafe("S") -> a1("A1"), SheetName.unsafe("S") -> a1("B1"))
+    )
+    assertEquals(report.converged, false)
+    assertEquals(report.rounds, 5)
+    assertEquals(audit.findings, 1)
+    assert(!audit.isClean)
+    // recalc's own words for the same book
+    val calcPr = diverging.metadata.calcPr.getOrElse(fail("no calcPr"))
+    val recalc = diverging.recalculate(IterativeCalc.fromCalcPr(calcPr))
+    assertEquals(audit.unconvergedVerdict, recalc.unconvergedVerdict)
+    assertEquals(
+      audit.unconvergedVerdict,
+      Some("exhausted 5 round(s) without converging (last values kept)")
+    )
+    assertEquals(audit.unconvergedCycles, recalc.unconverged)
+  }
+
+  test("#934: a converging cycle stays a note; without iteration a cycle is a plain finding") {
+    val converging = Workbook(
+      Vector(sheetWith("S", "A1" -> cachedFormula("B1/2+1", 0), "B1" -> cachedFormula("A1/2", 0)))
+    ).withCalcPr(iterative)
+    val noted = WorkbookAudit.of(converging)
+    assertEquals(noted.unconvergedCycles, Vector.empty)
+    assertEquals(noted.iterativeCycles.size, 1)
+    assert(noted.isClean, noted.toString)
+    assertEquals(noted.unconvergedVerdict, None)
+    val plain = WorkbookAudit.of(diverging.withCalcPr(CalcPr(iterativeCalculation = false)))
+    assertEquals(plain.cycles.size, 1)
+    assertEquals(plain.unconvergedCycles, Vector.empty)
   }
 
   test("GH-588: volatility is the FunctionFlags.volatile flag on the specs, not a name list") {

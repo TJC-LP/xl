@@ -21,6 +21,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   option: --version"). It now prints the `ok:true` envelope with `data.version` and exits 0, in
   either order and with `-v`; plain `xl --version` still prints the bare version.
 
+### Changed
+
+- **Behaviour change: `audit` reports a cycle that does not converge as a finding** (#934). With
+  iterative calculation on, every cycle used to be listed under "Cycles (iterative calculation
+  on, not a finding)", so a book whose cycle exhausts its rounds was `Audit: clean` and passed
+  `audit --fail-on-findings`. The audit now runs the book's iterative recalculation (only when the
+  book iterates and has a cycle, on the audit's own graph) and moves each cycle that exhausts its
+  rounds or stalls to a new finding bucket, `unconvergedCycles`, worded as `recalc` words it: the
+  text report adds an `Unconverged cycles (n): iterative calculation <verdict>` section with one
+  line per cycle, and `audit --json` adds `unconvergedCycles` (`[{cells, verdict, rounds,
+  maxChange, stalled}]`) and `unconvergedVerdict`. A converging cycle stays a note in
+  `iterativeCycles`. Library side: `WorkbookAudit.unconvergedCycles: Vector[SccReport]` and
+  `WorkbookAudit.unconvergedVerdict`. `unconvergedCycles` is a new field of the `WorkbookAudit`
+  case class: it defaults to `Vector.empty`, takes part in equality and `findings`, and changes the
+  shapes of `copy` and `unapply`; `iterativeCycles` no longer lists the unconverged cycles.
+
 ## [0.27.0] - 2026-11-23
 
 **"Bedrock storage."** `xl audit` is 3–20× faster on real models (#891): `Sheet.cells` is a

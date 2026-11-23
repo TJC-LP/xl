@@ -484,6 +484,27 @@ object WorkbookEvaluator:
       recalculateImpl(wb, clock, None, iterative, generationMemo = memo, built = Some(graph))
     (result, DependentRecalculation.editConeOn(wb, graph, seeds))
 
+  /**
+   * #934: the iterative recalculation of `wb` that `recalc` runs (`recalculate(clock, iterative)`),
+   * on a recalculation graph the caller already built for `wb`, so the audit's convergence check
+   * parses no formula a second time.
+   */
+  private[eval] def recalculateIterativeOn(
+    wb: Workbook,
+    clock: Clock,
+    iterative: IterativeCalc,
+    graph: RecalcGraph,
+    counters: RecalcCounters
+  ): RecalcResult =
+    recalculateImpl(
+      wb,
+      clock,
+      None,
+      Some(iterative),
+      generationMemo = new Evaluator.AggregateMemo(counters = counters),
+      built = Some(graph)
+    )
+
   /** The iterative settings `options` resolve to for `wb` — None when cycles must isolate. */
   private def resolveIterative(wb: Workbook, options: RecalcOptions): Option[IterativeCalc] =
     options.iterative match

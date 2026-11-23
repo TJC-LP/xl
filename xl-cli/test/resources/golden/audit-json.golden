@@ -37,6 +37,8 @@ audit
       "Calc!D1"
     ],
     "cycles": [],
+    "unconvergedCycles": [],
+    "unconvergedVerdict": null,
     "externalRefs": [
       "Calc!G1"
     ],

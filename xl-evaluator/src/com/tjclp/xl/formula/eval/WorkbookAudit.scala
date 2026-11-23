@@ -70,14 +70,19 @@ object StaleDataTable:
  *     and zeros)
  *   - `unresolvedReaders` — formulas whose name references the static graph cannot resolve
  *     (GH-507); an unparseable formula is reported once, in `unparseable`
+ *   - `unconvergedCycles` (#934) — with `calcPr.iterativeCalculation` on, the cyclic components
+ *     that do not converge under the book's own iteration settings: they exhaust their rounds or
+ *     stall, exactly as `recalc` reports them (the [[SccReport]]s of the book's iterative
+ *     recalculation, worded by [[unconvergedVerdict]]). That recalculation runs only when the book
+ *     iterates and has a cyclic component, on the audit's own graph
  *
- * Notes (reported, never findings): `iterativeCycles` (the same cyclic components when
+ * Notes (reported, never findings): `iterativeCycles` (the cyclic components that converge when
  * `calcPr.iterativeCalculation` is on — an intentional circular model converges by design, so
- * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of `cycles`
- * and `iterativeCycles`), `volatile` (a call to a function flagged `FunctionFlags.volatile` —
- * TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588, directly or through defined
- * names whose bodies make one, #678 — conservatively even when another name chain exceeds
- * [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
+ * `audit --fail-on-findings` must not fail it forever; every cycle lands in exactly one of
+ * `cycles`, `unconvergedCycles` and `iterativeCycles`), `volatile` (a call to a function flagged
+ * `FunctionFlags.volatile` — TODAY, NOW, RAND, RANDBETWEEN — read off the parsed call, GH-588,
+ * directly or through defined names whose bodies make one, #678 — conservatively even when another
+ * name chain exceeds [[NameWalk.MaxDepth]], #691), `dynamic` (INDIRECT/OFFSET readers,
  * [[DependencyGraph.dynamicCells]]), `externalRefs` (formulas touching another workbook, whose
  * caches are pinned) and the file's `calcPr`, and `staleDataTables` (#678; `dataTablesChecked` is
  * false when the caller skipped that note, #891 — it re-evaluates each table's corner, which on a
@@ -98,19 +103,29 @@ final case class WorkbookAudit(
   calcPr: Option[CalcPr],
   iterativeCycles: Vector[Scc],
   staleDataTables: Vector[StaleDataTable] = Vector.empty,
-  dataTablesChecked: Boolean = true
+  dataTablesChecked: Boolean = true,
+  unconvergedCycles: Vector[SccReport] = Vector.empty
 ) derives CanEqual:
 
-  /** The number of findings: error cells, uncached and unparseable formulas, cycles, unresolved. */
+  /**
+   * The number of findings: error cells, uncached and unparseable formulas, cycles, unresolved
+   * names and unconverged iterative cycles.
+   */
   def findings: Int =
     errorCells.size + uncachedFormulas.size + unparseable.size + cycles.size +
-      unresolvedReaders.size
+      unresolvedReaders.size + unconvergedCycles.size
 
   /**
-   * No findings. Iterative cycles, volatile, dynamic and external references and `calcPr` do not
-   * count.
+   * No findings. Converging iterative cycles, volatile, dynamic and external references and
+   * `calcPr` do not count.
    */
   def isClean: Boolean = findings == 0
+
+  /**
+   * #934: the verdict of [[unconvergedCycles]] in `recalc`'s words
+   * ([[RecalcResult.unconvergedVerdict]]), `None` when every iterative cycle converges.
+   */
+  def unconvergedVerdict: Option[String] = SccReport.unconvergedVerdict(unconvergedCycles)
 
   /**
    * The same audit seen from one sheet (`xl audit -s`): cell buckets keep that sheet's cells, a
@@ -127,7 +142,8 @@ final case class WorkbookAudit(
       externalRefs = externalRefs.filter(_.sheet == sheet),
       unresolvedReaders = unresolvedReaders.filter(_.sheet == sheet),
       iterativeCycles = iterativeCycles.filter(_.members.exists(_.sheet == sheet)),
-      staleDataTables = staleDataTables.filter(_.sheet == sheet)
+      staleDataTables = staleDataTables.filter(_.sheet == sheet),
+      unconvergedCycles = unconvergedCycles.filter(_.members.exists(_._1 == sheet))
     )
 
 object WorkbookAudit:
@@ -218,7 +234,11 @@ object WorkbookAudit:
     val cyclic =
       recalcGraph.components.filter(_.cyclic).sortBy(scc => scc.members.sorted.headOption)
     // With iterative calculation on, a circular model is the file's declared intent, not a finding
+    // — unless it does not converge under the file's own settings (#934)
     val iterative = wb.metadata.calcPr.exists(_.iterativeCalculation)
+    val unconverged = unconvergedOf(wb, clock, cyclic, recalcGraph, counters)
+    val unconvergedMembers = unconverged.map(_.members.toSet).toSet
+    def memberPairs(scc: Scc): Set[(SheetName, ARef)] = scc.members.map(q => (q.sheet, q.ref)).toSet
 
     WorkbookAudit(
       errorCells = scanned.collect { case Finding.ErrorValue(q, e) => (q, e) }.sortBy(_._1),
@@ -235,7 +255,9 @@ object WorkbookAudit:
         .toVector
         .sorted,
       calcPr = wb.metadata.calcPr,
-      iterativeCycles = if iterative then cyclic else Vector.empty,
+      iterativeCycles =
+        if iterative then cyclic.filterNot(scc => unconvergedMembers(memberPairs(scc)))
+        else Vector.empty,
       staleDataTables =
         if !checkDataTables then Vector.empty
         else
@@ -251,8 +273,29 @@ object WorkbookAudit:
             }.toSet
           )
       ,
-      dataTablesChecked = checkDataTables
+      dataTablesChecked = checkDataTables,
+      unconvergedCycles = unconverged.sortBy(_.members.map((s, r) => QualifiedRef(s, r)).minOption)
     )
+
+  /**
+   * #934: the components of `cyclic` that do not converge under `wb`'s iteration settings — the
+   * unconverged [[SccReport]]s of the iterative recalculation `recalc` runs, on the audit's graph.
+   * Nothing runs unless the book iterates and has a cyclic component, so an acyclic or
+   * non-iterating book costs nothing more.
+   */
+  private def unconvergedOf(
+    wb: Workbook,
+    clock: Clock,
+    cyclic: Vector[Scc],
+    graph: RecalcGraph,
+    counters: RecalcCounters
+  ): Vector[SccReport] =
+    wb.metadata.calcPr.filter(_.iterativeCalculation).filter(_ => cyclic.nonEmpty) match
+      case None => Vector.empty
+      case Some(calcPr) =>
+        WorkbookEvaluator
+          .recalculateIterativeOn(wb, clock, IterativeCalc.fromCalcPr(calcPr), graph, counters)
+          .unconverged
 
   /**
    * #678: every data table whose sampled interior disagrees with the `recalc --tables` evaluation,
