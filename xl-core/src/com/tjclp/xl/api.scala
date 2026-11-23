@@ -65,7 +65,8 @@ object api:
     DvErrorStyle,
     DvBoundedType,
     DvMessages,
-    AutoFilterState
+    AutoFilterState,
+    RangeHyperlink
   }
 
   // Drawing types (GH-221) — case classes/enums, so plain export forwarders are safe.

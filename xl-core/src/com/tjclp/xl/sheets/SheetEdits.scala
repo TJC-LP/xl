@@ -488,7 +488,9 @@ private[xl] object SheetEdits:
         val inRange = if dropCells then s1 else s1.clearStylesInRange(range)
         crossingMerges(range, touched).foldLeft(inRange)((s, m) => s.clearStylesInRange(m))
     val s3 = if what.comments then s2.clearCommentsInRange(range) else s2
-    touched.foldLeft(s3)((s, m) => s.unmerge(m))
+    // #931: contents clear takes the hyperlinks with it, range hyperlinks' coverage included
+    val s4 = if what.contents then s3.removeRangeHyperlinkCoverage(range) else s3
+    touched.foldLeft(s4)((s, m) => s.unmerge(m))
 
   /**
    * The merges in `touched` that cross the edge of `range`: their cells outside it need their own

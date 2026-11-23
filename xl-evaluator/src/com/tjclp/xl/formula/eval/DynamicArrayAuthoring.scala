@@ -401,7 +401,11 @@ private[xl] object DynamicArrayAuthoring:
             )
         } ++ pinned)
       else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
-    ContentsCleared(released.copy(cells = remaining), cleared, kept)
+    // #931: the cleared ranges lose their range hyperlinks' coverage too, as their own links
+    val unlinked = ranges.foldLeft(released.copy(cells = remaining))(
+      _.removeRangeHyperlinkCoverage(_)
+    )
+    ContentsCleared(unlinked, cleared, kept)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
   private def overlap(a: CellRange, b: CellRange): Option[CellRange] =

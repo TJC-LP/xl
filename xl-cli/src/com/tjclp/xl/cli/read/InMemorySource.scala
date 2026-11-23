@@ -108,7 +108,8 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       CellDetail(
         record,
         s.getComment(ref),
-        cell.flatMap(_.hyperlink).map(_.target),
+        // #931: the cell's own link, else the range hyperlink covering it
+        s.hyperlinkAt(ref).map(_.target),
         Some(declared),
         Some(listed(graph.dependentsOf(current)))
       )
