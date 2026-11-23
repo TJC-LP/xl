@@ -530,3 +530,103 @@ class HyperlinkRoundTripSpec extends FunSuite:
   test("GH-925: a range override excludes the cell from both MC branches") {
     checkRangeOverrides("D2:E3", inAlternateContent = true)("D2" -> "https://example.com/")
   }
+
+  for backend <- Seq(XmlBackend.ScalaXml, XmlBackend.SaxStax) do
+    for overrideUrl <- Seq("https://example.org/", d2e3.target) do
+      test(s"GH-925: split range ownership survives two saves ($backend, $overrideUrl)") {
+        val part = "xl/worksheets/sheet1.xml"
+        val relPart = "xl/worksheets/_rels/sheet1.xml.rels"
+        val src = patchPart(sourceWithRangeLink(), part)(
+          _.replace("""ref="D2:E3"""", """ref="D2:E3" tooltip="Docs" display="Docs link"""")
+        )
+        val first = Files.createTempFile("hl-split", ".xlsx")
+        val config = WriterConfig(backend = backend)
+        def xmlParts(path: Path): (String, String) =
+          val zip = new ZipFile(path.toFile)
+          try (entryText(zip, part), entryText(zip, relPart))
+          finally zip.close()
+        def worksheet(xml: String) =
+          XmlSecurity.parseSafe(xml, "worksheet").fold(e => fail(e.toString), identity)
+        def at(root: scala.xml.Elem, cell: ARef): scala.xml.Node =
+          val covering = (root \ "hyperlinks" \ "hyperlink").filter { link =>
+            CellRange.parse(link \@ "ref").exists(_.contains(cell))
+          }
+          covering.toList match
+            case link :: Nil => link
+            case other => fail(s"expected one hyperlink on ${cell.toA1}, found $other")
+        def ids(root: scala.xml.Elem) =
+          (root \ "hyperlinks" \ "hyperlink")
+            .map { link =>
+              (link \@ "ref") -> link.attribute(XmlUtil.nsRelationships, "id").map(_.text)
+            }
+            .toList
+            .sorted
+        try
+          val (sourceXml, _) = xmlParts(src)
+          val sourceAttrs = at(worksheet(sourceXml), ref"E2").attributes.asAttrMap - "ref"
+          assertEquals(sourceAttrs.get("tooltip"), Some("Docs"))
+          assertEquals(sourceAttrs.get("display"), Some("Docs link"))
+          val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+          val before = wb("Summary").fold(e => fail(e.message), identity)
+          assert(!before.contains(ref"E2"))
+          val changed = before.put(before(ref"D2").withHyperlink(overrideUrl))
+          XlsxWriter.writeWith(wb.put(changed), first, config).fold(e => fail(e.message), identity)
+          val reopened = XlsxReader.read(first).fold(e => fail(e.message), identity)
+          val sheet = reopened("Summary").fold(e => fail(e.message), identity)
+          val edited = reopened.put(sheet.put(ref"A1", CellValue.Text("edit")))
+          val (after, finalXml, finalRels) = writeAndReopen(edited, config)
+          val (firstXml, firstRels) = xmlParts(first)
+          for (model, xml, rels) <- List(
+              (sheet, firstXml, firstRels),
+              (after, finalXml, finalRels.getOrElse(fail("missing rels")))
+            )
+          do
+            val root = worksheet(xml)
+            val targets = resolvedLinks(xml, rels).toMap
+            for (cell, url) <- List(
+                ref"B7" -> b7.target,
+                ref"D2" -> overrideUrl,
+                ref"E2" -> d2e3.target,
+                ref"D3" -> d2e3.target,
+                ref"E3" -> d2e3.target
+              )
+            do assertEquals(targets(at(root, cell) \@ "ref"), url)
+            for cell <- List(ref"E2", ref"D3", ref"E3") do
+              assertEquals(at(root, cell).attributes.asAttrMap - "ref", sourceAttrs, cell.toA1)
+            assert(!model.contains(ref"E2"), "reread created an empty E2")
+            assert(!(root \ "sheetData" \ "row" \ "c").exists(cell => (cell \@ "r") == "E2"))
+          assertEquals(sheet.cells.iterator.toList, changed.cells.iterator.toList)
+          assertEquals(
+            ids(worksheet(finalXml)),
+            ids(worksheet(firstXml)),
+            "A1 edit changed hyperlink IDs"
+          )
+        finally
+          Files.deleteIfExists(first)
+          Files.deleteIfExists(src)
+      }
+
+    test(s"GH-925: a modeled prefixed hyperlink is emitted once ($backend)") {
+      val (_, seed) = readFromFile(
+        Cell(ref"B7", CellValue.Text("Example link")).withHyperlink(b7.target)
+      )
+      val src = patchPart(seed, "xl/worksheets/sheet1.xml")(
+        _.replace(
+          "<hyperlink ",
+          """<s:hyperlink xmlns:s="http://purl.oclc.org/ooxml/spreadsheetml/main" """
+        )
+      )
+      try
+        val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
+        val sheet = wb("Summary").fold(e => fail(e.message), identity)
+        assertEquals(sheet(ref"B7").hyperlink, Some(Hyperlink(b7.target)))
+        val (_, xml, rels) = writeAndReopen(
+          wb.put(sheet.put(ref"A1", CellValue.Text("edit"))),
+          WriterConfig(backend = backend)
+        )
+        assertEquals(
+          resolvedLinks(xml, rels.getOrElse(fail("missing rels"))),
+          List("B7" -> b7.target)
+        )
+      finally Files.deleteIfExists(src)
+    }

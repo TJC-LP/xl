@@ -215,7 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Assigning a cell hyperlink inside an existing range hyperlink now gives that cell its new target
-  and keeps the original target on the remaining cells when saving (#925).
+  and keeps the original target, tooltip and display text on the remaining cells across repeated saves (#925).
 - **Removing a sheet's last hyperlink sticks in the saved file** (#895): on a sheet read from a
   file, removing its only cell hyperlink (batch `{"op":"hyperlink","ref":"B7"}` with no target,
   a contents `clear`, or `Cell.clearHyperlink`) used to write the source's `<hyperlinks>` element

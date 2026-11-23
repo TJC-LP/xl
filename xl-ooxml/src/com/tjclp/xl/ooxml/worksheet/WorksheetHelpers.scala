@@ -410,13 +410,14 @@ private[ooxml] def unmodeledHyperlinksElem(
 ): Option[Elem] =
   // rebindUsedNamespaces puts descendant prefix bindings on the preserved subtree root.
   def keep(node: Node, direct: Boolean): Seq[Node] = node match
+    // The reader selects direct hyperlink children by label, regardless of their prefix.
+    case e: Elem
+        if direct && e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isDefined =>
+      Nil
     case e: Elem
         if e.label == "hyperlink" && (Option(e.prefix).isEmpty ||
           preserved.getNamespace(e.prefix) == nsSpreadsheetML) =>
-      // The reader models only direct children. Links in an MC branch remain owned by the source.
-      if direct && modeledHyperlink(e, hyperlinkTargets).isDefined then Nil
-      else
-        CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
+      CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
     case e: Elem
         if preserved.getNamespace(e.prefix) == XmlUtil.nsMarkupCompatibility &&
           (e.label == "AlternateContent" || e.label == "Choice" || e.label == "Fallback") =>
@@ -439,7 +440,8 @@ private def uncoveredHyperlinks(source: Elem, range: CellRange, sheet: Sheet): S
       if fromCol <= toCol && fromRow <= toRow then
         val first = ARef.from0(fromCol, fromRow)
         val last = ARef.from0(toCol, toRow)
-        val ref = if first == last then first.toA1 else CellRange(first, last).toA1
+        // Even E2:E2 stays a source range on reread. A bare E2 would become a model hyperlink.
+        val ref = CellRange(first, last).toA1
         fragments += source % new UnprefixedAttribute("ref", ref, Null)
 
     // inRange visits stored cells in row-major order. Emit full-width bands between edited rows
