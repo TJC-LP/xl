@@ -514,7 +514,7 @@ object CriteriaMatcher:
    * `">=4"`, matching Excel (criteria comparisons are type-segregated, like
    * [[extractOrderableText]] for text).
    */
-  private def orderableNumber(cellValue: CellValue): Option[BigDecimal] =
+  private[eval] def orderableNumber(cellValue: CellValue): Option[BigDecimal] =
     cellValue match
       case CellValue.Number(n) => Some(n)
       case CellValue.DateTime(dt) => Some(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))

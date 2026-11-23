@@ -711,3 +711,34 @@ class BatchPutSpec extends FunSuite:
       """[{"op":"putf","ref":"D1:D2","values":["=SUM(Table1[Col])","=ROWS(Table1[Col])"]}]"""
     ).foreach(json => assert(parseOk(json).ops.nonEmpty))
   }
+
+  // ========== GH-895: removing a sheet's last hyperlink sticks in the saved file ==========
+
+  for (label, json) <- Seq(
+      "hyperlink with no target" -> """[{"op":"hyperlink","ref":"B7"}]""",
+      "contents clear" -> """[{"op":"clear","range":"B7"}]"""
+    )
+  do
+    test(s"GH-895 batch: $label removes a file's only hyperlink, and it stays removed") {
+      val b7 = ARef.parse("B7").toOption.get
+      val src = Files.createTempFile("gh895-src", ".xlsx")
+      val jsonPath = Files.createTempFile("gh895", ".json")
+      try
+        val seeded = Sheet("Summary").put(
+          com.tjclp.xl.cells
+            .Cell(b7, CellValue.Text("Example link"))
+            .withHyperlink("https://example.com/")
+        )
+        ExcelIO.instance[IO].write(Workbook(seeded), src).unsafeRunSync()
+        val wb = ExcelIO.instance[IO].read(src).unsafeRunSync()
+        Files.writeString(jsonPath, json)
+        WriteCommands
+          .batch(wb, wb.sheets.headOption, jsonPath.toString, outputPath, config)
+          .unsafeRunSync()
+
+        val reread = ExcelIO.instance[IO].read(outputPath).unsafeRunSync()
+        assertEquals(reread.sheets.head.cells.get(b7).flatMap(_.hyperlink), None)
+      finally
+        Files.deleteIfExists(src)
+        Files.deleteIfExists(jsonPath)
+    }

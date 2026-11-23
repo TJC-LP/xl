@@ -753,10 +753,7 @@ object XlsxReader:
           tableTargets <- resolveTablePaths(tableRels, relsPath)
 
           // GH-235: hyperlink relationships (rId -> external target URL)
-          hyperlinkRels = rels.relationships
-            .filter(_.`type` == XmlUtil.relTypeHyperlink)
-            .map(r => r.id -> r.target)
-            .toMap
+          hyperlinkRels = com.tjclp.xl.ooxml.worksheet.hyperlinkTargets(rels.relationships)
 
           // GH-221: drawing relationship — same normalization as comments (the fixture target is
           // ABSOLUTE "/xl/drawings/drawing1.xml"; Excel writes "../drawings/drawing1.xml")
@@ -1233,19 +1230,13 @@ object XlsxReader:
       case Some(hls) =>
         // one merge into the store (#891); a later element for one cell wins, as a fold would
         val linked = (hls \ "hyperlink").iterator.flatMap {
+          // GH-895: the same rule the writer uses to decide which preserved links a cell owns
           case e: Elem =>
-            val refStr = e \@ "ref"
-            val rid = e.attributes.collectFirst {
-              case a: PrefixedAttribute if a.key == "id" => a.value.text
+            com.tjclp.xl.ooxml.worksheet.modeledHyperlink(e, hyperlinkRels).map { (ref, t) =>
+              val base =
+                cellsMap.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
+              base.withHyperlink(t)
             }
-            val loc = Option(e \@ "location").filter(_.nonEmpty)
-            val target = rid.flatMap(hyperlinkRels.get).orElse(loc)
-            (ARef.parse(refStr).toOption, target) match
-              case (Some(ref), Some(t)) =>
-                val base =
-                  cellsMap.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
-                Some(base.withHyperlink(t))
-              case _ => None
           case _ => None
         }
         if linked.hasNext then cellsMap.putAll(linked) else cellsMap
