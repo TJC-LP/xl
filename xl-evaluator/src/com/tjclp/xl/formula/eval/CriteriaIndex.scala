@@ -203,6 +203,109 @@ private[formula] object CriteriaKeys:
       case CriteriaMatcher.Compare(op, _) => op != CriteriaMatcher.CompareOp.Neq
       case _ => false
 
+  /**
+   * #920: the order key of a number, as [[OrderIndex]] sorts it: the nearest `Double`, `-0.0` read
+   * as `0.0`. `BigDecimal.doubleValue` rounds correctly, so it never reverses an order: `a < b`
+   * implies `orderKey(a) <= orderKey(b)` (values too large for a double round to an infinity, which
+   * keeps the order). Equal keys may hold unequal numbers: the index settles them by the exact
+   * values it keeps per key.
+   */
+  def orderKey(n: BigDecimal): Double = n.bigDecimal.doubleValue + 0.0
+
+  /**
+   * #920: the window a numeric criterion (`>`, `>=`, `<`, `<=` against a number) looks up; `None`
+   * for every other criterion. `matchesCompare` matches it only on a cell whose orderable number (a
+   * number or a date, #798) lies past the bound, and `Empty` has none, so no window matches a row
+   * outside a slice's held rows.
+   */
+  def window(criterion: CriteriaMatcher.Criterion): Option[IndexLookup.Window] =
+    import CriteriaMatcher.CompareOp
+    criterion match
+      case CriteriaMatcher.Compare(op, t) =>
+        op match
+          case CompareOp.Gt => Some(IndexLookup.Window(Some(Bound(t, inclusive = false)), None))
+          case CompareOp.Gte => Some(IndexLookup.Window(Some(Bound(t, inclusive = true)), None))
+          case CompareOp.Lt => Some(IndexLookup.Window(None, Some(Bound(t, inclusive = false))))
+          case CompareOp.Lte => Some(IndexLookup.Window(None, Some(Bound(t, inclusive = true))))
+          case CompareOp.Neq => None
+      case _ => None
+
+/**
+ * #920: one end of a numeric window: `value`, inclusive or not. Equal by value (`4.2` and `4.20`
+ * are one bound) and hashed by its order key, so a number whose Scala `BigDecimal.hashCode` throws
+ * (`100E+2147483647`) still makes a memo key.
+ */
+private[formula] final class Bound(val value: BigDecimal, val inclusive: Boolean):
+  val key: Double = CriteriaKeys.orderKey(value)
+
+  /** Whether `v` lies on the window's side of this bound when it is a lower bound. */
+  def admitsAbove(v: BigDecimal): Boolean =
+    val c = v.bigDecimal.compareTo(value.bigDecimal)
+    c > 0 || (c == 0 && inclusive)
+
+  /** Whether `v` lies on the window's side of this bound when it is an upper bound. */
+  def admitsBelow(v: BigDecimal): Boolean =
+    val c = v.bigDecimal.compareTo(value.bigDecimal)
+    c < 0 || (c == 0 && inclusive)
+
+  /** The tighter of two lower bounds: the larger value, exclusive on a tie. */
+  def maxLower(other: Bound): Bound =
+    val c = value.bigDecimal.compareTo(other.value.bigDecimal)
+    if c > 0 || (c == 0 && !inclusive) then this else other
+
+  /** The tighter of two upper bounds: the smaller value, exclusive on a tie. */
+  def minUpper(other: Bound): Bound =
+    val c = value.bigDecimal.compareTo(other.value.bigDecimal)
+    if c < 0 || (c == 0 && !inclusive) then this else other
+
+  override def equals(other: Any): Boolean = other match
+    case b: Bound =>
+      inclusive == b.inclusive && value.bigDecimal.compareTo(b.value.bigDecimal) == 0
+    case _ => false
+
+  override def hashCode: Int = java.lang.Double.hashCode(key) * 31 + (if inclusive then 1 else 0)
+
+  override def toString: String = s"Bound(${value.bigDecimal}, inclusive = $inclusive)"
+
+/**
+ * What one indexed criteria pair looks up: equality keys in its slice's [[EqIndex]] (#767), or a
+ * numeric window in its slice's [[OrderIndex]] (#920).
+ */
+private[formula] enum IndexLookup derives CanEqual:
+  case Keys(keys: List[MatchKey])
+
+  /** Rows whose orderable number lies past `lower` and before `upper` (absent: unbounded). */
+  case Window(lower: Option[Bound], upper: Option[Bound])
+
+private[formula] object IndexLookup:
+
+  /**
+   * #920: the lookups of the criteria a call reads through slices, each `(slice, firstRow,
+   * criterion)`: an equality lookup per keyed criterion, in order, then one window per range (slice
+   * and first row) holding numeric windows, the intersection of its windows (`>=start` and `<end`
+   * on one column become one interval). A row that matches every window of its range lies past
+   * every bound, so inside the intersection.
+   */
+  def of(
+    sliced: List[(ColumnSlice, Int, CriteriaMatcher.Criterion)]
+  ): List[(ColumnSlice, IndexLookup, Int)] =
+    val keyed = sliced.flatMap((slice, firstRow, criterion) =>
+      CriteriaKeys.lookup(criterion).map(keys => (slice, Keys(keys), firstRow))
+    )
+    val windows = sliced.flatMap((slice, firstRow, criterion) =>
+      CriteriaKeys.window(criterion).map(w => ((slice, firstRow), w))
+    )
+    val ranges = windows.map(_._1).distinctBy((slice, firstRow) => (slice.id, firstRow))
+    val merged = ranges.map { (slice, firstRow) =>
+      val mine = windows.collect {
+        case ((s, r), w: Window) if s.id == slice.id && r == firstRow => w
+      }
+      val lower = mine.flatMap(_.lower).reduceOption(_.maxLower(_))
+      val upper = mine.flatMap(_.upper).reduceOption(_.minUpper(_))
+      (slice, Window(lower, upper), firstRow)
+    }
+    keyed ++ merged
+
 /**
  * #767: the equality index of one [[ColumnSlice]], as compressed sparse rows: `keyOff(k) until
  * keyOff(k + 1)` of `rows` are the sheet rows (0-based) holding key `k`, ascending; `residual` the
@@ -317,29 +420,290 @@ private[formula] object EqIndex:
     )
 
 /**
+ * #920: the order index of one [[ColumnSlice]]: its number and date rows grouped by order key
+ * ([[CriteriaKeys.orderKey]]), keys ascending, in compressed sparse rows: `keyOff(k) until keyOff(k
+ * + 1)` of `rows` are the sheet rows (0-based, ascending) whose key is `keys(k)`, and
+ * `least(k)`/`greatest(k)` the smallest and largest exact number among them. `byRow(i)` is the key
+ * of held row `first + i`, `NaN` for a row no numeric window matches (text, booleans, blanks,
+ * errors). Built once per slice and never changed.
+ */
+private[formula] final class OrderIndex private (
+  first: Int,
+  byRow: IArray[Double],
+  keys: IArray[Double],
+  keyOff: IArray[Int],
+  rows: IArray[Int],
+  least: IArray[BigDecimal],
+  greatest: IArray[BigDecimal],
+  /**
+   * An estimate of the memory the index holds, charged against `PassCache.Limits.maxIndexBytes`.
+   */
+  val bytes: Long
+):
+  /**
+   * The rows a window selects: one contiguous run of the sorted order. Order keys never reverse an
+   * order, so every key group strictly inside the bounds' keys matches and every group outside
+   * cannot; a group whose key equals a bound's key is kept when its greatest (lower bound) or least
+   * (upper bound) number lies past the bound. The run is a superset of the matching rows, exact but
+   * for a boundary group that mixes matching and non-matching numbers. The run carries the keys of
+   * its first and last groups, so a row lies in the run exactly when its key lies between them.
+   */
+  def window(w: IndexLookup.Window): CriteriaCandidates.Selection =
+    val a = w.lower.fold(0) { b =>
+      val i = OrderIndex.lowerBound(keys, b.key)
+      if i < keys.length && keys(i) == b.key && !b.admitsAbove(greatest(i)) then i + 1 else i
+    }
+    val z = w.upper.fold(keys.length) { b =>
+      val j = OrderIndex.lowerBoundAbove(keys, b.key)
+      if j > 0 && keys(j - 1) == b.key && !b.admitsBelow(least(j - 1)) then j - 1 else j
+    }
+    if a >= z then CriteriaCandidates.Run(this, keyOff(a), keyOff(a), 1.0, 0.0)
+    else CriteriaCandidates.Run(this, keyOff(a), keyOff(z), keys(a), keys(z - 1))
+
+  /** Row `i` of the sorted order. */
+  private[eval] def rowAt(i: Int): Int = rows(i)
+
+  /** Whether `row`'s key lies in `lo..hi` (never for a row without a key). */
+  private[eval] def within(row: Int, lo: Double, hi: Double): Boolean =
+    val i = row - first
+    if i < 0 || i >= byRow.length then false
+    else
+      val k = byRow(i)
+      lo <= k && k <= hi
+
+  /** Whether rows `a..b` include every held row. */
+  private[eval] def spans(a: Int, b: Int): Boolean = a <= first && first + byRow.length - 1 <= b
+
+  /** Distinct keys. */
+  def keyCount: Int = keys.length
+
+  /** Rows that hold a key. */
+  def keyedRows: Int = rows.length
+
+private[formula] object OrderIndex:
+
+  /** The first index whose key is at least `k` (`keys.length` when none). */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def lowerBound(keys: IArray[Double], k: Double): Int =
+    var lo = 0
+    var hi = keys.length
+    while lo < hi do
+      val mid = (lo + hi) >>> 1
+      if keys(mid) < k then lo = mid + 1 else hi = mid
+    lo
+
+  /** The first index whose key is above `k` (`keys.length` when none). */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  private def lowerBoundAbove(keys: IArray[Double], k: Double): Int =
+    var lo = 0
+    var hi = keys.length
+    while lo < hi do
+      val mid = (lo + hi) >>> 1
+      if keys(mid) <= k then lo = mid + 1 else hi = mid
+    lo
+
+  /**
+   * Index the rows `slice` holds: each held row with an orderable number (a number or a date, as
+   * `CriteriaMatcher.orderableNumber` reads it) gets its order key. The keys are sorted and
+   * deduplicated, then the rows are grouped by key with a counting sort, so each group stays
+   * ascending: `O(n log n)` once per slice.
+   */
+  @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+  def build(slice: ColumnSlice): OrderIndex =
+    val first = slice.firstHeldRow
+    val held = slice.heldRows
+    val byRow = new Array[Double](held)
+    val exact = new Array[BigDecimal](held)
+    var keyed = 0
+    var i = 0
+    while i < held do
+      CriteriaMatcher.orderableNumber(slice.valueAt(first + i)) match
+        case Some(n) =>
+          byRow(i) = CriteriaKeys.orderKey(n)
+          exact(i) = n
+          keyed += 1
+        case None => byRow(i) = Double.NaN
+      i += 1
+    val sorted = new Array[Double](keyed)
+    var w = 0
+    i = 0
+    while i < held do
+      if !byRow(i).isNaN then
+        sorted(w) = byRow(i)
+        w += 1
+      i += 1
+    java.util.Arrays.sort(sorted)
+    // distinct keys, in place
+    var distinct = 0
+    i = 0
+    while i < keyed do
+      if distinct == 0 || sorted(distinct - 1) != sorted(i) then
+        sorted(distinct) = sorted(i)
+        distinct += 1
+      i += 1
+    val keys = java.util.Arrays.copyOf(sorted, distinct)
+    val keyOff = new Array[Int](distinct + 1)
+    val rank = new Array[Int](held)
+    i = 0
+    while i < held do
+      if !byRow(i).isNaN then
+        val r = java.util.Arrays.binarySearch(keys, byRow(i))
+        rank(i) = r
+        keyOff(r + 1) += 1
+      i += 1
+    var k = 0
+    while k < distinct do
+      keyOff(k + 1) += keyOff(k)
+      k += 1
+    val next = java.util.Arrays.copyOf(keyOff, distinct)
+    val rows = new Array[Int](keyed)
+    i = 0
+    while i < held do
+      if !byRow(i).isNaN then
+        rows(next(rank(i))) = first + i
+        next(rank(i)) += 1
+      i += 1
+    // each key group is non-empty: seed its least and greatest from its first row
+    val least = new Array[BigDecimal](distinct)
+    val greatest = new Array[BigDecimal](distinct)
+    k = 0
+    while k < distinct do
+      val seed = exact(rows(keyOff(k)) - first)
+      var lo = seed
+      var hi = seed
+      var j = keyOff(k) + 1
+      while j < keyOff(k + 1) do
+        val n = exact(rows(j) - first)
+        if n.bigDecimal.compareTo(lo.bigDecimal) < 0 then lo = n
+        if n.bigDecimal.compareTo(hi.bigDecimal) > 0 then hi = n
+        j += 1
+      least(k) = lo
+      greatest(k) = hi
+      k += 1
+    new OrderIndex(
+      first,
+      IArray.unsafeFromArray(byRow),
+      IArray.unsafeFromArray(keys),
+      IArray.unsafeFromArray(keyOff),
+      IArray.unsafeFromArray(rows),
+      IArray.unsafeFromArray(least),
+      IArray.unsafeFromArray(greatest),
+      // per held row its key; per key its value, offset and two numbers (a date's are its own)
+      64L + 8L * held + (8L + 4L + 2L * 64L) * distinct + 4L + 4L * keyed
+    )
+
+/**
  * #767: candidate rows of a criteria call from its indexed criteria. Every criteria range of the
  * call has `n` rows; range `k` starts at sheet row `offset_k`, so offset `i` of the call is row
  * `offset_k + i` of range `k`.
  *
- * Each indexed pair `k` selects the offsets whose row holds one of its lookup keys or is residual.
- * The candidates are the offsets every indexed pair selects: the pair selecting the fewest rows is
- * listed, and each further pair keeps the listed offsets it selects, found by galloping search
- * forward through its posting lists. A pair's selection is the DISTINCT rows its posting lists hold
- * in the window: a row holding both keys of a two-key lookup (text `"1"` has the Text and Num keys
- * a lookup for `"1"` reads) sits in two lists and counts once (#842). When even the smallest
- * selection is more than half the rows, listing it costs about as much as testing every row, so the
- * call tests every row (`None`); the count stops as soon as it passes that bound.
+ * Each indexed pair `k` selects the offsets whose row holds one of its lookup keys or is residual
+ * (an equality pair), or whose number lies in its window's run of the sorted order (a window pair,
+ * #920). The candidates are the offsets every indexed pair selects: the pair selecting the fewest
+ * rows is listed, and each further pair keeps the listed offsets it selects, found by galloping
+ * search forward through its posting lists, or by reading each candidate's order key. A pair's
+ * selection is the DISTINCT rows its posting lists hold in the window: a row holding both keys of a
+ * two-key lookup (text `"1"` has the Text and Num keys a lookup for `"1"` reads) sits in two lists
+ * and counts once (#842). When even the smallest selection is more than half the rows, listing it
+ * costs about as much as testing every row, so the call tests every row (`None`); the count stops
+ * as soon as it passes that bound.
  */
 private[formula] object CriteriaCandidates:
 
-  /** One indexed pair of a call: its slice's index, its lookup keys, and its range's first row. */
-  final case class Pair(index: EqIndex, keys: List[MatchKey], offset: Int)
+  /**
+   * The sheet rows one indexed pair selects: posting lists of an [[EqIndex]] ([[Postings]]) or a
+   * run of an [[OrderIndex]] ([[Run]]). Every method takes the pair's window, `n` rows from sheet
+   * row `offset`.
+   */
+  sealed trait Selection:
+    /** The distinct selected rows in the window, exact up to `limit` ([[selectionSize]]). */
+    def size(offset: Int, n: Int, limit: Int): Int
+
+    /** The ascending, distinct offsets `row - offset` of the selected rows in the window. */
+    def list(offset: Int, n: Int): Array[Int]
+
+    /** The offsets of `cand` (ascending) whose row `offset + i` is selected. */
+    def keep(cand: Array[Int], offset: Int): Array[Int]
+
+  /** #767: the rows of an equality lookup's posting lists. */
+  final case class Postings(lists: List[EqIndex.Postings]) extends Selection:
+    def size(offset: Int, n: Int, limit: Int): Int = selectionSize(lists, offset, n, limit)
+    def list(offset: Int, n: Int): Array[Int] = union(lists, offset, n)
+    def keep(cand: Array[Int], offset: Int): Array[Int] =
+      CriteriaCandidates.keep(cand, lists, offset)
 
   /**
-   * One indexed pair as a memo key: the slice by its identity in the pass, the keys, and the first
-   * row. Two calls whose indexed pairs have equal keys and `n` share their candidates.
+   * #920: rows `index.rowAt(from until until)`, the run of an [[OrderIndex]] whose keys lie in
+   * `lo..hi` (exactly those rows). The run is in key order, so listing it sorts the rows in the
+   * window (`O(k log k)` for `k` of them); keeping candidates reads each candidate's key (`O(1)` a
+   * candidate). A run longer than the window (a short range read through a whole-column slice) is
+   * sized and listed by reading the window's `n` keys instead, so a call never costs more than its
+   * own rows.
    */
-  final case class PairKey(slice: ColumnSlice.Id, keys: List[MatchKey], offset: Int)
+  final case class Run(index: OrderIndex, from: Int, until: Int, lo: Double, hi: Double)
+      extends Selection:
+    @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+    def size(offset: Int, n: Int, limit: Int): Int =
+      val last = offset + n - 1
+      if index.spans(offset, last) then until - from
+      else
+        var count = 0
+        if until - from > n then
+          var i = 0
+          while i < n && count <= limit do
+            if index.within(offset + i, lo, hi) then count += 1
+            i += 1
+        else
+          var i = from
+          while i < until && count <= limit do
+            val row = index.rowAt(i)
+            if row >= offset && row <= last then count += 1
+            i += 1
+        count
+
+    @SuppressWarnings(Array("org.wartremover.warts.Var", "org.wartremover.warts.While"))
+    def list(offset: Int, n: Int): Array[Int] =
+      if until - from > n then
+        val out = new Array[Int](n)
+        var w = 0
+        var i = 0
+        while i < n do
+          if index.within(offset + i, lo, hi) then
+            out(w) = i
+            w += 1
+          i += 1
+        java.util.Arrays.copyOf(out, w)
+      else
+        val last = offset + n - 1
+        val out = new Array[Int](until - from)
+        var w = 0
+        var i = from
+        while i < until do
+          val row = index.rowAt(i)
+          if row >= offset && row <= last then
+            out(w) = row - offset
+            w += 1
+          i += 1
+        val listed = java.util.Arrays.copyOf(out, w)
+        java.util.Arrays.sort(listed)
+        listed
+
+    def keep(cand: Array[Int], offset: Int): Array[Int] =
+      cand.filter(i => index.within(offset + i, lo, hi))
+
+  /** One indexed pair of a call: the rows it selects, and its range's first row. */
+  final case class Pair(selection: Selection, offset: Int)
+
+  object Pair:
+    /** An equality pair: the posting lists `keys` select in `index`. */
+    def apply(index: EqIndex, keys: List[MatchKey], offset: Int): Pair =
+      Pair(Postings(index.postings(keys)), offset)
+
+  /**
+   * One indexed pair as a memo key: the slice by its identity in the pass, the lookup, and the
+   * first row. Two calls whose indexed pairs have equal lookups and `n` share their candidates.
+   */
+  final case class PairKey(slice: ColumnSlice.Id, lookup: IndexLookup, offset: Int)
 
   final case class MemoKey(n: Int, pairs: List[PairKey])
 
@@ -348,19 +712,16 @@ private[formula] object CriteriaCandidates:
     if pairs.isEmpty || n <= 0 then None
     else
       val limit = n / 2
-      val selections = pairs.map { p =>
-        val lists = p.index.postings(p.keys)
-        (lists, p.offset, selectionSize(lists, p.offset, n, limit))
-      }
+      val selections = pairs.map(p => (p.selection, p.offset, p.selection.size(p.offset, n, limit)))
       val sorted = selections.sortBy(_._3)
       sorted match
-        case (lists, offset, size) :: rest =>
+        case (selection, offset, size) :: rest =>
           if size > limit then None
           else
-            val listed = union(lists, offset, n)
+            val listed = selection.list(offset, n)
             Some(
               ArraySeq.ofInt(rest.foldLeft(listed) { case (cand, (more, off, _)) =>
-                if cand.isEmpty then cand else keep(cand, more, off)
+                if cand.isEmpty then cand else more.keep(cand, off)
               })
             )
         case Nil => None

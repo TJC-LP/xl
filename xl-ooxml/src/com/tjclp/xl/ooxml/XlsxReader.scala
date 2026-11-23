@@ -575,7 +575,13 @@ object XlsxReader:
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
         chartSnapshots = parsedSheets.chartSnapshots,
-        sheetPathMapping = parsedSheets.sheetPathMapping
+        sheetPathMapping = parsedSheets.sheetPathMapping,
+        preservedSheetNames = ooxmlWb.sheets.iterator
+          .zip(sourceIndex.mask)
+          .collect { case (ref, false) =>
+            ref.name
+          }
+          .toSet
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
@@ -747,10 +753,7 @@ object XlsxReader:
           tableTargets <- resolveTablePaths(tableRels, relsPath)
 
           // GH-235: hyperlink relationships (rId -> external target URL)
-          hyperlinkRels = rels.relationships
-            .filter(_.`type` == XmlUtil.relTypeHyperlink)
-            .map(r => r.id -> r.target)
-            .toMap
+          hyperlinkRels = com.tjclp.xl.ooxml.worksheet.hyperlinkTargets(rels.relationships)
 
           // GH-221: drawing relationship — same normalization as comments (the fixture target is
           // ABSOLUTE "/xl/drawings/drawing1.xml"; Excel writes "../drawings/drawing1.xml")
@@ -1227,19 +1230,13 @@ object XlsxReader:
       case Some(hls) =>
         // one merge into the store (#891); a later element for one cell wins, as a fold would
         val linked = (hls \ "hyperlink").iterator.flatMap {
+          // GH-895: the same rule the writer uses to decide which preserved links a cell owns
           case e: Elem =>
-            val refStr = e \@ "ref"
-            val rid = e.attributes.collectFirst {
-              case a: PrefixedAttribute if a.key == "id" => a.value.text
+            com.tjclp.xl.ooxml.worksheet.modeledHyperlink(e, hyperlinkRels).map { (ref, t) =>
+              val base =
+                cellsMap.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
+              base.withHyperlink(t)
             }
-            val loc = Option(e \@ "location").filter(_.nonEmpty)
-            val target = rid.flatMap(hyperlinkRels.get).orElse(loc)
-            (ARef.parse(refStr).toOption, target) match
-              case (Some(ref), Some(t)) =>
-                val base =
-                  cellsMap.get(ref).getOrElse(Cell(ref, com.tjclp.xl.cells.CellValue.Empty))
-                Some(base.withHyperlink(t))
-              case _ => None
           case _ => None
         }
         if linked.hasNext then cellsMap.putAll(linked) else cellsMap
@@ -1620,7 +1617,8 @@ object XlsxReader:
     drawingPathMapping: Map[SheetName, String],
     drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
     chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
-    sheetPathMapping: Map[SheetName, String]
+    sheetPathMapping: Map[SheetName, String],
+    preservedSheetNames: Set[SheetName]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1675,7 +1673,12 @@ object XlsxReader:
           activeSheetIndex = activeSheetIndex,
           // GH-470: snapshot the defined names exactly as assembled so the writer can detect
           // untracked copy(metadata = ...) edits and regenerate instead of verbatim-copying.
-          sourceContext = ctx.map(_.copy(definedNamesAsRead = Some(remainingNames)))
+          sourceContext = ctx.map(
+            _.copy(
+              definedNamesAsRead = Some(remainingNames),
+              preservedSheetNames = preservedSheetNames
+            )
+          )
         )
       )
 

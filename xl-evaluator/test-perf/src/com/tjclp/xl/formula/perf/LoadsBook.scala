@@ -357,3 +357,50 @@ object LoadsBook:
   /** The value `runTotal(rows)` computes for `D_r` (1-based row `r`). */
   def runTotalAt(r: Int): BigDecimal =
     BigDecimal((FirstRow to r).map(n => 2L * (n % 7 + 1)).sum)
+
+  /** The regions [[dateWindow]] tags its rows with. */
+  val Regions: Vector[String] = Vector("North", "South", "East", "West")
+
+  /**
+   * #920: a made-up date-window book. `Data` holds `rows` rows from row 2: `A` a date between
+   * 2020-01-01 and 2025-12-31, `B` an amount in cents, `C` one of [[Regions]], all drawn from a
+   * seeded generator. `Report!A1:A<formulas>` holds trailing 30-day sums over whole columns,
+   * formula `i` (0-based) starting `i` days after 2020-01-01:
+   * `SUMIFS(Data!B:B,Data!A:A,">="&(DATE(2020,1,1)+i),Data!A:A,"<"&(DATE(2020,1,1)+i+30))`; every
+   * other one also requires a region (`Data!C:C,"North"`, ...). The windows are the relational
+   * criteria the order index answers; a region alone selects a quarter of the rows.
+   */
+  def dateWindow(rows: Int, formulas: Int, seed: Long = 0x5eedL): Workbook =
+    val rnd = new Random(seed)
+    val start = java.time.LocalDate.of(2020, 1, 1)
+    val days = java.time.temporal.ChronoUnit.DAYS.between(start, start.plusYears(6)).toInt
+    val data = (0 until rows).iterator.flatMap { i =>
+      val r = FirstRow + i
+      val day = start.plusDays(rnd.nextInt(days).toLong).atStartOfDay
+      Vector(
+        (0, r, CellValue.DateTime(day)),
+        (1, r, CellValue.Number(BigDecimal(rnd.nextInt(1000000), 2))),
+        (2, r, CellValue.Text(Regions(rnd.nextInt(Regions.size))))
+      )
+    }.toVector
+    val report = (0 until formulas).iterator.map { i =>
+      val from = s"(DATE(2020,1,1)+$i)"
+      val to = s"(DATE(2020,1,1)+${i + 30})"
+      val window = s"""Data!A:A,">="&$from,Data!A:A,"<"&$to"""
+      val region =
+        if i % 2 == 1 then s""",Data!C:C,"${Regions((i / 2) % Regions.size)}"""" else ""
+      (0, i + 1, fx(s"SUMIFS(Data!B:B,$window$region)"))
+    }
+    Workbook(
+      Vector(
+        sheet(
+          "Data",
+          Vector(
+            (0, 1, CellValue.Text("Date")),
+            (1, 1, CellValue.Text("Amount")),
+            (2, 1, CellValue.Text("Region"))
+          ) ++ data
+        ),
+        sheet("Report", report)
+      )
+    )

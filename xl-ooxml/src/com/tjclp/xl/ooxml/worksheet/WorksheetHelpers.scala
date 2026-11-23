@@ -96,7 +96,14 @@ private[ooxml] def usedPrefixBindings(
   def collect(e: Elem, inherited: NamespaceBinding): Vector[(String, String)] =
     val own = Option(e.scope).filterNot(_ == TopScope)
     val effectiveScope = own.getOrElse(inherited)
-    val prefixes = (Option(e.prefix).toList ++ attrPrefixes(e.attributes, Nil))
+    // MC Choice also uses prefixes as attribute *values*. They must stay bound on regeneration.
+    val required =
+      if e.label == "Choice" && Option(e.prefix).exists(p =>
+          effectiveScope.getURI(p) == XmlUtil.nsMarkupCompatibility
+        )
+      then (e \@ "Requires").split("\\s+").toList
+      else Nil
+    val prefixes = (Option(e.prefix).toList ++ attrPrefixes(e.attributes, Nil) ++ required)
       .filter(p => p.nonEmpty && p != "xml" && p != "xmlns")
     val here = prefixes.flatMap { p =>
       Option(effectiveScope.getURI(p))
@@ -349,19 +356,118 @@ private[ooxml] def isExternalHyperlink(target: String): Boolean =
  * relationship id ("rIdHL{n}") used by BOTH the `<hyperlink r:id>` attribute and the sheet .rels,
  * so the two agree without explicit plumbing (GH-235).
  */
-private[ooxml] def collectHyperlinks(sheet: Sheet): Seq[HyperlinkEntry] =
-  val sorted = sheet.cells.iterator.toSeq
-    .filter(_.hyperlink.isDefined)
-    .sortBy(c => (c.ref.row.index0, c.ref.col.index0))
-  val relIdByRef = sorted
-    .filter(c => isExternalHyperlink(c.hyperlink.fold("")(_.target)))
-    .zipWithIndex
-    .map { case (c, i) => c.ref -> s"rIdHL${i + 1}" }
-    .toMap
-  sorted.map { c =>
-    val target = c.hyperlink.fold("")(_.target)
-    HyperlinkEntry(c.ref, target, isExternalHyperlink(target), relIdByRef.getOrElse(c.ref, ""))
-  }
+private[ooxml] def collectHyperlinks(
+  sheet: Sheet,
+  reservedIds: Set[String] = Set.empty
+): Seq[HyperlinkEntry] =
+  val ids = Iterator.from(1).map(i => s"rIdHL$i").filterNot(reservedIds)
+  sheet.cells.iterator.flatMap { cell =>
+    cell.hyperlink.map { link =>
+      val target = link.target
+      val external = isExternalHyperlink(target)
+      HyperlinkEntry(cell.ref, target, external, if external then ids.next() else "")
+    }
+  }.toVector
+
+/**
+ * GH-235/GH-895: a sheet's hyperlink targets by rel id, from its rels of type
+ * `XmlUtil.relTypeHyperlink`. The reader resolves `r:id`s through this map and the writer asks the
+ * same map which preserved links the reader resolved; one definition keeps the two in step.
+ */
+private[ooxml] def hyperlinkTargets(
+  rels: Seq[com.tjclp.xl.ooxml.Relationship]
+): Map[String, String] =
+  rels.filter(_.`type` == XmlUtil.relTypeHyperlink).map(r => r.id -> r.target).toMap
+
+/**
+ * GH-235/GH-895: the cell and target a `<hyperlink>` puts on the model, or None when the reader
+ * leaves it unmodeled. The `ref` must be one cell, and the target is the `r:id`'s rel target
+ * (`hyperlinkTargets`) or else a non-empty `location`. `XlsxReader` populates `Cell.hyperlink` with
+ * it, and the writer treats exactly these links as the model's to write or drop, so the reader and
+ * writer can never disagree about which preserved links a cell owns.
+ */
+private[ooxml] def modeledHyperlink(
+  e: Elem,
+  hyperlinkTargets: Map[String, String]
+): Option[(ARef, String)] =
+  val rid = e.attributes.collectFirst { case a: PrefixedAttribute if a.key == "id" => a.value.text }
+  val target = rid.flatMap(hyperlinkTargets.get).orElse(Option(e \@ "location").filter(_.nonEmpty))
+  for
+    ref <- ARef.parse(e \@ "ref").toOption
+    t <- target
+  yield ref -> t
+
+/**
+ * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own: a range `ref`
+ * (`B7:C8`, which Excel writes for a link over a multi-cell selection) or a link whose target the
+ * reader cannot resolve (an ISO Strict rel type, say). Those have no `Cell.hyperlink` and ride
+ * through as preserved XML. None when nothing unmodeled is left.
+ */
+private[ooxml] def unmodeledHyperlinksElem(
+  preserved: Elem,
+  hyperlinkTargets: Map[String, String],
+  sheet: Sheet
+): Option[Elem] =
+  // rebindUsedNamespaces puts descendant prefix bindings on the preserved subtree root.
+  def keep(node: Node, direct: Boolean): Seq[Node] = node match
+    // The reader selects direct hyperlink children by label, regardless of their prefix.
+    case e: Elem
+        if direct && e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isDefined =>
+      Nil
+    case e: Elem
+        if e.label == "hyperlink" && (Option(e.prefix).isEmpty ||
+          preserved.getNamespace(e.prefix) == nsSpreadsheetML) =>
+      CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
+    case e: Elem
+        if preserved.getNamespace(e.prefix) == XmlUtil.nsMarkupCompatibility &&
+          (e.label == "AlternateContent" || e.label == "Choice" || e.label == "Fallback") =>
+      Seq(e.copy(child = e.child.flatMap(keep(_, direct = false))))
+    case other => Seq(other)
+
+  val kept = preserved.child.flatMap(keep(_, direct = true))
+  Option.when(kept.exists { case _: Elem => true; case _ => false })(preserved.copy(child = kept))
+
+/** Keep the source link on the cells for which the writer will not emit a model hyperlink. */
+private def uncoveredHyperlinks(source: Elem, range: CellRange, sheet: Sheet): Seq[Elem] =
+  val overrides = sheet.cells.inRange(range).filter(_.hyperlink.isDefined).map(_.ref).buffered
+  if !overrides.hasNext then Seq(source)
+  else
+    val fragments = Vector.newBuilder[Elem]
+    val left = range.colStart.index0
+    val right = range.colEnd.index0
+
+    def keep(fromCol: Int, fromRow: Int, toCol: Int, toRow: Int): Unit =
+      if fromCol <= toCol && fromRow <= toRow then
+        val first = ARef.from0(fromCol, fromRow)
+        val last = ARef.from0(toCol, toRow)
+        // Even E2:E2 stays a source range on reread. A bare E2 would become a model hyperlink.
+        val ref = CellRange(first, last).toA1
+        fragments += source % new UnprefixedAttribute("ref", ref, Null)
+
+    // inRange visits stored cells in row-major order. Emit full-width bands between edited rows
+    // and horizontal runs within each edited row, even for a range spanning the whole sheet.
+    var nextRow = range.rowStart.index0
+    while overrides.hasNext do
+      val row = overrides.head.row.index0
+      keep(left, nextRow, right, row - 1)
+      var nextCol = left
+      while overrides.headOption.exists(_.row.index0 == row) do
+        val col = overrides.next().col.index0
+        keep(nextCol, row, col - 1, row)
+        nextCol = col + 1
+      keep(nextCol, row, right, row)
+      nextRow = row + 1
+    keep(left, nextRow, right, range.rowEnd.index0)
+    fragments.result()
+
+/** Preserved links may be nested, e.g. in both branches of mc:AlternateContent. */
+private[ooxml] def hyperlinkRelIds(hyperlinks: Elem): Set[String] =
+  hyperlinks.descendant_or_self.iterator
+    .collect { case e: Elem => e }
+    .flatMap { e =>
+      e.attributes.iterator.collect { case a: PrefixedAttribute if a.key == "id" => a.value.text }
+    }
+    .toSet
 
 /** Build a `<hyperlinks>` element from collected entries (GH-235), or None if empty. */
 private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Elem] =

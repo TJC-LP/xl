@@ -428,6 +428,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **10,426 test cases** (the #917 `view --eval` convergence warning, 2026-11-20; 10,426 passed, none ignored) by module: xl-evaluator (4519), xl-core (1945), xl-ooxml (1484), xl-cli (2032), xl-cats-effect (220), xl-agent (153), xl prelude probes (73). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
+
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
