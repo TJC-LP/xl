@@ -65,17 +65,24 @@ object CellCommands:
       modified = (targetSheet.cells.refs.toSet ++ updatedSheet.cells.refs.toSet).filter { r =>
         targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
       }
-      result <- WriteCommands.writeAfterRefresh(
-        wb.put(updatedSheet),
-        targetSheet.name,
-        modified,
-        s"Merged: ${range.toA1}",
-        outputPath,
-        config,
-        stream,
-        policy,
-        warn
-      )
+      message = s"Merged: ${range.toA1}"
+      // A merge that hides nothing (the usual title merge) changes no value: no refresh to run
+      result <-
+        if modified.isEmpty then
+          writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          WriteCommands.writeAfterRefresh(
+            wb.put(updatedSheet),
+            targetSheet.name,
+            modified,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
     yield result
 
   /**

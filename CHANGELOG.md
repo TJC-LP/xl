@@ -20,9 +20,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   put A2 3; merge A1:B2; putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged
   cell leaves nothing hidden under it. In memory a hidden dynamic-array anchor releases its spill
   first, as `clear` does. A file whose merges already hide values is read and rewritten unchanged:
-  only the merge operation clears. **Behaviour change:** merging used to keep every hidden value,
-  invisible in Excel yet counted by `SUM`; the batch `merge` op is now cell-mutating (its batch
-  triggers the trailing recalculation) and `Edit.Merge` reports its range as touched content.
+  only the merge operation clears. A streamed batch clears the hidden cells' values but leaves
+  their hyperlinks and dynamic arrays as they were; the library's `Sheet.merge` does not release a
+  hidden dynamic-array anchor's spill either (the CLI's in-memory paths do). **Behaviour change:** merging used to keep every hidden value,
+  invisible in Excel yet counted by `SUM`; the batch `merge` op is now cell-mutating (a batch
+  holding one runs the trailing dependent refresh, which writes back only the caches of formulas
+  reading a cleared cell) and `Edit.Merge` reports its range as touched content.
 - **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
   qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
   formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)
