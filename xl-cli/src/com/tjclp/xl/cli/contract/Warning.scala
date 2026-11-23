@@ -33,6 +33,13 @@ object WarningCode:
   val EVAL_FAILED: String = "EVAL_FAILED"
 
   /**
+   * #917: `view --eval` showed a window that depends on a cycle whose iterative calculation did not
+   * converge (it ran out of rounds, or stalled on a failing member): those cells show the last
+   * round's values, as `recalc` would write them. `--strict` makes it `RECALC_GATE`.
+   */
+  val NOT_CONVERGED: String = "NOT_CONVERGED"
+
+  /**
    * GH-636: an in-memory load under a lifted `--max-size` whose estimated footprint may exceed the
    * heap — the upper-bound estimate does, the lower-bound one does not. The load proceeds; if it
    * exhausts the heap it fails typed (`RESOURCE_LIMIT`) with the same `--stream`/`-Xmx` hint.
@@ -121,6 +128,7 @@ object WarningCode:
     SHEET_AUTOSELECTED,
     FLAG_IGNORED,
     EVAL_FAILED,
+    NOT_CONVERGED,
     MEMORY_PRESSURE,
     NO_NUMERIC_VALUES,
     OFF_GRID_REF,
