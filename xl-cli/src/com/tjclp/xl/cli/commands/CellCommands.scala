@@ -7,7 +7,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
 import com.tjclp.xl.cli.contract.Warning
 import com.tjclp.xl.cli.helpers.SheetResolver
-import com.tjclp.xl.cli.MemoryGuard
+import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
 import com.tjclp.xl.ooxml.writer.WriterConfig
@@ -32,7 +32,11 @@ object CellCommands:
     else excel.writeWith(wb, outputPath, config)
 
   /**
-   * Merge cells in range.
+   * Merge cells in range, as Excel's Merge Cells does (GH-935): the upper-left cell keeps its value
+   * and every other cell of the range is cleared like a contents `clear` (value, formula and
+   * hyperlink go; its own formatting and comment stay). A hidden dynamic-array anchor releases its
+   * spill first, as `clear` does. The formulas that read a cleared cell are recalculated before the
+   * write (`--no-recalc` keeps every cache), so `SUM` over the merged area sees only the anchor.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -43,7 +47,9 @@ object CellCommands:
     rangeStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
@@ -54,10 +60,23 @@ object CellCommands:
           IO.raiseError(
             new Exception("merge requires a range (e.g., A1:C1), not a single cell")
           )
-      updatedSheet = targetSheet.merge(range)
-      updatedWb = wb.put(updatedSheet)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Merged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+      updatedSheet = DynamicArrayAuthoring.merge(targetSheet, range)
+      // the seeds of the dependent refresh: every cell whose content the merge changed
+      modified = (targetSheet.cells.refs.toSet ++ updatedSheet.cells.refs.toSet).filter { r =>
+        targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
+      }
+      result <- WriteCommands.writeAfterRefresh(
+        wb.put(updatedSheet),
+        targetSheet.name,
+        modified,
+        s"Merged: ${range.toA1}",
+        outputPath,
+        config,
+        stream,
+        policy,
+        warn
+      )
+    yield result
 
   /**
    * Unmerge cells in range.

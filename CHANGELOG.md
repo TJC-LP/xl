@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Merging keeps only the upper-left value, as Excel's Merge Cells does** (#935). `Sheet.merge`
+  (and through it `Patch.Merge`, `Edit.Merge`, the `range.merge` DSL, the `merge` verb with or
+  without `--stream`, and the batch `merge` op in memory and streamed) clears every other cell of
+  the range the way Clear Contents clears it: the value or formula and the hyperlink go, a cell's
+  own formatting and its comment stay, an unstyled cell is removed. An empty upper-left cell stays
+  empty: the values elsewhere are discarded, not moved. The formulas that read a cleared cell are
+  recalculated by the verb and the batch op as for any other content edit (`--no-recalc` keeps
+  their caches; a streamed batch never recalculates), so the issue's `put A1 1; put B1 2;
+  put A2 3; merge A1:B2; putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged
+  cell leaves nothing hidden under it. In memory a hidden dynamic-array anchor releases its spill
+  first, as `clear` does. A file whose merges already hide values is read and rewritten unchanged:
+  only the merge operation clears. **Behaviour change:** merging used to keep every hidden value,
+  invisible in Excel yet counted by `SUM`; the batch `merge` op is now cell-mutating (its batch
+  triggers the trailing recalculation) and `Edit.Merge` reports its range as touched content.
+
 ## [0.27.0] - 2026-11-23
 
 **"Bedrock storage."** `xl audit` is 3–20× faster on real models (#891): `Sheet.cells` is a

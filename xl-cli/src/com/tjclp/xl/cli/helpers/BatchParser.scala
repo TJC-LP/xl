@@ -2167,7 +2167,8 @@ object BatchParser:
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
-      result <- updateSheet(wb, sheetName)(_.merge(range))
+      // GH-935: the hidden cells are cleared (and their dynamic arrays released) as Excel does
+      result <- updateSheet(wb, sheetName)(DynamicArrayAuthoring.merge(_, range))
     yield result
 
   /** Apply an unmerge operation. */

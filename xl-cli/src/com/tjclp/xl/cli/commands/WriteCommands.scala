@@ -163,7 +163,7 @@ object WriteCommands:
    * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
    * entirely by `--no-recalc`, which leaves every cached value in the file exactly as it was.
    */
-  private def writeAfterRefresh(
+  private[cli] def writeAfterRefresh(
     wb: Workbook,
     sheetName: SheetName,
     modifiedRefs: Set[ARef],
@@ -1356,15 +1356,15 @@ object WriteCommands:
    * Whether a batch op can change a cell's value or formula, requiring recalculation before write
    * (GH-352).
    *
-   * Rule: recalculate whenever any op writes, clears, or copies cell content — such an op can
-   * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
-   * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
-   * presentation or non-formula metadata (styles, comments, widths, visibility, merges, freeze
-   * panes, sheet management, hyperlinks) leave every existing cached value correct — `rename-sheet`
-   * (GH-559) rewrites referencing formulas and names without changing a value — so a batch made
-   * exclusively of them skips the recalculation and preserves the input's caches as-is.
-   * Defined-name edits are checked separately in `batch`: they invalidate readers without writing
-   * any cell content.
+   * Rule: recalculate whenever any op writes, clears, or copies cell content (a merge clears the
+   * cells it hides, GH-935) — such an op can invalidate cached formula values anywhere in the
+   * workbook (cross-sheet dependents included), and `BatchParser` stores batch formulas uncached
+   * (`Formula(expr, None)`). Ops that only touch presentation or non-formula metadata (styles,
+   * comments, widths, visibility, unmerges, freeze panes, sheet management, hyperlinks) leave every
+   * existing cached value correct — `rename-sheet` (GH-559) rewrites referencing formulas and names
+   * without changing a value — so a batch made exclusively of them skips the recalculation and
+   * preserves the input's caches as-is. Defined-name edits are checked separately in `batch`: they
+   * invalidate readers without writing any cell content.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
    * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the
@@ -1378,24 +1378,26 @@ object WriteCommands:
           _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
           _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.CopyRange =>
         true
+      // GH-935: a merge clears every cell it hides but the upper-left one, as Excel does
+      case _: BatchParser.BatchOp.Merge => true
       // A styles-only or comments-only clear leaves every cell value intact — mirror
       // BatchParser.applyClear's clearContents condition so those take the no-recalc path.
       case c: BatchParser.BatchOp.Clear => c.all || (!c.styles && !c.comments)
-      case _: BatchParser.BatchOp.Style | _: BatchParser.BatchOp.Merge |
-          _: BatchParser.BatchOp.Unmerge | _: BatchParser.BatchOp.ColWidth |
-          _: BatchParser.BatchOp.RowHeight | _: BatchParser.BatchOp.AddComment |
-          _: BatchParser.BatchOp.RemoveComment | _: BatchParser.BatchOp.ColHide |
-          _: BatchParser.BatchOp.ColShow | _: BatchParser.BatchOp.RowHide |
-          _: BatchParser.BatchOp.RowShow | _: BatchParser.BatchOp.AutoFit |
-          _: BatchParser.BatchOp.AddSheet | _: BatchParser.BatchOp.RenameSheet |
-          _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName |
-          _: BatchParser.BatchOp.Freeze | BatchParser.BatchOp.Unfreeze |
-          _: BatchParser.BatchOp.Hyperlink | _: BatchParser.BatchOp.AddChart |
-          _: BatchParser.BatchOp.SetSheetView | _: BatchParser.BatchOp.SetTabColor |
-          _: BatchParser.BatchOp.SetAutoFilter | _: BatchParser.BatchOp.GroupRows |
-          _: BatchParser.BatchOp.GroupCols | _: BatchParser.BatchOp.UngroupRows |
-          _: BatchParser.BatchOp.UngroupCols | _: BatchParser.BatchOp.SetPageSetup |
-          _: BatchParser.BatchOp.SetHeaderFooter | _: BatchParser.BatchOp.AddConditionalFormat =>
+      case _: BatchParser.BatchOp.Style | _: BatchParser.BatchOp.Unmerge |
+          _: BatchParser.BatchOp.ColWidth | _: BatchParser.BatchOp.RowHeight |
+          _: BatchParser.BatchOp.AddComment | _: BatchParser.BatchOp.RemoveComment |
+          _: BatchParser.BatchOp.ColHide | _: BatchParser.BatchOp.ColShow |
+          _: BatchParser.BatchOp.RowHide | _: BatchParser.BatchOp.RowShow |
+          _: BatchParser.BatchOp.AutoFit | _: BatchParser.BatchOp.AddSheet |
+          _: BatchParser.BatchOp.RenameSheet | _: BatchParser.BatchOp.DefineName |
+          _: BatchParser.BatchOp.RemoveName | _: BatchParser.BatchOp.Freeze |
+          BatchParser.BatchOp.Unfreeze | _: BatchParser.BatchOp.Hyperlink |
+          _: BatchParser.BatchOp.AddChart | _: BatchParser.BatchOp.SetSheetView |
+          _: BatchParser.BatchOp.SetTabColor | _: BatchParser.BatchOp.SetAutoFilter |
+          _: BatchParser.BatchOp.GroupRows | _: BatchParser.BatchOp.GroupCols |
+          _: BatchParser.BatchOp.UngroupRows | _: BatchParser.BatchOp.UngroupCols |
+          _: BatchParser.BatchOp.SetPageSetup | _: BatchParser.BatchOp.SetHeaderFooter |
+          _: BatchParser.BatchOp.AddConditionalFormat =>
         false
 
   // ===== Cache-preserving recalculation (GH-468) + strict exit codes (GH-496) =====

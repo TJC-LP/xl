@@ -3638,7 +3638,7 @@ EXAMPLES:
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
       requireOutput("merge", outputOpt, backendOpt, stream, policy)(
-        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
+        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _, policy, warn)
       )
 
     case CliCommand.Unmerge(rangeStr) =>

@@ -16,7 +16,7 @@ import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.ops.OffGridRef
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, SheetEdits}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -955,6 +955,18 @@ object StreamingWriteCommands:
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
             addMerges += range
+            // GH-935: the cells the merge hides lose their contents, as Excel's Merge Cells
+            // clears them (each keeps its style). A value an earlier op of this batch wrote there
+            // goes too; a later op's value still lands, since explicit patches beat the clear.
+            val hidden = SheetEdits.hiddenByMerge(range)
+            cellPatches.keys.toVector.filter(r => hidden.exists(_.contains(r))).foreach { ref =>
+              cellPatches.get(ref) match
+                case Some(StreamingTransform.CellPatch.SetValue(_, _)) => cellPatches -= ref
+                case Some(StreamingTransform.CellPatch.SetStyleAndValue(styleId, _)) =>
+                  cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
+                case _ => ()
+            }
+            clearedSpills ++= hidden
             summaryLines += s"  MERGE $rangeStr"
 
           case BatchParser.BatchOp.Unmerge(rangeStr) =>
