@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 9,978 tests (CI on main dadf3b68, 2026-11-12).
+**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 10,588 tests (0.27.0 release branch, 2026-11-23).
 
-**Current Version**: **0.26.0** (criteria and lookups follow desktop Excel (#774, #773, #780, #731, #724, #775, #693); dynamic cycles are deterministic circular references (#828, #829); one parse per formula per recalculation (#790); `SLN`, `SYD`, `ISNONTEXT`, two-argument `IF`; supply-chain hardening (#833–#839))
+**Current Version**: **0.27.0** (`xl audit` 3–20× faster on a `CellStore` sheet model and one-graph recalculation (#891, #920); `SheetEvaluator.evaluateAt` (#741), `Workbook.adopt` (#526), table-column and computed references (#669, #723); case-insensitive sheet names (#752); Excel clear semantics (#886, #894, #909))
 
 ---
 
@@ -22,6 +22,19 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.27.0 — Audit performance on a new cell store, library closure evaluation (Released 2026-11-23)
+
+**Performance (#891, #920).** `Sheet.cells` became a `CellStore` row-radix trie; the legacy
+recalculation paths were purged for one after-edit pass, one graph and one parse per operation; a
+fixpoint shares one criteria cache; relational `*IFS` criteria use a sorted index. `xl audit` runs
+3–20× faster on real models. **Breaking:** `Sheet.cells`, removed deprecated API, removed
+sheet-level graph/evaluator, removed `recalculateDependents`.
+
+**Library and parity.** `SheetEvaluator.evaluateAt` (#741), `Workbook.adopt` (#526), qualified
+table-column references (#669), computed references in range arguments (#723, **Breaking**:
+`RangeLocation.Computed`), case-insensitive sheet names (#752), Excel's Clear Contents / Clear
+Formats (#886, #890, #894, #897, #909), `view --eval` non-convergence warning (#917).
 
 ### v0.26.0 — Excel-parity criteria and lookups, supply-chain hardening (Released 2026-11-12)
 

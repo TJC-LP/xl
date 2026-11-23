@@ -37,7 +37,7 @@ The canonical header for every script (this is the single source of truth — re
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 
 import com.tjclp.xl.scripting.{*, given}
 
@@ -129,7 +129,7 @@ orExit(wb.update("Sales", f))                      // 0.21.0: or print "Error: �
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val wb = Excel.read("input.xlsx")
@@ -260,7 +260,7 @@ A `Patch` is sheet-local and formula-blind. `Edit` is the operation vocabulary b
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val Data = SheetName.unsafe("Data")
@@ -366,7 +366,7 @@ if !result.isClean then
 
 **A freshly built model is written with `writeChecked` or `writeRecalculated`, never `Excel.write`.** `Excel.writeChecked(wb, path)` (0.21.0) computes only the formulas that have no cached value — in dependency order, reading every input's cache as it is — writes the workbook, and returns the `RecalcResult`; every cache the book already carried (Excel's, another engine's) is written byte for byte, so an edited model keeps what it had and gains what it lacked. `Excel.writeRecalculated(wb, path)` (0.13.0) recomputes *every* formula instead — reach for it when the caches themselves are suspect. Both write even when some formulas fail (errors are data; failed cells stay uncached and Excel computes them on open), and both take a `RecalcOptions` (0.21.0) for a fixed clock, seeded rng, iterative mode or parallelism. The pure step is `wb.recalculate()`: it evaluates every formula across all sheets in dependency order, resolves cross-sheet references automatically, isolates reference cycles (the rest of the workbook still computes), and reports failures per cell in `result.errors`; `result.toEither` gives `Left(errors)` for pipelines that must abort before anything lands on disk — then `Excel.write(result.workbook, path)` is the one legitimate plain write of a model, because the workbook is already cached. **Excel error values are results, not failures** (0.14.0): `=1/0` evaluates to `#DIV/0!` — catchable with `IFERROR`, cached into the written file exactly like Excel would, and listed via `result.excelErrors` rather than `result.errors` (which carries only host failures: parse errors, missing sheets, cycles). For one-off questions: `wb.evaluateFormula("=SUM(Data!A:A)", "Summary")`.
 
-**Qualified plain table columns** (unreleased): `SUM(Orders[qty])` and range-only consumers such as `COUNTIF(Orders[qty],">1")` resolve the table's `displayName` across the workbook and read its data rows, excluding headers/totals. Column identifiers in this slice contain letters, digits, spaces, underscores or periods. Raw table metadata updates require an explicit `wb.recalculate()` to refresh existing caches. Copying formulas preserves these identifiers; horizontal fill that advances table columns, row-relative/unqualified references, special selectors and escaped/nested column syntax remain unsupported.
+**Qualified plain table columns** (0.27.0, [#669](https://github.com/TJC-LP/xl/issues/669)): `SUM(Orders[qty])` and range-only consumers such as `COUNTIF(Orders[qty],">1")` resolve the table's `displayName` across the workbook and read its data rows, excluding headers/totals. Column identifiers in this slice contain letters, digits, spaces, underscores or periods. Raw table metadata updates require an explicit `wb.recalculate()` to refresh existing caches. Copying formulas preserves these identifiers; horizontal fill that advances table columns, row-relative/unqualified references, special selectors and escaped/nested column syntax remain unsupported.
 
 **Defined names resolve** (0.13.0): `fx"=IF(case=2,rev,cost)"`, `fx"=entry_mult*ltm_ebitda"`, `fx"=SUM(rev_range)"` evaluate against workbook- and sheet-scoped defined names (sheet-scoped shadows global), contribute dependency edges so recalc orders name-gated families correctly, and round-trip byte-faithfully; an unresolvable name is a clean per-cell error.
 
@@ -394,7 +394,7 @@ Native Excel `TABLE()` two-variable data tables (0.18.0) — the house sensitivi
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val model = Sheet("Sensitivity")
@@ -454,7 +454,7 @@ val sales = orExit(wb("Sales"))                      // SheetNotFound → printe
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.*
@@ -476,7 +476,7 @@ println(s"merged ${inputs.size} files, ${merged.sheets.size} sheets")
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 
 val data = List(("North", 125000.50), ("South", 98000.25), ("West", 143500.00))
@@ -503,7 +503,7 @@ println(if result.isClean then "✓ report written" else result.errors.map(_.ren
 
 ```scala
 //> using scala 3.9.0
-//> using dep com.tjclp::xl:0.26.0
+//> using dep com.tjclp::xl:0.27.0
 import com.tjclp.xl.scripting.{*, given}
 import cats.effect.IO
 import cats.effect.unsafe.implicits.global
