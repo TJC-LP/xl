@@ -208,9 +208,9 @@ object DataTableSeeder:
       clock: Clock,
       iterative: Option[IterativeCalc]
     ): XLResult[Workbook] =
-      if wb.sheets.exists(_.name == sheetName) then
-        Right(seedWorkbook(wb, Some((sheetName, only)), clock, iterative, AllCells)._1)
-      else Left(XLError.SheetNotFound(sheetName.value))
+      wb(sheetName).map(sheet =>
+        seedWorkbook(wb, Some((sheet.name, only)), clock, iterative, AllCells)._1
+      )
 
     /**
      * GH-453: whole-book seeding that also returns the per-table warnings (circular tables skipped
@@ -404,7 +404,7 @@ object DataTableSeeder:
         new SeedParses(graph.parses, counters)
       )
     targets.foldLeft((wb, Vector.empty[SeedTableWarning])) { case ((accWb, warns), name) =>
-      accWb.sheets.find(_.name == name) match
+      accWb(name).toOption match
         case None => (accWb, warns)
         case Some(sheet) =>
           val groups =

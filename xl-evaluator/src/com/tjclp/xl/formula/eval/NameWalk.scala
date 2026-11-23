@@ -2,6 +2,7 @@ package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.SheetName
 import com.tjclp.xl.formula.ast.TExpr
+import com.tjclp.xl.formula.graph.DependencyGraph
 import com.tjclp.xl.workbooks.{DefinedName, Workbook}
 
 import scala.annotation.tailrec
@@ -48,10 +49,12 @@ private[formula] object NameWalk:
   /**
    * The scoped lookup every walk uses ([[Evaluator.lookupDefinedNameAt]]): from the qualifier's
    * sheet, or `current`'s for an unqualified name, a sheet-scoped name shadowing a workbook-scoped
-   * one. `canonical` folds a qualifier onto the sheet it names (the dependency graph's
-   * case-insensitive rule); a qualifier naming no sheet sees only workbook-scoped names.
+   * one. A qualifier names its sheet by `Workbook.apply`'s rule (#752: exact, else equal ignoring
+   * case, through `DependencyGraph.sheetCanonicaliser`), as evaluation resolves it; a qualifier
+   * naming no sheet sees only workbook-scoped names.
    */
-  def resolver(wb: Workbook, canonical: SheetName => SheetName = identity): Resolver =
+  def resolver(wb: Workbook): Resolver =
+    val canonical = DependencyGraph.sheetCanonicaliser(wb)
     // Reverse insertion so a duplicated sheet name keeps its FIRST position, like indexWhere.
     val positions: Map[SheetName, Int] =
       wb.sheets.zipWithIndex.reverseIterator.map((sheet, i) => sheet.name -> i).toMap

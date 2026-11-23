@@ -1238,7 +1238,7 @@ object BatchParser:
           applyOne(currentWb, default, op, recalcDependents, spills, scanSpills, clock)
             .handleErrorWith(cause => IO.raiseError(opFailed(op, cause)))
             .map((next, hits, index, skipped) =>
-              (next, retarget(default, op.op), offGrid ++ hits, index, kept ++ skipped)
+              (next, retarget(currentWb, default, op.op), offGrid ++ hits, index, kept ++ skipped)
             )
         }
       }
@@ -1298,7 +1298,8 @@ object BatchParser:
     spills: SpillIndex,
     sheetName: Option[SheetName],
     op: BatchOp,
-    released: Option[(Vector[(SheetName, CellRange)], Boolean)]
+    released: Option[(Vector[(SheetName, CellRange)], Boolean)],
+    tabOf: SheetName => SheetName
   ): SpillIndex =
     released match
       case Some((areas, _)) =>
@@ -1319,7 +1320,7 @@ object BatchParser:
               _: BatchOp.SetPageSetup | _: BatchOp.SetHeaderFooter |
               _: BatchOp.AddConditionalFormat | _: BatchOp.Clear =>
             spills
-          case _ => touchedSheets(sheetName, op).fold(SpillIndex.empty)(spills -- _)
+          case _ => touchedSheets(sheetName, op).fold(SpillIndex.empty)(spills -- _.map(tabOf))
 
   /**
    * GH-714: a plain value or formula write applied to the dynamic arrays it touches, before the
@@ -1341,15 +1342,14 @@ object BatchParser:
     areas.groupMap(_._1)(_._2).toVector.foldLeft(IO.pure(wb)) { case (acc, (name, ranges)) =>
       acc.flatMap { current =>
         val known = spills.getOrElse(name, Vector.empty)
-        current.sheets.find(_.name == name).filter(_ => known.nonEmpty).fold(IO.pure(current)) {
-          sheet =>
-            IO.fromEither(
-              DynamicArrayAuthoring
-                .releaseRanges(sheet, known, ranges)
-                .map((released, _) => current.put(released))
-                .left
-                .map(spill => CliException(CliError.fromSpillBlocked(spill)))
-            )
+        sheetNamed(current, name).filter(_ => known.nonEmpty).fold(IO.pure(current)) { sheet =>
+          IO.fromEither(
+            DynamicArrayAuthoring
+              .releaseRanges(sheet, known, ranges)
+              .map((released, _) => current.put(released))
+              .left
+              .map(spill => CliException(CliError.fromSpillBlocked(spill)))
+          )
         }
       }
     }
@@ -1371,13 +1371,23 @@ object BatchParser:
       }
     }
 
-  /** A `rename-sheet` of the batch's default sheet moves the default with it. */
-  private def retarget(default: Option[SheetName], op: BatchOp): Option[SheetName] = op match
-    case BatchOp.RenameSheet(from, to) =>
-      default.map(current =>
-        if current.value == from then SheetName(to).getOrElse(current) else current
-      )
-    case _ => default
+  /**
+   * A `rename-sheet` of the batch's default sheet moves the default with it; `from` names the
+   * default when it resolves to that tab in `before`, the workbook the rename ran on (#752).
+   */
+  private def retarget(
+    before: Workbook,
+    default: Option[SheetName],
+    op: BatchOp
+  ): Option[SheetName] =
+    op match
+      case BatchOp.RenameSheet(from, to) =>
+        default.map { current =>
+          val renamed =
+            SheetName(from).toOption.exists(f => sheetNamed(before, f).exists(_.name == current))
+          if renamed then SheetName(to).getOrElse(current) else current
+        }
+      case _ => default
 
   /**
    * `BATCH_OP_FAILED`: `Object N (op): <cause>`, keeping the cause's hint, candidates and domain
@@ -1422,15 +1432,19 @@ object BatchParser:
   ): IO[
     (Workbook, Vector[OffGridHit], SpillIndex, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])
   ] =
-    IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { sheetName =>
+    IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { requested =>
+      val sheetName = requested.map(tab(wb, _))
+      // #752: the index is keyed by each tab's own spelling, whatever case a ref qualifier uses
       val areas = releaseAreas(sheetName, scoped.op)
+        .map((as, contents) => (as.map((name, range) => (tab(wb, name), range)), contents))
       // the sheets this op releases on, scanned once if the index does not know them yet
       val known = areas.toList.flatMap(_._1.map(_._1)).distinct.foldLeft(spills) { (ix, name) =>
         if ix.contains(name) then ix
-        else wb.sheets.find(_.name == name).fold(ix)(s => ix.updated(name, scanSpills(s)))
+        else sheetNamed(wb, name).fold(ix)(s => ix.updated(name, scanSpills(s)))
       }
-      def spillsOn(name: SheetName): Vector[DynamicArrayAuthoring.Spill] =
-        known.getOrElse(name, wb.sheets.find(_.name == name).fold(Vector.empty)(scanSpills))
+      def spillsOn(requested: SheetName): Vector[DynamicArrayAuthoring.Spill] =
+        val name = tab(wb, requested)
+        known.getOrElse(name, sheetNamed(wb, name).fold(Vector.empty)(scanSpills))
       val released = areas match
         case Some((as, false)) => releaseSpills(wb, as, known)
         case _ => IO.pure(wb)
@@ -1457,7 +1471,7 @@ object BatchParser:
             dispatch(currentWb, sheetName, scoped, recalcDependents, clock)
               .map((_, Vector.empty, none))
         applied.map((next, hits, kept) =>
-          (next, hits, nextSpills(known, sheetName, scoped.op, areas), kept)
+          (next, hits, nextSpills(known, sheetName, scoped.op, areas, tab(wb, _)), kept)
         )
       }
     }
@@ -1574,7 +1588,7 @@ object BatchParser:
 
       case BatchOp.Clear(rangeStr, all, stylesFlag, commentsFlag) =>
         def spillsOn(name: SheetName) =
-          currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
+          sheetNamed(currentWb, name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
         applyClear(currentWb, defaultSheetName, rangeStr, all, stylesFlag, commentsFlag, spillsOn)
           .map(_._1)
 
@@ -1679,8 +1693,7 @@ object BatchParser:
           valuesOnly,
           recalcDependents,
           // applyOne routes copy itself; here, scan the target sheet
-          name =>
-            currentWb.sheets.find(_.name == name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
+          name => sheetNamed(currentWb, name).fold(Vector.empty)(DynamicArrayAuthoring.spillsOf)
         ).map(_._1)
 
       case BatchOp.SetSheetView(gridlines, zoom, tabSelected) =>
@@ -1941,14 +1954,13 @@ object BatchParser:
     clock: Clock
   ): IO[Workbook] =
     def at(sheetName: SheetName, ref: ARef): IO[Workbook] =
-      wb.sheets.find(_.name == sheetName).fold(IO.raiseError(sheetNotFound(wb, sheetName))) {
-        sheet =>
-          IO.fromEither(
-            DynamicArrayAuthoring
-              .author(wb, sheet, ref, formula, clock)
-              .left
-              .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
-          ).map(authored => wb.put(format.fold(authored)(authored.withNumFmt).sheet))
+      IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_))).flatMap { sheet =>
+        IO.fromEither(
+          DynamicArrayAuthoring
+            .author(wb, sheet, ref, formula, clock)
+            .left
+            .map(refusal => CliException(CliError.fromSpillRefusal(refusal)))
+        ).map(authored => wb.put(format.fold(authored)(authored.withNumFmt).sheet))
       }
     IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) =>
@@ -2006,7 +2018,7 @@ object BatchParser:
       )
 
       // Apply formula with shifting, reporting the references the shift voided (GH-628)
-      sheet <- IO.fromEither(wb(sheetName).left.map(_ => sheetNotFound(wb, sheetName)))
+      sheet <- IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_)))
       startCol = Column.index0(fromARef.col)
       startRow = Row.index0(fromARef.row)
       (updated, offGrid) = range.cells.foldLeft((sheet, Vector.empty[OffGridHit])) {
@@ -2332,8 +2344,7 @@ object BatchParser:
       (sheetName, range) = rangeRef
       contents = Option
         .when(clearContents)(
-          wb.sheets
-            .find(_.name == sheetName)
+          sheetNamed(wb, sheetName)
             .map(s =>
               DynamicArrayAuthoring
                 .clearContents(s, spillsOn(sheetName), Vector(range), keepFormatting = !all)
@@ -2455,16 +2466,17 @@ object BatchParser:
   /**
    * A `define-name` / `remove-name` op's `scope` — the verb's `-s` — as the sheet it names:
    * `INVALID_SHEET_NAME` (the verb's) for a name Excel rejects, `SHEET_NOT_FOUND` with the CLI's
-   * one text and did-you-mean candidates for a sheet the book lacks — exactly as spelled, the rule
-   * of `-s` and of every op's `sheet` key (#659 review: `scope` was the one sheet key that matched
-   * case-insensitively). None is the workbook scope. The mutation itself is
-   * `SheetCommands.defineName` / `removeName` (GH-462); the caller adds the op index.
+   * one text and did-you-mean candidates for a sheet the book lacks. The sheet is matched by the
+   * rule of the verb's `-s` and of every op's `sheet` key ([[Resolve.named]], #752: exact, else
+   * ignoring case) and returned in the tab's own spelling. None is the workbook scope. The mutation
+   * itself is `SheetCommands.defineName` / `removeName` (GH-462); the caller adds the op index.
    */
   private def nameScope(wb: Workbook, scope: Option[String]): IO[Option[SheetName]] =
     scope.fold(IO.pure(Option.empty[SheetName])) { s =>
       SheetCommands.sheetName(s).flatMap { name =>
-        if wb.sheets.exists(_.name == name) then IO.pure(Some(name))
-        else IO.raiseError(sheetNotFound(wb, name))
+        IO.fromEither(
+          Resolve.named(wb, name).map(sheet => Some(sheet.name)).left.map(CliException(_))
+        )
       }
     }
 
@@ -2495,7 +2507,7 @@ object BatchParser:
         case Some(after) =>
           for
             afterName <- SheetCommands.sheetName(after)
-            idx = wb.sheets.indexWhere(_.name == afterName)
+            idx = wb.sheetIndexOf(afterName).getOrElse(-1)
             _ <- if idx < 0 then IO.raiseError(SheetCommands.sheetNotFound(after, wb)) else IO.unit
             inserted <- IO.fromEither(
               wb.insertAt(idx + 1, newSheet).left.map(SheetCommands.domain)
@@ -2681,6 +2693,16 @@ object BatchParser:
         IO.pure((sheetName, CellRange(ref, ref)))
     }
 
+  /**
+   * The sheet `name` names, matched as every sheet key and ref qualifier is (`Workbook.apply`,
+   * #752: exact, else ignoring case); None when it names no sheet.
+   */
+  private def sheetNamed(wb: Workbook, name: SheetName): Option[Sheet] = wb(name).toOption
+
+  /** The tab's own spelling of `name`, or `name` itself when it names no sheet. */
+  private def tab(wb: Workbook, name: SheetName): SheetName =
+    sheetNamed(wb, name).fold(name)(_.name)
+
   /** `SHEET_NOT_FOUND` with the CLI's one text and did-you-mean candidates. */
   private def sheetNotFound(wb: Workbook, sheetName: SheetName): CliException =
     sheetNotFound(wb.sheetNames.map(_.value).toVector, sheetName)
@@ -2698,9 +2720,8 @@ object BatchParser:
   private def updateSheet(wb: Workbook, sheetName: SheetName)(
     f: Sheet => Sheet
   ): IO[Workbook] =
-    wb.sheets.find(_.name == sheetName) match
-      case None => IO.raiseError(sheetNotFound(wb, sheetName))
-      case Some(sheet) => IO.pure(wb.put(f(sheet)))
+    IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_)))
+      .map(sheet => wb.put(f(sheet)))
 
   /**
    * Update the default sheet — the one THE rule gives the op ([[sheetFor]]) — with a validated
@@ -2723,8 +2744,7 @@ object BatchParser:
     wb: Workbook,
     sheetName: SheetName
   )(f: Sheet => XLResult[Sheet]): IO[Workbook] =
-    wb.sheets.find(_.name == sheetName) match
-      case None => IO.raiseError(sheetNotFound(wb, sheetName))
-      case Some(sheet) =>
-        IO.fromEither(f(sheet).left.map(err => CliException(CliError.fromXLError(err, None))))
-          .map(wb.put)
+    IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_))).flatMap { sheet =>
+      IO.fromEither(f(sheet).left.map(err => CliException(CliError.fromXLError(err, None))))
+        .map(wb.put)
+    }

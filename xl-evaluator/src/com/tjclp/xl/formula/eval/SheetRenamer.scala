@@ -88,9 +88,15 @@ object SheetRenamer:
 
   /**
    * [[rename]], with every refusal carrying WHERE it fired: the cell, the sheet whose conditional
-   * format or data validation, or the defined name whose text cannot be rewritten (GH-608).
+   * format or data validation, or the defined name whose text cannot be rewritten (GH-608). `from`
+   * names its sheet by `Workbook.apply`'s rule (#752), and the rewrite uses the tab's own spelling.
    */
   def renameLocated(wb: Workbook, from: SheetName, to: SheetName): Either[Refusal, Workbook] =
+    wb(from) match
+      case Left(err) => Left(Refusal(None, err))
+      case Right(sheet) => renameTab(wb, sheet.name, to)
+
+  private def renameTab(wb: Workbook, from: SheetName, to: SheetName): Either[Refusal, Workbook] =
     if from == to then wb.rename(from, to).left.map(Refusal(None, _))
     else
       for

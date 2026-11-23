@@ -24,11 +24,20 @@ final case class Workbook(
     if index >= 0 && index < sheets.size then Right(sheets(index))
     else Left(XLError.OutOfBounds(s"sheet[$index]", s"Valid range: 0 to ${sheets.size - 1}"))
 
-  /** Get sheet by name */
+  /**
+   * Get sheet by name, matched as Excel matches a reference's sheet qualifier (#752): the exact
+   * spelling first, else the one sheet whose name is equal ignoring case, so `data` reads the tab
+   * `Data`. A name that folds onto two tabs differing only by case and spells neither is
+   * [[XLError.InvalidReference]] ([[SheetName.indexIn]]).
+   */
   def apply(name: SheetName): XLResult[Sheet] =
-    sheets
-      .find(_.name == name)
-      .toRight(XLError.SheetNotFound(name.value, sheetNameValues))
+    sheetIndexOf(name).map(sheets(_))
+
+  /** The position of the sheet `name` resolves to under [[apply]]'s rule. */
+  private[xl] def sheetIndexOf(name: SheetName): XLResult[Int] =
+    sheets.indexWhere(_.name == name) match
+      case -1 => SheetName.indexIn(sheets.map(_.name), name)
+      case exact => Right(exact)
 
   /**
    * Get sheet by name string.
@@ -157,11 +166,9 @@ final case class Workbook(
   private def hasSheetNamed(name: SheetName, except: Option[SheetName] = None): Boolean =
     sheets.exists(s => !except.contains(s.name) && s.name.value.equalsIgnoreCase(name.value))
 
-  /** Remove sheet by name (preferred method) */
+  /** Remove sheet by name (preferred method), matched by [[apply]]'s rule (#752). */
   def remove(name: SheetName): XLResult[Workbook] =
-    sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
-      case index => removeAt(index)
+    sheetIndexOf(name).flatMap(removeAt)
 
   /**
    * Remove sheet by name (string variant).
@@ -211,26 +218,26 @@ final case class Workbook(
    * The new name is refused as [[XLError.DuplicateSheet]] when ANOTHER sheet already carries it in
    * any case (Excel sheet names are case-insensitive: renaming `T` to `s` beside `S` would write
    * two tabs Excel treats as one, and `=s!A1` would resolve against `S`). Renaming a sheet to a
-   * different spelling of its own name (`Data` to `DATA`) is a plain rename.
+   * different spelling of its own name (`Data` to `DATA`) is a plain rename. `oldName` is matched
+   * by [[apply]]'s rule (#752), so `rename("data", ...)` renames the tab `Data`.
    */
   def rename(oldName: SheetName, newName: SheetName): XLResult[Workbook] =
-    sheets.indexWhere(_.name == oldName) match
-      case -1 => Left(XLError.SheetNotFound(oldName.value, sheetNameValues))
-      case index =>
-        if hasSheetNamed(newName, except = Some(oldName)) then
-          Left(XLError.DuplicateSheet(newName.value))
-        else
-          val updated = sheets(index).copy(name = newName)
-          val renamedSheets = sheets
-            .updated(index, updated)
-            .map(Workbook.remapChartSheetName(_, oldName, newName))
-          // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles).
-          // GH-315: the identity-keyed source mappings follow the rename, so the renamed sheet
-          // keeps its source comment/drawing/worksheet parts.
-          val updatedContext = sourceContext.map(
-            _.markSheetModified(index).markMetadataModified.markSheetRenamed(oldName, newName)
-          )
-          Right(copy(sheets = renamedSheets, sourceContext = updatedContext))
+    sheetIndexOf(oldName).flatMap { index =>
+      val tab = sheets(index).name
+      if hasSheetNamed(newName, except = Some(tab)) then Left(XLError.DuplicateSheet(newName.value))
+      else
+        val updated = sheets(index).copy(name = newName)
+        val renamedSheets = sheets
+          .updated(index, updated)
+          .map(Workbook.remapChartSheetName(_, tab, newName))
+        // Mark both: metadata (workbook.xml has sheet names) AND sheet (to regenerate styles).
+        // GH-315: the identity-keyed source mappings follow the rename, so the renamed sheet
+        // keeps its source comment/drawing/worksheet parts.
+        val updatedContext = sourceContext.map(
+          _.markSheetModified(index).markMetadataModified.markSheetRenamed(tab, newName)
+        )
+        Right(copy(sheets = renamedSheets, sourceContext = updatedContext))
+    }
 
   /**
    * Apply `edits` (ADR-017 §2.12) under no default sheet: a qualified target names its sheet, an
@@ -258,9 +265,7 @@ final case class Workbook(
    * }}}
    */
   def update(name: SheetName, f: Sheet => Sheet): XLResult[Workbook] =
-    sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
-      case idx => updateAt(idx, f)
+    sheetIndexOf(name).flatMap(updateAt(_, f))
 
   /**
    * Update sheet by applying a function (string variant).
@@ -276,17 +281,22 @@ final case class Workbook(
    * Update the named sheet, or create it by applying f to a fresh empty sheet when absent.
    *
    * The total counterpart of `update`, parallel to `put`'s add-or-replace semantics: totality comes
-   * from create-on-missing, never from silently doing nothing.
+   * from create-on-missing. On a malformed book with ambiguous case-only twins, it leaves the
+   * workbook unchanged. Use the exact spelling to select a twin or [[update]] for a diagnostic.
    *
    * Example:
    * {{{
    * wb.upsert(SheetName.unsafe("Summary"), _.put(ref"A1" -> "Total"))  // creates Summary if absent
    * }}}
+   *
+   * The sheet is matched by [[apply]]'s rule (#752), so `upsert("data", f)` updates the tab `Data`
+   * rather than adding a tab Excel would treat as the same name.
    */
   def upsert(name: SheetName, f: Sheet => Sheet): Workbook =
-    sheets.indexWhere(_.name == name) match
-      case -1 => put(f(Sheet(name)))
-      case idx =>
+    sheetIndexOf(name) match
+      case Left(_: XLError.SheetNotFound) => put(f(Sheet(name)))
+      case Left(_) => this
+      case Right(idx) =>
         val updatedContext = sourceContext.map(_.markSheetModified(idx))
         copy(sheets = sheets.updated(idx, f(sheets(idx))), sourceContext = updatedContext)
 
@@ -314,11 +324,9 @@ final case class Workbook(
       val updatedContext = sourceContext.map(_.markSheetModified(idx))
       Right(copy(sheets = newSheets, sourceContext = updatedContext))
 
-  /** Delete sheet by name while tracking modification state. */
+  /** Delete sheet by name ([[apply]]'s rule, #752) while tracking modification state. */
   def delete(name: SheetName): XLResult[Workbook] =
-    sheets.indexWhere(_.name == name) match
-      case -1 => Left(XLError.SheetNotFound(name.value, sheetNameValues))
-      case idx => removeAt(idx)
+    sheetIndexOf(name).flatMap(removeAt)
 
   /**
    * Delete sheet by name (string variant).
@@ -431,6 +439,10 @@ final case class Workbook(
 
   // ========== Sheet Visibility ==========
 
+  // Listing the visibility of every tab uses its exact name. Build this set once so the listing
+  // stays linear even when only a few tabs have entries in sheetStates.
+  private lazy val exactSheetNames = sheets.iterator.map(_.name).toSet
+
   /**
    * Get sheet visibility state.
    *
@@ -438,7 +450,9 @@ final case class Workbook(
    *   None if visible (default), Some("hidden") if hidden, Some("veryHidden") if very hidden
    */
   def getSheetState(name: SheetName): Option[String] =
-    metadata.sheetStates.get(name).flatten
+    if metadata.sheetStates.isEmpty then None
+    else if exactSheetNames.contains(name) then metadata.sheetStates.get(name).flatten
+    else sheetIndexOf(name).toOption.flatMap(i => metadata.sheetStates.get(sheets(i).name).flatten)
 
   /**
    * Set sheet visibility state.
@@ -448,11 +462,12 @@ final case class Workbook(
    * @param state
    *   None for visible, Some("hidden") for hidden, Some("veryHidden") for very hidden
    * @return
-   *   Updated workbook or error if sheet not found, invalid state, or last visible sheet
+   *   Updated workbook or error if sheet not found ([[apply]]'s rule, #752), invalid state, or last
+   *   visible sheet
    */
   def setSheetState(name: SheetName, state: Option[String]): XLResult[Workbook] =
-    if !sheets.exists(_.name == name) then Left(XLError.SheetNotFound(name.value, sheetNameValues))
-    else
+    sheetIndexOf(name).flatMap { index =>
+      val tab = sheets(index).name
       state match
         case Some(s) if s != "hidden" && s != "veryHidden" =>
           Left(
@@ -465,15 +480,16 @@ final case class Workbook(
               val isVisible = metadata.sheetStates.get(sheet.name).flatten.isEmpty
               (
                 if isVisible then count + 1 else count,
-                found || (sheet.name == name && isVisible)
+                found || (sheet.name == tab && isVisible)
               )
           }
           if isCurrentlyVisible && visibleCount <= 1 then
             Left(XLError.InvalidWorkbook("Cannot hide the last visible sheet"))
-          else Right(withUpdatedSheetState(name, state))
+          else Right(withUpdatedSheetState(tab, state))
         case None =>
           // Making visible is always allowed
-          Right(withUpdatedSheetState(name, state))
+          Right(withUpdatedSheetState(tab, state))
+    }
 
   /** Helper: update sheet state in metadata and mark as modified. */
   private def withUpdatedSheetState(name: SheetName, state: Option[String]): Workbook =
@@ -603,14 +619,12 @@ final case class Workbook(
       names.filterNot(overridden) ++ derived
 
   /**
-   * The `localSheetId` a name scoped to `scope` carries: the sheet's position, the sheet matched
-   * case-insensitively (the [[hasSheetNamed]] rule). The one scope lookup of every defined-name
-   * mutation path — the Edit algebra and the CLI resolve a name's scope through it.
+   * The `localSheetId` a name scoped to `scope` carries: the sheet's position, matched by
+   * [[apply]]'s rule (#752: the exact spelling first, else the one sheet equal ignoring case). The
+   * one scope lookup of every defined-name mutation path — the Edit algebra and the CLI resolve a
+   * name's scope through it.
    */
-  private[xl] def localSheetIdOf(scope: SheetName): XLResult[Int] =
-    sheets.indexWhere(_.name.value.equalsIgnoreCase(scope.value)) match
-      case -1 => Left(XLError.SheetNotFound(scope.value, sheetNameValues))
-      case idx => Right(idx)
+  private[xl] def localSheetIdOf(scope: SheetName): XLResult[Int] = sheetIndexOf(scope)
 
   /**
    * The identifiers `removeDefinedName` can remove in `scope` (a `localSheetId`; None = workbook),
