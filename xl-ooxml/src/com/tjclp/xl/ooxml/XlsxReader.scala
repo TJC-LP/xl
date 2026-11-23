@@ -575,7 +575,13 @@ object XlsxReader:
         drawingPathMapping = parsedSheets.drawingPathMapping,
         drawingSnapshots = parsedSheets.drawingSnapshots,
         chartSnapshots = parsedSheets.chartSnapshots,
-        sheetPathMapping = parsedSheets.sheetPathMapping
+        sheetPathMapping = parsedSheets.sheetPathMapping,
+        preservedSheetNames = ooxmlWb.sheets.iterator
+          .zip(sourceIndex.mask)
+          .collect { case (ref, false) =>
+            ref.name
+          }
+          .toSet
       )
     yield ReadResult(workbook, styleWarnings ++ parsedSheets.warnings)
 
@@ -1611,7 +1617,8 @@ object XlsxReader:
     drawingPathMapping: Map[SheetName, String],
     drawingSnapshots: Map[SheetName, Vector[com.tjclp.xl.drawings.Drawing]],
     chartSnapshots: Map[SheetName, Vector[com.tjclp.xl.context.ChartSnapshot]],
-    sheetPathMapping: Map[SheetName, String]
+    sheetPathMapping: Map[SheetName, String],
+    preservedSheetNames: Set[SheetName]
   ): XLResult[Workbook] =
     if sheets.isEmpty then Left(XLError.InvalidWorkbook("Workbook must have at least one sheet"))
     else
@@ -1666,7 +1673,12 @@ object XlsxReader:
           activeSheetIndex = activeSheetIndex,
           // GH-470: snapshot the defined names exactly as assembled so the writer can detect
           // untracked copy(metadata = ...) edits and regenerate instead of verbatim-copying.
-          sourceContext = ctx.map(_.copy(definedNamesAsRead = Some(remainingNames)))
+          sourceContext = ctx.map(
+            _.copy(
+              definedNamesAsRead = Some(remainingNames),
+              preservedSheetNames = preservedSheetNames
+            )
+          )
         )
       )
 

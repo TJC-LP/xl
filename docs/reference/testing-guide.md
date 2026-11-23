@@ -2,6 +2,12 @@
 
 **Current Status**: the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19 recorded **10,398 cases**: 10,398 passed, 0 failed (MUnit reported none ignored).
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 ## Test Infrastructure
 
 ### Frameworks
