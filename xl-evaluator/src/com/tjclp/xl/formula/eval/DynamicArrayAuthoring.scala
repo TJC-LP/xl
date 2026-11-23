@@ -348,6 +348,19 @@ private[xl] object DynamicArrayAuthoring:
       derives CanEqual
 
   /**
+   * GH-935: `Sheet.merge` with the dynamic arrays of the hidden cells released first. The merge
+   * clears every cell but the upper-left one as a contents clear does; a hidden dynamic-array
+   * anchor takes its whole spill with it, as [[clearContents]] clears it, rather than leaving its
+   * spilled values behind with no formula to own them. A sheet with no dynamic arrays is
+   * `sheet.merge(range)`.
+   */
+  def merge(sheet: Sheet, range: CellRange): Sheet =
+    val hidden = SheetEdits.hiddenByMerge(range)
+    val spills = if hidden.isEmpty then Vector.empty else spillsOf(sheet)
+    val released = if spills.isEmpty then sheet else clearContents(sheet, spills, hidden).sheet
+    released.merge(range)
+
+  /**
    * A contents clear of `ranges` on `sheet`, applied to its dynamic arrays as Excel 365 applies it:
    * every cell of the ranges is emptied, except the cells of a live spill whose anchor the clear
    * leaves in place — Excel keeps a spill's cells while its anchor stays, so clearing them changes

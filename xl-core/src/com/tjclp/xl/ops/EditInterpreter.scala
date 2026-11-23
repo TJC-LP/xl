@@ -283,7 +283,8 @@ private[xl] object EditInterpreter:
         case Edit.Style(at, overlay, mode) =>
           pure(at.sheet, Vector.empty)(applyStyle(_, at.range, overlay, mode))
 
-        case Edit.Merge(at) => pure(at.sheet, Vector.empty)(_.merge(at.range))
+        // GH-935: merging clears the hidden cells' contents, so the range seeds a recalculation
+        case Edit.Merge(at) => pure(at.sheet, Vector(at.range))(_.merge(at.range))
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
         case Edit.ColWidth(sheet, cols, width) =>

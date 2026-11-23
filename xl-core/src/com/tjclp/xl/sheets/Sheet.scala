@@ -686,9 +686,14 @@ final case class Sheet(
   def getRange(range: CellRange): Iterable[Cell] =
     cells.inRange(range).toSeq
 
-  /** Merge cells in range */
+  /**
+   * Merge cells in range, as Excel's Merge Cells does (GH-935): the upper-left cell keeps its value
+   * and every other cell of the range is cleared like Clear Contents (value, formula and hyperlink
+   * go; the cell's own style and comment stay). An empty upper-left cell stays empty. Only this
+   * operation clears: a sheet read from a file whose merge already hides values keeps them.
+   */
   def merge(range: CellRange): Sheet =
-    copy(mergedRanges = mergedRanges + range)
+    SheetEdits.merge(this, range)
 
   /** Unmerge cells in range */
   def unmerge(range: CellRange): Sheet =

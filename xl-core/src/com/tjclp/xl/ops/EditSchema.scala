@@ -333,7 +333,11 @@ object EditSchema:
       streamable = true
     )
 
-  private val merge = rangeOnly("merge", "Merge a range into one cell.", "merge")
+  private val merge = rangeOnly(
+    "merge",
+    "Merge a range into one cell, keeping only the upper-left value (the other cells are cleared).",
+    "merge"
+  )
   private val unmerge = rangeOnly("unmerge", "Unmerge a merged range.", "unmerge")
 
   private val colWidth = spec(

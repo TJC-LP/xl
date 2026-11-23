@@ -52,7 +52,10 @@ enum Patch:
   /** Clear style for a cell */
   case ClearStyle(ref: ARef)
 
-  /** Merge cells in a range */
+  /**
+   * Merge cells in a range ([[com.tjclp.xl.sheets.Sheet.merge]]): the upper-left cell keeps its
+   * value and the others are cleared like Clear Contents, as Excel does (GH-935).
+   */
   case Merge(range: CellRange)
 
   /** Unmerge cells in a range */

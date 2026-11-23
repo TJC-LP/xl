@@ -72,6 +72,11 @@ enum Edit derives CanEqual:
 
   /** Overlay a partial style onto every cell of `at`, merging or replacing. */
   case Style(at: Area, overlay: StyleOverlay, mode: StyleMode)
+
+  /**
+   * Merge `at` as Excel's Merge Cells does (GH-935): only the upper-left cell keeps its value; the
+   * other cells are cleared like Clear Contents (their own formatting and comments stay).
+   */
   case Merge(at: Area)
   case Unmerge(at: Area)
   case ColWidth(sheet: Option[SheetName], cols: ColSpan, width: Double)

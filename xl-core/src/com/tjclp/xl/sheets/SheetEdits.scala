@@ -490,6 +490,41 @@ private[xl] object SheetEdits:
     val s3 = if what.comments then s2.clearCommentsInRange(range) else s2
     touched.foldLeft(s3)((s, m) => s.unmerge(m))
 
+  // ===== Merge (GH-935) =====
+
+  /**
+   * Merge `range` the way Excel's Merge Cells does: only the upper-left cell keeps its value
+   * ("Merging cells only keeps the upper-left value and discards other values"). Every other cell
+   * of the range is cleared as Clear Contents clears it ([[clearContentsKeepingStyles]]): its value
+   * or formula and its hyperlink go, a cell that keeps a record keeps its own style, an unstyled
+   * cell is removed. Comments stay (Clear Contents keeps them too). An empty anchor stays empty:
+   * the values elsewhere are discarded, never moved. The store is walked by its stored cells, so a
+   * whole-column merge does not visit a million positions.
+   */
+  def merge(sheet: Sheet, range: CellRange): Sheet =
+    val cleared = hiddenByMerge(range).foldLeft(sheet)(clearContentsKeepingStyles)
+    cleared.copy(mergedRanges = cleared.mergedRanges + range)
+
+  /**
+   * The cells a merge of `range` hides — everything but the upper-left cell — as at most two
+   * rectangles: the rest of the first row, then every row below it.
+   */
+  private[xl] def hiddenByMerge(range: CellRange): Vector[CellRange] =
+    val start = range.start
+    val end = range.end
+    val restOfRow =
+      Option.when(end.col.index0 > start.col.index0)(
+        CellRange(
+          ARef.from0(start.col.index0 + 1, start.row.index0),
+          ARef.from0(end.col.index0, start.row.index0)
+        )
+      )
+    val below =
+      Option.when(end.row.index0 > start.row.index0)(
+        CellRange(ARef.from0(start.col.index0, start.row.index0 + 1), end)
+      )
+    (restOfRow.toList ++ below.toList).toVector
+
   /**
    * The merges in `touched` that cross the edge of `range`: their cells outside it need their own
    * style reset (GH-909). A merge wholly inside `range` is already covered by the range's own.
