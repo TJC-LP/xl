@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Library closure evaluation with placement protection** (#741):
+  `SheetEvaluator.evaluateAt(workbook, sheet, formula, at, overrides)` (the formula first, the cell
+  after, as `xl eval <formula> --at <ref>` reads them) now owns the same
+  formula placement, value-read precedent closure, guarded evaluation and cycle checks as
+  `xl eval --at`. `evaluateWithClosure` and `evaluateArrayWithClosure` share the positionless
+  closure and spill-tracking evaluator. Typed overrides and cell edits in the supplied sheet invalidate their cached readers. A
+  failure is `FormulaEvaluationError.Cycle(error, path)` (the complete path, the placement alone
+  for a read of it computed at run time) or `Failed(error)`, `error` the diagnostic the existing
+  APIs report; `clock` and `rng` parameters, defaulting to the system, pin TODAY/NOW and RAND as
+  `evaluateFormula(formula, clock, rng)` does. Spill detection and the placement guard read the
+  evaluation copy (supplied sheet and overrides applied), so `x#` readers that only the supplied
+  sheet or an override carries are tracked. The supplied sheet replaces the tab its name
+  resolves to under `Workbook.apply`'s rule (#752), so `Sheet("data")` edits a book's `Data`.
+  CLI output, existing evaluation APIs, and the cached cross-sheet limitations tracked in #729
+  remain unchanged, with one message aside: `xl eval " =A1*2"` (whitespace before the `=`),
+  refused as before with `FORMULA_ERROR`, now quotes `'==A1*2'` at position 0 where 0.26.0
+  quoted `'= =A1*2'` at position 1.
+
 - **Date-window benchmark book** (#920): `LoadsBookMain shape=DateWindow [rows=50000]
   [formulas=2000]` (`xl-evaluator.perf`) builds a made-up book of seeded dates, amounts and regions
   read by trailing 30-day `SUMIFS` over whole columns, half of them also keyed by region: the
