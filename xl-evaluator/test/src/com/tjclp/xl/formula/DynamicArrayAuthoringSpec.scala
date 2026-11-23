@@ -2,6 +2,8 @@ package com.tjclp.xl.formula
 
 import java.time.{LocalDate, LocalDateTime}
 
+import scala.concurrent.duration.*
+
 import munit.FunSuite
 
 import com.tjclp.xl.{*, given}
@@ -22,6 +24,9 @@ import com.tjclp.xl.workbooks.Workbook
  * refuses (writing nothing) a spill Excel would show as `#SPILL!`.
  */
 class DynamicArrayAuthoringSpec extends FunSuite:
+
+  // Authoring a spill of 1,048,576 cells can exceed 30 s under load (#919).
+  override val munitTimeout: Duration = 2.minutes
 
   private val S = SheetName.unsafe("S")
   private val clock = Clock.fixed(LocalDate.of(2026, 1, 2), LocalDateTime.of(2026, 1, 2, 3, 4, 5))
@@ -479,8 +484,8 @@ class DynamicArrayAuthoringSpec extends FunSuite:
   }
 
   test("#750: a whole-axis spill is refused as TooLarge from its shape, never built") {
-    // =B:C is 1,048,576 x 2 positions, held as its populated box until the shape is checked; a
-    // spill that was built would trip the suite's 30 s munitTimeout, the backstop here (#843)
+    // =B:C is 1,048,576 x 2 positions, held as its populated box until the shape is checked.
+    // The suite timeout guards against hangs if the spill is materialized (#843).
     author(base, ref"E1", "=B:C") match
       case Left(Refusal.Blocked(b)) =>
         assertEquals(b.blocker, SpillBlocker.TooLarge(1048576, 2, ArrayResult.MaxCells))

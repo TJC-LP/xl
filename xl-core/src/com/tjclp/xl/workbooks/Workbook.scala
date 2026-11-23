@@ -72,6 +72,33 @@ final case class Workbook(
         apply(sheetName).map(sheet => sheet.getRange(range))
 
   /**
+   * Adopt an unchanged sheet from `from` without silently rebinding external-workbook ordinals
+   * (GH-526). Unlike [[put]], this is an add-only, fallible preservation guard. The sheet must be a
+   * member of the supplied source workbook, compared by value including styles and properties.
+   *
+   * This first slice accepts source-free, fully modeled sheets with no external ordinal formulas,
+   * tables, drawings, conditional formats or validations. Source and destination must share the
+   * same effective default font and theme palette; mismatches are refused. Foreign source-backed
+   * sheets are refused: their opaque parts and workbook-scoped style context cannot yet be migrated
+   * safely. Names are compared case-insensitively and collisions are refused. An identical
+   * source/destination workbook is a no-op only after membership validation; edited sheets are
+   * never discarded.
+   *
+   * The sheet's visibility in `from` (hidden or veryHidden) is carried to the destination; a hidden
+   * sheet is refused if the destination would then have no visible sheet.
+   *
+   * `from` is trusted caller input: every check reads it as supplied, and a [[Sheet]] carries no
+   * record of the file it came from. Pass the workbook the sheet was actually read from. Wrapping a
+   * loaded sheet in a fresh `Workbook(sheet)` hides its source context, default font and theme, so
+   * the guard cannot refuse it.
+   *
+   * No formula/name rewriting, link-table merging or cached-value materialization is performed.
+   * Ordinary formula dependencies remain the caller's responsibility. Raw put/update are unchanged.
+   */
+  def adopt(sheet: Sheet, from: Workbook): XLResult[Workbook] =
+    SheetAdoption.adopt(this, sheet, from)
+
+  /**
    * Put sheet (add-or-replace by name).
    *
    * If a sheet with the same name exists, replaces it in-place and marks as modified for surgical
