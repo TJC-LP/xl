@@ -4,6 +4,7 @@ import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
 import com.tjclp.xl.formula.eval.{
   ColumnSlice,
   CriteriaKeys,
+  IndexLookup,
   EvalError,
   Evaluator,
   CriteriaMatcher,
@@ -767,8 +768,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   /**
    * #767: what one criteria call counts. Its row matches are tallied locally and added to
    * `MatcherCalls` once; the call counts as `CriteriaIndexed` when it tested only the candidate
-   * rows of the equality index, else as `CriteriaScan`; a call with no indexed criterion also
-   * counts as `CriteriaWindowOnly` (every criterion a numeric `>`, `>=`, `<` or `<=`) or
+   * rows of the criteria indexes, else as `CriteriaScan`; a call whose every criterion is a numeric
+   * `>`, `>=`, `<` or `<=` also counts as `CriteriaWindowOnly` (#920: answered by the order index
+   * when it can be), and a call with no criterion either index can look up as
    * `CriteriaNotIndexable`. Confined to the thread running the call.
    */
   @SuppressWarnings(Array("org.wartremover.warts.Var"))
@@ -782,9 +784,12 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     def criteria(parsed: List[CriteriaMatcher.Criterion]): Unit =
       shape =
         if !counting then None
-        else if parsed.exists(CriteriaKeys.lookup(_).isDefined) then None
         else if parsed.nonEmpty && parsed.forall(CriteriaKeys.isNumericWindow) then
           Some(RecalcCounters.Counter.CriteriaWindowOnly)
+        else if parsed.exists(q =>
+            CriteriaKeys.lookup(q).isDefined || CriteriaKeys.isNumericWindow(q)
+          )
+        then None
         else Some(RecalcCounters.Counter.CriteriaNotIndexable)
 
     def flush(counters: RecalcCounters): Unit =
@@ -821,13 +826,14 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
    * `0 until n`.
    *
    * Offsets are listed only when every criteria range reads through a column slice and at least one
-   * criterion is indexed ([[CriteriaKeys.lookup]]): then the candidates are the offsets every
-   * indexed criterion's equality index selects ([[PassCache.candidates]]). Every candidate is still
-   * tested with `CriteriaMatcher.matches` for every criterion, in order, so the call counts the
-   * same rows as testing every offset: an offset left out matches no indexed criterion. The
-   * functions that use this read every criteria value from a slice (never a `Left`) and compute
-   * only on matching rows, in ascending order, so they add the same values in the same order and
-   * meet the same first error.
+   * criterion is indexed: an equality criterion ([[CriteriaKeys.lookup]]) or a numeric window
+   * ([[CriteriaKeys.window]], #920; the windows on one range merge into one interval,
+   * [[IndexLookup.of]]). Then the candidates are the offsets every indexed lookup selects
+   * ([[PassCache.candidates]]). Every candidate is still tested with `CriteriaMatcher.matches` for
+   * every criterion, in order, so the call counts the same rows as testing every offset: an offset
+   * left out matches no indexed criterion. The functions that use this read every criteria value
+   * from a slice (never a `Left`) and compute only on matching rows, in ascending order, so they
+   * add the same values in the same order and meet the same first error.
    */
   private def candidateOffsets(
     ctx: EvalContext,
@@ -837,9 +843,9 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
   ): Option[IndexedSeq[Int]] =
     call.criteria(columns.map(_._2))
     val sliced = columns.map((column, criterion) => column.sliced.map((_, criterion)))
-    val pairs = sliced.flatten.flatMap { case ((slice, firstRow), criterion) =>
-      CriteriaKeys.lookup(criterion).map(keys => (slice, keys, firstRow))
-    }
+    val pairs = IndexLookup.of(sliced.flatten.map { case ((slice, firstRow), criterion) =>
+      (slice, firstRow, criterion)
+    })
     if n <= 0 || sliced.exists(_.isEmpty) || pairs.isEmpty then None
     else
       ctx.aggregateMemo

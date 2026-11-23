@@ -287,6 +287,12 @@
 
 **10,398 test cases** (the #891 fixpoint criteria cache (PR C, on #902), 2026-11-19): 10,398 passed, 0 failed, none ignored. Counts include skipped cases.
 
+Issue #526 local candidate (2026-11-05) adds 13 test cases by source: 11 in the new core
+`SheetAdoptionSpec`, one OOXML round-trip case and one OOXML `StyleIndexSpec` case.
+The dated aggregate receipt above remains historical; final execution counts/results are recorded
+in the contribution package and fresh validation receipts, not inferred by adding source counts.
+
+
 | Module | Tests | Covers |
 |--------|-------|--------|
 | xl-evaluator | 4508 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |

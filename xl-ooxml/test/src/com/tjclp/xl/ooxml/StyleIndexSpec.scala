@@ -275,3 +275,16 @@ class StyleIndexSpec extends FunSuite:
       )
     finally Files.deleteIfExists(path)
   }
+
+  test("GH-526: adoption must not silently change effective workbook default font") {
+    val sheet = Sheet("Portable").put(ref"A1", "text")
+    val source = Workbook(sheet).withDefaultFont(Font("Times New Roman", 10.0))
+    val destination = Workbook("Destination")
+    val rawCopied = destination.put(sheet)
+    assertNotEquals(
+      StyleIndex.fromWorkbook(rawCopied)._1.fonts.headOption,
+      StyleIndex.fromWorkbook(source)._1.fonts.headOption
+    )
+    assert(destination.adopt(sheet, source).isLeft)
+
+  }

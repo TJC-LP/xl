@@ -1118,6 +1118,10 @@ class WorkbookLintSpec extends FunSuite:
     assertEquals(WorkbookLint.externalOrdinals("[2]!ExtName"), Set(2))
     assertEquals(WorkbookLint.externalOrdinals("=[1]Sheet1!A1"), Set(1))
     assertEquals(WorkbookLint.externalOrdinals("'[12]Ext'!A1*[3]Ext!B1"), Set(12, 3))
+    // GH-526: apostrophe escapes inside structured headers cannot hide later external refs.
+    assertEquals(WorkbookLint.externalOrdinals("SUM(Table1['[Col])+[1]Data!A1"), Set(1))
+    assertEquals(WorkbookLint.externalOrdinals("SUM(Table1[Col']])+[2]Data!A1"), Set(2))
+    assertEquals(WorkbookLint.externalOrdinals("SUM(Table1['[3']])"), Set.empty[Int])
     // ordinal 0 is the self-workbook
     assertEquals(WorkbookLint.externalOrdinals("[0]!ThisBookName"), Set.empty[Int])
     // structured references — including a column literally named "3" — never count

@@ -118,6 +118,13 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     "\"\"",
     "\"<>a\"",
     "\">0\"",
+    // #920: numeric windows, answered by the order index (one interval per range when merged)
+    "\">=1\"",
+    "\"<2\"",
+    "\"<=2.5\"",
+    "\">-1E+999999999\"",
+    "\"<\"&DATE(1900,1,2)",
+    "\">=\"&DATE(1900,1,1)",
     "\"a*\"",
     "\"=a*\"",
     "\"=\"",
@@ -163,6 +170,10 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
         s"AVERAGEIFS($v,$a,$c1,$o,$c2)",
         s"MINIFS($v,$b,$c1,$a,$c2)",
         s"MAXIFS($v,$a,$c1,$d,$c3)",
+        // #920: two criteria on one range (a window pair merges into one interval)
+        s"COUNTIFS($a,$c1,$a,$c2)",
+        s"SUMIFS($v,$b,$c1,$b,$c2,$a,$c3)",
+        s"SUMIFS(Data!C:C,Data!B:B,$c1,Data!B:B,$c2)",
         s"SUM(COUNTIFS($a,{\"a\",\"b\",1},$b,$c2))",
         s"SUM(SUMIFS($v,$b,{1,2,TRUE},$a,$c1))",
         // whole columns: the blank tail counts when every criterion matches a blank
@@ -337,15 +348,16 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     assertEquals(values.get(at("A4")), Some(num(lane3.filter(_ <= 500).foldLeft(0)(math.max))))
     assertEquals(values.get(at("A5")), Some(num(lane3.size)))
     val snap = counters.snapshot
-    // six calls have an equality criterion; the last is window-only and scans
-    assertEquals(snap(Counter.CriteriaIndexed), 6L)
-    assertEquals(snap(Counter.CriteriaScan), 1L)
+    // six calls have an equality criterion; the last is window-only, answered by the order index
+    // since #920 (years 2023 and 2024: 400 of the 1,000 rows)
+    assertEquals(snap(Counter.CriteriaIndexed), 7L)
+    assertEquals(snap(Counter.CriteriaScan), 0L)
     assertEquals(snap(Counter.CriteriaWindowOnly), 1L)
     assertEquals(snap(Counter.ScanFallbacks), 0L)
     // indexed calls test their 100 candidates: one pair each for A1, A5 (lane bucket = the year
     // bucket's intersection), two for A2, A3, A4 (MAXIFS: D only on lane matches) and A6; the
-    // window-only call tests all 1,000 rows
-    assert(snap(Counter.MatcherCalls) <= 6L * 2 * 100 + 1000L, snap.render)
+    // window-only call tests its 400
+    assert(snap(Counter.MatcherCalls) <= 6L * 2 * 100 + 400L, snap.render)
   }
 
   test("criteria that select more than half the rows test every row, through the slice") {
@@ -359,8 +371,48 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
       recalculateWithMemo(book, sequential(), new Evaluator.AggregateMemo(counters = counters))
     assertEquals(result.evaluated.get(out).flatMap(_.get(at("B1"))), Some(num(501)))
     // "hi" holds rows 501..1001: more than half, so B1 scans its 1,000 rows
-    assertEquals(counters.snapshot(Counter.CriteriaIndexed), 6L)
-    assertEquals(counters.snapshot(Counter.CriteriaScan), 2L)
+    assertEquals(counters.snapshot(Counter.CriteriaIndexed), 7L)
+    assertEquals(counters.snapshot(Counter.CriteriaScan), 1L)
+  }
+
+  test("#920: a date-window SUMIFS tests only its month's rows, with the same results") {
+    // Data!A2:A1201 dates over 2024-2025, one a day from 2024-01-01 then again (600 days, twice);
+    // B = row number; Out holds one SUMIFS and one COUNTIFS per month of 2024
+    val start = java.time.LocalDate.of(2024, 1, 1)
+    val sheet = (2 to 1201).foldLeft(Sheet(data)) { (s, r) =>
+      val day = start.plusDays(((r - 2) % 600).toLong).atStartOfDay
+      s.put(ARef.from0(0, r - 1), CellValue.DateTime(day)).put(ARef.from0(1, r - 1), num(r))
+    }
+    val outSheet = (1 to 12).foldLeft(Sheet(out)) { (s, m) =>
+      val window = s"""Data!A:A,">="&DATE(2024,$m,1),Data!A:A,"<"&EDATE(DATE(2024,$m,1),1)"""
+      s.put(ARef.from0(0, m - 1), CellValue.Formula(s"SUMIFS(Data!B:B,$window)"))
+        .put(ARef.from0(1, m - 1), CellValue.Formula(s"COUNTIFS($window)"))
+    }
+    val wb = Workbook(Vector(sheet, outSheet))
+    val on = RecalcCounters.create()
+    val off = RecalcCounters.create()
+    val result = recalculateWithMemo(wb, sequential(), new Evaluator.AggregateMemo(counters = on))
+    assertEquals(result, recalculateWithMemo(wb, sequential(), cachesOff()))
+    assertEquals(
+      result,
+      recalculateWithMemo(
+        wb,
+        sequential(),
+        new Evaluator.AggregateMemo(counters = off, criteriaIndex = false)
+      )
+    )
+    val values = result.evaluated.getOrElse(out, Map.empty)
+    // January: rows 2..32 and 602..632 (days 0..30 of both cycles)
+    assertEquals(values.get(at("B1")), Some(num(62)))
+    assertEquals(values.get(at("A1")), Some(num((2 to 32).sum + (602 to 632).sum)))
+    val (a, b) = (on.snapshot, off.snapshot)
+    assertEquals(a(Counter.CriteriaIndexed), 24L, a.render)
+    assertEquals(a(Counter.CriteriaWindowOnly), 24L)
+    // each call tests both criteria on its month's ~60 rows; without the index, every used row
+    assert(a(Counter.MatcherCalls) <= 24L * 2 * 62, a.render)
+    assert(b(Counter.MatcherCalls) >= 24L * 1200, b.render)
+    // one slice (the date column; the sum range is read cell by cell), so one order index
+    assertEquals(a(Counter.SlicesBuilt), 1L)
   }
 
   test("an empty-text criterion stays on the matcher, blank tail included") {
@@ -386,6 +438,26 @@ class CriteriaIndexLawSpec extends ScalaCheckSuite:
     // only A1 has an indexed criterion
     assertEquals(counters.snapshot(Counter.CriteriaIndexed), 1L)
     assertEquals(counters.snapshot(Counter.CriteriaNotIndexable), 2L)
+  }
+
+  test("a mixed COUNTIFS tests the unindexed window only on equality candidates") {
+    val sheet = (1 to 600).foldLeft(Sheet(data)) { (s, row) =>
+      s.put(ARef.from0(0, row - 1), CellValue.Text(if row % 60 == 0 then "pick" else "other"))
+        .put(ARef.from0(1, row - 1), num(row))
+    }
+    val query = CellValue.Formula("""COUNTIFS(Data!A:A,"pick",Data!B:B,">300")""")
+    val wb = Workbook(Vector(sheet, Sheet(out).put(at("A1"), query)))
+    val counters = RecalcCounters.create()
+    // Two text keys fit. An order index with 600 distinct numeric keys does not.
+    val memo = new Evaluator.AggregateMemo(
+      counters = counters,
+      limits = PassCache.DefaultLimits.copy(maxIndexBytes = 8192L)
+    )
+    val result = recalculateWithMemo(wb, sequential(), memo)
+    assertEquals(result, recalculateWithMemo(wb, sequential(), cachesOff()))
+    assertEquals(result.evaluated.get(out).flatMap(_.get(at("A1"))), Some(num(5)))
+    assertEquals(counters.snapshot(Counter.CriteriaIndexed), 1L)
+    assert(counters.snapshot(Counter.MatcherCalls) <= 20)
   }
 
   test("a tiny index budget scans instead, with the same results") {
