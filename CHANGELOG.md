@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (pinned under `022`, `002` and `077`). Residual: the JVM can neither read nor copy a POSIX.1e
   ACL (Linux `setfacl`), so a replaced file with one loses it, and its group bits, which were the
   ACL mask, now apply to the owning group.
+- **`xl --version --json` is a success envelope** (#937): it exited 2 with `USAGE` ("Unexpected
+  option: --version"). It now prints the `ok:true` envelope with `data.version` and exits 0, in
+  either order and with `-v`; plain `xl --version` still prints the bare version.
 
 ## [0.27.0] - 2026-11-23
 
