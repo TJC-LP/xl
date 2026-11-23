@@ -89,17 +89,17 @@ class XlsxWriterFileModeSpec extends FunSuite:
       catch case _: Exception => false
     }
 
-  test("an overwritten output keeps its group with its mode (GH-868 review)") {
+  test("an overwritten output keeps its group and its exact mode (GH-868 review, #930)") {
     assume(posix, "POSIX permissions only")
     val dir = Files.createTempDirectory("xl-gh868-group-")
     val dest = dir.resolve("dest.xlsx")
     Files.writeString(dest, "old")
-    setMode(dest, "rw-r--r--")
+    setMode(dest, "rw-rw----")
     val other = regroup(dest)
     assume(other.isDefined, "needs a second group the user belongs to")
     assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
     assertEquals(Some(group(dest)), other)
-    assertEquals(mode(dest), "rw-r--r--")
+    assertEquals(mode(dest), "rw-rw----")
   }
 
   test("group bits are capped at the others bits when the group cannot be kept (GH-868 review)") {
