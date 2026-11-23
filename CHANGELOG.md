@@ -23,6 +23,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the merge operation clears. **Behaviour change:** merging used to keep every hidden value,
   invisible in Excel yet counted by `SUM`; the batch `merge` op is now cell-mutating (its batch
   triggers the trailing recalculation) and `Edit.Merge` reports its range as touched content.
+- **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
+  qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
+  formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)
+  and the batch `putf` op (one cell, `from` drag, `values`; in memory and streamed, an earlier
+  `add-sheet` of the same batch included) now store `=sheet1!A1` as `=Sheet1!A1`, `='my data'!A1`
+  as `='My Data'!A1` and `=data!rate` as `=Data!rate`. A qualifier that names no sheet (or folds
+  onto two tabs differing only by case), an external-workbook reference (`[1]sheet1!A1`) and a
+  string literal (`INDIRECT("sheet1!A1")`) stay as typed, and a formula already in canonical form
+  is stored byte-identical. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
+  `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
+  `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer
+  lowers a sheet-qualified formula (the kernel has no tab names). Formulas read from a file are
+  never rewritten. Evaluation is unchanged. **Behaviour change:** the stored formula text (and the
+  text `view --formulas` shows) differs from the typed text when a qualifier's case differs.
+  Not covered: `Sheet.put(ref, fx"…")` (no workbook in scope), defined-name `refersTo`,
+  conditional-format and data-validation formulas, and `fill`/`copy` of existing formulas.
 
 ## [0.27.0] - 2026-11-23
 

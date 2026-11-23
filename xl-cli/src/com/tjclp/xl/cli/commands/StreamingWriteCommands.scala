@@ -11,6 +11,7 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, TExpr}
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
@@ -263,16 +264,21 @@ object StreamingWriteCommands:
       (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      (sheetName, worksheetPath) <- resolveSheetTarget(
+      meta <- readMeta(sourcePath)
+      (sheetName, worksheetPath) <- resolveSheetTargetIn(
         sourcePath,
+        meta,
         sheetNameOpt,
         qualified,
         unqualifiedContext("putf", refStr, refOrRange)
       )
+      // GH-936: each sheet qualifier stored as the tab's own name, as the in-memory verb does
+      tabs = meta.sheets.map(_.name)
+      authored = formulas.map(FormulaOps.canonicalSheets(_, tabs))
 
       // Build formula map — every formula through the verb's parser gate first (GH-663: the
       // in-memory verb and every batch shape refuse an unparseable formula; this arm did not)
-      built <- (refOrRange, formulas) match
+      built <- (refOrRange, authored) match
         case (Left(ref), List(singleFormula)) =>
           parsedFormulaText(singleFormula).map(formula =>
             Map(ref -> CellValue.Formula(formula, None)) -> Vector.empty[OffGridRef]
@@ -510,8 +516,12 @@ object StreamingWriteCommands:
       (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, meta, sheetNameOpt, scoped)
       _ <- refuseOtherSheets(scoped, meta.sheets.map(_.name), sheetName)
 
-      // A ref qualified with the streamed sheet is honoured as its bare form
-      ops = scoped.map(s => s.copy(op = OpRegistry.unqualified(s.op)))
+      // A ref qualified with the streamed sheet is honoured as its bare form; GH-936: authored
+      // formulas spell each sheet qualifier as the tab's own name, as the in-memory batch does
+      tabs = meta.sheets.map(_.name)
+      ops = scoped.map(s =>
+        s.copy(op = BatchParser.canonicalFormulas(OpRegistry.unqualified(s.op), tabs))
+      )
 
       // Separate operations into cell patches vs worksheet metadata
       (cellPatches, stylesXml, worksheetMetadata, summary, offGrid) <-

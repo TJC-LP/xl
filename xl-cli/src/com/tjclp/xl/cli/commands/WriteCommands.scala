@@ -51,6 +51,7 @@ import com.tjclp.xl.formula.eval.{
   StructuralEditor
 }
 import com.tjclp.xl.formula.graph.NameChanges
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
@@ -536,6 +537,34 @@ object WriteCommands:
     policy: WritePolicy = WritePolicy.default,
     warn: Warning => IO[Unit] = _ => IO.unit,
     array: Boolean = false
+  ): IO[String] =
+    // GH-936: each sheet qualifier is stored as the tab's own name, as Excel stores an entered
+    // formula (`=sheet1!A1` becomes `=Sheet1!A1`); a drag shifts the respelled text
+    val tabs = wb.sheets.map(_.name)
+    putFormulaAuthored(
+      wb,
+      sheetOpt,
+      refStr,
+      formulas.map(FormulaOps.canonicalSheets(_, tabs)),
+      outputPath,
+      config,
+      stream,
+      policy,
+      warn,
+      array
+    )
+
+  private def putFormulaAuthored(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    refStr: String,
+    formulas: List[String],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit],
+    array: Boolean
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
