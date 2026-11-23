@@ -17,3 +17,5 @@ Changed (2):
 
 Summary: 2 changed, 0 added, 0 removed cell(s) across 1 sheet(s)
 ## stderr
+Error: Differences found: <DIR>/simple.xlsx vs <DIR>/changed.xlsx
+  code: DIFFERENCES_FOUND

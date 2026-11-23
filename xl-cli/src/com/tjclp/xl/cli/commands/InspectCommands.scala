@@ -284,8 +284,8 @@ object InspectCommands:
   /**
    * `audit [-s S] [--fail-on-findings]`: the [[WorkbookAudit]] buckets, restricted to `-s` when
    * given. With `--fail-on-findings` a dirty book is the `AUDIT_FINDINGS` signal (exit 1) whose
-   * report is the payload — text mode prints the report and no `Error:` line, `--json` keeps it as
-   * `data`; without the flag the same report exits 0.
+   * report is the payload — text mode prints the report on stdout and its `Error:` block on stderr
+   * (#933), `--json` keeps it as `data`; without the flag the same report exits 0.
    */
   def audit(
     wb: Workbook,
@@ -307,7 +307,11 @@ object InspectCommands:
             ErrorCode.AUDIT_FINDINGS,
             findingsHeadline(audit) + sheetOpt.fold("")(s => s" on ${s.name.value}"),
             hint = Some(
-              "recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing"
+              // #934: recalculating cannot clear an unconverged cycle; say what does
+              (if audit.unconvergedCycles.nonEmpty then
+                 "raise the workbook's iteration limit or fix the unconverged cycle; "
+               else "") +
+                "recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing"
             )
           )
         )

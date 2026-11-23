@@ -43,6 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `recalc --json` always carries `data.unconvergedCycles` (`[{cells, verdict, rounds, maxChange,
   stalled}]`, `[]` when every cycle converged), the same shape `audit --json` gives. Under
   `--strict` the non-convergence is the gate's reason, as before, and no warning is raised.
+- **Behaviour change: findings and failed gates write their `Error:` line to stderr** (#933).
+  `recalc --strict`, `put --strict` and every other `--strict` write that fails its gate, `audit
+  --fail-on-findings`, `diff` with differences and `lint` with findings exited 1 with an empty
+  stderr, while the xl-cli skill promises one `Error: <message>` line (only `view --eval --strict`
+  gave one). Every such run now writes its error to stderr as a failure does: in text mode the
+  diagnostics block (`Error: <message>`, `code:`, and `hint:` when there is one) after the report,
+  which stays on stdout unchanged; under `--json` the one-line `Error: <message>` echo beside the
+  envelope, whose `data` still holds the report. A `--strict` gate's error now carries a hint (the
+  summary on stdout names the failing cells; drop `--strict` to write the file anyway), and
+  `audit --fail-on-findings` on an unconverged cycle hints at the iteration limit.
 
 ## [0.27.0] - 2026-11-23
 

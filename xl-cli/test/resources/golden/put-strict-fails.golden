@@ -1,0 +1,22 @@
+## args
+-f
+<DIR>/circular.xlsx
+-s
+Data
+-o
+<DIR>/put-strict-fails.xlsx
+--strict
+put
+B1
+5
+## exit
+1
+## stdout
+Put: B1 = 5 (number)
+Recalculated 0 formulas; 1 error (Data!A1: Formula error in 'A1+1': Circular reference)
+NOT saved (--strict failure): nothing written to <DIR>/put-strict-fails.xlsx
+STRICT FAILURE (--strict): 1 formula evaluation error(s)
+## stderr
+Error: STRICT FAILURE (--strict): 1 formula evaluation error(s)
+  code: RECALC_GATE
+  hint: the summary on stdout names the failing cells; drop --strict to write the file anyway

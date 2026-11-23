@@ -26,9 +26,10 @@ recalc
   "error": {
     "code": "RECALC_GATE",
     "message": "STRICT FAILURE (--strict): 1 formula evaluation error(s)",
-    "hint": null,
+    "hint": "the summary on stdout names the failing cells; drop --strict to write the file anyway",
     "candidates": [],
     "location": null
   }
 }
 ## stderr
+Error: STRICT FAILURE (--strict): 1 formula evaluation error(s)

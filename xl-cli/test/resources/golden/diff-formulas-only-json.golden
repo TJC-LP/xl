@@ -72,3 +72,4 @@ diff
   }
 }
 ## stderr
+Error: Differences found: <DIR>/simple.xlsx vs <DIR>/changed.xlsx

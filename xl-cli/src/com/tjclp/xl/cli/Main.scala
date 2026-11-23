@@ -2112,7 +2112,11 @@ EXAMPLES:
               Outcome.signal(
                 cmd.verb,
                 Payload.Text(summary, None, false, strict.facts),
-                CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
+                CliError(
+                  ErrorCode.RECALC_GATE,
+                  strictReason(summary),
+                  hint = Some(strictHint)
+                ),
                 collected
               )
             // ADR-017 §2.10: a read verb that completed with findings (`audit --fail-on-findings`)
@@ -2140,6 +2144,10 @@ EXAMPLES:
   private def strictReason(summary: String): String =
     val lines = summary.linesIterator.toVector
     lines.find(_.startsWith("STRICT FAILURE")).orElse(lines.headOption).getOrElse(summary)
+
+  /** #933: what the gate's `Error:` block on stderr suggests; the summary is on stdout. */
+  private val strictHint: String =
+    "the summary on stdout names the failing cells; drop --strict to write the file anyway"
 
   /**
    * The GH-464 temp→target rewrite on a prose payload; JSON payloads never name the staging file.

@@ -52,9 +52,10 @@ audit
   "error": {
     "code": "AUDIT_FINDINGS",
     "message": "Audit: 1 finding",
-    "hint": "recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing",
+    "hint": "raise the workbook's iteration limit or fix the unconverged cycle; recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing",
     "candidates": [],
     "location": null
   }
 }
 ## stderr
+Error: Audit: 1 finding

@@ -26,3 +26,6 @@ External references (1):
   Calc!G1
 Calculation: iterative (100 iterations, max change 0.001)
 ## stderr
+Error: Audit: 5 findings
+  code: AUDIT_FINDINGS
+  hint: recalculate (`xl recalc`) or fix the listed cells; omit --fail-on-findings to report without failing

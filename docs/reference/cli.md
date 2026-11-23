@@ -2598,9 +2598,11 @@ findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that
 recalculation summary), so nothing text mode showed is lost.
 
 **Channels.** With `--json` the envelope is the only thing on stdout. When a run fails (exit `2`
-or `3`), stderr also carries the single line `Error: <message>` so a human tailing a log still
-sees it; the `code:` and `hint:` lines live in the envelope instead. Findings and gates (exit `1`)
-print nothing on stderr, exactly as text mode does — the report is in `data`. A wrong command line (unknown verb, a
+or `3`) or completes with findings or a failed gate (exit `1`), stderr also carries the single
+line `Error: <message>` so a human tailing a log still sees it; the `code:` and `hint:` lines live
+in the envelope instead, and a finding's report stays in `data`. In text mode the report of a
+finding or gate is on stdout and its `Error:` block (with `code:` and any `hint:`) on stderr, as
+for a failure (#933). A wrong command line (unknown verb, a
 verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — exit `2`,
 `code: USAGE` — when `--json` is among the arguments.
 

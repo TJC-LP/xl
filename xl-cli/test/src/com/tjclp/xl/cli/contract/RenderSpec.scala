@@ -136,8 +136,8 @@ class RenderSpec extends FunSuite:
     )
     assertEquals(
       rendered.stderr,
-      "",
-      "a signal's report is its data: no Error: line, as in text mode"
+      "Error: STRICT FAILURE (--strict): 1 formula evaluation error(s)",
+      "#933: a signal keeps its report as data and still echoes its one Error: line"
     )
   }
 
@@ -261,14 +261,30 @@ class RenderSpec extends FunSuite:
     )
   }
 
-  test("text: a gate's report stays on stdout and stderr carries no Error line") {
+  test("text: a gate's report stays on stdout and stderr carries its diagnostics block (#933)") {
     val summary = "Recalculated 1 formula\nSTRICT FAILURE (--strict): 1 formula evaluation error(s)"
     val gate =
       CliError(ErrorCode.RECALC_GATE, "STRICT FAILURE (--strict): 1 formula evaluation error(s)")
+    val warning = Warning(WarningCode.RECALC_ERRORS, "1 formula could not be evaluated")
     assertEquals(
       Render.text(Outcome.signal("recalc", Payload.Text(summary, Some("out.xlsx"), true), gate)),
-      Rendered(summary, "")
+      Rendered(summary, Diagnostics.render(gate))
     )
+    assertEquals(
+      Render
+        .text(
+          Outcome.signal("recalc", Payload.text(summary), gate, Vector(warning))
+        )
+        .stderr,
+      s"${Diagnostics.render(gate)}\n${Diagnostics.renderWarning(warning)}",
+      "the Error: line first, then the warnings, as for any failure"
+    )
+    val rendered = Render
+      .text(Outcome.signal("recalc", Payload.text(summary), gate))
+      .stderr
+      .linesIterator
+      .toList
+    assertEquals(rendered.count(_.startsWith("Error: ")), 1, "exactly one Error: line")
   }
 
   test("text: a Json payload prints as indented JSON") {

@@ -12,3 +12,6 @@ Recalculated 2 formulas; WARNING: iterative calculation exhausted 5 round(s) wit
 NOT saved (--strict failure): nothing written to <DIR>/recalc-unconverged-strict.xlsx
 STRICT FAILURE (--strict): iterative calculation exhausted 5 round(s) without converging (last values kept)
 ## stderr
+Error: STRICT FAILURE (--strict): iterative calculation exhausted 5 round(s) without converging (last values kept)
+  code: RECALC_GATE
+  hint: the summary on stdout names the failing cells; drop --strict to write the file anyway

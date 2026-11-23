@@ -198,7 +198,9 @@ class ErrorContractSpec extends CatsEffectSuite:
       assertEquals(differs.exit, 1)
       // B1 changed and B4's cache followed it (GH-607)
       assert(differs.stdout.contains("Summary: 2 changed"), differs.stdout)
-      assertEquals(differs.stderr, "")
+      // #933: the report on stdout, the verdict's Error: block on stderr
+      assert(differs.stderr.startsWith("Error: Differences found: "), differs.stderr)
+      assert(differs.stderr.contains("  code: DIFFERENCES_FOUND"), differs.stderr)
       assertEquals(unreadable.exit, 3, unreadable.stderr)
       assertEquals(unreadable.stdout, "")
       assert(unreadable.stderr.startsWith("Error: "), unreadable.stderr)
@@ -215,7 +217,8 @@ class ErrorContractSpec extends CatsEffectSuite:
     yield
       assertEquals(findings.exit, 1, findings.stderr)
       assert(findings.stdout.contains("finding(s)"), findings.stdout)
-      assertEquals(findings.stderr, "")
+      assert(findings.stderr.startsWith("Error: "), findings.stderr)
+      assert(findings.stderr.contains("  code: LINT_FINDINGS"), findings.stderr)
       assertFailure(
         both,
         2,
@@ -444,11 +447,20 @@ class ErrorContractSpec extends CatsEffectSuite:
       )
       assert(viaOutput.stdout.contains("STRICT FAILURE (--strict)"), viaOutput.stdout)
       assert(!viaOutput.stdout.contains("Saved:"), viaOutput.stdout)
-      assertEquals(viaOutput.stderr, "", "a gate is not an error")
+      // #933: a gate is not a failure, but it says why on stderr: exactly one Error: line
+      assertEquals(
+        viaOutput.stderr.linesIterator.toList,
+        List(
+          "Error: STRICT FAILURE (--strict): 1 formula evaluation error(s)",
+          "  code: RECALC_GATE",
+          "  hint: the summary on stdout names the failing cells; drop --strict to write the " +
+            "file anyway"
+        )
+      )
       assert(!created, "a failed --strict gate must not create the -o file")
       assertEquals(viaInPlace.exit, 1, viaInPlace.stderr)
       assert(viaInPlace.stdout.contains("NOT saved (--strict failure)"), viaInPlace.stdout)
-      assertEquals(viaInPlace.stderr, "")
+      assertEquals(viaInPlace.stderr, viaOutput.stderr)
       assert(java.util.Arrays.equals(before, after), "-i leaves the input untouched")
   }
 
