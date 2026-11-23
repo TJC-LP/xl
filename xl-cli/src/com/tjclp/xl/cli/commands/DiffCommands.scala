@@ -299,7 +299,7 @@ object DiffCommands:
       mapDeltas(sheetA.comments, sheetB.comments, sameComment)
 
     val (linksAdded, linksRemoved, linksChanged) =
-      mapDeltas(hyperlinks(sheetA), hyperlinks(sheetB), (a: String, b: String) => a == b)
+      linkDeltas(hyperlinks(sheetA), hyperlinks(sheetB))
 
     val cellDiff = SheetDiff(
       name = sheetA.name.value,
@@ -370,8 +370,33 @@ object DiffCommands:
   private def sameComment(a: Comment, b: Comment): Boolean =
     a.text.toPlainText == b.text.toPlainText && a.author == b.author
 
-  private def hyperlinks(sheet: Sheet): Map[ARef, String] =
-    sheet.cells.iterator.flatMap(cell => cell.hyperlink.map(h => cell.ref -> h.target)).toMap
+  /**
+   * A sheet's links by the cells they cover: a cell's own link under its one-cell range, and each
+   * range hyperlink under the rectangles it still covers (#931), never expanded to its cells.
+   */
+  private def hyperlinks(sheet: Sheet): Map[CellRange, String] =
+    val own =
+      sheet.cells.iterator.flatMap(c => c.hyperlink.map(h => CellRange(c.ref, c.ref) -> h.target))
+    val ranged = sheet.rangeHyperlinks.iterator.flatMap(r => r.coverage.map(_ -> r.link.target))
+    (own ++ ranged).toMap
+
+  /** added/removed/changed links between two sheets, `A1` or `A1:A5`, in row-major order. */
+  private def linkDeltas(
+    mapA: Map[CellRange, String],
+    mapB: Map[CellRange, String]
+  ): (Vector[String], Vector[String], Vector[String]) =
+    def show(r: CellRange): String = if r.start == r.end then r.start.toA1 else r.toA1
+    val keys = (mapA.keySet ++ mapB.keySet).toVector.sortBy(r =>
+      (r.start.row.index0, r.start.col.index0, r.end.row.index0, r.end.col.index0)
+    )
+    keys.foldLeft((Vector.empty[String], Vector.empty[String], Vector.empty[String])) {
+      case ((add, rem, chg), key) =>
+        (mapA.get(key), mapB.get(key)) match
+          case (None, Some(_)) => (add :+ show(key), rem, chg)
+          case (Some(_), None) => (add, rem :+ show(key), chg)
+          case (Some(a), Some(b)) if a != b => (add, rem, chg :+ show(key))
+          case _ => (add, rem, chg)
+    }
 
   // ==========================================================================
   // Sheet structure

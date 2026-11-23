@@ -315,7 +315,10 @@ private[xl] object EditInterpreter:
         case Edit.RemoveComment(at) => pure(at.sheet, Vector.empty)(_.removeComment(at.ref))
         case Edit.Hyperlink(at, target) =>
           pure(at.sheet, Vector.empty) { s =>
-            s.put(target.fold(s(at.ref).clearHyperlink)(s(at.ref).withHyperlink))
+            // `#Sheet1!A1` authoring dialect: strip the `#` as Cell.withHyperlink does (GH-406)
+            target.fold(s.removeHyperlinks(at.range)) { t =>
+              s.setHyperlink(at.range, com.tjclp.xl.cells.Hyperlink(t.stripPrefix("#")))
+            }
           }
         case Edit.AddConditionalFormat(sheet, ranges, rules) =>
           pure(sheet, Vector.empty)(_.conditionalFormat(ranges, rules))

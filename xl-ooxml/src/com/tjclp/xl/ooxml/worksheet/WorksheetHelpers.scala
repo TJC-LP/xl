@@ -11,6 +11,7 @@ import com.tjclp.xl.sheets.{
   ColumnProperties,
   FreezePane,
   PageSetup,
+  RangeHyperlink,
   RowProperties,
   Sheet,
   SheetView
@@ -339,12 +340,17 @@ private[ooxml] val worksheetCanonicalOrder: Vector[String] = Vector(
 // Cell.hyperlink is the typed model. On write we emit a <hyperlinks> element (and, for external
 // targets, sheet .rels relationships) so the model is no longer a silent no-op.
 
-/** A hyperlink to emit: cell ref, target, whether external (needs a rel), and its rel id. */
+/**
+ * A hyperlink to emit: its `ref` as written (`B7`, or a range such as `A1:A5`), target, whether
+ * external (needs a rel), its rel id, and the tooltip/display a range hyperlink carries (#932).
+ */
 private[ooxml] case class HyperlinkEntry(
-  ref: ARef,
+  ref: String,
   target: String,
   external: Boolean,
-  relId: String
+  relId: String,
+  tooltip: Option[String] = None,
+  display: Option[String] = None
 )
 
 /** External hyperlinks (URLs/mailto/file) need a relationship; others are internal `location`s. */
@@ -352,22 +358,44 @@ private[ooxml] def isExternalHyperlink(target: String): Boolean =
   target.contains("://") || target.startsWith("mailto:") || target.startsWith("file:")
 
 /**
- * Collect a sheet's hyperlinks in deterministic order (by cell ref). External targets get a stable
- * relationship id ("rIdHL{n}") used by BOTH the `<hyperlink r:id>` attribute and the sheet .rels,
- * so the two agree without explicit plumbing (GH-235).
+ * Collect a sheet's hyperlinks in deterministic order: cell links by cell ref, then the range
+ * hyperlinks no source element writes (`fromSource`, see [[sourceRangeHyperlinks]]) in model order,
+ * one entry per rectangle they still cover (#932). External targets get a stable relationship id
+ * ("rIdHL{n}") used by BOTH the `<hyperlink r:id>` attribute and the sheet .rels, so the two agree
+ * without explicit plumbing (GH-235).
  */
 private[ooxml] def collectHyperlinks(
   sheet: Sheet,
-  reservedIds: Set[String] = Set.empty
+  reservedIds: Set[String] = Set.empty,
+  fromSource: Vector[RangeHyperlink] = Vector.empty
 ): Seq[HyperlinkEntry] =
   val ids = Iterator.from(1).map(i => s"rIdHL$i").filterNot(reservedIds)
-  sheet.cells.iterator.flatMap { cell =>
+  val cellLinks = sheet.cells.iterator.flatMap { cell =>
     cell.hyperlink.map { link =>
       val target = link.target
       val external = isExternalHyperlink(target)
-      HyperlinkEntry(cell.ref, target, external, if external then ids.next() else "")
+      HyperlinkEntry(cell.ref.toA1, target, external, if external then ids.next() else "")
     }
   }.toVector
+  val rangeLinks = sheet.rangeHyperlinks.iterator
+    .filterNot(link => fromSource.exists(_.sameLinkAs(link)))
+    .flatMap { link =>
+      val target = link.link.target
+      val external = isExternalHyperlink(target)
+      // the cells with their own link override the range there (#925)
+      val own = sheet.cells
+        .inRange(link.range)
+        .filter(_.hyperlink.isDefined)
+        .map(c => CellRange(c.ref, c.ref))
+      val parts = RangeHyperlink.remaining(link.range, link.excluded ++ own)
+      // one relationship serves every fragment of the link; a one-cell part keeps the `E2:E2`
+      // form, so a reread reads it back as this range link rather than as a cell link
+      val relId = if external && parts.nonEmpty then ids.next() else ""
+      parts
+        .map(part => HyperlinkEntry(part.toA1, target, external, relId, link.tooltip, link.display))
+    }
+    .toVector
+  cellLinks ++ rangeLinks
 
 /**
  * GH-235/GH-895: a sheet's hyperlink targets by rel id, from its rels of type
@@ -390,12 +418,53 @@ private[ooxml] def modeledHyperlink(
   e: Elem,
   hyperlinkTargets: Map[String, String]
 ): Option[(ARef, String)] =
-  val rid = e.attributes.collectFirst { case a: PrefixedAttribute if a.key == "id" => a.value.text }
-  val target = rid.flatMap(hyperlinkTargets.get).orElse(Option(e \@ "location").filter(_.nonEmpty))
   for
     ref <- ARef.parse(e \@ "ref").toOption
-    t <- target
+    t <- hyperlinkTarget(e, hyperlinkTargets)
   yield ref -> t
+
+/** The target a `<hyperlink>` names: its `r:id`'s hyperlink rel target, else its `location`. */
+private def hyperlinkTarget(e: Elem, hyperlinkTargets: Map[String, String]): Option[String] =
+  val rid = e.attributes.collectFirst { case a: PrefixedAttribute if a.key == "id" => a.value.text }
+  rid.flatMap(hyperlinkTargets.get).orElse(Option(e \@ "location").filter(_.nonEmpty))
+
+/**
+ * #931: the range hyperlink a direct `<hyperlink>` child puts on the model: a `ref` that is a range
+ * (`A1:A5`, or the `E2:E2` remnant a split writes) rather than one cell, with a target resolved
+ * like [[modeledHyperlink]]'s. The reader fills `Sheet.rangeHyperlinks` with it and the writer
+ * matches its source elements against the model through it, so the two share one rule.
+ */
+private[ooxml] def modeledRangeHyperlink(
+  e: Elem,
+  hyperlinkTargets: Map[String, String]
+): Option[RangeHyperlink] =
+  val ref = e \@ "ref"
+  for
+    _ <- Option.when(ARef.parse(ref).isLeft)(())
+    range <- CellRange.parse(ref).toOption
+    t <- hyperlinkTarget(e, hyperlinkTargets)
+  yield RangeHyperlink(
+    range,
+    com.tjclp.xl.cells.Hyperlink(t),
+    tooltip = Option(e \@ "tooltip").filter(_.nonEmpty),
+    display = Option(e \@ "display").filter(_.nonEmpty)
+  )
+
+/**
+ * #931: the range hyperlinks of a source `<hyperlinks>` element, from its direct children in
+ * document order (the children the reader selects; links nested in `mc:AlternateContent` are not
+ * modeled).
+ */
+private[ooxml] def sourceRangeHyperlinks(
+  hyperlinks: Elem,
+  hyperlinkTargets: Map[String, String]
+): Vector[RangeHyperlink] =
+  hyperlinks.child.iterator
+    .collect {
+      case e: Elem if e.label == "hyperlink" => modeledRangeHyperlink(e, hyperlinkTargets)
+    }
+    .flatten
+    .toVector
 
 /**
  * GH-895: the part of a preserved `<hyperlinks>` element the cell model does not own: a range `ref`
@@ -408,12 +477,21 @@ private[ooxml] def unmodeledHyperlinksElem(
   hyperlinkTargets: Map[String, String],
   sheet: Sheet
 ): Option[Elem] =
+  def sourceRange(e: Elem): Option[RangeHyperlink] = modeledRangeHyperlink(e, hyperlinkTargets)
   // rebindUsedNamespaces puts descendant prefix bindings on the preserved subtree root.
   def keep(node: Node, direct: Boolean): Seq[Node] = node match
     // The reader selects direct hyperlink children by label, regardless of their prefix.
     case e: Elem
         if direct && e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isDefined =>
       Nil
+    // #931: a direct range link is the model's: the matching entry says what it still covers, and
+    // a link no entry matches was removed
+    case e: Elem if direct && e.label == "hyperlink" && sourceRange(e).isDefined =>
+      sourceRange(e).fold(Seq[Node](e)) { source =>
+        sheet.rangeHyperlinks.find(_.sameLinkAs(source)).fold(Seq.empty[Node]) { model =>
+          uncoveredHyperlinks(e, source.range, sheet).flatMap(withoutExcluded(_, model.excluded))
+        }
+      }
     case e: Elem
         if e.label == "hyperlink" && (Option(e.prefix).isEmpty ||
           preserved.getNamespace(e.prefix) == nsSpreadsheetML) =>
@@ -426,6 +504,23 @@ private[ooxml] def unmodeledHyperlinksElem(
 
   val kept = preserved.child.flatMap(keep(_, direct = true))
   Option.when(kept.exists { case _: Elem => true; case _ => false })(preserved.copy(child = kept))
+
+/**
+ * #931: `fragment` (a copy of a source link) minus the parts a removal excluded. Unchanged when
+ * nothing is excluded, so an unedited link keeps its exact source element.
+ */
+private def withoutExcluded(fragment: Elem, excluded: Vector[CellRange]): Seq[Elem] =
+  if excluded.isEmpty then Seq(fragment)
+  else
+    CellRange
+      .parse(fragment \@ "ref")
+      .fold(
+        _ => Seq(fragment),
+        range =>
+          val parts = RangeHyperlink.remaining(range, excluded)
+          if parts == Vector(range) then Seq(fragment)
+          else parts.map(part => fragment % new UnprefixedAttribute("ref", part.toA1, Null))
+      )
 
 /** Keep the source link on the cells for which the writer will not emit a model hyperlink. */
 private def uncoveredHyperlinks(source: Elem, range: CellRange, sheet: Sheet): Seq[Elem] =
@@ -476,10 +571,13 @@ private[ooxml] def buildHyperlinksElem(entries: Seq[HyperlinkEntry]): Option[Ele
     val children = entries.map { e =>
       // GH-406: OOXML location wants no leading '#' — defense for targets that bypassed
       // Cell.withHyperlink (direct construction). External targets keep their fragments.
+      // ref, then r:id or location, then the tooltip and display a range link carries (#932)
+      val shown = e.display.fold(Null: MetaData)(d => new UnprefixedAttribute("display", d, Null))
+      val tipped = e.tooltip.fold(shown)(t => new UnprefixedAttribute("tooltip", t, shown))
       val tail: MetaData =
-        if e.external then new PrefixedAttribute("r", "id", e.relId, Null)
-        else new UnprefixedAttribute("location", e.target.stripPrefix("#"), Null)
-      val attrs = new UnprefixedAttribute("ref", e.ref.toA1, tail)
+        if e.external then new PrefixedAttribute("r", "id", e.relId, tipped)
+        else new UnprefixedAttribute("location", e.target.stripPrefix("#"), tipped)
+      val attrs = new UnprefixedAttribute("ref", e.ref, tail)
       Elem(null, "hyperlink", attrs, TopScope, minimizeEmpty = true)
     }
     // External entries use r:id — carry the binding so emission can hoist it (GH-291)

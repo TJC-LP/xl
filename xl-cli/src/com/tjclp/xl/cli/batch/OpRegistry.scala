@@ -291,8 +291,13 @@ object OpRegistry:
     name = "hyperlink",
     aliases = Vector.empty,
     fields = Vector(
-      req("ref", Ref, "The cell"),
-      opt("target", Str, "URL or internal location; omit to clear the hyperlink", "url")
+      req("ref", Range, "The cell or range; a range is one link over every cell in it"),
+      opt(
+        "target",
+        Str,
+        "URL or internal location; omit to clear the hyperlink of every cell in ref",
+        "url"
+      )
     ),
     oneOf = Vector.empty,
     sheetScoped = true,
@@ -302,7 +307,7 @@ object OpRegistry:
     streamable = false,
     cliVerb = None,
     since = "0.10.0",
-    doc = "Set or clear a cell hyperlink.",
+    doc = "Set or clear the hyperlink of a cell or of every cell in a range.",
     example = ujson.Obj(
       "op" -> ujson.Str("hyperlink"),
       "ref" -> ujson.Str("A1"),

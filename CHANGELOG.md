@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Batch `hyperlink` takes a range** (#932): `{"op":"hyperlink","ref":"A1:A5","target":"…"}`
+  links every cell of the range as one link over the selection, the way Excel applies a link to a
+  selected range. It is written as a single `<hyperlink ref="A1:A5">` with one relationship, and
+  no cell is created per position. With no `target` the op clears every link in the range: the
+  cells' own links, and the covered part of any range link, which splits around it. The library
+  equivalents are `Sheet.setHyperlink(range, link)` and `Sheet.removeHyperlinks(range)`, and
+  `Edit.Hyperlink` now targets an `Area` instead of a `Loc` (**Breaking** for code that builds it
+  directly: wrap a cell with `Area.cell(loc)`). The op stays refused under `--stream`.
+  `xl batch --schema` and `docs/reference/generated/batch-ops.md` say a range is accepted.
+
 ### Fixed
 
 - **A replaced file keeps its permission bits exactly** (#930): `-i`, `-o` over an existing file,
@@ -20,6 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`xl --version --json` is a success envelope** (#937): it exited 2 with `USAGE` ("Unexpected
   option: --version"). It now prints the `ok:true` envelope with `data.version` and exits 0, in
   either order and with `-v`; plain `xl --version` still prints the bare version.
+- **Cells under a range hyperlink report it** (#931): a worksheet link over a range
+  (`<hyperlink ref="A1:A5" r:id=… tooltip=…/>`, which Excel writes when a link is applied to a
+  selection) is now read into `Sheet.rangeHyperlinks` (`RangeHyperlink`: range, target, tooltip,
+  display). `sheet(ref).hyperlink`, `sheet.getRange(…)` and the new `sheet.hyperlinkAt(ref)` report
+  it for every covered cell that has no link of its own, and `xl cell` / `cell --json` show it
+  where they printed nothing or `null`. Covered cells are not materialised, so a whole-column link
+  stays one entry. `describe --full` counts a range link once, and `diff` reports range links by
+  the rectangles they cover. An unedited book writes the same bytes as before: the source element
+  is kept whenever the model still holds that link unchanged. Removing the link from part of the
+  range (batch `hyperlink` with no target, a contents clear, `Sheet.removeHyperlinks`) splits the
+  range around it as Excel does, keeping the source tooltip and display on the remaining parts,
+  and removing all of it drops the element and its relationship. Putting back a cell read through
+  `sheet(ref)` keeps the link inherited rather than splitting the range. `Sheet.put` of a cell whose
+  `hyperlink` is `None` does not remove a range link from that cell; use `removeHyperlinks`.
+  Range links nested in `mc:AlternateContent` are still kept as preserved XML without being
+  reported, and range links do not yet move with structural edits (#924).
 
 ### Changed
 

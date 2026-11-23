@@ -456,10 +456,15 @@ object EditSchema:
   private val hyperlink = spec(
     "hyperlink",
     Vector(
-      req("ref", Ref, "The cell"),
-      opt("target", Str, "URL or internal location; omit to clear the hyperlink", "url")
+      req("ref", Range, "The cell or range; a range is one link over every cell in it"),
+      opt(
+        "target",
+        Str,
+        "URL or internal location; omit to clear the hyperlink of every cell in ref",
+        "url"
+      )
     ),
-    "Set or clear a cell hyperlink.",
+    "Set or clear the hyperlink of a cell or of every cell in a range.",
     since = "0.10.0",
     batchOp = Some("hyperlink")
   )

@@ -18,7 +18,9 @@ object styleSyntax:
     @annotation.targetName("withCellStyleExt")
     def withCellStyle(ref: ARef, style: CellStyle): Sheet =
       val (newRegistry, styleId) = sheet.styleRegistry.register(style)
-      val cell = sheet(ref).withStyle(styleId)
+      // the stored cell, not `sheet(ref)`: that reports a covering range hyperlink (#931), which
+      // a raw store write would turn into an own link and split the range
+      val cell = sheet.cells.get(ref).getOrElse(Cell.empty(ref)).withStyle(styleId)
       sheet.copy(
         styleRegistry = newRegistry,
         cells = sheet.cells.updated(cell)

@@ -1,7 +1,7 @@
 package com.tjclp.xl.sheets
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue, Comment}
+import com.tjclp.xl.cells.{Cell, CellValue, Comment, Hyperlink}
 import com.tjclp.xl.cf.{CfRule, ConditionalFormat}
 import com.tjclp.xl.charts.{Chart, DataRef, Series, SeriesName}
 import com.tjclp.xl.codec.{CellCodec, CellWritable, CellWriter}
@@ -68,6 +68,11 @@ import scala.util.boundary, boundary.break
  *   verbatim); the reader populates it from a parseable source `@ref` so structural edits keep the
  *   filter attached to its data. `Some(Remove)` actively strips the element (a collapsed range must
  *   not resurrect the stale source filter).
+ *
+ * @param rangeHyperlinks
+ *   Hyperlinks applied to a range of cells (#931), such as the `<hyperlink ref="A1:A5">` Excel
+ *   writes for a link over a selection. Covered cells carry no `Cell.hyperlink` of their own;
+ *   [[apply]] and [[hyperlinkAt]] report the link for them. See [[RangeHyperlink]].
  */
 final case class Sheet(
   name: SheetName,
@@ -87,12 +92,65 @@ final case class Sheet(
   conditionalFormats: Vector[ConditionalFormat] = Vector.empty,
   tabColor: Option[Color] = None,
   dataValidations: Vector[DataValidation] = Vector.empty,
-  autoFilter: Option[AutoFilterState] = None
+  autoFilter: Option[AutoFilterState] = None,
+  rangeHyperlinks: Vector[RangeHyperlink] = Vector.empty
 ):
 
-  /** Get cell at reference (returns empty cell if not present) */
+  /**
+   * Get cell at reference (returns empty cell if not present). A cell with no hyperlink of its own
+   * reports the range hyperlink covering it (#931), so `sheet(ref).hyperlink` is the link a reader
+   * of the file sees at `ref`.
+   */
   def apply(ref: ARef): Cell =
-    cells.get(ref).getOrElse(Cell.empty(ref))
+    withRangeLink(cells.get(ref).getOrElse(Cell.empty(ref)))
+
+  /** `cell` with the covering range hyperlink when it has none of its own. */
+  private def withRangeLink(cell: Cell): Cell =
+    if rangeHyperlinks.isEmpty || cell.hyperlink.isDefined then cell
+    else rangeHyperlinkAt(cell.ref).fold(cell)(r => cell.copy(hyperlink = Some(r.link)))
+
+  /**
+   * The hyperlink at `ref`: the cell's own, else the range hyperlink covering it (#931). None when
+   * neither links the cell.
+   */
+  def hyperlinkAt(ref: ARef): Option[Hyperlink] =
+    cells.hyperlinkAt(ref).orElse(rangeHyperlinkAt(ref).map(_.link))
+
+  /**
+   * The range hyperlink covering `ref` (the latest, if several do), whatever the cell's own link.
+   */
+  def rangeHyperlinkAt(ref: ARef): Option[RangeHyperlink] =
+    rangeHyperlinks.findLast(_.covers(ref))
+
+  /**
+   * Link every cell of `range` to `link`, as Excel does for a selection (#932). Existing links in
+   * the range, the cells' own and the covered parts of range hyperlinks, are replaced. One cell
+   * gets a `Cell.hyperlink`; a larger range becomes one [[RangeHyperlink]], written as a single
+   * `<hyperlink ref="…">` without creating a cell per position.
+   */
+  def setHyperlink(range: CellRange, link: Hyperlink): Sheet =
+    val cleared = removeHyperlinks(range)
+    if range.start == range.end then
+      val ref = range.start
+      cleared.copy(cells =
+        cleared.cells.updated(cleared.cells.get(ref).getOrElse(Cell.empty(ref)).withHyperlink(link))
+      )
+    else cleared.copy(rangeHyperlinks = cleared.rangeHyperlinks :+ RangeHyperlink(range, link))
+
+  /**
+   * Remove every hyperlink from the cells of `range`: the cells' own links and the coverage of
+   * range hyperlinks, which split around the removed part as in Excel (#931). Cells are kept (a
+   * cell that held only a link stays as an empty record, as `Cell.clearHyperlink` leaves it).
+   */
+  def removeHyperlinks(range: CellRange): Sheet =
+    val unlinked = cells.inRange(range).filter(_.hyperlink.isDefined).map(_.clearHyperlink).toVector
+    val withCells = if unlinked.isEmpty then this else copy(cells = cells.putAll(unlinked))
+    withCells.removeRangeHyperlinkCoverage(range)
+
+  /** Cut `range` out of every range hyperlink's coverage, leaving the cells' own links alone. */
+  private[xl] def removeRangeHyperlinkCoverage(range: CellRange): Sheet =
+    if !rangeHyperlinks.exists(_.range.intersects(range)) then this
+    else copy(rangeHyperlinks = rangeHyperlinks.flatMap(_.without(range)))
 
   /** Get cell at A1 notation */
   def apply(a1: String): XLResult[Cell] =
@@ -126,7 +184,14 @@ final case class Sheet(
    * cell: they live in [[comments]] (see `comment`).
    */
   def put(cell: Cell): Sheet =
-    copy(cells = cells.updated(cell))
+    // #931: a link equal to the covering range hyperlink is the range's (it is what `apply` put
+    // there), so it stays inherited rather than splitting the range into an own link.
+    val own =
+      if rangeHyperlinks.isEmpty || cell.hyperlink.isEmpty then cell
+      else if rangeHyperlinkAt(cell.ref).exists(r => cell.hyperlink.contains(r.link)) then
+        cell.copy(hyperlink = None)
+      else cell
+    copy(cells = cells.updated(own))
 
   // ===== Structural editing: insert/delete rows & columns (GH-128, GH-129) =====
   // PURE cell/merge/property/freeze shifting along one axis. Formula-reference rewriting is layered
@@ -684,7 +749,9 @@ final case class Sheet(
 
   /** Get all cells in a range */
   def getRange(range: CellRange): Iterable[Cell] =
-    cells.inRange(range).toSeq
+    // #931: like `apply`, a stored cell without an own link reports its covering range hyperlink
+    if rangeHyperlinks.isEmpty then cells.inRange(range).toSeq
+    else cells.inRange(range).map(withRangeLink).toSeq
 
   /** Merge cells in range */
   def merge(range: CellRange): Sheet =
