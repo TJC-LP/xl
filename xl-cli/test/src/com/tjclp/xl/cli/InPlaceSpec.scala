@@ -459,8 +459,8 @@ class InPlaceSpec extends CatsEffectSuite:
   }
 
   // GH-868: -o and -i stage the output in an owner-only temp file, which used to be renamed into
-  // place with its 0600 mode. A new output now gets the umask's mode; a replaced one keeps its own,
-  // its group bits capped at its others bits.
+  // place with its 0600 mode. A new output now gets the umask's mode; a replaced one keeps its own
+  // exactly (#930).
 
   private val posix =
     java.nio.file.FileSystems.getDefault.supportedFileAttributeViews.contains("posix")
@@ -501,29 +501,76 @@ class InPlaceSpec extends CatsEffectSuite:
         val dir = Files.createTempDirectory("xl-gh868-o-keep-")
         val out = dir.resolve("out.xlsx")
         Files.copy(input, out)
-        setMode(out, "rw-r--r--")
         out
       }.flatMap { out =>
-        runCliCaptured("-f", input.toString, "-s", "Test", "-o", out.toString, "put", "A2", "99")
-          .map { case (code, _) =>
-            assertEquals(code, ExitCode.Success)
-            assertEquals(mode(out), "rw-r--r--")
+        // #930: every bit kept, the group's included (640 used to become 600, 664 became 644)
+        replacedModes.traverse_ { m =>
+          IO.blocking(setMode(out, m)) *>
+            runCliCaptured(
+              "-f",
+              input.toString,
+              "-s",
+              "Test",
+              "-o",
+              out.toString,
+              "put",
+              "A2",
+              "99"
+            ).map { case (code, _) =>
+              assertEquals(code, ExitCode.Success)
+              assertEquals(mode(out), m, s"-o over a $m file")
+            }
+        }
+      }
+    }
+  }
+
+  test("-i put: the input keeps its mode exactly, group bits included (GH-868, #930)") {
+    assume(posix, "POSIX permissions only")
+    withTempExcelFile { input =>
+      replacedModes.traverse_ { m =>
+        IO.blocking(setMode(input, m)) *>
+          runCliCaptured("-f", input.toString, "-s", "Test", "-i", "put", "A2", "99").map {
+            case (code, _) =>
+              assertEquals(code, ExitCode.Success)
+              assertEquals(mode(input), m, s"-i on a $m file")
           }
       }
     }
   }
 
-  test("-i put: the input keeps its mode, owner-only included (GH-868)") {
+  /**
+   * #930: the modes a replace keeps bit for bit. 640, 660 and 664 used to lose their group bits to
+   * a cap at the others bits; 600, 644 and 755 were already kept.
+   */
+  private val replacedModes =
+    List("rw-r-----", "rw-rw----", "rw-rw-r--", "rw-------", "rw-r--r--", "rwxr-xr-x")
+
+  /** Run the CLI in a child JVM under `umask` (a JVM cannot change its own); true on exit 0. */
+  private def runUnderUmask(umask: String, args: String*): Boolean =
+    val java = Path.of(System.getProperty("java.home"), "bin", "java").toString
+    val command =
+      Seq(java, "-cp", System.getProperty("java.class.path"), "com.tjclp.xl.cli.Main") ++ args
+    val quoted = command.map(a => "'" + a.replace("'", "'\\''") + "'").mkString(" ")
+    val proc = new ProcessBuilder("sh", "-c", s"umask $umask && exec $quoted")
+      .redirectErrorStream(true)
+      .start()
+    proc.getInputStream.readAllBytes(): Unit
+    proc.waitFor() == 0
+
+  test("-o put: a new output follows the umask: 022, 002, 077 (#930)") {
     assume(posix, "POSIX permissions only")
     withTempExcelFile { input =>
-      val modes = List("rw-r--r--", "rw-------")
-      modes.traverse_ { m =>
-        IO.blocking(setMode(input, m)) *>
-          runCliCaptured("-f", input.toString, "-s", "Test", "-i", "put", "A2", "99").map {
-            case (code, _) =>
-              assertEquals(code, ExitCode.Success)
-              assertEquals(mode(input), m)
-          }
+      IO.blocking {
+        val dir = Files.createTempDirectory("xl-930-umask-")
+        List("022" -> "rw-r--r--", "002" -> "rw-rw-r--", "077" -> "rw-------").foreach {
+          (umask, expected) =>
+            val out = dir.resolve(s"out-$umask.xlsx")
+            val args =
+              Seq("-f", input.toString, "-s", "Test", "-o", out.toString, "put", "A2", "99")
+            assert(runUnderUmask(umask, args*), s"xl under umask $umask failed")
+            assertEquals(mode(out), expected, s"a new output under umask $umask")
+        }
       }
     }
   }

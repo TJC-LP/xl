@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A replaced file keeps its permission bits exactly** (#930): `-i`, `-o` over an existing file,
+  the streaming writes and `Excel.modify` used to cap the group bits at the others bits, so `640`
+  became `600`, `660` became `600` and `664` became `644`. The staged file now takes the
+  original's group and its whole mode, as `cp -p` and editors do; the cap remains only when the
+  writer may not give the staged file the original's group. A new output still follows the umask
+  (pinned under `022`, `002` and `077`). Residual: the JVM can neither read nor copy a POSIX.1e
+  ACL (Linux `setfacl`), so a replaced file with one loses it, and its group bits, which were the
+  ACL mask, now apply to the owning group.
+
 ## [0.27.0] - 2026-11-23
 
 **"Bedrock storage."** `xl audit` is 3–20× faster on real models (#891): `Sheet.cells` is a
