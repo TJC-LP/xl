@@ -36,15 +36,16 @@ private[functions] object NumericGuard:
  * step from 10% overshoots past -100% and runs away.
  *
  * Two stages, both bounded:
- *   1. [[bracket]] samples the NPV on a grid of `ln(1 + rate)` around the guess, outward one step
- *      at a time on each side, and returns the first interval whose ends differ in sign: the root
- *      nearest the guess. Rates stay above -100%, where the NPV is continuous, so a sign change
- *      always holds a root. Sampling uses a `Double` NPV; an overflowed (±Infinity) sample counts
- *      by its sign, a NaN one is skipped.
+ *   1. [[brackets]] samples the NPV on a grid of `ln(1 + rate)` around the guess, outward one step
+ *      at a time on each side, and yields the intervals whose ends differ in sign, nearest the
+ *      guess first. Rates stay above -100%, where the NPV is continuous, so a sign change always
+ *      holds a root. Sampling uses a `Double` NPV; ±Infinity counts by its sign, NaN and an exact
+ *      0.0 (usually an underflow) carry none.
  *   2. [[refine]] narrows that bracket with safeguarded Newton (`rtsafe`): a Newton step is taken
  *      only when it lands inside the bracket and is under half the step before last, otherwise the
  *      bracket is bisected. It stops at the caller's tolerance, the same one Newton uses, within
- *      [[MaxRefineIterations]] steps.
+ *      [[MaxRefineIterations]] steps. A bracket it rejects (equal signs in BigDecimal) hands the
+ *      search back to stage 1.
  *
  * Flows whose NPV never changes sign have no rate, and the caller keeps its `#NUM!`.
  */
@@ -54,7 +55,11 @@ private[functions] object RateSolver:
   private val MaxSteps = 200
   private val MaxRefineIterations = 100
 
-  /** Root of `f` nearest `guess`, or None when no sign change is found or the guess is ≤ -100%. */
+  /**
+   * Root of `f` nearest `guess`, or None when no bracket refines to a root or the guess is ≤ -100%.
+   * A bracket whose ends `refine` finds equally signed in BigDecimal (a Double sample that rounded
+   * the wrong way) does not end the search: the scan goes on to the next one.
+   */
   def fallback(
     guess: BigDecimal,
     fDouble: Double => Double,
@@ -62,37 +67,45 @@ private[functions] object RateSolver:
     df: BigDecimal => BigDecimal,
     tolerance: BigDecimal
   ): Option[BigDecimal] =
-    bracket(guess.toDouble, fDouble).flatMap { case (lo, hi) =>
-      refine(BigDecimal(lo), BigDecimal(hi), f, df, tolerance)
-    }
+    brackets(guess.toDouble, fDouble)
+      .flatMap { case (lo, hi) => refine(BigDecimal(lo), BigDecimal(hi), f, df, tolerance) }
+      .nextOption()
 
-  /** The sign-change interval `(lo, hi)` (as rates, `lo < hi`) nearest `guess`. */
-  def bracket(guess: Double, f: Double => Double): Option[(Double, Double)] =
+  /**
+   * Sign-change intervals `(lo, hi)` (as rates, `lo < hi`), nearest `guess` first, sampled lazily.
+   *
+   * A crossing is a sign change between the current sample and the last SIGNED sample on the same
+   * side. NaN carries no sign, and neither does an exact 0.0: in Double it is usually an underflow
+   * (leading zero periods push `x^n` below the smallest Double), not a root. A true root on a grid
+   * point is still bracketed by the signed samples either side of it. An overflowed sample keeps
+   * its sign (with 1 + rate > 0 the dominant term decides it), so ±Infinity counts.
+   */
+  def brackets(guess: Double, f: Double => Double): Iterator[(Double, Double)] =
     val center = math.log1p(guess)
-    if guess <= -1.0 || !center.isFinite then None
+    if guess <= -1.0 || !center.isFinite then Iterator.empty
     else
       def rateAt(j: Int): Double = math.expm1(center + j * Step)
-      // An overflowed sample keeps its sign (with 1 + rate > 0 the dominant term decides it), so
-      // ±Infinity still marks a side of the root; only NaN carries no sign. `refine` re-checks
-      // the bracket's signs in BigDecimal, so a wrongly signed end can only yield None.
-      def crosses(fa: Double, fb: Double): Boolean =
-        !fa.isNaN && !fb.isNaN && (fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0))
-
-      // Outward from the guess, one step above then one below, each point evaluated once: a
-      // root near the guess costs a handful of NPV evaluations, not the whole grid.
-      @annotation.tailrec
-      def scan(k: Int, fAbove: Double, fBelow: Double): Option[(Double, Double)] =
-        if k > MaxSteps then None
-        else
-          val fUp = f(rateAt(k))
-          if crosses(fAbove, fUp) then Some((rateAt(k - 1), rateAt(k)))
-          else
-            val fDown = f(rateAt(-k))
-            if crosses(fDown, fBelow) then Some((rateAt(-k), rateAt(-(k - 1))))
-            else scan(k + 1, fUp, fDown)
+      def signed(v: Double): Boolean = !v.isNaN && v != 0.0
+      def changes(last: Option[(Int, Double)], v: Double): Option[Int] =
+        last.collect { case (j, w) if signed(v) && (w < 0.0) != (v < 0.0) => j }
+      def keep(last: Option[(Int, Double)], j: Int, v: Double): Option[(Int, Double)] =
+        if signed(v) then Some((j, v)) else last
 
       val fCenter = f(rateAt(0))
-      scan(1, fCenter, fCenter)
+      val start = keep(None, 0, fCenter)
+      // State: next step k, and the last signed sample above and below the guess. Each step
+      // evaluates one point on each side and yields the crossings it closes.
+      Iterator
+        .unfold((1, start, start)) { case (k, above, below) =>
+          if k > MaxSteps then None
+          else
+            val fUp = f(rateAt(k))
+            val fDown = f(rateAt(-k))
+            val up = changes(above, fUp).map(j => (rateAt(j), rateAt(k)))
+            val down = changes(below, fDown).map(j => (rateAt(-k), rateAt(-j)))
+            Some((up.toList ++ down.toList, (k + 1, keep(above, k, fUp), keep(below, -k, fDown))))
+        }
+        .flatten
 
   /** Safeguarded Newton inside `[lo, hi]`, whose ends must bracket a root of `f`. */
   def refine(

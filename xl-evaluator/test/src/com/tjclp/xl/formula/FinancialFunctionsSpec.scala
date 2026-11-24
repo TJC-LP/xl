@@ -376,6 +376,22 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertApprox(evalNumeric("=IRR(A1:A10001, 0.12)", s), expected, 1e-9)
   }
 
+  test("#954: leading zero periods: an underflowed scan sample is not a root") {
+    // NPV = x^365 · (-100 + 10x), x = 1/(1+rate): the rate is -0.9 (Excel gives -0.9). Above the
+    // guess the Double NPV underflows to -0.0; that exact zero must not end the scan at a false
+    // bracket before the real sign change below the guess is reached.
+    val s = column(Seq.fill(365)("0") ++ Seq("-100", "10")*)
+    assertApprox(evalNumeric("=IRR(A1:A367)", s), -0.9, 1e-9)
+  }
+
+  test("#954: leading zero periods: more zeros, and a different tail") {
+    val moreZeros = column(Seq.fill(730)("0") ++ Seq("-100", "10")*)
+    assertApprox(evalNumeric("=IRR(A1:A732)", moreZeros), -0.9, 1e-9)
+    // -100 + 50x = 0 at x = 2: rate -0.5
+    val otherTail = column(Seq.fill(365)("0") ++ Seq("-100", "50")*)
+    assertApprox(evalNumeric("=IRR(A1:A367)", otherTail), -0.5, 1e-9)
+  }
+
   test("#954: flows whose NPV never crosses zero stay #NUM!") {
     // -100 + 300x - 250x^2 (x = 1/(1+r)) has no real root: no rate exists, Newton and the
     // bracket search both fail, and the error stays a contained #NUM!
