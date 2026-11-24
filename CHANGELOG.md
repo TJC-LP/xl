@@ -64,7 +64,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   replays all 93 — plus 14 union and intersection cases checked by hand in Excel (`f8-*`) and 17
   scenarios from a fourth review's Excel runs (`f9-*` function argument kinds, `f10-01` 3-D,
   `f11-01` data validation, `f12-*` assorted) and 3 from a fifth (`f9b-01` array-typed arguments
-  of formulas xl cannot parse, `f11-02`/`f11-03` validation rules over a bare range), 127 in all —
+  of formulas xl cannot parse, `f11-02`/`f11-03` validation rules over a bare range) and 1 from a
+  sixth (`f9b-02` argument separators and the newer array functions), 128 in all —
   through the workbook-level merge (formula text exactly, values after recalculation, names,
   merged areas) plus a sample through the `merge` verb. Excel's merge is
   "cut the winner onto the anchor, then clear the rest":
@@ -107,10 +108,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     (`CutReferences.ArrayParameters`, a superset of the registry flags, pinned by a law): a
     reference anywhere inside such an argument depends on all its cells. Checked in Excel:
     LOOKUP's vectors, IRR's and MIRR's values, XLOOKUP's lookup and return arrays, XMATCH's lookup
-    array, SORT's and UNIQUE's array, MMULT, SUMX2MY2, CORREL (`=XLOOKUP(7,B1:C1*1,B1:C1*1)` →
+    array, SORT's and UNIQUE's array, MMULT, SUMX2MY2, CORREL, FILTER, SORTBY, TOCOL, VSTACK,
+    FORECAST.LINEAR's known values, COVARIANCE.P (`=XLOOKUP(7,B1:C1*1,B1:C1*1)` →
     `=XLOOKUP(7,A1:C1*1,A1:C1*1)`); taken from Excel's function reference without a merge check:
     SUMX2PY2, SUMXMY2, PEARSON, RSQ, SLOPE, INTERCEPT, COVAR, FORECAST, FREQUENCY, TREND, GROWTH,
-    LINEST, LOGEST, MDETERM, MINVERSE. A 3-D reference (`Sheet1:Sheet2!B1`) is
+    LINEST, LOGEST, MDETERM, MINVERSE, HSTACK, TOROW, TAKE, DROP, CHOOSECOLS, CHOOSEROWS,
+    WRAPROWS, WRAPCOLS, EXPAND, COVARIANCE.S and the FORECAST.ETS family. Value-typed arguments
+    stay out (checked: LARGE, SMALL, PERCENTILE, QUARTILE, TRIMMEAN, MATCH, TRANSPOSE, SUM, LET, a
+    LAMBDA call). Arguments are counted on the formula's own commas: those inside array constants
+    (`=XLOOKUP(1,{1,2},B1:C1*1)` → `=XLOOKUP(1,{1,2},A1:C1*1)`), quoted sheet names
+    (`=XMATCH('a,b'!A1,B1:C1*1)` → `=XMATCH('a,b'!A1,A1:C1*1)`), strings and structured references
+    do not separate arguments, and their parentheses do not open or close a call. A 3-D reference (`Sheet1:Sheet2!B1`) is
     kept verbatim and the formula's other references still follow the cut
     (`=SUM(Sheet1:Sheet2!B1)+Sheet1!B1` → `=SUM(Sheet1:Sheet2!B1)+Sheet1!A1`). Only
     the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
@@ -130,7 +138,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     to be `A5:A5`).
   - Merging a single cell (`A1`, `A1:A1`) does nothing, as in Excel, on every path (the verb says
     "A1 is a single cell: nothing to merge", and the batch summary "MERGE A1 (a single cell:
-    nothing to merge)", in memory as streamed); no one-cell `<mergeCell>` is ever written (the verb
+    nothing to merge)", in memory as streamed, sheet-qualified or not); no one-cell `<mergeCell>` is ever written (the verb
     used to exit `INTERNAL`, the batch wrote `A1:A1`). Files that already hold one are left as
     they are.
   - Not determined by the oracle, kept as before: circular winner formulas, spills (below),
