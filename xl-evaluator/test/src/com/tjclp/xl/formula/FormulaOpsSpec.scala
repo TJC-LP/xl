@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.formula.printer.FormulaOps
+import com.tjclp.xl.formula.printer.{CutReferences, FormulaOps}
 import munit.FunSuite
 
 /**
@@ -331,7 +331,13 @@ class FormulaOpsSpec extends FunSuite:
   }
 
   test("GH-935 review: relocateCell rewrites only the reference, keeping every other byte") {
-    def rel(t: String) = FormulaOps.relocateCell(t, Some(Sheet1), Sheet1, ref"B1", ref"A1")
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
     assertEquals(rel("=( B1 ) + 1E3"), "=( A1 ) + 1E3")
     assertEquals(rel("=-(-$B$1)"), "=-(-$A$1)")
     assertEquals(rel("=sum(b1:b1, B10, Sheet1!B1)"), "=sum(A1:A1, B10, Sheet1!A1)")
@@ -347,11 +353,18 @@ class FormulaOpsSpec extends FunSuite:
   }
 
   test("GH-935 review 2: relocateCell reaches intersection operands") {
-    def rel(t: String) = FormulaOps.relocateCell(t, Some(Sheet1), Sheet1, ref"B1", ref"A1")
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
     assertEquals(rel("=B1 C1"), "=A1 C1")
-    assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 B1:C1)")
-    // ISREF is not in xl's function registry: the formula does not parse, so it is left alone
-    assertEquals(rel("=ISREF(B1)"), "=ISREF(B1)")
+    // a one-row range starting at the cut cell extends to the paste (Excel oracle rule c)
+    assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 A1:C1)")
+    // the rewrite is textual, so a function xl does not register follows the cut too
+    assertEquals(rel("=ISREF(B1)"), "=ISREF(A1)")
   }
 
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {

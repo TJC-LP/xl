@@ -4,7 +4,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cf.CfRule
 import com.tjclp.xl.styles.Dxf
 import com.tjclp.xl.formula.eval.CellMover
-import com.tjclp.xl.formula.printer.FormulaOps
+import com.tjclp.xl.formula.printer.{CutReferences, FormulaOps}
 import munit.FunSuite
 
 /**
@@ -30,8 +30,15 @@ class CellMoverSpec extends FunSuite:
 
   // ===== the text rewrite =====
 
+  /** A formula in Z9 of `host`, or a defined name with `None`; B1 cut onto A1 of Sheet1. */
   private def moved(t: String, host: Option[SheetName] = Some(S1)): String =
-    FormulaOps.relocateCell(t, host, S1, ref"B1", ref"A1")
+    FormulaOps.relocateCell(
+      t,
+      host.fold(CutReferences.Host.Name)(h => CutReferences.Host.Cell(h, ref"Z9", array = false)),
+      S1,
+      ref"B1",
+      ref"A1"
+    )
 
   test("relocateCell: single-cell references to the moved cell follow it, anchors kept") {
     assertEquals(moved("=B1+1"), "=A1+1")
@@ -48,11 +55,14 @@ class CellMoverSpec extends FunSuite:
     assertEquals(moved("=B10+B2"), "=B10+B2")
     assertEquals(moved("=[1]Sheet1!B1"), "=[1]Sheet1!B1")
     assertEquals(moved("=INDIRECT(\"B1\")"), "=INDIRECT(\"B1\")")
-    // a defined name (no host) reaches only qualified references
+    // a defined name: its unqualified references count as on the cut sheet (Excel oracle)
     assertEquals(moved("Sheet1!$B$1", None), "Sheet1!$A$1")
-    assertEquals(moved("B1", None), "B1")
-    // unparseable text is left as it is
-    assertEquals(moved("=SUM(B1"), "=SUM(B1")
+    assertEquals(moved("B1", None), "A1")
+    // a reference to the anchor the cut overwrites becomes #REF!, its qualifier kept
+    assertEquals(moved("=A1+1"), "=#REF!+1")
+    assertEquals(moved("=Sheet1!$A$1*2", Some(Other)), "=Sheet1!#REF!*2")
+    // the rewrite is textual: even text the parser rejects follows the cut, as Excel's would
+    assertEquals(moved("=SUM(B1"), "=SUM(A1")
   }
 
   // ===== the workbook-level merge =====

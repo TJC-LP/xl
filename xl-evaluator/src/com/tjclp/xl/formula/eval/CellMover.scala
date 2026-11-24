@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.eval
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.error.XLResult
-import com.tjclp.xl.formula.printer.FormulaOps
+import com.tjclp.xl.formula.printer.{CutReferences, FormulaOps}
 import com.tjclp.xl.sheets.{Sheet, SheetEdits}
 import com.tjclp.xl.workbooks.Workbook
 
@@ -31,13 +31,13 @@ object CellMover:
     else
       val canonical = wb(sheet).fold(_ => sheet, _.name)
       val withSheets = wb.sheets.foldLeft(wb) { (acc, s) =>
-        val rewritten = relocateIn(s, Some(s.name), canonical, from, to)
+        val rewritten = relocateIn(s, canonical, from, to)
         if rewritten eq s then acc else acc.put(rewritten)
       }
       val names = withSheets.metadata.definedNames.map { dn =>
         val text = StructuralEditor
           .splitTopLevelCommas(dn.formula)
-          .map(FormulaOps.relocateCell(_, None, canonical, from, to))
+          .map(FormulaOps.relocateCell(_, CutReferences.Host.Name, canonical, from, to))
           .mkString(",")
         if text == dn.formula then dn else dn.copy(formula = text)
       }
@@ -50,7 +50,7 @@ object CellMover:
 
   /** [[relocateReferences]] limited to the formulas on `sheet` itself (its cells, CF and DV). */
   def relocateOnSheet(sheet: Sheet, from: ARef, to: ARef): Sheet =
-    relocateIn(sheet, Some(sheet.name), sheet.name, from, to)
+    relocateIn(sheet, sheet.name, from, to)
 
   /**
    * Merge `range` on `sheetName` as Excel does: [[relocateReferences]] for the cell an empty
@@ -88,26 +88,36 @@ object CellMover:
   /** The sheet with its readers of `target!from` rewritten; the same instance when none changed. */
   private def relocateIn(
     sheet: Sheet,
-    host: Option[SheetName],
     target: SheetName,
     from: ARef,
     to: ARef
   ): Sheet =
-    def rewrite(text: String): String = FormulaOps.relocateCell(text, host, target, from, to)
+    def rewrite(host: CutReferences.Host)(text: String): String =
+      FormulaOps.relocateCell(text, host, target, from, to)
+    val onTarget = sheet.name.value.equalsIgnoreCase(target.value)
     val changed = sheet.cells.iterator.flatMap { cell =>
       cell.value match
         // GH-430: a data-table record's TABLE(...) text is derived from local geometry
         case CellValue.Formula(_, _, _: FormulaKind.DataTable) => None
         case CellValue.Formula(text, cached, kind) =>
-          val next = rewrite(text)
+          // the cut cell's own formula is judged where it is pasted (Excel rewrites it there)
+          val at = if onTarget && cell.ref == from then to else cell.ref
+          val array = kind match
+            case _: FormulaKind.ArrayFormula => true
+            case _ => false
+          val next = rewrite(CutReferences.Host.Cell(sheet.name, at, array))(text)
           Option.when(next != text)(cell.copy(value = CellValue.Formula(next, cached, kind)))
         case _ => None
     }.toVector
     val cfs = sheet.conditionalFormats.map(cf =>
-      SheetRenamer.rewriteCf(cf, t => Right(rewrite(t))).fold(_ => cf, identity)
+      SheetRenamer
+        .rewriteCf(cf, t => Right(rewrite(CutReferences.Host.Rule(sheet.name))(t)))
+        .fold(_ => cf, identity)
     )
     val dvs = sheet.dataValidations.map(dv =>
-      SheetRenamer.rewriteDv(dv, t => Right(rewrite(t))).fold(_ => dv, identity)
+      SheetRenamer
+        .rewriteDv(dv, t => Right(rewrite(CutReferences.Host.Rule(sheet.name))(t)))
+        .fold(_ => dv, identity)
     )
     val cfChanged = cfs != sheet.conditionalFormats
     val dvChanged = dvs != sheet.dataValidations

@@ -89,51 +89,20 @@ object FormulaOps:
       .exists(e => FormulaPrinter.printFileForm(e) == FormulaPrinter.printFileForm(expected))
 
   /**
-   * GH-935: `text` with every reference to the single cell `sheet!from` respelled as `sheet!to`
-   * ([[FormulaShifter.relocateCell]]), as Excel rewrites a cut cell's readers on paste. `host` is
-   * the sheet the formula lives on (`None` for a defined name: only qualified references count).
-   * Total: text that names no such reference, or does not parse, comes back byte-identical.
+   * GH-935: `text` rewritten for a cell cut from `sheet!from` and pasted onto `sheet!to`, by
+   * Excel's rule ([[CutReferences]]): references to `from` follow it, references to `to` become
+   * `#REF!`, line ranges with `from` at an end grow or shrink, and a formula none of whose
+   * references depends on either cell is left alone. Only the changed reference spans are replaced;
+   * everything else is byte-identical. Total.
    */
   def relocateCell(
     text: String,
-    host: Option[SheetName],
+    host: CutReferences.Host,
     sheet: SheetName,
     from: ARef,
     to: ARef
   ): String =
-    if from == to || !text.replace("$", "").toUpperCase(java.util.Locale.ROOT).contains(from.toA1)
-    then text
-    else
-      FormulaParser.parse(text) match
-        case Left(_) => text
-        case Right(expr) =>
-          val moved = FormulaShifter.relocateCell(expr, host, sheet, from, to)
-          if moved == expr then text
-          else
-            // Excel's paste rewrites only the reference: replace those spans, keep every other
-            // byte; when the scanner and the parser disagree, the parser's reprint is the answer
-            def onSheet(q: Option[FormulaSpans.Qualifier]): Boolean =
-              q.fold(host.exists(_.value.equalsIgnoreCase(sheet.value)))(
-                _.name.equalsIgnoreCase(sheet.value)
-              )
-            FormulaSpans
-              .scan(text)
-              .map { scan =>
-                val edits = scan.references.filter(r => onSheet(r.qualifier)).flatMap {
-                  case FormulaSpans.Reference(_, first, None) if first.ref == from =>
-                    Vector((first.start, first.end, first.spelledAt(to)))
-                  case FormulaSpans.Reference(_, first, Some(second))
-                      if first.ref == from && second.ref == from =>
-                    Vector(
-                      (first.start, first.end, first.spelledAt(to)),
-                      (second.start, second.end, second.spelledAt(to))
-                    )
-                  case _ => Vector.empty
-                }
-                FormulaSpans.replace(text, edits)
-              }
-              .filter(rewritten => sameFormula(rewritten, moved))
-              .getOrElse(reprint(text, moved))
+    CutReferences.rewrite(text, host, sheet, from, to)
 
   /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1

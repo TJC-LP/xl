@@ -529,64 +529,10 @@ object FormulaShifter:
     )
 
   /**
-   * GH-935: every reference to the single cell `sheet!from` respelled as `sheet!to`, as Excel
-   * rewrites a cut cell's readers when it is pasted (a merge whose upper-left cell is empty moves
-   * the first non-empty cell into it this way). `host` is the sheet the formula lives on, which a
-   * local reference names; `None` (a defined name) reaches only qualified references. Single-cell
-   * references and a range that is exactly that one cell move, keeping their `$` anchors; any wider
-   * range, whole-column or whole-row form, and external-workbook references are untouched, as Excel
-   * leaves a range a cut of one of its cells does not cover.
-   */
-  def relocateCell[A](
-    expr: TExpr[A],
-    host: Option[SheetName],
-    sheet: SheetName,
-    from: ARef,
-    to: ARef
-  ): TExpr[A] =
-    import TExpr.*
-    def onSheet(s: SheetName): Boolean = s.value.equalsIgnoreCase(sheet.value)
-    val local = host.exists(onSheet)
-    def cellRange(range: CellRange, form: RangeForm): Option[CellRange] =
-      // a single cell in a range slot (`B1` as an intersection operand: RangeForm.Cell) or an
-      // exact one-cell range (`B1:B1`)
-      Option.when(
-        (form == RangeForm.Cells || form == RangeForm.Cell) && range.start == from &&
-          range.end == from
-      )(
-        range.copy(start = to, end = to)
-      )
-    if from == to then expr
-    else
-      mapSites(
-        expr,
-        {
-          case Ref(at, anchor, decode) if local && at == from => Ref(to, anchor, decode)
-          case PolyRef(at, anchor) if local && at == from => PolyRef(to, anchor)
-          case SheetRef(s, at, anchor, decode) if onSheet(s) && at == from =>
-            SheetRef(s, to, anchor, decode)
-          case SheetPolyRef(s, at, anchor) if onSheet(s) && at == from =>
-            SheetPolyRef(s, to, anchor)
-          case r @ RangeRef(range, form) if local =>
-            cellRange(range, form).fold(r)(RangeRef(_, form))
-          case r @ SheetRange(s, range, form) if onSheet(s) =>
-            cellRange(range, form).fold(r)(SheetRange(s, _, form))
-          case other => other
-        },
-        {
-          case l @ RangeLocation.Local(range, form) if local =>
-            cellRange(range, form).fold(l)(RangeLocation.Local(_, form))
-          case c @ RangeLocation.CrossSheet(s, range, form) if onSheet(s) =>
-            cellRange(range, form).fold(c)(RangeLocation.CrossSheet(s, _, form))
-          case other => other
-        }
-      )
-
-  /**
-   * The one traversal behind [[mapSheets]] and [[relocateCell]]: rebuild `expr` with every leaf
-   * (references, literals, names, errors) passed through `leaf` and every range-slot location
-   * through `location` (a computed location's expression is traversed first). `leaf` must return a
-   * node of the same type it was given; the casts below rely on it.
+   * The traversal behind [[mapSheets]]: rebuild `expr` with every leaf (references, literals,
+   * names, errors) passed through `leaf` and every range-slot location through `location` (a
+   * computed location's expression is traversed first). `leaf` must return a node of the same type
+   * it was given; the casts below rely on it.
    */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @nowarn("msg=Unreachable case")
