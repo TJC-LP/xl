@@ -162,6 +162,13 @@ class DateTextCoercionSpec extends FunSuite:
     assertEquals(eval("=LEFT(\"abcdef\",\"1/2/1900\")"), Right(CellValue.Text("ab")))
   }
 
+  test("#953: TEXT formats date text as the date it spells") {
+    assertEquals(eval("=TEXT(\"12/31/2028\",\"yyyy\")"), Right(CellValue.Text("2028")))
+    assertEquals(eval("=TEXT(A1,\"mmm yyyy\")"), Right(CellValue.Text("Dec 2028")))
+    assertEquals(eval("=TEXT(A2,\"0\")"), Right(CellValue.Text("47118")))
+    assertEquals(eval("=TEXT(A3,\"0\")"), Right(CellValue.Text("not a date")))
+  }
+
   test("#953: non-date text stays #VALUE! in arithmetic and VALUE") {
     assertError("=A3+0", CellError.Value)
     assertError("=VALUE(\"31-Foo-2028\")", CellError.Value)
