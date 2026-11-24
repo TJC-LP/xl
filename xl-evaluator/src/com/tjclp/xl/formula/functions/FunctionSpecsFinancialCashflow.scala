@@ -39,10 +39,12 @@ private[functions] object NumericGuard:
  *   1. [[bracket]] samples the NPV on a grid of `ln(1 + rate)` around the guess, outward one step
  *      at a time on each side, and returns the first interval whose ends differ in sign: the root
  *      nearest the guess. Rates stay above -100%, where the NPV is continuous, so a sign change
- *      always holds a root. Sampling uses a `Double` NPV; non-finite samples are skipped.
+ *      always holds a root. Sampling uses a `Double` NPV; an overflowed (±Infinity) sample counts
+ *      by its sign, a NaN one is skipped.
  *   2. [[refine]] narrows that bracket with safeguarded Newton (`rtsafe`): a Newton step is taken
- *      only when it lands inside the bracket, otherwise the bracket is bisected. It stops at the
- *      caller's tolerance, the same one Newton uses, within [[MaxRefineIterations]] steps.
+ *      only when it lands inside the bracket and is under half the step before last, otherwise the
+ *      bracket is bisected. It stops at the caller's tolerance, the same one Newton uses, within
+ *      [[MaxRefineIterations]] steps.
  *
  * Flows whose NPV never changes sign have no rate, and the caller keeps its `#NUM!`.
  */
@@ -70,8 +72,11 @@ private[functions] object RateSolver:
     if guess <= -1.0 || !center.isFinite then None
     else
       def rateAt(j: Int): Double = math.expm1(center + j * Step)
+      // An overflowed sample keeps its sign (with 1 + rate > 0 the dominant term decides it), so
+      // ±Infinity still marks a side of the root; only NaN carries no sign. `refine` re-checks
+      // the bracket's signs in BigDecimal, so a wrongly signed end can only yield None.
       def crosses(fa: Double, fb: Double): Boolean =
-        fa.isFinite && fb.isFinite && (fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0))
+        !fa.isNaN && !fb.isNaN && (fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0))
 
       // Outward from the guess, one step above then one below, each point evaluated once: a
       // root near the guess costs a handful of NPV evaluations, not the whole grid.

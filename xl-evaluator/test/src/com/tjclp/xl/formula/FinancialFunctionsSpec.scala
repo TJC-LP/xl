@@ -366,6 +366,16 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertApprox(evalNumeric("=IRR(A1:A3651)", s), expected, 1e-9)
   }
 
+  test("#954: a very long schedule whose scan sample overflows still brackets the rate") {
+    // 10,000 periods: from guess 0.12 the grid point below the root sits ~0.087 lower in
+    // ln(1+rate), so the Double NPV there is -Infinity (2000·e^866). An overflowed sample keeps
+    // its sign and must still count as one end of the bracket.
+    val flows = "-1000" +: Seq.fill(9999)("0") :+ "2000"
+    val s = column(flows*)
+    val expected = math.pow(2.0, 1.0 / 10000) - 1
+    assertApprox(evalNumeric("=IRR(A1:A10001, 0.12)", s), expected, 1e-9)
+  }
+
   test("#954: flows whose NPV never crosses zero stay #NUM!") {
     // -100 + 300x - 250x^2 (x = 1/(1+r)) has no real root: no rate exists, Newton and the
     // bracket search both fail, and the error stays a contained #NUM!
