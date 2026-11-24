@@ -47,6 +47,12 @@ final case class RangeHyperlink(
     range == other.range && link == other.link && tooltip == other.tooltip &&
       display == other.display
 
+  /**
+   * The link with nothing excluded: equal for two links exactly when [[sameLinkAs]] holds, so it
+   * keys a map that matches links in constant time.
+   */
+  def identity: RangeHyperlink = if excluded.isEmpty then this else copy(excluded = Vector.empty)
+
   /** This link with `cut` removed from its coverage, or None when nothing of it is left. */
   def without(cut: CellRange): Option[RangeHyperlink] =
     range.intersect(cut) match

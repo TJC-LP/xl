@@ -120,7 +120,9 @@ final case class Sheet(
    * The range hyperlink covering `ref` (the latest, if several do), whatever the cell's own link.
    */
   def rangeHyperlinkAt(ref: ARef): Option[RangeHyperlink] =
-    rangeHyperlinks.findLast(_.covers(ref))
+    // indexed past a few links: one link per row is a common export shape (#931)
+    if rangeHyperlinks.isEmpty then None
+    else RangeHyperlinkIndex.covering(rangeHyperlinks, ref)
 
   /**
    * Link every cell of `range` to `link`, as Excel does for a selection (#932). Existing links in

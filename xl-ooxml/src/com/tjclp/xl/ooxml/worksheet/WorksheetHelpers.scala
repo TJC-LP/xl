@@ -377,8 +377,10 @@ private[ooxml] def collectHyperlinks(
       HyperlinkEntry(cell.ref.toA1, target, external, if external then ids.next() else "")
     }
   }.toVector
+  // matched by identity in one set, not a scan per link: a sheet can hold a link per row (#931)
+  val written = fromSource.iterator.map(_.identity).toSet
   val rangeLinks = sheet.rangeHyperlinks.iterator
-    .filterNot(link => fromSource.exists(_.sameLinkAs(link)))
+    .filterNot(link => written.contains(link.identity))
     .flatMap { link =>
       val target = link.link.target
       val external = isExternalHyperlink(target)
@@ -477,25 +479,33 @@ private[ooxml] def unmodeledHyperlinksElem(
   hyperlinkTargets: Map[String, String],
   sheet: Sheet
 ): Option[Elem] =
-  def sourceRange(e: Elem): Option[RangeHyperlink] = modeledRangeHyperlink(e, hyperlinkTargets)
+  // #931: the model's range links by identity, the first of equal ones winning (as a scan in model
+  // order would), built once per write: a sheet can hold a link per row
+  val models = sheet.rangeHyperlinks.foldLeft(Map.empty[RangeHyperlink, RangeHyperlink]) {
+    (acc, link) => if acc.contains(link.identity) then acc else acc.updated(link.identity, link)
+  }
+  // a spreadsheetML hyperlink the model does not own: keep it, minus cells with an own link (#925)
+  def unowned(e: Elem): Seq[Node] =
+    if Option(e.prefix).isEmpty || preserved.getNamespace(e.prefix) == nsSpreadsheetML then
+      CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
+    else Seq(e)
   // rebindUsedNamespaces puts descendant prefix bindings on the preserved subtree root.
   def keep(node: Node, direct: Boolean): Seq[Node] = node match
     // The reader selects direct hyperlink children by label, regardless of their prefix.
-    case e: Elem
-        if direct && e.label == "hyperlink" && modeledHyperlink(e, hyperlinkTargets).isDefined =>
-      Nil
-    // #931: a direct range link is the model's: the matching entry says what it still covers, and
-    // a link no entry matches was removed
-    case e: Elem if direct && e.label == "hyperlink" && sourceRange(e).isDefined =>
-      sourceRange(e).fold(Seq[Node](e)) { source =>
-        sheet.rangeHyperlinks.find(_.sameLinkAs(source)).fold(Seq.empty[Node]) { model =>
-          uncoveredHyperlinks(e, source.range, sheet).flatMap(withoutExcluded(_, model.excluded))
-        }
-      }
-    case e: Elem
-        if e.label == "hyperlink" && (Option(e.prefix).isEmpty ||
-          preserved.getNamespace(e.prefix) == nsSpreadsheetML) =>
-      CellRange.parse(e \@ "ref").fold(_ => Seq(e), range => uncoveredHyperlinks(e, range, sheet))
+    case e: Elem if direct && e.label == "hyperlink" =>
+      if modeledHyperlink(e, hyperlinkTargets).isDefined then Nil
+      else
+        modeledRangeHyperlink(e, hyperlinkTargets) match
+          // #931: a direct range link is the model's: the matching entry says what it still
+          // covers, and a link no entry matches was removed
+          case Some(source) =>
+            models.get(source).fold(Seq.empty[Node]) { model =>
+              uncoveredHyperlinks(e, source.range, sheet).flatMap(
+                withoutExcluded(_, model.excluded)
+              )
+            }
+          case None => unowned(e)
+    case e: Elem if e.label == "hyperlink" => unowned(e)
     case e: Elem
         if preserved.getNamespace(e.prefix) == XmlUtil.nsMarkupCompatibility &&
           (e.label == "AlternateContent" || e.label == "Choice" || e.label == "Fallback") =>
