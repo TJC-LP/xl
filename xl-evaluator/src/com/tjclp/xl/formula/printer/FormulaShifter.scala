@@ -548,7 +548,12 @@ object FormulaShifter:
     def onSheet(s: SheetName): Boolean = s.value.equalsIgnoreCase(sheet.value)
     val local = host.exists(onSheet)
     def cellRange(range: CellRange, form: RangeForm): Option[CellRange] =
-      Option.when(form == RangeForm.Cells && range.start == from && range.end == from)(
+      // a single cell in a range slot (`B1` as an intersection operand: RangeForm.Cell) or an
+      // exact one-cell range (`B1:B1`)
+      Option.when(
+        (form == RangeForm.Cells || form == RangeForm.Cell) && range.start == from &&
+          range.end == from
+      )(
         range.copy(start = to, end = to)
       )
     if from == to then expr

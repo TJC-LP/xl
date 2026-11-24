@@ -339,6 +339,21 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(rel("=\"B1\"&B1"), "=\"B1\"&A1")
   }
 
+  test("GH-936 review 2: a structured reference does not hide the next qualifier") {
+    assertEquals(canon("=SUM(Table1[Col] data!A1)"), "=SUM(Table1[Col] Data!A1)")
+    assertEquals(canon("=SUM(A1:A2 data!A1)"), "=SUM(A1:A2 Data!A1)")
+    // an external prefix still guards its own qualifier
+    assertEquals(canon("=[1]sheet1!A1+data!A1"), "=[1]sheet1!A1+Data!A1")
+  }
+
+  test("GH-935 review 2: relocateCell reaches intersection operands") {
+    def rel(t: String) = FormulaOps.relocateCell(t, Some(Sheet1), Sheet1, ref"B1", ref"A1")
+    assertEquals(rel("=B1 C1"), "=A1 C1")
+    assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 B1:C1)")
+    // ISREF is not in xl's function registry: the formula does not parse, so it is left alone
+    assertEquals(rel("=ISREF(B1)"), "=ISREF(B1)")
+  }
+
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
     val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
     assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")

@@ -119,7 +119,11 @@ private[printer] object FormulaSpans:
             if depth == 0 then closed = true
           j += 1
         if !closed then ok = false
-        external = true
+        // GH-936 review: only an external-workbook prefix (`[1]Sheet1!A1`, `[Book.xlsx]S!A1`,
+        // `[1]!name`) makes the next qualifier another workbook's: one not glued to a word before
+        // it and followed at once by the sheet name or `!`. `Table1[Col]`, `[@Col]` and
+        // `[[#This Row],[Col]]` are structured references and change nothing.
+        external = !isWordChar(charAt(i - 1)) && (isWordChar(charAt(j)) || charAt(j) == '!')
         i = j
       else if c == '\'' then
         var j = i + 1
@@ -183,7 +187,7 @@ private[printer] object FormulaSpans:
                 i = end
             case _ => i = end
       else
-        if !c.isWhitespace then external = false
+        external = false
         i += 1
     Option.when(ok)(Scan(quals.result(), refs.result()))
 
