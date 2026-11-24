@@ -213,3 +213,43 @@ class PutWidensColumnSpec extends FunSuite:
       assertEquals(widthOf(out, "B"), Some(read.autoFitWidth(col("B"))))
     }
   }
+
+  // ===== #869 review: across separate commands =====
+
+  private def putFile(in: Path, ref: String, value: String, out: Path): String =
+    val wb = ExcelIO.instance[IO].read(in).unsafeRunSync()
+    WriteCommands.put(wb, wb.sheets.headOption, ref, List(value), out, config).unsafeRunSync()
+
+  test("put, then a wider put in a second command: the column is widened again") {
+    withOut { first =>
+      withOut { second =>
+        put(Sheet("Data"), "B1", "$1,234,567.89", first)
+        val w1 = widthOf(first, "B").getOrElse(fail("B was not widened"))
+        val message = putFile(first, "B2", "$987,654,321,098.76", second)
+        val w2 = widthOf(second, "B").getOrElse(fail("B lost its width"))
+        assert(w2 > w1, s"B should widen from $w1, got $w2: $message")
+      }
+    }
+  }
+
+  test("autofit, then a wider put: a width autofit set stays locked") {
+    withOut { first =>
+      withOut { second =>
+        val wb = Workbook(Sheet("Data").put(ARef.from0(1, 0), CellValue.Text("Total")))
+        WriteCommands
+          .autoFit(wb, wb.sheets.headOption, Some("B"), first, config)
+          .unsafeRunSync()
+        val fitted = widthOf(first, "B")
+        putFile(first, "B2", "$987,654,321,098.76", second)
+        assertEquals(widthOf(second, "B"), fitted)
+      }
+    }
+  }
+
+  test("a book whose unsized columns are wider (baseColWidth) is not narrowed") {
+    withOut { out =>
+      val sheet = Sheet("Data").copy(baseColumnWidth = Some(20))
+      put(sheet, "B1", "$1,234,567.89", out)
+      assertEquals(widthOf(out, "B"), None)
+    }
+  }

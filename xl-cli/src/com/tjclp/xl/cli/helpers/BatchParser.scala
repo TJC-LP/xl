@@ -2275,7 +2275,7 @@ object BatchParser:
       )
       sheetName <- sheetFor(wb, defaultSheetName, "colwidth")
       result <- updateSheet(wb, sheetName) { sheet =>
-        val props = sheet.getColumnProperties(col).copy(width = Some(width))
+        val props = sheet.getColumnProperties(col).withWidth(width)
         sheet.setColumnProperties(col, props)
       }
     yield result
@@ -2518,7 +2518,7 @@ object BatchParser:
         val measured = ColumnAutoFit.withEvaluatedCaches(sheet, wb, columns)
         columns.foldLeft(sheet) { (s, col) =>
           val w = autoFitWidth(measured, col)
-          val props = s.getColumnProperties(col).copy(width = Some(w))
+          val props = s.getColumnProperties(col).withWidth(w)
           s.setColumnProperties(col, props)
         }
       }

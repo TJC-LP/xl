@@ -650,7 +650,8 @@ private[ooxml] def buildColsElement(
       // GH-445: column-default style, remapped from the sheet-local id to the workbook xf index
       // exactly like cell styleIds. Index 0 is the workbook default — omitted, same as cells.
       remappedStyleAttr(p.styleId, styleRemapping).foreach(s => attrs += ("style" -> s))
-      if p.width.isDefined then attrs += ("customWidth" -> "1")
+      // #869 review: an entry-widened width is not custom, so a later entry may widen it again
+      if p.width.isDefined && p.customWidth then attrs += ("customWidth" -> "1")
       if p.hidden then attrs += ("hidden" -> "1")
       p.outlineLevel.foreach(l => attrs += ("outlineLevel" -> l.toString))
       if p.collapsed then attrs += ("collapsed" -> "1")
@@ -866,9 +867,10 @@ private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
 // ===== Sheet-default sizing (GH-426) =====
 
 /**
- * Overlay the modeled sheet defaults (`Sheet.defaultColumnWidth` / `Sheet.defaultRowHeight`) onto
- * the preserved `<sheetFormatPr>` element (the mergePageSetupElem precedent). Shared by both writer
- * backends so the element serializes identically on the DOM and streaming paths.
+ * Overlay the modeled sheet defaults (`Sheet.defaultColumnWidth` / `Sheet.defaultRowHeight` /
+ * `Sheet.baseColumnWidth`) onto the preserved `<sheetFormatPr>` element (the mergePageSetupElem
+ * precedent). Shared by both writer backends so the element serializes identically on the DOM and
+ * streaming paths.
  *
  *   - both fields None → passthrough (the passive default: a sheet that never had the element and
  *     sets no defaults emits nothing; a preserved element rides verbatim)
@@ -880,27 +882,33 @@ private[ooxml] def parseAutoFilterRef(e: Elem): Option[CellRange] =
  *     Calibri-11 grid default) — CT_SheetFormatPr REQUIRES the attribute; preserved elements are
  *     never healed, only overlaid
  *
- * Unmodeled attributes (baseColWidth, zeroHeight, thickTop/thickBottom, outlineLevelRow/Col, ...)
- * ride through untouched.
+ * Unmodeled attributes (zeroHeight, thickTop/thickBottom, outlineLevelRow/Col, ...) ride through
+ * untouched.
  */
 private[ooxml] def mergeSheetFormatPrElem(
   existing: Option[Elem],
   defaultColumnWidth: Option[Double],
   defaultRowHeight: Option[Double],
   maxRowOutline: Int = 0,
-  maxColOutline: Int = 0
+  maxColOutline: Int = 0,
+  baseColumnWidth: Option[Int] = None
 ): Option[Elem] =
-  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty &&
+  if defaultColumnWidth.isEmpty && defaultRowHeight.isEmpty && baseColumnWidth.isEmpty &&
     maxRowOutline == 0 && maxColOutline == 0
   then existing
   else
     def attrDouble(e: Elem, key: String): Option[Double] =
       Option(e \@ key).filter(_.nonEmpty).flatMap(_.toDoubleOption)
     val base = existing.getOrElse(XmlUtil.elem("sheetFormatPr")())
-    val withWidth =
-      defaultColumnWidth.filterNot(attrDouble(base, "defaultColWidth").contains) match
-        case Some(w) => setOrRemoveAttr(base, "defaultColWidth", Some(w.toString))
+    // #869 review: baseColWidth, overlaid like defaultColWidth (same identity fast-path)
+    val withBase =
+      baseColumnWidth.filterNot(b => (base \@ "baseColWidth").toIntOption.contains(b)) match
+        case Some(b) => setOrRemoveAttr(base, "baseColWidth", Some(b.toString))
         case None => base
+    val withWidth =
+      defaultColumnWidth.filterNot(attrDouble(withBase, "defaultColWidth").contains) match
+        case Some(w) => setOrRemoveAttr(withBase, "defaultColWidth", Some(w.toString))
+        case None => withBase
     val withHeight =
       defaultRowHeight.filterNot(attrDouble(withWidth, "defaultRowHeight").contains) match
         case Some(h) =>

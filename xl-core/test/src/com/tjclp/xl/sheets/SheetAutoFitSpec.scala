@@ -175,3 +175,51 @@ class SheetAutoFitSpec extends ScalaCheckSuite:
     assert(SheetEdits.scaledFit(64, 9) <= unsized)
     assert(SheetEdits.scaledFit(81, 9) > unsized)
   }
+
+  test("#869 review: baseColWidth sets the unsized baseline, so a fitting entry never narrows") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val fit = s.autoFitWidth(Column.from0(0))
+    // a base wide enough for the value: an unsized column already shows it in full
+    val base = math.ceil(fit).toInt + 1
+    val wide = s.copy(baseColumnWidth = Some(base))
+    assertEqualsDouble(SheetEdits.unsizedColumnWidth(wide), (base * 7 + 5) / 7.0, 1e-9)
+    assertEquals(SheetEdits.widenForEntries(wide, List(a1))._2, Vector.empty)
+    // Excel for Mac's 10 is 75 px: 10.71
+    assertEqualsDouble(
+      SheetEdits.unsizedColumnWidth(s.copy(baseColumnWidth = Some(10))),
+      75.0 / 7,
+      1e-9
+    )
+    // defaultColWidth wins over baseColWidth when both are set
+    assertEquals(
+      SheetEdits.unsizedColumnWidth(
+        s.copy(baseColumnWidth = Some(10), defaultColumnWidth = Some(40))
+      ),
+      40.0
+    )
+  }
+
+  test("#869 review: a width entry wrote is widened again by a wider entry, never narrowed") {
+    val a1 = ARef.from0(0, 0)
+    val a2 = ARef.from0(0, 1)
+    val small = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val (once, first) = SheetEdits.widenForEntries(small, List(a1))
+    val w1 = first.headOption.map(_._2).getOrElse(fail("A was not widened"))
+    assertEquals(once.getColumnProperties(Column.from0(0)).customWidth, false)
+    // a later, wider entry widens the entry-written width again
+    val bigger = withCurrency(once, a2, BigDecimal("987654321098.76"))
+    val (twice, second) = SheetEdits.widenForEntries(bigger, List(a2))
+    val w2 = second.headOption.map(_._2).getOrElse(fail("A was not widened again"))
+    assert(w2 > w1, s"$w2 should exceed $w1")
+    assertEquals(twice.getColumnProperties(Column.from0(0)).customWidth, false)
+    // a narrower later entry leaves it as it is
+    val narrower = withCurrency(twice, ARef.from0(0, 2), BigDecimal(5))
+    assertEquals(SheetEdits.widenForEntries(narrower, List(ARef.from0(0, 2)))._2, Vector.empty)
+    // a width set on purpose (withWidth, as col --width and autofit set it) is never changed
+    val locked = bigger.setColumnProperties(
+      Column.from0(0),
+      bigger.getColumnProperties(Column.from0(0)).withWidth(w1)
+    )
+    assertEquals(SheetEdits.widenForEntries(locked, List(a2))._2, Vector.empty)
+  }

@@ -1273,6 +1273,10 @@ object XlsxReader:
 
     // Parse sheet-default sizing from <sheetFormatPr> (GH-426) so read→modify→write keeps it
     val (defaultColumnWidth, defaultRowHeight) = parseSheetFormatPr(ooxmlSheet.sheetFormatPr)
+    // #869 review: baseColWidth sizes unsized columns when defaultColWidth is absent
+    val baseColumnWidth = ooxmlSheet.sheetFormatPr
+      .flatMap(_.attributes.asAttrMap.get("baseColWidth"))
+      .flatMap(_.toIntOption)
 
     // Parse conditional formatting into the typed model (GH-136); dxfId attrs resolve through
     // the styles.xml <dxfs> table. Total: unmodeled content rides through Preserved.
@@ -1304,6 +1308,7 @@ object XlsxReader:
         rowProperties = rowProperties,
         defaultColumnWidth = defaultColumnWidth,
         defaultRowHeight = defaultRowHeight,
+        baseColumnWidth = baseColumnWidth,
         pageSetup = pageSetup,
         freezePane = freezePane,
         viewSettings = viewSettings,
@@ -1370,7 +1375,10 @@ object XlsxReader:
           // cell styleIds so read→modify→write re-emits it instead of silently dropping it
           styleId = attrs.get("style").flatMap(_.toIntOption).flatMap(styleMapping.get),
           outlineLevel = attrs.get("outlineLevel").flatMap(_.toIntOption),
-          collapsed = attrs.get("collapsed").contains("1")
+          collapsed = attrs.get("collapsed").contains("1"),
+          // #869 review: a width without customWidth was not set manually (an entry widening)
+          customWidth = !attrs.contains("width") ||
+            attrs.get("customWidth").exists(v => v == "1" || v == "true")
         )
         // Expand range: min and max are 1-indexed, Column is 0-indexed
         for colIdx <- min to max do builder += (Column.from1(colIdx) -> props)
@@ -1549,10 +1557,10 @@ object XlsxReader:
 
   /**
    * Parse the sheet-default column width / row height (GH-426) from `<sheetFormatPr>` as
-   * (defaultColumnWidth, defaultRowHeight). Only the two modeled attributes are lifted; everything
-   * else (baseColWidth, outlineLevelRow, ...) rides the preserved element, and the writer's
-   * identity fast-path (mergeSheetFormatPrElem) keeps the element verbatim while the modeled values
-   * are unchanged.
+   * (defaultColumnWidth, defaultRowHeight); `baseColWidth` is lifted beside it (#869 review).
+   * Everything else (outlineLevelRow, ...) rides the preserved element, and the writer's identity
+   * fast-path (mergeSheetFormatPrElem) keeps the element verbatim while the modeled values are
+   * unchanged.
    */
   private def parseSheetFormatPr(elem: Option[Elem]): (Option[Double], Option[Double]) =
     val attrs = elem.map(_.attributes.asAttrMap).getOrElse(Map.empty)

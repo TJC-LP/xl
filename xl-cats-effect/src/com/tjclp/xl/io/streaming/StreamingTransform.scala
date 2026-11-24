@@ -938,7 +938,7 @@ object StreamingTransform:
         writer.writeAttribute("max", maxCol.toString)
         props.width.foreach { width =>
           writer.writeAttribute("width", width.toString)
-          writer.writeAttribute("customWidth", "1")
+          if props.customWidth then writer.writeAttribute("customWidth", "1")
         }
         if props.hidden then writer.writeAttribute("hidden", "1")
         props.styleId.foreach { sid =>

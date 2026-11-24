@@ -73,6 +73,11 @@ import scala.util.boundary, boundary.break
  *   Hyperlinks applied to a range of cells (#931), such as the `<hyperlink ref="A1:A5">` Excel
  *   writes for a link over a selection. Covered cells carry no `Cell.hyperlink` of their own;
  *   [[apply]] and [[hyperlinkAt]] report the link for them. See [[RangeHyperlink]].
+ *
+ * @param baseColumnWidth
+ *   `<sheetFormatPr baseColWidth>` (#869 review): the width of an unsized column in characters of
+ *   the default font's widest digit, not counting padding (Excel's default is 8; Excel for Mac
+ *   writes 10). It sizes an unsized column only when [[defaultColumnWidth]] is absent.
  */
 final case class Sheet(
   name: SheetName,
@@ -93,7 +98,8 @@ final case class Sheet(
   tabColor: Option[Color] = None,
   dataValidations: Vector[DataValidation] = Vector.empty,
   autoFilter: Option[AutoFilterState] = None,
-  rangeHyperlinks: RangeHyperlinks = RangeHyperlinks.empty
+  rangeHyperlinks: RangeHyperlinks = RangeHyperlinks.empty,
+  baseColumnWidth: Option[Int] = None
 ):
 
   /**

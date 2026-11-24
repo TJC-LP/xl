@@ -1250,10 +1250,10 @@ object WriteCommands:
               val effectiveWidth: Option[Double] =
                 if autoFit then Some(calculateAutoFitWidth(measured, colRef))
                 else width
-              val newProps = currentProps.copy(
-                width = effectiveWidth.orElse(currentProps.width),
-                hidden = if hide then true else if show then false else currentProps.hidden
-              )
+              // a width given here (or auto-fitted) is set on purpose: entry never changes it
+              val newProps = effectiveWidth
+                .fold(currentProps)(currentProps.withWidth)
+                .copy(hidden = if hide then true else if show then false else currentProps.hidden)
               val newSheet = s.setColumnProperties(colRef, newProps)
               val changes = List(
                 effectiveWidth.map(w => f"$w%.2f${if autoFit then " (auto)" else ""}"),
@@ -1371,7 +1371,7 @@ object WriteCommands:
             case ((s, ws), colRef) =>
               val w = calculateAutoFitWidth(measured, colRef)
               val currentProps = s.getColumnProperties(colRef)
-              val newProps = currentProps.copy(width = Some(w))
+              val newProps = currentProps.withWidth(w)
               (s.setColumnProperties(colRef, newProps), ws :+ (colRef, w))
           }
           val updatedWb = wb.put(updatedSheet)

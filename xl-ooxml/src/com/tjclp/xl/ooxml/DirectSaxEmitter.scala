@@ -105,7 +105,8 @@ object DirectSaxEmitter:
           sheet.defaultColumnWidth,
           sheet.defaultRowHeight,
           maxRowOutline,
-          maxColOutline
+          maxColOutline,
+          baseColumnWidth = sheet.baseColumnWidth
         ).foreach(writer.writeElem)
       }
 
@@ -189,7 +190,9 @@ object DirectSaxEmitter:
         spanProps.width.foreach(w => writer.writeAttribute("width", w.toString))
         remappedStyleAttr(spanProps.styleId, styleRemapping)
           .foreach(s => writer.writeAttribute("style", s))
-        if spanProps.width.isDefined then writer.writeAttribute("customWidth", "1")
+        // #869 review: an entry-widened width is not custom, so a later entry may widen it again
+        if spanProps.width.isDefined && spanProps.customWidth then
+          writer.writeAttribute("customWidth", "1")
         if spanProps.hidden then writer.writeAttribute("hidden", "1")
         spanProps.outlineLevel.foreach(l => writer.writeAttribute("outlineLevel", l.toString))
         if spanProps.collapsed then writer.writeAttribute("collapsed", "1")

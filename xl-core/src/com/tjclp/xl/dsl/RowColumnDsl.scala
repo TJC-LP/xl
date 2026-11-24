@@ -92,7 +92,7 @@ object RowColumnDsl:
   ):
     /** Set column width in character units */
     def width(w: Double): ColumnBuilder =
-      ColumnBuilder(targetCol, props.copy(width = Some(w)))
+      ColumnBuilder(targetCol, props.withWidth(w))
 
     /** Mark column as hidden */
     def hidden: ColumnBuilder =
