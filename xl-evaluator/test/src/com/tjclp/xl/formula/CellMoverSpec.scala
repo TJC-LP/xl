@@ -78,7 +78,8 @@ class CellMoverSpec extends FunSuite:
     assertEquals(s.cells.get(ref"B1"), None)
     assertEquals(text(wb, S1, ref"E1"), "A1+1")
     assertEquals(text(wb, Other, ref"A1"), "Sheet1!A1*2")
-    assertEquals(text(wb, Other, ref"A2"), "Sheet1!A1:A1")
+    // only the reference changes: the typed quotes stay
+    assertEquals(text(wb, Other, ref"A2"), "'Sheet1'!A1:A1")
     assertEquals(
       wb.metadata.definedNames.find(_.name == "seed").map(_.formula),
       Some("Sheet1!$A$1")
@@ -165,6 +166,32 @@ class CellMoverSpec extends FunSuite:
     assertEquals(cached(recalculated, S1, ref"E1"), Some(num(2)))
     assertEquals(cached(recalculated, S1, ref"E2"), Some(num(7)))
     assertEquals(cached(recalculated, S1, ref"E3"), Some(num(14)))
+  }
+
+  test("GH-935 review: merging into a spill range moves no spilled value; the anchor is #SPILL!") {
+    val spilled = Workbook(
+      Sheet(S1)
+        .put(
+          ref"C1",
+          CellValue.Formula(
+            "SEQUENCE(3,1)",
+            Some(num(1)),
+            FormulaKind.dynamicArray(CellRange(ref"C1", ref"C3"))
+          )
+        )
+        .put(ref"C2", num(2))
+        .put(ref"C3", num(3))
+    )
+    val wb = CellMover
+      .merge(spilled, S1, CellRange(ref"B2", ref"C3"))
+      .fold(e => fail(e.message), identity)
+    val s = wb(S1).fold(e => fail(e.message), identity)
+    // the spilled 2 is not merge content: B2 stays empty, nothing becomes a constant
+    assertEquals(s.cells.get(ref"B2").map(_.value).getOrElse(CellValue.Empty), CellValue.Empty)
+    val recalculated = wb.recalculate().workbook
+    assertEquals(cached(recalculated, S1, ref"C1"), Some(CellValue.Error(CellError.Spill)))
+    // a spill clear of merges still evaluates
+    assertEquals(cached(spilled.recalculate().workbook, S1, ref"C1"), Some(num(1)))
   }
 
   test("GH-935: the sheet-level merge rewrites only this sheet's readers") {

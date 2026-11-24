@@ -356,10 +356,13 @@ private[xl] object DynamicArrayAuthoring:
    * `CellMover.merge`). A sheet with no dynamic arrays is `sheet.merge(range)`.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
+    // spill children are never the winner (SheetEdits.mergeWinner skips them), so the spills are
+    // known before anything moves; the hidden area is the merge's real extent (absorbed merges)
+    val target = SheetEdits.mergeTarget(sheet, range)
     val moved = SheetEdits
       .mergeWinner(sheet, range)
-      .fold(sheet)(w => SheetEdits.moveCell(sheet, w.ref, range.start))
-    val hidden = SheetEdits.hiddenByMerge(range)
+      .fold(sheet)(w => SheetEdits.moveCell(sheet, w.ref, target.start))
+    val hidden = SheetEdits.hiddenByMerge(target)
     val spills = if hidden.isEmpty then Vector.empty else spillsOf(moved)
     val released = if spills.isEmpty then moved else clearContents(moved, spills, hidden).sheet
     released.merge(range)

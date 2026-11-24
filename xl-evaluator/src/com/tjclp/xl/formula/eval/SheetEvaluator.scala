@@ -9,7 +9,7 @@ import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.{Clock, Rng}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
-import com.tjclp.xl.cells.{Cell, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{ArrayMode, Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.codec.CodecError
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.patch.Patch
@@ -688,6 +688,13 @@ object SheetEvaluator:
             // an ArrayFormula record (CSE or dynamic-array anchor) evaluates as an array and the
             // anchor holds element (0,0); a plain formula evaluates as a scalar cell
             kind match
+              // GH-935 review: merged cells inside a dynamic array's spill range block it, and
+              // Excel shows #SPILL! at the anchor (Microsoft documents merged cells as a cause)
+              case FormulaKind.ArrayFormula(extent, _, _, _: ArrayMode.Dynamic)
+                  if sheet.mergedRanges.exists(_.intersects(extent)) =>
+                scala.util.Right(
+                  CellOutcome(CellValue.Error(CellError.Spill), Some("spill range is merged"))
+                )
               case _: FormulaKind.ArrayFormula =>
                 val arrayEvaluator = cellEvaluator.withArrayResults
                 parsedCell.flatMap { parsed =>
