@@ -326,8 +326,13 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(canon("=sum( data!A1 ,\"x!y\")"), "=sum( Data!A1 ,\"x!y\")")
     assertEquals(canon("=data!$A$1:$B2 + 'q1 data'!C3"), "=Data!$A$1:$B2 + 'Q1 Data'!C3")
     assertEquals(canon("=data!#REF!+1"), "=Data!#REF!+1")
-    // a 3-D reference is ambiguous to the scanner: left as typed
+    // a 3-D reference is one opaque span, kept as typed; the other qualifiers are still respelled
     assertEquals(canon("=SUM(sheet1:data!A1)"), "=SUM(sheet1:data!A1)")
+    assertEquals(canon("=SUM(sheet1:data!A1)+data!B2"), "=SUM(sheet1:data!A1)+Data!B2")
+    assertEquals(
+      canon("=SUM('q1 data':data!A1:B2)+sheet1!C3"),
+      "=SUM('q1 data':data!A1:B2)+Sheet1!C3"
+    )
   }
 
   test("GH-935 review: relocateCell rewrites only the reference, keeping every other byte") {
@@ -374,6 +379,47 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 A1:C1)")
     // the rewrite is textual, so a function xl does not register follows the cut too
     assertEquals(rel("=ISREF(B1)"), "=ISREF(A1)")
+  }
+
+  test(
+    "GH-935 review 4: a 3-D reference stays as typed while the other references follow the cut"
+  ) {
+    def rel(t: String, host: SheetName) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(host, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    val sheet3 = SheetName.unsafe("Sheet3")
+    // checked in Excel for Mac (fixture f10-01)
+    assertEquals(
+      rel("=SUM(Sheet1:Sheet2!B1)+Sheet1!B1", sheet3),
+      "=SUM(Sheet1:Sheet2!B1)+Sheet1!A1"
+    )
+    // not checked in Excel: on the merge sheet, the 3-D span's own B1 never leaks as a local ref
+    assertEquals(rel("=SUM(Sheet1:Sheet2!B1)+B1", Sheet1), "=SUM(Sheet1:Sheet2!B1)+A1")
+    assertEquals(rel("=SUM('Sheet1:Sheet 3'!B1)+B1", Sheet1), "=SUM('Sheet1:Sheet 3'!B1)+A1")
+    assertEquals(rel("=SUM(Sheet1:'Sheet 3'!B1:C1)+B1", Sheet1), "=SUM(Sheet1:'Sheet 3'!B1:C1)+A1")
+  }
+
+  test("GH-935 review 4: array-typed parameters depend on every cell of the ranges they hold") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9-03): SUMPRODUCT's, INDEX's first, ROWS' parameter
+    assertEquals(rel("=SUMPRODUCT((B1:C1>0)*B1:C1)"), "=SUMPRODUCT((A1:C1>0)*A1:C1)")
+    assertEquals(rel("=INDEX(B1:C1*1,1,1)"), "=INDEX(A1:C1*1,1,1)")
+    assertEquals(rel("=ROWS(B1:C1*1)"), "=ROWS(A1:C1*1)")
+    // value-typed parameters keep the implicit-intersection rule (Excel leaves these alone)
+    assertEquals(rel("=SUM(B1:C1*1)"), "=SUM(B1:C1*1)")
+    assertEquals(rel("=MAX(B1:C1*2)"), "=MAX(B1:C1*2)")
+    // not checked in Excel: COLUMNS' parameter is array-typed too
+    assertEquals(rel("=COLUMNS(B1:C1*1)"), "=COLUMNS(A1:C1*1)")
   }
 
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {

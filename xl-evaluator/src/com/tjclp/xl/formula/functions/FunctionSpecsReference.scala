@@ -184,7 +184,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "ROWS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        arrayArguments = ArrayArguments.All
+      )
     ) { (expr, ctx) =>
       // GH-612: ROWS(#REF!) is #REF!, the error value the argument names
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
@@ -203,7 +207,11 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, AnyExpr](
       "COLUMNS",
       Arity.one,
-      flags = FunctionFlags(returnsNumeric = true, requiresReferenceArguments = true)
+      flags = FunctionFlags(
+        returnsNumeric = true,
+        requiresReferenceArguments = true,
+        arrayArguments = ArrayArguments.All
+      )
     ) { (expr, ctx) =>
       errorLiteral(expr).map(e => Left(EvalError.ErrorValue(e))).getOrElse {
         extractCellRange(expr) match

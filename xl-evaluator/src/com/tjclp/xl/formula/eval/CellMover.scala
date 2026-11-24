@@ -4,7 +4,8 @@ import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.error.XLResult
 import com.tjclp.xl.formula.printer.{CutReferences, FormulaOps}
-import com.tjclp.xl.sheets.{Sheet, SheetEdits}
+import com.tjclp.xl.cf.ConditionalFormat
+import com.tjclp.xl.sheets.{DataValidation, Sheet, SheetEdits}
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -109,16 +110,29 @@ object CellMover:
           Option.when(next != text)(cell.copy(value = CellValue.Formula(next, cached, kind)))
         case _ => None
     }.toVector
-    val cfs = sheet.conditionalFormats.map(cf =>
-      SheetRenamer
-        .rewriteCf(cf, t => Right(rewrite(CutReferences.Host.Rule(sheet.name))(t)))
-        .fold(_ => cf, identity)
-    )
-    val dvs = sheet.dataValidations.map(dv =>
-      SheetRenamer
-        .rewriteDv(dv, t => Right(rewrite(CutReferences.Host.Rule(sheet.name))(t)))
-        .fold(_ => dv, identity)
-    )
+    // GH-935 review 4: a data-validation formula follows the full cut rule, judged at the rule's
+    // first cell — the position Excel evaluates its relative references from (checked in Excel for
+    // Mac); a conditional format follows the same rule (not verifiable through AppleScript)
+    def ruleHost(ranges: Vector[CellRange]): CutReferences.Host =
+      CutReferences.Host.Cell(
+        sheet.name,
+        ranges.headOption.fold(ARef.from0(0, 0))(_.start),
+        array = false
+      )
+    val cfs = sheet.conditionalFormats.map {
+      case rules: ConditionalFormat.Rules =>
+        SheetRenamer
+          .rewriteCf(rules, t => Right(rewrite(ruleHost(rules.ranges))(t)))
+          .fold(_ => rules, identity)
+      case other => other
+    }
+    val dvs = sheet.dataValidations.map {
+      case rules: DataValidation.Rules =>
+        SheetRenamer
+          .rewriteDv(rules, t => Right(rewrite(ruleHost(rules.ranges))(t)))
+          .fold(_ => rules, identity)
+      case other => other
+    }
     val cfChanged = cfs != sheet.conditionalFormats
     val dvChanged = dvs != sheet.dataValidations
     if changed.isEmpty && !cfChanged && !dvChanged then sheet

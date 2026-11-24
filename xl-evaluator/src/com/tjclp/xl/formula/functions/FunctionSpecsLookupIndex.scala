@@ -33,7 +33,7 @@ trait FunctionSpecsLookupIndex extends FunctionSpecsBase:
     FunctionSpec.referencing[ArrayResult, IndexArgs](
       "INDEX",
       Arity.Range(2, 4),
-      flags = FunctionFlags(lift = ArrayLift.all),
+      flags = FunctionFlags(lift = ArrayLift.all, arrayArguments = ArrayArguments.First),
       envelope = Some(ReferenceOperators.indexEnvelope)
     )((args, ctx) => indexTarget(args, ctx).map(_.fold(identity, identity))) { (args, ctx) =>
       indexTarget(args, ctx).flatMap {

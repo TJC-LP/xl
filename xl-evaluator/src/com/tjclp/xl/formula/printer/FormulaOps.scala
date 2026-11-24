@@ -60,8 +60,21 @@ object FormulaOps:
   def canonicalSheets(text: String, names: IndexedSeq[SheetName]): String =
     if names.isEmpty || !text.contains('!') then text
     else
+      def respelled: Option[String] =
+        FormulaSpans.scan(text).filter(_.threeD).map { scan =>
+          val edits = scan.qualifiers.flatMap { q =>
+            SheetName(q.name).toOption
+              .flatMap(typed => SheetName.indexIn(names, typed).toOption.map(names(_)))
+              .filter(_.value != q.name)
+              .map(own => (q.start, q.end, SheetName.quoteForFormula(own.value)))
+          }
+          FormulaSpans.replace(text, edits)
+        }
       FormulaParser.parse(text) match
-        case Left(_) => text
+        // GH-936 review 4: text xl cannot parse because it holds a 3-D reference (which the
+        // scanner keeps as one opaque span) still has its other qualifiers respelled, span by
+        // span; any other unparseable text stays as typed
+        case Left(_) => respelled.getOrElse(text)
         case Right(expr) =>
           val canonical = FormulaShifter.canonicalSheets(expr, names)
           if canonical == expr then text

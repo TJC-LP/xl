@@ -1,6 +1,9 @@
 package com.tjclp.xl.formula.printer
 
-import com.tjclp.xl.addressing.{ARef, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
+import com.tjclp.xl.formula.ast.{BinarySpine, TExpr}
+import com.tjclp.xl.formula.functions.ArgValue
+import com.tjclp.xl.formula.parser.FormulaParser
 
 /**
  * GH-935: Excel's rule for the formulas and names that refer to a cell CUT from `from` and PASTED
@@ -26,8 +29,9 @@ import com.tjclp.xl.addressing.{ARef, SheetName}
  * bare range Excel implicitly intersects (`=B1:C1+0`, `=(B1:C1)`) only on its intersection with the
  * formula's own row or column. A defined name has no cell and is always rewritten.
  *
- * Text-level: only the changed reference spans are replaced ([[FormulaSpans]]); text the scanner
- * finds ambiguous (a 3-D reference) is returned unchanged.
+ * Text-level: only the changed reference spans are replaced ([[FormulaSpans]]); a 3-D reference is
+ * one opaque span (Excel leaves it alone), and text the scanner finds ambiguous is returned
+ * unchanged. Data-validation and conditional-format formulas are hosted at their rule's first cell.
  */
 object CutReferences:
 
@@ -42,12 +46,6 @@ object CutReferences:
      * A defined name's `refersTo`: always rewritten, its unqualified references on the cut sheet.
      */
     case Name
-
-    /**
-     * Conditional-format or data-validation text on `sheet` (not covered by the oracle): only exact
-     * references to `from` follow it, as before; nothing becomes `#REF!`.
-     */
-    case Rule(sheet: SheetName)
 
   private final case class Box(r1: Int, c1: Int, r2: Int, c2: Int):
     def contains(r: Int, c: Int): Boolean = r1 <= r && r <= r2 && c1 <= c && c <= c2
@@ -65,14 +63,10 @@ object CutReferences:
         val (fr, fc) = (from.row.index0, from.col.index0)
         val (tr, tc) = (to.row.index0, to.col.index0)
         val masked = maskStrings(text)
-        val ruleHost = host match
-          case Host.Rule(_) => true
-          case _ => false
 
         def onSheet(r: FormulaSpans.Reference): Boolean =
           r.qualifier.fold(host match
             case Host.Cell(s, _, _) => s.value.equalsIgnoreCase(sheet.value)
-            case Host.Rule(s) => s.value.equalsIgnoreCase(sheet.value)
             case Host.Name => true)(_.name.equalsIgnoreCase(sheet.value))
 
         def box(r: FormulaSpans.Reference): Box =
@@ -100,7 +94,6 @@ object CutReferences:
 
         def outcome(b: Box): Outcome =
           if b == Box(fr, fc, fr, fc) then Outcome.To(Box(tr, tc, tr, tc))
-          else if ruleHost then Outcome.Keep
           else if b == Box(tr, tc, tr, tc) then Outcome.Refs
           else
             val horizontal = fr == tr && fc != tc
@@ -124,8 +117,8 @@ object CutReferences:
         // is not a whole function argument (in a plain cell) narrows to its implicit intersection
         // with the formula's own row or column (the oracle's rule)
         val affected = host match
-          case Host.Name | Host.Rule(_) => true
-          case Host.Cell(_, at, array) =>
+          case Host.Name => true
+          case Host.Cell(hostSheet, at, array) =>
             expressions(masked, scan.references).exists { (span, areasOf) =>
               val operands = areasOf.flatten
               val areas = operands.filter(onSheet).map(box)
@@ -136,7 +129,7 @@ object CutReferences:
                 if whole || operands.size > 1 then areas
                 else areas.flatMap(implicitly(_, at))
               deps.exists(d => d.contains(fr, fc) || d.contains(tr, tc))
-            }
+            } || (!array && arrayArgumentsTouch(text, hostSheet, sheet, fr, fc, tr, tc))
         if !affected then text
         else
           val edits = refs.flatMap { r =>
@@ -206,6 +199,63 @@ object CutReferences:
     val inUnion = unions.flatMap(_._2).toSet
     unions ++ groups.filterNot(inUnion.contains).map(g => (span(g), Vector(g)))
 
+  /**
+   * GH-935 review 4 (checked in Excel for Mac): an argument whose parameter Excel types as an array
+   * (SUMPRODUCT's, INDEX's first, ROWS', COLUMNS': `FunctionFlags.arrayArguments`, the registry's
+   * own declaration) is evaluated whole in a plain cell too, so every range anywhere inside it —
+   * `SUMPRODUCT((B1:C1>0)*B1:C1)`, `INDEX(B1:C1*1,1,1)` — depends on all its cells. Whether one of
+   * those ranges on the cut sheet holds the cut or the paste cell. Text that does not parse has no
+   * such argument here (the text gate still applies).
+   */
+  private def arrayArgumentsTouch(
+    text: String,
+    host: SheetName,
+    sheet: SheetName,
+    fr: Int,
+    fc: Int,
+    tr: Int,
+    tc: Int
+  ): Boolean =
+    FormulaParser.parse(text).toOption.exists { expr =>
+      arrayArgumentRanges(expr).exists { (qualifier, range) =>
+        qualifier.getOrElse(host).value.equalsIgnoreCase(sheet.value) &&
+        (range.contains(ARef.from0(fc, fr)) || range.contains(ARef.from0(tc, tr)))
+      }
+    }
+
+  /** The ranges inside the array-typed arguments of every call in `expr`. */
+  private def arrayArgumentRanges(expr: TExpr[?]): List[(Option[SheetName], CellRange)] =
+    import TExpr.*
+    def whole(value: ArgValue): List[(Option[SheetName], CellRange)] = value match
+      case ArgValue.Expr(e) => TExpr.collectRanges(e)
+      case ArgValue.Range(RangeLocation.Local(range, _)) => List((Option.empty[SheetName], range))
+      case ArgValue.Range(RangeLocation.CrossSheet(s, range, _)) => List((Some(s), range))
+      case ArgValue.Range(RangeLocation.Computed(e)) => TExpr.collectRanges(e)
+      case ArgValue.Range(_) => Nil
+    def inner(value: ArgValue): List[(Option[SheetName], CellRange)] = value match
+      case ArgValue.Expr(e) => arrayArgumentRanges(e)
+      case ArgValue.Range(RangeLocation.Computed(e)) => arrayArgumentRanges(e)
+      case ArgValue.Range(_) => Nil
+    expr match
+      case call: Call[?] =>
+        call.spec.argSpec.toValues(call.args).zipWithIndex.flatMap { (value, position) =>
+          (if call.spec.flags.arrayArguments.contains(position) then whole(value) else Nil) ++
+            inner(value)
+        }
+      case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
+          _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
+        BinarySpine.operandList(chain).flatMap(arrayArgumentRanges)
+      case ToInt(e) => arrayArgumentRanges(e)
+      case DateToSerial(e) => arrayArgumentRanges(e)
+      case DateTimeToSerial(e) => arrayArgumentRanges(e)
+      case UnaryPlus(e) => arrayArgumentRanges(e)
+      case Percent(e) => arrayArgumentRanges(e)
+      case Let(bindings, body) =>
+        bindings.flatMap((_, value) => arrayArgumentRanges(value)) ++ arrayArgumentRanges(body)
+      case Coerced(e, _) => arrayArgumentRanges(e)
+      case _ => Nil
+
+  /** `text` with string-literal contents blanked (same length), so parentheses inside are inert. */
   private def maskStrings(text: String): String =
     text
       .foldLeft((new StringBuilder(text.length), false)) { case ((sb, inString), c) =>

@@ -73,7 +73,15 @@ final case class FunctionFlags(
    * (`TExprAnalysis.transformRanges`). `Evaluator.referenceFunctions`, which routes a reference
    * position to the selected reference, lists every flagged spec (a drift law pins it).
    */
-  selector: Boolean = false
+  selector: Boolean = false,
+  /**
+   * GH-935: the parameters Excel types as ARRAYS (SUMPRODUCT's, INDEX's first, ROWS' and COLUMNS'):
+   * Excel evaluates an expression there whole in a plain cell too, so it depends on every cell of
+   * the ranges it holds. (xl's SUMPRODUCT and INDEX evaluate it whole; ROWS and COLUMNS still
+   * evaluate it in the formula's mode, a known difference.) Read by the cut rule's dependency gate
+   * (`CutReferences`), which decides whether a merge rewrites a formula.
+   */
+  arrayArguments: ArrayArguments = ArrayArguments.Off
 ):
 
   /**
@@ -83,6 +91,18 @@ final case class FunctionFlags(
    * and the evaluator, which drops the extent at any other call.
    */
   def entersArrayRangeBounds: Boolean = boundsReferenceAxis || lift != ArrayLift.Off
+
+/** Which arguments of a function Excel types as arrays (see [[FunctionFlags.arrayArguments]]). */
+enum ArrayArguments derives CanEqual:
+  case Off
+  case All
+  case First
+
+  /** Whether the argument at `position` (0-based) is array-typed. */
+  def contains(position: Int): Boolean = this match
+    case ArrayArguments.Off => false
+    case ArrayArguments.All => true
+    case ArrayArguments.First => position == 0
 
 /**
  * Which scalar slots of a function lift over arrays (see [[FunctionFlags.lift]]).

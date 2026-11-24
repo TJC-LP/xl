@@ -34,8 +34,12 @@ private[printer] object FormulaSpans:
     second: Option[CellToken]
   ) derives CanEqual
 
-  final case class Scan(qualifiers: Vector[Qualifier], references: Vector[Reference])
-      derives CanEqual
+  /** `threeD`: the text holds a 3-D reference, skipped as one opaque span. */
+  final case class Scan(
+    qualifiers: Vector[Qualifier],
+    references: Vector[Reference],
+    threeD: Boolean = false
+  ) derives CanEqual
 
   private val CellShape = "^(\\$?)([A-Za-z]{1,3})(\\$?)([0-9]+)$".r
 
@@ -93,6 +97,33 @@ private[printer] object FormulaSpans:
             end
         case _ => start
 
+    var sawThreeD = false
+    // GH-935 review 4: a 3-D reference (`Sheet1:Sheet2!B1`, `'Q1':'Q3'!A1:B2`,
+    // `'Sheet1:Sheet 3'!A1`) is one opaque span: Excel leaves it alone on a cut, xl does not respell
+    // it, and the scan continues after it. `skipReference` steps over the cell or range after `!`.
+    def skipReference(bang: Int): Int =
+      sawThreeD = true
+      val s = bang + 1
+      val e = wordEnd(s)
+      if charAt(e) == ':' then wordEnd(e + 1) else e
+    // after `first:`, the second sheet of a 3-D span (quoted or bare) and its `!`: the index after
+    // the span's reference, or None when this is no 3-D reference
+    def skipThreeD(p: Int): Option[Int] =
+      val q =
+        if charAt(p) == '\'' then
+          var j = p + 1
+          var closed = false
+          while !closed && j < n do
+            if text.charAt(j) == '\'' then
+              if charAt(j + 1) == '\'' then j += 2
+              else
+                closed = true
+                j += 1
+            else j += 1
+          if closed then j else -1
+        else wordEnd(p)
+      Option.when(q > p && charAt(q) == '!')(skipReference(q))
+
     while ok && i < n do
       val c = text.charAt(i)
       if c == '"' then
@@ -140,7 +171,12 @@ private[printer] object FormulaSpans:
           else
             name.append(text.charAt(j))
             j += 1
-        if !closed || charAt(j) != '!' || charAt(i - 1) == ':' then ok = false
+        if closed && charAt(j) == ':' then
+          skipThreeD(j + 1) match
+            case Some(k) => i = k
+            case None => ok = false
+        else if closed && charAt(j) == '!' && name.contains(':') then i = skipReference(j)
+        else if !closed || charAt(j) != '!' || charAt(i - 1) == ':' then ok = false
         else
           val ext = external || name.headOption.contains('[')
           val q = Qualifier(i, j, name.toString)
@@ -165,11 +201,9 @@ private[printer] object FormulaSpans:
             if !external then quals += q
             i = qualified(Some(q), end)
             external = false
-        else if charAt(end) == ':' && {
-            val e2 = wordEnd(end + 1)
-            charAt(e2) == '!'
-          }
-        then ok = false // a 3-D reference: Sheet1:Sheet3!A1
+        else if charAt(end) == ':' && skipThreeD(end + 1).isDefined then
+          // a 3-D reference: Sheet1:Sheet3!A1 (opaque, see skipThreeD)
+          i = skipThreeD(end + 1).getOrElse(end)
         else
           external = false
           cellToken(word, i) match
@@ -189,7 +223,7 @@ private[printer] object FormulaSpans:
       else
         external = false
         i += 1
-    Option.when(ok)(Scan(quals.result(), refs.result()))
+    Option.when(ok)(Scan(quals.result(), refs.result(), sawThreeD))
 
   /** `text` with each `(start, end, replacement)` applied; the spans must not overlap. */
   def replace(text: String, edits: Vector[(Int, Int, String)]): String =
