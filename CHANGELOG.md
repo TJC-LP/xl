@@ -57,23 +57,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through a map, so the cost range links add to a write or a recalc grows linearly with their
   number instead of quadratically.
 - **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac
-  (`merge range`, alerts off): a non-empty upper-left cell keeps its value and the other cells
-  are cleared; when the upper-left cell is empty, the FIRST non-empty cell of the range in
-  row-major order is cut and pasted into it — its value or formula verbatim (`=D1*2` stays
-  `=D1*2`), its format and hyperlink — and every formula that read it now reads the upper-left
-  cell (with `E1 = B1+1`, merging `A1:B1` over an empty A1 gives `E1 = A1+1`). The reader rewrite
-  covers single-cell references and a range that is exactly that cell, on every sheet, in defined
-  names and in conditional-format and data-validation formulas (`CellMover`, built on the new
-  `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`); a wider range keeps its cells, as
-  Excel does (checked: with B1:B3 = 7, 1, 1, the same merge leaves `=SUM(B1:B3)` at 2 and rewrites
-  `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Only the reference text
-  changes: the rest of each reader is kept byte for byte, and intersection operands
-  (`=B1 C1`, `=SUM(B1 B1:C1)`) follow too. (`ISREF` is not in xl's function registry, so a
-  formula using it does not parse and is left as typed.) Every other cell is cleared the way
-  Clear Contents clears it: the value or formula and the hyperlinks go (its own link and its part
-  of a range hyperlink, which splits around the merge), a cell's own formatting and its comment
-  stay, an unstyled cell is removed. A moved cell carries its effective link (its own, or the
-  range hyperlink covering it) to the upper-left cell.
+  16.115: 93 merge scenarios (477 cell expectations, every name and merged area), including 69
+  cut-and-paste controls in which cutting the winner onto the anchor produced the merge's formulas
+  and names character for character; the scenarios ship as
+  `xl-evaluator/test/resources/excel-oracle/merge-references.json` and `ExcelMergeOracleSpec`
+  replays all 93 through the workbook-level merge (formula text exactly, values after
+  recalculation, names, merged areas) plus a sample through the `merge` verb. Excel's merge is
+  "cut the winner onto the anchor, then clear the rest":
+  - The final area grows to the bounding box of the range and every merged area it touches, to a
+    fixpoint; the absorbed merges are replaced by the one area. Merging inside an existing merged
+    area, or the same range again, changes nothing.
+  - A non-empty upper-left cell (the anchor) keeps its value, the other cells are cleared, and no
+    formula or name anywhere is rewritten. When the anchor is empty, the winner is the first
+    non-empty cell in row-major order (a formula returning `""` counts, as do 0 and FALSE), skipping
+    the hidden cells of an absorbed merge (cleared, never moved); it is cut onto the anchor — value
+    or formula verbatim apart from the rewrite below, its format and hyperlink — and the rest is
+    cleared. No winner: nothing moves and nothing is rewritten.
+  - The rewrite (`CutReferences`, behind `FormulaOps.relocateCell` and `CellMover`) is Excel's cut
+    rule, applied to every formula on every sheet (the winner's own included) and every defined
+    name, for references to the merge sheet: a reference to the winner (cell or one-cell range,
+    `$` flags kept per end) follows it to the anchor; a reference to the anchor becomes `#REF!`
+    (`Sheet1!#REF!` when qualified) — the pasted cell overwrote it; a one-row range on a horizontal
+    move or one-column range on a vertical move with the winner at an end grows (`B1:C1` →
+    `A1:C1`) or, with the winner last and the anchor inside, drops it (`A1:A5` → `A1:A4`);
+    everything else (2-D ranges, the winner in the middle, diagonal moves, whole columns, unions,
+    INDIRECT text) is unchanged, and references to cleared cells never change. A formula is
+    touched only when one of its references depends on the winner or the anchor: a range that is a
+    whole function argument depends on all its cells, a bare range Excel implicitly intersects
+    (`=B1:C1+0`, `=(B1:C1)`) only on its intersection with the formula's own row or column. Only
+    the changed reference spans are replaced; everything else is byte-identical.
+  - Every other cell is cleared the way Clear Contents clears it: the value or formula and the
+    hyperlinks go (its own link and its part of a range hyperlink, which splits around the merge),
+    a cell's own formatting and its comment stay, an unstyled cell is removed. A moved cell carries
+    its effective link (its own, or the range hyperlink covering it) to the anchor.
+  - Not determined by the oracle, kept as before: circular winner formulas, spills (below),
+    relative defined names, 3-D/structured/external references (left as typed), and
+    conditional-format and data-validation formulas (only exact references to the winner follow
+    it). Pending in `ExcelMergeOracleSpec`: the VALUES of four winner formulas that name their own
+    cell in ROW/COLUMN/ROWS/COLUMNS (`f4-13`…`f4-16`; their text matches) — xl's dependency graph
+    reports such a formula circular where Excel reads only the address.
   - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
     member of a legacy array other than its anchor, is never the cell moved into an empty
     upper-left cell (nothing becomes a constant), and a spilled value AT the upper-left cell does

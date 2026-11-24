@@ -1,0 +1,4727 @@
+[
+  {
+    "id": "f1-01",
+    "family": 1,
+    "description": "relative ref to winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=B1+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1+1",
+        "value": 8
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-02",
+    "family": 1,
+    "description": "absolute ref to winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=$B$1*2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=$A$1*2",
+        "value": 14
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-03",
+    "family": 1,
+    "description": "mixed $B1 ref to winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=$B1+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=$A1+1",
+        "value": 8
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-04",
+    "family": 1,
+    "description": "mixed B$1 ref to winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=B$1+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A$1+1",
+        "value": 8
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-05",
+    "family": 1,
+    "description": "other-sheet refs to winner (relative, absolute, mixed)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7
+      },
+      "Sheet2": {
+        "A1": "=Sheet1!B1*3",
+        "A2": "=Sheet1!$B$1",
+        "A3": "=Sheet1!B$1+0",
+        "A4": "=SUM(Sheet1!B1:B1)",
+        "A5": "=SUM(Sheet1!A1:B1)",
+        "A6": "=SUM(Sheet1!B1:B3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet2!A1": {
+        "formula": "=Sheet1!A1*3",
+        "value": 21
+      },
+      "Sheet2!A2": {
+        "formula": "=Sheet1!$A$1",
+        "value": 7
+      },
+      "Sheet2!A3": {
+        "formula": "=Sheet1!A$1+0",
+        "value": 7
+      },
+      "Sheet2!A4": {
+        "formula": "=SUM(Sheet1!A1:A1)",
+        "value": 7
+      },
+      "Sheet2!A5": {
+        "formula": "=SUM(Sheet1!A1:A1)",
+        "value": 7
+      },
+      "Sheet2!A6": {
+        "formula": "=SUM(Sheet1!B1:B3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-06",
+    "family": 1,
+    "description": "winner inside functions",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(B1,10)",
+        "F2": "=ROUND(B1/3,2)",
+        "F3": "=IF(B1>5,B1,0)",
+        "F4": "=MAX(B1,C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1,10)",
+        "value": 17
+      },
+      "Sheet1!F2": {
+        "formula": "=ROUND(A1/3,2)",
+        "value": 2.33
+      },
+      "Sheet1!F3": {
+        "formula": "=IF(A1>5,A1,0)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=MAX(A1,C1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-07",
+    "family": 1,
+    "description": "defined names to winner (absolute cell, range, whole merge)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=nmB+0",
+        "F2": "=SUM(nmBB)",
+        "F3": "=SUM(nmAB)",
+        "F4": "=SUM(nmBC)"
+      }
+    },
+    "names": {
+      "nmAB": "=Sheet1!$A$1:$B$1",
+      "nmB": "=Sheet1!$B$1",
+      "nmBB": "=Sheet1!$B$1:$B$3",
+      "nmBC": "=Sheet1!$B$1:$C$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=nmB+0",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(nmBB)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(nmAB)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(nmBC)",
+        "value": 7
+      }
+    },
+    "namesAfter": {
+      "nmAB": "=Sheet1!$A$1:$A$1",
+      "nmB": "=Sheet1!$A$1",
+      "nmBB": "=Sheet1!$B$1:$B$3",
+      "nmBC": "=Sheet1!$A$1:$C$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-08",
+    "family": 1,
+    "description": "ranges B1:B1 (single cell) and A1:B1 (exactly the merge)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(B1:B1)",
+        "F2": "=SUM(A1:B1)",
+        "F3": "=SUM($A$1:$B$1)",
+        "F4": "=SUM($B$1:$B$1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM($A$1:$A$1)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM($A$1:$A$1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-09",
+    "family": 1,
+    "description": "ranges partly inside: winner top-left of range extending out",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F1": "=SUM(B1:C1)",
+        "F2": "=SUM(B1:B3)",
+        "F3": "=SUM(B1:C2)",
+        "F4": "=SUM(B1:D1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:C1)",
+        "value": 8
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(B1:B3)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B1:C2)",
+        "value": 1
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:D1)",
+        "value": 8
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-10",
+    "family": 1,
+    "description": "ranges enclosing the merge",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(A1:B2)",
+        "F2": "=SUM(A1:C1)",
+        "F3": "=SUM(A1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:B2)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C3)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-11",
+    "family": 1,
+    "description": "ranges ending at winner from outside (winner bottom-right)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(B1:C1)",
+        "F2": "=SUM(B1:B1)+SUM(A1:A1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:A1)+SUM(#REF!)",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(C1:B1)",
+        "F2": "=SUM(B1:B1)+SUM(A1:A1)"
+      }
+    },
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-12",
+    "family": 1,
+    "description": "whole column / row refs",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F3": "=SUM(B:B)",
+        "F4": "=SUM(A:A)",
+        "F5": "=SUM(A:B)",
+        "F6": "=SUM(1:1)",
+        "F7": "=SUM($B:$B)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B:B)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A:A)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A:B)",
+        "value": 7
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(1:1)",
+        "value": 7
+      },
+      "Sheet1!F7": {
+        "formula": "=SUM($B:$B)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-13",
+    "family": 1,
+    "description": "INDIRECT / OFFSET / ROW / COLUMN on winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=INDIRECT(\"B1\")",
+        "F2": "=OFFSET(B1,0,0)",
+        "F3": "=COLUMN(B1)",
+        "F4": "=ROWS(B1:B3)"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=INDIRECT(\"B1\")",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=OFFSET(A1,0,0)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=COLUMN(A1)",
+        "value": 1
+      },
+      "Sheet1!F4": {
+        "formula": "=ROWS(B1:B3)",
+        "value": 3
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-14",
+    "family": 1,
+    "description": "2x2 merge, winner B2 (bottom-right): single refs",
+    "sheets": {
+      "Sheet1": {
+        "B2": 7,
+        "F1": "=B2",
+        "F2": "=$B$2",
+        "F3": "=$B2",
+        "F4": "=B$2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=$A$1",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=$A1",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=A$1",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-15",
+    "family": 1,
+    "description": "2x2 merge, winner B2: ranges inside the merge ending at the winner",
+    "sheets": {
+      "Sheet1": {
+        "B2": 7,
+        "F1": "=SUM(B1:B2)",
+        "F2": "=SUM(A2:B2)",
+        "F3": "=SUM(A1:B2)",
+        "F4": "=SUM(B2:B2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(B1:B2)",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A2:B2)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:B2)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-16",
+    "family": 1,
+    "description": "2x2 merge, winner B2: ranges partly inside",
+    "sheets": {
+      "Sheet1": {
+        "B2": 7,
+        "F1": "=SUM(B2:C3)",
+        "F2": "=SUM(B2:B4)",
+        "F3": "=SUM(B1:B4)",
+        "F4": "=SUM(A2:C2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(B2:C3)",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(B2:B4)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B1:B4)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A2:C2)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-17",
+    "family": 1,
+    "description": "3x3 merge, winner B2 (center): ranges in every corner position",
+    "sheets": {
+      "Sheet1": {
+        "B2": 7,
+        "F1": "=SUM(B2:C3)",
+        "F2": "=SUM(A1:B2)",
+        "F3": "=SUM(B2:D4)",
+        "F4": "=SUM(A2:C2)",
+        "F5": "=SUM(B1:B3)",
+        "F6": "=SUM(B2:B5)",
+        "F7": "=SUM(A1:C3)",
+        "F8": "=B2",
+        "F9": "=SUM(A2:B3)",
+        "F10": "=SUM(B1:C2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(B2:C3)",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:B2)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B2:D4)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A2:C2)",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(B1:B3)",
+        "value": 0
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(B2:B5)",
+        "value": 0
+      },
+      "Sheet1!F7": {
+        "formula": "=SUM(A1:C3)",
+        "value": 7
+      },
+      "Sheet1!F8": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F9": {
+        "formula": "=SUM(A2:B3)",
+        "value": 0
+      },
+      "Sheet1!F10": {
+        "formula": "=SUM(B1:C2)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-18",
+    "family": 1,
+    "description": "3x3 merge, winner C1 (top-right corner): ranges",
+    "sheets": {
+      "Sheet1": {
+        "C1": 7,
+        "F1": "=C1",
+        "F2": "=SUM(B1:C2)",
+        "F3": "=SUM(C1:C3)",
+        "F4": "=SUM(A1:C1)",
+        "F5": "=SUM(C1:D1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(B1:C2)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(C1:C3)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:B1)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:D1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-19",
+    "family": 1,
+    "description": "3x3 merge, winner A3 (bottom-left): ranges",
+    "sheets": {
+      "Sheet1": {
+        "A3": 7,
+        "F1": "=A3",
+        "F2": "=SUM(A2:B3)",
+        "F3": "=SUM(A1:A3)",
+        "F4": "=SUM(A3:C3)",
+        "F5": "=SUM(A3:A4)",
+        "F6": "=SUM(A2:A3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A2:B3)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:A2)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A3:C3)",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:A4)",
+        "value": 7
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(A2:A3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-20",
+    "family": 1,
+    "description": "winner as range endpoint where other endpoint is the anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(A1:B1)",
+        "F2": "=A1:B1",
+        "F3": "=COUNTA(A1:B1)"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=A1:B1",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F3": {
+        "formula": "=COUNTA(A1:A1)",
+        "value": 1
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-21",
+    "family": 1,
+    "description": "winner referenced by a formula on Sheet2 and a name; winner on Sheet2 merge",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=Sheet2!B1+1",
+        "F2": "=SUM(Sheet2!A1:B1)",
+        "F3": "=nmSecond*1"
+      },
+      "Sheet2": {
+        "B1": 7,
+        "F1": "=B1*2"
+      }
+    },
+    "names": {
+      "nmSecond": "=Sheet2!$B$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet2",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=Sheet2!A1+1",
+        "value": 8
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(Sheet2!A1:A1)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=nmSecond*1",
+        "value": 7
+      },
+      "Sheet2!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet2!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet2!F1": {
+        "formula": "=A1*2",
+        "value": 14
+      }
+    },
+    "namesAfter": {
+      "nmSecond": "=Sheet2!$A$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet2!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-22",
+    "family": 1,
+    "description": "winner range refs in a multi-area / union and intersection",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(B1,B1:B1)",
+        "F2": "=SUM((B1:B3,C1))",
+        "F3": "=SUM(B1:B3 A1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1,A1:A1)",
+        "value": 14
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM((B1:B3,C1))",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B1:B3 A1:C1)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-23",
+    "family": 1,
+    "description": "line ranges, 5-row merge A1:A5 winner A5: shrink vs edge-move",
+    "sheets": {
+      "Sheet1": {
+        "A5": 7,
+        "F1": "=SUM(A1:A5)",
+        "F2": "=SUM(A2:A5)",
+        "F3": "=SUM(A5:A6)",
+        "F4": "=SUM(A4:A5)",
+        "F5": "=SUM(A1:A4)",
+        "F6": "=SUM(A3:A5)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A5"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!A5": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:A4)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A2:A5)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:A6)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A4:A5)",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:A4)",
+        "value": 7
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(A3:A5)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:A5"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-24",
+    "family": 1,
+    "description": "line ranges straddling a merge A3:A5 with winner A5",
+    "sheets": {
+      "Sheet1": {
+        "A5": 7,
+        "F1": "=SUM(A1:A5)",
+        "F2": "=SUM(A4:A5)",
+        "F3": "=SUM(A2:A5)",
+        "F4": "=SUM(A5:A7)",
+        "F5": "=SUM(A3:A5)",
+        "F6": "=SUM(A1:A3)",
+        "F7": "=SUM(A2:A4)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A3:A5"
+    },
+    "expectedAfter": {
+      "Sheet1!A3": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!A5": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(A1:A4)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A4:A5)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A2:A4)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A3:A7)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A3:A4)",
+        "value": 7
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(A1:A3)",
+        "value": 7
+      },
+      "Sheet1!F7": {
+        "formula": "=SUM(A2:A4)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A3:A5"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-25",
+    "family": 1,
+    "description": "row ranges, merge C1:E1 winner E1",
+    "sheets": {
+      "Sheet1": {
+        "E1": 7,
+        "H1": "=SUM(A1:E1)",
+        "H2": "=SUM(D1:E1)",
+        "H3": "=SUM(E1:F1)",
+        "H4": "=SUM(B1:E1)",
+        "H5": "=SUM(C1:E1)",
+        "H6": "=SUM(E1:G1)",
+        "H7": "=SUM(A1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "C1:E1"
+    },
+    "expectedAfter": {
+      "Sheet1!C1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!E1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H1": {
+        "formula": "=SUM(A1:D1)",
+        "value": 7
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(D1:E1)",
+        "value": 0
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(C1:F1)",
+        "value": 7
+      },
+      "Sheet1!H4": {
+        "formula": "=SUM(B1:D1)",
+        "value": 7
+      },
+      "Sheet1!H5": {
+        "formula": "=SUM(C1:D1)",
+        "value": 7
+      },
+      "Sheet1!H6": {
+        "formula": "=SUM(C1:G1)",
+        "value": 7
+      },
+      "Sheet1!H7": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!C1:E1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-26",
+    "family": 1,
+    "description": "line ranges around winner C1 of merge A1:C1 (winner is an end of C1:D1 / B1:C1, middle of A1:D1)",
+    "sheets": {
+      "Sheet1": {
+        "C1": 7,
+        "H1": "=SUM(B1:D1)",
+        "H2": "=SUM(C1:D1)",
+        "H3": "=SUM(B1:C1)",
+        "H4": "=SUM(A1:D1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H1": {
+        "formula": "=SUM(B1:D1)",
+        "value": 0
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(A1:D1)",
+        "value": 7
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(B1:C1)",
+        "value": 0
+      },
+      "Sheet1!H4": {
+        "formula": "=SUM(A1:D1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-27",
+    "family": 1,
+    "description": "diagonal move (winner B2 -> A1): line ranges through the winner are never adjusted",
+    "sheets": {
+      "Sheet1": {
+        "B2": 7,
+        "H1": "=SUM(B2:D2)",
+        "H2": "=SUM(B2:B4)",
+        "H3": "=SUM(A2:B2)",
+        "H4": "=SUM(B1:B2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H1": {
+        "formula": "=SUM(B2:D2)",
+        "value": 0
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(B2:B4)",
+        "value": 0
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(A2:B2)",
+        "value": 0
+      },
+      "Sheet1!H4": {
+        "formula": "=SUM(B1:B2)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-28",
+    "family": 1,
+    "description": "bare range operands (not function arguments) on the winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "B6": "=A1:B1",
+        "C1": 1,
+        "C5": "=B1:C1",
+        "F1": "=B1:C1+0",
+        "F2": "=B1:B1",
+        "F3": "=(B1:C1)",
+        "F4": "=SUM(B1:C1)",
+        "F5": "=A1:B1+0"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7,
+        "formula2": "7"
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B6": {
+        "formula": "=A1:A1",
+        "value": 7,
+        "formula2": "=@A1:A1"
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1,
+        "formula2": "1"
+      },
+      "Sheet1!C5": {
+        "formula": "=B1:C1",
+        "value": 1,
+        "formula2": "=@B1:C1"
+      },
+      "Sheet1!F1": {
+        "formula": "=B1:C1+0",
+        "value": "#VALUE!",
+        "formula2": "=@B1:C1+0"
+      },
+      "Sheet1!F2": {
+        "formula": "=A1:A1",
+        "value": 7,
+        "formula2": "=@A1:A1"
+      },
+      "Sheet1!F3": {
+        "formula": "=(B1:C1)",
+        "value": "#VALUE!",
+        "formula2": "=(@B1:C1)"
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:C1)",
+        "value": 8,
+        "formula2": "=SUM(A1:C1)"
+      },
+      "Sheet1!F5": {
+        "formula": "=A1:B1+0",
+        "value": "#VALUE!",
+        "formula2": "=@A1:B1+0"
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-29",
+    "family": 1,
+    "description": "bare (implicitly intersected) ranges whose intersection is the winner, the anchor, or another cell",
+    "sheets": {
+      "Sheet1": {
+        "A5": "=A1:B1",
+        "B1": 7,
+        "B5": "=B1:C1",
+        "B7": "=B1:C1*1",
+        "C1": 1,
+        "C6": "=A1:C1",
+        "C7": "=SUM(B1:C1)+B1:C1",
+        "D1": 2,
+        "D5": "=B1:D1",
+        "F1": "=B1:B3"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7,
+        "formula2": "7"
+      },
+      "Sheet1!A5": {
+        "formula": "=A1:A1",
+        "value": 7,
+        "formula2": "=@A1:A1"
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B5": {
+        "formula": "=A1:C1",
+        "value": 0,
+        "formula2": "=@A1:C1"
+      },
+      "Sheet1!B7": {
+        "formula": "=A1:C1*1",
+        "value": 0,
+        "formula2": "=@A1:C1*1"
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1,
+        "formula2": "1"
+      },
+      "Sheet1!C6": {
+        "formula": "=A1:C1",
+        "value": 1,
+        "formula2": "=@A1:C1"
+      },
+      "Sheet1!C7": {
+        "formula": "=SUM(A1:C1)+A1:C1",
+        "value": 9,
+        "formula2": "=SUM(A1:C1)+@A1:C1"
+      },
+      "Sheet1!D1": {
+        "formula": "2",
+        "value": 2,
+        "formula2": "2"
+      },
+      "Sheet1!D5": {
+        "formula": "=B1:D1",
+        "value": 2,
+        "formula2": "=@B1:D1"
+      },
+      "Sheet1!F1": {
+        "formula": "=B1:B3",
+        "value": 0,
+        "formula2": "=@B1:B3"
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-30",
+    "family": 1,
+    "description": "bare ranges in a vertical merge A1:A3 with winner A3",
+    "sheets": {
+      "Sheet1": {
+        "A3": 7,
+        "C1": "=A1:A3",
+        "C2": "=A1:A3",
+        "C3": "=A3:A5",
+        "C4": "=A3:A5",
+        "C5": "=SUM(A3:A5)"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7,
+        "formula2": "7"
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "=A1:A2",
+        "value": 7,
+        "formula2": "=@A1:A2"
+      },
+      "Sheet1!C2": {
+        "formula": "=A1:A3",
+        "value": 0,
+        "formula2": "=@A1:A3"
+      },
+      "Sheet1!C3": {
+        "formula": "=A1:A5",
+        "value": 0,
+        "formula2": "=@A1:A5"
+      },
+      "Sheet1!C4": {
+        "formula": "=A3:A5",
+        "value": 0,
+        "formula2": "=@A3:A5"
+      },
+      "Sheet1!C5": {
+        "formula": "=SUM(A1:A5)",
+        "value": 7,
+        "formula2": "=SUM(A1:A5)"
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:A3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f1-31",
+    "family": 1,
+    "description": "defined names that no formula uses (winner B1, anchor A1)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7
+      }
+    },
+    "names": {
+      "nmU": "=Sheet1!$B$1",
+      "nmV": "=Sheet1!$B$1:$C$1",
+      "nmW": "=Sheet1!$A$1",
+      "nmX": "=Sheet1!$A$1:$B$1",
+      "nmY": "=Sheet1!$B$1:$B$3"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {
+      "nmU": "=Sheet1!$A$1",
+      "nmV": "=Sheet1!$A$1:$C$1",
+      "nmW": "=Sheet1!#REF!",
+      "nmX": "=Sheet1!$A$1:$A$1",
+      "nmY": "=Sheet1!$B$1:$B$3"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-01",
+    "family": 2,
+    "description": "anchor empty: reader of anchor (relative)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=A1+5"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=#REF!+5",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-02",
+    "family": 2,
+    "description": "anchor empty: absolute/mixed refs to anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=$A$1+5",
+        "F2": "=$A1",
+        "F3": "=A$1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=#REF!+5",
+        "value": "#REF!"
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-03",
+    "family": 2,
+    "description": "anchor empty: ranges starting at anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=SUM(A1:A1)",
+        "F2": "=SUM(A1:A3)",
+        "F3": "=SUM(A1:C1)",
+        "F4": "=SUM(A1:B2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(#REF!)",
+        "value": "#REF!"
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:A3)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:B2)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-04",
+    "family": 2,
+    "description": "anchor empty: cross-sheet and name refs to anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7
+      },
+      "Sheet2": {
+        "A1": "=Sheet1!A1",
+        "A2": "=Sheet1!$A$1*2",
+        "A3": "=SUM(Sheet1!A1:A2)",
+        "A4": "=nmA+0"
+      }
+    },
+    "names": {
+      "nmA": "=Sheet1!$A$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet2!A1": {
+        "formula": "=Sheet1!#REF!",
+        "value": "#REF!"
+      },
+      "Sheet2!A2": {
+        "formula": "=Sheet1!#REF!*2",
+        "value": "#REF!"
+      },
+      "Sheet2!A3": {
+        "formula": "=SUM(Sheet1!A1:A2)",
+        "value": 7
+      },
+      "Sheet2!A4": {
+        "formula": "=nmA+0",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {
+      "nmA": "=Sheet1!#REF!"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-05",
+    "family": 2,
+    "description": "anchor empty: ISBLANK/ROW of anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=ISBLANK(A1)",
+        "F2": "=ROW(A1)",
+        "F3": "=INDIRECT(\"A1\")"
+      }
+    },
+    "names": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=ISBLANK(#REF!)",
+        "value": false
+      },
+      "Sheet1!F2": {
+        "formula": "=ROW(#REF!)",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=INDIRECT(\"A1\")",
+        "value": 7
+      }
+    },
+    "namesAfter": {
+      "_xlfn.SINGLE": "=#NAME?"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-06",
+    "family": 2,
+    "description": "anchor non-empty: readers of anchor unchanged",
+    "sheets": {
+      "Sheet1": {
+        "A1": 5,
+        "B1": 7,
+        "F1": "=A1+5",
+        "F2": "=$A$1",
+        "F3": "=SUM(A1:A3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1+5",
+        "value": 10
+      },
+      "Sheet1!F2": {
+        "formula": "=$A$1",
+        "value": 5
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:A3)",
+        "value": 5
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f2-07",
+    "family": 2,
+    "description": "anchor empty in 3x3, winner C3: refs to anchor and winner",
+    "sheets": {
+      "Sheet1": {
+        "C3": 7,
+        "F1": "=A1",
+        "F2": "=C3",
+        "F3": "=SUM(A1:C3)",
+        "F4": "=SUM(A1:A3)",
+        "F5": "=SUM(C1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C3)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:A3)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(C1:C3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f2-08",
+    "family": 2,
+    "description": "nothing in merge at all: refs to anchor and hidden cells",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=A1",
+        "F2": "=B1",
+        "F3": "=SUM(A1:B1)",
+        "F4": "=$B$1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=B1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:B1)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=$B$1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f3-01",
+    "family": 3,
+    "description": "cleared hidden cell C1 (winner B1): single refs",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 9,
+        "F1": "=C1",
+        "F2": "=$C$1",
+        "F3": "=C1*2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=C1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=$C$1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=C1*2",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f3-02",
+    "family": 3,
+    "description": "cleared hidden cell C1: ranges",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 9,
+        "F1": "=SUM(C1:C1)",
+        "F2": "=SUM(B1:C1)",
+        "F3": "=SUM(C1:D1)",
+        "F4": "=SUM(A1:C1)",
+        "F5": "=SUM(C1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(C1:C1)",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(C1:D1)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(C1:C3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f3-03",
+    "family": 3,
+    "description": "cleared hidden cell C1: cross-sheet and name",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 9
+      },
+      "Sheet2": {
+        "A1": "=Sheet1!C1",
+        "A2": "=nmC*1"
+      }
+    },
+    "names": {
+      "nmC": "=Sheet1!$C$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet2!A1": {
+        "formula": "=Sheet1!C1",
+        "value": 0
+      },
+      "Sheet2!A2": {
+        "formula": "=nmC*1",
+        "value": 0
+      }
+    },
+    "namesAfter": {
+      "nmC": "=Sheet1!$C$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f3-04",
+    "family": 3,
+    "description": "empty hidden cell C1 (winner B1): refs",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=C1",
+        "F2": "=SUM(C1:C1)",
+        "F3": "=SUM(B1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=C1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(C1:C1)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f3-05",
+    "family": 3,
+    "description": "anchor non-empty: readers of hidden cells (cleared and empty)",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "B1": 2,
+        "F1": "=B1",
+        "F2": "=C1",
+        "F3": "=SUM(B1:C1)",
+        "F4": "=$B$1",
+        "F5": "=SUM(A1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=C1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B1:C1)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=$B$1",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:C1)",
+        "value": 1
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ]
+  },
+  {
+    "id": "f3-06",
+    "family": 3,
+    "description": "3x3, winner A2, cleared B3 and C1: readers",
+    "sheets": {
+      "Sheet1": {
+        "A2": 1,
+        "B3": 2,
+        "C1": 3,
+        "F1": "=A2",
+        "F2": "=B3",
+        "F3": "=C1",
+        "F4": "=SUM(B3:C3)",
+        "F5": "=SUM(A1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!A2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=B3",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=A1",
+        "value": 3
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(B3:C3)",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:C3)",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f3-07",
+    "family": 3,
+    "description": "cleared hidden cell that was a formula, read by outside",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": "=B1*2",
+        "F1": "=C1",
+        "F2": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=C1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-01",
+    "family": 4,
+    "description": "winner formula references other hidden cell (cleared)",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=C1*2",
+        "C1": 5
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=C1*2",
+        "value": 0
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-02",
+    "family": 4,
+    "description": "winner formula references the anchor",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=A1+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=#REF!+1",
+        "value": "#REF!"
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-03",
+    "family": 4,
+    "description": "winner formula references outside cell relative (below)",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=B2+1",
+        "B2": 3
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=B2+1",
+        "value": 4
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B2": {
+        "formula": "3",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-04",
+    "family": 4,
+    "description": "winner formula references outside absolute and mixed",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=$D$1+D$1+$D1+D1",
+        "D1": 3
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=$D$1+D$1+$D1+D1",
+        "value": 12
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D1": {
+        "formula": "3",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-05",
+    "family": 4,
+    "description": "winner formula without references (ROW/COLUMN)",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=COLUMN()*10+ROW()"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=COLUMN()*10+ROW()",
+        "value": 11
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-06",
+    "family": 4,
+    "description": "winner formula references inside+outside mix",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=C1+D1",
+        "C1": 2,
+        "D1": 3
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=C1+D1",
+        "value": 3
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D1": {
+        "formula": "3",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-07",
+    "family": 4,
+    "description": "winner formula range partly inside merge",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=SUM(C1:D1)",
+        "C1": 2,
+        "D1": 3
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=SUM(C1:D1)",
+        "value": 3
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D1": {
+        "formula": "3",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-08",
+    "family": 4,
+    "description": "2x2 winner B2 formula reading anchor and other hidden",
+    "sheets": {
+      "Sheet1": {
+        "B2": "=B1+A2+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=B1+A2+1",
+        "value": 1
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-09",
+    "family": 4,
+    "description": "winner formula references same address on other sheet",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=Sheet2!B1+Sheet2!A1"
+      },
+      "Sheet2": {
+        "A1": 1,
+        "B1": 2
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=Sheet2!B1+Sheet2!A1",
+        "value": 3
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet2!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet2!B1": {
+        "formula": "2",
+        "value": 2
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-10",
+    "family": 4,
+    "description": "winner formula, and an outside reader of the winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=D1*2",
+        "D1": 3,
+        "F1": "=B1+1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=D1*2",
+        "value": 6
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!F1": {
+        "formula": "=A1+1",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-11",
+    "family": 4,
+    "description": "winner formula references a range enclosing merge",
+    "sheets": {
+      "Sheet1": {
+        "A2": 1,
+        "B1": "=SUM(A2:C3)",
+        "C3": 2
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=SUM(A2:C3)",
+        "value": 3
+      },
+      "Sheet1!A2": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C3": {
+        "formula": "2",
+        "value": 2
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-12",
+    "family": 4,
+    "description": "winner formula with a name",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=nmD*2",
+        "D1": 4
+      }
+    },
+    "names": {
+      "nmD": "=Sheet1!$D$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=nmD*2",
+        "value": 8
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D1": {
+        "formula": "4",
+        "value": 4
+      }
+    },
+    "namesAfter": {
+      "nmD": "=Sheet1!$D$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-13",
+    "family": 4,
+    "description": "winner formula referencing its own cell (non-circular ROW/COLUMN)",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=ROW(B1)*10+COLUMN(B1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=ROW(A1)*10+COLUMN(A1)",
+        "value": 11
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-14",
+    "family": 4,
+    "description": "winner formula with a range ending at its own cell",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=COLUMNS($B$1:B1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=COLUMNS($A$1:A1)",
+        "value": 1
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-15",
+    "family": 4,
+    "description": "winner formula with a range starting at its own cell",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=COLUMNS(B1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=COLUMNS(A1:C1)",
+        "value": 3
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f4-16",
+    "family": 4,
+    "description": "winner formula with ROWS over a range ending at itself, vertical",
+    "sheets": {
+      "Sheet1": {
+        "A3": "=ROWS(A2:A3)+ROW(A3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=ROWS(A2:A3)+ROW(A1)",
+        "value": 3
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:A3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-01",
+    "family": 5,
+    "description": "A1:C3, only C2 non-empty",
+    "sheets": {
+      "Sheet1": {
+        "C2": 7,
+        "F1": "=C2",
+        "F2": "=SUM(A1:C3)",
+        "F3": "=SUM(C1:C3)",
+        "F4": "=SUM(A2:C2)"
+      },
+      "Sheet2": {
+        "A1": "=Sheet1!C2*2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!C2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:C3)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(C1:C3)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A2:C2)",
+        "value": 0
+      },
+      "Sheet2!A1": {
+        "formula": "=Sheet1!A1*2",
+        "value": 14
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-02",
+    "family": 5,
+    "description": "winner order: B3 and C2 (row-major picks C2)",
+    "sheets": {
+      "Sheet1": {
+        "B3": 1,
+        "C2": 2,
+        "F1": "=B3",
+        "F2": "=C2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!B3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B3",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 2
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-03",
+    "family": 5,
+    "description": "winner order: A2 and B1 (row-major picks B1)",
+    "sheets": {
+      "Sheet1": {
+        "A2": 1,
+        "B1": 2,
+        "F1": "=A2",
+        "F2": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!A2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 2
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-04",
+    "family": 5,
+    "description": "winner order: A3 and B2 in A1:B3",
+    "sheets": {
+      "Sheet1": {
+        "A3": 1,
+        "B2": 2,
+        "F1": "=A3",
+        "F2": "=B2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A3",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 2
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-05",
+    "family": 5,
+    "description": "single-column merge A1:A3, A3 non-empty",
+    "sheets": {
+      "Sheet1": {
+        "A3": 7,
+        "F1": "=A3",
+        "F2": "=SUM(A1:A3)",
+        "F3": "=SUM(A2:A3)",
+        "F4": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A1:A2)",
+        "value": 7
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A2:A3)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:A3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-06",
+    "family": 5,
+    "description": "formula returning empty string counts as non-empty?",
+    "sheets": {
+      "Sheet1": {
+        "B1": "=\"\"",
+        "C1": 7,
+        "F1": "=C1",
+        "F2": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=\"\"",
+        "value": ""
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=C1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": ""
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-07",
+    "family": 5,
+    "description": "text winner",
+    "sheets": {
+      "Sheet1": {
+        "B2": "hello",
+        "C3": 5,
+        "F1": "=B2",
+        "F2": "=C3"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "hello",
+        "value": "hello"
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": "hello"
+      },
+      "Sheet1!F2": {
+        "formula": "=C3",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-08",
+    "family": 5,
+    "description": "merge not at A1: C3:E5 with winner E4",
+    "sheets": {
+      "Sheet1": {
+        "E4": 7,
+        "G1": "=E4",
+        "G2": "=C3",
+        "G3": "=SUM(C3:E5)",
+        "G4": "=SUM(E4:E5)",
+        "G5": "=$E$4"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "C3:E5"
+    },
+    "expectedAfter": {
+      "Sheet1!C3": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!E4": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!G1": {
+        "formula": "=C3",
+        "value": 7
+      },
+      "Sheet1!G2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!G3": {
+        "formula": "=SUM(C3:E5)",
+        "value": 7
+      },
+      "Sheet1!G4": {
+        "formula": "=SUM(E4:E5)",
+        "value": 0
+      },
+      "Sheet1!G5": {
+        "formula": "=$C$3",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!C3:E5"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-09",
+    "family": 5,
+    "description": "anchor-empty multi: winner D2 in B2:D3, readers on all cells",
+    "sheets": {
+      "Sheet1": {
+        "C3": 8,
+        "D2": 7,
+        "G1": "=B2",
+        "G2": "=C2",
+        "G3": "=D2",
+        "G4": "=B3",
+        "G5": "=C3",
+        "G6": "=D3"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:D3"
+    },
+    "expectedAfter": {
+      "Sheet1!B2": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!G1": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!G2": {
+        "formula": "=C2",
+        "value": 0
+      },
+      "Sheet1!G3": {
+        "formula": "=B2",
+        "value": 7
+      },
+      "Sheet1!G4": {
+        "formula": "=B3",
+        "value": 0
+      },
+      "Sheet1!G5": {
+        "formula": "=C3",
+        "value": 0
+      },
+      "Sheet1!G6": {
+        "formula": "=D3",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!B2:D3"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f5-10",
+    "family": 5,
+    "description": "winner zero / FALSE counts as non-empty",
+    "sheets": {
+      "Sheet1": {
+        "B1": 0,
+        "C1": 7,
+        "F1": "=B1",
+        "F2": "=C1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "0",
+        "value": 0
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=C1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "cutPasteControl": {
+      "agrees": true,
+      "differences": []
+    }
+  },
+  {
+    "id": "f6-01",
+    "family": 6,
+    "description": "partial overlap: existing A1:B2 (A1=1), merge B2:C3 with C3=5",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "C3": 5,
+        "F1": "=A1",
+        "F2": "=C3",
+        "F3": "=B2",
+        "F4": "=SUM(A1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 1
+      },
+      "Sheet1!F2": {
+        "formula": "=C3",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=B2",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:C3)",
+        "value": 1
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ]
+  },
+  {
+    "id": "f6-02",
+    "family": 6,
+    "description": "enclosing: existing B2:C2 (B2=1), merge A1:D3 with D3=5",
+    "sheets": {
+      "Sheet1": {
+        "B2": 1,
+        "D3": 5,
+        "F1": "=B2",
+        "F2": "=D3",
+        "F3": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!B2:C2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:D3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!D3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 1
+      },
+      "Sheet1!F2": {
+        "formula": "=D3",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D3"
+    ]
+  },
+  {
+    "id": "f6-03",
+    "family": 6,
+    "description": "enclosed: existing A1:D3 (A1=1), merge B2:C2",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "F1": "=A1",
+        "F2": "=B2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:D3"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 1
+      },
+      "Sheet1!F2": {
+        "formula": "=B2",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D3"
+    ]
+  },
+  {
+    "id": "f6-04",
+    "family": 6,
+    "description": "adjacent existing A1:A2 (empty) and B1:B2 (B1=5), merge A1:B2",
+    "sheets": {
+      "Sheet1": {
+        "B1": 5,
+        "F1": "=B1",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:A2",
+      "Sheet1!B1:B2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 5
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ]
+  },
+  {
+    "id": "f6-05",
+    "family": 6,
+    "description": "partial overlap, existing anchor outside new range: existing A1:B1 (A1=1), merge B1:C2 with C2=5",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "C2": 5,
+        "F1": "=A1",
+        "F2": "=C2",
+        "F3": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B1"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B1:C2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!C2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 1
+      },
+      "Sheet1!F2": {
+        "formula": "=C2",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=B1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C2"
+    ]
+  },
+  {
+    "id": "f6-06",
+    "family": 6,
+    "description": "partial overlap, existing anchor empty, new-range value: existing A1:B2 (empty), merge B2:C3 with C3=5",
+    "sheets": {
+      "Sheet1": {
+        "C3": 5,
+        "F1": "=C3",
+        "F2": "=A1",
+        "F3": "=SUM(A1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 5
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C3)",
+        "value": 5
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ]
+  },
+  {
+    "id": "f6-07",
+    "family": 6,
+    "description": "re-merge exactly the same range: existing A1:B1 (A1=1)",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "F1": "=A1",
+        "F2": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B1"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 1
+      },
+      "Sheet1!F2": {
+        "formula": "=B1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f6-08",
+    "family": 6,
+    "description": "enclosing with existing anchor value and empty new anchor: existing C2:D2 (C2=4), merge A1:D3",
+    "sheets": {
+      "Sheet1": {
+        "C2": 4,
+        "F1": "=C2",
+        "F2": "=A1",
+        "F3": "=SUM(A1:D3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!C2:D2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:D3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "4",
+        "value": 4
+      },
+      "Sheet1!C2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 4
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:D3)",
+        "value": 4
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D3"
+    ]
+  },
+  {
+    "id": "f6-09",
+    "family": 6,
+    "description": "cascading growth: existing A1:B2 and C3:D4 (D4=5), merge B2:C3",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=D4",
+        "F2": "=A1",
+        "F3": "=SUM(A1:D4)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B2",
+      "Sheet1!C3:D4"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=D4",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:D4)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D4"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "D4": 5,
+        "F1": "=D4",
+        "F2": "=A1",
+        "F3": "=SUM(A1:D4)"
+      }
+    }
+  },
+  {
+    "id": "f6-10",
+    "family": 6,
+    "description": "growth whose bounding box pulls in a cell with a value outside the requested range: existing A1:A3, merge A2:B2 with B3=9 (outside both)",
+    "sheets": {
+      "Sheet1": {
+        "B3": 9,
+        "F1": "=B3",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:A3"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A2:B2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "9",
+        "value": 9
+      },
+      "Sheet1!B3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 9
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B3"
+    ]
+  },
+  {
+    "id": "f6-11",
+    "family": 6,
+    "description": "cascade, value only in second-pass area: existing A1:B2 and C1:D1, D2=5 (plain cell), merge B2:C2",
+    "sheets": {
+      "Sheet1": {
+        "D2": 5,
+        "F1": "=D2",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B2",
+      "Sheet1!C1:D1"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!D2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 5
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D2"
+    ]
+  },
+  {
+    "id": "f6-12",
+    "family": 6,
+    "description": "cascade, value in anchor of second merge: existing A1:B2 and C1:D1, C1=5, merge B2:C2",
+    "sheets": {
+      "Sheet1": {
+        "C1": 5,
+        "F1": "=C1",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:B2",
+      "Sheet1!C1:D1"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B2:C2"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 5
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D2"
+    ]
+  },
+  {
+    "id": "f6-13",
+    "family": 6,
+    "description": "value in a hidden cell of an existing merge: existing A1:A2 (A2=5 written into the hidden cell), merge A1:B1",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=A2",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:A2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=A2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "A2": 5,
+        "F1": "=A2",
+        "F2": "=A1"
+      }
+    }
+  },
+  {
+    "id": "f6-14",
+    "family": 6,
+    "description": "single-pass growth, value in plain cell only inside grown box: existing A1:A2, B2=5, merge A1:B1",
+    "sheets": {
+      "Sheet1": {
+        "B2": 5,
+        "F1": "=B2",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A1:A2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=A1",
+        "value": 5
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B2"
+    ]
+  },
+  {
+    "id": "f6-15",
+    "family": 6,
+    "description": "enclosing an existing merge whose hidden cell holds a value: existing B2:C2 (C2=5 hidden), merge A1:D3",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=C2",
+        "F2": "=A1",
+        "F3": "=B2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!B2:C2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:D3"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=C2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=B2",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D3"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "C2": 5,
+        "F1": "=C2",
+        "F2": "=A1",
+        "F3": "=B2"
+      }
+    }
+  },
+  {
+    "id": "f6-16",
+    "family": 6,
+    "description": "same with the old anchor filled too: existing B2:C2 (B2=1, C2=5 hidden), merge A1:D3",
+    "sheets": {
+      "Sheet1": {
+        "B2": 1,
+        "F1": "=C2",
+        "F2": "=A1",
+        "F3": "=B2"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!B2:C2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:D3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=C2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=A1",
+        "value": 1
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D3"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "B2": 1,
+        "C2": 5,
+        "F1": "=C2",
+        "F2": "=A1",
+        "F3": "=B2"
+      }
+    }
+  },
+  {
+    "id": "f6-17",
+    "family": 6,
+    "description": "hidden-cell value inside the requested range, existing merge partly overlapping: existing A2:B2 (B2=5 hidden), merge A1:B3",
+    "sheets": {
+      "Sheet1": {
+        "F1": "=B2",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!A2:B2"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B3"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "=B2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B3"
+    ],
+    "submitted": {
+      "Sheet1": {
+        "B2": 5,
+        "F1": "=B2",
+        "F2": "=A1"
+      }
+    }
+  },
+  {
+    "id": "f7-01",
+    "family": 7,
+    "description": "anchor non-empty: readers of B1 in every form",
+    "sheets": {
+      "Sheet1": {
+        "A1": 1,
+        "B1": 2,
+        "F1": "=B1",
+        "F2": "=$B$1",
+        "F3": "=SUM(B1:B1)",
+        "F4": "=SUM(A1:B1)",
+        "F5": "=SUM(B1:C1)",
+        "F6": "=nmB"
+      },
+      "Sheet2": {
+        "A1": "=Sheet1!B1"
+      }
+    },
+    "names": {
+      "nmB": "=Sheet1!$B$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=$B$1",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(B1:B1)",
+        "value": 0
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM(A1:B1)",
+        "value": 1
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(B1:C1)",
+        "value": 0
+      },
+      "Sheet1!F6": {
+        "formula": "=nmB",
+        "value": 0
+      },
+      "Sheet2!A1": {
+        "formula": "=Sheet1!B1",
+        "value": 0
+      }
+    },
+    "namesAfter": {
+      "nmB": "=Sheet1!$B$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f7-02",
+    "family": 7,
+    "description": "anchor is formula reading hidden cell",
+    "sheets": {
+      "Sheet1": {
+        "A1": "=B1*10",
+        "B1": 2,
+        "F1": "=B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=B1*10",
+        "value": 0
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B1",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f7-03",
+    "family": 7,
+    "description": "anchor formula returning empty string, B1=7",
+    "sheets": {
+      "Sheet1": {
+        "A1": "=\"\"",
+        "B1": 7,
+        "F1": "=B1",
+        "F2": "=A1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "=\"\"",
+        "value": ""
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B1",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=A1",
+        "value": ""
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ]
+  },
+  {
+    "id": "f7-04",
+    "family": 7,
+    "description": "anchor text, 3x3 others",
+    "sheets": {
+      "Sheet1": {
+        "A1": "x",
+        "B2": 2,
+        "C3": 3,
+        "F1": "=B2",
+        "F2": "=C3",
+        "F3": "=SUM(A1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C3"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "x",
+        "value": "x"
+      },
+      "Sheet1!B2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=B2",
+        "value": 0
+      },
+      "Sheet1!F2": {
+        "formula": "=C3",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(A1:C3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C3"
+    ]
+  }
+]

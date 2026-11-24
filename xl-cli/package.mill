@@ -108,7 +108,9 @@ object `package` extends build.XLInternalModule with NativeImageModule {
     // sheet-rule property (ResolveSpec) draws sheet names from; xl-ooxml.test carries the
     // real-file fixture corpus (resources and com.tjclp.xl.ooxml.TestFixtures) the diff law runs
     // over, the xl-cats-effect precedent.
-    override def moduleDeps = super.moduleDeps ++ Seq(build.`xl-core`.test, build.`xl-ooxml`.test)
+    // xl-evaluator.test carries the Excel merge oracle (excel-oracle/merge-references.json, GH-935)
+    override def moduleDeps =
+      super.moduleDeps ++ Seq(build.`xl-core`.test, build.`xl-ooxml`.test, build.`xl-evaluator`.test)
 
     override def mvnDeps = Seq(
       mvn"org.scalameta::munit:1.3.6",
