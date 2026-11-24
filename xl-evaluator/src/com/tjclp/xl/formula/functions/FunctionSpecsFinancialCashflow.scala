@@ -39,10 +39,8 @@ private[functions] def numError(detail: String, usage: String): EvalError =
   EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
-  /**
-   * Days between the 1900 and 1904 date systems' serials for the same date (1904-01-01 is 1462).
-   */
-  private val Date1904Offset = BigDecimal(1462)
+  /** The largest 1904-system serial (9999-12-31), the 1900 maximum less the systems' 1462 days. */
+  private val MaxDate1904Serial = ScalarCoercion.MaxExcelDateSerial - 1462
 
   private def rangeValues(
     location: TExpr.RangeLocation,
@@ -136,23 +134,31 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
                         case other =>
+                          def refused = invalid(s"invalid date at ${dateCell.ref.toA1}")
                           // #956: date text, typed or a formula's text, is the date it spells, as
-                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md)
+                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md). Every dates
+                          // cell decodes to its true calendar date, so in a 1904 book a serial is
+                          // read in that system: a range mixing text, serials and DateTime cells
+                          // keeps its true gaps
+                          def serial1904(n: BigDecimal): Either[EvalError, LocalDate] =
+                            if n < 0 || n > MaxDate1904Serial then Left(refused)
+                            else
+                              Right(
+                                CellValue
+                                  .excelSerialToDateTime(n.toDouble, date1904 = true)
+                                  .toLocalDate
+                              )
                           ScalarCoercion.cellText(other).flatMap(DateText.serial) match
                             case Some(serial) =>
-                              // A 1904 book stores its date cells as 1904 serials, which the
-                              // evaluator reads as 1900 ones; date text takes its 1904 serial and
-                              // the same decoding, so a mixed range keeps the true gaps
-                              val stored = if date1904 then serial - Date1904Offset else serial
-                              if stored < 0 then
-                                Left(invalid(s"invalid date at ${dateCell.ref.toA1}"))
-                              else
-                                Right(CellValue.excelSerialToDateTime(stored.toDouble).toLocalDate)
+                              Right(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
                             case None =>
-                              TExpr
-                                .decodeAsDate(dateCell)
-                                .left
-                                .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                              other match
+                                case CellValue.Number(n) if date1904 => serial1904(n)
+                                case CellValue.Formula(_, Some(CellValue.Number(n)), _)
+                                    if date1904 =>
+                                  serial1904(n)
+                                case _ =>
+                                  TExpr.decodeAsDate(dateCell).left.map(_ => refused)
                     yield (value, date) :: acc
                 }
             }

@@ -223,27 +223,35 @@ class DateTextCoercionSpec extends FunSuite:
     }
   }
 
-  // A 1904-system workbook stores its date cells as 1904 serials, which the evaluator reads as 1900
-  // ones (docs/LIMITATIONS.md); date text there must decode on that same shifted footing, or a range
-  // mixing the two gets a spurious 1,462-day gap. 2028-01-01 is 1904 serial 45291, 2028-12-31 45656.
-  test("#956: in a 1904 workbook, date text and numeric dates mix on one epoch") {
-    def book(second: CellValue): (Sheet, Workbook) =
+  // A 1904-system workbook stores its date cells as 1904 serials; XIRR/XNPV read every kind of
+  // dates cell there as its true date, so a range mixing date text, 1904 serials and in-memory
+  // DateTime cells keeps its true gaps. 2028-01-01 is 1904 serial 45291, 2028-12-31 is 45656.
+  test("#956: in a 1904 workbook, date text, serials and DateTime cells mix on one footing") {
+    def evalIn(first: CellValue, second: CellValue, formula: String): BigDecimal =
       val sheet = Sheet("Flows")
         .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
         .put(ref"A2", CellValue.Number(BigDecimal(1100)))
-        .put(ref"B1", CellValue.Number(BigDecimal(45291)))
+        .put(ref"B1", first)
         .put(ref"B2", second)
-      (sheet, Workbook(sheet).copy(metadata = WorkbookMetadata(date1904 = true)))
-    def evalIn(second: CellValue, formula: String): BigDecimal =
-      val (sheet, wb) = book(second)
+      val wb = Workbook(sheet).copy(metadata = WorkbookMetadata(date1904 = true))
       sheet.evaluateFormula(formula, workbook = Some(wb)) match
         case Right(CellValue.Number(n)) => n
-        case other => fail(s"$formula: expected a number, got $other")
-    val numeric = CellValue.Number(BigDecimal(45656))
-    val text = CellValue.Text("12/31/2028")
-    assertEqualsDouble(evalIn(text, "=XIRR(A1:A2,B1:B2)").toDouble, 0.1, 1e-9)
-    assertEquals(evalIn(text, "=XIRR(A1:A2,B1:B2)"), evalIn(numeric, "=XIRR(A1:A2,B1:B2)"))
-    assertEquals(evalIn(text, "=XNPV(0.1,A1:A2,B1:B2)"), evalIn(numeric, "=XNPV(0.1,A1:A2,B1:B2)"))
+        case other => fail(s"$formula over ($first, $second): expected a number, got $other")
+    val jan1 = List(
+      CellValue.Number(BigDecimal(45291)),
+      CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay()),
+      CellValue.Formula("B9", Some(CellValue.Number(BigDecimal(45291)))),
+      CellValue.Text("1/1/2028")
+    )
+    val dec31 = List(
+      CellValue.Number(BigDecimal(45656)),
+      CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()),
+      CellValue.Formula("B9", Some(CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()))),
+      CellValue.Text("12/31/2028")
+    )
+    for first <- jan1; second <- dec31 do
+      assertEqualsDouble(evalIn(first, second, "=XIRR(A1:A2,B1:B2)").toDouble, 0.1, 1e-9)
+      assertEqualsDouble(evalIn(first, second, "=XNPV(0.1,A1:A2,B1:B2)").toDouble, 0.0, 1e-9)
   }
 
   test("#956: other text in the dates range is still #VALUE!") {
