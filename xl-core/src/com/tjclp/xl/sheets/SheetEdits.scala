@@ -535,7 +535,30 @@ private[xl] object SheetEdits:
    */
   private[xl] def moveCell(sheet: Sheet, from: ARef, to: ARef): Sheet =
     if from == to then sheet
-    else sheet.cells.get(from).fold(sheet)(cell => sheet.remove(from).put(cell.copy(ref = to)))
+    else
+      sheet.cells.get(from).fold(sheet) { cell =>
+        sheet.remove(from).put(cell.copy(ref = to, value = movedGeometry(cell.value, from, to)))
+      }
+
+  /**
+   * A moved record's own geometry follows it: an array formula's (legacy or dynamic) result range
+   * and a data table's range, when anchored at the moved cell, shift by the move's displacement, as
+   * a cut and paste carries them. Inputs a data table names (`r1`/`r2`) are other cells and stay.
+   */
+  private def movedGeometry(value: CellValue, from: ARef, to: ARef): CellValue =
+    val dc = to.col.index0 - from.col.index0
+    val dr = to.row.index0 - from.row.index0
+    // Only a range the record anchors (its top-left is the moved cell, as OOXML writes array and
+    // data-table masters) moves with it; the move is then up-left inside the merge, never off-grid
+    def shifted(r: CellRange): CellRange =
+      def at(a: ARef): ARef = ARef.from0(a.col.index0 + dc, a.row.index0 + dr)
+      if r.start == from then r.copy(start = at(r.start), end = at(r.end)) else r
+    value match
+      case f @ CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) =>
+        f.copy(kind = k.copy(ref = shifted(k.ref)))
+      case f @ CellValue.Formula(_, _, k: FormulaKind.DataTable) =>
+        f.copy(kind = k.copy(ref = shifted(k.ref)))
+      case other => other
 
   /**
    * The cells a merge of `range` hides — everything but the upper-left cell — as at most two

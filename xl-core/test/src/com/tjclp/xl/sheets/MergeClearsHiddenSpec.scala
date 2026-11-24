@@ -89,6 +89,17 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(merged.cells.get(a1("B1")), None)
   }
 
+  test("GH-935: a moved array formula carries its result range with it") {
+    import com.tjclp.xl.cells.FormulaKind
+    def dyn(r: String) =
+      CellValue.Formula("SEQUENCE(1)", Some(num(1)), FormulaKind.dynamicArray(rng(r)))
+    def cse(r: String) = CellValue.Formula("D1*2", Some(num(2)), FormulaKind.ArrayFormula(rng(r)))
+    val a = Sheet(name).put(a1("B2"), dyn("B2:B2")).merge(rng("A1:B2"))
+    assertEquals(a(a1("A1")).value, dyn("A1:A1"))
+    val b = Sheet(name).put(a1("C3"), cse("C3:C3")).merge(rng("B2:C3"))
+    assertEquals(b(a1("B2")).value, cse("B2:B2"))
+  }
+
   test("GH-935: Sheet.merge cannot rewrite the moved cell's readers (no parser in xl-core)") {
     val s = Sheet(name).put(a1("B1"), num(7)).put(a1("E1"), CellValue.Formula("B1+1", None))
     val merged = s.merge(rng("A1:B1"))
