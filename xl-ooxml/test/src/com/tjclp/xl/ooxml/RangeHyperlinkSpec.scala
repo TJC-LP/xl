@@ -129,7 +129,7 @@ class RangeHyperlinkSpec extends FunSuite:
     try
       val (_, sheet) = read(src)
       assertEquals(
-        sheet.rangeHyperlinks,
+        sheet.rangeHyperlinks.toVector,
         Vector(
           RangeHyperlink(
             CellRange.parse("D2:E3").toOption.get,
@@ -207,7 +207,10 @@ class RangeHyperlinkSpec extends FunSuite:
           for a1 <- Seq("D2", "D3", "E3") do
             assertEquals(after(ARef.parse(a1).toOption.get).hyperlink, Some(link), a1)
           // the remnants keep the source tooltip and display
-          assert(after.rangeHyperlinks.forall(_.tooltip.contains("Docs")), after.rangeHyperlinks)
+          assert(
+            after.rangeHyperlinks.toVector.forall(_.tooltip.contains("Docs")),
+            after.rangeHyperlinks
+          )
           assert(!after.contains(ref"E2"))
         finally Files.deleteIfExists(out)
     finally Files.deleteIfExists(src)
@@ -218,7 +221,7 @@ class RangeHyperlinkSpec extends FunSuite:
     try
       val (wb, sheet) = read(src)
       val removed = sheet.removeHyperlinks(CellRange.parse("C1:F4").toOption.get)
-      assertEquals(removed.rangeHyperlinks, Vector.empty)
+      assertEquals(removed.rangeHyperlinks.toVector, Vector.empty)
       val out = write(wb.put(removed))
       try
         assertEquals(writtenLinks(out), List("B7" -> "https://example.com/"))
@@ -338,7 +341,9 @@ class RangeHyperlinkSpec extends FunSuite:
     // the path of an authored link, and of a range link on a sheet detached from its source
     val range = CellRange.parse("B2:C4").toOption.get
     val modeled = RangeHyperlink(range, link, Some("Docs"), Some("Docs link"))
-    val sheet = Sheet("Summary").copy(rangeHyperlinks = Vector(modeled))
+    val sheet = Sheet("Summary").copy(rangeHyperlinks =
+      com.tjclp.xl.sheets.RangeHyperlinks.from(Vector(modeled))
+    )
     for backend <- backends do
       val out = write(Workbook(sheet), WriterConfig(backend = backend))
       try
@@ -348,6 +353,6 @@ class RangeHyperlinkSpec extends FunSuite:
           backend
         )
         val (_, after) = read(out)
-        assertEquals(after.rangeHyperlinks, Vector(modeled), backend)
+        assertEquals(after.rangeHyperlinks.toVector, Vector(modeled), backend)
       finally Files.deleteIfExists(out)
   }

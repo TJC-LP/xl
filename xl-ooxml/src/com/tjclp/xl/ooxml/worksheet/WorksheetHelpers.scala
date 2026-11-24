@@ -481,7 +481,7 @@ private[ooxml] def unmodeledHyperlinksElem(
 ): Option[Elem] =
   // #931: the model's range links by identity, the first of equal ones winning (as a scan in model
   // order would), built once per write: a sheet can hold a link per row
-  val models = sheet.rangeHyperlinks.foldLeft(Map.empty[RangeHyperlink, RangeHyperlink]) {
+  val models = sheet.rangeHyperlinks.iterator.foldLeft(Map.empty[RangeHyperlink, RangeHyperlink]) {
     (acc, link) => if acc.contains(link.identity) then acc else acc.updated(link.identity, link)
   }
   // a spreadsheetML hyperlink the model does not own: keep it, minus cells with an own link (#925)

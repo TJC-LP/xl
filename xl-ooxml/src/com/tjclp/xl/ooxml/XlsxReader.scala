@@ -1312,7 +1312,7 @@ object XlsxReader:
         tabColor = tabColor,
         dataValidations = dataValidations,
         autoFilter = autoFilter,
-        rangeHyperlinks = rangeHyperlinks
+        rangeHyperlinks = com.tjclp.xl.sheets.RangeHyperlinks.from(rangeHyperlinks)
       )
     )
 

@@ -55,6 +55,24 @@ class SheetSerializationSpec extends ScalaCheckSuite:
     assertEquals(edited, sheet.cells.updated(Cell(ARef.from0(300, 5), CellValue.Text("after"))))
   }
 
+  test("#931: range hyperlinks round-trip as their links; lookups work after (indexed)") {
+    val links = Vector.tabulate(40)(r =>
+      RangeHyperlink(
+        com.tjclp.xl.addressing.CellRange(ARef.from0(3, r), ARef.from0(4, r)),
+        com.tjclp.xl.cells.Hyperlink(s"https://x/$r"),
+        tooltip = Some("tip")
+      )
+    )
+    val sheet = Sheet(SheetName.unsafe("S")).copy(rangeHyperlinks = RangeHyperlinks.from(links))
+    // force the index before writing: it must not be part of the serial form
+    assert(sheet.rangeHyperlinkAt(ARef.from0(4, 7)).isDefined)
+    val back = roundTrip(sheet)
+    assertEquals(back, sheet)
+    assertEquals(back.rangeHyperlinks.hashCode, sheet.rangeHyperlinks.hashCode)
+    assertEquals(back.rangeHyperlinkAt(ARef.from0(3, 39)).map(_.link.target), Some("https://x/39"))
+    assert(roundTrip(Sheet(SheetName.unsafe("E"))).rangeHyperlinks eq RangeHyperlinks.empty)
+  }
+
   test("a store round-trips on its own") {
     val store = CellStore.from(populated)
     val back = roundTrip(store)

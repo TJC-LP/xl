@@ -36,8 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   either order and with `-v`; plain `xl --version` still prints the bare version.
 - **Cells under a range hyperlink report it** (#931): a worksheet link over a range
   (`<hyperlink ref="A1:A5" r:id=… tooltip=…/>`, which Excel writes when a link is applied to a
-  selection) is now read into `Sheet.rangeHyperlinks` (`RangeHyperlink`: range, target, tooltip,
-  display). `sheet(ref).hyperlink`, `sheet.getRange(…)` and the new `sheet.hyperlinkAt(ref)` report
+  selection) is now read into `Sheet.rangeHyperlinks`, a `RangeHyperlinks` value (immutable, equal
+  by its links; `RangeHyperlinks.empty` / `.from(...)`, `toVector`, `at(ref)`) holding
+  `RangeHyperlink`s (range, target, tooltip, display). `sheet(ref).hyperlink`, `sheet.getRange(…)` and the new `sheet.hyperlinkAt(ref)` report
   it for every covered cell that has no link of its own, and `xl cell` / `cell --json` show it
   where they printed nothing or `null`. Covered cells are not materialised, so a whole-column link
   stays one entry. `describe --full` counts a range link once, and `diff` reports range links by
@@ -50,8 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hyperlink` is `None` does not remove a range link from that cell; use `removeHyperlinks`.
   Range links nested in `mc:AlternateContent` are still kept as preserved XML without being
   reported, and range links do not yet move with structural edits (#924). Lookups and writes stay
-  fast on sheets with a range link per row: the covering link is found through an index built once
-  per set of links (O(log n) per cell), and the writer matches source elements to model links
+  fast on sheets with a range link per row: the covering link is found through an index that the
+  `RangeHyperlinks` value builds on its first lookup and that a sheet's copies share (O(log n) per
+  cell, no cache outside the value), and the writer matches source elements to model links
   through a map, so the cost range links add to a write or a recalc grows linearly with their
   number instead of quadratically.
 - **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac

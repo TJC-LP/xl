@@ -511,7 +511,7 @@ class EditInterpreterSpec extends FunSuite:
 
   test("#932: a hyperlink over a range links every cell; clearing part of it splits the range") {
     val linked = sheetAfter(Workbook(baseData), Edit.Hyperlink(area("H1:H5"), Some("#Other!A1")))
-    assertEquals(linked.rangeHyperlinks.map(_.range), Vector(rng("H1:H5")))
+    assertEquals(linked.rangeHyperlinks.toVector.map(_.range), Vector(rng("H1:H5")))
     (1 to 5).foreach(r => assertEquals(linked(a1(s"H$r")).hyperlink, Some(Hyperlink("Other!A1"))))
     assert(!linked.contains(a1("H3")), "a range link must not create cells")
     val cleared = sheetAfter(Workbook(linked), Edit.Hyperlink(area("H2:H3"), None))

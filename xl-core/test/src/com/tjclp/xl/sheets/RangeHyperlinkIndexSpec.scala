@@ -45,7 +45,8 @@ class RangeHyperlinkIndexSpec extends ScalaCheckSuite:
 
   property("Sheet.rangeHyperlinkAt ≡ the scan, below and above the scan limit") {
     Prop.forAll(Gen.choose(0, 60).flatMap(Gen.listOfN(_, genLink)), genRef) { (links, ref) =>
-      val sheet = Sheet("S").copy(rangeHyperlinks = links.toVector)
+      val sheet =
+        Sheet("S").copy(rangeHyperlinks = com.tjclp.xl.sheets.RangeHyperlinks.from(links.toVector))
       assertEquals(sheet.rangeHyperlinkAt(ref), scan(links.toVector, ref))
     }
   }
@@ -77,4 +78,45 @@ class RangeHyperlinkIndexSpec extends ScalaCheckSuite:
     val index = RangeHyperlinkIndex(links)
     assertEquals(index.at(ARef.from0(0, 1048575)), Some(column))
     assertEquals(index.at(ARef.from0(3, 50)).map(_.link.target), Some("https://x/50"))
+  }
+
+  // ===== the index lives in the RangeHyperlinks value, built once per value =====
+
+  test("a put loop over a sheet with many range links builds the index once") {
+    val start = Sheet("S").copy(rangeHyperlinks = RangeHyperlinks.from(perRow(1000)))
+    val index = start.rangeHyperlinks.index
+    // each step reads a covered cell through apply (an index lookup) and puts it back with a
+    // value, then a cell with its own link: every copy keeps the same links value
+    val end = (0 until 500).foldLeft(start) { (s, r) =>
+      val read = s(ARef.from0(3, r))
+      assertEquals(read.hyperlink, Some(Hyperlink(s"https://x/$r")))
+      val typed = s.put(read.withValue(com.tjclp.xl.cells.CellValue.Number(BigDecimal(r))))
+      assert(typed.rangeHyperlinks eq start.rangeHyperlinks, s"put $r replaced the links value")
+      assert(typed.rangeHyperlinks.index eq index, s"put $r rebuilt the index")
+      typed.put(com.tjclp.xl.cells.Cell(ARef.from0(9, r)).withHyperlink("https://own/"))
+    }
+    assert(end.rangeHyperlinks.index eq index)
+    assertEquals(end.cells.hyperlinkAt(ARef.from0(3, 7)), None, "the range link stays inherited")
+  }
+
+  test("an edit of the links makes a new value with its own index") {
+    val start = Sheet("S").copy(rangeHyperlinks = RangeHyperlinks.from(perRow(100)))
+    val before = start.rangeHyperlinks.index
+    val cut = start.removeHyperlinks(rng("D5:E5"))
+    assert(!(cut.rangeHyperlinks eq start.rangeHyperlinks))
+    assert(!(cut.rangeHyperlinks.index eq before))
+    assertEquals(cut.rangeHyperlinkAt(ARef.from0(3, 4)), None)
+    assertEquals(cut.rangeHyperlinkAt(ARef.from0(3, 5)).map(_.link.target), Some("https://x/5"))
+    // removing nothing keeps the value, and its index
+    assert(start.removeHyperlinks(rng("Z1:Z9")).rangeHyperlinks eq start.rangeHyperlinks)
+  }
+
+  test("RangeHyperlinks is a value: equality and hashCode follow its links") {
+    val a = RangeHyperlinks.from(perRow(20))
+    val b = RangeHyperlinks(perRow(20)*)
+    assertEquals(a, b)
+    assertEquals(a.hashCode, b.hashCode)
+    assertNotEquals(a, a :+ RangeHyperlink(rng("A1:B2"), Hyperlink("https://y/")))
+    assertEquals(RangeHyperlinks.from(Vector.empty), RangeHyperlinks.empty)
+    assertEquals(a.toVector, perRow(20))
   }

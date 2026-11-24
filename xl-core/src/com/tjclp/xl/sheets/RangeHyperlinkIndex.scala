@@ -1,8 +1,5 @@
 package com.tjclp.xl.sheets
 
-import java.lang.ref.WeakReference
-import java.util.concurrent.atomic.{AtomicInteger, AtomicReferenceArray}
-
 import com.tjclp.xl.addressing.ARef
 
 /**
@@ -68,37 +65,8 @@ final class RangeHyperlinkIndex private (val links: Vector[RangeHyperlink]):
 
 object RangeHyperlinkIndex:
 
-  /** Below this many links a scan is cheaper than building an index. */
+  /** Up to this many links a scan is cheaper than building an index ([[RangeHyperlinks.at]]). */
   private[sheets] val ScanLimit: Int = 16
 
-  /** An index over `links` (built now, whatever their number). */
+  /** An index over `links`. */
   def apply(links: Vector[RangeHyperlink]): RangeHyperlinkIndex = new RangeHyperlinkIndex(links)
-
-  /**
-   * The latest link in `links` covering `ref`. A few links are scanned; more go through an index
-   * built once per distinct `links` vector and shared by every sheet that holds the same vector (a
-   * sheet's copies share it, so a run of edits and reads does not rebuild it).
-   */
-  def covering(links: Vector[RangeHyperlink], ref: ARef): Option[RangeHyperlink] =
-    if links.sizeIs <= ScanLimit then links.findLast(_.covers(ref))
-    else Memo.of(links).at(ref)
-
-  /**
-   * A few recently used indices, matched by the identity of their links vector. Entries are weak,
-   * so the memo never keeps a sheet's links alive; a miss only costs a rebuild, so races between
-   * threads are harmless.
-   */
-  private object Memo:
-    private val Slots = 8
-    private val slots = new AtomicReferenceArray[WeakReference[RangeHyperlinkIndex]](Slots)
-    private val next = new AtomicInteger(0)
-
-    def of(links: Vector[RangeHyperlink]): RangeHyperlinkIndex =
-      (0 until Slots).iterator
-        .flatMap(i => Option(slots.get(i)).flatMap(ref => Option(ref.get)))
-        .find(_.links eq links)
-        .getOrElse {
-          val built = RangeHyperlinkIndex(links)
-          slots.set(Math.floorMod(next.getAndIncrement(), Slots), new WeakReference(built))
-          built
-        }

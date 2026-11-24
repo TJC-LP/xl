@@ -279,7 +279,9 @@ class RangeHyperlinkCliSpec extends CatsEffectSuite:
       assertEquals(sheet(ref"B7").hyperlink, Some(Hyperlink("https://example.com/")))
       // the remnants keep the source element's tooltip
       assert(
-        sheet.rangeHyperlinks.nonEmpty && sheet.rangeHyperlinks.forall(_.tooltip.contains("Docs"))
+        sheet.rangeHyperlinks.nonEmpty && sheet.rangeHyperlinks.toVector.forall(
+          _.tooltip.contains("Docs")
+        )
       )
       assert(!sheet.contains(ref"E2"), "the split must not create E2")
   }

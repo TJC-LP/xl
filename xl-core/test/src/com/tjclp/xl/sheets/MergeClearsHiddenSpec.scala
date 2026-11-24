@@ -218,7 +218,7 @@ class MergeClearsHiddenSpec extends FunSuite:
     val merged = s.merge(rng("A3:C3"))
     assertEquals(merged.hyperlinkAt(a1("B3")), None)
     assertEquals(merged.hyperlinkAt(a1("C3")), None)
-    assertEquals(merged.rangeHyperlinks, Vector.empty)
+    assertEquals(merged.rangeHyperlinks.toVector, Vector.empty)
     // a range link reaching outside the merge keeps its outside part
     val wide =
       Sheet(name).put(a1("A1"), num(1)).setHyperlink(rng("B1:D1"), link).merge(rng("A1:C1"))

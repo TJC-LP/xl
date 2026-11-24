@@ -52,16 +52,18 @@ class RangeHyperlinkScaleSpec extends FunSuite:
 
   test("200k source range links match their model links in linear time") {
     assertEquals(links.size, n)
-    val sheet = Sheet("S").copy(rangeHyperlinks = links)
+    val sheet = Sheet("S").copy(rangeHyperlinks = com.tjclp.xl.sheets.RangeHyperlinks.from(links))
     val kept = unmodeledHyperlinksElem(preserved, targets, sheet).getOrElse(fail("nothing kept"))
     assertEquals(kept.child.size, n)
     assertEquals(collectHyperlinks(sheet, Set.empty, links), Vector.empty)
   }
 
   test("with every other link removed, the kept and generated sets stay exact") {
-    val sheet = Sheet("S").copy(rangeHyperlinks = links.zipWithIndex.collect {
-      case (link, i) if i % 2 == 0 => link
-    } :+ RangeHyperlink(rowRange(n), Hyperlink("https://new.example/")))
+    val sheet = Sheet("S").copy(rangeHyperlinks =
+      com.tjclp.xl.sheets.RangeHyperlinks.from(links.zipWithIndex.collect {
+        case (link, i) if i % 2 == 0 => link
+      } :+ RangeHyperlink(rowRange(n), Hyperlink("https://new.example/")))
+    )
     val kept = unmodeledHyperlinksElem(preserved, targets, sheet).getOrElse(fail("nothing kept"))
     assertEquals(kept.child.size, n / 2)
     assertEquals(collectHyperlinks(sheet, Set.empty, links).map(_.ref), Vector(rowRange(n).toA1))

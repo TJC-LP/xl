@@ -93,7 +93,7 @@ final case class Sheet(
   tabColor: Option[Color] = None,
   dataValidations: Vector[DataValidation] = Vector.empty,
   autoFilter: Option[AutoFilterState] = None,
-  rangeHyperlinks: Vector[RangeHyperlink] = Vector.empty
+  rangeHyperlinks: RangeHyperlinks = RangeHyperlinks.empty
 ):
 
   /**
@@ -121,8 +121,7 @@ final case class Sheet(
    */
   def rangeHyperlinkAt(ref: ARef): Option[RangeHyperlink] =
     // indexed past a few links: one link per row is a common export shape (#931)
-    if rangeHyperlinks.isEmpty then None
-    else RangeHyperlinkIndex.covering(rangeHyperlinks, ref)
+    rangeHyperlinks.at(ref)
 
   /**
    * Link every cell of `range` to `link`, as Excel does for a selection (#932). Existing links in
@@ -151,8 +150,8 @@ final case class Sheet(
 
   /** Cut `range` out of every range hyperlink's coverage, leaving the cells' own links alone. */
   private[xl] def removeRangeHyperlinkCoverage(range: CellRange): Sheet =
-    if !rangeHyperlinks.exists(_.range.intersects(range)) then this
-    else copy(rangeHyperlinks = rangeHyperlinks.flatMap(_.without(range)))
+    val cut = rangeHyperlinks.without(range)
+    if cut eq rangeHyperlinks then this else copy(rangeHyperlinks = cut)
 
   /** Get cell at A1 notation */
   def apply(a1: String): XLResult[Cell] =
