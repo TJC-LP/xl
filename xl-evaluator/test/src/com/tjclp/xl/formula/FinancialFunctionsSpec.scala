@@ -355,6 +355,17 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertApprox(evalNumeric("=XIRR(A1:A3, B1:B3)", x), 0.17432922593135303, 1e-9)
   }
 
+  test("#954: a long steep schedule converges whatever the guess") {
+    // -1000 now, 3649 zero periods, 2000 at the end: rate = 2^(1/3650) - 1. From guess 0.12
+    // Newton fails and the refinement starts on the convex side of a steep NPV, where plain
+    // in-bracket Newton steps crawl; the rtsafe progress check must bisect instead.
+    val flows = "-1000" +: Seq.fill(3649)("0") :+ "2000"
+    val s = column(flows*)
+    val expected = math.pow(2.0, 1.0 / 3650) - 1
+    assertApprox(evalNumeric("=IRR(A1:A3651, 0.12)", s), expected, 1e-9)
+    assertApprox(evalNumeric("=IRR(A1:A3651)", s), expected, 1e-9)
+  }
+
   test("#954: flows whose NPV never crosses zero stay #NUM!") {
     // -100 + 300x - 250x^2 (x = 1/(1+r)) has no real root: no rate exists, Newton and the
     // bracket search both fail, and the error stays a contained #NUM!

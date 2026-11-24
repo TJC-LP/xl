@@ -108,8 +108,19 @@ private[functions] object RateSolver:
       // Orient so that f(neg) < 0 < f(pos); neg may lie above pos.
       val (neg0, pos0) = if fLo < zero then (lo, hi) else (hi, lo)
 
+      // rtsafe: a Newton step is taken only when it lands inside the bracket AND is less than
+      // half the step before last. Otherwise the bracket is bisected, so the bracket shrinks at
+      // least geometrically: on the convex side of a steep NPV, in-bracket Newton steps alone
+      // can crawl far slower than bisection.
       @annotation.tailrec
-      def loop(iter: Int, x: BigDecimal, neg: BigDecimal, pos: BigDecimal): Option[BigDecimal] =
+      def loop(
+        iter: Int,
+        x: BigDecimal,
+        neg: BigDecimal,
+        pos: BigDecimal,
+        lastStep: BigDecimal,
+        stepBeforeLast: BigDecimal
+      ): Option[BigDecimal] =
         if iter >= MaxRefineIterations then None
         else
           val fx = f(x)
@@ -119,12 +130,16 @@ private[functions] object RateSolver:
             val low = nNeg.min(nPos)
             val high = nNeg.max(nPos)
             val dfx = df(x)
-            val newton = if dfx == zero then None else Some(x - fx / dfx)
-            val next = newton.filter(n => n > low && n < high).getOrElse((low + high) / two)
-            if (next - x).abs <= tolerance || (high - low) <= tolerance then Some(next)
-            else loop(iter + 1, next, nNeg, nPos)
+            val newton =
+              if dfx == zero || (two * fx).abs > (stepBeforeLast * dfx).abs then None
+              else Some(x - fx / dfx).filter(n => n > low && n < high)
+            val next = newton.getOrElse((low + high) / two)
+            val step = (next - x).abs
+            if step <= tolerance || (high - low) <= tolerance then Some(next)
+            else loop(iter + 1, next, nNeg, nPos, step, lastStep)
 
-      loop(0, (lo + hi) / two, neg0, pos0)
+      val width = (hi - lo).abs
+      loop(0, (lo + hi) / two, neg0, pos0, width, width)
 
 /**
  * #670(h): a financial function's argument failure as Excel's `#NUM!` — XIRR/XNPV over values and
