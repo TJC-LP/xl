@@ -155,6 +155,48 @@ class RangeHyperlinkCliSpec extends CatsEffectSuite:
       assertEquals(s(ref"A5").hyperlink, Some(Hyperlink(url)))
   }
 
+  for (whole, written, probe, outside) <- Seq(
+      ("A:A", "A1:A1048576", "A1048576", "B1"),
+      ("Summary!B:C", "B1:C1048576", "C70000", "D1"),
+      ("3:3", "A3:XFD3", "XFD3", "A4")
+    )
+  do
+    test(s"#932: batch hyperlink over $whole writes one range link and creates no cells") {
+      val src = tmp("whole")
+      val out = tmp("whole-linked")
+      for
+        _ <- excel.write(Workbook(Sheet("Summary").put(ref"A1", CellValue.Text("Top"))), src)
+        r <- batch(src, out, s"""[{"op":"hyperlink","ref":"$whole","target":"$url"}]""")
+        in <- run("-f", out.toString, "cell", probe)
+        off <- run("-f", out.toString, "cell", outside)
+        wb <- excel.read(out)
+      yield
+        assertEquals(r.exit, 0, r.stderr)
+        assertEquals(linkLine(in), Some(s"Hyperlink: $url"), in.stdout)
+        assertEquals(linkLine(off), None, off.stdout)
+        val xml = entryText(out, sheetPart)
+        assert(xml.contains(s"""ref="$written""""), xml)
+        val s = wb.sheets.head
+        assertEquals(s.rangeHyperlinks.size, 1)
+        assertEquals(s.cells.size, 1, "a whole-column link must not materialise cells")
+    }
+
+  test("#932: batch hyperlink with no target clears a whole column") {
+    val src = tmp("whole-src")
+    val linked = tmp("whole-linked2")
+    val cleared = tmp("whole-cleared")
+    for
+      _ <- excel.write(Workbook(Sheet("Summary").put(ref"A1", CellValue.Text("Top"))), src)
+      _ <- batch(src, linked, s"""[{"op":"hyperlink","ref":"A1:B9","target":"$url"}]""")
+      r <- batch(linked, cleared, """[{"op":"hyperlink","ref":"A:A"}]""")
+      wb <- excel.read(cleared)
+    yield
+      assertEquals(r.exit, 0, r.stderr)
+      val s = wb.sheets.head
+      assertEquals(s(ref"A5").hyperlink, None)
+      assertEquals(s(ref"B5").hyperlink, Some(Hyperlink(url)))
+  }
+
   test("#932: batch hyperlink is refused under --stream before any write") {
     val src = tmp("plain3")
     val out = tmp("streamed3")

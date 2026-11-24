@@ -946,7 +946,8 @@ object OpRegistry:
 
   /** The sheet a ref string is qualified with, if any (`Other!A1` → `Other`). */
   def qualifiedSheet(refStr: String): Option[SheetName] =
-    RefType.parse(refStr).toOption.collect {
+    // whole columns/rows too (`Other!A:A`), which the hyperlink op accepts (#932)
+    RefType.parseWithWhole(refStr).toOption.collect {
       case RefType.QualifiedCell(sheet, _) => sheet
       case RefType.QualifiedRange(sheet, _) => sheet
     }

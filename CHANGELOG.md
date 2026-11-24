@@ -16,7 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cells' own links, and the covered part of any range link, which splits around it. The library
   equivalents are `Sheet.setHyperlink(range, link)` and `Sheet.removeHyperlinks(range)`, and
   `Edit.Hyperlink` now targets an `Area` instead of a `Loc` (**Breaking** for code that builds it
-  directly: wrap a cell with `Area.cell(loc)`). The op stays refused under `--stream`.
+  directly: wrap a cell with `Area.cell(loc)`). A whole column or row (`"ref":"A:A"`,
+  `"Summary!B:C"`, `"3:3"`) is accepted and stays one range link, never a cell per position.
+  The op stays refused under `--stream`.
   `xl batch --schema` and `docs/reference/generated/batch-ops.md` say a range is accepted.
 
 ### Fixed
@@ -47,7 +49,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `sheet(ref)` keeps the link inherited rather than splitting the range. `Sheet.put` of a cell whose
   `hyperlink` is `None` does not remove a range link from that cell; use `removeHyperlinks`.
   Range links nested in `mc:AlternateContent` are still kept as preserved XML without being
-  reported, and range links do not yet move with structural edits (#924).
+  reported, and range links do not yet move with structural edits (#924). Lookups and writes stay
+  fast on sheets with a range link per row: the covering link is found through an index built once
+  per set of links (O(log n) per cell), and the writer matches source elements to model links
+  through a map, so the cost range links add to a write or a recalc grows linearly with their
+  number instead of quadratically.
 - **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac
   (`merge range`, alerts off): a non-empty upper-left cell keeps its value and the other cells
   are cleared; when the upper-left cell is empty, the FIRST non-empty cell of the range in

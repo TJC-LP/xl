@@ -2294,7 +2294,8 @@ object BatchParser:
       }
     def onDefault(range: CellRange): IO[Workbook] =
       sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, range))
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
+    // a whole column or row (`A:A`, `3:3`) is one range link, never a cell per position
+    IO.fromEither(RefType.parseWithWhole(refStr).left.map(e => new Exception(e))).flatMap {
       case RefType.Cell(ref) => onDefault(CellRange(ref, ref))
       case RefType.Range(range) => onDefault(range)
       case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, CellRange(ref, ref))
