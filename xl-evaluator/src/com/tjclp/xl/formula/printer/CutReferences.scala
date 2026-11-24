@@ -260,14 +260,19 @@ object CutReferences:
       case _ => Nil
 
   /**
-   * GH-935 review 5: Excel's array-typed parameters by function, as 0-based argument positions
+   * GH-935 review 5/6: Excel's array-typed parameters by function, as 0-based argument positions
    * (`None`: every argument), for formulas read as text. Checked in Excel for Mac (merge A1:B1 with
    * the value in B1 rewrites `B1:C1*1` in each): SUMPRODUCT, INDEX (first), ROWS, COLUMNS, LOOKUP
    * (lookup and result vectors), IRR, MIRR (values), XLOOKUP (lookup and return arrays), XMATCH
-   * (lookup array), SORT, UNIQUE, MMULT, SUMX2MY2, CORREL. From Excel's function reference, not
+   * (lookup array), SORT, UNIQUE, MMULT, SUMX2MY2, CORREL, FILTER (array, include), SORTBY, TOCOL,
+   * VSTACK, FORECAST.LINEAR (known ys and xs), COVARIANCE.P. From Excel's function reference, not
    * checked by a merge: SUMX2PY2, SUMXMY2, PEARSON, RSQ, SLOPE, INTERCEPT, COVAR, FORECAST (known
-   * ys and xs), FREQUENCY, TREND, GROWTH, LINEST, LOGEST, MDETERM, MINVERSE. Every function the
-   * registry flags (`FunctionFlags.arrayArguments`) is here too (a law pins it).
+   * ys and xs), FREQUENCY, TREND, GROWTH, LINEST, LOGEST, MDETERM, MINVERSE, HSTACK, TOROW, TAKE,
+   * DROP, CHOOSECOLS, CHOOSEROWS, WRAPROWS, WRAPCOLS, EXPAND (array), COVARIANCE.S, the
+   * FORECAST.ETS family (values, timeline). Excel leaves the value-typed ones alone, so they are
+   * not here (checked): LARGE, SMALL, PERCENTILE, QUARTILE, TRIMMEAN, MATCH, TRANSPOSE, SUM, LET, a
+   * LAMBDA call. Every function the registry flags (`FunctionFlags.arrayArguments`) is here too (a
+   * law pins it).
    */
   val ArrayParameters: Map[String, Option[Set[Int]]] = Map(
     "SUMPRODUCT" -> None,
@@ -298,14 +303,35 @@ object CutReferences:
     "LINEST" -> Some(Set(0, 1)),
     "LOGEST" -> Some(Set(0, 1)),
     "MDETERM" -> None,
-    "MINVERSE" -> None
+    "MINVERSE" -> None,
+    "FILTER" -> Some(Set(0, 1)),
+    "SORTBY" -> None,
+    "TOCOL" -> Some(Set(0)),
+    "VSTACK" -> None,
+    "FORECAST.LINEAR" -> Some(Set(1, 2)),
+    "COVARIANCE.P" -> None,
+    "HSTACK" -> None,
+    "TOROW" -> Some(Set(0)),
+    "TAKE" -> Some(Set(0)),
+    "DROP" -> Some(Set(0)),
+    "CHOOSECOLS" -> Some(Set(0)),
+    "CHOOSEROWS" -> Some(Set(0)),
+    "WRAPROWS" -> Some(Set(0)),
+    "WRAPCOLS" -> Some(Set(0)),
+    "EXPAND" -> Some(Set(0)),
+    "COVARIANCE.S" -> None,
+    "FORECAST.ETS" -> Some(Set(1, 2)),
+    "FORECAST.ETS.CONFINT" -> Some(Set(1, 2)),
+    "FORECAST.ETS.SEASONALITY" -> Some(Set(0, 1)),
+    "FORECAST.ETS.STAT" -> Some(Set(0, 1))
   )
 
   /**
    * Whether the text at `pos` lies, at any depth, inside an argument whose parameter Excel types as
    * an array ([[ArrayParameters]]): walks the parentheses before it, tracking each call's name and
    * argument index. Works on text the parser rejects (XLOOKUP, IRR, LOOKUP with expression
-   * arguments), which is where it matters; strings are masked.
+   * arguments), which is where it matters; strings, quoted sheet names, array constants and
+   * brackets are masked ([[maskStrings]]), so only the formula's own commas count.
    */
   private def inArrayArgument(masked: String, pos: Int): Boolean =
     // a frame: the function's array positions (if it is a call) and the current argument index
@@ -331,15 +357,64 @@ object CutReferences:
       }
     frames.exists(f => f.arrays.exists(_.forall(_.contains(f.arg))))
 
-  /** `text` with string-literal contents blanked (same length), so parentheses inside are inert. */
+  /** Where [[maskStrings]] is in the text: plain formula, a string literal, a quoted sheet name. */
+  private enum Mask derives CanEqual:
+    case Plain, Str, Quoted
+
+  /**
+   * `text` with the punctuation that is not formula structure blanked (same length, so every span
+   * keeps its position): string literals and quoted sheet names (`'a,b'!`, `'Q)1'!`, `''` escapes
+   * included) whole, and the contents of array constants (`{1,2}`) and brackets (structured
+   * references `T[[#This Row],[a]]`, external-book prefixes; both nest, and a `'` inside brackets
+   * escapes the next character), whose braces and brackets stay. So the commas and parentheses left
+   * are the formula's own: argument separators, unions and calls (GH-935 review 6).
+   */
   private def maskStrings(text: String): String =
-    text
-      .foldLeft((new StringBuilder(text.length), false)) { case ((sb, inString), c) =>
-        if c == '"' then (sb.append(' '), !inString)
-        else (sb.append(if inString then ' ' else c), inString)
-      }
-      ._1
-      .toString
+    final case class State(mode: Mask, braces: Int, brackets: Int, escape: Boolean)
+    val sb = new StringBuilder(text.length)
+    text.foldLeft(State(Mask.Plain, 0, 0, escape = false)) { (st, c) =>
+      st.mode match
+        case Mask.Str =>
+          sb.append(' ')
+          if c == '"' then st.copy(mode = Mask.Plain) else st
+        case Mask.Quoted =>
+          sb.append(' ')
+          if c == '\'' then st.copy(mode = Mask.Plain) else st
+        case Mask.Plain =>
+          val nested = st.braces > 0 || st.brackets > 0
+          val structural = c == '{' || c == '}' || c == '[' || c == ']'
+          if st.escape then
+            sb.append(' ')
+            st.copy(escape = false)
+          else if st.brackets > 0 then
+            sb.append(if structural then c else ' ')
+            c match
+              case '\'' => st.copy(escape = true)
+              case '[' => st.copy(brackets = st.brackets + 1)
+              case ']' => st.copy(brackets = st.brackets - 1)
+              case _ => st
+          else
+            c match
+              case '"' =>
+                sb.append(' ')
+                st.copy(mode = Mask.Str)
+              case '\'' if !nested =>
+                sb.append(' ')
+                st.copy(mode = Mask.Quoted)
+              case '{' =>
+                sb.append(c)
+                st.copy(braces = st.braces + 1)
+              case '}' =>
+                sb.append(c)
+                st.copy(braces = (st.braces - 1).max(0))
+              case '[' =>
+                sb.append(c)
+                st.copy(brackets = 1)
+              case _ =>
+                sb.append(if nested then ' ' else c)
+                st
+    }
+    sb.toString
 
   /**
    * Whether the reference at `[start, end)` is a whole argument of a function call: the innermost

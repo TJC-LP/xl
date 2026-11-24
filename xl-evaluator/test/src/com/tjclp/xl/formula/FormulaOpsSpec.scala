@@ -457,6 +457,67 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(rel("=TREND(B1:C1*1)"), "=TREND(A1:C1*1)")
   }
 
+  test("GH-935 review 6: only the formula's own commas and parentheses count as arguments") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-02): commas inside an array constant or a quoted
+    // sheet name are not argument separators
+    assertEquals(rel("=XLOOKUP(1,{1,2},B1:C1*1)"), "=XLOOKUP(1,{1,2},A1:C1*1)")
+    assertEquals(rel("=XMATCH({1,2}*B1:C1,D1:E1)"), "=XMATCH({1,2}*B1:C1,D1:E1)")
+    assertEquals(rel("=XMATCH('a,b'!A1,B1:C1*1)"), "=XMATCH('a,b'!A1,A1:C1*1)")
+    // not checked in Excel: a parenthesis in a quoted sheet name, an escaped quote, a row
+    // constant, and commas inside a structured reference
+    assertEquals(rel("=XMATCH('Q)1'!A1,B1:C1*1)"), "=XMATCH('Q)1'!A1,A1:C1*1)")
+    assertEquals(rel("=XMATCH('it''s'!A1,B1:C1*1)"), "=XMATCH('it''s'!A1,A1:C1*1)")
+    assertEquals(rel("=XLOOKUP(1,{1;2},B1:C1*1)"), "=XLOOKUP(1,{1;2},A1:C1*1)")
+    assertEquals(
+      rel("=XLOOKUP(1,T[[#This Row],[a]],B1:C1*1)"),
+      "=XLOOKUP(1,T[[#This Row],[a]],A1:C1*1)"
+    )
+    assertEquals(rel("=XLOOKUP(1,T[Amount (USD)],B1:C1*1)"), "=XLOOKUP(1,T[Amount (USD)],A1:C1*1)")
+    assertEquals(rel("=XMATCH(\"x,y\",B1:C1*1)"), "=XMATCH(\"x,y\",A1:C1*1)")
+  }
+
+  test("GH-935 review 6: array-typed parameters of the newer functions, value-typed ones kept") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-02 holds the array-typed ones): Excel leaves these
+    // value-typed arguments alone
+    Vector(
+      "=LARGE(B1:C1*1,1)",
+      "=SMALL(B1:C1*1,1)",
+      "=PERCENTILE(B1:C1*1,0.5)",
+      "=QUARTILE(B1:C1*1,1)",
+      "=TRIMMEAN(B1:C1*1,0.2)",
+      "=MATCH(7,B1:C1*1,0)",
+      "=SUM(TRANSPOSE(B1:C1*1))",
+      "=SUM(B1:C1*1)",
+      "=LET(x,B1:C1*1,SUM(x))",
+      "=LAMBDA(x,SUM(x))(B1:C1*1)"
+    ).foreach(t => assertEquals(rel(t), t, t))
+    // not checked in Excel (from Excel's function reference): array-typed too
+    assertEquals(rel("=SUM(HSTACK(B1:C1*1))"), "=SUM(HSTACK(A1:C1*1))")
+    assertEquals(rel("=SUM(TAKE(B1:C1*1,1))"), "=SUM(TAKE(A1:C1*1,1))")
+    assertEquals(rel("=SUM(CHOOSECOLS(B1:C1*1,1))"), "=SUM(CHOOSECOLS(A1:C1*1,1))")
+    assertEquals(rel("=COVARIANCE.S(B1:C1*1,{1,2})"), "=COVARIANCE.S(A1:C1*1,{1,2})")
+    assertEquals(
+      rel("=_xlfn.FORECAST.ETS(3,B1:C1*1,{1,2})"),
+      "=_xlfn.FORECAST.ETS(3,A1:C1*1,{1,2})"
+    )
+    // a value-typed argument of an array-typed function keeps the intersection rule
+    assertEquals(rel("=SUM(TAKE({1,2},B1:C1*1))"), "=SUM(TAKE({1,2},B1:C1*1))")
+  }
+
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
     val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
     assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")
