@@ -85,7 +85,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     touched only when one of its references depends on the winner or the anchor: a range that is a
     whole function argument depends on all its cells, a bare range Excel implicitly intersects
     (`=B1:C1+0`, `=(B1:C1)`) only on its intersection with the formula's own row or column. Only
-    the changed reference spans are replaced; everything else is byte-identical.
+    the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
+    refresh is seeded with every cell the merge changed on any sheet, so a reader rewritten to
+    `#REF!` elsewhere is recalculated, not left on its old cached value.
   - Every other cell is cleared the way Clear Contents clears it: the value or formula and the
     hyperlinks go (its own link and its part of a range hyperlink, which splits around the merge),
     a cell's own formatting and its comment stay, an unstyled cell is removed. A moved cell carries

@@ -94,10 +94,11 @@ object CellCommands:
           writeWorkbook(merged, outputPath, config, stream)
             .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
         else
-          WriteCommands.writeAfterRefresh(
+          // the cut can rewrite formulas on other sheets and in names: the whole-book refresh
+          // seeds every changed cell (GH-935, Excel oracle)
+          WriteCommands.writeAfterContentEdit(
+            wb,
             merged,
-            targetSheet.name,
-            modified,
             message,
             outputPath,
             config,

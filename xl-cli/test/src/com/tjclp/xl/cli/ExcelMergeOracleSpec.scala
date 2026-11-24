@@ -190,7 +190,9 @@ class ExcelMergeOracleSpec extends FunSuite:
       withDir { dir =>
         val in = dir.resolve("in.xlsx")
         val out = dir.resolve("out.xlsx")
-        ExcelIO.instance[IO].write(build(sc), in).unsafeRunSync()
+        // cached values in the input, so a reader the merge rewrites must be recalculated (a stale
+        // cache would show the old value)
+        ExcelIO.instance[IO].write(build(sc).recalculate().workbook, in).unsafeRunSync()
         val run = CliHarness
           .run(
             "-f",

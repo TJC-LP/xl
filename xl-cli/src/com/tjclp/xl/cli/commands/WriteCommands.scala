@@ -1767,6 +1767,31 @@ object WriteCommands:
     }
 
   /**
+   * GH-935: the write tail of an edit that may change cells on several sheets at once — a merge
+   * whose cut rewrites formulas on other sheets and in names: every cell whose value or formula
+   * text changed, on any sheet, seeds the dependent refresh (the batch's scoped refresh), so a
+   * reader rewritten to `#REF!` elsewhere is recalculated too. `--no-recalc` keeps every cache.
+   */
+  def writeAfterContentEdit(
+    before: Workbook,
+    edited: Workbook,
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    refreshDependents(before, edited, mutating = true, outputPath, policy).flatMap {
+      (finalWb, recalcOpt, refreshLine) =>
+        writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+          val recalcLine = refreshLine.fold("")(line => s"$line\n")
+          val rendered = s"$message\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+          strictGate(policy, rendered, recalcOpt, Vector.empty, warn)
+        }
+    }
+
+  /**
    * GH-496: the `--strict` gate. The verb has already written its output path — in the CLI always a
    * staging file; this only decides the outcome, and the runner publishes the staged file only on
    * exit 0 (#677).
