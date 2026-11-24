@@ -192,7 +192,7 @@ object OpRegistry:
   // GH-935 review 2: unmerging re-spills a dynamic array the merge had blocked
   private val unmerge = rangeOnly(
     "unmerge",
-    "Unmerge a merged range (a dynamic array the merge blocked spills again).",
+    "Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again.",
     "A1:D1",
     "unmerge",
     cellMutating = true

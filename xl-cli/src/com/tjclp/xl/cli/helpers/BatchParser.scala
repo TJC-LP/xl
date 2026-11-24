@@ -1583,7 +1583,7 @@ object BatchParser:
         applyMerge(currentWb, defaultSheetName, rangeStr)
 
       case BatchOp.Unmerge(rangeStr) =>
-        applyUnmerge(currentWb, defaultSheetName, rangeStr, clock)
+        applyUnmerge(currentWb, defaultSheetName, rangeStr)
 
       case BatchOp.ColWidth(colStr, width) =>
         applyColWidth(currentWb, defaultSheetName, colStr, width)
@@ -2199,16 +2199,15 @@ object BatchParser:
   private def applyUnmerge(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
-    rangeStr: String,
-    clock: Clock
+    rangeStr: String
   ): IO[Workbook] =
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
-      unmerged <- updateSheet(wb, sheetName)(_.unmerge(range))
-      sheet <- IO.fromEither(Resolve.named(unmerged, sheetName).left.map(CliException(_)))
-    // GH-935 review 2: a dynamic array the merge blocked spills again once nothing blocks it
-    yield DynamicArrayAuthoring.respillAfterUnmerge(unmerged, sheet.name, clock)._1
+      // GH-935 review 3: every merged area the range touches; the batch's trailing refresh
+      // re-spills a dynamic array the merge had blocked
+      result <- updateSheet(wb, sheetName)(_.unmerge(range))
+    yield result
 
   /** Apply a column width operation. */
   private def applyColWidth(

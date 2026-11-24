@@ -76,14 +76,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   range hyperlink covering it) to the upper-left cell.
   - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
     member of a legacy array other than its anchor, is never the cell moved into an empty
-    upper-left cell (nothing becomes a constant). A merge that covers part of the range a dynamic
+    upper-left cell (nothing becomes a constant), and a spilled value AT the upper-left cell does
+    not win either: the first cell holding real content of its own does (with `=SEQUENCE(3)` in
+    A1, B2 = 5 and `D1 = B2*10`, merging `A2:B3` moves 5 to A2 and D1 reads `=A2*10`, 50). When the
+    cell moved is itself a dynamic-array anchor, its old spill is released first and it moves as
+    a one-cell anchor, which evaluates to `#SPILL!` in the merged cell; its spilled values never
+    stay behind as constants. A merge that covers part of the range a dynamic
     array's result spills into blocks it, as in Excel: the anchor evaluates to `#SPILL!` (reason
     "spill range is merged", judged on the evaluated result's shape, so every later recalculation
     agrees) and its spill range is EMPTY — the merge clears the spilled values and leaves the
     anchor a one-cell record cached at `#SPILL!`, so a reader of a spill cell reads blank (with
     `=SEQUENCE(3)` in A1 and `C1 = A3*10`, merging `A2:B2` or `A1:A2` gives `#SPILL!` and C1 = 0).
-    Unmerging (the verb and the batch `unmerge` op, now cell-mutating) re-spills every blocked
-    anchor nothing blocks any more and refreshes its readers (C1 = 30 again).
+    Any path that removes the blocking merge re-spills it and refreshes its readers (C1 = 30
+    again): the `unmerge` verb and batch op (now cell-mutating), `clear --styles`/`--all` and the
+    batch `clear` with styles, and a streamed `unmerge` followed by `recalc`. Every write's
+    dependent refresh and `recalc` re-establish a dynamic array stored truncated to its anchor
+    (`DynamicArrayAuthoring.respillTruncated`) when its result is larger and nothing blocks it,
+    whatever its cached value says. **Behaviour change:** this also re-spills a dynamic array
+    authored as one cell whose result later grows (`=SEQUENCE(D2)` after `D2` goes from 1 to 3),
+    which used to stay one cell; an array authored with a larger spill still keeps its authored
+    extent on a later input change (the pinned limitation; Excel re-spills on open).
+  - `unmerge` unmerges every merged area its range touches, as Excel's Unmerge Cells does for a
+    selection (`Sheet.unmerge`, `Patch.Unmerge`, `Edit.Unmerge`, the verb, the batch op in memory
+    and streamed); a single cell selects its merge (it used to fail with `INTERNAL`). The verb
+    names the areas it unmerged, and a range that touches no merge is a no-op that says so
+    ("nothing unmerged"). **Behaviour change:** `unmerge` used to remove only an exactly matching
+    merge and report success otherwise.
   - A merge whose range (grown over existing merges) touches a legacy array formula or a data
     table is refused, as Excel refuses it (it cannot change part of an array, and array formulas
     are not valid in merged cells): `InvalidRange` from `Edit.Merge`, `CellMover.merge`, the verb
@@ -125,11 +143,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hidden under it.
   - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
     whose merges already hide values is read and rewritten unchanged: only the merge operation
-    clears. Residuals: `Sheet.merge` does not release spills; comments are not moved with a moved
-    cell; a `clear --styles`/`--all` that unmerges does not re-spill a blocked dynamic array (the
-    next unmerge or `putf --array` does); a streamed batch `unmerge` never re-spills (the stream
-    never recalculates); a value a streamed merge clears from an unstyled cell leaves an empty
-    `<c>` record where the in-memory merge removes it. A moved array formula or data-table master
+    clears. A streamed batch is checked against the in-memory batch on random merge, unmerge and
+    put sequences: the files agree or the stream refuses. (It used to drop the clearing of a cell
+    an earlier merge in the same batch had emptied, so a second merge over it brought the value
+    back.) Residuals: `Sheet.merge` does not release spills; comments are not moved with a moved
+    cell; a streamed batch `unmerge` re-spills only at the next recalculation (the stream never
+    recalculates); the library's `wb.recalculate()` does not re-spill a truncated dynamic array by
+    itself (the CLI's refresh and `recalc` do, through `respillTruncated`); a value a streamed
+    merge clears from an unstyled cell leaves an empty `<c>` record where the in-memory merge
+    removes it. A moved array formula or data-table master
     carries its anchored result range.
   - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
     by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now

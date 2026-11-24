@@ -770,7 +770,8 @@ object StreamingWriteCommands:
               (live.filterNot(_.intersects(t)) + t, acc :+ t)
             }
           case ((live, acc), BatchParser.BatchOp.Unmerge(r)) =>
-            (CellRange.parse(r).toOption.fold(live)(live - _), acc)
+            // GH-935 review 3: an unmerge removes every merged area it touches
+            (parseArea(r).fold(live)(u => live.filterNot(_.intersects(u))), acc)
           case (state, _) => state
         }
         ._2
@@ -780,8 +781,6 @@ object StreamingWriteCommands:
         else StreamingTransform.MergeContext(Set.empty, Vector.empty, Vector.empty)
       val filledInMerges = mergeContext.filled
       val liveMerges = mutable.Set[CellRange]() ++ sourceMerges
-      // the file cells a merge of this batch has emptied (an earlier merge's hidden cells)
-      val mergeCleared = mutable.Set[ARef]()
 
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
@@ -1009,8 +1008,7 @@ object StreamingWriteCommands:
               case Some(StreamingTransform.CellPatch.SetValue(v, _)) => v != CellValue.Empty
               case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, v)) => v != CellValue.Empty
               case _ =>
-                filledInMerges.contains(ref) && !mergeCleared.contains(ref) &&
-                !clearedSpills.exists(_.contains(ref))
+                filledInMerges.contains(ref) && !clearedSpills.exists(_.contains(ref))
             val hiddenCells = SheetEdits.hiddenByMerge(range)
             def refuse(why: String): Nothing =
               throw CliException(
@@ -1044,34 +1042,39 @@ object StreamingWriteCommands:
             liveMerges.filterInPlace(m => !m.intersects(range))
             liveMerges += range
             // GH-935: the cells the merge hides lose their contents, as Excel's Merge Cells
-            // clears them (each keeps its style). A value an earlier op of this batch wrote there
-            // goes too; a later op's value still lands, since it replaces the patch. Only cells
-            // that hold content are patched, so an empty record is left exactly as it was.
-            cellPatches.keys.toVector.filter(r => hiddenCells.exists(_.contains(r))).foreach {
-              ref =>
-                cellPatches.get(ref) match
-                  case Some(StreamingTransform.CellPatch.SetValue(_, _)) => cellPatches -= ref
-                  case Some(StreamingTransform.CellPatch.SetStyleAndValue(styleId, _)) =>
-                    cellPatches(ref) = StreamingTransform.CellPatch.SetStyle(styleId)
-                  case _ => ()
-            }
-            filledInMerges.iterator
-              .filter(r => hiddenCells.exists(_.contains(r)) && !mergeCleared.contains(r))
+            // clears them (each keeps its style). GH-935 review 3: the patch map IS the state of
+            // every touched cell, so each hidden cell holding a value is set to empty (a file cell
+            // by an empty-value patch, a cell only an earlier op created by dropping its patch);
+            // a cell already empty is left alone, and a later op's value still replaces the patch.
+            (cellPatches.keysIterator ++ filledInMerges.iterator).toVector.distinct
+              .filter(r => hiddenCells.exists(_.contains(r)) && holdsValue(r))
               .foreach { ref =>
-                mergeCleared += ref
-                cellPatches(ref) = cellPatches.get(ref) match
+                val inFile = filledInMerges.contains(ref)
+                cellPatches.get(ref) match
                   case Some(StreamingTransform.CellPatch.SetStyle(styleId)) =>
-                    StreamingTransform.CellPatch.SetStyleAndValue(styleId, CellValue.Empty)
-                  case _ => StreamingTransform.CellPatch.SetValue(CellValue.Empty)
+                    cellPatches(ref) =
+                      StreamingTransform.CellPatch.SetStyleAndValue(styleId, CellValue.Empty)
+                  case Some(StreamingTransform.CellPatch.SetStyleAndValue(styleId, _)) =>
+                    cellPatches(ref) =
+                      if inFile then
+                        StreamingTransform.CellPatch.SetStyleAndValue(styleId, CellValue.Empty)
+                      else StreamingTransform.CellPatch.SetStyle(styleId)
+                  case Some(StreamingTransform.CellPatch.SetValue(_, _)) =>
+                    if inFile then
+                      cellPatches(ref) = StreamingTransform.CellPatch.SetValue(CellValue.Empty)
+                    else cellPatches -= ref
+                  case _ =>
+                    cellPatches(ref) = StreamingTransform.CellPatch.SetValue(CellValue.Empty)
               }
             val absorbed = if range == requested then "" else s" (merged ${range.toA1})"
             summaryLines += s"  MERGE $rangeStr$absorbed"
 
           case BatchParser.BatchOp.Unmerge(rangeStr) =>
-            val range = CellRange.parse(rangeStr) match
-              case Right(r) => r
-              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            liveMerges -= range
+            val range = parseArea(rangeStr).getOrElse(
+              throw new Exception(s"Invalid range '$rangeStr'")
+            )
+            // GH-935 review 3: every merged area the range touches, as Excel unmerges a selection
+            liveMerges.filterInPlace(m => !m.intersects(range))
             summaryLines += s"  UNMERGE $rangeStr"
 
           case BatchParser.BatchOp.ColWidth(colStr, width) =>
@@ -1209,6 +1212,10 @@ object StreamingWriteCommands:
         case Some(entry) => StreamingTransform.scanMergedRanges(zipFile.getInputStream(entry))
         case None => throw new Exception(s"Worksheet not found: $normalizedPath")
     finally zipFile.close()
+
+  /** A range or a single cell (a 1x1 range), as the merge and unmerge ops accept them. */
+  private def parseArea(s: String): Option[CellRange] =
+    CellRange.parse(s).toOption.orElse(ARef.parse(s).toOption.map(r => CellRange(r, r)))
 
   /** GH-935 review 2: [[StreamingTransform.MergeContext]] of the source worksheet. */
   private def scanMergeContext(

@@ -126,31 +126,25 @@ object CellCommands:
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
       (targetSheet, refOrRange) = resolved
-      range <- refOrRange match
-        case Right(r) => IO.pure(r)
-        case Left(_) =>
-          IO.raiseError(
-            new Exception("unmerge requires a range (e.g., A1:C1), not a single cell")
-          )
+      // a single cell selects the merge it belongs to, as in Excel
+      range = refOrRange.fold(ref => CellRange(ref, ref), identity)
+      // GH-935 review 3: Excel's Unmerge Cells unmerges every merged area the selection touches
+      unmerged = targetSheet.mergesIn(range)
       updatedSheet = targetSheet.unmerge(range)
-      // GH-935 review 2: a dynamic array the merge blocked (#SPILL!) spills again once nothing
-      // blocks it, and its readers are refreshed, as Excel recalculates it
-      respilled = DynamicArrayAuthoring.respillAfterUnmerge(
-        wb.put(updatedSheet),
-        targetSheet.name,
-        Clock.system
-      )
-      (updatedWb, seeds) = respilled
-      message = s"Unmerged: ${range.toA1}"
+      message =
+        if unmerged.isEmpty then s"No merged cells in ${range.toA1}: nothing unmerged"
+        else s"Unmerged: ${unmerged.map(_.toA1).mkString(", ")}"
+      // a dynamic array the merge blocked (#SPILL!) spills again once nothing blocks it, and its
+      // readers are refreshed (writeAfterRefresh re-spills truncated arrays of the sheet)
       result <-
-        if seeds.isEmpty then
-          writeWorkbook(updatedWb, outputPath, config, stream)
+        if unmerged.isEmpty then
+          writeWorkbook(wb, outputPath, config, stream)
             .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
         else
           WriteCommands.writeAfterRefresh(
-            updatedWb,
+            wb.put(updatedSheet),
             targetSheet.name,
-            seeds,
+            Set.empty,
             message,
             outputPath,
             config,
@@ -257,8 +251,11 @@ object CellCommands:
       modified = candidates.filter(r =>
         targetSheet.cells.get(r).map(_.value) != sheet4.cells.get(r).map(_.value)
       )
+      // GH-935 review 3: a styles clear that unmerges can unblock a dynamic array the merge
+      // truncated; the refresh re-spills it
+      unmergedAny = clearStyles && overlappingMerges.nonEmpty
       result <-
-        if modified.isEmpty then
+        if modified.isEmpty && !unmergedAny then
           writeWorkbook(updatedWb, outputPath, config, stream)
             .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
         else

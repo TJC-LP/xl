@@ -265,3 +265,212 @@ class MergeStreamParitySpec extends FunSuite:
       assert(b.stderr.contains("array formula at A2:A3"), b.stderr)
     }
   }
+
+  // ===== GH-935 review 3 =====
+
+  /** In memory and streamed: the same observed file, or the stream refuses with no file. */
+  private def assertParity(book: Sheet, ops: String): Unit =
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val mem = dir.resolve("mem.xlsx")
+      val str = dir.resolve("str.xlsx")
+      write(Workbook(book), in)
+      val m = runIn(ops, "-f", in.toString, "-o", mem.toString, "batch", "-")
+      val s = runIn(ops, "-f", in.toString, "-o", str.toString, "--stream", "batch", "-")
+      if s.exit == 0 then
+        assertEquals(m.exit, 0, s"$ops: in memory failed where the stream did not: ${m.stderr}")
+        assertEquals(observed(read(str)), observed(read(mem)), ops)
+      else
+        assert(!Files.exists(str), s"$ops: a refused stream writes no file")
+        assert(s.stderr.contains("drop --stream") || m.exit != 0, s"$ops: ${s.stderr}")
+    }
+
+  test("GH-935 review 3: a second merge over a cleared cell keeps it cleared in the stream") {
+    val p = sheet("A1" -> num(1), "A2" -> num(3), "D1" -> f("SUM(A1:B2)", Some(num(4))))
+    for ops <- List(
+        """[{"op":"merge","range":"A1:A2"},{"op":"merge","range":"A1:B2"}]""",
+        """[{"op":"merge","range":"A1:B2"},{"op":"put","ref":"B1","value":9},{"op":"merge","range":"B2:E2"}]""",
+        """[{"op":"merge","range":"A1:A2"},{"op":"unmerge","range":"A1:A2"},{"op":"merge","range":"A1:B2"}]"""
+      )
+    do assertParity(p, ops)
+    // the first sequence, concretely: A2 stays gone in both
+    withDir { dir =>
+      val in = dir.resolve("p.xlsx")
+      val str = dir.resolve("str.xlsx")
+      write(Workbook(p), in)
+      val ops = """[{"op":"merge","range":"A1:A2"},{"op":"merge","range":"A1:B2"}]"""
+      assertEquals(
+        runIn(ops, "-f", in.toString, "-o", str.toString, "--stream", "batch", "-").exit,
+        0
+      )
+      assertEquals(valueOf(read(str), "A2"), CellValue.Empty)
+    }
+  }
+
+  test("GH-935 review 3: random merge/unmerge/put sequences agree in memory and streamed") {
+    val rnd = new scala.util.Random(935L)
+    val cols = Vector("A", "B", "C")
+    def cell = s"${cols(rnd.nextInt(3))}${rnd.nextInt(3) + 1}"
+    def area =
+      val (c1, c2) = (rnd.nextInt(3), rnd.nextInt(3))
+      val (r1, r2) = (rnd.nextInt(3) + 1, rnd.nextInt(3) + 1)
+      s"${cols(c1 min c2)}${r1 min r2}:${cols(c1 max c2)}${r1 max r2}"
+    for round <- 1 to 25 do
+      val book =
+        (1 to rnd.nextInt(5) + 1).foldLeft(Sheet("Sheet1"))((s, i) => s.put(at(cell), num(i)))
+      val ops = (1 to rnd.nextInt(4) + 1).map { _ =>
+        rnd.nextInt(5) match
+          case 0 => s"""{"op":"unmerge","range":"$area"}"""
+          case 1 => s"""{"op":"put","ref":"$cell","value":${rnd.nextInt(90) + 10}}"""
+          case _ => s"""{"op":"merge","range":"$area"}"""
+      }
+      assertParity(book, ops.mkString("[", ",", "]"))
+  }
+
+  test("GH-935 review 3: a spilled value at the upper-left cell does not win over real content") {
+    withDir { dir =>
+      val base = dir.resolve("base.xlsx")
+      write(Workbook(Sheet("Sheet1")), base)
+      val b = dir.resolve("b.xlsx")
+      assertEquals(
+        run("-f", base.toString, "-o", b.toString, "putf", "A1", "=SEQUENCE(3)", "--array").exit,
+        0
+      )
+      assertEquals(run("-f", b.toString, "-o", b.toString, "put", "B2", "5").exit, 0)
+      assertEquals(run("-f", b.toString, "-o", b.toString, "putf", "D1", "=B2*10").exit, 0)
+      val out = dir.resolve("out.xlsx")
+      val r = run("-f", b.toString, "-o", out.toString, "merge", "A2:B3")
+      assertEquals(r.exit, 0, r.stderr)
+      val s = read(out)
+      assertEquals(valueOf(s, "A2"), num(5))
+      assertEquals(formulaText(s, "D1"), Some("A2*10"))
+      assertEquals(cache(s, "D1"), Some(num(50)))
+      assertEquals(cache(s, "A1"), Some(CellValue.Error(CellError.Spill)))
+      assertEquals(valueOf(s, "A3"), CellValue.Empty)
+    }
+  }
+
+  test("GH-935 review 3: a moved dynamic-array anchor leaves no spilled constant behind") {
+    withDir { dir =>
+      val base = dir.resolve("base.xlsx")
+      write(Workbook(Sheet("Sheet1")), base)
+      // vertical: A2 =SEQUENCE(3), C1 =SUM(A1:A10), merge A1:A2
+      val v = dir.resolve("v.xlsx")
+      assertEquals(
+        run("-f", base.toString, "-o", v.toString, "putf", "A2", "=SEQUENCE(3)", "--array").exit,
+        0
+      )
+      assertEquals(run("-f", v.toString, "-o", v.toString, "putf", "C1", "=SUM(A1:A10)").exit, 0)
+      val vm = dir.resolve("vm.xlsx")
+      assertEquals(run("-f", v.toString, "-o", vm.toString, "merge", "A1:A2").exit, 0)
+      val m = read(vm)
+      assertEquals(formulaText(m, "A1"), Some("SEQUENCE(3)"))
+      assertEquals(cache(m, "A1"), Some(CellValue.Error(CellError.Spill)))
+      for r <- List("A2", "A3", "A4") do assertEquals(valueOf(m, r), CellValue.Empty, r)
+      val vu = dir.resolve("vu.xlsx")
+      assertEquals(run("-f", vm.toString, "-o", vu.toString, "unmerge", "A1:A2").exit, 0)
+      val u = read(vu)
+      assertEquals(
+        List("A1", "A2", "A3", "A4").map(r =>
+          valueOf(u, r) match
+            case CellValue.Formula(_, c, _) => c.getOrElse(CellValue.Empty)
+            case other => other
+        ),
+        List(num(1), num(2), num(3), CellValue.Empty)
+      )
+      assertEquals(cache(u, "C1"), Some(num(6)))
+      // horizontal: B1 =SEQUENCE(1,3), merge A1:B1
+      val h = dir.resolve("h.xlsx")
+      assertEquals(
+        run("-f", base.toString, "-o", h.toString, "putf", "B1", "=SEQUENCE(1,3)", "--array").exit,
+        0
+      )
+      val hm = dir.resolve("hm.xlsx")
+      assertEquals(run("-f", h.toString, "-o", hm.toString, "merge", "A1:B1").exit, 0)
+      val hs = read(hm)
+      assertEquals(valueOf(hs, "C1"), CellValue.Empty)
+      assertEquals(valueOf(hs, "D1"), CellValue.Empty)
+    }
+  }
+
+  test("GH-935 review 3: every path that removes the blocking merge restores the spill") {
+    withDir { dir =>
+      val base = dir.resolve("base.xlsx")
+      write(Workbook(Sheet("Sheet1")), base)
+      val sp = dir.resolve("sp.xlsx")
+      assertEquals(
+        run("-f", base.toString, "-o", sp.toString, "putf", "A1", "=SEQUENCE(3)", "--array").exit,
+        0
+      )
+      assertEquals(run("-f", sp.toString, "-o", sp.toString, "putf", "C1", "=A3*10").exit, 0)
+      val merged = dir.resolve("merged.xlsx")
+      assertEquals(run("-f", sp.toString, "-o", merged.toString, "merge", "A2:B2").exit, 0)
+      def restored(path: Path, how: String): Unit =
+        val s = read(path)
+        assertEquals(valueOf(s, "A2"), num(2), how)
+        assertEquals(valueOf(s, "A3"), num(3), how)
+        assertEquals(cache(s, "C1"), Some(num(30)), how)
+      def recalc(in: Path, name: String): Path =
+        val out = dir.resolve(name)
+        assertEquals(run("-f", in.toString, "-o", out.toString, "recalc").exit, 0)
+        out
+      // batch clear with styles over the merge
+      val bc = dir.resolve("bc.xlsx")
+      val clearOps = """[{"op":"clear","range":"A2:B2","styles":true}]"""
+      assertEquals(runIn(clearOps, "-f", merged.toString, "-o", bc.toString, "batch", "-").exit, 0)
+      restored(bc, "batch clear styles")
+      // clear --styles verb, and after a recalc as well
+      val cs = dir.resolve("cs.xlsx")
+      assertEquals(
+        run("-f", merged.toString, "-o", cs.toString, "clear", "A2:B2", "--styles").exit,
+        0
+      )
+      restored(cs, "clear --styles")
+      restored(recalc(cs, "cs-r.xlsx"), "clear --styles + recalc")
+      // streamed unmerge, then recalc
+      val su = dir.resolve("su.xlsx")
+      val unOps = """[{"op":"unmerge","range":"A2:B2"}]"""
+      assertEquals(
+        runIn(unOps, "-f", merged.toString, "-o", su.toString, "--stream", "batch", "-").exit,
+        0
+      )
+      restored(recalc(su, "su-r.xlsx"), "streamed unmerge + recalc")
+      // a recalc that had already run once after the unmerge (anchor no longer cached #SPILL!)
+      val su2 = dir.resolve("su2.xlsx")
+      assertEquals(
+        run("-f", su.toString, "-o", su2.toString, "--no-recalc", "put", "F1", "1").exit,
+        0
+      )
+      restored(recalc(su2, "su2-r.xlsx"), "after an intermediate write")
+    }
+  }
+
+  test("GH-935 review 3: unmerge unmerges every merged area a selection touches") {
+    withDir { dir =>
+      val in = dir.resolve("un.xlsx")
+      write(
+        Workbook(sheet("A2" -> num(1)).copy(mergedRanges = Set(rng("A2:B2"), rng("D5:E5")))),
+        in
+      )
+      val out = dir.resolve("out.xlsx")
+      val r = run("-f", in.toString, "-o", out.toString, "unmerge", "A1:C3")
+      assertEquals(r.exit, 0, r.stderr)
+      assert(r.stdout.contains("Unmerged: A2:B2"), r.stdout)
+      assertEquals(read(out).mergedRanges, Set(rng("D5:E5")))
+      val one = dir.resolve("one.xlsx")
+      val c = run("-f", in.toString, "-o", one.toString, "unmerge", "B2")
+      assertEquals(c.exit, 0, c.stderr)
+      assertEquals(read(one).mergedRanges, Set(rng("D5:E5")))
+      val none = dir.resolve("none.xlsx")
+      val n = run("-f", in.toString, "-o", none.toString, "unmerge", "G7:H8")
+      assertEquals(n.exit, 0, n.stderr)
+      assert(n.stdout.contains("nothing unmerged"), n.stdout)
+      for streamed <- List(false, true) do
+        val b = dir.resolve(s"b-$streamed.xlsx")
+        val args = List("-f", in.toString, "-o", b.toString) ++
+          (if streamed then List("--stream") else Nil) ++ List("batch", "-")
+        val br = runIn("""[{"op":"unmerge","range":"B2"}]""", args*)
+        assertEquals(br.exit, 0, br.stderr)
+        assertEquals(read(b).mergedRanges, Set(rng("D5:E5")), s"stream=$streamed")
+    }
+  }

@@ -166,9 +166,9 @@ object WriteCommands:
    * entirely by `--no-recalc`, which leaves every cached value in the file exactly as it was.
    */
   private[cli] def writeAfterRefresh(
-    wb: Workbook,
+    wb0: Workbook,
     sheetName: SheetName,
-    modifiedRefs: Set[ARef],
+    modifiedRefs0: Set[ARef],
     message: String,
     outputPath: Path,
     config: WriterConfig,
@@ -184,6 +184,12 @@ object WriteCommands:
       else
         // GH-636: the recalculation builds the graph and every result at once — under the guard
         MemoryGuard.blocking(outputPath, "recalc") {
+          // GH-935 review 3: a dynamic array a merge truncated on this sheet spills again once
+          // nothing blocks it (after an unmerge, a styles clear), its new cells joining the seeds
+          val (respilled, respillSeeds) =
+            DynamicArrayAuthoring.respillOnSheet(wb0, sheetName, clock.getOrElse(Clock.system))
+          val wb = respilled
+          val modifiedRefs = modifiedRefs0 ++ respillSeeds
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
               val (full, cone) =
@@ -200,7 +206,7 @@ object WriteCommands:
           Some(result)
         }
     calculation.flatMap { result =>
-      val finalWb = result.fold(wb)(_.workbook)
+      val finalWb = result.fold(wb0)(_.workbook)
       writeWorkbook(finalWb, outputPath, config, stream).flatMap { report =>
         val note = result match
           case None => noRecalcSuffix(policy)
@@ -1686,9 +1692,12 @@ object WriteCommands:
    */
   private def scopedRecalc(
     before: Workbook,
-    edited: Workbook,
+    editedRaw: Workbook,
     clock: Clock = Clock.system
   ): (Workbook, RecalcResult) =
+    // GH-935 review 3: a dynamic array a merge truncated spills again once nothing blocks it (an
+    // unmerge, a styles clear); its new cells are changes like any other
+    val edited = DynamicArrayAuthoring.respillTruncated(editedRaw, clock)._1
     val changed = changedRefs(before, edited)
     // A name's binding can change while every cell retains its text and cache. Seed its readers
     // explicitly before closing the cell graph, including readers of removed names and aliases.
@@ -1868,7 +1877,14 @@ object WriteCommands:
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
               } && changesNames(wb, updatedWb)
-              val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
+              // GH-935 review 3: a batch that removed a merge (a styles clear) can unblock a dynamic
+              // array the merge truncated; the refresh re-spills it
+              val unmerged = wb.sheets.exists { before =>
+                updatedWb(before.name).toOption
+                  .exists(after => !before.mergedRanges.subsetOf(after.mergedRanges))
+              }
+              val mutating =
+                result.scoped.map(_.op).exists(isCellMutating) || nameEdit || unmerged
               refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
                 (finalWb, recalcOpt, refreshLine) =>
                   writeWorkbook(finalWb, outputPath, config, stream).flatMap { written =>
@@ -1959,7 +1975,12 @@ object WriteCommands:
     // memory guard (GH-636): a heap the whole-book recalculation exhausts is RESOURCE_LIMIT.
     MemoryGuard
       .blocking(outputPath, "recalc")(
-        recalcHonoringCalcPr(wb, parallel, seedTables = seedTables)
+        // GH-935 review 3: a dynamic array a merge truncated spills again once nothing blocks it
+        recalcHonoringCalcPr(
+          DynamicArrayAuthoring.respillTruncated(wb, Clock.system)._1,
+          parallel,
+          seedTables = seedTables
+        )
       )
       .flatMap { run =>
         val result = run.result
