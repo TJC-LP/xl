@@ -117,7 +117,13 @@ private[xl] object PatchLowering:
       if props.hidden == current.hidden then Vector.empty
       else Vector(if props.hidden then Edit.HideCols(None, span) else Edit.ShowCols(None, span))
     props.width match
-      case Some(w) if props == current.copy(width = Some(w), hidden = props.hidden) =>
+      // `ColWidth` sets a custom width (#869): a width entry widening wrote has no exact edit
+      case Some(w)
+          if props.customWidth && props == current.copy(
+            width = Some(w),
+            hidden = props.hidden,
+            customWidth = true
+          ) =>
         Option.when(w >= 0 && w <= 255.0)(Edit.ColWidth(None, span, w) +: visibility)
       case None if props == current.copy(hidden = props.hidden) =>
         Option.when(visibility.nonEmpty || sheet.columnProperties.contains(col))(visibility)

@@ -183,13 +183,22 @@ class SheetAutoFitSpec extends ScalaCheckSuite:
     // a base wide enough for the value: an unsized column already shows it in full
     val base = math.ceil(fit).toInt + 1
     val wide = s.copy(baseColumnWidth = Some(base))
-    assertEqualsDouble(SheetEdits.unsizedColumnWidth(wide), (base * 7 + 5) / 7.0, 1e-9)
+    assertEqualsDouble(
+      SheetEdits.unsizedColumnWidth(wide),
+      math.ceil((base * 7 + 5) / 8.0) * 8 / 7.0,
+      1e-9
+    )
     assertEquals(SheetEdits.widenForEntries(wide, List(a1))._2, Vector.empty)
-    // Excel for Mac's 10 is 75 px: 10.71
+    // Excel for Mac's 10 draws an 80 px column (75 px rounded up to a multiple of 8)
     assertEqualsDouble(
       SheetEdits.unsizedColumnWidth(s.copy(baseColumnWidth = Some(10))),
-      75.0 / 7,
+      80.0 / 7,
       1e-9
+    )
+    // an explicit 8 (openpyxl's default) is the same 64 px column as no attribute (#869 review)
+    assertEquals(
+      SheetEdits.unsizedColumnWidth(s.copy(baseColumnWidth = Some(8))),
+      SheetEdits.unsizedColumnWidth(s)
     )
     // defaultColWidth wins over baseColWidth when both are set
     assertEquals(

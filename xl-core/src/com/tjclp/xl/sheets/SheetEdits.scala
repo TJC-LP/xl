@@ -883,17 +883,24 @@ private[xl] object SheetEdits:
 
   /**
    * The width an unsized column of `sheet` has, in [[autoFitWidth]]'s units: the sheet's
-   * `defaultColWidth`, else its `baseColWidth` digits plus the 5 px of padding (Excel for Mac's 10
-   * gives 75 / 7 = 10.71), else Excel's 64 px ([[UnsizedColumnFitWidth]]). Comparing against 64 px
-   * on a sheet whose unsized columns are wider would write a width narrower than the column already
-   * shows (#869 review).
+   * `defaultColWidth`, else the column Excel draws for its `baseColWidth`, else Excel's 64 px
+   * ([[UnsizedColumnFitWidth]]). Comparing against 64 px on a sheet whose unsized columns are wider
+   * would write a width narrower than the column already shows (#869 review).
    */
   private[sheets] def unsizedColumnWidth(sheet: Sheet): Double =
     sheet.defaultColumnWidth
-      .orElse(
-        sheet.baseColumnWidth.map(b => (b * MaxDigitWidthPx + CellPaddingPx) / MaxDigitWidthPx)
-      )
+      .orElse(sheet.baseColumnWidth.map(baseColumnPx(_) / MaxDigitWidthPx))
       .getOrElse(UnsizedColumnFitWidth)
+
+  /**
+   * The pixel width Excel draws an unsized column at for `<sheetFormatPr baseColWidth=b>`: `b`
+   * digits plus the 5 px of padding, rounded up to a multiple of 8 px. So 8 (the default, which
+   * openpyxl writes explicitly) is the same 64 px as no attribute at all, and 10 (Excel for Mac) is
+   * 80 px (#869 review).
+   */
+  private[sheets] def baseColumnPx(baseColWidth: Int): Double =
+    val px = baseColWidth * MaxDigitWidthPx + CellPaddingPx
+    math.ceil(px / 8.0) * 8.0
 
   /**
    * The width `cell`'s formatted text needs, judged in Excel's units: the text's measured width is

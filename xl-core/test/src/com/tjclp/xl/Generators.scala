@@ -108,7 +108,16 @@ object Generators:
       styleId <- Gen.option(Gen.choose(0, 100).map(StyleId.apply))
       outlineLevel <- Gen.option(Gen.choose(0, 7))
       collapsed <- Gen.oneOf(true, false)
-    yield ColumnProperties(width, hidden, styleId, outlineLevel, collapsed)
+      // #869: an entry-widened width is not custom; a column with no width always is
+      entryWidth <- Gen.oneOf(true, false)
+    yield ColumnProperties(
+      width,
+      hidden,
+      styleId,
+      outlineLevel,
+      collapsed,
+      customWidth = width.isEmpty || !entryWidth
+    )
 
   /** Generate row properties */
   val genRowProperties: Gen[RowProperties] =

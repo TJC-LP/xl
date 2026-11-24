@@ -262,6 +262,18 @@ abstract class EditLawsSuite(support: FormulaSupport, label: String) extends Sca
     assertEquals(viaEdit.flatMap(_.cells.get(b2)), Some(com.tjclp.xl.cells.Cell(b2)))
   }
 
+  test("#869: hiding an entry-widened column keeps its width not custom on both paths") {
+    val col = com.tjclp.xl.addressing.Column.from0(1)
+    val entry = com.tjclp.xl.sheets.ColumnProperties(width = Some(15.29), customWidth = false)
+    val sheet = baseData.setColumnProperties(col, entry)
+    val p = Patch.SetColumnProperties(col, entry.copy(hidden = true))
+    val viaEdits =
+      Patch.toEdits(p, sheet).map(es => sheetOf(run(Workbook(sheet), es, Scope.of(data)), data))
+    // no exact desugaring (ColWidth would mark the width custom), or one that agrees exactly
+    viaEdits.foreach(v => assertEquals(v, Right(Patch.applyPatch(sheet, p))))
+    assertEquals(Patch.applyPatch(sheet, p).getColumnProperties(col).customWidth, false)
+  }
+
   property("desugar coherence: Patch.toEdits(p, sheet) applied equals Patch.applyPatch(sheet, p)") {
     forAll(genPatch(baseData)) { (p: Patch) =>
       Patch.toEdits(p, baseData) match
