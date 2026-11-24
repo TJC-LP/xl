@@ -9,6 +9,7 @@ import com.tjclp.xl.{*, given}
 import com.tjclp.xl.cli.contract.CliHarness
 import com.tjclp.xl.formula.eval.CellMover
 import com.tjclp.xl.io.ExcelIO
+import com.tjclp.xl.sheets.{DataValidation, DvKind}
 
 import munit.FunSuite
 
@@ -17,11 +18,13 @@ import munit.FunSuite
  * holds 93 merge scenarios run in Excel for Mac 16.115 — 477 cell expectations, every defined name
  * and merged area after the merge, and for each of the 69 empty-anchor cases a cut-and-paste of the
  * winner onto the anchor that produced the same formulas character for character — plus 14
- * union/intersection cases (family 8, `f8-01`…`f8-14`) checked by hand in Excel for Mac. Each
- * scenario's workbook is built here, merged by the workbook-level merge (`CellMover.merge`, what
- * `wb.edit(Edit.Merge(...))`, the `merge` verb and the batch op run), recalculated, and compared:
- * every formula's text exactly (Excel's `=` prefix is xl's stored text with `=` added; no other
- * normalisation), every value, the merged areas and the names.
+ * union/intersection cases (family 8, `f8-01`…`f8-14`) and 17 scenarios from the fourth review's
+ * Excel runner (family 9 function argument kinds, 10 3-D references, 11 data validation, 12
+ * assorted) checked by hand in Excel for Mac. Each scenario's workbook is built here, merged by the
+ * workbook-level merge (`CellMover.merge`, what `wb.edit(Edit.Merge(...))`, the `merge` verb and
+ * the batch op run), recalculated, and compared: every formula's text exactly (Excel's `=` prefix
+ * is xl's stored text with `=` added; no other normalisation), every value, the merged areas and
+ * the names.
  *
  * Inputs: a scenario's `sheets` is the workbook as Excel stored it before the merge (ranges
  * normalised, `=SUM(C1:B1)` read back as `=SUM(B1:C1)`), used as is; `submitted` adds the cells
@@ -54,7 +57,22 @@ class ExcelMergeOracleSpec extends FunSuite:
     "f4-13" -> (Set("Sheet1!A1"), selfReference),
     "f4-14" -> (Set("Sheet1!A1"), selfReference),
     "f4-15" -> (Set("Sheet1!A1"), selfReference),
-    "f4-16" -> (Set("Sheet1!A1"), selfReference)
+    "f4-16" -> (Set("Sheet1!A1"), selfReference),
+    "f9-03" -> (
+      Set("Sheet1!F19"),
+      "xl evaluates ROWS' argument expression in the formula's mode, so ROWS(A1:C1*1) in a plain " +
+        "cell intersects to #VALUE!; Excel types the parameter as an array (1). Evaluating it " +
+        "whole breaks Excel-pinned cases such as ROWS(IF(A1:A10>2,A1:A10,A1:A3)) = #VALUE!"
+    ),
+    "f10-01" -> (
+      Set("Sheet3!A1", "Sheet3!A2", "Sheet3!A3"),
+      "xl does not evaluate 3-D references (SUM(Sheet1:Sheet2!B1) fails to parse, merged or not)"
+    ),
+    "f12-05" -> (
+      Set("Sheet1!F1"),
+      "xl cannot read a defined name whose definition is a union (Sheet1!$B$1,Sheet1!$D$1), " +
+        "merged or not"
+    )
   )
 
   private def ref(a1: String): ARef = ARef.parse(a1).fold(e => fail(e), identity)
@@ -91,9 +109,20 @@ class ExcelMergeOracleSpec extends FunSuite:
         .foldLeft(Sheet(SheetName.unsafe(name)))((s, kv) => s.put(ref(kv._1), input(kv._2)))
         .copy(mergedRanges = merges.toSet)
     }
+    val validated = sc.obj.get("dataValidations").toList.flatMap(_.obj.toVector).foldLeft(sheets) {
+      case (acc, (qualified, formula)) =>
+        val (name, a1) = (qualified.takeWhile(_ != '!'), qualified.dropWhile(_ != '!').drop(1))
+        acc.map(s =>
+          if s.name.value == name then
+            s.withDataValidation(range(s"$a1:$a1"), DataValidation.custom(formula.str))
+          else s
+        )
+    }
     sc("names").obj
       .filterNot((n, _) => n.startsWith("_xlfn."))
-      .foldLeft(Workbook(sheets))((wb, kv) => wb.withDefinedName(kv._1, kv._2.str.stripPrefix("=")))
+      .foldLeft(Workbook(validated))((wb, kv) =>
+        wb.withDefinedName(kv._1, kv._2.str.stripPrefix("="))
+      )
 
   private def merged(sc: ujson.Value): Workbook =
     val wb = build(sc)
@@ -152,6 +181,20 @@ class ExcelMergeOracleSpec extends FunSuite:
           .map((n, v) => n -> v.str)
           .toMap
       if names != expectedNames then problems += s"names: expected $expectedNames, got $names"
+      sc.obj.get("dataValidationsAfter").toList.flatMap(_.obj.toVector).foreach {
+        (qualified, formula) =>
+          val (name, a1) = (qualified.takeWhile(_ != '!'), qualified.dropWhile(_ != '!').drop(1))
+          val got = after(SheetName.unsafe(name)).toOption.toList
+            .flatMap(_.dataValidations)
+            .collect {
+              case r: DataValidation.Rules if r.ranges.exists(_.contains(ref(a1))) =>
+                r.kind match
+                  case DvKind.Custom(f) => f
+                  case other => other.toString
+            }
+          if got != List(formula.str) then
+            problems += s"$qualified validation: expected ${formula.str}, got ${got.mkString(", ")}"
+      }
       val areas =
         after.sheets.flatMap(s => s.mergedRanges.map(r => s"${s.name.value}!${r.toA1}")).toSet
       val expectedAreas = sc("mergedAreasAfter").arr.map(_.str).toSet
@@ -171,10 +214,12 @@ class ExcelMergeOracleSpec extends FunSuite:
       }
     }
 
-  test("oracle: the fixture holds the 107 scenarios Excel ran") {
+  test("oracle: the fixture holds the 124 scenarios Excel ran") {
     // 93 from the oracle harness (477 cells) + 14 union/intersection cases checked by hand (f8-*)
-    assertEquals(scenarios.size, 107)
-    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 533)
+    // + 17 from review 4's Excel runner (f9-* argument kinds, f10-01 3-D, f11-01 data validation,
+    // f12-* assorted)
+    assertEquals(scenarios.size, 124)
+    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 690)
   }
 
   // ===== the CLI merge verb over a sample of the scenarios =====

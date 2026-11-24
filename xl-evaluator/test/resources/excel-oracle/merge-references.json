@@ -5297,5 +5297,1188 @@
       "Sheet1!A1:B1"
     ],
     "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f9-01",
+    "family": 9,
+    "description": "winner inside lookup/aggregation functions",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F1": "=INDEX(B1:C1,1)",
+        "F2": "=OFFSET(B1,0,1)",
+        "F3": "=SUMIFS(B1:C1,B1:C1,\">0\")",
+        "F4": "=MATCH(7,B1:D1,0)",
+        "F7": "=SUMPRODUCT(B1:C1*1)",
+        "F8": "=COUNTIF(B1:B3,7)",
+        "F9": "=VLOOKUP(7,B1:C1,2,FALSE)",
+        "F10": "=INDEX(B1:C2,1,1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F1": {
+        "formula": "=INDEX(A1:C1,1)",
+        "value": 7
+      },
+      "Sheet1!F2": {
+        "formula": "=OFFSET(A1,0,1)",
+        "value": 0
+      },
+      "Sheet1!F3": {
+        "formula": "=SUMIFS(A1:C1,A1:C1,\">0\")",
+        "value": 8
+      },
+      "Sheet1!F4": {
+        "formula": "=MATCH(7,A1:D1,0)",
+        "value": 1
+      },
+      "Sheet1!F7": {
+        "formula": "=SUMPRODUCT(A1:C1*1)",
+        "value": 8
+      },
+      "Sheet1!F8": {
+        "formula": "=COUNTIF(B1:B3,7)",
+        "value": 0
+      },
+      "Sheet1!F9": {
+        "formula": "=VLOOKUP(7,A1:C1,2,FALSE)",
+        "value": 0
+      },
+      "Sheet1!F10": {
+        "formula": "=INDEX(B1:C2,1,1)",
+        "value": 0
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-03)"
+  },
+  {
+    "id": "f9-02",
+    "family": 9,
+    "description": "bare ranges inside expressions, off the winner's row/col",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F5": "=SUM(B1:C1*1)",
+        "F6": "=-B1:C1",
+        "F7": "=IF(TRUE,B1:C1)",
+        "F8": "=B1:C1",
+        "F9": "=SUM( B1:C1 )",
+        "F10": "=SUM(+B1:C1)",
+        "F11": "=IF(B1:C1>0,1,2)",
+        "F12": "=ROWS(B1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(B1:C1*1)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F6": {
+        "formula": "=-B1:C1",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F7": {
+        "formula": "=IF(TRUE,A1:C1)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F8": {
+        "formula": "=B1:C1",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F9": {
+        "formula": "=SUM( A1:C1 )",
+        "value": 8
+      },
+      "Sheet1!F10": {
+        "formula": "=SUM(+B1:C1)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F11": {
+        "formula": "=IF(B1:C1>0,1,2)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F12": {
+        "formula": "=ROWS(A1:C1)",
+        "value": 1
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-04)"
+  },
+  {
+    "id": "f9-03",
+    "family": 9,
+    "description": "array-class arguments holding range expressions (off-row readers)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F5": "=SUMPRODUCT((B1:C1>0)*B1:C1)",
+        "F6": "=SUMPRODUCT(B1:C1,B1:C1)",
+        "F7": "=SUMPRODUCT(--(B1:C1>0))",
+        "F9": "=INDEX(B1:C1*1,1,1)",
+        "F10": "=SUM(IF(B1:C1>0,1,0))",
+        "F11": "=MAX(B1:C1*2)",
+        "F12": "=COUNT(B1:C1*1)",
+        "F13": "=MEDIAN(B1:C1+0)",
+        "F16": "=AND(B1:C1>0)",
+        "F17": "=SUMPRODUCT(B1:C1*1)",
+        "F19": "=ROWS(B1:C1*1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F5": {
+        "formula": "=SUMPRODUCT((A1:C1>0)*A1:C1)",
+        "value": 8
+      },
+      "Sheet1!F6": {
+        "formula": "=SUMPRODUCT(A1:C1,A1:C1)",
+        "value": 50
+      },
+      "Sheet1!F7": {
+        "formula": "=SUMPRODUCT(--(A1:C1>0))",
+        "value": 2
+      },
+      "Sheet1!F9": {
+        "formula": "=INDEX(A1:C1*1,1,1)",
+        "value": 7
+      },
+      "Sheet1!F10": {
+        "formula": "=SUM(IF(B1:C1>0,1,0))",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F11": {
+        "formula": "=MAX(B1:C1*2)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F12": {
+        "formula": "=COUNT(B1:C1*1)",
+        "value": 0
+      },
+      "Sheet1!F13": {
+        "formula": "=MEDIAN(B1:C1+0)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F16": {
+        "formula": "=AND(B1:C1>0)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!F17": {
+        "formula": "=SUMPRODUCT(A1:C1*1)",
+        "value": 8
+      },
+      "Sheet1!F19": {
+        "formula": "=ROWS(A1:C1*1)",
+        "value": 1
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r5-01)"
+  },
+  {
+    "id": "f9-04",
+    "family": 9,
+    "description": "vertical SUMPRODUCT patterns, merge A1:A3 winner A3",
+    "sheets": {
+      "Sheet1": {
+        "A3": 7,
+        "B3": 1,
+        "A4": 1,
+        "B4": 1,
+        "A5": 2,
+        "B5": 1,
+        "H10": "=SUMPRODUCT((A3:A5>0)*B3:B5)",
+        "H11": "=SUMPRODUCT(A3:A5*B3:B5)",
+        "H12": "=SUMPRODUCT(A3:A5,B3:B5)",
+        "H13": "=SUMPRODUCT((A1:A3=7)*1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A3"
+    },
+    "expectedAfter": {
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B3": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!A4": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!B4": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!A5": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!B5": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!H10": {
+        "formula": "=SUMPRODUCT((A1:A5>0)*B3:B5)",
+        "value": "#N/A"
+      },
+      "Sheet1!H11": {
+        "formula": "=SUMPRODUCT(A1:A5*B3:B5)",
+        "value": "#N/A"
+      },
+      "Sheet1!H12": {
+        "formula": "=SUMPRODUCT(A1:A5,B3:B5)",
+        "value": "#VALUE!"
+      },
+      "Sheet1!H13": {
+        "formula": "=SUMPRODUCT((A1:A2=7)*1)",
+        "value": 1
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:A3"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r5-02)"
+  },
+  {
+    "id": "f10-01",
+    "family": 10,
+    "description": "3-D references next to plain references",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7
+      },
+      "Sheet2": {
+        "A1": 2,
+        "B1": 1
+      },
+      "Sheet3": {
+        "A1": "=SUM(Sheet1:Sheet2!B1)",
+        "A2": "=SUM(Sheet1:Sheet2!B1)+Sheet1!B1",
+        "A3": "=Sheet1!B1+SUM(Sheet1:Sheet2!A1)",
+        "A4": "=Sheet1!B1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet2!A1": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet2!B1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet3!A1": {
+        "formula": "=SUM(Sheet1:Sheet2!B1)",
+        "value": 1
+      },
+      "Sheet3!A2": {
+        "formula": "=SUM(Sheet1:Sheet2!B1)+Sheet1!A1",
+        "value": 8
+      },
+      "Sheet3!A3": {
+        "formula": "=Sheet1!A1+SUM(Sheet1:Sheet2!A1)",
+        "value": 16
+      },
+      "Sheet3!A4": {
+        "formula": "=Sheet1!A1",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-02)"
+  },
+  {
+    "id": "f12-01",
+    "family": 12,
+    "description": "sheet name with space; qualified readers on another sheet; name",
+    "sheets": {
+      "Sheet1": {
+        "F1": "='My Sheet'!B1+1",
+        "F2": "=SUM('My Sheet'!B1:C1)",
+        "F3": "='My Sheet'!A1",
+        "F4": "=SUM('My Sheet'!B1:B3)",
+        "F5": "=nmS*2"
+      },
+      "My Sheet": {
+        "B1": 7,
+        "C1": 1,
+        "F1": "=B1",
+        "F2": "='My Sheet'!B1+B1"
+      }
+    },
+    "names": {
+      "nmS": "='My Sheet'!$B$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "My Sheet",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!F1": {
+        "formula": "='My Sheet'!A1+1",
+        "value": 8
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM('My Sheet'!A1:C1)",
+        "value": 8
+      },
+      "Sheet1!F3": {
+        "formula": "='My Sheet'!#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM('My Sheet'!B1:B3)",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=nmS*2",
+        "value": 14
+      },
+      "My Sheet!B1": {
+        "formula": "",
+        "value": null
+      },
+      "My Sheet!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "My Sheet!F1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "My Sheet!F2": {
+        "formula": "='My Sheet'!A1+A1",
+        "value": 14
+      },
+      "My Sheet!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {
+      "nmS": "='My Sheet'!$A$1"
+    },
+    "mergedAreasAfter": [
+      "My Sheet!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-01)"
+  },
+  {
+    "id": "f12-02",
+    "family": 12,
+    "description": "vertical move in 2-col merge A1:B3, winner A2",
+    "sheets": {
+      "Sheet1": {
+        "H1": "=A2",
+        "A2": 7,
+        "H2": "=SUM(A2:A5)",
+        "H3": "=SUM(A2:B2)",
+        "A4": 1,
+        "H4": "=SUM(A2:A2)",
+        "H5": "=SUM($A$2:$A5)",
+        "H6": "=A1",
+        "H7": "=SUM(A1:A2)",
+        "H8": "=SUM(A2:A3)",
+        "H9": "=SUM(A1:A5)",
+        "H10": "=SUM(A2:C2)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B3"
+    },
+    "expectedAfter": {
+      "Sheet1!H1": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!A2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(A1:A5)",
+        "value": 8
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(A2:B2)",
+        "value": 0
+      },
+      "Sheet1!A4": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!H4": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      },
+      "Sheet1!H5": {
+        "formula": "=SUM($A$1:$A5)",
+        "value": 8
+      },
+      "Sheet1!H6": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!H7": {
+        "formula": "=SUM(A1:A1)",
+        "value": 7
+      },
+      "Sheet1!H8": {
+        "formula": "=SUM(A1:A3)",
+        "value": 7
+      },
+      "Sheet1!H9": {
+        "formula": "=SUM(A1:A5)",
+        "value": 8
+      },
+      "Sheet1!H10": {
+        "formula": "=SUM(A2:C2)",
+        "value": 0
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B3"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-05)"
+  },
+  {
+    "id": "f12-03",
+    "family": 12,
+    "description": "mixed $ on range ends, horizontal",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "D1": 2,
+        "F1": "=SUM($B$1:C1)",
+        "F2": "=SUM(B$1:$D1)",
+        "F3": "=SUM($A1:$B$1)",
+        "F4": "=SUM($B1:$B1)",
+        "F5": "=SUM(B1:$C$1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!D1": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM($A$1:C1)",
+        "value": 8
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(A$1:$D1)",
+        "value": 10
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM($A1:$A$1)",
+        "value": 7
+      },
+      "Sheet1!F4": {
+        "formula": "=SUM($A1:$A1)",
+        "value": 7
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(A1:$C$1)",
+        "value": 8
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-06)"
+  },
+  {
+    "id": "f12-04",
+    "family": 12,
+    "description": "merge at B4:C5 absorbing C5:C6 (C5=3, C6=9 hidden), diagonal growth",
+    "sheets": {
+      "Sheet1": {
+        "H1": "=C5",
+        "H2": "=SUM(C5:C9)",
+        "H3": "=SUM(B5:C5)",
+        "H4": "=B4",
+        "C5": 3,
+        "H5": "=C6",
+        "H6": "=SUM(B4:C6)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [
+      "Sheet1!C5:C6"
+    ],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "B4:C5"
+    },
+    "expectedAfter": {
+      "Sheet1!H1": {
+        "formula": "=B4",
+        "value": 3
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(C5:C9)",
+        "value": 0
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(B5:C5)",
+        "value": 0
+      },
+      "Sheet1!H4": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!C5": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H5": {
+        "formula": "=C6",
+        "value": 0
+      },
+      "Sheet1!H6": {
+        "formula": "=SUM(B4:C6)",
+        "value": 3
+      },
+      "Sheet1!B4": {
+        "formula": "3",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!B4:C6"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-07)"
+  },
+  {
+    "id": "f12-05",
+    "family": 12,
+    "description": "names of several shapes (union, 2-D, formula, OFFSET, intersection)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "D1": 5,
+        "F1": "=SUM(nmU)",
+        "F2": "=SUM(nm2D)",
+        "F3": "=nmF",
+        "F4": "=nmO",
+        "F5": "=SUM(nmI)",
+        "F6": "=nmK"
+      }
+    },
+    "names": {
+      "nm2D": "=Sheet1!$B$1:$C$2",
+      "nmF": "=Sheet1!$B$1*2",
+      "nmI": "=Sheet1!$A$1:$C$1 Sheet1!$B$1:$B$3",
+      "nmK": "=Sheet1!$A$1+1",
+      "nmO": "=OFFSET(Sheet1!$B$1,0,1)",
+      "nmU": "=Sheet1!$B$1,Sheet1!$D$1"
+    },
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!D1": {
+        "formula": "5",
+        "value": 5
+      },
+      "Sheet1!F1": {
+        "formula": "=SUM(nmU)",
+        "value": 12
+      },
+      "Sheet1!F2": {
+        "formula": "=SUM(nm2D)",
+        "value": 1
+      },
+      "Sheet1!F3": {
+        "formula": "=nmF",
+        "value": 14
+      },
+      "Sheet1!F4": {
+        "formula": "=nmO",
+        "value": 0
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM(nmI)",
+        "value": 0
+      },
+      "Sheet1!F6": {
+        "formula": "=nmK",
+        "value": "#REF!"
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {
+      "nm2D": "=Sheet1!$B$1:$C$2",
+      "nmF": "=Sheet1!$A$1*2",
+      "nmI": "=Sheet1!$A$1:$C$1 Sheet1!$B$1:$B$3",
+      "nmK": "=Sheet1!#REF!+1",
+      "nmO": "=OFFSET(Sheet1!$A$1,0,1)",
+      "nmU": "=Sheet1!$A$1,Sheet1!$D$1"
+    },
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-08)"
+  },
+  {
+    "id": "f12-06",
+    "family": 12,
+    "description": "qualified self-sheet refs on the merge sheet",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F1": "=Sheet1!B1+B1",
+        "F2": "=Sheet1!A1",
+        "F3": "=SUM(Sheet1!B1:C1)",
+        "F4": "=Sheet1!$B$1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F1": {
+        "formula": "=Sheet1!A1+A1",
+        "value": 14
+      },
+      "Sheet1!F2": {
+        "formula": "=Sheet1!#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F3": {
+        "formula": "=SUM(Sheet1!A1:C1)",
+        "value": 8
+      },
+      "Sheet1!F4": {
+        "formula": "=Sheet1!$A$1",
+        "value": 7
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-09)"
+  },
+  {
+    "id": "f12-07",
+    "family": 12,
+    "description": "4x4 diagonal, winner D4",
+    "sheets": {
+      "Sheet1": {
+        "H1": "=SUM(A1:D1)",
+        "H2": "=SUM(A1:A4)",
+        "H3": "=SUM(D1:D4)",
+        "D4": 7,
+        "H4": "=SUM(A4:D4)",
+        "H5": "=A1",
+        "H6": "=D4",
+        "H7": "=SUM(D4:E4)",
+        "H8": "=SUM(D4:D6)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:D4"
+    },
+    "expectedAfter": {
+      "Sheet1!H1": {
+        "formula": "=SUM(A1:D1)",
+        "value": 7
+      },
+      "Sheet1!H2": {
+        "formula": "=SUM(A1:A4)",
+        "value": 7
+      },
+      "Sheet1!H3": {
+        "formula": "=SUM(D1:D4)",
+        "value": 0
+      },
+      "Sheet1!D4": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!H4": {
+        "formula": "=SUM(A4:D4)",
+        "value": 0
+      },
+      "Sheet1!H5": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!H6": {
+        "formula": "=A1",
+        "value": 7
+      },
+      "Sheet1!H7": {
+        "formula": "=SUM(D4:E4)",
+        "value": 0
+      },
+      "Sheet1!H8": {
+        "formula": "=SUM(D4:D6)",
+        "value": 0
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:D4"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-10)"
+  },
+  {
+    "id": "f12-08",
+    "family": 12,
+    "description": "strings that look like references",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "F1": "=IF(B1>0,\"B1:C1\",B1)",
+        "F2": "=\"A1\"&B1",
+        "F3": "=\"(B1,C1)\"&A1",
+        "F4": "=LEN(\"B1\")"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!F1": {
+        "formula": "=IF(A1>0,\"B1:C1\",A1)",
+        "value": "B1:C1"
+      },
+      "Sheet1!F2": {
+        "formula": "=\"A1\"&A1",
+        "value": "A17"
+      },
+      "Sheet1!F3": {
+        "formula": "=\"(B1,C1)\"&#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!F4": {
+        "formula": "=LEN(\"B1\")",
+        "value": 2
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-11)"
+  },
+  {
+    "id": "f12-09",
+    "family": 12,
+    "description": "winner formula on a vertical move with relative refs and another sheet",
+    "sheets": {
+      "Sheet1": {
+        "H1": "=A3",
+        "A3": "=SUM(Sheet2!A1:B2)+B3+A4",
+        "B3": 1,
+        "A4": 2
+      },
+      "Sheet2": {
+        "A1": 1,
+        "C1": "=Sheet1!A3*2",
+        "B2": 2,
+        "C2": "=SUM(Sheet1!A1:A3)",
+        "C3": "=SUM(Sheet1!A3:A6)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:A3"
+    },
+    "expectedAfter": {
+      "Sheet1!H1": {
+        "formula": "=A1",
+        "value": 6
+      },
+      "Sheet1!A3": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!B3": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!A4": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet1!A1": {
+        "formula": "=SUM(Sheet2!A1:B2)+B3+A4",
+        "value": 6
+      },
+      "Sheet2!A1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet2!C1": {
+        "formula": "=Sheet1!A1*2",
+        "value": 12
+      },
+      "Sheet2!B2": {
+        "formula": "2",
+        "value": 2
+      },
+      "Sheet2!C2": {
+        "formula": "=SUM(Sheet1!A1:A2)",
+        "value": 6
+      },
+      "Sheet2!C3": {
+        "formula": "=SUM(Sheet1!A1:A6)",
+        "value": 8
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:A3"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-12)"
+  },
+  {
+    "id": "f12-10",
+    "family": 12,
+    "description": "merge at E2:G2 winner G2, readers incl. qualified + whole-row",
+    "sheets": {
+      "Sheet1": {
+        "G2": 7,
+        "A5": "=G2",
+        "A6": "=SUM(E2:G2)",
+        "A7": "=SUM(G2:J2)",
+        "A8": "=SUM(2:2)",
+        "A9": "=SUM(F2:G2)",
+        "A10": "=E2",
+        "A11": "=SUM(E2:E4)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "E2:G2"
+    },
+    "expectedAfter": {
+      "Sheet1!G2": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!A5": {
+        "formula": "=E2",
+        "value": 7
+      },
+      "Sheet1!A6": {
+        "formula": "=SUM(E2:F2)",
+        "value": 7
+      },
+      "Sheet1!A7": {
+        "formula": "=SUM(E2:J2)",
+        "value": 7
+      },
+      "Sheet1!A8": {
+        "formula": "=SUM(2:2)",
+        "value": 7
+      },
+      "Sheet1!A9": {
+        "formula": "=SUM(F2:G2)",
+        "value": 0
+      },
+      "Sheet1!A10": {
+        "formula": "=#REF!",
+        "value": "#REF!"
+      },
+      "Sheet1!A11": {
+        "formula": "=SUM(E2:E4)",
+        "value": 7
+      },
+      "Sheet1!E2": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!E2:G2"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-13)"
+  },
+  {
+    "id": "f12-11",
+    "family": 12,
+    "description": "intersection and union with spaces in formulas off-row",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F5": "=SUM((B1, C1))",
+        "F6": "=SUM(B1:C1  B1:B3)",
+        "F7": "=SUM((A1:A3,C1))",
+        "F8": "=SUM((C1,D1))"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F5": {
+        "formula": "=SUM((A1, C1))",
+        "value": 8
+      },
+      "Sheet1!F6": {
+        "formula": "=SUM(A1:C1  B1:B3)",
+        "value": 0
+      },
+      "Sheet1!F7": {
+        "formula": "=SUM((A1:A3,C1))",
+        "value": 8
+      },
+      "Sheet1!F8": {
+        "formula": "=SUM((C1,D1))",
+        "value": 1
+      },
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 4 runner, scenario r4-14)"
+  },
+  {
+    "id": "f11-01",
+    "family": 11,
+    "description": "data-validation formulas follow the cut rule (custom rules on E5:E7, winner B1)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 0.5,
+        "C1": 3,
+        "E5": 1,
+        "E6": 1,
+        "E7": 1
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:C1"
+    },
+    "dataValidations": {
+      "Sheet1!E5": "B1>0",
+      "Sheet1!E6": "SUM(B1:C1)>0",
+      "Sheet1!E7": "A1>0"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "0.5",
+        "value": 0.5
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "dataValidationsAfter": {
+      "Sheet1!E5": "A1>0",
+      "Sheet1!E6": "SUM(A1:C1)>0",
+      "Sheet1!E7": "#REF!>0"
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:C1"
+    ],
+    "source": "Excel for Mac (review 4, data validation read back with Validation formula 1)"
   }
 ]

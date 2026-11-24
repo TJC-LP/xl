@@ -61,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut-and-paste controls in which cutting the winner onto the anchor produced the merge's formulas
   and names character for character; the scenarios ship as
   `xl-evaluator/test/resources/excel-oracle/merge-references.json` and `ExcelMergeOracleSpec`
-  replays all 93 — plus 14 union and intersection cases checked by hand in Excel (`f8-*`) —
-  through the workbook-level merge (formula text exactly, values after recalculation, names,
+  replays all 93 — plus 14 union and intersection cases checked by hand in Excel (`f8-*`) and 17
+  scenarios from a fourth review's Excel runs (`f9-*` function argument kinds, `f10-01` 3-D,
+  `f11-01` data validation, `f12-*` assorted), 124 in all — through the workbook-level merge (formula text exactly, values after recalculation, names,
   merged areas) plus a sample through the `merge` verb. Excel's merge is
   "cut the winner onto the anchor, then clear the rest":
   - The final area grows to the bounding box of the range and every merged area it touches, to a
@@ -94,7 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     areas share C1, not the winner), an empty intersection `=B1 C1` → `=A1 C1`, a bare union
     `=(B1:C1,D5)` → `=(A1:C1,D5)` (in F1 or in Z10 alike), while `=SUM(C1:D1 C1:C3)` (no operand holds the winner or
     the anchor) is untouched and `=SUM(B1:B3 A1:C1)` passes the gate yet stays byte-identical (no
-    rule applies to either area). Only
+    rule applies to either area). An argument whose parameter Excel types as an array —
+    SUMPRODUCT's, INDEX's first, ROWS' and COLUMNS' (declared on the function registry as
+    `FunctionFlags.arrayArguments`) — depends on every cell of every range anywhere inside it, even
+    in a plain cell: `=SUMPRODUCT((B1:C1>0)*B1:C1)` → `=SUMPRODUCT((A1:C1>0)*A1:C1)`,
+    `=INDEX(B1:C1*1,1,1)` → `=INDEX(A1:C1*1,1,1)`, while value-typed contexts (`SUM(B1:C1*1)`,
+    `MAX(B1:C1*2)`) keep the implicit-intersection rule. A 3-D reference (`Sheet1:Sheet2!B1`) is
+    kept verbatim and the formula's other references still follow the cut
+    (`=SUM(Sheet1:Sheet2!B1)+Sheet1!B1` → `=SUM(Sheet1:Sheet2!B1)+Sheet1!A1`). Only
     the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
     refresh is seeded with every cell the merge changed on any sheet, so a reader rewritten to
     `#REF!` elsewhere is recalculated, not left on its old cached value.
@@ -102,12 +110,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hyperlinks go (its own link and its part of a range hyperlink, which splits around the merge),
     a cell's own formatting and its comment stay, an unstyled cell is removed. A moved cell carries
     its effective link (its own, or the range hyperlink covering it) to the anchor.
+  - Data-validation formulas follow the full cut rule, judged at the rule's first cell (checked in
+    Excel: with the winner B1 of `A1:C1`, `SUM(B1:C1)>0` → `SUM(A1:C1)>0`, `A1>0` → `#REF!>0`,
+    `B1>0` → `A1>0`); conditional-format formulas follow the same rule (not verifiable through
+    Excel's AppleScript, so not Excel-checked).
+  - Merging a single cell (`A1`, `A1:A1`) does nothing, as in Excel, on every path (the verb says
+    "A1 is a single cell: nothing to merge"); no one-cell `<mergeCell>` is ever written (the verb
+    used to exit `INTERNAL`, the batch wrote `A1:A1`). Files that already hold one are left as
+    they are.
   - Not determined by the oracle, kept as before: circular winner formulas, spills (below),
-    relative defined names, 3-D/structured/external references (left as typed), and
-    conditional-format and data-validation formulas (only exact references to the winner follow
-    it). Pending in `ExcelMergeOracleSpec`: the VALUES of four winner formulas that name their own
-    cell in ROW/COLUMN/ROWS/COLUMNS (`f4-13`…`f4-16`; their text matches) — xl's dependency graph
-    reports such a formula circular where Excel reads only the address.
+    relative defined names, structured and external references (left as typed). Pending in
+    `ExcelMergeOracleSpec` (formula text matches in every case, the VALUE differs for an evaluator
+    reason that holds before the merge too): four winner formulas naming their own cell in
+    ROW/COLUMN/ROWS/COLUMNS (`f4-13`…`f4-16`, reported circular where Excel reads only the
+    address); `ROWS(A1:C1*1)` in a plain cell (`f9-03`: xl intersects the argument, #VALUE!, where
+    Excel types it as an array, 1); 3-D references (`f10-01`, not evaluated by xl); a defined name
+    whose definition is a union (`f12-05`).
   - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
     member of a legacy array other than its anchor, is never the cell moved into an empty
     upper-left cell (nothing becomes a constant), and a spilled value AT the upper-left cell does
@@ -211,7 +229,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of the formula (spacing, parentheses, `1E3`, `-(-x)`, function-name case) is kept as typed. A
   structured reference (`Table1[Col]`) does not hide the qualifiers after it; only an
   external-workbook prefix (`[1]Sheet1!A1`) guards its own. A formula the qualifier scanner finds
-  ambiguous (a 3-D reference anywhere in it) is stored as typed. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  ambiguous is stored as typed; a 3-D reference (`Sheet1:Sheet2!A1`) is kept verbatim as one span
+  and no longer stops the formula's other qualifiers from being respelled. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
   `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
   `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
   `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer
