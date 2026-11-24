@@ -221,14 +221,14 @@ class ExcelMergeOracleSpec extends FunSuite:
       }
     }
 
-  test("oracle: the fixture holds the 127 scenarios Excel ran") {
+  test("oracle: the fixture holds the 128 scenarios Excel ran") {
     // 93 from the oracle harness (477 cells) + 14 union/intersection cases checked by hand (f8-*)
     // + 17 from review 4's Excel runner (f9-* argument kinds, f10-01 3-D, f11-01 data validation,
     // f12-* assorted)
     // + 3 from the fifth review (f9b-01 unparseable array-typed arguments, f11-02/03 bare-range
-    // validation rules)
-    assertEquals(scenarios.size, 127)
-    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 708)
+    // validation rules) and 1 from the sixth (f9b-02 argument separators, newer array functions)
+    assertEquals(scenarios.size, 128)
+    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 720)
   }
 
   // ===== the CLI merge verb over a sample of the scenarios =====

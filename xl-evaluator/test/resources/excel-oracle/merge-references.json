@@ -6644,5 +6644,80 @@
       "Sheet1!A1:B1"
     ],
     "source": "Excel for Mac (review 5, t1/t2.applescript: formula after the merge; values not recorded, and xl cannot evaluate these formulas)"
+  },
+  {
+    "id": "f9b-02",
+    "family": "9b",
+    "description": "array constants and quoted sheet names do not split arguments; the newer array-typed functions follow the cut (formula text only)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F6": "=XLOOKUP(1,{1,2},B1:C1*1)",
+        "F7": "=XMATCH({1,2}*B1:C1,D1:E1)",
+        "F8": "=XMATCH('a,b'!A1,B1:C1*1)",
+        "F9": "=SUM(FILTER(B1:C1*1,{TRUE,TRUE}))",
+        "F10": "=SUM(SORTBY(B1:C1*1,{1,2}))",
+        "F11": "=SUM(TOCOL(B1:C1*1))",
+        "F12": "=SUM(VSTACK(B1:C1*1))",
+        "F13": "=FORECAST.LINEAR(1,B1:C1*1,{1,2})",
+        "F14": "=COVARIANCE.P(B1:C1*1,{1,2})"
+      },
+      "a,b": {
+        "A1": 7
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F6": {
+        "formula": "=XLOOKUP(1,{1,2},A1:C1*1)"
+      },
+      "Sheet1!F7": {
+        "formula": "=XMATCH({1,2}*B1:C1,D1:E1)"
+      },
+      "Sheet1!F8": {
+        "formula": "=XMATCH('a,b'!A1,A1:C1*1)"
+      },
+      "Sheet1!F9": {
+        "formula": "=SUM(FILTER(A1:C1*1,{TRUE,TRUE}))"
+      },
+      "Sheet1!F10": {
+        "formula": "=SUM(SORTBY(A1:C1*1,{1,2}))"
+      },
+      "Sheet1!F11": {
+        "formula": "=SUM(TOCOL(A1:C1*1))"
+      },
+      "Sheet1!F12": {
+        "formula": "=SUM(VSTACK(A1:C1*1))"
+      },
+      "Sheet1!F13": {
+        "formula": "=FORECAST.LINEAR(1,A1:C1*1,{1,2})"
+      },
+      "Sheet1!F14": {
+        "formula": "=COVARIANCE.P(A1:C1*1,{1,2})"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 6: formula after the merge; values not recorded)"
   }
 ]
