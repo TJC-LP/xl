@@ -100,7 +100,7 @@ excel.read(path).flatMap(wb => excel.write(wb, outPath))
 
 ```bash
 ./mill __.compile          # Compile all (main + test sources)
-./mill __.test             # Run all tests (10,588)
+./mill __.test             # Run all tests (10,907)
 ./mill xl-core.test        # Test one module
 ./mill xl-core.test.testOnly com.tjclp.xl.addressing.ColumnSpec -- '*parse*'   # One suite, glob-filtered
 ./mill mill.scalalib.scalafmt.ScalafmtModule/reformatAll __.sources     # Format (what CI checks; __.reformat skips test sources)
@@ -322,7 +322,7 @@ See `docs/reference/cli.md` for full command reference.
 - `.claude/` - Dev-only commands (release-prep, docs-cleanup-xl)
 - `plugin/` - User-facing skill distributed via plugin marketplace
 
-The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.27.0; its installer (`reference/INSTALL.md`) verifies the binary against that release's `SHA256SUMS` and keeps the inline v0.25.0 digests only as the legacy fallback for the release that predates manifests (keep that version and its digests together). The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
+The CLI skill (`plugin/skills/xl-cli/SKILL.md`) currently pins v0.28.0; its installer (`reference/INSTALL.md`) verifies the binary against that release's `SHA256SUMS` and keeps the inline v0.25.0 digests only as the legacy fallback for the release that predates manifests (keep that version and its digests together). The scripting skill (`plugin/skills/xl-scripting/SKILL.md`) pins the library version instead (bumped by release-prep; release workflow gates on it) and its snippets are compile-verified by `scripts/verify-skill-snippets.sh`.
 
 ## Code Style
 
@@ -426,12 +426,12 @@ Styles deduplicated by `CellStyle.canonicalKey`. Build style index before emitti
 
 **Framework**: MUnit + ScalaCheck | **Generators**: `xl-core/test/src/com/tjclp/xl/Generators.scala`
 
-**10,588 test cases** (the 0.27.0 release branch, 2026-11-23; 10,587 passed, one platform-specific ACL test skipped) by module: xl-evaluator (4616), xl-core (1970), xl-ooxml (1512), xl-cli (2040), xl-cats-effect (223), xl-agent (153), xl prelude probes (74). See `docs/reference/testing-guide.md` for suite structure and patterns.
+**10,907 test cases** (the 0.28.0 release branch, 2026-11-24; 10,906 passed, one platform-specific ACL test skipped) by module: xl-evaluator (4649), xl-core (2020), xl-ooxml (1528), xl-cli (2257), xl-cats-effect (224), xl-agent (153), xl prelude probes (76). See `docs/reference/testing-guide.md` for suite structure and patterns.
 
 ## Documentation
 
 - **Roadmap**: `docs/plan/roadmap.md` (single source of truth for work scheduling)
-- **Status**: `docs/STATUS.md` (current capabilities, 10,588 tests)
+- **Status**: `docs/STATUS.md` (current capabilities, 10,907 tests)
 - **Design**: `docs/design/*.md` (architecture, purity charter, domain model)
 - **Reference**: `docs/reference/*.md` (examples, scaffolds, performance guide)
 - **Remote sessions**: `docs/reference/remote-sessions.md` (cloud sandbox, SessionStart hook, GitHub Actions, Docker rehearsal)

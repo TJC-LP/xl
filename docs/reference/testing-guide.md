@@ -1,6 +1,6 @@
 # Testing & Laws — Property Suites, Round-Trips, and Coverage
 
-**Current Status**: the 0.27.0 release branch, 2026-11-23 recorded **10,588 cases**: 10,587 passed, 0 failed, one platform-specific ACL test skipped.
+**Current Status**: the 0.28.0 release branch, 2026-11-24 recorded **10,907 cases**: 10,906 passed, 0 failed, one platform-specific ACL test skipped.
 
 
 ## Test Infrastructure
@@ -282,18 +282,18 @@ applies the timeout to synchronous tests too; the body keeps running, but the su
 
 ## Test Counts by Module
 
-As of the 0.27.0 release branch, 2026-11-23 (10,587 passed, 0 failed, one skipped). Counts include skipped cases.
+As of the 0.28.0 release branch, 2026-11-24 (10,906 passed, 0 failed, one skipped). Counts include skipped cases.
 
 | Module | Tests |
 |--------|-------|
-| xl-evaluator | 4616 |
-| xl-core | 1970 |
-| xl-ooxml | 1512 |
-| xl-cli | 2040 |
-| xl-cats-effect | 223 |
+| xl-evaluator | 4649 |
+| xl-core | 2020 |
+| xl-ooxml | 1528 |
+| xl-cli | 2257 |
+| xl-cats-effect | 224 |
 | xl-agent | 153 |
-| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 74 |
-| **Total** | **10,588** |
+| xl (prelude probes, `xlprelude.ScriptingPreludeTest`) | 76 |
+| **Total** | **10,907** |
 
 
 ## Test Quality Metrics

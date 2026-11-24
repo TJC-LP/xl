@@ -1,12 +1,18 @@
 # XL Project Status
 
-**Last Updated**: 2026-11-23 (0.27.0)
+**Last Updated**: 2026-11-24 (0.28.0)
 
 ## Current State
 
 > **For detailed phase completion status and roadmap, see [plan/roadmap.md](plan/roadmap.md)**
 
 ### What Works (Production-Ready)
+
+**New in 0.28.0** (2026-11-24) — fixes from the Weaver dogfood of 0.27.0 (#930–#938); merge follows Excel, checked against Excel itself; one **Breaking** entry and several behaviour changes:
+- ✅ **Merge is Excel's cut-and-clear** (#935) — the first non-empty cell is cut onto an empty anchor (references follow, the anchor's readers become `#REF!`, line ranges grow or shrink, each formula is rewritten only when it depends on the moved cell, as Excel's dependency tracking decides), absorbed merges grow the area, spills show `#SPILL!` and re-spill on unmerge, arrays and data tables are refused, and `--stream` writes exactly the in-memory file or refuses; golden-tested against 128 scenarios run in Excel for Mac; `clear` refreshes its readers
+- ✅ **Range hyperlinks** (#931, #932) — `<hyperlink ref="A1:A5">` is read (`Sheet.rangeHyperlinks`, an indexed `RangeHyperlinks` value) and reported for every covered cell; batch `hyperlink` takes a range or whole column; edits split ranges as Excel does; linear-time writes (80k links 56 s → 5 s)
+- ✅ **Gates that catch bad models** (#933, #934) — `audit` reports a cycle that does not converge as a finding (members-only check, no extra recalculation cost); `recalc --json` carries `unconvergedCycles` and a `NOT_CONVERGED` warning; every failed gate writes its `Error:` line to stderr
+- ✅ **Fidelity** — a replaced file keeps its exact permission bits (#930); authored formulas spell sheet qualifiers as the tab does, changing only those bytes (#936); `xl --version --json` (#937); skill-doc corrections (#938)
 
 **New in 0.27.0** (2026-11-23) — audit and recalculation on a new cell store, library closure evaluation, case-insensitive sheet names and Excel's clear semantics; several **Breaking** entries (see the CHANGELOG's `Sheet.cells` migration notes):
 - ✅ **`xl audit` 3–20× faster on real models** (#891) — data-oriented SCC/sweep, a spreading `ARef` hash, one graph and one parse per operation, a fixpoint-scoped criteria cache (a data-table model 20.8 s → 9.7 s), `audit --skip-data-tables`; relational `*IFS` criteria use a sorted index (#920)
@@ -292,18 +298,18 @@
 
 ### Test Coverage
 
-**10,588 test cases** (the 0.27.0 release branch, 2026-11-23): 10,587 passed, 0 failed, one platform-specific ACL test skipped. Counts include skipped cases.
+**10,907 test cases** (the 0.28.0 release branch, 2026-11-24): 10,906 passed, 0 failed, one platform-specific ACL test skipped. Counts include skipped cases.
 
 
 | Module | Tests | Covers |
 |--------|-------|--------|
-| xl-evaluator | 4616 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
-| xl-core | 1970 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
-| xl-ooxml | 1512 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
-| xl-cli | 2040 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
-| xl-cats-effect | 223 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
+| xl-evaluator | 4649 | parser, evaluator, 128-function library, dependency graph, cross-sheet formulas, recalculation, structural editing, Excel comparison total order, array CSE semantics |
+| xl-core | 2020 | addressing laws, Patch/StylePatch monoids, codecs, optics, RichText, interpolation, render (HTML/SVG), styles DSL, charts, drawings, conditional formatting |
+| xl-ooxml | 1528 | round-trips (cells, styles, tables, comments, hyperlinks, charts, drawings, conditional formatting), compression, security (XXE, ZIP bomb), preservation |
+| xl-cli | 2257 | command parsing, batch ops, view/eval/export, streaming mode, memory guard (GH-636) |
+| xl-cats-effect | 224 | streaming I/O, O(1) memory verification, SAX/StAX write, spill-directory routing |
 | xl-agent | 153 | benchmark engine, skill abstraction, failure-path diagnostics, release-asset resolution |
-| xl (prelude) | 74 | external-consumer probes (`xl/test/src/xlprelude/`) |
+| xl (prelude) | 76 | external-consumer probes (`xl/test/src/xlprelude/`) |
 | xl-testkit | 0 | placeholder (no sources yet) |
 
 

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-24
+
+**"Excel's own rules."** Fixes for everything a Weaver dogfood of 0.27.0 found (#930–#938). Merge
+now follows Excel's Merge Cells exactly. It is a cut of the winner onto the anchor, then a clear:
+references follow, the anchor's readers become `#REF!`, line ranges grow or shrink, and absorbed
+merges grow the area. This was checked against 128 scenarios run in Excel for Mac (#935). Range
+hyperlinks are read and authored (#931, #932). Replaced files keep their exact permission bits
+(#930). `audit` and `recalc --json` report cycles that do not converge, and failed gates write
+their error to stderr (#933, #934). Authored formulas spell sheet names as the tab does (#936).
+**Breaking:** `Edit.Hyperlink` targets an `Area`. **Behaviour changes:** merge, `clear`, `audit`,
+`recalc --json` and stderr. Read the entries below before upgrading.
+
 ### Added
 
 - **Batch `hyperlink` takes a range** (#932): `{"op":"hyperlink","ref":"A1:A5","target":"…"}`
