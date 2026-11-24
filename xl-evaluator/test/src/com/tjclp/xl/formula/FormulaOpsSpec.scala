@@ -355,13 +355,14 @@ class FormulaOpsSpec extends FunSuite:
   test("GH-935 review 2: relocateCell reaches intersection operands") {
     def rel(t: String) = FormulaOps.relocateCell(
       t,
-      CutReferences.Host.Cell(Sheet1, ref"E1", array = false),
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
       Sheet1,
       ref"B1",
       ref"A1"
     )
     // an intersection depends on every cell of every operand area (Excel's conservative rule,
-    // checked in Excel for Mac, formulas in E1): even an empty one such as B1 C1 is rewritten
+    // checked in Excel for Mac), wherever the formula sits (here Z9, off the cut cell's row and
+    // column): even an empty one such as B1 C1 is rewritten
     assertEquals(rel("=B1 C1"), "=A1 C1")
     assertEquals(rel("=SUM(B1:C1 C1:C3)"), "=SUM(A1:C1 C1:C3)")
     assertEquals(rel("=B1 B1:C1"), "=A1 A1:C1")

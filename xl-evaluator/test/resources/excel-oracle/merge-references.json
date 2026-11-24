@@ -5174,5 +5174,128 @@
       "Sheet1!A1:B1"
     ],
     "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-12",
+    "family": 8,
+    "description": "union/intersection: a bare empty intersection off the winner's row and column",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "Z9": "=B1 C1"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!Z9": {
+        "formula": "=A1 C1",
+        "value": "#NULL!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-13",
+    "family": 8,
+    "description": "union/intersection: a bare union off the winner's row and column",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "Z10": "=(B1:C1,D5)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!Z10": {
+        "formula": "=(A1:C1,D5)",
+        "value": "#VALUE!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-14",
+    "family": 8,
+    "description": "union/intersection: an empty intersection as a function argument",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "Z11": "=SUM(B1 C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!Z11": {
+        "formula": "=SUM(A1 C1)",
+        "value": "#NULL!"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
   }
 ]

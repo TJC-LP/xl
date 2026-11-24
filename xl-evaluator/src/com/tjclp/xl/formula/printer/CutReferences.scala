@@ -120,11 +120,9 @@ object CutReferences:
         // cut or the paste cell. An expression is a reference, an intersection of references
         // (`B1 B1:C1`) or a parenthesised union of those (`(B1:C1,D5)`), and Excel's dependency
         // for the last two is conservative (checked in Excel for Mac): every cell of every operand
-        // area, not the cells the areas share. As a whole function argument (or in an array
-        // formula) an expression depends on all those cells; as a bare value in a plain cell, a
-        // lone range on its implicit intersection with the formula's own row or column (the
-        // oracle's rule), an intersection or union on each operand area's cells in the formula's
-        // own row or column
+        // area, not the cells the areas share, wherever the formula sits. Only a lone range that
+        // is not a whole function argument (in a plain cell) narrows to its implicit intersection
+        // with the formula's own row or column (the oracle's rule)
         val affected = host match
           case Host.Name | Host.Rule(_) => true
           case Host.Cell(_, at, array) =>
@@ -132,10 +130,11 @@ object CutReferences:
               val operands = areasOf.flatten
               val areas = operands.filter(onSheet).map(box)
               val whole = array || wholeArgument(masked, span._1, span._2)
+              // only a lone bare range is implicitly intersected; an intersection or union depends
+              // on every cell of its operand areas wherever it sits (checked in Excel for Mac)
               val deps =
-                if whole then areas
-                else if operands.size == 1 then areas.flatMap(implicitly(_, at))
-                else areas.flatMap(onOwnLines(_, at))
+                if whole || operands.size > 1 then areas
+                else areas.flatMap(implicitly(_, at))
               deps.exists(d => d.contains(fr, fc) || d.contains(tr, tc))
             }
         if !affected then text
@@ -159,13 +158,6 @@ object CutReferences:
           }
           FormulaSpans.replace(text, edits)
       }
-
-  /** The cells of `b` on the row or the column of `at` (none when it meets neither). */
-  private def onOwnLines(b: Box, at: ARef): Vector[Box] =
-    val (row, col) = (at.row.index0, at.col.index0)
-    val onRow = Option.when(b.r1 <= row && row <= b.r2)(Box(row, b.c1, row, b.c2))
-    val onCol = Option.when(b.c1 <= col && col <= b.c2)(Box(b.r1, col, b.r2, col))
-    onRow.toList.toVector ++ onCol.toList.toVector
 
   /**
    * The reference expressions of a formula, each with its text span and its areas: a vector of
