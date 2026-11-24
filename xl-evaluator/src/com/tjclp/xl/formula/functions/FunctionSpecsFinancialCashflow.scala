@@ -70,13 +70,15 @@ private[functions] object RateSolver:
     if guess <= -1.0 || !center.isFinite then None
     else
       def rateAt(j: Int): Double = math.expm1(center + j * Step)
-      val samples: Map[Int, Double] =
-        (-MaxSteps to MaxSteps).map(j => j -> f(rateAt(j))).toMap
+      // Sampled lazily, outward from the guess, each point once: a root near the guess costs
+      // a handful of NPV evaluations, not the whole grid.
+      val above: LazyList[Double] = LazyList.from(0).map(j => f(rateAt(j)))
+      val below: LazyList[Double] = LazyList.from(0).map(j => f(rateAt(-j)))
+      def sample(j: Int): Double = if j >= 0 then above(j) else below(-j)
       def crosses(a: Int, b: Int): Boolean =
-        (samples.get(a), samples.get(b)) match
-          case (Some(fa), Some(fb)) if fa.isFinite && fb.isFinite =>
-            fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0)
-          case _ => false
+        val fa = sample(a)
+        val fb = sample(b)
+        fa.isFinite && fb.isFinite && (fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0))
       (1 to MaxSteps).iterator
         .flatMap(k => Iterator((k - 1, k), (-k, -(k - 1))))
         .find { case (a, b) => crosses(a, b) }
@@ -469,7 +471,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                         if (next - r).abs <= tolerance then Right(next)
                         else loop(iter + 1, next)
 
-                  val flowsDouble = values.map(_.toDouble).zip(yearFractions.map(_.toDouble))
+                  lazy val flowsDouble = values.map(_.toDouble).zip(yearFractions.map(_.toDouble))
                   def xnpvDouble(rate: Double): Double =
                     flowsDouble.foldLeft(0.0) { case (acc, (cf, yf)) =>
                       acc + cf / math.pow(1.0 + rate, yf)
