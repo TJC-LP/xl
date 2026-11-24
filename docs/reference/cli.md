@@ -198,7 +198,7 @@ Unaffected caches keep the values supplied by their original calculator.
 
 `--no-recalc` (alias `--preserve-caches`) skips the post-edit recalculation. The edit still lands;
 newly written formulas can carry caches produced by the verb's authoring step. Use it when an external calculator owns the numbers. Honored by `put`,
-`putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
+`putf`, `fill`, `copy`, `clear`, `merge`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
 `recalc` rejects it as a contradiction.
 
 How completely caches survive depends on the verb:

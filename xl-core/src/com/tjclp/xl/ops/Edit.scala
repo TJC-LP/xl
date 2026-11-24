@@ -74,8 +74,10 @@ enum Edit derives CanEqual:
   case Style(at: Area, overlay: StyleOverlay, mode: StyleMode)
 
   /**
-   * Merge `at` as Excel's Merge Cells does (GH-935): only the upper-left cell keeps its value; the
-   * other cells are cleared like Clear Contents (their own formatting and comments stay).
+   * Merge `at` as Excel's Merge Cells does (GH-935): a non-empty upper-left cell keeps its value;
+   * an empty one receives the first non-empty cell (row-major), cut and pasted, its readers pointed
+   * at the upper-left cell through `FormulaSupport.relocateCell` (the text-only support refuses).
+   * The other cells are cleared like Clear Contents (their own formatting and comments stay).
    */
   case Merge(at: Area)
   case Unmerge(at: Area)

@@ -15,9 +15,12 @@ import com.tjclp.xl.styles.numfmt.NumFmt
 import munit.FunSuite
 
 /**
- * GH-935: `merge` (verb, `--stream` verb, batch op, streamed batch op) keeps only the upper-left
- * value, as Excel's Merge Cells does, and the formulas reading a cleared cell are recalculated: the
- * issue's `put A1 1; put B1 2; put A2 3; merge A1:B2; putf D1 =SUM(A1:B2)` gives 1, not 6.
+ * GH-935: `merge` (verb, `--stream` verb, batch op, streamed batch op) keeps one value as Excel's
+ * Merge Cells does: the upper-left cell's, or, when it is empty, the first non-empty cell's, moved
+ * there with its readers following (a streamed batch refuses that case). The formulas reading a
+ * cleared cell are recalculated: the issue's
+ * `put A1 1; put B1 2; put A2 3; merge A1:B2; putf D1 =SUM(A1:B2)` gives 1, not 6. Also the `clear`
+ * refresh found during #935.
  */
 class MergeClearsHiddenCliSpec extends FunSuite:
 
@@ -262,6 +265,33 @@ class MergeClearsHiddenCliSpec extends FunSuite:
       val t = read(out2)
       assertEquals(value(t, "A5"), CellValue.Text("b5"))
       assertEquals(value(t, "A6"), CellValue.Empty)
+    }
+  }
+
+  test("GH-935: cross-sheet readers and defined names follow the moved cell through the file") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      val book = Workbook(
+        Vector(
+          Sheet("Sheet1").put(ARef.from1(2, 1), num(7)),
+          Sheet("Other")
+            .put(ARef.from1(1, 1), CellValue.Formula("Sheet1!B1*2", Some(num(14))))
+            .put(ARef.from1(1, 2), CellValue.Formula("seed+1", Some(num(8))))
+        )
+      ).withDefinedName("seed", "Sheet1!$B$1")
+      write(book, in)
+      val r = run("-f", in.toString, "-o", out.toString, "-s", "Sheet1", "merge", "A1:B1")
+      assertEquals(r.exit, 0, r.stderr)
+      val wb = ExcelIO.instance[IO].read(out).unsafeRunSync()
+      val other = wb.sheets.find(_.name.value == "Other").getOrElse(fail("no Other"))
+      assertEquals(formulaOf(other, "A1"), Some("Sheet1!A1*2"))
+      assertEquals(cached(other, "A1"), Some(num(14)))
+      assertEquals(cached(other, "A2"), Some(num(8)))
+      assertEquals(
+        wb.metadata.definedNames.find(_.name == "seed").map(_.formula),
+        Some("Sheet1!$A$1")
+      )
     }
   }
 
