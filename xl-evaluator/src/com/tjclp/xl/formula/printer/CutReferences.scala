@@ -129,7 +129,11 @@ object CutReferences:
                 if whole || operands.size > 1 then areas
                 else areas.flatMap(implicitly(_, at))
               deps.exists(d => d.contains(fr, fc) || d.contains(tr, tc))
-            } || (!array && arrayArgumentsTouch(text, hostSheet, sheet, fr, fc, tr, tc))
+            } || (!array && arrayArgumentsTouch(text, hostSheet, sheet, fr, fc, tr, tc)) ||
+            (!array && refs.exists { r =>
+              val b = box(r)
+              (b.contains(fr, fc) || b.contains(tr, tc)) && inArrayArgument(masked, start(r))
+            })
         if !affected then text
         else
           val edits = refs.flatMap { r =>
@@ -254,6 +258,78 @@ object CutReferences:
         bindings.flatMap((_, value) => arrayArgumentRanges(value)) ++ arrayArgumentRanges(body)
       case Coerced(e, _) => arrayArgumentRanges(e)
       case _ => Nil
+
+  /**
+   * GH-935 review 5: Excel's array-typed parameters by function, as 0-based argument positions
+   * (`None`: every argument), for formulas read as text. Checked in Excel for Mac (merge A1:B1 with
+   * the value in B1 rewrites `B1:C1*1` in each): SUMPRODUCT, INDEX (first), ROWS, COLUMNS, LOOKUP
+   * (lookup and result vectors), IRR, MIRR (values), XLOOKUP (lookup and return arrays), XMATCH
+   * (lookup array), SORT, UNIQUE, MMULT, SUMX2MY2, CORREL. From Excel's function reference, not
+   * checked by a merge: SUMX2PY2, SUMXMY2, PEARSON, RSQ, SLOPE, INTERCEPT, COVAR, FORECAST (known
+   * ys and xs), FREQUENCY, TREND, GROWTH, LINEST, LOGEST, MDETERM, MINVERSE. Every function the
+   * registry flags (`FunctionFlags.arrayArguments`) is here too (a law pins it).
+   */
+  val ArrayParameters: Map[String, Option[Set[Int]]] = Map(
+    "SUMPRODUCT" -> None,
+    "INDEX" -> Some(Set(0)),
+    "ROWS" -> None,
+    "COLUMNS" -> None,
+    "LOOKUP" -> Some(Set(1, 2)),
+    "IRR" -> Some(Set(0)),
+    "MIRR" -> Some(Set(0)),
+    "XLOOKUP" -> Some(Set(1, 2)),
+    "XMATCH" -> Some(Set(1)),
+    "SORT" -> Some(Set(0)),
+    "UNIQUE" -> Some(Set(0)),
+    "MMULT" -> None,
+    "SUMX2MY2" -> None,
+    "CORREL" -> None,
+    "SUMX2PY2" -> None,
+    "SUMXMY2" -> None,
+    "PEARSON" -> None,
+    "RSQ" -> None,
+    "SLOPE" -> None,
+    "INTERCEPT" -> None,
+    "COVAR" -> None,
+    "FORECAST" -> Some(Set(1, 2)),
+    "FREQUENCY" -> None,
+    "TREND" -> Some(Set(0, 1, 2)),
+    "GROWTH" -> Some(Set(0, 1, 2)),
+    "LINEST" -> Some(Set(0, 1)),
+    "LOGEST" -> Some(Set(0, 1)),
+    "MDETERM" -> None,
+    "MINVERSE" -> None
+  )
+
+  /**
+   * Whether the text at `pos` lies, at any depth, inside an argument whose parameter Excel types as
+   * an array ([[ArrayParameters]]): walks the parentheses before it, tracking each call's name and
+   * argument index. Works on text the parser rejects (XLOOKUP, IRR, LOOKUP with expression
+   * arguments), which is where it matters; strings are masked.
+   */
+  private def inArrayArgument(masked: String, pos: Int): Boolean =
+    // a frame: the function's array positions (if it is a call) and the current argument index
+    final case class Frame(arrays: Option[Option[Set[Int]]], arg: Int)
+    val frames =
+      masked.substring(0, pos).zipWithIndex.foldLeft(List.empty[Frame]) { case (stack, (c, i)) =>
+        if c == '(' then
+          val name = masked
+            .substring(0, i)
+            .reverse
+            .takeWhile(ch => ch.isLetterOrDigit || ch == '.' || ch == '_')
+            .reverse
+            .toUpperCase(java.util.Locale.ROOT)
+            .stripPrefix("_XLFN.")
+            .stripPrefix("_XLWS.")
+          Frame(ArrayParameters.get(name), 0) :: stack
+        else if c == ')' then stack.drop(1)
+        else if c == ',' then
+          stack match
+            case top :: rest => top.copy(arg = top.arg + 1) :: rest
+            case Nil => Nil
+        else stack
+      }
+    frames.exists(f => f.arrays.exists(_.forall(_.contains(f.arg))))
 
   /** `text` with string-literal contents blanked (same length), so parentheses inside are inert. */
   private def maskStrings(text: String): String =

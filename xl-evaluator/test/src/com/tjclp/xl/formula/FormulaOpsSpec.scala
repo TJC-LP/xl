@@ -422,6 +422,41 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(rel("=COLUMNS(B1:C1*1)"), "=COLUMNS(A1:C1*1)")
   }
 
+  test("GH-935 review 5: the text-level array-parameter table covers every registry flag") {
+    import com.tjclp.xl.formula.functions.{ArrayArguments, FunctionRegistry}
+    FunctionRegistry.all.foreach { spec =>
+      val expected = spec.flags.arrayArguments match
+        case ArrayArguments.Off => None
+        case ArrayArguments.All => Some(None)
+        case ArrayArguments.First => Some(Some(Set(0)))
+      expected.foreach { positions =>
+        assertEquals(CutReferences.ArrayParameters.get(spec.name), Some(positions), spec.name)
+      }
+    }
+  }
+
+  test("GH-935 review 5: array-typed arguments of formulas xl cannot parse follow the cut") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-01)
+    assertEquals(rel("=XLOOKUP(7,B1:C1*1,B1:C1*1)"), "=XLOOKUP(7,A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=IRR(B1:C1*1-4)"), "=IRR(A1:C1*1-4)")
+    // at any depth inside the argument
+    assertEquals(rel("=LOOKUP(7,(B1:C1+0)*1)"), "=LOOKUP(7,(A1:C1+0)*1)")
+    // a value-typed argument of the same call keeps the implicit-intersection rule
+    assertEquals(rel("=XLOOKUP(B1:C1*1,{1,2},{3,4})"), "=XLOOKUP(B1:C1*1,{1,2},{3,4})")
+    // not checked in Excel (from Excel's function reference): these parameters are array-typed too
+    assertEquals(rel("=SUMX2PY2(B1:C1*1,B1:C1*1)"), "=SUMX2PY2(A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=PEARSON(B1:C1*1,B1:C1*1)"), "=PEARSON(A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=FREQUENCY(B1:C1*1,{1;2})"), "=FREQUENCY(A1:C1*1,{1;2})")
+    assertEquals(rel("=TREND(B1:C1*1)"), "=TREND(A1:C1*1)")
+  }
+
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
     val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
     assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")

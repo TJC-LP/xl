@@ -110,14 +110,17 @@ object CellMover:
           Option.when(next != text)(cell.copy(value = CellValue.Formula(next, cached, kind)))
         case _ => None
     }.toVector
-    // GH-935 review 4: a data-validation formula follows the full cut rule, judged at the rule's
-    // first cell — the position Excel evaluates its relative references from (checked in Excel for
-    // Mac); a conditional format follows the same rule (not verifiable through AppleScript)
+    // GH-935 review 4/5: a data-validation formula follows the full cut rule, judged at the rule's
+    // first cell — the position Excel evaluates its relative references from — as an array
+    // formula (checked in Excel for Mac); a conditional format follows the same rule (not
+    // verifiable through AppleScript)
     def ruleHost(ranges: Vector[CellRange]): CutReferences.Host =
       CutReferences.Host.Cell(
         sheet.name,
         ranges.headOption.fold(ARef.from0(0, 0))(_.start),
-        array = false
+        // Excel evaluates a rule formula as an array formula: a bare range there is never
+        // implicitly intersected (checked in Excel for Mac, GH-935 review 5)
+        array = true
       )
     val cfs = sheet.conditionalFormats.map {
       case rules: ConditionalFormat.Rules =>
