@@ -47,9 +47,9 @@ private[functions] object NumericGuard:
  * Flows whose NPV never changes sign have no rate, and the caller keeps its `#NUM!`.
  */
 private[functions] object RateSolver:
-  private val Step = 0.05
-  private val MaxSteps =
-    400 // ±20 in ln(1 + rate): rates from -99.9999998% to ~e^20 around the guess
+  // ±20 in ln(1 + rate) around the guess: from -99.9999998% up to ~e^20, 401 samples at most
+  private val Step = 0.1
+  private val MaxSteps = 200
   private val MaxRefineIterations = 100
 
   /** Root of `f` nearest `guess`, or None when no sign change is found or the guess is ≤ -100%. */
@@ -70,19 +70,24 @@ private[functions] object RateSolver:
     if guess <= -1.0 || !center.isFinite then None
     else
       def rateAt(j: Int): Double = math.expm1(center + j * Step)
-      // Sampled lazily, outward from the guess, each point once: a root near the guess costs
-      // a handful of NPV evaluations, not the whole grid.
-      val above: LazyList[Double] = LazyList.from(0).map(j => f(rateAt(j)))
-      val below: LazyList[Double] = LazyList.from(0).map(j => f(rateAt(-j)))
-      def sample(j: Int): Double = if j >= 0 then above(j) else below(-j)
-      def crosses(a: Int, b: Int): Boolean =
-        val fa = sample(a)
-        val fb = sample(b)
+      def crosses(fa: Double, fb: Double): Boolean =
         fa.isFinite && fb.isFinite && (fa == 0.0 || fb == 0.0 || (fa < 0.0) != (fb < 0.0))
-      (1 to MaxSteps).iterator
-        .flatMap(k => Iterator((k - 1, k), (-k, -(k - 1))))
-        .find { case (a, b) => crosses(a, b) }
-        .map { case (a, b) => (rateAt(a), rateAt(b)) }
+
+      // Outward from the guess, one step above then one below, each point evaluated once: a
+      // root near the guess costs a handful of NPV evaluations, not the whole grid.
+      @annotation.tailrec
+      def scan(k: Int, fAbove: Double, fBelow: Double): Option[(Double, Double)] =
+        if k > MaxSteps then None
+        else
+          val fUp = f(rateAt(k))
+          if crosses(fAbove, fUp) then Some((rateAt(k - 1), rateAt(k)))
+          else
+            val fDown = f(rateAt(-k))
+            if crosses(fDown, fBelow) then Some((rateAt(-k), rateAt(-(k - 1))))
+            else scan(k + 1, fUp, fDown)
+
+      val fCenter = f(rateAt(0))
+      scan(1, fCenter, fCenter)
 
   /** Safeguarded Newton inside `[lo, hi]`, whose ends must bracket a root of `f`. */
   def refine(
@@ -320,10 +325,13 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                   if (next - r).abs <= tolerance then Right(next)
                   else loop(iter + 1, next)
 
-            // Horner in x = 1/(1+rate), for the fallback's bracket scan
+            // Horner in x = 1/(1+rate), for the fallback's bracket scan. The flows are converted
+            // once, and only if the fallback runs: BigDecimal.toDouble per sample dominated the scan.
+            lazy val flowsLastFirst: Array[Double] =
+              cashFlows.reverseIterator.map(_.toDouble).toArray
             def npvDouble(rate: Double): Double =
               val x = 1.0 / (1.0 + rate)
-              cashFlows.foldRight(0.0)((cf, acc) => cf.toDouble + x * acc)
+              flowsLastFirst.foldLeft(0.0)((acc, cf) => cf + x * acc)
 
             val usage = "IRR(values[, guess])"
             // #954: Newton first, so every rate it already finds is unchanged
@@ -471,10 +479,12 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                         if (next - r).abs <= tolerance then Right(next)
                         else loop(iter + 1, next)
 
-                  lazy val flowsDouble = values.map(_.toDouble).zip(yearFractions.map(_.toDouble))
+                  // Converted once, and only if the fallback runs
+                  lazy val cfDouble: Array[Double] = values.map(_.toDouble).toArray
+                  lazy val yfDouble: Array[Double] = yearFractions.map(_.toDouble).toArray
                   def xnpvDouble(rate: Double): Double =
-                    flowsDouble.foldLeft(0.0) { case (acc, (cf, yf)) =>
-                      acc + cf / math.pow(1.0 + rate, yf)
+                    cfDouble.indices.foldLeft(0.0) { (acc, i) =>
+                      acc + cfDouble(i) / math.pow(1.0 + rate, yfDouble(i))
                     }
 
                   val usage = "XIRR(values, dates[, guess])"
