@@ -474,3 +474,23 @@ class MergeStreamParitySpec extends FunSuite:
         assertEquals(read(b).mergedRanges, Set(rng("D5:E5")), s"stream=$streamed")
     }
   }
+
+  test("GH-935 review 4: merging a single cell is a no-op on every path") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      write(Workbook(sheet("A1" -> num(1))), in)
+      val out = dir.resolve("out.xlsx")
+      val r = run("-f", in.toString, "-o", out.toString, "merge", "A1")
+      assertEquals(r.exit, 0, r.stderr)
+      assert(r.stdout.contains("A1 is a single cell: nothing to merge"), r.stdout)
+      assertEquals(read(out).mergedRanges, Set.empty[CellRange])
+      for streamed <- List(false, true); range <- List("A1", "A1:A1") do
+        val b = dir.resolve(s"b-$streamed-${range.replace(":", "")}.xlsx")
+        val args = List("-f", in.toString, "-o", b.toString) ++
+          (if streamed then List("--stream") else Nil) ++ List("batch", "-")
+        val br = runIn(s"""[{"op":"merge","range":"$range"}]""", args*)
+        assertEquals(br.exit, 0, s"stream=$streamed $range: ${br.stderr}")
+        assertEquals(read(b).mergedRanges, Set.empty[CellRange], s"stream=$streamed $range")
+        assertEquals(valueOf(read(b), "A1"), num(1))
+    }
+  }

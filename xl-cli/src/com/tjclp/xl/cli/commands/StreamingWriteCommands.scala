@@ -747,7 +747,7 @@ object StreamingWriteCommands:
       // upper-left cell is empty moves the first of them there and rewrites its readers, which a
       // stream cannot do, so that case is refused rather than diverging from the in-memory merge
       val mergeRanges = plainOps.collect { case BatchParser.BatchOp.Merge(r) =>
-        CellRange.parse(r).toOption
+        parseArea(r)
       }.flatten
       // GH-935 review: the file's merged areas, when the batch merges or unmerges: a new merge
       // absorbs every merge it touches, so no two <mergeCell> entries ever overlap
@@ -765,7 +765,7 @@ object StreamingWriteCommands:
       val mergeTargets = plainOps
         .foldLeft((sourceMerges, Vector.empty[CellRange])) {
           case ((live, acc), BatchParser.BatchOp.Merge(r)) =>
-            CellRange.parse(r).toOption.fold((live, acc)) { requested =>
+            parseArea(r).filter(a => a.start != a.end).fold((live, acc)) { requested =>
               val t = grownOver(live, requested)
               (live.filterNot(_.intersects(t)) + t, acc :+ t)
             }
@@ -996,10 +996,16 @@ object StreamingWriteCommands:
             }
             summaryLines += s"  STYLE $rangeStr"
 
+          case BatchParser.BatchOp.Merge(rangeStr)
+              if parseArea(rangeStr)
+                .exists(r => r.start == r.end && !liveMerges.exists(_.contains(r.start))) =>
+            // GH-935 review 4: a single cell is nothing to merge, as in Excel
+            summaryLines += s"  MERGE $rangeStr (a single cell: nothing to merge)"
+
           case BatchParser.BatchOp.Merge(rangeStr) =>
-            val requested = CellRange.parse(rangeStr) match
-              case Right(r) => r
-              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            val requested = parseArea(rangeStr).getOrElse(
+              throw new Exception(s"Invalid range '$rangeStr'")
+            )
             // the merge covers the bounding box of every merged area it touches, as in memory
             val range = grownOver(liveMerges.toSet, requested)
             // GH-935: what each cell holds at this point of the batch: an earlier op's value patch

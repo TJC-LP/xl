@@ -518,12 +518,14 @@ private[xl] object SheetEdits:
     else mergeUnchecked(sheet, range)
 
   /**
-   * GH-935 (Excel oracle): merging inside an existing merged area, or the same range again, changes
-   * nothing — the final area ([[mergeTarget]]) is that merge, and Excel leaves its cells, hidden
-   * values included, exactly as they were.
+   * GH-935 (Excel oracle): merging inside an existing merged area, or the same range again, or a
+   * single cell, changes nothing — the final area ([[mergeTarget]]) is that merge, and Excel leaves
+   * its cells, hidden values included, exactly as they were.
    */
   private[xl] def mergeIsNoOp(sheet: Sheet, range: CellRange): Boolean =
-    sheet.mergedRanges.contains(mergeTarget(sheet, range))
+    // GH-935 review 4: merging a single cell does nothing in Excel; never a one-cell <mergeCell>
+    val target = mergeTarget(sheet, range)
+    target.start == target.end || sheet.mergedRanges.contains(target)
 
   /** [[merge]] once [[mergeRefusal]] has passed. */
   private def mergeUnchecked(sheet: Sheet, range: CellRange): Sheet =

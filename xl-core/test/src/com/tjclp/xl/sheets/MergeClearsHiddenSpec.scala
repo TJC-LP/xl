@@ -334,6 +334,12 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(s.unmerge(rng("G7:H8")), s)
   }
 
+  test("GH-935 review 4: merging a single cell does nothing (no one-cell merged area)") {
+    val s = Sheet(name).put(a1("A1"), num(1))
+    assertEquals(s.merge(rng("A1:A1")), s)
+    assert(SheetEdits.mergeIsNoOp(s, rng("A1:A1")))
+  }
+
   test("GH-935: merging a whole column walks stored cells, not positions") {
     val s = Sheet(name).put(a1("A1"), num(1)).put(a1("A1000000"), num(2))
     val merged = s.merge(rng("A1:A1048576"))

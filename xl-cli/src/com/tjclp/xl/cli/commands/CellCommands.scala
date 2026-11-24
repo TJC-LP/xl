@@ -58,12 +58,8 @@ object CellCommands:
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
       (targetSheet, refOrRange) = resolved
-      range <- refOrRange match
-        case Right(r) => IO.pure(r)
-        case Left(_) =>
-          IO.raiseError(
-            new Exception("merge requires a range (e.g., A1:C1), not a single cell")
-          )
+      // GH-935 review 4: a single cell (`A1`, `A1:A1`) is nothing to merge, as in Excel
+      range = refOrRange.fold(ref => CellRange(ref, ref), identity)
       // GH-935: an empty upper-left cell receives the first non-empty cell, its readers following
       merged <- IO.fromEither(
         CellMover
@@ -87,7 +83,13 @@ object CellCommands:
         targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
       } ++ blockedAnchors
       // the range actually merged: grown over the merged areas it touched (absorbed)
-      message = s"Merged: ${SheetEdits.mergeTarget(targetSheet, range).toA1}"
+      target = SheetEdits.mergeTarget(targetSheet, range)
+      message =
+        if target.start == target.end then
+          s"${target.start.toA1} is a single cell: nothing to merge"
+        else if SheetEdits.mergeIsNoOp(targetSheet, range) then
+          s"${target.toA1} is already merged: nothing to merge"
+        else s"Merged: ${target.toA1}"
       // A merge that hides nothing (the usual title merge) changes no value: no refresh to run
       result <-
         if modified.isEmpty then
