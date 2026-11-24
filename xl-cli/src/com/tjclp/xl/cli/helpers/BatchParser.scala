@@ -244,13 +244,14 @@ object BatchParser:
       case BatchOp.PutValues(range, values) =>
         s"  PUT $range = [${values.length} values]"
       case BatchOp.Style(range, _) => s"  STYLE $range"
-      // GH-935 review 5: the note the streamed batch prints for a single cell, a no-op
-      case BatchOp.Merge(range)
-          if CellRange
-            .parse(range)
-            .toOption
-            .orElse(ARef.parse(range).toOption.map(r => CellRange(r, r)))
-            .exists(r => r.start == r.end) =>
+      // GH-935 review 5/6: the note the streamed batch prints for a single cell (qualified or
+      // not), a no-op
+      case BatchOp.Merge(range) if RefType.parse(range).toOption.exists {
+            case RefType.Cell(_) | RefType.QualifiedCell(_, _) => true
+            case RefType.Range(r) => r.start == r.end
+            case RefType.QualifiedRange(_, r) => r.start == r.end
+            case _ => false
+          } =>
         s"  MERGE $range (a single cell: nothing to merge)"
       case BatchOp.Merge(range) => s"  MERGE $range"
       case BatchOp.Unmerge(range) => s"  UNMERGE $range"

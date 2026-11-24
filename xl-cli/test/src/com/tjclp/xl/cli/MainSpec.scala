@@ -1232,12 +1232,23 @@ class MainSpec extends CatsEffectSuite:
   }
 
   test("formatSummary: a single-cell merge carries the streamed batch's no-op note") {
-    val summary = BatchParser.formatSummary(Vector(BatchOp.Merge("B2"), BatchOp.Merge("C3:C3")))
+    val summary = BatchParser.formatSummary(
+      Vector(
+        BatchOp.Merge("B2"),
+        BatchOp.Merge("C3:C3"),
+        BatchOp.Merge("Sheet1!B2"),
+        BatchOp.Merge("'My Sheet'!C3:C3"),
+        BatchOp.Merge("Sheet1!B2:C2")
+      )
+    )
     assertEquals(
       summary.split("\n").toVector,
       Vector(
         "  MERGE B2 (a single cell: nothing to merge)",
-        "  MERGE C3:C3 (a single cell: nothing to merge)"
+        "  MERGE C3:C3 (a single cell: nothing to merge)",
+        "  MERGE Sheet1!B2 (a single cell: nothing to merge)",
+        "  MERGE 'My Sheet'!C3:C3 (a single cell: nothing to merge)",
+        "  MERGE Sheet1!B2:C2"
       )
     )
   }
