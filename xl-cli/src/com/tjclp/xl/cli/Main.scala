@@ -3658,7 +3658,7 @@ EXAMPLES:
 
     case CliCommand.Unmerge(rangeStr) =>
       requireOutput("unmerge", outputOpt, backendOpt, stream, policy)(
-        CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _)
+        CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _, policy, warn)
       )
 
     case CliCommand.AddComment(refStr, text, author) =>

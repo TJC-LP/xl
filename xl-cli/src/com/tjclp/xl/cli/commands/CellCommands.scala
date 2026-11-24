@@ -9,6 +9,7 @@ import com.tjclp.xl.cli.contract.{CliError, CliException, Warning}
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring}
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.sheets.SheetEdits
@@ -118,7 +119,9 @@ object CellCommands:
     rangeStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
@@ -130,9 +133,32 @@ object CellCommands:
             new Exception("unmerge requires a range (e.g., A1:C1), not a single cell")
           )
       updatedSheet = targetSheet.unmerge(range)
-      updatedWb = wb.put(updatedSheet)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Unmerged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+      // GH-935 review 2: a dynamic array the merge blocked (#SPILL!) spills again once nothing
+      // blocks it, and its readers are refreshed, as Excel recalculates it
+      respilled = DynamicArrayAuthoring.respillAfterUnmerge(
+        wb.put(updatedSheet),
+        targetSheet.name,
+        Clock.system
+      )
+      (updatedWb, seeds) = respilled
+      message = s"Unmerged: ${range.toA1}"
+      result <-
+        if seeds.isEmpty then
+          writeWorkbook(updatedWb, outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          WriteCommands.writeAfterRefresh(
+            updatedWb,
+            targetSheet.name,
+            seeds,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+    yield result
 
   /**
    * Clear cell contents, styles, or comments from range.

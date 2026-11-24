@@ -418,10 +418,54 @@ object StreamingTransform:
     result.toMap
 
   /**
-   * GH-935: the cells inside `ranges` that hold content — a value (`<v>`), a formula (`<f>`) or an
-   * inline string (`<is>`) — read in one SAX pass without materializing the worksheet. A styled
-   * empty cell (`<c r="B1" s="3"/>`) does not count.
+   * GH-935 review 2: what a streamed merge must know about a worksheet, from one SAX pass: the
+   * cells inside `ranges` that hold content, every array-formula and data-table range (`<f
+   * t="array" ref>`, `<f t="dataTable" ref>`, legacy or dynamic), and every hyperlink range.
    */
+  final case class MergeContext(
+    filled: Set[ARef],
+    arrays: Vector[CellRange],
+    links: Vector[CellRange]
+  )
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  def scanMergeContext(input: InputStream, ranges: Vector[CellRange]): MergeContext =
+    val filled = mutable.Set[ARef]()
+    val arrays = Vector.newBuilder[CellRange]
+    val links = Vector.newBuilder[CellRange]
+    val handler = new DefaultHandler:
+      private var current: Option[ARef] = None
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        attributes: Attributes
+      ): Unit =
+        localName match
+          case "c" =>
+            current = Option(attributes.getValue("r"))
+              .flatMap(r => ARef.parse(r).toOption)
+              .filter(ref => ranges.exists(_.contains(ref)))
+          case "f" =>
+            current.foreach(filled += _)
+            val t = Option(attributes.getValue("t"))
+            if t.contains("array") || t.contains("dataTable") then
+              Option(attributes.getValue("ref")).flatMap(r => CellRange.parse(r).toOption).foreach {
+                arrays += _
+              }
+          case "v" | "is" => current.foreach(filled += _)
+          case "hyperlink" =>
+            Option(attributes.getValue("ref")).flatMap(r => CellRange.parse(r).toOption).foreach {
+              links += _
+            }
+          case _ => ()
+      override def endElement(uri: String, localName: String, qName: String): Unit =
+        if localName == "c" then current = None
+    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+    try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
+    finally scala.util.Try(input.close())
+    MergeContext(filled.toSet, arrays.result(), links.result())
+
   /** GH-935 review: the `<mergeCell ref>` ranges of a worksheet, read in one SAX pass. */
   def scanMergedRanges(input: InputStream): Set[CellRange] =
     val result = mutable.Set[CellRange]()
@@ -436,14 +480,6 @@ object StreamingTransform:
           Option(attributes.getValue("ref")).flatMap(r => CellRange.parse(r).toOption).foreach {
             result += _
           }
-    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
-    try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
-    finally scala.util.Try(input.close())
-    result.toSet
-
-  def scanNonEmptyCells(input: InputStream, ranges: Vector[CellRange]): Set[ARef] =
-    val result = mutable.Set[ARef]()
-    val handler = new NonEmptyScanHandler(ranges, result)
     val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
     try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
     finally scala.util.Try(input.close())
@@ -1052,28 +1088,6 @@ object StreamingTransform:
               result(ref) = styleId
           }
         }
-
-  @SuppressWarnings(Array("org.wartremover.warts.Var"))
-  private class NonEmptyScanHandler(ranges: Vector[CellRange], result: mutable.Set[ARef])
-      extends DefaultHandler:
-    private var current: Option[ARef] = None
-
-    override def startElement(
-      uri: String,
-      localName: String,
-      qName: String,
-      attributes: Attributes
-    ): Unit =
-      localName match
-        case "c" =>
-          current = Option(attributes.getValue("r"))
-            .flatMap(r => ARef.parse(r).toOption)
-            .filter(ref => ranges.exists(_.contains(ref)))
-        case "v" | "f" | "is" => current.foreach(result += _)
-        case _ => ()
-
-    override def endElement(uri: String, localName: String, qName: String): Unit =
-      if localName == "c" then current = None
 
   /**
    * SAX handler that transforms worksheet XML with early-abort optimization.

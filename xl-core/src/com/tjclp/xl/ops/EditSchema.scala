@@ -338,7 +338,12 @@ object EditSchema:
     "Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.",
     "merge"
   )
-  private val unmerge = rangeOnly("unmerge", "Unmerge a merged range.", "unmerge")
+  private val unmerge =
+    rangeOnly(
+      "unmerge",
+      "Unmerge a merged range (a dynamic array the merge blocked spills again).",
+      "unmerge"
+    )
 
   private val colWidth = spec(
     "col-width",

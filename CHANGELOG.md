@@ -67,16 +67,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`); a wider range keeps its cells, as
   Excel does (checked: with B1:B3 = 7, 1, 1, the same merge leaves `=SUM(B1:B3)` at 2 and rewrites
   `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Only the reference text
-  changes: the rest of each reader is kept byte for byte. Every other cell is cleared the way
+  changes: the rest of each reader is kept byte for byte, and intersection operands
+  (`=B1 C1`, `=SUM(B1 B1:C1)`) follow too. (`ISREF` is not in xl's function registry, so a
+  formula using it does not parse and is left as typed.) Every other cell is cleared the way
   Clear Contents clears it: the value or formula and the hyperlinks go (its own link and its part
   of a range hyperlink, which splits around the merge), a cell's own formatting and its comment
   stay, an unstyled cell is removed. A moved cell carries its effective link (its own, or the
   range hyperlink covering it) to the upper-left cell.
   - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
     member of a legacy array other than its anchor, is never the cell moved into an empty
-    upper-left cell (nothing becomes a constant). A merge that covers part of a dynamic array's
-    spill range blocks it, as in Excel: the anchor evaluates to `#SPILL!` (reason "spill range is
-    merged"), and the `merge` verb recalculates that anchor.
+    upper-left cell (nothing becomes a constant). A merge that covers part of the range a dynamic
+    array's result spills into blocks it, as in Excel: the anchor evaluates to `#SPILL!` (reason
+    "spill range is merged", judged on the evaluated result's shape, so every later recalculation
+    agrees) and its spill range is EMPTY — the merge clears the spilled values and leaves the
+    anchor a one-cell record cached at `#SPILL!`, so a reader of a spill cell reads blank (with
+    `=SEQUENCE(3)` in A1 and `C1 = A3*10`, merging `A2:B2` or `A1:A2` gives `#SPILL!` and C1 = 0).
+    Unmerging (the verb and the batch `unmerge` op, now cell-mutating) re-spills every blocked
+    anchor nothing blocks any more and refreshes its readers (C1 = 30 again).
+  - A merge whose range (grown over existing merges) touches a legacy array formula or a data
+    table is refused, as Excel refuses it (it cannot change part of an array, and array formulas
+    are not valid in merged cells): `InvalidRange` from `Edit.Merge`, `CellMover.merge`, the verb
+    and the batch op, in memory and streamed, with nothing written. The total `Sheet.merge` (and
+    `Patch.Merge`, the `range.merge` DSL) leaves the sheet unchanged in that case rather than
+    produce a merge Excel cannot hold. A dynamic array is not refused: merging over its spill
+    blocks it (above); merging its anchor in as a hidden cell discards it like any other hidden
+    content, and an anchor that is the upper-left cell stays the merged cell's value (blocked if
+    its spill meets the merge) — that last case is not verified against Excel.
   - Merging a range that touches existing merged areas absorbs them, as Excel extends a selection
     over the merged cells it touches: the merge covers the bounding box of the range and every
     merged area it intersects (grown until stable), the absorbed merges are removed, and the
@@ -93,9 +109,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     reader keeps Excel's value (`=B1+1` still reads 8, `SUM` over the area is the kept value) and
     only the merged cell's display differs from Excel. For Excel's move, use
     `wb.edit(Edit.Merge(...))` or `CellMover.merge` (`CellMover.mergeSheet` moves and rewrites the
-    readers on the same sheet). A streamed batch
-    applies a merge whose upper-left cell holds a value and refuses (`BATCH_OP_FAILED`, before
-    anything is written, "drop --stream") one that would move a cell.
+    readers on the same sheet). `Edit.Merge` runs through the new `FormulaSupport.merge`, which
+    `EvalFormulaSupport` implements as `CellMover.merge`, so the library edit, the verb and the
+    batch op share one merge. A streamed batch writes exactly the file the in-memory batch writes,
+    or refuses: it replays the batch's merges and unmerges first so every merge's grown range is
+    known, reads those ranges' cells, every array-formula, data-table and hyperlink range in one
+    pass, and refuses (`BATCH_OP_FAILED`, before anything is written, "drop --stream") a merge that
+    would move a cell, touches any array formula or data table, or hides a linked cell. (A streamed
+    merge that grew over an existing merge used to judge only the requested range and could clear
+    the value the in-memory merge moves.)
   - The formulas that read a cleared or moved cell are recalculated by the verb and the batch op
     as for any other content edit (`--no-recalc` keeps their caches; a streamed batch never
     recalculates), so the issue's `put A1 1; put B1 2; put A2 3; merge A1:B2;
@@ -103,11 +125,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hidden under it.
   - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
     whose merges already hide values is read and rewritten unchanged: only the merge operation
-    clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays, and
-    refuses conservatively when a spilled value sits in a merge over an empty upper-left cell; a
-    batch `merge` does not re-evaluate a newly blocked spill anchor until the next recalculation;
-    `Sheet.merge` does not release spills; comments are not moved with a moved cell. A moved array
-    formula or data-table master carries its anchored result range.
+    clears. Residuals: `Sheet.merge` does not release spills; comments are not moved with a moved
+    cell; a `clear --styles`/`--all` that unmerges does not re-spill a blocked dynamic array (the
+    next unmerge or `putf --array` does); a streamed batch `unmerge` never re-spills (the stream
+    never recalculates); a value a streamed merge clears from an unstyled cell leaves an empty
+    `<c>` record where the in-memory merge removes it. A moved array formula or data-table master
+    carries its anchored result range.
   - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
     by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now
     cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports
@@ -129,8 +152,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   onto two tabs differing only by case), an external-workbook reference (`[1]sheet1!A1`) and a
   string literal (`INDIRECT("sheet1!A1")`) stay as typed, and a formula already in canonical form
   is stored byte-identical. Only the qualifier's spelling changes, as in Excel: every other byte
-  of the formula (spacing, parentheses, `1E3`, `-(-x)`, function-name case) is kept as typed; a
-  formula the qualifier scanner finds ambiguous (a 3-D reference) is stored as typed. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  of the formula (spacing, parentheses, `1E3`, `-(-x)`, function-name case) is kept as typed. A
+  structured reference (`Table1[Col]`) does not hide the qualifiers after it; only an
+  external-workbook prefix (`[1]Sheet1!A1`) guards its own. A formula the qualifier scanner finds
+  ambiguous (a 3-D reference anywhere in it) is stored as typed. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
   `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
   `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
   `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer

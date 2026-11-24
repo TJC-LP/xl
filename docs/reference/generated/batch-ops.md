@@ -21,7 +21,7 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | `putf` | — | yes | yes | yes | `putf` | 0.1.0 | Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID before anything is written, --dry-run included. `"array": true` stores one cell as an Excel 365 dynamic array that spills (putf --array). |
 | `style` | — | yes | no | yes | `style` | 0.1.0 | Style a range: font, fill, alignment, number format, borders (merged unless `replace`). |
 | `merge` | — | yes | yes | yes | `merge` | 0.1.0 | Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared. |
-| `unmerge` | — | yes | no | yes | `unmerge` | 0.1.0 | Unmerge a merged range. |
+| `unmerge` | — | yes | yes | yes | `unmerge` | 0.1.0 | Unmerge a merged range (a dynamic array the merge blocked spills again). |
 | `colwidth` | — | yes | no | yes | `col` | 0.1.0 | Set a column's width. |
 | `rowheight` | — | yes | no | yes | `row` | 0.1.0 | Set a row's height. |
 | `comment` | — | no | no | yes | `comment` | 0.9.6 | Add or replace a cell comment. |
@@ -143,7 +143,7 @@ Merge a range into one cell as Excel does: the upper-left value stays, or, when 
 
 ### `unmerge`
 
-Unmerge a merged range.
+Unmerge a merged range (a dynamic array the merge blocked spills again).
 
 ```json
 {"op":"unmerge","range":"A1:D1"}
