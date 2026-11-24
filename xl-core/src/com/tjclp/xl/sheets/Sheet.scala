@@ -771,9 +771,21 @@ final case class Sheet(
   def merge(range: CellRange): Sheet =
     SheetEdits.merge(this, range)
 
-  /** Unmerge cells in range */
+  /**
+   * Unmerge every merged area `range` intersects (GH-935 review 3), as Excel's Unmerge Cells does
+   * for a selection: `unmerge(A1:C3)` over a merged `A2:B2` unmerges it, and a single cell of a
+   * merge unmerges that merge. A range that touches no merge changes nothing ([[mergesIn]] says
+   * which areas a call unmerges).
+   */
   def unmerge(range: CellRange): Sheet =
-    copy(mergedRanges = mergedRanges - range)
+    copy(mergedRanges = mergedRanges.filterNot(_.intersects(range)))
+
+  /** The merged areas [[unmerge]] of `range` removes, in reading order. */
+  def mergesIn(range: CellRange): Vector[CellRange] =
+    mergedRanges
+      .filter(_.intersects(range))
+      .toVector
+      .sortBy(m => (m.start.row.index0, m.start.col.index0))
 
   /** Check if cell is part of a merged range */
   def isMerged(ref: ARef): Boolean =

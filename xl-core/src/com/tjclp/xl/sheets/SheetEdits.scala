@@ -564,18 +564,21 @@ private[xl] object SheetEdits:
   private[xl] def mergeWinner(sheet: Sheet, range: CellRange): Option[Cell] =
     val target = mergeTarget(sheet, range)
     val anchor = target.start
-    if sheet.cells.get(anchor).exists(_.value != CellValue.Empty) then None
+    val arrays = sheet.cells.iterator.flatMap { c =>
+      c.value match
+        case CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) if k.ref.intersects(target) =>
+          Some((c.ref, k.ref))
+        case _ => None
+    }.toVector
+    def spillChild(ref: ARef): Boolean = arrays.exists((a, r) => a != ref && r.contains(ref))
+    // GH-935 review 3: a spilled value is never merge content, the upper-left cell's included:
+    // the upper-left cell wins only when it holds real content of its own
+    def content(c: Cell): Boolean = c.value != CellValue.Empty && !spillChild(c.ref)
+    if sheet.cells.get(anchor).exists(content) then None
     else
-      val arrays = sheet.cells.iterator.flatMap { c =>
-        c.value match
-          case CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) if k.ref.intersects(target) =>
-            Some((c.ref, k.ref))
-          case _ => None
-      }.toVector
-      def spillChild(ref: ARef): Boolean = arrays.exists((a, r) => a != ref && r.contains(ref))
       sheet.cells
         .inRange(target)
-        .filter(c => c.ref != anchor && c.value != CellValue.Empty && !spillChild(c.ref))
+        .filter(c => c.ref != anchor && content(c))
         .minByOption(c => (c.ref.row.index0, c.ref.col.index0))
 
   /**

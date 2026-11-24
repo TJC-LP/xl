@@ -312,6 +312,28 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(SheetEdits.mergeRefusal(dyn, rng("B2:C3")), None)
   }
 
+  test("GH-935 review 3: a spilled value at the upper-left cell is not merge content") {
+    import com.tjclp.xl.cells.FormulaKind
+    val s = Sheet(name)
+      .put(
+        a1("A1"),
+        CellValue.Formula("SEQUENCE(3)", Some(num(1)), FormulaKind.dynamicArray(rng("A1:A3")))
+      )
+      .put(a1("A2"), num(2))
+      .put(a1("A3"), num(3))
+      .put(a1("B2"), num(5))
+    assertEquals(SheetEdits.mergeWinner(s, rng("A2:B3")).map(_.ref), Some(a1("B2")))
+  }
+
+  test("GH-935 review 3: unmerge removes every merged area a selection touches") {
+    val s = Sheet(name).copy(mergedRanges = Set(rng("A2:B2"), rng("D5:E5"), rng("A4:A6")))
+    assertEquals(s.mergesIn(rng("A1:C3")), Vector(rng("A2:B2")))
+    assertEquals(s.unmerge(rng("A1:C3")).mergedRanges, Set(rng("D5:E5"), rng("A4:A6")))
+    assertEquals(s.unmerge(rng("B2:B2")).mergedRanges, Set(rng("D5:E5"), rng("A4:A6")))
+    assertEquals(s.unmerge(rng("A5:E5")).mergedRanges, Set(rng("A2:B2")))
+    assertEquals(s.unmerge(rng("G7:H8")), s)
+  }
+
   test("GH-935: merging a whole column walks stored cells, not positions") {
     val s = Sheet(name).put(a1("A1"), num(1)).put(a1("A1000000"), num(2))
     val merged = s.merge(rng("A1:A1048576"))

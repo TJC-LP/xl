@@ -341,7 +341,7 @@ object EditSchema:
   private val unmerge =
     rangeOnly(
       "unmerge",
-      "Unmerge a merged range (a dynamic array the merge blocked spills again).",
+      "Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again.",
       "unmerge"
     )
 
