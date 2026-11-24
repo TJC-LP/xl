@@ -126,7 +126,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cell's row or column (checked in Excel: a list or custom rule over `$C$1:$D$1` follows the
     winner D1 to `$C$1:$C$1` whether the rule sits in A5 or C5). Conditional-format formulas follow
     the same rule (not verifiable through Excel's AppleScript, so not Excel-checked). A validation
-    over a single cell is written `sqref="A5"`, as Excel writes it (it used to be `A5:A5`).
+    or conditional format over a single cell is written `sqref="A5"`, as Excel writes it (it used
+    to be `A5:A5`).
   - Merging a single cell (`A1`, `A1:A1`) does nothing, as in Excel, on every path (the verb says
     "A1 is a single cell: nothing to merge", and the batch summary "MERGE A1 (a single cell:
     nothing to merge)", in memory as streamed); no one-cell `<mergeCell>` is ever written (the verb
