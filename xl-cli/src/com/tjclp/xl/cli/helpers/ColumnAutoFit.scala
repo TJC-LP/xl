@@ -1,10 +1,10 @@
 package com.tjclp.xl.cli.helpers
 
-import com.tjclp.xl.addressing.{ARef, Column}
+import com.tjclp.xl.addressing.{ARef, Column, SheetName}
 import com.tjclp.xl.cells.{CellValue, FormulaKind}
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.eval.DependentRecalculation
-import com.tjclp.xl.sheets.Sheet
+import com.tjclp.xl.sheets.{Sheet, SheetEdits}
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -45,3 +45,30 @@ object ColumnAutoFit:
     case CellValue.Formula(_, None, _: FormulaKind.DataTable) => false
     case CellValue.Formula(_, None, _) => true
     case _ => false
+
+  /**
+   * GH-869: widen, as Excel does on entry, every never-sized column where a written cell's
+   * formatted number would not fit and so would show `#####` (`SheetEdits.widenForEntries`). Run on
+   * the final, recalculated workbook so a `putf` cell is measured by the value it will display.
+   * Returns the workbook and one `(sheet, column, width)` per column widened.
+   */
+  def widenForWrites(
+    wb: Workbook,
+    written: Iterable[(SheetName, ARef)]
+  ): (Workbook, Vector[(SheetName, Column, Double)]) =
+    written.groupMap(_._1)(_._2).toVector.sortBy(_._1.value).foldLeft((wb, Vector.empty)) {
+      case ((acc, notes), (name, refs)) =>
+        acc(name).toOption match
+          case None => (acc, notes)
+          case Some(sheet) =>
+            val (widened, cols) = SheetEdits.widenForEntries(sheet, refs)
+            if cols.isEmpty then (acc, notes)
+            else (acc.put(widened), notes ++ cols.map((c, w) => (name, c, w)))
+    }
+
+  /** The summary line for the columns [[widenForWrites]] widened; empty when there were none. */
+  def widenedNote(widened: Vector[(SheetName, Column, Double)]): String =
+    if widened.isEmpty then ""
+    else
+      val cols = widened.map((_, c, w) => f"${c.toLetter} to $w%.2f").mkString(", ")
+      s"\nWidened column(s) $cols so formatted values fit (Excel would show #####)"

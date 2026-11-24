@@ -125,3 +125,42 @@ class SheetAutoFitSpec extends ScalaCheckSuite:
       perColumn(s, ColSpan(Column.from0(0), Column.from0(2)).columns)
     )
   }
+
+  // ===== GH-869: widening on entry, as Excel does for a formatted number =====
+
+  private val currency = com.tjclp.xl.styles.CellStyle.default
+    .withNumFmt(com.tjclp.xl.styles.numfmt.NumFmt.Currency)
+
+  private def withCurrency(sheet: Sheet, ref: ARef, n: BigDecimal): Sheet =
+    sheet.put(ref, CellValue.Number(n)).withCellStyle(ref, currency)
+
+  test("GH-869: an overflowing currency entry widens its column to the autofit width") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val (widened, cols) = SheetEdits.widenForEntries(s, List(a1))
+    val fit = s.autoFitWidth(Column.from0(0))
+    assertEquals(cols, Vector(Column.from0(0) -> fit))
+    assertEquals(widened.getColumnProperties(Column.from0(0)).width, Some(fit))
+  }
+
+  test("GH-869: only the written refs count, and a column is never narrowed") {
+    val a1 = ARef.from0(0, 0)
+    val a2 = ARef.from0(0, 1)
+    val s = withCurrency(
+      withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89")),
+      a2,
+      BigDecimal(1)
+    )
+    // writing only the short A2 leaves the column as it is, though A1 overflows
+    assertEquals(SheetEdits.widenForEntries(s, List(a2))._2, Vector.empty)
+    // a sheet default already wider than the entry needs is not narrowed
+    val wide = s.copy(defaultColumnWidth = Some(40.0))
+    assertEquals(SheetEdits.widenForEntries(wide, List(a1))._2, Vector.empty)
+  }
+
+  test("GH-869: a number inside a merge is measured by the merge, not its column") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+      .copy(mergedRanges = Set(com.tjclp.xl.addressing.CellRange(a1, ARef.from0(2, 0))))
+    assertEquals(SheetEdits.widenForEntries(s, List(a1))._2, Vector.empty)
+  }

@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`put`, `putf` and `batch` widen a column a formatted number would overflow** (#869). A
+  currency, percent or date written into a column too narrow for it opened in Excel as `#####`
+  until the column was autofitted. Typing the same value into Excel widens the column, so xl now
+  does what Excel's entry does: when a written number or date with a non-General format is wider
+  than its column, and the column's width was never set, the column is set to the width `autofit`
+  would give it. An explicit width (including one set earlier in the same batch), a hidden column,
+  text and General numbers are left alone, and a column is never narrowed. The write's summary
+  names each widened column. `--stream` writes are unchanged. **Behaviour change:** a `put`/`putf`
+  of an overflowing formatted number now also writes a `<col>` width for its column, and the
+  summary gains a `Widened column(s) …` line.
+
 ## [0.28.0] - 2026-11-24
 
 **"Excel's own rules."** Fixes for everything a Weaver dogfood of 0.27.0 found (#930–#938). Merge

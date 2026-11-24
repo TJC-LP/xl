@@ -1890,6 +1890,28 @@ object BatchParser:
     }
 
   /**
+   * GH-869: every area a `put` or `putf` op of the batch wrote, for the column widening Excel's own
+   * entry does (`ColumnAutoFit.widenForWrites`). Other writers (`copy`, `fill`, `import`) leave
+   * widths alone, as Excel's paste and fill do.
+   */
+  def putTargets(
+    wb: Workbook,
+    defaultSheetOpt: Option[Sheet],
+    scoped: Vector[ScopedOp]
+  ): Vector[(SheetName, CellRange)] =
+    scoped.flatMap { s =>
+      val refs = s.op match
+        case BatchOp.Put(ref, _, _) => Vector(ref)
+        case BatchOp.PutValues(range, _) => Vector(range)
+        case BatchOp.PutFormula(ref, _, _, _) => Vector(ref)
+        case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
+        case BatchOp.PutFormulas(range, _, _) => Vector(range)
+        case _ => Vector.empty
+      if refs.isEmpty then Vector.empty
+      else targetAreas(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
+    }
+
+  /**
    * GH-714: which of the [[putfTargets]] cells the `IMPLICIT_INTERSECTION` check need not parse
    * again — the cells of a `putf … from` drag whose source may diverge, since a shift keeps a
    * formula's shape. A drag counts only when no reference left the grid at any of its range's

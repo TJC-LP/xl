@@ -806,6 +806,53 @@ private[xl] object SheetEdits:
         px => (px + CellPaddingPx) / MaxDigitWidthPx
       )
 
+  /**
+   * GH-869: what Excel does to a column when a formatted number is typed into it. A number or date
+   * whose formatted text is wider than its column shows `#####` (text spills into the next cell
+   * instead), so Excel widens the column to fit the entry — but only a column whose width was never
+   * set: an explicit width, including one from an earlier auto-fit, is the user's and is kept, as
+   * is a hidden column. Excel never narrows a column on entry.
+   *
+   * Only cells in `refs` count, and only those that display a number under a non-General format
+   * (currency, percent, dates, …): a General number is shortened to fit rather than shown as
+   * `#####`, and xl's General text is not Excel's, so it is left alone. A formula counts by its
+   * cached value; an uncached one has nothing to measure. A cell inside a merge is skipped (its
+   * width is the merge's, not the column's).
+   *
+   * Returns the sheet with each such column's width set to what its widest entry needs (measured
+   * like [[autoFitWidth]]), and the columns widened with their new widths, in column order.
+   */
+  private[xl] def widenForEntries(
+    sheet: Sheet,
+    refs: Iterable[ARef]
+  ): (Sheet, Vector[(Column, Double)]) =
+    val current = sheet.defaultColumnWidth.getOrElse(DefaultColumnWidth)
+    val widened = refs.iterator
+      .filter(ref => !sheet.mergedRanges.exists(_.contains(ref)))
+      .flatMap(sheet.cells.get)
+      .filter(displaysFormattedNumber(_, sheet))
+      .toVector
+      .groupBy(_.ref.col)
+      .iterator
+      .filter((col, _) => sheet.columnProperties.get(col).forall(p => p.width.isEmpty && !p.hidden))
+      .map((col, cells) => col -> fitWidth(sheet, cells))
+      .filter((_, width) => width > current)
+      .toVector
+      .sortBy(_._1.index0)
+    val updated = widened.foldLeft(sheet) { case (s, (col, width)) =>
+      s.setColumnProperties(col, s.getColumnProperties(col).copy(width = Some(width)))
+    }
+    (updated, widened)
+
+  /** Whether `cell` displays a number or date under a non-General format (GH-869). */
+  private def displaysFormattedNumber(cell: Cell, sheet: Sheet): Boolean =
+    val numFmt = cell.styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt)
+    val numeric = cell.value match
+      case CellValue.Number(_) | CellValue.DateTime(_) => true
+      case CellValue.Formula(_, Some(CellValue.Number(_) | CellValue.DateTime(_)), _) => true
+      case _ => false
+    numeric && numFmt.exists(f => f != NumFmt.General && f != NumFmt.Text)
+
   private def heuristicWidth(text: String, styleOpt: Option[CellStyle]): Double =
     val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
     text.length * boldFactor * 0.90 + 1.5
