@@ -514,8 +514,16 @@ private[xl] object SheetEdits:
    * its stored cells, so a whole-column merge does not visit a million positions.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
-    if mergeRefusal(sheet, range).isDefined then sheet
+    if mergeRefusal(sheet, range).isDefined || mergeIsNoOp(sheet, range) then sheet
     else mergeUnchecked(sheet, range)
+
+  /**
+   * GH-935 (Excel oracle): merging inside an existing merged area, or the same range again, changes
+   * nothing — the final area ([[mergeTarget]]) is that merge, and Excel leaves its cells, hidden
+   * values included, exactly as they were.
+   */
+  private[xl] def mergeIsNoOp(sheet: Sheet, range: CellRange): Boolean =
+    sheet.mergedRanges.contains(mergeTarget(sheet, range))
 
   /** [[merge]] once [[mergeRefusal]] has passed. */
   private def mergeUnchecked(sheet: Sheet, range: CellRange): Sheet =
@@ -523,7 +531,8 @@ private[xl] object SheetEdits:
     // Excel widens a selection to the merged areas it touches and merges the whole: the absorbed
     // merges go, so the sheet never holds overlapping merges (Excel repairs a file that does)
     val base = sheet.copy(mergedRanges = sheet.mergedRanges.filterNot(_.intersects(target)))
-    val kept = mergeWinner(base, target).map(w => w.copy(hyperlink = base.hyperlinkAt(w.ref)))
+    // the winner is judged on the sheet as it was (a hidden cell of an absorbed merge never wins)
+    val kept = mergeWinner(sheet, range).map(w => w.copy(hyperlink = base.hyperlinkAt(w.ref)))
     // a hidden cell loses its links as it loses its value: its own and range-link coverage
     val cleared = hiddenByMerge(target).foldLeft(base)((s, r) =>
       clearContentsKeepingStyles(s, r).removeRangeHyperlinkCoverage(r)
@@ -571,9 +580,14 @@ private[xl] object SheetEdits:
         case _ => None
     }.toVector
     def spillChild(ref: ARef): Boolean = arrays.exists((a, r) => a != ref && r.contains(ref))
+    // GH-935 (Excel oracle): a hidden cell of a merged area the merge absorbs is never a candidate
+    // (its value is cleared, nothing that reads it is rewritten)
+    val absorbed = sheet.mergedRanges.filter(_.intersects(target)).toVector
+    def hiddenBefore(ref: ARef): Boolean = absorbed.exists(m => m.contains(ref) && m.start != ref)
     // GH-935 review 3: a spilled value is never merge content, the upper-left cell's included:
     // the upper-left cell wins only when it holds real content of its own
-    def content(c: Cell): Boolean = c.value != CellValue.Empty && !spillChild(c.ref)
+    def content(c: Cell): Boolean =
+      c.value != CellValue.Empty && !spillChild(c.ref) && !hiddenBefore(c.ref)
     if sheet.cells.get(anchor).exists(content) then None
     else
       sheet.cells

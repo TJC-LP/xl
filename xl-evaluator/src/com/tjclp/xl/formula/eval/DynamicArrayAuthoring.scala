@@ -358,7 +358,8 @@ private[xl] object DynamicArrayAuthoring:
   def merge(sheet: Sheet, range: CellRange): Sheet =
     // a merge Excel refuses (an array formula or a data table in the way) changes nothing here;
     // the XLResult paths (CellMover.merge, Edit.Merge) report the refusal
-    if SheetEdits.mergeRefusal(sheet, range).isDefined then sheet
+    if SheetEdits.mergeRefusal(sheet, range).isDefined || SheetEdits.mergeIsNoOp(sheet, range)
+    then sheet
     else mergeChecked(sheet, range)
 
   private def mergeChecked(sheet: Sheet, range: CellRange): Sheet =
