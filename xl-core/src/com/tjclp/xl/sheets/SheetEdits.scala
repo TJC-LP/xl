@@ -514,6 +514,11 @@ private[xl] object SheetEdits:
    * its stored cells, so a whole-column merge does not visit a million positions.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
+    if mergeRefusal(sheet, range).isDefined then sheet
+    else mergeUnchecked(sheet, range)
+
+  /** [[merge]] once [[mergeRefusal]] has passed. */
+  private def mergeUnchecked(sheet: Sheet, range: CellRange): Sheet =
     val target = mergeTarget(sheet, range)
     // Excel widens a selection to the merged areas it touches and merges the whole: the absorbed
     // merges go, so the sheet never holds overlapping merges (Excel repairs a file that does)
@@ -572,6 +577,56 @@ private[xl] object SheetEdits:
         .inRange(target)
         .filter(c => c.ref != anchor && c.value != CellValue.Empty && !spillChild(c.ref))
         .minByOption(c => (c.ref.row.index0, c.ref.col.index0))
+
+  /**
+   * Why Excel refuses to merge `range` (GH-935 review), judged over the range the merge actually
+   * covers ([[mergeTarget]]): it intersects a legacy (CSE) array formula's range or a data table's
+   * range — Excel cannot change part of an array or a data table, and array formulas are not valid
+   * in merged cells. `None` when the merge may proceed. A dynamic array is not a refusal: merging
+   * over its spill range blocks it (`#SPILL!`), as in Excel; merging over its anchor discards the
+   * anchor like any other hidden content, or keeps it as the merged cell's value.
+   */
+  private[xl] def mergeRefusal(sheet: Sheet, range: CellRange): Option[XLError] =
+    val target = mergeTarget(sheet, range)
+    sheet.cells.iterator
+      .flatMap { c =>
+        c.value match
+          case CellValue.Formula(_, _, k: FormulaKind.ArrayFormula)
+              if !k.isDynamicArray && k.ref.intersects(target) =>
+            Some(("an array formula", k.ref))
+          case CellValue.Formula(_, _, k: FormulaKind.DataTable) if k.ref.intersects(target) =>
+            Some(("a data table", k.ref))
+          case _ => None
+      }
+      .toVector
+      .sortBy((_, r) => (r.start.row.index0, r.start.col.index0))
+      .headOption
+      .map { (what, r) =>
+        XLError.InvalidRange(
+          target.toA1,
+          s"the merge range ${target.toA1} intersects $what at ${r.toA1}; Excel cannot merge " +
+            s"cells of $what"
+        )
+      }
+
+  /**
+   * Whether the merge of `range` touches a dynamic array's spill (its anchor's declared range
+   * intersects what the merge covers): the workbook-level merge releases such a spill, which the
+   * kernel cannot, so the Edit/Patch lowerings leave these merges alone.
+   */
+  private[xl] def mergeTouchesSpill(sheet: Sheet, range: CellRange): Boolean =
+    val target = mergeTarget(sheet, range)
+    sheet.cells.iterator.exists { c =>
+      c.value match
+        case CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) =>
+          k.isDynamicArray && k.ref.cellCount > 1 && k.ref.intersects(target)
+        case _ => false
+    }
+
+  /** Whether `Edit.Merge`/`Patch.Merge` of `range` lower exactly to `Sheet.merge` (no move). */
+  private[xl] def mergeLowers(sheet: Sheet, range: CellRange): Boolean =
+    mergeRefusal(sheet, range).isEmpty && mergeWinner(sheet, range).isEmpty &&
+      !mergeTouchesSpill(sheet, range)
 
   /** The upper-left cell of the range a merge of `range` covers ([[mergeTarget]]). */
   private[xl] def mergeAnchor(sheet: Sheet, range: CellRange): ARef =

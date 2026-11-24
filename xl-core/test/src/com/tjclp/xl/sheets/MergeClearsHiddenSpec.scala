@@ -270,6 +270,48 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(grown.merge(rng("E1:F1")).mergedRanges, Set(rng("A1:C2"), rng("E1:F1")))
   }
 
+  test("GH-935 review 2: a merge touching a legacy array or a data table is refused") {
+    import com.tjclp.xl.cells.FormulaKind
+    import com.tjclp.xl.error.XLError
+    val cse = Sheet(name)
+      .put(
+        a1("A2"),
+        CellValue.Formula("SEQUENCE(2)", Some(num(1)), FormulaKind.ArrayFormula(rng("A2:A3")))
+      )
+      .put(a1("A3"), num(2))
+      .put(a1("C1"), CellValue.Formula("SUM(A1:A3)", Some(num(3))))
+    assert(SheetEdits.mergeRefusal(cse, rng("A1:A3")).isDefined)
+    // the total Sheet.merge leaves the sheet as it was rather than merge cells of an array
+    assertEquals(cse.merge(rng("A1:A3")), cse)
+    // so does a merge that only GROWS into the array through an existing merge
+    val grown = cse.copy(mergedRanges = Set(rng("A3:B3")))
+    assert(SheetEdits.mergeRefusal(grown, rng("B2:B3")).isDefined)
+    val edit = Edit.Merge(Area(None, rng("A1:A3")))
+    assertEquals(Edit.lower(edit, cse), None)
+    assertEquals(Patch.toEdits(Patch.Merge(rng("A1:A3")), cse), None)
+    Edit.applyAll(Workbook(cse), Vector(edit), Scope.none) match
+      case Left(XLError.EditFailed(1, "merge", XLError.InvalidRange(_, reason))) =>
+        assert(reason.contains("array formula at A2:A3"), reason)
+      case other => fail(s"expected an InvalidRange refusal, got $other")
+    // a data table too
+    val dt = Sheet(name).put(
+      a1("B2"),
+      CellValue.Formula(
+        "TABLE(,A1)",
+        None,
+        FormulaKind.DataTable(rng("B2:B3"), false, false, None, Some(a1("A1")))
+      )
+    )
+    assert(SheetEdits.mergeRefusal(dt, rng("A2:B2")).exists(_.message.contains("data table")))
+    // a dynamic spill is not a refusal (it is blocked: #SPILL!)
+    val dyn = Sheet(name)
+      .put(
+        a1("C1"),
+        CellValue.Formula("SEQUENCE(3)", Some(num(1)), FormulaKind.dynamicArray(rng("C1:C3")))
+      )
+    assertEquals(SheetEdits.mergeRefusal(dyn, rng("B2:C3")), None)
+  }
+
   test("GH-935: merging a whole column walks stored cells, not positions") {
     val s = Sheet(name).put(a1("A1"), num(1)).put(a1("A1000000"), num(2))
     val merged = s.merge(rng("A1:A1048576"))

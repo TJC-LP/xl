@@ -58,7 +58,7 @@ private[xl] object PatchLowering:
     // GH-935: a merge that moves a cell into an empty upper-left one also rewrites that cell's
     // readers in the Edit algebra (the kernel cannot), so it has no exact desugaring
     case Patch.Merge(range) =>
-      Option.when(SheetEdits.mergeWinner(sheet, range).isEmpty)(Vector(Edit.Merge(area(range))))
+      Option.when(SheetEdits.mergeLowers(sheet, range))(Vector(Edit.Merge(area(range))))
     case Patch.Unmerge(range) => Some(Vector(Edit.Unmerge(area(range))))
 
     case Patch.SetColumnProperties(col, props) => columnEdits(sheet, col, props)

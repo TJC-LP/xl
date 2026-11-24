@@ -1,8 +1,9 @@
 package com.tjclp.xl.ops
 
-import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.{XLError, XLResult}
+import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.workbooks.Workbook
 
 /**
@@ -53,6 +54,28 @@ trait FormulaSupport:
    */
   def relocateCell(wb: Workbook, sheet: SheetName, from: ARef, to: ARef): XLResult[Workbook] =
     Left(FormulaSupport.unsupported("merge (moving a cell into an empty upper-left cell)"))
+
+  /**
+   * GH-935: merge `range` on `sheet` as Excel's Merge Cells does — the edit `Edit.Merge` runs. A
+   * merge that intersects a legacy array formula or a data table is refused (`InvalidRange`), as
+   * Excel refuses it. Over an empty upper-left cell the first non-empty cell is moved there after
+   * [[relocateCell]] has pointed its readers at it. xl-evaluator's `EvalFormulaSupport` also
+   * releases the dynamic spills the merge blocks (`CellMover.merge`).
+   */
+  def merge(wb: Workbook, sheet: SheetName, range: CellRange): XLResult[Workbook] =
+    wb(sheet).flatMap { s =>
+      SheetEdits.mergeRefusal(s, range) match
+        case Some(refusal) => Left(refusal)
+        case None =>
+          SheetEdits.mergeWinner(s, range) match
+            case None => Right(wb.put(s.merge(range)))
+            case Some(winner) =>
+              val anchor = SheetEdits.mergeAnchor(s, range)
+              for
+                relocated <- relocateCell(wb, s.name, winner.ref, anchor)
+                target <- relocated(s.name)
+              yield relocated.put(SheetEdits.moveCell(target, winner.ref, anchor).merge(range))
+    }
 
   /** Insert `count` rows before `at` on `sheet`, rewriting references on every sheet. */
   def insertRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook]

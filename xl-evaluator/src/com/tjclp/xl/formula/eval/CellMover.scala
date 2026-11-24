@@ -59,19 +59,27 @@ object CellMover:
    */
   def merge(wb: Workbook, sheetName: SheetName, range: CellRange): XLResult[Workbook] =
     wb(sheetName).flatMap { sheet =>
-      val relocated = SheetEdits
-        .mergeWinner(sheet, range)
-        .fold(wb)(w =>
-          relocateReferences(wb, sheet.name, w.ref, SheetEdits.mergeAnchor(sheet, range))
-        )
-      relocated(sheet.name).map(s => relocated.put(DynamicArrayAuthoring.merge(s, range)))
+      SheetEdits.mergeRefusal(sheet, range).toLeft(()).flatMap(_ => mergeChecked(wb, sheet, range))
     }
+
+  private def mergeChecked(wb: Workbook, sheet: Sheet, range: CellRange): XLResult[Workbook] = {
+    val relocated = SheetEdits
+      .mergeWinner(sheet, range)
+      .fold(wb)(w =>
+        relocateReferences(wb, sheet.name, w.ref, SheetEdits.mergeAnchor(sheet, range))
+      )
+    relocated(sheet.name).map(s => relocated.put(DynamicArrayAuthoring.merge(s, range)))
+  }
 
   /**
    * The sheet-level merge: as [[merge]], but only the moved cell's readers on this sheet are
    * rewritten (a sheet does not see the workbook's other sheets or its defined names).
    */
   def mergeSheet(sheet: Sheet, range: CellRange): Sheet =
+    if SheetEdits.mergeRefusal(sheet, range).isDefined then sheet
+    else mergeSheetChecked(sheet, range)
+
+  private def mergeSheetChecked(sheet: Sheet, range: CellRange): Sheet =
     val relocated = SheetEdits
       .mergeWinner(sheet, range)
       .fold(sheet)(w => relocateOnSheet(sheet, w.ref, SheetEdits.mergeAnchor(sheet, range)))

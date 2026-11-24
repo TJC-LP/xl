@@ -688,22 +688,30 @@ object SheetEvaluator:
             // an ArrayFormula record (CSE or dynamic-array anchor) evaluates as an array and the
             // anchor holds element (0,0); a plain formula evaluates as a scalar cell
             kind match
-              // GH-935 review: merged cells inside a dynamic array's spill range block it, and
-              // Excel shows #SPILL! at the anchor (Microsoft documents merged cells as a cause)
-              case FormulaKind.ArrayFormula(extent, _, _, _: ArrayMode.Dynamic)
-                  if sheet.mergedRanges.exists(_.intersects(extent)) =>
-                scala.util.Right(
-                  CellOutcome(CellValue.Error(CellError.Spill), Some("spill range is merged"))
-                )
-              case _: FormulaKind.ArrayFormula =>
+              case arr: FormulaKind.ArrayFormula =>
                 val arrayEvaluator = cellEvaluator.withArrayResults
                 parsedCell.flatMap { parsed =>
                   val raw = arrayEvaluator.eval(parsed, sheet, clock, workbook, Some(ref))
-                  val result = cellOutcome(expr, raw)
+                  // GH-935 review: merged cells inside the range a dynamic array's RESULT would
+                  // spill into block it, and Excel shows #SPILL! at the anchor (Microsoft documents
+                  // merged cells as a cause); keyed on the evaluated shape, not the declared ref
+                  val mergedSpill = arr.isDynamicArray && sheet.mergedRanges.nonEmpty &&
+                    (raw match
+                      case Right(ar: ArrayResult) if ar.cellCount > 1 =>
+                        DynamicArrayAuthoring
+                          .spillExtent(ref, ar.rows, ar.cols)
+                          .exists(e => sheet.mergedRanges.exists(_.intersects(e)))
+                      case _ => false)
+                  val result =
+                    if mergedSpill then
+                      scala.util.Right(
+                        CellOutcome(CellValue.Error(CellError.Spill), Some("spill range is merged"))
+                      )
+                    else cellOutcome(expr, raw)
                   // GH-695: the raw result goes to the generation memo for this generation's `x#`
                   // readers, which read it as they read an anchor they evaluate themselves; the
                   // threaded sheet keeps only element (0,0) as the anchor's cache
-                  if result.isRight then
+                  if result.isRight && !mergedSpill then
                     arrayEvaluator.generationMemo.foreach(_.recordSpill(sheet.name, ref, raw))
                   result
                 }

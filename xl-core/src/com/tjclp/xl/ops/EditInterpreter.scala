@@ -294,28 +294,13 @@ private[xl] object EditInterpreter:
         // GH-935: merging clears the hidden cells' contents, so the range seeds a recalculation. An
         // empty upper-left cell receives the first non-empty cell, cut and pasted: every formula
         // that read it (any sheet, names, CF, DV) is pointed at the upper-left cell first.
+        // GH-935: one merge for every surface, through the formula support (FormulaSupport.merge):
+        // Excel's refusals, the move into an empty upper-left cell with its readers rewritten, and
+        // (EvalFormulaSupport) the release of the dynamic spills the merge blocks
         case Edit.Merge(at) =>
           resolve(wb, at.sheet, scope, name).flatMap { sheet =>
-            val planned = Planned(index, edit, Some(sheet.name), Vector(at.range))
-            SheetEdits.mergeWinner(sheet, at.range) match
-              case None => Right((wb.put(sheet.merge(at.range)), planned))
-              case Some(winner) =>
-                for
-                  relocated <- fs.relocateCell(
-                    wb,
-                    sheet.name,
-                    winner.ref,
-                    SheetEdits.mergeAnchor(sheet, at.range)
-                  )
-                  target <- findSheet(relocated, sheet.name)
-                yield (
-                  relocated.put(
-                    SheetEdits
-                      .moveCell(target, winner.ref, SheetEdits.mergeAnchor(sheet, at.range))
-                      .merge(at.range)
-                  ),
-                  planned
-                )
+            fs.merge(wb, sheet.name, at.range)
+              .map(next => (next, Planned(index, edit, Some(sheet.name), Vector(at.range))))
           }
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
@@ -680,7 +665,7 @@ private[xl] object EditInterpreter:
         )
       )
     // GH-935: a merge that moves a cell rewrites its readers through the formula support
-    case Edit.Merge(at) if SheetEdits.mergeWinner(existing, at.range).isEmpty =>
+    case Edit.Merge(at) if SheetEdits.mergeLowers(existing, at.range) =>
       Some(Patch.Merge(at.range))
     case Edit.Unmerge(at) => Some(Patch.Unmerge(at.range))
     case Edit.ColWidth(_, cols, width) if width >= 0 && width <= SheetEdits.MaxColumnWidth =>
