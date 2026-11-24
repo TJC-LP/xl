@@ -3,7 +3,7 @@ package com.tjclp.xl.formula
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
-import com.tjclp.xl.formula.eval.{IterativeCalc, WorkbookAudit}
+import com.tjclp.xl.formula.eval.{IterativeCalc, SccReport, WorkbookAudit}
 import com.tjclp.xl.formula.functions.FunctionRegistry
 import com.tjclp.xl.formula.graph.DependencyGraph.QualifiedRef
 import com.tjclp.xl.sheets.Sheet
@@ -586,6 +586,60 @@ class WorkbookAuditSpec extends FunSuite:
       Some("exhausted 5 round(s) without converging (last values kept)")
     )
     assertEquals(audit.unconvergedCycles, recalc.unconverged)
+  }
+
+  test("#934: the members-only check gives recalculation's verdict on books with fresh caches") {
+    def f(expr: String): CellValue = CellValue.Formula(expr, None)
+    val short = iterative.copy(maxIterations = Some(5))
+    val books: Vector[(String, Workbook)] = Vector(
+      "diverging pair" -> diverging,
+      "converging pair" -> Workbook(Vector(sheetWith("S", "A1" -> f("B1/2+1"), "B1" -> f("A1/2"))))
+        .withCalcPr(iterative),
+      "oscillating pair" -> Workbook(Vector(sheetWith("S", "A1" -> f("1-B1"), "B1" -> f("A1"))))
+        .withCalcPr(iterative),
+      "converging cycle feeding a diverging one" -> Workbook(
+        Vector(
+          sheetWith(
+            "S",
+            "A1" -> f("B1/2+1"),
+            "B1" -> f("A1/2"),
+            "C1" -> f("D1+A1"),
+            "D1" -> f("C1*2")
+          )
+        )
+      ).withCalcPr(short),
+      "cross-sheet cycle" -> Workbook(
+        Vector(sheetWith("S", "A1" -> f("T!A1/2+1")), sheetWith("T", "A1" -> f("S!A1/2")))
+      ).withCalcPr(iterative),
+      "cycle over an acyclic input chain, with a dependent" -> Workbook(
+        Vector(
+          sheetWith(
+            "S",
+            "X1" -> num(5),
+            "Y1" -> f("X1*2"),
+            "A1" -> f("B1*0.5+Y1"),
+            "B1" -> f("A1*0.5"),
+            "Z1" -> f("A1+B1")
+          )
+        )
+      ).withCalcPr(iterative),
+      "self-loop" -> Workbook(Vector(sheetWith("S", "A1" -> f("A1+1")))).withCalcPr(short)
+    )
+    books.foreach { (label, book) =>
+      val calc = IterativeCalc.fromCalcPr(book.metadata.calcPr.getOrElse(fail(s"$label: calcPr")))
+      // fresh caches: the book as recalculation leaves it
+      val saved = book.recalculate(calc).workbook
+      val audit = WorkbookAudit.of(saved)
+      val recalc = saved.recalculate(calc)
+      def verdict(r: SccReport) = (r.members, r.converged, r.rounds, r.stalled, r.errorValued)
+      assertEquals(audit.unconvergedCycles.map(verdict), recalc.unconverged.map(verdict), label)
+      assertEquals(audit.unconvergedVerdict, recalc.unconvergedVerdict, label)
+      // A cycle fed by another cycle reads that cycle's SAVED values, where recalculation
+      // re-iterates it first; the last-round change can differ by what the upstream cycle still
+      // moves. With no upstream cycle the reports are identical.
+      if !label.contains("feeding") then
+        assertEquals(audit.unconvergedCycles, recalc.unconverged, label)
+    }
   }
 
   test("#934: a converging cycle stays a note; without iteration a cycle is a plain finding") {

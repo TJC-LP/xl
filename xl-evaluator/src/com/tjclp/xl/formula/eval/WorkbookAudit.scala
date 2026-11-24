@@ -72,9 +72,10 @@ object StaleDataTable:
  *     (GH-507); an unparseable formula is reported once, in `unparseable`
  *   - `unconvergedCycles` (#934) — with `calcPr.iterativeCalculation` on, the cyclic components
  *     that do not converge under the book's own iteration settings: they exhaust their rounds or
- *     stall, exactly as `recalc` reports them (the [[SccReport]]s of the book's iterative
- *     recalculation, worded by [[unconvergedVerdict]]). That recalculation runs only when the book
- *     iterates and has a cyclic component, on the audit's own graph
+ *     stall, reported as `recalc` reports them ([[SccReport]]s worded by [[unconvergedVerdict]]).
+ *     Each component is iterated with recalculation's engine and settings against the book's saved
+ *     values (its members only, not a whole-book recalculation), and only when the book iterates
+ *     and has a cyclic component
  *
  * Notes (reported, never findings): `iterativeCycles` (the cyclic components that converge when
  * `calcPr.iterativeCalculation` is on — an intentional circular model converges by design, so
@@ -278,10 +279,11 @@ object WorkbookAudit:
     )
 
   /**
-   * #934: the components of `cyclic` that do not converge under `wb`'s iteration settings — the
-   * unconverged [[SccReport]]s of the iterative recalculation `recalc` runs, on the audit's graph.
-   * Nothing runs unless the book iterates and has a cyclic component, so an acyclic or
-   * non-iterating book costs nothing more.
+   * #934: the components of `cyclic` that do not converge under `wb`'s iteration settings, each
+   * iterated against the book's saved values with recalculation's engine and settings
+   * ([[WorkbookEvaluator.convergenceAtCaches]]): the cost is the cycle members' rounds, not a
+   * whole-book recalculation. Nothing runs unless the book iterates and has a cyclic component, so
+   * an acyclic or non-iterating book costs nothing more.
    */
   private def unconvergedOf(
     wb: Workbook,
@@ -294,8 +296,15 @@ object WorkbookAudit:
       case None => Vector.empty
       case Some(calcPr) =>
         WorkbookEvaluator
-          .recalculateIterativeOn(wb, clock, IterativeCalc.fromCalcPr(calcPr), graph, counters)
-          .unconverged
+          .convergenceAtCaches(
+            wb,
+            clock,
+            IterativeCalc.fromCalcPr(calcPr),
+            cyclic.map(_.members),
+            graph,
+            counters
+          )
+          .filterNot(_.converged)
 
   /**
    * #678: every data table whose sampled interior disagrees with the `recalc --tables` evaluation,
