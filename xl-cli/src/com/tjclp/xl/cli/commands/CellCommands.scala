@@ -11,6 +11,7 @@ import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
 import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring}
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.SheetEdits
 
 /**
  * Cell-level command handlers.
@@ -73,10 +74,19 @@ object CellCommands:
         merged(targetSheet.name).left.map(e => CliException(CliError.fromXLError(e, None)))
       )
       // the seeds of the dependent refresh: every cell whose content the merge changed
+      // GH-935 review: a dynamic array whose spill range the merge now covers is blocked (#SPILL!),
+      // so its anchor is re-evaluated with the cells the merge changed
+      blockedAnchors = updatedSheet.cells.iterator.collect {
+        case Cell(ref, CellValue.Formula(_, _, k: FormulaKind.ArrayFormula), _, _)
+            if k.mode != ArrayMode.Legacy &&
+              updatedSheet.mergedRanges.exists(_.intersects(k.ref)) =>
+          ref
+      }.toSet
       modified = (targetSheet.cells.refs.toSet ++ updatedSheet.cells.refs.toSet).filter { r =>
         targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
-      }
-      message = s"Merged: ${range.toA1}"
+      } ++ blockedAnchors
+      // the range actually merged: grown over the merged areas it touched (absorbed)
+      message = s"Merged: ${SheetEdits.mergeTarget(targetSheet, range).toA1}"
       // A merge that hides nothing (the usual title merge) changes no value: no refresh to run
       result <-
         if modified.isEmpty then

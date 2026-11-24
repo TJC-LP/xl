@@ -58,9 +58,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   names and in conditional-format and data-validation formulas (`CellMover`, built on the new
   `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`); a wider range keeps its cells, as
   Excel does (checked: with B1:B3 = 7, 1, 1, the same merge leaves `=SUM(B1:B3)` at 2 and rewrites
-  `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Every other cell is cleared the way
-  Clear Contents clears it: the value or formula and the hyperlink go, a cell's own formatting and
-  its comment stay, an unstyled cell is removed.
+  `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Only the reference text
+  changes: the rest of each reader is kept byte for byte. Every other cell is cleared the way
+  Clear Contents clears it: the value or formula and the hyperlinks go (its own link and its part
+  of a range hyperlink, which splits around the merge), a cell's own formatting and its comment
+  stay, an unstyled cell is removed. A moved cell carries its effective link (its own, or the
+  range hyperlink covering it) to the upper-left cell.
+  - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
+    member of a legacy array other than its anchor, is never the cell moved into an empty
+    upper-left cell (nothing becomes a constant). A merge that covers part of a dynamic array's
+    spill range blocks it, as in Excel: the anchor evaluates to `#SPILL!` (reason "spill range is
+    merged"), and the `merge` verb recalculates that anchor.
+  - Merging a range that touches existing merged areas absorbs them, as Excel extends a selection
+    over the merged cells it touches: the merge covers the bounding box of the range and every
+    merged area it intersects (grown until stable), the absorbed merges are removed, and the
+    one-value rule applies over the whole box, so no two `<mergeCell>` entries ever overlap (an
+    overlap made Excel repair the file; 0.27.0 wrote one). The verb reports the range it merged.
+    This holds in memory and in a streamed batch, which now also keeps the file's other merges.
   - Paths: the `merge` verb (with or without `--stream`, which loads the book for this verb) and
     the batch `merge` op in memory use `CellMover.merge`; `wb.edit(Edit.Merge(...))` rewrites
     readers through the new `FormulaSupport.relocateCell` (`EvalFormulaSupport`; the text-only
@@ -81,7 +95,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     hidden under it.
   - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
     whose merges already hide values is read and rewritten unchanged: only the merge operation
-    clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays;
+    clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays, and
+    refuses conservatively when a spilled value sits in a merge over an empty upper-left cell; a
+    batch `merge` does not re-evaluate a newly blocked spill anchor until the next recalculation;
     `Sheet.merge` does not release spills; comments are not moved with a moved cell. A moved array
     formula or data-table master carries its anchored result range.
   - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
@@ -104,7 +120,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `='My Data'!A1` and `=data!rate` as `=Data!rate`. A qualifier that names no sheet (or folds
   onto two tabs differing only by case), an external-workbook reference (`[1]sheet1!A1`) and a
   string literal (`INDIRECT("sheet1!A1")`) stay as typed, and a formula already in canonical form
-  is stored byte-identical. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  is stored byte-identical. Only the qualifier's spelling changes, as in Excel: every other byte
+  of the formula (spacing, parentheses, `1E3`, `-(-x)`, function-name case) is kept as typed; a
+  formula the qualifier scanner finds ambiguous (a 3-D reference) is stored as typed. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
   `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
   `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
   `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer

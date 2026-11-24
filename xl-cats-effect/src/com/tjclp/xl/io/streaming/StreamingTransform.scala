@@ -422,6 +422,25 @@ object StreamingTransform:
    * inline string (`<is>`) — read in one SAX pass without materializing the worksheet. A styled
    * empty cell (`<c r="B1" s="3"/>`) does not count.
    */
+  /** GH-935 review: the `<mergeCell ref>` ranges of a worksheet, read in one SAX pass. */
+  def scanMergedRanges(input: InputStream): Set[CellRange] =
+    val result = mutable.Set[CellRange]()
+    val handler = new DefaultHandler:
+      override def startElement(
+        uri: String,
+        localName: String,
+        qName: String,
+        attributes: Attributes
+      ): Unit =
+        if localName == "mergeCell" then
+          Option(attributes.getValue("ref")).flatMap(r => CellRange.parse(r).toOption).foreach {
+            result += _
+          }
+    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+    try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
+    finally scala.util.Try(input.close())
+    result.toSet
+
   def scanNonEmptyCells(input: InputStream, ranges: Vector[CellRange]): Set[ARef] =
     val result = mutable.Set[ARef]()
     val handler = new NonEmptyScanHandler(ranges, result)
