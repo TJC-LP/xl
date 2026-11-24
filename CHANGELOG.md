@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`DATEVALUE`** (#953): `=DATEVALUE("12/31/2028")` is 47118, the date's serial, as in Excel.
+  It reads Excel's US date forms: `m/d/yyyy`, `m-d-yyyy`, `m/d/yy`, `yyyy-m-d`, `yyyy/m/d`,
+  `d-mmm-yyyy`, `d mmm yyyy`, `d-mmm-yy`, `mmm d, yyyy` and `mmm yyyy`, with three-letter or full
+  month names. It takes text only: a number, a date cell, a logical, text that is no date, or a
+  date outside 1900–9999 is `#VALUE!`. A time part and dates without a year are not read yet
+  (`docs/LIMITATIONS.md`).
+
+### Fixed
+
+- **Date text is its serial wherever a single value converts text to a number** (#953):
+  `=VALUE("12/31/2028")`, `="12/31/2028"+0` and `=A1+0` over the text `12/31/2028` are 47118,
+  and a numeric, integer or date argument reads date text the same way (`=YEAR("31-Dec-2028")`
+  is 2028), in the forms `DATEVALUE` reads. One parser, `DateText`, serves all of them.
+  **Behaviour change:** these were `#VALUE!`. Range folds and aggregate arguments still skip or
+  refuse date text (`=SUM("12/31/2028")` is `#VALUE!`; the XIRR/XNPV dates range is unchanged).
+
 ## [0.28.0] - 2026-11-24
 
 **"Excel's own rules."** Fixes for everything a Weaver dogfood of 0.27.0 found (#930–#938). Merge

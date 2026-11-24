@@ -85,9 +85,12 @@ trait TExprDecoders:
           case Some(n) => scala.util.Right(n)
           case None => decodeNumeric(cell)
 
-  /** #709: the number a text cell (or a formula cached as text) spells, if it spells one. */
+  /**
+   * #709: the number a text cell (or a formula cached as text) spells, if it spells one; date text
+   * is its serial (#953).
+   */
   private def numericText(value: CellValue): Option[BigDecimal] =
-    ScalarCoercion.cellText(value).flatMap(ScalarCoercion.parseNumericText)
+    ScalarCoercion.cellText(value).flatMap(ScalarCoercion.parseValueText)
 
   /**
    * Decode cell as LocalDate value (extracts date from DateTime).
@@ -335,7 +338,7 @@ trait TExprDecoders:
       case CellValue.Number(n) => truncateToInt(n)
       case CellValue.Bool(b) => scala.util.Right(ArrayArithmetic.boolToNumeric(b).toInt)
       case text @ (CellValue.Text(_) | CellValue.RichText(_)) =>
-        ScalarCoercion.cellText(text).flatMap(ScalarCoercion.parseNumericText) match
+        ScalarCoercion.cellText(text).flatMap(ScalarCoercion.parseValueText) match
           case Some(n) => truncateToInt(n)
           case None => scala.util.Left(CodecError.TypeMismatch("Int", cell.value))
       case CellValue.Empty => scala.util.Right(0)

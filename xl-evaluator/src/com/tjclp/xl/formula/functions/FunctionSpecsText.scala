@@ -3,7 +3,7 @@ package com.tjclp.xl.formula.functions
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.display.NumFmtFormatter
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{CriteriaMatcher, EvalError, Evaluator}
+import com.tjclp.xl.formula.eval.{CriteriaMatcher, DateText, EvalError, Evaluator}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -250,7 +250,10 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       Arity.one,
       flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
     ) { (textExpr, ctx) =>
-      ctx.evalExpr(textExpr).flatMap(parseExcelNumber)
+      // #953: text that is no number may spell a date, which VALUE reads as its serial
+      ctx.evalExpr(textExpr).flatMap { text =>
+        parseExcelNumber(text).left.flatMap(err => DateText.serial(text).toRight(err))
+      }
     }
 
   /**
@@ -275,7 +278,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
    * Parse an Excel-style numeric string. Handles currency ($), thousands commas, percent suffix
    * (×1/100), accounting parentheses (negative), scientific notation, sign, and whitespace.
    *
-   * Date and time strings are rejected (deferred per TJC-1055 scope decision).
+   * Date text is read by the VALUE spec through [[DateText]] (#953); time text is rejected.
    */
   private def parseExcelNumber(input: String): Either[EvalError, BigDecimal] =
     val trimmed = input.trim
