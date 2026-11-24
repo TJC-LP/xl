@@ -74,6 +74,15 @@ class PutWidensColumnSpec extends FunSuite:
     }
   }
 
+  test("put: a short date that Excel shows in full leaves the column unsized (GH-869)") {
+    // 3/15/26 is narrower than the 64 px an unsized column has; the fit is compared in the same
+    // units autofit returns (padding included), not against the UI's 8.43
+    withOut { out =>
+      put(Sheet("Data"), "C2", "2026-03-15", out)
+      assertEquals(widthOf(out, "C"), None)
+    }
+  }
+
   test("put: long text and long General numbers do not widen (GH-869)") {
     withOut { out =>
       put(Sheet("Data"), "B2", "A heading much wider than the column", out)

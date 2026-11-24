@@ -826,7 +826,7 @@ private[xl] object SheetEdits:
     sheet: Sheet,
     refs: Iterable[ARef]
   ): (Sheet, Vector[(Column, Double)]) =
-    val current = sheet.defaultColumnWidth.getOrElse(DefaultColumnWidth)
+    val current = sheet.defaultColumnWidth.getOrElse(UnsizedColumnFitWidth)
     val widened = refs.iterator
       .filter(ref => !sheet.mergedRanges.exists(_.contains(ref)))
       .flatMap(sheet.cells.get)
@@ -843,6 +843,15 @@ private[xl] object SheetEdits:
       s.setColumnProperties(col, s.getColumnProperties(col).copy(width = Some(width)))
     }
     (updated, widened)
+
+  /**
+   * GH-869: the width of a column with no `<col>` entry and no sheet default, in the units
+   * [[autoFitWidth]] returns (the file's `width`, padding included). Excel draws such a column 64
+   * px wide — the "8.43" its UI shows is the same column without the 5 px of padding — so a fitted
+   * width up to 64 / 7 = 9.14 already fits it. Comparing against 8.43 would widen a short date such
+   * as `3/15/26` that Excel shows in full.
+   */
+  private val UnsizedColumnFitWidth: Double = 64.0 / MaxDigitWidthPx
 
   /** Whether `cell` displays a number or date under a non-General format (GH-869). */
   private def displaysFormattedNumber(cell: Cell, sheet: Sheet): Boolean =
