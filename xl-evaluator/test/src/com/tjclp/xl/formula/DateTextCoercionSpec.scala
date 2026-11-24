@@ -179,3 +179,55 @@ class DateTextCoercionSpec extends FunSuite:
   test("#953: a range's date text is still skipped by SUM (range folds are out of scope)") {
     assertEquals(eval("=SUM(A1:A2)"), Right(CellValue.Number(BigDecimal(0))))
   }
+
+  // ===== #956: XIRR and XNPV read date text in the dates range =====
+
+  // -1000 on 1/1/2028 and 1100 on 12/31/2028, 365 days apart: XIRR is 0.1 and XNPV at 10% is 0.
+  private def flows(second: CellValue): Sheet =
+    Sheet("Flows")
+      .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
+      .put(ref"A2", CellValue.Number(BigDecimal(1100)))
+      .put(ref"B1", CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay()))
+      .put(ref"B2", second)
+
+  private def numberOf(sheet: Sheet, formula: String): BigDecimal =
+    sheet.evaluateFormula(formula) match
+      case Right(CellValue.Number(n)) => n
+      case other => fail(s"$formula: expected a number, got $other")
+
+  private val dateTextCells: List[(String, CellValue)] = List(
+    "plain text 12/31/2028" -> CellValue.Text("12/31/2028"),
+    "plain text 31-Dec-2028" -> CellValue.Text("31-Dec-2028"),
+    "plain text 2028-12-31" -> CellValue.Text("2028-12-31"),
+    "a formula returning the text" -> CellValue.Formula("IF(1=2,\"x\",\"12/31/2028\")", None)
+  )
+
+  dateTextCells.foreach { case (label, cell) =>
+    test(s"#956: XIRR and XNPV read date text in the dates range ($label)") {
+      val withText = flows(cell)
+      val withDate = flows(CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()))
+      val rate = numberOf(withText, "=XIRR(A1:A2,B1:B2)")
+      assertEqualsDouble(rate.toDouble, 0.1, 1e-9)
+      assertEquals(rate, numberOf(withDate, "=XIRR(A1:A2,B1:B2)"))
+      val npv = numberOf(withText, "=XNPV(0.1,A1:A2,B1:B2)")
+      assertEqualsDouble(npv.toDouble, 0.0, 1e-9)
+      assertEquals(npv, numberOf(withDate, "=XNPV(0.1,A1:A2,B1:B2)"))
+    }
+  }
+
+  test("#956: other text in the dates range is still #VALUE!") {
+    List(CellValue.Text("not a date"), CellValue.Text("12/31"), CellValue.Text("47118")).foreach {
+      cell =>
+        val sheet = flows(cell)
+        assertEquals(
+          sheet.evaluateFormula("=XIRR(A1:A2,B1:B2)"),
+          Right(CellValue.Error(CellError.Value)),
+          cell.toString
+        )
+        assertEquals(
+          sheet.evaluateFormula("=XNPV(0.1,A1:A2,B1:B2)"),
+          Right(CellValue.Error(CellError.Value)),
+          cell.toString
+        )
+    }
+  }

@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{DateText, EvalError, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -129,11 +129,17 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                       date <- dateCell.value match
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
-                        case _ =>
-                          TExpr
-                            .decodeAsDate(dateCell)
-                            .left
-                            .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                        case other =>
+                          // #956: date text, typed or a formula's text, is the date it spells, as
+                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md)
+                          ScalarCoercion.cellText(other).flatMap(DateText.serial) match
+                            case Some(serial) =>
+                              Right(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
+                            case None =>
+                              TExpr
+                                .decodeAsDate(dateCell)
+                                .left
+                                .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
                     yield (value, date) :: acc
                 }
             }

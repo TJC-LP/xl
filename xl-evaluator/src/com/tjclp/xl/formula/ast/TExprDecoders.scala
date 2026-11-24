@@ -295,8 +295,8 @@ trait TExprDecoders:
    * holiday and XIRR/XNPV folds keep the strict decoder.
    *
    * For a SINGLE-REFERENCE scalar slot only: a range fold that takes dates must use
-   * [[decodeAsDate]], which never reads text as a date (Excel's NETWORKDAYS holidays and XIRR/XNPV
-   * dates do not).
+   * [[decodeAsDate]], which never reads text as a date (Excel's NETWORKDAYS holidays do not; the
+   * XIRR/XNPV dates range reads date text through DateText first, #956, but not numeric text).
    */
   def decodeAsDateScalar(cell: Cell): Either[CodecError, java.time.LocalDate] =
     val serial = cell.value match

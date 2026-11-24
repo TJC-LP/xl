@@ -6,8 +6,8 @@ import scala.math.BigDecimal
 
 /**
  * #953: the date a text spells, as Excel's 1900-system serial, in Excel's US forms. The one parser
- * behind DATEVALUE, VALUE and every single-value text-to-number coercion
- * ([[ScalarCoercion.parseValueText]]); a later dates-range reader (XIRR/XNPV) can reuse it.
+ * behind DATEVALUE, VALUE, every single-value text-to-number coercion
+ * ([[ScalarCoercion.parseValueText]]) and the XIRR/XNPV dates range (#956).
  *
  * Accepted, trimmed and case-insensitive (`mmm` is a three-letter month or the full name):
  *   - `m/d/yyyy`, `m-d-yyyy`, `m/d/yy` (the separator repeats; a two-digit year 00-29 is 20yy,
