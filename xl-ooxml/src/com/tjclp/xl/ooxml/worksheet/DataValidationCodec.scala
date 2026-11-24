@@ -251,7 +251,12 @@ object DataValidationCodec:
           m.error.map(t => "error" -> XmlUtil.escapeXstringAttr(t)),
           m.promptTitle.map(t => "promptTitle" -> XmlUtil.escapeXstringAttr(t)),
           m.prompt.map(t => "prompt" -> XmlUtil.escapeXstringAttr(t)),
-          Some("sqref" -> rules.ranges.map(_.toA1).mkString(" "))
+          // a single cell is written `A5`, as Excel writes it (never `A5:A5`)
+          Some(
+            "sqref" -> rules.ranges
+              .map(r => if r.start == r.end then r.start.toA1 else r.toA1)
+              .mkString(" ")
+          )
         ).flatten
         val formulaElems =
           formula1.map(f => elem("formula1")(Text(FormulaStorage.toStored(f)))).toList ++

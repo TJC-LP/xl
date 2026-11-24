@@ -182,6 +182,21 @@ class DataValidationPreservationSpec extends FunSuite:
     )
   }
 
+  test("(d) GH-935 review 5: a single-cell range is written A5, as Excel writes it") {
+    val sheet = Sheet(SheetName.unsafe("Case"))
+      .withDataValidation(
+        Vector(CellRange(ref"A5", ref"A5"), ref"C5:C6": CellRange),
+        DataValidation.listOf("x", "y")
+      )
+    val out = writeTo(Workbook(Vector(sheet)), "singlecell")
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(sheetXml.contains("sqref=\"A5 C5:C6\""), sheetXml.take(800))
+    assertEquals(
+      reread(out).sheets(0).typedDataValidations.map(_.ranges.map(_.toA1)),
+      Vector(Vector("A5:A5", "C5:C6"))
+    )
+  }
+
   test("(d) schema position: dataValidations sits after sheetData, before pageMargins/hyperlinks") {
     val sheet = Sheet(SheetName.unsafe("Case"))
       .put(ref"A1", CellValue.Text("v"))
