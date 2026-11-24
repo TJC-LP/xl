@@ -48,6 +48,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hyperlink` is `None` does not remove a range link from that cell; use `removeHyperlinks`.
   Range links nested in `mc:AlternateContent` are still kept as preserved XML without being
   reported, and range links do not yet move with structural edits (#924).
+- **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac
+  (`merge range`, alerts off): a non-empty upper-left cell keeps its value and the other cells
+  are cleared; when the upper-left cell is empty, the FIRST non-empty cell of the range in
+  row-major order is cut and pasted into it — its value or formula verbatim (`=D1*2` stays
+  `=D1*2`), its format and hyperlink — and every formula that read it now reads the upper-left
+  cell (with `E1 = B1+1`, merging `A1:B1` over an empty A1 gives `E1 = A1+1`). The reader rewrite
+  covers single-cell references and a range that is exactly that cell, on every sheet, in defined
+  names and in conditional-format and data-validation formulas (`CellMover`, built on the new
+  `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`); a wider range keeps its cells, as
+  Excel does (checked: with B1:B3 = 7, 1, 1, the same merge leaves `=SUM(B1:B3)` at 2 and rewrites
+  `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Every other cell is cleared the way
+  Clear Contents clears it: the value or formula and the hyperlink go, a cell's own formatting and
+  its comment stay, an unstyled cell is removed.
+  - Paths: the `merge` verb (with or without `--stream`, which loads the book for this verb) and
+    the batch `merge` op in memory use `CellMover.merge`; `wb.edit(Edit.Merge(...))` rewrites
+    readers through the new `FormulaSupport.relocateCell` (`EvalFormulaSupport`; the text-only
+    support refuses a moving merge with `UnsupportedCapability`). The parser-less sheet-level
+    paths — `Sheet.merge`, `Patch.Merge` and the `range.merge` DSL — cannot rewrite readers, and
+    moving the cell without them would silently change their values, so over an empty upper-left
+    cell they leave the first non-empty cell where it is and clear only the other cells: every
+    reader keeps Excel's value (`=B1+1` still reads 8, `SUM` over the area is the kept value) and
+    only the merged cell's display differs from Excel. For Excel's move, use
+    `wb.edit(Edit.Merge(...))` or `CellMover.merge` (`CellMover.mergeSheet` moves and rewrites the
+    readers on the same sheet). A streamed batch
+    applies a merge whose upper-left cell holds a value and refuses (`BATCH_OP_FAILED`, before
+    anything is written, "drop --stream") one that would move a cell.
+  - The formulas that read a cleared or moved cell are recalculated by the verb and the batch op
+    as for any other content edit (`--no-recalc` keeps their caches; a streamed batch never
+    recalculates), so the issue's `put A1 1; put B1 2; put A2 3; merge A1:B2;
+    putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged cell leaves nothing
+    hidden under it.
+  - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
+    whose merges already hide values is read and rewritten unchanged: only the merge operation
+    clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays;
+    `Sheet.merge` does not release spills; comments are not moved with a moved cell. A moved array
+    formula or data-table master carries its anchored result range.
+  - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
+    by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now
+    cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports
+    its range as touched content, and `Edit.lower` / `Patch.toEdits` do not lower a merge that
+    moves a cell.
+- **`clear` refreshes the formulas that read the cleared cells** (found during #935). The `clear`
+  verb wrote the cleared book without recalculating dependents, so `clear B1` left
+  `D1 = SUM(A1:B2)` with its stale cached value. A contents clear now ends with the same scoped
+  dependent refresh as `put`, `merge` and the batch `clear` op (which already had it):
+  `--no-recalc` keeps every cache and `--strict` gates on the recalculation. A styles- or
+  comments-only clear changes no value and refreshes nothing. **Behaviour change:** the verb's
+  summary gains the `Recalculated N formula(s)` line when readers were refreshed.
+- **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
+  qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
+  formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)
+  and the batch `putf` op (one cell, `from` drag, `values`; in memory and streamed, an earlier
+  `add-sheet` of the same batch included) now store `=sheet1!A1` as `=Sheet1!A1`, `='my data'!A1`
+  as `='My Data'!A1` and `=data!rate` as `=Data!rate`. A qualifier that names no sheet (or folds
+  onto two tabs differing only by case), an external-workbook reference (`[1]sheet1!A1`) and a
+  string literal (`INDIRECT("sheet1!A1")`) stay as typed, and a formula already in canonical form
+  is stored byte-identical. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
+  `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
+  `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer
+  lowers a sheet-qualified formula (the kernel has no tab names). Formulas read from a file are
+  never rewritten. Evaluation is unchanged. **Behaviour change:** the stored formula text (and the
+  text `view --formulas` shows) differs from the typed text when a qualifier's case differs.
+  Not covered: `Sheet.put(ref, fx"…")` (no workbook in scope), defined-name `refersTo`,
+  conditional-format and data-validation formulas, and `fill`/`copy` of existing formulas.
 
 ### Changed
 

@@ -164,7 +164,9 @@ class DynamicArrayAuthoringSpec extends FunSuite:
     assertEquals(occupied.extent, Some(range("A1:A3")))
     assertEquals(occupied.hint, "clear A3 or choose another anchor")
 
-    val merged = blockedBy(base.merge(range("A2:B4")), ref"A1", "=SORT(B1:B3)")
+    // a merge read from a file over the data (GH-935: `merge` itself would move B2 into A2)
+    val mergedSheet = base.copy(mergedRanges = base.mergedRanges + range("A2:B4"))
+    val merged = blockedBy(mergedSheet, ref"A1", "=SORT(B1:B3)")
     assertEquals(merged.blocker, SpillBlocker.Merged(Vector(range("A2:B4"))))
     assertEquals(merged.hint, "unmerge A2:B4 or choose another anchor")
     assert(!merged.hint.contains("clear"), merged.hint)

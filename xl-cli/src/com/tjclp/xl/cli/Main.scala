@@ -3653,7 +3653,7 @@ EXAMPLES:
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
       requireOutput("merge", outputOpt, backendOpt, stream, policy)(
-        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
+        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _, policy, warn)
       )
 
     case CliCommand.Unmerge(rangeStr) =>
@@ -3673,7 +3673,7 @@ EXAMPLES:
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
       requireOutput("clear", outputOpt, backendOpt, stream, policy)(
-        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn)
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn, policy)
       )
 
     case CliCommand.Fill(source, target, direction) =>

@@ -492,6 +492,100 @@ private[xl] object SheetEdits:
     val s4 = if what.contents then s3.removeRangeHyperlinkCoverage(range) else s3
     touched.foldLeft(s4)((s, m) => s.unmerge(m))
 
+  // ===== Merge (GH-935) =====
+
+  /**
+   * Merge `range` without a formula parser (GH-935). Excel's Merge Cells (checked against Excel for
+   * Mac) keeps a non-empty upper-left cell and clears the rest; when the upper-left cell is empty
+   * it MOVES the first non-empty cell of the range (row-major) into it and points every reader of
+   * that cell at the upper-left cell. xl-core cannot rewrite those readers, and moving the cell
+   * without them would silently change their values (`=B1+1` would read the emptied B1). So here:
+   *   - a non-empty upper-left cell keeps its value; every other cell is cleared (as Excel);
+   *   - an empty upper-left cell stays empty and the first non-empty cell ([[mergeWinner]]) stays
+   *     where it is, untouched; every OTHER cell is cleared. Every reader keeps Excel's value (the
+   *     kept cell holds what Excel would move); only the merged cell's display differs from Excel.
+   *
+   * For Excel's move with reader rewriting use the workbook-level paths: `wb.edit(Edit.Merge(...))`
+   * (through `FormulaSupport.relocateCell`) or xl-evaluator's `CellMover.merge`.
+   *
+   * A cleared cell is cleared as Clear Contents clears it ([[clearContentsKeepingStyles]]): its
+   * value or formula and its hyperlink go, a cell that keeps a record keeps its own style, an
+   * unstyled cell is removed. Comments stay (Clear Contents keeps them too). The store is walked by
+   * its stored cells, so a whole-column merge does not visit a million positions.
+   */
+  def merge(sheet: Sheet, range: CellRange): Sheet =
+    val kept = mergeWinner(sheet, range)
+    val cleared = hiddenByMerge(range).foldLeft(sheet)(clearContentsKeepingStyles)
+    val restored = kept.fold(cleared)(cleared.put)
+    restored.copy(mergedRanges = restored.mergedRanges + range)
+
+  /**
+   * The cell a merge of `range` moves into its upper-left cell (GH-935): `None` when the upper-left
+   * cell holds a value (it wins) or nothing in the range does; otherwise the first non-empty cell
+   * in row-major order, as Excel picks it.
+   */
+  private[xl] def mergeWinner(sheet: Sheet, range: CellRange): Option[Cell] =
+    val anchor = range.start
+    if sheet.cells.get(anchor).exists(_.value != CellValue.Empty) then None
+    else
+      sheet.cells
+        .inRange(range)
+        .filter(c => c.ref != anchor && c.value != CellValue.Empty)
+        .minByOption(c => (c.ref.row.index0, c.ref.col.index0))
+
+  /**
+   * Cut the cell at `from` and paste it at `to` on the same sheet: the record (value or formula
+   * verbatim, style, hyperlink) lands at `to`, replacing what was there, and `from` is left with no
+   * record. References to `from` are not rewritten here (no parser in xl-core). No record at `from`
+   * leaves the sheet unchanged.
+   */
+  private[xl] def moveCell(sheet: Sheet, from: ARef, to: ARef): Sheet =
+    if from == to then sheet
+    else
+      sheet.cells.get(from).fold(sheet) { cell =>
+        sheet.remove(from).put(cell.copy(ref = to, value = movedGeometry(cell.value, from, to)))
+      }
+
+  /**
+   * A moved record's own geometry follows it: an array formula's (legacy or dynamic) result range
+   * and a data table's range, when anchored at the moved cell, shift by the move's displacement, as
+   * a cut and paste carries them. Inputs a data table names (`r1`/`r2`) are other cells and stay.
+   */
+  private def movedGeometry(value: CellValue, from: ARef, to: ARef): CellValue =
+    val dc = to.col.index0 - from.col.index0
+    val dr = to.row.index0 - from.row.index0
+    // Only a range the record anchors (its top-left is the moved cell, as OOXML writes array and
+    // data-table masters) moves with it; the move is then up-left inside the merge, never off-grid
+    def shifted(r: CellRange): CellRange =
+      def at(a: ARef): ARef = ARef.from0(a.col.index0 + dc, a.row.index0 + dr)
+      if r.start == from then r.copy(start = at(r.start), end = at(r.end)) else r
+    value match
+      case f @ CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) =>
+        f.copy(kind = k.copy(ref = shifted(k.ref)))
+      case f @ CellValue.Formula(_, _, k: FormulaKind.DataTable) =>
+        f.copy(kind = k.copy(ref = shifted(k.ref)))
+      case other => other
+
+  /**
+   * The cells a merge of `range` hides — everything but the upper-left cell — as at most two
+   * rectangles: the rest of the first row, then every row below it.
+   */
+  private[xl] def hiddenByMerge(range: CellRange): Vector[CellRange] =
+    val start = range.start
+    val end = range.end
+    val restOfRow =
+      Option.when(end.col.index0 > start.col.index0)(
+        CellRange(
+          ARef.from0(start.col.index0 + 1, start.row.index0),
+          ARef.from0(end.col.index0, start.row.index0)
+        )
+      )
+    val below =
+      Option.when(end.row.index0 > start.row.index0)(
+        CellRange(ARef.from0(start.col.index0, start.row.index0 + 1), end)
+      )
+    (restOfRow.toList ++ below.toList).toVector
+
   /**
    * The merges in `touched` that cross the edge of `range`: their cells outside it need their own
    * style reset (GH-909). A merge wholly inside `range` is already covered by the range's own.

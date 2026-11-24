@@ -57,8 +57,8 @@ class InMemorySourceSpec extends CatsEffectSuite:
       .put(ref"B1", "wide")
       .put(ref"D1", "free")
       .put(ref"A50", "inner")
-      .merge(tallMerge)
-      .merge(shortMerge)
+      // a file whose merges already hide values (GH-935: `merge` itself would clear them)
+      .copy(mergedRanges = Set(tallMerge, shortMerge))
     ReadTestKit.withTempWorkbook(Workbook(Vector(sheet))) { path =>
       val query = ReadQuery.Search("Total|wide|free|inner", 50, None, exactTotal = false)
       def mergedInto(json: String): Map[String, ujson.Value] =

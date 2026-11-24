@@ -163,14 +163,15 @@ object OpRegistry:
     name: String,
     doc: String,
     example: String,
-    verb: String
+    verb: String,
+    cellMutating: Boolean = false
   ): OpSpec = OpSpec(
     name = name,
     aliases = Vector.empty,
     fields = Vector(req("range", Range, "The range")),
     oneOf = Vector.empty,
     sheetScoped = true,
-    cellMutating = false,
+    cellMutating = cellMutating,
     structural = false,
     needsFormula = false,
     streamable = true,
@@ -180,7 +181,14 @@ object OpRegistry:
     example = ujson.Obj("op" -> ujson.Str(name), "range" -> ujson.Str(example))
   )
 
-  private val merge = rangeOnly("merge", "Merge a range into one cell.", "A1:D1", "merge")
+  // GH-935: a merge clears every cell it hides but the upper-left one, as Excel does
+  private val merge = rangeOnly(
+    "merge",
+    "Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.",
+    "A1:D1",
+    "merge",
+    cellMutating = true
+  )
   private val unmerge = rangeOnly("unmerge", "Unmerge a merged range.", "A1:D1", "unmerge")
 
   private val colwidth = OpSpec(

@@ -482,45 +482,125 @@ object FormulaShifter:
    * never mentions `b`; `!mentionsSheet(renameSheet(e, a, b), a)` for `a != b`.
    */
   def renameSheet[A](expr: TExpr[A], from: SheetName, to: SheetName): TExpr[A] =
-    if from == to then expr else renameSheetInternal(expr, from.value, to)
+    if from == to then expr
+    else mapSheets(expr, sheet => if sheet.value.equalsIgnoreCase(from.value) then to else sheet)
 
+  /**
+   * GH-936: every sheet qualifier respelled as the sheet it resolves to among `names`, by
+   * [[SheetName.indexIn]]'s rule (#752: the exact spelling, else the one sheet equal ignoring case)
+   * — what Excel does to a formula when it is entered: `=sheet1!A1` is stored as `=Sheet1!A1`. A
+   * qualifier no sheet carries, or one that folds onto two tabs differing only by case, stays as
+   * typed. Reaches the same sites as [[renameSheet]] (references, ranges, qualified defined names,
+   * qualified error literals); external-workbook references are untouched.
+   */
+  def canonicalSheets[A](expr: TExpr[A], names: IndexedSeq[SheetName]): TExpr[A] =
+    mapSheets(expr, sheet => SheetName.indexIn(names, sheet).fold(_ => sheet, names(_)))
+
+  /**
+   * Replace every sheet qualifier `s` in `expr` by `f(s)`: the sites [[renameSheet]] documents.
+   * Coordinates, anchors, local references and external-workbook references are untouched.
+   */
+  private def mapSheets[A](expr: TExpr[A], f: SheetName => SheetName): TExpr[A] =
+    import TExpr.*
+    def targetQualifier(qualifier: ErrorQualifier): ErrorQualifier = qualifier match
+      case ErrorQualifier.Sheet(sheet) => ErrorQualifier.Sheet(f(sheet))
+      case external: ErrorQualifier.External => external
+    mapSites(
+      expr,
+      {
+        case SheetRef(sheet, at, anchor, decode) => SheetRef(f(sheet), at, anchor, decode)
+        case SheetPolyRef(sheet, at, anchor) => SheetPolyRef(f(sheet), at, anchor)
+        case SheetRange(sheet, range, form) => SheetRange(f(sheet), range, form)
+        case SheetNameRef(sheet, name) => SheetNameRef(f(sheet), name)
+        // GH-694: `Old!#REF!` follows the rename like a reference's qualifier
+        case ErrorLit(error, Some(qualifier)) => ErrorLit(error, Some(targetQualifier(qualifier)))
+        case other => other
+      },
+      {
+        case RangeLocation.CrossSheet(sheet, range, form) =>
+          RangeLocation.CrossSheet(f(sheet), range, form)
+        // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
+        case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(f(scope)))
+        // GH-694: `SUM(Old!#REF!)` keeps naming its sheet, as Excel renames it
+        case RangeLocation.Error(error, qualifier) =>
+          RangeLocation.Error(error, qualifier.map(targetQualifier))
+        case other => other
+      }
+    )
+
+  /**
+   * GH-935: every reference to the single cell `sheet!from` respelled as `sheet!to`, as Excel
+   * rewrites a cut cell's readers when it is pasted (a merge whose upper-left cell is empty moves
+   * the first non-empty cell into it this way). `host` is the sheet the formula lives on, which a
+   * local reference names; `None` (a defined name) reaches only qualified references. Single-cell
+   * references and a range that is exactly that one cell move, keeping their `$` anchors; any wider
+   * range, whole-column or whole-row form, and external-workbook references are untouched, as Excel
+   * leaves a range a cut of one of its cells does not cover.
+   */
+  def relocateCell[A](
+    expr: TExpr[A],
+    host: Option[SheetName],
+    sheet: SheetName,
+    from: ARef,
+    to: ARef
+  ): TExpr[A] =
+    import TExpr.*
+    def onSheet(s: SheetName): Boolean = s.value.equalsIgnoreCase(sheet.value)
+    val local = host.exists(onSheet)
+    def cellRange(range: CellRange, form: RangeForm): Option[CellRange] =
+      Option.when(form == RangeForm.Cells && range.start == from && range.end == from)(
+        range.copy(start = to, end = to)
+      )
+    if from == to then expr
+    else
+      mapSites(
+        expr,
+        {
+          case Ref(at, anchor, decode) if local && at == from => Ref(to, anchor, decode)
+          case PolyRef(at, anchor) if local && at == from => PolyRef(to, anchor)
+          case SheetRef(s, at, anchor, decode) if onSheet(s) && at == from =>
+            SheetRef(s, to, anchor, decode)
+          case SheetPolyRef(s, at, anchor) if onSheet(s) && at == from =>
+            SheetPolyRef(s, to, anchor)
+          case r @ RangeRef(range, form) if local =>
+            cellRange(range, form).fold(r)(RangeRef(_, form))
+          case r @ SheetRange(s, range, form) if onSheet(s) =>
+            cellRange(range, form).fold(r)(SheetRange(s, _, form))
+          case other => other
+        },
+        {
+          case l @ RangeLocation.Local(range, form) if local =>
+            cellRange(range, form).fold(l)(RangeLocation.Local(_, form))
+          case c @ RangeLocation.CrossSheet(s, range, form) if onSheet(s) =>
+            cellRange(range, form).fold(c)(RangeLocation.CrossSheet(s, _, form))
+          case other => other
+        }
+      )
+
+  /**
+   * The one traversal behind [[mapSheets]] and [[relocateCell]]: rebuild `expr` with every leaf
+   * (references, literals, names, errors) passed through `leaf` and every range-slot location
+   * through `location` (a computed location's expression is traversed first). `leaf` must return a
+   * node of the same type it was given; the casts below rely on it.
+   */
   @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
   @nowarn("msg=Unreachable case")
-  private def renameSheetInternal[A](expr: TExpr[A], from: String, to: SheetName): TExpr[A] =
+  private def mapSites[A](
+    expr: TExpr[A],
+    leaf: TExpr[?] => TExpr[?],
+    location: RangeLocation => RangeLocation
+  ): TExpr[A] =
     import TExpr.*
-    def target(sheet: SheetName): SheetName =
-      if sheet.value.equalsIgnoreCase(from) then to else sheet
-    def targetQualifier(qualifier: ErrorQualifier): ErrorQualifier = qualifier match
-      case ErrorQualifier.Sheet(sheet) => ErrorQualifier.Sheet(target(sheet))
-      case external: ErrorQualifier.External => external
-    def go[B](e: TExpr[B]): TExpr[B] = renameSheetInternal(e, from, to)
-    def goLocation(location: RangeLocation): RangeLocation = location match
-      case RangeLocation.Computed(expr) => RangeLocation.Computed(go(expr))
-      case RangeLocation.CrossSheet(sheet, range, form) =>
-        RangeLocation.CrossSheet(target(sheet), range, form)
-      // GH-394: a sheet-qualified name in a range slot (`SUMIF(Model!rev_range, …)`) follows too
-      case RangeLocation.Name(name, Some(scope)) => RangeLocation.Name(name, Some(target(scope)))
-      // GH-694: `SUM(Old!#REF!)` keeps naming its sheet, as Excel renames it
-      case RangeLocation.Error(error, qualifier) =>
-        RangeLocation.Error(error, qualifier.map(targetQualifier))
-      case other @ (RangeLocation.Local(_, _) | RangeLocation.External(_, _, _, _) |
-          RangeLocation.Name(_, None) | RangeLocation.Binding(_)) =>
-        other
+    def go[B](e: TExpr[B]): TExpr[B] = mapSites(e, leaf, location)
+    def goLocation(loc: RangeLocation): RangeLocation = loc match
+      case RangeLocation.Computed(inner) => RangeLocation.Computed(go(inner))
+      case other => location(other)
 
     expr match
-      case SheetRef(sheet, at, anchor, decode) => SheetRef(target(sheet), at, anchor, decode)
-      case SheetPolyRef(sheet, at, anchor) =>
-        SheetPolyRef(target(sheet), at, anchor).asInstanceOf[TExpr[A]]
-      case SheetRange(sheet, range, form) =>
-        SheetRange(target(sheet), range, form).asInstanceOf[TExpr[A]]
-      case SheetNameRef(sheet, name) => SheetNameRef(target(sheet), name).asInstanceOf[TExpr[A]]
-      // GH-694: `Old!#REF!` follows the rename like a reference's qualifier
-      case ErrorLit(error, Some(qualifier)) =>
-        ErrorLit(error, Some(targetQualifier(qualifier))).asInstanceOf[TExpr[A]]
-      // Nothing to rename: local refs, literals, identifiers, external-workbook refs
-      case _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
-          ErrorLit(_, None) | Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
-        expr
+      case _: SheetRef[?] | _: SheetPolyRef | _: SheetRange | _: SheetNameRef | _: ErrorLit |
+          _: Ref[?] | _: PolyRef | _: RangeRef | _: ExternalRef | _: ExternalRange | _: Lit[?] |
+          Missing | _: BindingRef | _: NameRef | _: CoercedBindingRef[?] =>
+        leaf(expr).asInstanceOf[TExpr[A]]
       // GH-680: a chain's left spine in one loop, not one recursion per operator
       case chain @ (_: Add | _: Sub | _: Mul | _: Div | _: Pow | _: Concat | _: Eq[?] | _: Neq[?] |
           _: Lt[?] | _: Lte[?] | _: Gt[?] | _: Gte[?]) =>
@@ -528,11 +608,11 @@ object FormulaShifter:
       case ToInt(e) => ToInt(go(e)).asInstanceOf[TExpr[A]]
       case UnaryPlus(e) => UnaryPlus(go(e))
       case Percent(e) => Percent(go(e)).asInstanceOf[TExpr[A]]
-      case Aggregate(aggId, location) =>
-        Aggregate(aggId, goLocation(location)).asInstanceOf[TExpr[A]]
+      case Aggregate(aggId, loc) =>
+        Aggregate(aggId, goLocation(loc)).asInstanceOf[TExpr[A]]
       case call: Call[?] =>
-        val renamed = call.spec.argSpec.map(call.args)(e => go(e), goLocation)
-        Call(call.spec, renamed).asInstanceOf[TExpr[A]]
+        val mapped = call.spec.argSpec.map(call.args)(e => go(e), goLocation)
+        Call(call.spec, mapped).asInstanceOf[TExpr[A]]
       case DateToSerial(e) => DateToSerial(go(e)).asInstanceOf[TExpr[A]]
       case DateTimeToSerial(e) => DateTimeToSerial(go(e)).asInstanceOf[TExpr[A]]
       case Let(bindings, body) =>

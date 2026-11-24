@@ -753,9 +753,22 @@ final case class Sheet(
     if rangeHyperlinks.isEmpty then cells.inRange(range).toSeq
     else cells.inRange(range).map(withRangeLink).toSeq
 
-  /** Merge cells in range */
+  /**
+   * Merge cells in range (GH-935). A non-empty upper-left cell keeps its value and every other cell
+   * is cleared like Clear Contents (value, formula and hyperlink go; the cell's own style and
+   * comment stay), as Excel's Merge Cells does.
+   *
+   * When the upper-left cell is empty, Excel moves the first non-empty cell (row-major) into it and
+   * rewrites every formula that read it. This sheet-level method has no formula parser, so it does
+   * NOT move that cell: it stays where it is and every OTHER cell is cleared. Readers keep Excel's
+   * values; only the merged cell's display differs. For Excel's move use `wb.edit(Edit.Merge(...))`
+   * or xl-evaluator's `CellMover.merge`.
+   *
+   * Only this operation clears: a sheet read from a file whose merge already hides values keeps
+   * them.
+   */
   def merge(range: CellRange): Sheet =
-    copy(mergedRanges = mergedRanges + range)
+    SheetEdits.merge(this, range)
 
   /** Unmerge cells in range */
   def unmerge(range: CellRange): Sheet =

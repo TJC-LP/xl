@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.printer
 
 import java.util.regex.Pattern
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -45,6 +45,48 @@ object FormulaOps:
           )
         case Right(expr) if !FormulaShifter.mentionsSheet(expr, from.value) => Right(text)
         case Right(expr) => Right(reprint(text, FormulaShifter.renameSheet(expr, from, to)))
+
+  /**
+   * GH-936: `text` with every sheet qualifier spelled as the sheet's own name among `names`, as
+   * Excel stores a formula when it is entered (`=sheet1!A1` becomes `=Sheet1!A1`, `='my data'!A1`
+   * becomes `='My Data'!A1`, `=data!rate` becomes `=Data!rate`). A qualifier resolves by
+   * [[SheetName.indexIn]]'s rule (#752); one that matches no sheet, or folds onto two tabs
+   * differing only by case, stays as typed, and an external-workbook reference (`[1]sheet1!A1`) is
+   * never touched. Total: text that needs no respelling — including text that does not parse, which
+   * the caller's own gate reports — comes back byte-identical, so a formula already in canonical
+   * form keeps its spacing and casing exactly. For newly authored formulas only: a formula read
+   * from a file is never passed through here.
+   */
+  def canonicalSheets(text: String, names: IndexedSeq[SheetName]): String =
+    if names.isEmpty || !text.contains('!') then text
+    else
+      FormulaParser.parse(text) match
+        case Left(_) => text
+        case Right(expr) =>
+          val canonical = FormulaShifter.canonicalSheets(expr, names)
+          if canonical == expr then text else reprint(text, canonical)
+
+  /**
+   * GH-935: `text` with every reference to the single cell `sheet!from` respelled as `sheet!to`
+   * ([[FormulaShifter.relocateCell]]), as Excel rewrites a cut cell's readers on paste. `host` is
+   * the sheet the formula lives on (`None` for a defined name: only qualified references count).
+   * Total: text that names no such reference, or does not parse, comes back byte-identical.
+   */
+  def relocateCell(
+    text: String,
+    host: Option[SheetName],
+    sheet: SheetName,
+    from: ARef,
+    to: ARef
+  ): String =
+    if from == to || !text.replace("$", "").toUpperCase(java.util.Locale.ROOT).contains(from.toA1)
+    then text
+    else
+      FormulaParser.parse(text) match
+        case Left(_) => text
+        case Right(expr) =>
+          val moved = FormulaShifter.relocateCell(expr, host, sheet, from, to)
+          if moved == expr then text else reprint(text, moved)
 
   /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1

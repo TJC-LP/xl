@@ -1,6 +1,6 @@
 package com.tjclp.xl.ops
 
-import com.tjclp.xl.addressing.{Column, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.workbooks.Workbook
@@ -31,6 +31,28 @@ trait FormulaSupport:
     rowDelta: Int
   ): XLResult[FormulaSupport.Shifted] =
     shift(formula, colDelta, rowDelta).map(FormulaSupport.Shifted(_, Vector.empty))
+
+  /**
+   * GH-936: `formula` with every sheet qualifier respelled as the tab it names among `sheets`
+   * (matched as a reference resolves, #752: exact, else the one tab equal ignoring case), as Excel
+   * stores a formula when it is entered — `=sheet1!A1` becomes `=Sheet1!A1`. Unknown or ambiguous
+   * qualifiers and external-workbook references stay as typed. Called for newly authored formulas
+   * only. The default returns `formula` unchanged (a text-only support cannot parse it);
+   * xl-evaluator's `EvalFormulaSupport` respells.
+   */
+  def canonicalSheets(formula: String, sheets: IndexedSeq[SheetName]): String = formula
+
+  /**
+   * GH-935: point every reference to the single cell `sheet!from` at `sheet!to` instead — formulas
+   * on every sheet, defined names, conditional-format and data-validation formulas — as Excel
+   * rewrites a cut cell's readers on paste. The cell itself is not moved. A merge whose upper-left
+   * cell is empty moves the first non-empty cell into it this way. The default REFUSES with
+   * [[XLError.UnsupportedCapability]] (a text-only support cannot find the readers, and leaving
+   * them on the emptied cell would silently change their values); xl-evaluator's
+   * `EvalFormulaSupport` rewrites.
+   */
+  def relocateCell(wb: Workbook, sheet: SheetName, from: ARef, to: ARef): XLResult[Workbook] =
+    Left(FormulaSupport.unsupported("merge (moving a cell into an empty upper-left cell)"))
 
   /** Insert `count` rows before `at` on `sheet`, rewriting references on every sheet. */
   def insertRows(wb: Workbook, sheet: SheetName, at: Row, count: Int): XLResult[Workbook]

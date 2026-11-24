@@ -27,7 +27,8 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.Clock
-import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, ImplicitIntersection}
+import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring, ImplicitIntersection}
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -1424,7 +1425,7 @@ object BatchParser:
   private def applyOne(
     wb: Workbook,
     default: Option[SheetName],
-    scoped: ScopedOp,
+    requested: ScopedOp,
     recalcDependents: Boolean,
     spills: SpillIndex,
     scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill],
@@ -1432,6 +1433,7 @@ object BatchParser:
   ): IO[
     (Workbook, Vector[OffGridHit], SpillIndex, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])
   ] =
+    val scoped = requested.copy(op = canonicalFormulas(requested.op, wb.sheets.map(_.name)))
     IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { requested =>
       val sheetName = requested.map(tab(wb, _))
       // #752: the index is keyed by each tab's own spelling, whatever case a ref qualifier uses
@@ -1475,6 +1477,21 @@ object BatchParser:
         )
       }
     }
+
+  /**
+   * GH-936: the op with each authored formula's sheet qualifiers spelled as the tabs' own names
+   * among `tabs` — the sheets the batch has at this op, an earlier `add-sheet` included — as Excel
+   * stores an entered formula (`=sheet1!A1` becomes `=Sheet1!A1`). A dragged formula is respelled
+   * before it is shifted. Unknown sheets and external references stay as typed; every other op is
+   * returned as is. Shared with the streamed batch.
+   */
+  private[cli] def canonicalFormulas(op: BatchOp, tabs: IndexedSeq[SheetName]): BatchOp =
+    def canon(text: String): String = FormulaOps.canonicalSheets(text, tabs)
+    op match
+      case p: BatchOp.PutFormula => p.copy(formula = canon(p.formula))
+      case p: BatchOp.PutFormulaDragging => p.copy(formula = canon(p.formula))
+      case p: BatchOp.PutFormulas => p.copy(formulas = p.formulas.map(canon))
+      case other => other
 
   /**
    * THE sheet rule for one op ([[Resolve.forOp]], ADR-017 §2.5), before dispatch. An op whose
@@ -2167,7 +2184,15 @@ object BatchParser:
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
-      result <- updateSheet(wb, sheetName)(_.merge(range))
+      // GH-935: the hidden cells are cleared (and their dynamic arrays released) as Excel does; an
+      // empty upper-left cell receives the first non-empty cell, its readers following
+      sheet <- IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_)))
+      result <- IO.fromEither(
+        CellMover
+          .merge(wb, sheet.name, range)
+          .left
+          .map(e => CliException(CliError.fromXLError(e, None)))
+      )
     yield result
 
   /** Apply an unmerge operation. */
