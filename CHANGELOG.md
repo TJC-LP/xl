@@ -9,23 +9,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Merging keeps only the upper-left value, as Excel's Merge Cells does** (#935). `Sheet.merge`
-  (and through it `Patch.Merge`, `Edit.Merge`, the `range.merge` DSL, the `merge` verb with or
-  without `--stream`, and the batch `merge` op in memory and streamed) clears every other cell of
-  the range the way Clear Contents clears it: the value or formula and the hyperlink go, a cell's
-  own formatting and its comment stay, an unstyled cell is removed. An empty upper-left cell stays
-  empty: the values elsewhere are discarded, not moved. The formulas that read a cleared cell are
-  recalculated by the verb and the batch op as for any other content edit (`--no-recalc` keeps
-  their caches; a streamed batch never recalculates), so the issue's `put A1 1; put B1 2;
-  put A2 3; merge A1:B2; putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged
-  cell leaves nothing hidden under it. In memory a hidden dynamic-array anchor releases its spill
-  first, as `clear` does. A file whose merges already hide values is read and rewritten unchanged:
-  only the merge operation clears. A streamed batch clears the hidden cells' values but leaves
-  their hyperlinks and dynamic arrays as they were; the library's `Sheet.merge` does not release a
-  hidden dynamic-array anchor's spill either (the CLI's in-memory paths do). **Behaviour change:** merging used to keep every hidden value,
-  invisible in Excel yet counted by `SUM`; the batch `merge` op is now cell-mutating (a batch
-  holding one runs the trailing dependent refresh, which writes back only the caches of formulas
-  reading a cleared cell) and `Edit.Merge` reports its range as touched content.
+- **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac
+  (`merge range`, alerts off): a non-empty upper-left cell keeps its value and the other cells
+  are cleared; when the upper-left cell is empty, the FIRST non-empty cell of the range in
+  row-major order is cut and pasted into it — its value or formula verbatim (`=D1*2` stays
+  `=D1*2`), its format and hyperlink — and every formula that read it now reads the upper-left
+  cell (with `E1 = B1+1`, merging `A1:B1` over an empty A1 gives `E1 = A1+1`). The reader rewrite
+  covers single-cell references and a range that is exactly that cell, on every sheet, in defined
+  names and in conditional-format and data-validation formulas (`CellMover`, built on the new
+  `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`). Every other cell is cleared the way
+  Clear Contents clears it: the value or formula and the hyperlink go, a cell's own formatting and
+  its comment stay, an unstyled cell is removed.
+  - Paths: the `merge` verb (with or without `--stream`, which loads the book for this verb) and
+    the batch `merge` op in memory use `CellMover.merge`; `wb.edit(Edit.Merge(...))` rewrites
+    readers through the new `FormulaSupport.relocateCell` (`EvalFormulaSupport`; the text-only
+    support refuses a moving merge with `UnsupportedCapability`). `Sheet.merge`, `Patch.Merge`
+    and the `range.merge` DSL move the cell but cannot rewrite its readers (xl-core has no
+    parser); `CellMover.mergeSheet` rewrites the readers on the same sheet. A streamed batch
+    applies a merge whose upper-left cell holds a value and refuses (`BATCH_OP_FAILED`, before
+    anything is written, "drop --stream") one that would move a cell.
+  - The formulas that read a cleared or moved cell are recalculated by the verb and the batch op
+    as for any other content edit (`--no-recalc` keeps their caches; a streamed batch never
+    recalculates), so the issue's `put A1 1; put B1 2; put A2 3; merge A1:B2;
+    putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged cell leaves nothing
+    hidden under it.
+  - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
+    whose merges already hide values is read and rewritten unchanged: only the merge operation
+    clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays;
+    `Sheet.merge` does not release spills; comments are not moved with a moved cell.
+  - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
+    by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now
+    cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports
+    its range as touched content, and `Edit.lower` / `Patch.toEdits` do not lower a merge that
+    moves a cell.
 - **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
   qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
   formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)

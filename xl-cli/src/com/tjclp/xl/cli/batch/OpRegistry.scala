@@ -184,7 +184,7 @@ object OpRegistry:
   // GH-935: a merge clears every cell it hides but the upper-left one, as Excel does
   private val merge = rangeOnly(
     "merge",
-    "Merge a range into one cell, keeping only the upper-left value (the other cells are cleared).",
+    "Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.",
     "A1:D1",
     "merge",
     cellMutating = true

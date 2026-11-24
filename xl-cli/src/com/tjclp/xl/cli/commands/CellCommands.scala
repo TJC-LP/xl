@@ -5,11 +5,11 @@ import java.nio.file.Path
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.addressing.CellRange
-import com.tjclp.xl.cli.contract.Warning
+import com.tjclp.xl.cli.contract.{CliError, CliException, Warning}
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
-import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring}
 import com.tjclp.xl.ooxml.writer.WriterConfig
 
 /**
@@ -32,8 +32,10 @@ object CellCommands:
     else excel.writeWith(wb, outputPath, config)
 
   /**
-   * Merge cells in range, as Excel's Merge Cells does (GH-935): the upper-left cell keeps its value
-   * and every other cell of the range is cleared like a contents `clear` (value, formula and
+   * Merge cells in range, as Excel's Merge Cells does (GH-935): a non-empty upper-left cell keeps
+   * its value; an empty one receives the first non-empty cell of the range (row-major), cut and
+   * pasted — formula verbatim, format, and every reader pointed at the upper-left cell
+   * ([[CellMover.merge]]). Every other cell is cleared like a contents `clear` (value, formula and
    * hyperlink go; its own formatting and comment stay). A hidden dynamic-array anchor releases its
    * spill first, as `clear` does. The formulas that read a cleared cell are recalculated before the
    * write (`--no-recalc` keeps every cache), so `SUM` over the merged area sees only the anchor.
@@ -60,7 +62,16 @@ object CellCommands:
           IO.raiseError(
             new Exception("merge requires a range (e.g., A1:C1), not a single cell")
           )
-      updatedSheet = DynamicArrayAuthoring.merge(targetSheet, range)
+      // GH-935: an empty upper-left cell receives the first non-empty cell, its readers following
+      merged <- IO.fromEither(
+        CellMover
+          .merge(wb, targetSheet.name, range)
+          .left
+          .map(e => CliException(CliError.fromXLError(e, None)))
+      )
+      updatedSheet <- IO.fromEither(
+        merged(targetSheet.name).left.map(e => CliException(CliError.fromXLError(e, None)))
+      )
       // the seeds of the dependent refresh: every cell whose content the merge changed
       modified = (targetSheet.cells.refs.toSet ++ updatedSheet.cells.refs.toSet).filter { r =>
         targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
@@ -69,11 +80,11 @@ object CellCommands:
       // A merge that hides nothing (the usual title merge) changes no value: no refresh to run
       result <-
         if modified.isEmpty then
-          writeWorkbook(wb.put(updatedSheet), outputPath, config, stream)
+          writeWorkbook(merged, outputPath, config, stream)
             .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
         else
           WriteCommands.writeAfterRefresh(
-            wb.put(updatedSheet),
+            merged,
             targetSheet.name,
             modified,
             message,

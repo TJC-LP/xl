@@ -418,6 +418,19 @@ object StreamingTransform:
     result.toMap
 
   /**
+   * GH-935: the cells inside `ranges` that hold content — a value (`<v>`), a formula (`<f>`) or an
+   * inline string (`<is>`) — read in one SAX pass without materializing the worksheet. A styled
+   * empty cell (`<c r="B1" s="3"/>`) does not count.
+   */
+  def scanNonEmptyCells(input: InputStream, ranges: Vector[CellRange]): Set[ARef] =
+    val result = mutable.Set[ARef]()
+    val handler = new NonEmptyScanHandler(ranges, result)
+    val parser = XmlSecurity.secureSaxParserFactory().newSAXParser()
+    try parser.parse(InputSource(XmlSecurity.stripLeadingDoctypeStream(input)), handler)
+    finally scala.util.Try(input.close())
+    result.toSet
+
+  /**
    * SAX handler that transforms worksheet XML via StAX writer.
    *
    * For cells in patches map:
@@ -1020,6 +1033,28 @@ object StreamingTransform:
               result(ref) = styleId
           }
         }
+
+  @SuppressWarnings(Array("org.wartremover.warts.Var"))
+  private class NonEmptyScanHandler(ranges: Vector[CellRange], result: mutable.Set[ARef])
+      extends DefaultHandler:
+    private var current: Option[ARef] = None
+
+    override def startElement(
+      uri: String,
+      localName: String,
+      qName: String,
+      attributes: Attributes
+    ): Unit =
+      localName match
+        case "c" =>
+          current = Option(attributes.getValue("r"))
+            .flatMap(r => ARef.parse(r).toOption)
+            .filter(ref => ranges.exists(_.contains(ref)))
+        case "v" | "f" | "is" => current.foreach(result += _)
+        case _ => ()
+
+    override def endElement(uri: String, localName: String, qName: String): Unit =
+      if localName == "c" then current = None
 
   /**
    * SAX handler that transforms worksheet XML with early-abort optimization.

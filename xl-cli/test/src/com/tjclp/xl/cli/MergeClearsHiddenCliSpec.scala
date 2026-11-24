@@ -221,3 +221,88 @@ class MergeClearsHiddenCliSpec extends FunSuite:
       assertEquals(value(s, "A2"), num(3))
     }
   }
+
+  // ===== GH-935: an empty upper-left cell receives the first non-empty cell (Excel for Mac) =====
+
+  private def formulaOf(s: Sheet, a1: String): Option[String] = value(s, a1) match
+    case CellValue.Formula(text, _, _) => Some(text)
+    case _ => None
+
+  private val moving: Workbook =
+    Workbook(
+      Sheet("Sheet1")
+        .put(ARef.from1(2, 1), CellValue.Formula("D1*2", Some(num(10))))
+        .put(ARef.from1(4, 1), num(5))
+        .put(ARef.from1(5, 1), CellValue.Formula("B1+1", Some(num(11))))
+        .withCellStyle(ARef.from1(2, 1), CellStyle.default.withNumFmt(NumFmt.Percent))
+        .put(ARef.from1(2, 5), CellValue.Text("b5"))
+        .put(ARef.from1(1, 6), CellValue.Text("a6"))
+    )
+
+  test(
+    "GH-935 (Excel): merge over an empty anchor moves the first non-empty cell, readers follow"
+  ) {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      val out2 = dir.resolve("out2.xlsx")
+      write(moving, in)
+      val r = run("-f", in.toString, "-o", out.toString, "merge", "A1:B1")
+      assertEquals(r.exit, 0, r.stderr)
+      val s = read(out)
+      // the formula moves verbatim, with its format; its reader is pointed at the anchor
+      assertEquals(formulaOf(s, "A1"), Some("D1*2"))
+      assertEquals(cached(s, "A1"), Some(num(10)))
+      assert(ARef.parse("A1").toOption.flatMap(s.cells.get).flatMap(_.styleId).isDefined)
+      assertEquals(value(s, "B1"), CellValue.Empty)
+      assertEquals(formulaOf(s, "E1"), Some("A1+1"))
+      assertEquals(cached(s, "E1"), Some(num(11)))
+      // row-major: B5 (first row) beats A6
+      assertEquals(run("-f", in.toString, "-o", out2.toString, "merge", "A5:B6").exit, 0)
+      val t = read(out2)
+      assertEquals(value(t, "A5"), CellValue.Text("b5"))
+      assertEquals(value(t, "A6"), CellValue.Empty)
+    }
+  }
+
+  test("GH-935 (Excel): batch merge over an empty anchor moves the cell and rewrites its readers") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      write(moving, in)
+      val r = runIn(
+        """[{"op":"merge","range":"A1:B1"}]""",
+        "-f",
+        in.toString,
+        "-o",
+        out.toString,
+        "batch",
+        "-"
+      )
+      assertEquals(r.exit, 0, r.stderr)
+      val s = read(out)
+      assertEquals(formulaOf(s, "A1"), Some("D1*2"))
+      assertEquals(formulaOf(s, "E1"), Some("A1+1"))
+      assertEquals(cached(s, "E1"), Some(num(11)))
+    }
+  }
+
+  test("GH-935: a streamed batch refuses a merge that would move a cell, before writing") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      write(moving, in)
+      val ops = """[{"op":"merge","range":"A1:B1"}]"""
+      val r = runIn(ops, "-f", in.toString, "-o", out.toString, "--stream", "batch", "-")
+      assertNotEquals(r.exit, 0)
+      assert(r.stderr.contains("streaming mode cannot do"), r.stderr)
+      assert(r.stderr.contains("drop --stream"), r.stderr)
+      assert(!Files.exists(out))
+      // the upper-left cell holds a value: the stream applies it
+      val okOps = """[{"op":"put","ref":"A1","value":1},{"op":"merge","range":"A1:B1"}]"""
+      val ok = runIn(okOps, "-f", in.toString, "-o", out.toString, "--stream", "batch", "-")
+      assertEquals(ok.exit, 0, ok.stderr)
+      assertEquals(value(read(out), "A1"), num(1))
+      assertEquals(value(read(out), "B1"), CellValue.Empty)
+    }
+  }

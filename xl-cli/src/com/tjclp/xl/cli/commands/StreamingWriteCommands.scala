@@ -743,6 +743,15 @@ object StreamingWriteCommands:
       val existingStyles =
         if formattedRefs.nonEmpty then scanExistingStyles(sourcePath, worksheetPath, formattedRefs)
         else Map.empty[ARef, Int]
+      // GH-935: the cells holding content inside each merged range, read once: a merge whose
+      // upper-left cell is empty moves the first of them there and rewrites its readers, which a
+      // stream cannot do, so that case is refused rather than diverging from the in-memory merge
+      val mergeRanges = plainOps.collect { case BatchParser.BatchOp.Merge(r) =>
+        CellRange.parse(r).toOption
+      }.flatten
+      val filledInMerges =
+        if mergeRanges.nonEmpty then scanNonEmptyCells(sourcePath, worksheetPath, mergeRanges)
+        else Set.empty[ARef]
 
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
@@ -964,11 +973,33 @@ object StreamingWriteCommands:
             val range = CellRange.parse(rangeStr) match
               case Right(r) => r
               case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
+            // GH-935: what each cell holds at this point of the batch: an earlier op's value patch
+            // decides, else the file
+            def holdsValue(ref: ARef): Boolean = cellPatches.get(ref) match
+              case Some(StreamingTransform.CellPatch.SetValue(v, _)) => v != CellValue.Empty
+              case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, v)) => v != CellValue.Empty
+              case _ =>
+                filledInMerges.contains(ref) && !clearedSpills.exists(_.contains(ref))
+            val hiddenCells = SheetEdits.hiddenByMerge(range)
+            val hiddenFilled =
+              (filledInMerges.iterator ++ cellPatches.keysIterator)
+                .filter(r => hiddenCells.exists(_.contains(r)))
+                .exists(holdsValue)
+            if !holdsValue(range.start) && hiddenFilled then
+              throw CliException(
+                CliError(
+                  ErrorCode.UNSUPPORTED_IN_STREAM,
+                  s"merge $rangeStr: the upper-left cell ${range.start.toA1} is empty, so Excel " +
+                    "moves the first non-empty cell of the range into it and points its readers " +
+                    "there, which streaming mode cannot do; drop --stream to apply it in memory",
+                  hint = Some("drop --stream to apply it in memory")
+                )
+              )
             addMerges += range
             // GH-935: the cells the merge hides lose their contents, as Excel's Merge Cells
             // clears them (each keeps its style). A value an earlier op of this batch wrote there
             // goes too; a later op's value still lands, since explicit patches beat the clear.
-            val hidden = SheetEdits.hiddenByMerge(range)
+            val hidden = hiddenCells
             cellPatches.keys.toVector.filter(r => hidden.exists(_.contains(r))).foreach { ref =>
               cellPatches.get(ref) match
                 case Some(StreamingTransform.CellPatch.SetValue(_, _)) => cellPatches -= ref
@@ -1109,6 +1140,23 @@ object StreamingWriteCommands:
       case _ => Vector.empty
 
   /** Read style IDs for selected cells without materializing the worksheet. */
+  /** GH-935: the cells inside `ranges` that hold content in the source worksheet. */
+  private def scanNonEmptyCells(
+    sourcePath: Path,
+    worksheetPath: String,
+    ranges: Vector[CellRange]
+  ): Set[ARef] =
+    val normalizedPath =
+      val trimmed = worksheetPath.stripPrefix("/")
+      if trimmed.startsWith("xl/") then trimmed else s"xl/$trimmed"
+    val zipFile = new ZipFile(sourcePath.toFile)
+    try
+      Option(zipFile.getEntry(normalizedPath)) match
+        case Some(entry) =>
+          StreamingTransform.scanNonEmptyCells(zipFile.getInputStream(entry), ranges)
+        case None => throw new Exception(s"Worksheet not found: $normalizedPath")
+    finally zipFile.close()
+
   private def scanExistingStyles(
     sourcePath: Path,
     worksheetPath: String,

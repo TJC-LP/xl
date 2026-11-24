@@ -27,7 +27,7 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.Clock
-import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, ImplicitIntersection}
+import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring, ImplicitIntersection}
 import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
@@ -2184,8 +2184,15 @@ object BatchParser:
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
-      // GH-935: the hidden cells are cleared (and their dynamic arrays released) as Excel does
-      result <- updateSheet(wb, sheetName)(DynamicArrayAuthoring.merge(_, range))
+      // GH-935: the hidden cells are cleared (and their dynamic arrays released) as Excel does; an
+      // empty upper-left cell receives the first non-empty cell, its readers following
+      sheet <- IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_)))
+      result <- IO.fromEither(
+        CellMover
+          .merge(wb, sheet.name, range)
+          .left
+          .map(e => CliException(CliError.fromXLError(e, None)))
+      )
     yield result
 
   /** Apply an unmerge operation. */
