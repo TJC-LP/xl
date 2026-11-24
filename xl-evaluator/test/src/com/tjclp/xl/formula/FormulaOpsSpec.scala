@@ -355,14 +355,15 @@ class FormulaOpsSpec extends FunSuite:
   test("GH-935 review 2: relocateCell reaches intersection operands") {
     def rel(t: String) = FormulaOps.relocateCell(
       t,
-      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      CutReferences.Host.Cell(Sheet1, ref"E1", array = false),
       Sheet1,
       ref"B1",
       ref"A1"
     )
-    // the gate reads an intersection as the cells its areas share: B1 and C1 share none, so the
-    // formula depends on neither cell and stays as typed; B1 B1:C1 is B1, so both areas follow
-    assertEquals(rel("=B1 C1"), "=B1 C1")
+    // an intersection depends on every cell of every operand area (Excel's conservative rule,
+    // checked in Excel for Mac, formulas in E1): even an empty one such as B1 C1 is rewritten
+    assertEquals(rel("=B1 C1"), "=A1 C1")
+    assertEquals(rel("=SUM(B1:C1 C1:C3)"), "=SUM(A1:C1 C1:C3)")
     assertEquals(rel("=B1 B1:C1"), "=A1 A1:C1")
     // a union depends on every cell of every area, the cut cell only in its second area
     assertEquals(rel("=SUM((D5,B1:C1))"), "=SUM((D5,A1:C1))")

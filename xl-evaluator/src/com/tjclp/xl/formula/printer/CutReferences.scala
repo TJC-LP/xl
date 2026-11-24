@@ -118,25 +118,24 @@ object CutReferences:
         val refs = scan.references.filter(onSheet)
         // rule 5: a formula is touched only when one of its reference expressions depends on the
         // cut or the paste cell. An expression is a reference, an intersection of references
-        // (`B1 B1:C1`: the cells they share) or a parenthesised union of those (`(B1:C1,D5)`: every
-        // cell of every area); as a whole function argument (or in an array formula) it depends on
-        // all the cells it denotes, as a bare value only on their intersection with the formula's
+        // (`B1 B1:C1`) or a parenthesised union of those (`(B1:C1,D5)`), and Excel's dependency
+        // for the last two is conservative (checked in Excel for Mac): every cell of every operand
+        // area, not the cells the areas share. As a whole function argument (or in an array
+        // formula) an expression depends on all those cells; as a bare value in a plain cell, a
+        // lone range on its implicit intersection with the formula's own row or column (the
+        // oracle's rule), an intersection or union on each operand area's cells in the formula's
         // own row or column
         val affected = host match
           case Host.Name | Host.Rule(_) => true
           case Host.Cell(_, at, array) =>
             expressions(masked, scan.references).exists { (span, areasOf) =>
-              val areas = areasOf.flatMap { group =>
-                group
-                  .filter(onSheet)
-                  .map(box)
-                  .reduceOption((a, b) => intersect(a, b).getOrElse(Box(-1, -1, -2, -2)))
-                  .filter(b => b.r1 <= b.r2 && b.c1 <= b.c2)
-                  // an intersection with an area on another sheet (or none on this one) is skipped
-                  .filter(_ => group.forall(onSheet))
-              }
+              val operands = areasOf.flatten
+              val areas = operands.filter(onSheet).map(box)
               val whole = array || wholeArgument(masked, span._1, span._2)
-              val deps = if whole then areas else areas.flatMap(implicitly(_, at))
+              val deps =
+                if whole then areas
+                else if operands.size == 1 then areas.flatMap(implicitly(_, at))
+                else areas.flatMap(onOwnLines(_, at))
               deps.exists(d => d.contains(fr, fc) || d.contains(tr, tc))
             }
         if !affected then text
@@ -161,9 +160,12 @@ object CutReferences:
           FormulaSpans.replace(text, edits)
       }
 
-  private def intersect(a: Box, b: Box): Option[Box] =
-    val r = Box(a.r1.max(b.r1), a.c1.max(b.c1), a.r2.min(b.r2), a.c2.min(b.c2))
-    Option.when(r.r1 <= r.r2 && r.c1 <= r.c2)(r)
+  /** The cells of `b` on the row or the column of `at` (none when it meets neither). */
+  private def onOwnLines(b: Box, at: ARef): Vector[Box] =
+    val (row, col) = (at.row.index0, at.col.index0)
+    val onRow = Option.when(b.r1 <= row && row <= b.r2)(Box(row, b.c1, row, b.c2))
+    val onCol = Option.when(b.c1 <= col && col <= b.c2)(Box(b.r1, col, b.r2, col))
+    onRow.toList.toVector ++ onCol.toList.toVector
 
   /**
    * The reference expressions of a formula, each with its text span and its areas: a vector of

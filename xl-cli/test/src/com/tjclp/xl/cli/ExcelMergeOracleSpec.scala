@@ -16,8 +16,8 @@ import munit.FunSuite
  * GH-935: the Excel oracle. `excel-oracle/merge-references.json` (xl-evaluator test resources)
  * holds 93 merge scenarios run in Excel for Mac 16.115 — 477 cell expectations, every defined name
  * and merged area after the merge, and for each of the 69 empty-anchor cases a cut-and-paste of the
- * winner onto the anchor that produced the same formulas character for character — plus seven
- * union/intersection cases (family 8, `f8-01`…`f8-07`) checked by hand in Excel for Mac. Each
+ * winner onto the anchor that produced the same formulas character for character — plus eleven
+ * union/intersection cases (family 8, `f8-01`…`f8-11`) checked by hand in Excel for Mac. Each
  * scenario's workbook is built here, merged by the workbook-level merge (`CellMover.merge`, what
  * `wb.edit(Edit.Merge(...))`, the `merge` verb and the batch op run), recalculated, and compared:
  * every formula's text exactly (Excel's `=` prefix is xl's stored text with `=` added; no other
@@ -171,10 +171,10 @@ class ExcelMergeOracleSpec extends FunSuite:
       }
     }
 
-  test("oracle: the fixture holds the 100 scenarios Excel ran") {
-    // 93 from the oracle harness (477 cells) + 7 union/intersection cases checked by hand (f8-*)
-    assertEquals(scenarios.size, 100)
-    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 505)
+  test("oracle: the fixture holds the 104 scenarios Excel ran") {
+    // 93 from the oracle harness (477 cells) + 11 union/intersection cases checked by hand (f8-*)
+    assertEquals(scenarios.size, 104)
+    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 521)
   }
 
   // ===== the CLI merge verb over a sample of the scenarios =====
