@@ -39,6 +39,11 @@ private[functions] def numError(detail: String, usage: String): EvalError =
   EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
+  /**
+   * Days between the 1900 and 1904 date systems' serials for the same date (1904-01-01 is 1462).
+   */
+  private val Date1904Offset = BigDecimal(1462)
+
   private def rangeValues(
     location: TExpr.RangeLocation,
     ctx: EvalContext
@@ -93,6 +98,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       EvalError.ErrorValue(CellError.Num, Some(s"$function: $message"))
     def invalid(message: String): EvalError =
       EvalError.ErrorValue(CellError.Value, Some(s"$function: $message"))
+    val date1904 = ctx.workbook.exists(_.metadata.date1904)
 
     for
       values <- rangeValues(valuesLocation, ctx)
@@ -134,7 +140,14 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                           // in Excel; numeric text stays refused (docs/LIMITATIONS.md)
                           ScalarCoercion.cellText(other).flatMap(DateText.serial) match
                             case Some(serial) =>
-                              Right(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
+                              // A 1904 book stores its date cells as 1904 serials, which the
+                              // evaluator reads as 1900 ones; date text takes its 1904 serial and
+                              // the same decoding, so a mixed range keeps the true gaps
+                              val stored = if date1904 then serial - Date1904Offset else serial
+                              if stored < 0 then
+                                Left(invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                              else
+                                Right(CellValue.excelSerialToDateTime(stored.toDouble).toLocalDate)
                             case None =>
                               TExpr
                                 .decodeAsDate(dateCell)
