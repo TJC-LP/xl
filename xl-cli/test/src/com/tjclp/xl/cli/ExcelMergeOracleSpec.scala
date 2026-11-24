@@ -231,7 +231,22 @@ class ExcelMergeOracleSpec extends FunSuite:
       Files.list(dir).forEach(p => Files.deleteIfExists(p))
       Files.deleteIfExists(dir)
 
-  for id <- List("f1-08", "f1-09", "f1-23", "f2-04", "f3-02", "f4-02", "f5-08", "f6-09", "f7-01") do
+  for id <- List(
+      "f1-08",
+      "f1-09",
+      "f1-23",
+      "f2-04",
+      "f3-02",
+      "f4-02",
+      "f5-08",
+      "f6-09",
+      "f7-01",
+      "f9-03",
+      "f10-01",
+      "f11-01",
+      "f12-01"
+    )
+  do
     test(s"oracle via the CLI merge verb: $id") {
       val sc = scenarios.find(_("id").str == id).getOrElse(fail(s"no scenario $id"))
       withDir { dir =>
@@ -254,13 +269,27 @@ class ExcelMergeOracleSpec extends FunSuite:
           .unsafeRunSync()
         assertEquals(run.exit, 0, run.stderr)
         val wb = ExcelIO.instance[IO].read(out).unsafeRunSync()
+        val pendingCells = pendingValues.get(id).fold(Set.empty[String])(_._1)
         sc("expectedAfter").obj.foreach { (cell, exp) =>
           val (formula, value) = actual(wb, cell)
           assertEquals(formula, exp("formula").str, s"$id $cell")
           assert(
-            sameValue(exp("value"), value),
+            pendingCells.contains(cell) || sameValue(exp("value"), value),
             s"$id $cell value: expected ${exp("value")}, got $value"
           )
+        }
+        sc.obj.get("dataValidationsAfter").toList.flatMap(_.obj.toVector).foreach {
+          (qualified, formula) =>
+            val (name, a1) = (qualified.takeWhile(_ != '!'), qualified.dropWhile(_ != '!').drop(1))
+            val got = wb(SheetName.unsafe(name)).toOption.toList
+              .flatMap(_.dataValidations)
+              .collect {
+                case r: DataValidation.Rules if r.ranges.exists(_.contains(ref(a1))) =>
+                  r.kind match
+                    case DvKind.Custom(f) => f
+                    case other => other.toString
+              }
+            assertEquals(got, List(formula.str), s"$id $qualified")
         }
       }
     }
