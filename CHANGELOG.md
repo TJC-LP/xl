@@ -61,8 +61,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cut-and-paste controls in which cutting the winner onto the anchor produced the merge's formulas
   and names character for character; the scenarios ship as
   `xl-evaluator/test/resources/excel-oracle/merge-references.json` and `ExcelMergeOracleSpec`
-  replays all 93 through the workbook-level merge (formula text exactly, values after
-  recalculation, names, merged areas) plus a sample through the `merge` verb. Excel's merge is
+  replays all 93 — plus seven union and intersection cases checked by hand in Excel (`f8-*`) —
+  through the workbook-level merge (formula text exactly, values after recalculation, names,
+  merged areas) plus a sample through the `merge` verb. Excel's merge is
   "cut the winner onto the anchor, then clear the rest":
   - The final area grows to the bounding box of the range and every merged area it touches, to a
     fixpoint; the absorbed merges are replaced by the one area. Merging inside an existing merged
@@ -82,9 +83,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `A1:C1`) or, with the winner last and the anchor inside, drops it (`A1:A5` → `A1:A4`);
     everything else (2-D ranges, the winner in the middle, diagonal moves, whole columns, unions,
     INDIRECT text) is unchanged, and references to cleared cells never change. A formula is
-    touched only when one of its references depends on the winner or the anchor: a range that is a
-    whole function argument depends on all its cells, a bare range Excel implicitly intersects
-    (`=B1:C1+0`, `=(B1:C1)`) only on its intersection with the formula's own row or column. Only
+    touched only when one of its reference expressions depends on the winner or the anchor: a
+    reference, an intersection (`B1:C1 B1:B3`, the cells the areas share) or a parenthesised union
+    (`(B1:C1,D5)`, every cell of every area) that is a whole function argument depends on all the
+    cells it denotes; a bare one Excel implicitly intersects (`=B1:C1+0`, `=(B1:C1)`) only on their
+    intersection with the formula's own row or column. Line ranges inside unions and intersections
+    follow the rules above (`=SUM((B1:C1,D5))` → `=SUM((A1:C1,D5))`, `=SUM(B1:C1 B1:B3)` →
+    `=SUM(A1:C1 B1:B3)`), and a formula the gate admits may still change nothing
+    (`=SUM(B1:B3 A1:C1)` stays byte-identical). Only
     the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
     refresh is seeded with every cell the merge changed on any sheet, so a reader rewritten to
     `#REF!` elsewhere is recalculated, not left on its old cached value.

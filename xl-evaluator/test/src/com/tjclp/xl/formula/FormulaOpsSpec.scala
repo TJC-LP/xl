@@ -360,7 +360,14 @@ class FormulaOpsSpec extends FunSuite:
       ref"B1",
       ref"A1"
     )
-    assertEquals(rel("=B1 C1"), "=A1 C1")
+    // the gate reads an intersection as the cells its areas share: B1 and C1 share none, so the
+    // formula depends on neither cell and stays as typed; B1 B1:C1 is B1, so both areas follow
+    assertEquals(rel("=B1 C1"), "=B1 C1")
+    assertEquals(rel("=B1 B1:C1"), "=A1 A1:C1")
+    // a union depends on every cell of every area, the cut cell only in its second area
+    assertEquals(rel("=SUM((D5,B1:C1))"), "=SUM((D5,A1:C1))")
+    // an intersection without the cut cell is byte-identical
+    assertEquals(rel("=SUM(C1:D1  C1:C3)"), "=SUM(C1:D1  C1:C3)")
     // a one-row range starting at the cut cell extends to the paste (Excel oracle rule c)
     assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 A1:C1)")
     // the rewrite is textual, so a function xl does not register follows the cut too

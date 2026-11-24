@@ -4723,5 +4723,292 @@
     "mergedAreasAfter": [
       "Sheet1!A1:C3"
     ]
+  },
+  {
+    "id": "f8-01",
+    "family": 8,
+    "description": "union/intersection: intersection with the winner as a function argument",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E1": "=SUM(B1 B1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E1": {
+        "formula": "=SUM(A1 A1:C1)",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-02",
+    "family": 8,
+    "description": "union/intersection: union with a line range starting at the winner",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E2": "=SUM((B1:C1,D5))"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E2": {
+        "formula": "=SUM((A1:C1,D5))",
+        "value": 10
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-03",
+    "family": 8,
+    "description": "union/intersection: intersection whose cells are the winner (line range first)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E3": "=SUM(B1:C1 B1:B3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E3": {
+        "formula": "=SUM(A1:C1 B1:B3)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-04",
+    "family": 8,
+    "description": "union/intersection: intersection without the winner stays byte-identical",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E1": "=SUM(C1:D1 C1:C3)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E1": {
+        "formula": "=SUM(C1:D1 C1:C3)",
+        "value": 3
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-05",
+    "family": 8,
+    "description": "union/intersection: union with the winner only in the second area",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E2": "=SUM((D5,B1:C1))"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E2": {
+        "formula": "=SUM((D5,A1:C1))",
+        "value": 10
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-06",
+    "family": 8,
+    "description": "union/intersection: union with the winner as a single cell",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E3": "=SUM((D5,B1))"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E3": {
+        "formula": "=SUM((D5,A1))",
+        "value": 7
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
+  },
+  {
+    "id": "f8-07",
+    "family": 8,
+    "description": "union/intersection: the gate passes (the intersection is the winner) yet no rule applies",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 3,
+        "E4": "=SUM(B1:B3 A1:C1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!E4": {
+        "formula": "=SUM(B1:B3 A1:C1)",
+        "value": 0
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac, checked by hand for the union/intersection gate (GH-935)"
   }
 ]

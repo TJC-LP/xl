@@ -88,21 +88,15 @@ object CutReferences:
         def start(r: FormulaSpans.Reference): Int = r.qualifier.fold(r.first.start)(_.start)
         def end(r: FormulaSpans.Reference): Int = r.second.fold(r.first.end)(_.end)
 
-        // the cells a reference depends on (rule 5): a bare range Excel implicitly intersects only
-        // depends on its intersection with the formula's own row or column
-        def dependsOn(r: FormulaSpans.Reference): Option[Box] =
-          val b = box(r)
-          host match
-            case Host.Cell(_, at, array)
-                if r.second.isDefined && !b.isCell && !array &&
-                  !wholeArgument(masked, start(r), end(r)) =>
-              val (row, col) = (at.row.index0, at.col.index0)
-              if b.c1 == b.c2 && b.r1 <= row && row <= b.r2 then Some(Box(row, b.c1, row, b.c1))
-              else if b.r1 == b.r2 && b.c1 <= col && col <= b.c2 then
-                Some(Box(b.r1, col, b.r1, col))
-              else if b.contains(row, col) then Some(Box(row, col, row, col))
-              else None
-            case _ => Some(b)
+        // the cells a bare (implicitly intersected) area depends on: its intersection with the
+        // formula's own row or column; a single cell is itself
+        def implicitly(b: Box, at: ARef): Option[Box] =
+          val (row, col) = (at.row.index0, at.col.index0)
+          if b.isCell then Some(b)
+          else if b.c1 == b.c2 && b.r1 <= row && row <= b.r2 then Some(Box(row, b.c1, row, b.c1))
+          else if b.r1 == b.r2 && b.c1 <= col && col <= b.c2 then Some(Box(b.r1, col, b.r1, col))
+          else if b.contains(row, col) then Some(Box(row, col, row, col))
+          else None
 
         def outcome(b: Box): Outcome =
           if b == Box(fr, fc, fr, fc) then Outcome.To(Box(tr, tc, tr, tc))
@@ -122,10 +116,29 @@ object CutReferences:
             else Outcome.Keep
 
         val refs = scan.references.filter(onSheet)
+        // rule 5: a formula is touched only when one of its reference expressions depends on the
+        // cut or the paste cell. An expression is a reference, an intersection of references
+        // (`B1 B1:C1`: the cells they share) or a parenthesised union of those (`(B1:C1,D5)`: every
+        // cell of every area); as a whole function argument (or in an array formula) it depends on
+        // all the cells it denotes, as a bare value only on their intersection with the formula's
+        // own row or column
         val affected = host match
           case Host.Name | Host.Rule(_) => true
-          case Host.Cell(_, _, _) =>
-            refs.exists(r => dependsOn(r).exists(d => d.contains(fr, fc) || d.contains(tr, tc)))
+          case Host.Cell(_, at, array) =>
+            expressions(masked, scan.references).exists { (span, areasOf) =>
+              val areas = areasOf.flatMap { group =>
+                group
+                  .filter(onSheet)
+                  .map(box)
+                  .reduceOption((a, b) => intersect(a, b).getOrElse(Box(-1, -1, -2, -2)))
+                  .filter(b => b.r1 <= b.r2 && b.c1 <= b.c2)
+                  // an intersection with an area on another sheet (or none on this one) is skipped
+                  .filter(_ => group.forall(onSheet))
+              }
+              val whole = array || wholeArgument(masked, span._1, span._2)
+              val deps = if whole then areas else areas.flatMap(implicitly(_, at))
+              deps.exists(d => d.contains(fr, fc) || d.contains(tr, tc))
+            }
         if !affected then text
         else
           val edits = refs.flatMap { r =>
@@ -148,7 +161,57 @@ object CutReferences:
           FormulaSpans.replace(text, edits)
       }
 
-  /** `text` with string-literal contents blanked (same length), so parentheses inside are inert. */
+  private def intersect(a: Box, b: Box): Option[Box] =
+    val r = Box(a.r1.max(b.r1), a.c1.max(b.c1), a.r2.min(b.r2), a.c2.min(b.c2))
+    Option.when(r.r1 <= r.r2 && r.c1 <= r.c2)(r)
+
+  /**
+   * The reference expressions of a formula, each with its text span and its areas: a vector of
+   * intersection groups (references joined only by spaces), more than one when a non-call
+   * parenthesis holds nothing but comma-separated groups (a union). Every reference belongs to
+   * exactly one expression.
+   */
+  private def expressions(
+    masked: String,
+    refs: Vector[FormulaSpans.Reference]
+  ): Vector[((Int, Int), Vector[Vector[FormulaSpans.Reference]])] =
+    def start(r: FormulaSpans.Reference): Int = r.qualifier.fold(r.first.start)(_.start)
+    def end(r: FormulaSpans.Reference): Int = r.second.fold(r.first.end)(_.end)
+    // intersection groups: consecutive references separated by whitespace only
+    val groups = refs.foldLeft(Vector.empty[Vector[FormulaSpans.Reference]]) { (acc, r) =>
+      acc.lastOption match
+        case Some(g) if {
+              val gap = masked.substring(g.lastOption.fold(0)(end), start(r))
+              gap.nonEmpty && gap.forall(_.isWhitespace)
+            } =>
+          acc.dropRight(1) :+ (g :+ r)
+        case _ => acc :+ Vector(r)
+    }
+    def span(g: Vector[FormulaSpans.Reference]): (Int, Int) =
+      (g.headOption.fold(0)(start), g.lastOption.fold(0)(end))
+    // non-call parenthesis pairs whose content is only comma-separated groups: unions
+    val pairs = masked.zipWithIndex
+      .foldLeft((List.empty[(Int, Boolean)], Vector.empty[(Int, Int)])) {
+        case ((stack, found), (c, i)) =>
+          if c == '(' then
+            val before = if i > 0 then masked.charAt(i - 1) else ' '
+            ((i, before.isLetterOrDigit || before == '.' || before == '_') :: stack, found)
+          else if c == ')' then
+            stack match
+              case (open, call) :: rest => (rest, if call then found else found :+ (open, i))
+              case Nil => (stack, found)
+          else (stack, found)
+      }
+      ._2
+    val unions = pairs.flatMap { (open, close) =>
+      val inner = groups.filter(g => span(g)._1 > open && span(g)._2 <= close)
+      val pieces = masked.substring(open + 1, close).split(",", -1).map(_.trim).toVector
+      val matches = inner.map(g => masked.substring(span(g)._1, span(g)._2).trim)
+      Option.when(inner.size >= 2 && pieces == matches)(((open, close + 1), inner))
+    }
+    val inUnion = unions.flatMap(_._2).toSet
+    unions ++ groups.filterNot(inUnion.contains).map(g => (span(g), Vector(g)))
+
   private def maskStrings(text: String): String =
     text
       .foldLeft((new StringBuilder(text.length), false)) { case ((sb, inString), c) =>
