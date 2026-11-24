@@ -42,6 +42,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports
     its range as touched content, and `Edit.lower` / `Patch.toEdits` do not lower a merge that
     moves a cell.
+- **`clear` refreshes the formulas that read the cleared cells** (found during #935). The `clear`
+  verb wrote the cleared book without recalculating dependents, so `clear B1` left
+  `D1 = SUM(A1:B2)` with its stale cached value. A contents clear now ends with the same scoped
+  dependent refresh as `put`, `merge` and the batch `clear` op (which already had it):
+  `--no-recalc` keeps every cache and `--strict` gates on the recalculation. A styles- or
+  comments-only clear changes no value and refreshes nothing. **Behaviour change:** the verb's
+  summary gains the `Recalculated N formula(s)` line when readers were refreshed.
 - **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
   qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
   formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)

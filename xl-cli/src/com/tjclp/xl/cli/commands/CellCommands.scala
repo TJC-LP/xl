@@ -4,7 +4,7 @@ import java.nio.file.Path
 
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cli.contract.{CliError, CliException, Warning}
 import com.tjclp.xl.cli.helpers.SheetResolver
 import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
@@ -151,7 +151,8 @@ object CellCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    warn: Warning => IO[Unit] = _ => IO.unit
+    warn: Warning => IO[Unit] = _ => IO.unit,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "clear")
@@ -202,9 +203,6 @@ object CellCommands:
         else sheet3
 
       updatedWb = wb.put(sheet4)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-      kept = contents.fold(Vector.empty)(_.kept).map(targetSheet.name -> _)
-      _ <- WriteCommands.spillsKeptWarning(kept).fold(IO.unit)(warn)
 
       // Build description of what was cleared
       clearedItems = Vector(
@@ -213,4 +211,32 @@ object CellCommands:
         if clearComments then Some("comments") else None
       ).flatten
       clearedDesc = clearedItems.mkString(", ")
-    yield s"Cleared $clearedDesc from ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+      message = s"Cleared $clearedDesc from ${range.toA1}"
+
+      // Found during #935: a contents clear changes what formulas read, so their caches are
+      // refreshed before the write like any other content edit (--no-recalc keeps them). The
+      // seeds are the range's cells and the released spill cells whose value changed.
+      candidates = targetSheet.cells.inRange(range).map(_.ref).toSet ++
+        contents.fold(Set.empty[ARef])(_.released)
+      modified = candidates.filter(r =>
+        targetSheet.cells.get(r).map(_.value) != sheet4.cells.get(r).map(_.value)
+      )
+      result <-
+        if modified.isEmpty then
+          writeWorkbook(updatedWb, outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          WriteCommands.writeAfterRefresh(
+            updatedWb,
+            targetSheet.name,
+            modified,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+      kept = contents.fold(Vector.empty)(_.kept).map(targetSheet.name -> _)
+      _ <- WriteCommands.spillsKeptWarning(kept).fold(IO.unit)(warn)
+    yield result

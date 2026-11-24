@@ -306,3 +306,34 @@ class MergeClearsHiddenCliSpec extends FunSuite:
       assertEquals(value(read(out), "B1"), CellValue.Empty)
     }
   }
+
+  // ===== found during #935: a contents clear refreshes the formulas that read the range =====
+
+  test("clear (found during #935): the verb recalculates readers of the cleared cells") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      val kept = dir.resolve("kept.xlsx")
+      write(repro, in)
+      val r = run("-f", in.toString, "-o", out.toString, "clear", "B1")
+      assertEquals(r.exit, 0, r.stderr)
+      assert(r.stdout.contains("Cleared contents from B1:B1"), r.stdout)
+      assertEquals(cached(read(out), "D1"), Some(num(4)))
+      // --no-recalc keeps the cache
+      val noRecalc = run("-f", in.toString, "-o", kept.toString, "--no-recalc", "clear", "B1")
+      assertEquals(noRecalc.exit, 0, noRecalc.stderr)
+      assertEquals(cached(read(kept), "D1"), Some(num(6)))
+    }
+  }
+
+  test("clear (found during #935): batch clear recalculates readers too") {
+    withDir { dir =>
+      val in = dir.resolve("in.xlsx")
+      val out = dir.resolve("out.xlsx")
+      write(repro, in)
+      val ops = """[{"op":"clear","range":"B1"}]"""
+      val r = runIn(ops, "-f", in.toString, "-o", out.toString, "batch", "-")
+      assertEquals(r.exit, 0, r.stderr)
+      assertEquals(cached(read(out), "D1"), Some(num(4)))
+    }
+  }

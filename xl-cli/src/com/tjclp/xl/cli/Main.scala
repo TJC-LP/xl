@@ -3658,7 +3658,7 @@ EXAMPLES:
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
       requireOutput("clear", outputOpt, backendOpt, stream, policy)(
-        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn)
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn, policy)
       )
 
     case CliCommand.Fill(source, target, direction) =>
