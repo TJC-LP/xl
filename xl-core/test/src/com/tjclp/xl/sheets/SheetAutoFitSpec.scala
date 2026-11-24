@@ -164,3 +164,14 @@ class SheetAutoFitSpec extends ScalaCheckSuite:
       .copy(mergedRanges = Set(com.tjclp.xl.addressing.CellRange(a1, ARef.from0(2, 0))))
     assertEquals(SheetEdits.widenForEntries(s, List(a1))._2, Vector.empty)
   }
+
+  test("GH-869 review: overflow is judged in 7 px digits, whatever font measured it") {
+    val unsized = 64.0 / 7.0
+    // Calibri metrics: 59 px of text plus 5 px padding is exactly the unsized column's 64 px
+    assert(SheetEdits.scaledFit(59, 7) <= unsized)
+    assert(SheetEdits.scaledFit(60, 7) > unsized)
+    // a fallback font with a 9 px digit: 8 characters of `12/31/26` measure 64 px, which is
+    // 64 * 7/9 = 49.8 px in Calibri terms and fits; unscaled it would have widened
+    assert(SheetEdits.scaledFit(64, 9) <= unsized)
+    assert(SheetEdits.scaledFit(81, 9) > unsized)
+  }

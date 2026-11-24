@@ -835,8 +835,12 @@ private[xl] object SheetEdits:
       .groupBy(_.ref.col)
       .iterator
       .filter((col, _) => sheet.columnProperties.get(col).forall(p => p.width.isEmpty && !p.hidden))
-      .map((col, cells) => col -> fitWidth(sheet, cells))
-      .filter((_, width) => width > current)
+      .map((col, cells) => (col, cells, cells.map(entryFit(_, sheet)).maxOption.getOrElse(0.0)))
+      .collect {
+        // the written width is autofit's, never below the scaled need, so it never narrows
+        case (col, cells, need) if need > current =>
+          col -> math.max(fitWidth(sheet, cells), roundUp(need))
+      }
       .toVector
       .sortBy(_._1.index0)
     val updated = widened.foldLeft(sheet) { case (s, (col, width)) =>
@@ -852,6 +856,36 @@ private[xl] object SheetEdits:
    * as `3/15/26` that Excel shows in full.
    */
   private val UnsizedColumnFitWidth: Double = 64.0 / MaxDigitWidthPx
+
+  /**
+   * The width `cell`'s formatted text needs, judged in Excel's units: the text's measured width is
+   * rescaled by the measuring font's own digit width (the default font's `0`) to Calibri 11's 7 px
+   * digit. Without that, a host lacking Calibri measures with a wider fallback font and widens a
+   * short date such as `12/31/26` that Excel shows in full (#869 review). The width then written is
+   * still [[fitWidth]], the same as `autofit` gives the column. When fonts cannot be measured at
+   * all, the char-count heuristic decides.
+   */
+  private def entryFit(cell: Cell, sheet: Sheet): Double =
+    val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
+    val text = RenderUtils.cellValueToText(cell.value, numFmt)
+    Try(
+      scaledFit(
+        RenderUtils.measureTextWidth(text, styleOpt.map(_.font)),
+        RenderUtils.measureTextWidth("0", None)
+      )
+    ).getOrElse(heuristicWidth(text, styleOpt))
+
+  /**
+   * The width (in [[autoFitWidth]]'s units) text `textPx` wide needs once rescaled to a 7 px digit,
+   * when the font that measured it draws its default-size `0` `digitPx` wide.
+   */
+  private[sheets] def scaledFit(textPx: Int, digitPx: Int): Double =
+    val scale = if digitPx > 0 then MaxDigitWidthPx / digitPx else 1.0
+    (textPx * scale + CellPaddingPx) / MaxDigitWidthPx
+
+  private def roundUp(width: Double): Double =
+    BigDecimal(width).setScale(2, BigDecimal.RoundingMode.CEILING).toDouble
 
   /** Whether `cell` displays a number or date under a non-General format (GH-869). */
   private def displaysFormattedNumber(cell: Cell, sheet: Sheet): Boolean =

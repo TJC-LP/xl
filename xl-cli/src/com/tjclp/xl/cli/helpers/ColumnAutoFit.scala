@@ -56,7 +56,9 @@ object ColumnAutoFit:
     wb: Workbook,
     written: Iterable[(SheetName, ARef)]
   ): (Workbook, Vector[(SheetName, Column, Double)]) =
-    written.groupMap(_._1)(_._2).toVector.sortBy(_._1.value).foldLeft((wb, Vector.empty)) {
+    // grouped by the tab's own name, so `data` and `Data` are measured as the one sheet they are
+    val byTab = written.groupMap((name, _) => wb(name).fold(_ => name, _.name))(_._2)
+    byTab.toVector.sortBy(_._1.value).foldLeft((wb, Vector.empty)) {
       case ((acc, notes), (name, refs)) =>
         acc(name).toOption match
           case None => (acc, notes)

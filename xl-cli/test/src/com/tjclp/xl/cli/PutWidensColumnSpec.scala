@@ -191,3 +191,25 @@ class PutWidensColumnSpec extends FunSuite:
       assertEquals(widthOf(out, "A"), Some(7.0))
     }
   }
+
+  test("batch: a put before rename-sheet widens the renamed sheet's column (GH-869 review)") {
+    withOut { out =>
+      val ops =
+        """[{"op":"put","ref":"B1","value":"$1,234,567.89"},
+          | {"op":"rename-sheet","from":"Data","to":"Report"}]""".stripMargin
+      batch(ops, out)
+      assert(widthOf(out, "B").exists(_ > 9.14), s"B is ${widthOf(out, "B")}")
+    }
+  }
+
+  test("batch: ops spelling the sheet in another case are measured as one sheet (GH-869 review)") {
+    withOut { out =>
+      val ops =
+        """[{"op":"put","sheet":"data","ref":"B1","value":"$1,234,567.89"},
+          | {"op":"put","sheet":"Data","ref":"B2","value":"$987,654,321,000.00"}]""".stripMargin
+      batch(ops, out)
+      // fitted to the wider B2 in one pass, not locked at B1's width by a first, lower-case group
+      val read = ExcelIO.instance[IO].read(out).unsafeRunSync().sheets.head
+      assertEquals(widthOf(out, "B"), Some(read.autoFitWidth(col("B"))))
+    }
+  }

@@ -1891,25 +1891,42 @@ object BatchParser:
 
   /**
    * GH-869: every area a `put` or `putf` op of the batch wrote, for the column widening Excel's own
-   * entry does (`ColumnAutoFit.widenForWrites`). Other writers (`copy`, `fill`, `import`) leave
-   * widths alone, as Excel's paste and fill do.
+   * entry does (`ColumnAutoFit.widenForWrites`), named by the sheet's final name. The ops are
+   * walked in order so a later `rename-sheet` carries both the batch default (as the applier's
+   * `retarget` does) and the areas already written on that sheet to the new name; `wb` is the final
+   * workbook. Other writers (`copy`, `fill`, `import`) leave widths alone, as Excel's paste and
+   * fill do.
    */
   def putTargets(
     wb: Workbook,
     defaultSheetOpt: Option[Sheet],
     scoped: Vector[ScopedOp]
   ): Vector[(SheetName, CellRange)] =
-    scoped.flatMap { s =>
-      val refs = s.op match
-        case BatchOp.Put(ref, _, _) => Vector(ref)
-        case BatchOp.PutValues(range, _) => Vector(range)
-        case BatchOp.PutFormula(ref, _, _, _) => Vector(ref)
-        case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
-        case BatchOp.PutFormulas(range, _, _) => Vector(range)
-        case _ => Vector.empty
-      if refs.isEmpty then Vector.empty
-      else targetAreas(opSheet(wb, defaultSheetOpt.map(_.name), s).toOption.flatten, refs)
+    def same(a: SheetName, b: SheetName): Boolean = a.value.equalsIgnoreCase(b.value)
+    val (_, areas) = scoped.foldLeft(
+      (defaultSheetOpt.map(_.name), Vector.empty[(SheetName, CellRange)])
+    ) { case ((default, acc), s) =>
+      s.op match
+        case BatchOp.RenameSheet(from, to) =>
+          (SheetName(from).toOption, SheetName(to).toOption) match
+            case (Some(f), Some(t)) =>
+              (
+                default.map(d => if same(d, f) then t else d),
+                acc.map((name, r) => (if same(name, f) then t else name) -> r)
+              )
+            case _ => (default, acc)
+        case op =>
+          val refs = op match
+            case BatchOp.Put(ref, _, _) => Vector(ref)
+            case BatchOp.PutValues(range, _) => Vector(range)
+            case BatchOp.PutFormula(ref, _, _, _) => Vector(ref)
+            case BatchOp.PutFormulaDragging(range, _, _, _) => Vector(range)
+            case BatchOp.PutFormulas(range, _, _) => Vector(range)
+            case _ => Vector.empty
+          if refs.isEmpty then (default, acc)
+          else (default, acc ++ targetAreas(opSheet(wb, default, s).toOption.flatten, refs))
     }
+    areas
 
   /**
    * GH-714: which of the [[putfTargets]] cells the `IMPLICIT_INTERSECTION` check need not parse
