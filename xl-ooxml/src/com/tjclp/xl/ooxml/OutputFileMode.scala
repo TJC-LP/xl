@@ -19,13 +19,13 @@ import scala.jdk.CollectionConverters.*
  * (0600), and a rename keeps that mode, so outputs used to end up 0600 whatever the umask. The
  * staged file stays owner-only while it is written; [[prepare]] then gives it the mode the output
  * should have:
- *   - an output that already exists keeps its owner and others bits, and its group where the writer
- *     may set it. Its group bits are capped at its others bits (`0664` becomes `0644`, `0640`
- *     becomes `0600`): the group bits cannot be trusted for the staged file, whose group may not be
- *     the original's, and which carries no ACL (on a file with a POSIX ACL the group bits are the
- *     ACL mask, not the group's own entry). The JVM cannot read POSIX ACLs, so the cap is applied
- *     every time. No user or group gains access; a group-shared file loses the group's extra
- *     rights;
+ *   - an output that already exists keeps its mode exactly (#930), as `cp -p` and editors do, once
+ *     the staged file carries the original's group. Where the writer may not give it that group (it
+ *     is not a member), the staged file's group is not the one the bits were granted to, so its
+ *     group bits are capped at its others bits (`0664` becomes `0644`, `0640` becomes `0600`): no
+ *     user or group gains access. Residual: on a file with a POSIX.1e ACL (Linux `setfacl`) the
+ *     group bits are the ACL mask, and the JVM can read neither the ACL nor copy it, so the
+ *     replaced file, which carries no ACL, grants its owning group the mask's rights;
  *   - a new output gets the mode any new file gets in its directory — `0666 & ~umask`, narrowed by
  *     a default ACL if the directory has one — read from an empty probe file there, since the JVM
  *     cannot read the umask. The probe holds no data, so it exposes nothing.
@@ -48,15 +48,20 @@ private[xl] object OutputFileMode:
   ): Option[java.util.Set[PosixFilePermission]] =
     if Files.isRegularFile(target) then
       val original = Files.readAttributes(target, classOf[PosixFileAttributes])
-      keepGroup(staged, original.group)
-      Some(groupCappedAtOthers(original.permissions))
+      if keepGroup(staged, original.group) then Some(original.permissions)
+      else Some(groupCappedAtOthers(original.permissions))
     else if Files.exists(target) then None // not a file (a directory): no mode to carry over
     else freshMode(Option(target.toAbsolutePath.getParent).getOrElse(Path.of(".")))
 
-  /** Give `staged` the original's group where allowed; the capped bits make it safe either way. */
-  private def keepGroup(staged: PosixFileAttributeView, group: GroupPrincipal): Unit =
-    try if staged.readAttributes.group != group then staged.setGroup(group)
-    catch case _: IOException | _: SecurityException => ()
+  /**
+   * Give `staged` the original's group where allowed; true when it now carries that group (read
+   * back, not assumed), so the original's group bits mean what they meant.
+   */
+  private def keepGroup(staged: PosixFileAttributeView, group: GroupPrincipal): Boolean =
+    try
+      if staged.readAttributes.group != group then staged.setGroup(group)
+      staged.readAttributes.group == group
+    catch case _: IOException | _: SecurityException => false
 
   private val groupToOthers: List[(PosixFilePermission, PosixFilePermission)] = List(
     PosixFilePermission.GROUP_READ -> PosixFilePermission.OTHERS_READ,
@@ -64,7 +69,10 @@ private[xl] object OutputFileMode:
     PosixFilePermission.GROUP_EXECUTE -> PosixFilePermission.OTHERS_EXECUTE
   )
 
-  /** `permissions` with each group bit kept only where the matching others bit is set. */
+  /**
+   * `permissions` with each group bit kept only where the matching others bit is set: the mode of a
+   * replaced file whose group the staged file could not take.
+   */
   private[ooxml] def groupCappedAtOthers(
     permissions: java.util.Set[PosixFilePermission]
   ): java.util.Set[PosixFilePermission] =

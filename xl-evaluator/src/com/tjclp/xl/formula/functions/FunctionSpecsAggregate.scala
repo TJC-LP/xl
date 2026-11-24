@@ -2006,7 +2006,7 @@ trait FunctionSpecsAggregate extends FunctionSpecsBase:
     FunctionSpec.simple[BigDecimal, SumProductArgs](
       "SUMPRODUCT",
       Arity.atLeastOne,
-      flags = FunctionFlags(returnsNumeric = true)
+      flags = FunctionFlags(returnsNumeric = true, arrayArguments = ArrayArguments.All)
     ) { (args, ctx) =>
       import com.tjclp.xl.formula.ast.TExpr
 

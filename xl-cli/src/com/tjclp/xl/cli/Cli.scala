@@ -39,7 +39,8 @@ import com.tjclp.xl.text.Suggest
  *     [[usage]], never the full subcommand dump (ADR-017 §2.2). With `--json` among the arguments
  *     both render the `ok:false` envelope instead (§2.4), so a program never has to parse help text
  *     out of a failed call
- *   - `--version` / `-v` prints the version on stdout and exits 0
+ *   - `--version` / `-v` prints the version on stdout and exits 0; with `--json` it is the
+ *     `ok:true` envelope carrying `data.version` (#937)
  *
  * Command errors go to stderr as `Error: <message>` plus a `code:` line ([[contract.Diagnostics]]);
  * stdout is empty on every failure. Under the global `--json` every result — success or failure —
@@ -383,14 +384,21 @@ object Cli:
     emit(Outcome.failed(verb, CliError(ErrorCode.INTERNAL, message)), mode, io)
 
   /**
-   * Exactly the flag decline-effect's `CommandIOApp` added: `--version`/`-v`, partially visible.
+   * The flag decline-effect's `CommandIOApp` added: `--version`/`-v`, partially visible. Plain, it
+   * prints the bare version; with `--json` (#937) it is the `ok:true` envelope whose `data.version`
+   * is that version, under the verb `""` a top-level `--help --json` uses.
    */
   private def versionFlag(io: CliIO): Opts[IO[ExitCode]] =
-    Opts
-      .flag(
-        long = "version",
-        short = "v",
-        help = "Print the version number and exit.",
-        visibility = Visibility.Partial
-      )
-      .as(io.out(BuildInfo.version).as(ExitCode.Success))
+    val flag = Opts.flag(
+      long = "version",
+      short = "v",
+      help = "Print the version number and exit.",
+      visibility = Visibility.Partial
+    )
+    (flag, jsonOpt).mapN { (_, mode) =>
+      mode match
+        case OutputMode.Json =>
+          val data = ujson.Obj("version" -> ujson.Str(BuildInfo.version))
+          emit(Outcome.ok("", Payload.Json(data)), mode, io)
+        case OutputMode.Text => io.out(BuildInfo.version).as(ExitCode.Success)
+    }

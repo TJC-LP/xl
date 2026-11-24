@@ -52,8 +52,8 @@ final class CliException(val error: CliError) extends Exception(error.message) w
 /**
  * A run that COMPLETED with findings, carried through `IO` like [[CliException]]: the report is the
  * payload, the verdict is `error` (a signal code, exit 1 — `AUDIT_FINDINGS`). The runner turns it
- * into [[Outcome.signal]], so text mode prints the report with no `Error:` line and `--json` keeps
- * it as `data`. Stack-trace free: nothing here is a defect to debug.
+ * into [[Outcome.signal]]: the report goes to stdout (`data` under `--json`) and the verdict's one
+ * `Error:` line to stderr (#933). Stack-trace free: nothing here is a defect to debug.
  */
 final class CliSignal(val payload: Payload, val error: CliError)
     extends Exception(error.message)

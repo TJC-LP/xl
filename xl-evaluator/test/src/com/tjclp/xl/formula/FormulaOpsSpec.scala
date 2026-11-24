@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula
 
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.formula.printer.FormulaOps
+import com.tjclp.xl.formula.printer.{CutReferences, FormulaOps}
 import munit.FunSuite
 
 /**
@@ -278,4 +278,248 @@ class FormulaOpsSpec extends FunSuite:
     // the #REF! is per reference: the rest of the formula survives and re-parses
     assertEquals(shifted("=IF(A1>0,ABS(A1),B5)", 0, -1), "=IF(#REF!>0,ABS(#REF!),B4)")
     assertEquals(shifted("=#REF!+B2", 1, 1), "=#REF!+C3")
+  }
+
+  // ===== canonicalSheets (GH-936) =====
+
+  private val tabs = Vector(Sheet1, Data, Q1Data, SheetName.unsafe("O'Brien"))
+  private def canon(text: String): String = FormulaOps.canonicalSheets(text, tabs)
+
+  test("GH-936: a qualifier typed in another case is stored as the sheet's own name") {
+    assertEquals(canon("=sheet1!A1"), "=Sheet1!A1")
+    assertEquals(canon("=SHEET1!A1+1"), "=Sheet1!A1+1")
+    assertEquals(canon("=SUM(data!B1:B3)"), "=SUM(Data!B1:B3)")
+    assertEquals(canon("=SUM(DATA!A:A)"), "=SUM(Data!A:A)")
+    // the bare (equals-free) cell text keeps its form
+    assertEquals(canon("sheet1!A1"), "Sheet1!A1")
+  }
+
+  test("GH-936: quoted names stay quoted, apostrophes doubled") {
+    assertEquals(canon("='q1 data'!A1"), "='Q1 Data'!A1")
+    assertEquals(canon("='o''brien'!B2"), "='O''Brien'!B2")
+  }
+
+  test("GH-936: sheet-qualified defined names follow too") {
+    assertEquals(canon("=data!rate*2"), "=Data!rate*2")
+    assertEquals(canon("=SUMIF(data!crit,\">1\")"), "=SUMIF(Data!crit,\">1\")")
+  }
+
+  test("GH-936: unknown sheets, external refs and string literals stay as typed") {
+    assertEquals(canon("=nosuch!A1"), "=nosuch!A1")
+    assertEquals(canon("=[1]sheet1!A1"), "=[1]sheet1!A1")
+    assertEquals(canon("=INDIRECT(\"sheet1!A1\")"), "=INDIRECT(\"sheet1!A1\")")
+    // a mix: only the known qualifier changes
+    assertEquals(canon("=sheet1!A1+nosuch!B1"), "=Sheet1!A1+nosuch!B1")
+  }
+
+  test("GH-936: canonical or unqualified text comes back byte-identical, spacing and case kept") {
+    assertEquals(canon("=sum( Sheet1!A1 , 2 )"), "=sum( Sheet1!A1 , 2 )")
+    assertEquals(canon("=sum( a1 , 2 )"), "=sum( a1 , 2 )")
+    assertEquals(canon("=SUM(("), "=SUM((")
+    assertEquals(canon("=sheet1!"), "=sheet1!")
+  }
+
+  test("GH-936 review: only the qualifier changes; every other byte is kept as typed") {
+    assertEquals(canon("=(data!A1) + 1"), "=(Data!A1) + 1")
+    assertEquals(canon("=-(-data!A1)"), "=-(-Data!A1)")
+    assertEquals(canon("=1E3+data!A1"), "=1E3+Data!A1")
+    assertEquals(canon("=sum( data!A1 ,\"x!y\")"), "=sum( Data!A1 ,\"x!y\")")
+    assertEquals(canon("=data!$A$1:$B2 + 'q1 data'!C3"), "=Data!$A$1:$B2 + 'Q1 Data'!C3")
+    assertEquals(canon("=data!#REF!+1"), "=Data!#REF!+1")
+    // a 3-D reference is one opaque span, kept as typed; the other qualifiers are still respelled
+    assertEquals(canon("=SUM(sheet1:data!A1)"), "=SUM(sheet1:data!A1)")
+    assertEquals(canon("=SUM(sheet1:data!A1)+data!B2"), "=SUM(sheet1:data!A1)+Data!B2")
+    assertEquals(
+      canon("=SUM('q1 data':data!A1:B2)+sheet1!C3"),
+      "=SUM('q1 data':data!A1:B2)+Sheet1!C3"
+    )
+  }
+
+  test("GH-935 review: relocateCell rewrites only the reference, keeping every other byte") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    assertEquals(rel("=( B1 ) + 1E3"), "=( A1 ) + 1E3")
+    assertEquals(rel("=-(-$B$1)"), "=-(-$A$1)")
+    assertEquals(rel("=sum(b1:b1, B10, Sheet1!B1)"), "=sum(A1:A1, B10, Sheet1!A1)")
+    assertEquals(rel("=SUM(B1:B3)"), "=SUM(B1:B3)")
+    assertEquals(rel("=\"B1\"&B1"), "=\"B1\"&A1")
+  }
+
+  test("GH-936 review 2: a structured reference does not hide the next qualifier") {
+    assertEquals(canon("=SUM(Table1[Col] data!A1)"), "=SUM(Table1[Col] Data!A1)")
+    assertEquals(canon("=SUM(A1:A2 data!A1)"), "=SUM(A1:A2 Data!A1)")
+    // an external prefix still guards its own qualifier
+    assertEquals(canon("=[1]sheet1!A1+data!A1"), "=[1]sheet1!A1+Data!A1")
+  }
+
+  test("GH-935 review 2: relocateCell reaches intersection operands") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // an intersection depends on every cell of every operand area (Excel's conservative rule,
+    // checked in Excel for Mac), wherever the formula sits (here Z9, off the cut cell's row and
+    // column): even an empty one such as B1 C1 is rewritten
+    assertEquals(rel("=B1 C1"), "=A1 C1")
+    assertEquals(rel("=SUM(B1:C1 C1:C3)"), "=SUM(A1:C1 C1:C3)")
+    assertEquals(rel("=B1 B1:C1"), "=A1 A1:C1")
+    // a union depends on every cell of every area, the cut cell only in its second area
+    assertEquals(rel("=SUM((D5,B1:C1))"), "=SUM((D5,A1:C1))")
+    // an intersection without the cut cell is byte-identical
+    assertEquals(rel("=SUM(C1:D1  C1:C3)"), "=SUM(C1:D1  C1:C3)")
+    // a one-row range starting at the cut cell extends to the paste (Excel oracle rule c)
+    assertEquals(rel("=SUM(B1 B1:C1)"), "=SUM(A1 A1:C1)")
+    // the rewrite is textual, so a function xl does not register follows the cut too
+    assertEquals(rel("=ISREF(B1)"), "=ISREF(A1)")
+  }
+
+  test(
+    "GH-935 review 4: a 3-D reference stays as typed while the other references follow the cut"
+  ) {
+    def rel(t: String, host: SheetName) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(host, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    val sheet3 = SheetName.unsafe("Sheet3")
+    // checked in Excel for Mac (fixture f10-01)
+    assertEquals(
+      rel("=SUM(Sheet1:Sheet2!B1)+Sheet1!B1", sheet3),
+      "=SUM(Sheet1:Sheet2!B1)+Sheet1!A1"
+    )
+    // not checked in Excel: on the merge sheet, the 3-D span's own B1 never leaks as a local ref
+    assertEquals(rel("=SUM(Sheet1:Sheet2!B1)+B1", Sheet1), "=SUM(Sheet1:Sheet2!B1)+A1")
+    assertEquals(rel("=SUM('Sheet1:Sheet 3'!B1)+B1", Sheet1), "=SUM('Sheet1:Sheet 3'!B1)+A1")
+    assertEquals(rel("=SUM(Sheet1:'Sheet 3'!B1:C1)+B1", Sheet1), "=SUM(Sheet1:'Sheet 3'!B1:C1)+A1")
+  }
+
+  test("GH-935 review 4: array-typed parameters depend on every cell of the ranges they hold") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9-03): SUMPRODUCT's, INDEX's first, ROWS' parameter
+    assertEquals(rel("=SUMPRODUCT((B1:C1>0)*B1:C1)"), "=SUMPRODUCT((A1:C1>0)*A1:C1)")
+    assertEquals(rel("=INDEX(B1:C1*1,1,1)"), "=INDEX(A1:C1*1,1,1)")
+    assertEquals(rel("=ROWS(B1:C1*1)"), "=ROWS(A1:C1*1)")
+    // value-typed parameters keep the implicit-intersection rule (Excel leaves these alone)
+    assertEquals(rel("=SUM(B1:C1*1)"), "=SUM(B1:C1*1)")
+    assertEquals(rel("=MAX(B1:C1*2)"), "=MAX(B1:C1*2)")
+    // not checked in Excel: COLUMNS' parameter is array-typed too
+    assertEquals(rel("=COLUMNS(B1:C1*1)"), "=COLUMNS(A1:C1*1)")
+  }
+
+  test("GH-935 review 5: the text-level array-parameter table covers every registry flag") {
+    import com.tjclp.xl.formula.functions.{ArrayArguments, FunctionRegistry}
+    FunctionRegistry.all.foreach { spec =>
+      val expected = spec.flags.arrayArguments match
+        case ArrayArguments.Off => None
+        case ArrayArguments.All => Some(None)
+        case ArrayArguments.First => Some(Some(Set(0)))
+      expected.foreach { positions =>
+        assertEquals(CutReferences.ArrayParameters.get(spec.name), Some(positions), spec.name)
+      }
+    }
+  }
+
+  test("GH-935 review 5: array-typed arguments of formulas xl cannot parse follow the cut") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-01)
+    assertEquals(rel("=XLOOKUP(7,B1:C1*1,B1:C1*1)"), "=XLOOKUP(7,A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=IRR(B1:C1*1-4)"), "=IRR(A1:C1*1-4)")
+    // at any depth inside the argument
+    assertEquals(rel("=LOOKUP(7,(B1:C1+0)*1)"), "=LOOKUP(7,(A1:C1+0)*1)")
+    // a value-typed argument of the same call keeps the implicit-intersection rule
+    assertEquals(rel("=XLOOKUP(B1:C1*1,{1,2},{3,4})"), "=XLOOKUP(B1:C1*1,{1,2},{3,4})")
+    // not checked in Excel (from Excel's function reference): these parameters are array-typed too
+    assertEquals(rel("=SUMX2PY2(B1:C1*1,B1:C1*1)"), "=SUMX2PY2(A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=PEARSON(B1:C1*1,B1:C1*1)"), "=PEARSON(A1:C1*1,A1:C1*1)")
+    assertEquals(rel("=FREQUENCY(B1:C1*1,{1;2})"), "=FREQUENCY(A1:C1*1,{1;2})")
+    assertEquals(rel("=TREND(B1:C1*1)"), "=TREND(A1:C1*1)")
+  }
+
+  test("GH-935 review 6: only the formula's own commas and parentheses count as arguments") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-02): commas inside an array constant or a quoted
+    // sheet name are not argument separators
+    assertEquals(rel("=XLOOKUP(1,{1,2},B1:C1*1)"), "=XLOOKUP(1,{1,2},A1:C1*1)")
+    assertEquals(rel("=XMATCH({1,2}*B1:C1,D1:E1)"), "=XMATCH({1,2}*B1:C1,D1:E1)")
+    assertEquals(rel("=XMATCH('a,b'!A1,B1:C1*1)"), "=XMATCH('a,b'!A1,A1:C1*1)")
+    // not checked in Excel: a parenthesis in a quoted sheet name, an escaped quote, a row
+    // constant, and commas inside a structured reference
+    assertEquals(rel("=XMATCH('Q)1'!A1,B1:C1*1)"), "=XMATCH('Q)1'!A1,A1:C1*1)")
+    assertEquals(rel("=XMATCH('it''s'!A1,B1:C1*1)"), "=XMATCH('it''s'!A1,A1:C1*1)")
+    assertEquals(rel("=XLOOKUP(1,{1;2},B1:C1*1)"), "=XLOOKUP(1,{1;2},A1:C1*1)")
+    assertEquals(
+      rel("=XLOOKUP(1,T[[#This Row],[a]],B1:C1*1)"),
+      "=XLOOKUP(1,T[[#This Row],[a]],A1:C1*1)"
+    )
+    assertEquals(rel("=XLOOKUP(1,T[Amount (USD)],B1:C1*1)"), "=XLOOKUP(1,T[Amount (USD)],A1:C1*1)")
+    assertEquals(rel("=XMATCH(\"x,y\",B1:C1*1)"), "=XMATCH(\"x,y\",A1:C1*1)")
+  }
+
+  test("GH-935 review 6: array-typed parameters of the newer functions, value-typed ones kept") {
+    def rel(t: String) = FormulaOps.relocateCell(
+      t,
+      CutReferences.Host.Cell(Sheet1, ref"Z9", array = false),
+      Sheet1,
+      ref"B1",
+      ref"A1"
+    )
+    // checked in Excel for Mac (fixture f9b-02 holds the array-typed ones): Excel leaves these
+    // value-typed arguments alone
+    Vector(
+      "=LARGE(B1:C1*1,1)",
+      "=SMALL(B1:C1*1,1)",
+      "=PERCENTILE(B1:C1*1,0.5)",
+      "=QUARTILE(B1:C1*1,1)",
+      "=TRIMMEAN(B1:C1*1,0.2)",
+      "=MATCH(7,B1:C1*1,0)",
+      "=SUM(TRANSPOSE(B1:C1*1))",
+      "=SUM(B1:C1*1)",
+      "=LET(x,B1:C1*1,SUM(x))",
+      "=LAMBDA(x,SUM(x))(B1:C1*1)"
+    ).foreach(t => assertEquals(rel(t), t, t))
+    // not checked in Excel (from Excel's function reference): array-typed too
+    assertEquals(rel("=SUM(HSTACK(B1:C1*1))"), "=SUM(HSTACK(A1:C1*1))")
+    assertEquals(rel("=SUM(TAKE(B1:C1*1,1))"), "=SUM(TAKE(A1:C1*1,1))")
+    assertEquals(rel("=SUM(CHOOSECOLS(B1:C1*1,1))"), "=SUM(CHOOSECOLS(A1:C1*1,1))")
+    assertEquals(rel("=COVARIANCE.S(B1:C1*1,{1,2})"), "=COVARIANCE.S(A1:C1*1,{1,2})")
+    assertEquals(
+      rel("=_xlfn.FORECAST.ETS(3,B1:C1*1,{1,2})"),
+      "=_xlfn.FORECAST.ETS(3,A1:C1*1,{1,2})"
+    )
+    // a value-typed argument of an array-typed function keeps the intersection rule
+    assertEquals(rel("=SUM(TAKE({1,2},B1:C1*1))"), "=SUM(TAKE({1,2},B1:C1*1))")
+  }
+
+  test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
+    val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
+    assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")
+    assertEquals(FormulaOps.canonicalSheets("=DATA!A1", twins), "=DATA!A1")
   }

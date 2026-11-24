@@ -188,8 +188,9 @@ object TestFixtures:
       .put(ref"B1", CellValue.Formula("A1+1", None))
       .put(ref"C1", cached("TODAY()", 45000))
       .put(ref"D1", cached("INDIRECT(\"A2\")", 0))
-      .put(ref"E1", cached("F1+1", 0))
-      .put(ref"F1", cached("E1+1", 0))
+      // #934: a converging two-cycle, the audit's NOTE; a diverging one is diverging.xlsx's finding
+      .put(ref"E1", cached("F1/2+1", 0))
+      .put(ref"F1", cached("E1/2", 0))
       .put(ref"G1", cached("'[1]Ext'!A1", 3))
       .put(ref"H1", cached("UNSUPPORTED(1)", 0))
       .put(ref"I1", cached("NoSuchName*2", 0))
@@ -201,6 +202,23 @@ object TestFixtures:
         maxChange = Some(BigDecimal("0.001"))
       )
     )
+
+  /**
+   * #933/#934's repro: `<calcPr iterate="1" iterateCount="5" iterateDelta="0.001"/>` over `A1 =
+   * B1+1`, `B1 = A1*2`, a pair that grows every round, so it exhausts its 5 rounds. Cached zeros,
+   * so `audit` has nothing to report but the cycle.
+   */
+  def divergingBook(): Workbook =
+    def cached(expr: String): CellValue =
+      CellValue.Formula(expr, Some(CellValue.Number(BigDecimal(0))))
+    Workbook(Vector(Sheet("Model").put(ref"A1", cached("B1+1")).put(ref"B1", cached("A1*2"))))
+      .withCalcPr(
+        CalcPr(
+          iterativeCalculation = true,
+          maxIterations = Some(5),
+          maxChange = Some(BigDecimal("0.001"))
+        )
+      )
 
   /**
    * The `cell` range-gap fixture (ADR-017 §2.10): `B1 = SUM(A1:A5)` over a column with only A1 and
@@ -324,6 +342,7 @@ object TestFixtures:
     "named.xlsx" -> (() => namedBook()),
     "linked.xlsx" -> (() => linkedBook()),
     "dirty.xlsx" -> (() => dirtyBook()),
+    "diverging.xlsx" -> (() => divergingBook()),
     "gaps.xlsx" -> (() => gapsBook()),
     "precise.xlsx" -> (() => preciseBook()),
     "qualified.xlsx" -> (() => qualifiedBook()),

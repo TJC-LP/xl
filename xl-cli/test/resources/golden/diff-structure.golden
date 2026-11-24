@@ -19,3 +19,5 @@ Columns (1):
 
 Summary: 0 changed, 0 added, 0 removed cell(s) across 1 sheet(s); 2 structure change(s)
 ## stderr
+Error: Differences found: <DIR>/simple.xlsx vs <DIR>/resized.xlsx
+  code: DIFFERENCES_FOUND

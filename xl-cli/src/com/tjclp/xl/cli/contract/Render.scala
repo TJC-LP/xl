@@ -15,11 +15,12 @@ final case class Rendered(stdout: String, stderr: String) derives CanEqual
 /**
  * The two renderings of an [[Outcome]] (ADR-017 §2.4).
  *
- * [[text]] is today's contract byte for byte: the payload on stdout; on stderr the diagnostics
- * block ([[Diagnostics.render]]) when a failure has no payload, then one `Warning[CODE]: …` line
- * per warning. An error that arrives WITH a payload is a signal — findings or a failed gate — whose
- * report is the payload itself, so the text form prints that report and no `Error:` line, exactly
- * as `diff`, `lint` and a `--strict` write always have.
+ * [[text]] is the payload on stdout; on stderr the diagnostics block ([[Diagnostics.render]]) of
+ * any error, then one `Warning[CODE]: …` line per warning. An error that arrives WITH a payload is
+ * a signal — findings or a failed gate (`diff` differs, `lint` findings,
+ * `audit --fail-on-findings`, a `--strict` write) — whose report is the payload itself: the report
+ * stays on stdout and the signal's own one `Error:` line goes to stderr, as for a failure (#933;
+ * before, a signal printed nothing on stderr, so a caller reading stderr saw a silent exit 1).
  *
  * [[json]] is the envelope, identical for every verb, success or failure, and the only thing on
  * stdout:
@@ -29,10 +30,9 @@ final case class Rendered(stdout: String, stderr: String) derives CanEqual
  * }}}
  * `ok ⇔ error == null`; `data` is `null` on a failure, `{text, saved, written}` for prose verbs and
  * the verb's own JSON otherwise — a [[Payload.Raw]] is spliced in as the text its renderer
- * produced, re-indented, so no number lexeme is ever rounded through a `Double`. stderr follows the
- * text rule: the one-line `Error: <message>` only when a failure has no payload, so a human tailing
- * a log still sees it; a signal (findings, a failed gate) keeps its report as `data` and prints
- * nothing on stderr, exactly as text mode does for the same run.
+ * produced, re-indented, so no number lexeme is ever rounded through a `Double`. stderr carries the
+ * one-line `Error: <message>` of any error, a signal's included (#933), so a human tailing a log
+ * still sees it; a signal keeps its report as `data` as well.
  *
  * [[stream]] is the stdout of either mode written as it is produced (GH-635): the bytes `emit`
  * prints, a fragment at a time for a [[Payload.Streamed]] — the same bytes as [[apply]] would print
@@ -66,9 +66,9 @@ object Render:
     Rendered(stdout, stderr(OutputMode.Json)(outcome))
 
   /**
-   * The stderr of a run in `mode`, which never depends on the payload's text — only on whether
-   * there is one: text mode prints the diagnostics block of a failure without a payload, then the
-   * warnings; `--json` the one-line `Error:` of such a failure and nothing else.
+   * The stderr of a run in `mode`, which never depends on the payload: text mode prints the
+   * diagnostics block of the run's error (a failure's or a signal's, #933), then the warnings;
+   * `--json` the one-line `Error:` of that error and nothing else.
    *
    * The `--json` echo is deliberate (GH-676 kept it): a program reads the envelope on stdout and
    * never has to look at stderr, while a human tailing a log, or a CI step that shows only stderr,
@@ -76,11 +76,11 @@ object Render:
    */
   def stderr(mode: OutputMode)(outcome: Outcome): String = mode match
     case OutputMode.Text =>
-      val diagnostics = errorWithoutPayload(outcome).map(Diagnostics.render).toList
+      val diagnostics = outcome.error.map(Diagnostics.render).toList
       val warnings = outcome.warnings.map(Diagnostics.renderWarning).toList
       (diagnostics ++ warnings).mkString("\n")
     case OutputMode.Json =>
-      errorWithoutPayload(outcome).fold("")(e => s"Error: ${e.message}")
+      outcome.error.fold("")(e => s"Error: ${e.message}")
 
   /**
    * The bytes this run writes on stdout in `mode`, as text fragments in order (GH-635): exactly
@@ -197,10 +197,6 @@ object Render:
                 .echo >>
               Pull.output1(shift("\n  ]" + dataTail) + shellTail + "\n")
         }.stream
-
-  /** The error a channel reports as such: a failure's; a signal's report is its payload. */
-  private def errorWithoutPayload(outcome: Outcome): Option[CliError] =
-    outcome.error.filter(_ => outcome.payload.isEmpty)
 
   /** The seven keys, in order, around a given `data`. */
   private def envelope(outcome: Outcome, version: String, data: ujson.Value): ujson.Obj =

@@ -11,12 +11,13 @@ import com.tjclp.xl.addressing.{ARef, CellRange, Column, RefType, Row, SheetName
 import com.tjclp.xl.cells.CellValue
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.{FormulaParser, FormulaPrinter, FormulaShifter, TExpr}
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.io.streaming.{StreamingTransform, StylePatcher, ZipTransformer}
 import com.tjclp.xl.ooxml.XmlSecurity
 import com.tjclp.xl.ooxml.metadata.{LightMetadata, WorkbookMetadataReader}
 import com.tjclp.xl.ooxml.writer.WriterConfig
 import com.tjclp.xl.ops.OffGridRef
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, SheetEdits}
 import com.tjclp.xl.styles.units.StyleId
 import com.tjclp.xl.styles.CellStyle
 import com.tjclp.xl.styles.numfmt.NumFmt
@@ -263,16 +264,21 @@ object StreamingWriteCommands:
       (qualified, refOrRange) <- parseTarget(refStr, "reference")
 
       // THE sheet rule over workbook.xml: qualifier > -s > the only sheet > SHEET_REQUIRED
-      (sheetName, worksheetPath) <- resolveSheetTarget(
+      meta <- readMeta(sourcePath)
+      (sheetName, worksheetPath) <- resolveSheetTargetIn(
         sourcePath,
+        meta,
         sheetNameOpt,
         qualified,
         unqualifiedContext("putf", refStr, refOrRange)
       )
+      // GH-936: each sheet qualifier stored as the tab's own name, as the in-memory verb does
+      tabs = meta.sheets.map(_.name)
+      authored = formulas.map(FormulaOps.canonicalSheets(_, tabs))
 
       // Build formula map — every formula through the verb's parser gate first (GH-663: the
       // in-memory verb and every batch shape refuse an unparseable formula; this arm did not)
-      built <- (refOrRange, formulas) match
+      built <- (refOrRange, authored) match
         case (Left(ref), List(singleFormula)) =>
           parsedFormulaText(singleFormula).map(formula =>
             Map(ref -> CellValue.Formula(formula, None)) -> Vector.empty[OffGridRef]
@@ -510,8 +516,12 @@ object StreamingWriteCommands:
       (sheetName, worksheetPath) <- resolveBatchSheet(sourcePath, meta, sheetNameOpt, scoped)
       _ <- refuseOtherSheets(scoped, meta.sheets.map(_.name), sheetName)
 
-      // A ref qualified with the streamed sheet is honoured as its bare form
-      ops = scoped.map(s => s.copy(op = OpRegistry.unqualified(s.op)))
+      // A ref qualified with the streamed sheet is honoured as its bare form; GH-936: authored
+      // formulas spell each sheet qualifier as the tab's own name, as the in-memory batch does
+      tabs = meta.sheets.map(_.name)
+      ops = scoped.map(s =>
+        s.copy(op = BatchParser.canonicalFormulas(OpRegistry.unqualified(s.op), tabs))
+      )
 
       // Separate operations into cell patches vs worksheet metadata
       (cellPatches, stylesXml, worksheetMetadata, summary, offGrid) <-
@@ -733,6 +743,44 @@ object StreamingWriteCommands:
       val existingStyles =
         if formattedRefs.nonEmpty then scanExistingStyles(sourcePath, worksheetPath, formattedRefs)
         else Map.empty[ARef, Int]
+      // GH-935: the cells holding content inside each merged range, read once: a merge whose
+      // upper-left cell is empty moves the first of them there and rewrites its readers, which a
+      // stream cannot do, so that case is refused rather than diverging from the in-memory merge
+      val mergeRanges = plainOps.collect { case BatchParser.BatchOp.Merge(r) =>
+        parseArea(r)
+      }.flatten
+      // GH-935 review: the file's merged areas, when the batch merges or unmerges: a new merge
+      // absorbs every merge it touches, so no two <mergeCell> entries ever overlap
+      val touchesMerges = plainOps.exists {
+        case _: BatchParser.BatchOp.Merge | _: BatchParser.BatchOp.Unmerge => true
+        case _ => false
+      }
+      val sourceMerges =
+        if touchesMerges then scanMergedRanges(sourcePath, worksheetPath) else Set.empty[CellRange]
+      // GH-935 review 2: replay the batch's merges and unmerges first, so every merge's GROWN
+      // range is known before the worksheet is read: the cells, arrays and links the decisions
+      // below need are scanned over those ranges, not over the requested ones
+      def grownOver(merges: Set[CellRange], r: CellRange): CellRange =
+        SheetEdits.mergeTarget(com.tjclp.xl.sheets.Sheet("stream").copy(mergedRanges = merges), r)
+      val mergeTargets = plainOps
+        .foldLeft((sourceMerges, Vector.empty[CellRange])) {
+          case ((live, acc), BatchParser.BatchOp.Merge(r)) =>
+            parseArea(r).filter(a => a.start != a.end).fold((live, acc)) { requested =>
+              val t = grownOver(live, requested)
+              (live.filterNot(_.intersects(t)) + t, acc :+ t)
+            }
+          case ((live, acc), BatchParser.BatchOp.Unmerge(r)) =>
+            // GH-935 review 3: an unmerge removes every merged area it touches
+            (parseArea(r).fold(live)(u => live.filterNot(_.intersects(u))), acc)
+          case (state, _) => state
+        }
+        ._2
+      val mergeContext =
+        if mergeTargets.nonEmpty then
+          scanMergeContext(sourcePath, worksheetPath, mergeTargets ++ mergeRanges)
+        else StreamingTransform.MergeContext(Set.empty, Vector.empty, Vector.empty)
+      val filledInMerges = mergeContext.filled
+      val liveMerges = mutable.Set[CellRange]() ++ sourceMerges
 
       // Accumulate patches and metadata
       val cellPatches = mutable.Map[ARef, StreamingTransform.CellPatch]()
@@ -742,8 +790,6 @@ object StreamingWriteCommands:
         else Vector.empty
       val clearedSpills = mutable.ListBuffer[CellRange]()
       val columns = mutable.Map[Column, ColumnProperties]() ++ existingMetadata.columns
-      val addMerges = mutable.Set[CellRange]()
-      val removeMerges = mutable.Set[CellRange]()
       val rowProps = mutable.Map[Row, RowProperties]() ++ existingMetadata.rowProps
       val summaryLines = mutable.ListBuffer[String]()
       // GH-628: the cells a dragged putf wrote #REF! into for an off-grid reference
@@ -950,18 +996,91 @@ object StreamingWriteCommands:
             }
             summaryLines += s"  STYLE $rangeStr"
 
+          case BatchParser.BatchOp.Merge(rangeStr)
+              if parseArea(rangeStr)
+                .exists(r => r.start == r.end && !liveMerges.exists(_.contains(r.start))) =>
+            // GH-935 review 4: a single cell is nothing to merge, as in Excel
+            summaryLines += s"  MERGE $rangeStr (a single cell: nothing to merge)"
+
           case BatchParser.BatchOp.Merge(rangeStr) =>
-            val range = CellRange.parse(rangeStr) match
-              case Right(r) => r
-              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            addMerges += range
-            summaryLines += s"  MERGE $rangeStr"
+            val requested = parseArea(rangeStr).getOrElse(
+              throw new Exception(s"Invalid range '$rangeStr'")
+            )
+            // the merge covers the bounding box of every merged area it touches, as in memory
+            val range = grownOver(liveMerges.toSet, requested)
+            // GH-935: what each cell holds at this point of the batch: an earlier op's value patch
+            // decides, else the file (less what an earlier merge or spill release emptied)
+            def holdsValue(ref: ARef): Boolean = cellPatches.get(ref) match
+              case Some(StreamingTransform.CellPatch.SetValue(v, _)) => v != CellValue.Empty
+              case Some(StreamingTransform.CellPatch.SetStyleAndValue(_, v)) => v != CellValue.Empty
+              case _ =>
+                filledInMerges.contains(ref) && !clearedSpills.exists(_.contains(ref))
+            val hiddenCells = SheetEdits.hiddenByMerge(range)
+            def refuse(why: String): Nothing =
+              throw CliException(
+                CliError(
+                  ErrorCode.UNSUPPORTED_IN_STREAM,
+                  s"merge $rangeStr (merging ${range.toA1}): $why, which streaming mode cannot " +
+                    "do; drop --stream to apply it in memory",
+                  hint = Some("drop --stream to apply it in memory")
+                )
+              )
+            // GH-935 review 2: the stream applies a merge only where the in-memory merge would do
+            // exactly what it can (clear values); anything else is refused before a byte is written
+            mergeContext.arrays.find(_.intersects(range)).foreach { a =>
+              refuse(
+                s"it intersects the array formula or data table at ${a.toA1} (Excel refuses a " +
+                  "legacy array or data table; a dynamic spill must be released and re-evaluated)"
+              )
+            }
+            val hiddenFilled =
+              (filledInMerges.iterator ++ cellPatches.keysIterator)
+                .filter(r => hiddenCells.exists(_.contains(r)))
+                .exists(holdsValue)
+            if !holdsValue(range.start) && hiddenFilled then
+              refuse(
+                s"the upper-left cell ${range.start.toA1} is empty, so Excel moves the first " +
+                  "non-empty cell of the range into it and points its readers there"
+              )
+            mergeContext.links.find(l => hiddenCells.exists(_.intersects(l))).foreach { l =>
+              refuse(s"the cells it hides carry the hyperlink at ${l.toA1}, which must be removed")
+            }
+            liveMerges.filterInPlace(m => !m.intersects(range))
+            liveMerges += range
+            // GH-935: the cells the merge hides lose their contents, as Excel's Merge Cells
+            // clears them (each keeps its style). GH-935 review 3: the patch map IS the state of
+            // every touched cell, so each hidden cell holding a value is set to empty (a file cell
+            // by an empty-value patch, a cell only an earlier op created by dropping its patch);
+            // a cell already empty is left alone, and a later op's value still replaces the patch.
+            (cellPatches.keysIterator ++ filledInMerges.iterator).toVector.distinct
+              .filter(r => hiddenCells.exists(_.contains(r)) && holdsValue(r))
+              .foreach { ref =>
+                val inFile = filledInMerges.contains(ref)
+                cellPatches.get(ref) match
+                  case Some(StreamingTransform.CellPatch.SetStyle(styleId)) =>
+                    cellPatches(ref) =
+                      StreamingTransform.CellPatch.SetStyleAndValue(styleId, CellValue.Empty)
+                  case Some(StreamingTransform.CellPatch.SetStyleAndValue(styleId, _)) =>
+                    cellPatches(ref) =
+                      if inFile then
+                        StreamingTransform.CellPatch.SetStyleAndValue(styleId, CellValue.Empty)
+                      else StreamingTransform.CellPatch.SetStyle(styleId)
+                  case Some(StreamingTransform.CellPatch.SetValue(_, _)) =>
+                    if inFile then
+                      cellPatches(ref) = StreamingTransform.CellPatch.SetValue(CellValue.Empty)
+                    else cellPatches -= ref
+                  case _ =>
+                    cellPatches(ref) = StreamingTransform.CellPatch.SetValue(CellValue.Empty)
+              }
+            val absorbed = if range == requested then "" else s" (merged ${range.toA1})"
+            summaryLines += s"  MERGE $rangeStr$absorbed"
 
           case BatchParser.BatchOp.Unmerge(rangeStr) =>
-            val range = CellRange.parse(rangeStr) match
-              case Right(r) => r
-              case Left(e) => throw new Exception(s"Invalid range '$rangeStr': $e")
-            removeMerges += range
+            val range = parseArea(rangeStr).getOrElse(
+              throw new Exception(s"Invalid range '$rangeStr'")
+            )
+            // GH-935 review 3: every merged area the range touches, as Excel unmerges a selection
+            liveMerges.filterInPlace(m => !m.intersects(range))
             summaryLines += s"  UNMERGE $rangeStr"
 
           case BatchParser.BatchOp.ColWidth(colStr, width) =>
@@ -1038,8 +1157,10 @@ object StreamingWriteCommands:
 
       val worksheetMetadata = StreamingTransform.WorksheetMetadata(
         columns = columns.toMap,
-        addMerges = addMerges.toSet,
-        removeMerges = removeMerges.toSet,
+        // the whole merge table when the batch touched it: what is left of the file's plus the
+        // new ones; every file merge no longer present is removed
+        addMerges = if touchesMerges then liveMerges.toSet else Set.empty,
+        removeMerges = if touchesMerges then sourceMerges -- liveMerges else Set.empty,
         rowProps = rowProps.toMap,
         clearContents = clearedSpills.toVector
       )
@@ -1085,6 +1206,39 @@ object StreamingWriteCommands:
       case BatchParser.BatchOp.PutFormulas(rangeStr, _, Some(_)) => cellsOf(rangeStr)
       case BatchParser.BatchOp.Style(rangeStr, props) if !props.replace => cellsOf(rangeStr)
       case _ => Vector.empty
+
+  /** GH-935 review: the merged areas the source worksheet declares. */
+  private def scanMergedRanges(sourcePath: Path, worksheetPath: String): Set[CellRange] =
+    val normalizedPath =
+      val trimmed = worksheetPath.stripPrefix("/")
+      if trimmed.startsWith("xl/") then trimmed else s"xl/$trimmed"
+    val zipFile = new ZipFile(sourcePath.toFile)
+    try
+      Option(zipFile.getEntry(normalizedPath)) match
+        case Some(entry) => StreamingTransform.scanMergedRanges(zipFile.getInputStream(entry))
+        case None => throw new Exception(s"Worksheet not found: $normalizedPath")
+    finally zipFile.close()
+
+  /** A range or a single cell (a 1x1 range), as the merge and unmerge ops accept them. */
+  private def parseArea(s: String): Option[CellRange] =
+    CellRange.parse(s).toOption.orElse(ARef.parse(s).toOption.map(r => CellRange(r, r)))
+
+  /** GH-935 review 2: [[StreamingTransform.MergeContext]] of the source worksheet. */
+  private def scanMergeContext(
+    sourcePath: Path,
+    worksheetPath: String,
+    ranges: Vector[CellRange]
+  ): StreamingTransform.MergeContext =
+    val normalizedPath =
+      val trimmed = worksheetPath.stripPrefix("/")
+      if trimmed.startsWith("xl/") then trimmed else s"xl/$trimmed"
+    val zipFile = new ZipFile(sourcePath.toFile)
+    try
+      Option(zipFile.getEntry(normalizedPath)) match
+        case Some(entry) =>
+          StreamingTransform.scanMergeContext(zipFile.getInputStream(entry), ranges)
+        case None => throw new Exception(s"Worksheet not found: $normalizedPath")
+    finally zipFile.close()
 
   /** Read style IDs for selected cells without materializing the worksheet. */
   private def scanExistingStyles(

@@ -4,13 +4,15 @@ import java.nio.file.Path
 
 import cats.effect.IO
 import com.tjclp.xl.{*, given}
-import com.tjclp.xl.addressing.CellRange
-import com.tjclp.xl.cli.contract.Warning
+import com.tjclp.xl.addressing.{ARef, CellRange}
+import com.tjclp.xl.cli.contract.{CliError, CliException, Warning}
 import com.tjclp.xl.cli.helpers.SheetResolver
-import com.tjclp.xl.cli.MemoryGuard
+import com.tjclp.xl.cli.{MemoryGuard, WritePolicy}
 import com.tjclp.xl.cli.output.Format
-import com.tjclp.xl.formula.eval.DynamicArrayAuthoring
+import com.tjclp.xl.formula.Clock
+import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring}
 import com.tjclp.xl.ooxml.writer.WriterConfig
+import com.tjclp.xl.sheets.SheetEdits
 
 /**
  * Cell-level command handlers.
@@ -32,7 +34,13 @@ object CellCommands:
     else excel.writeWith(wb, outputPath, config)
 
   /**
-   * Merge cells in range.
+   * Merge cells in range, as Excel's Merge Cells does (GH-935): a non-empty upper-left cell keeps
+   * its value; an empty one receives the first non-empty cell of the range (row-major), cut and
+   * pasted — formula verbatim, format, and every reader pointed at the upper-left cell
+   * ([[CellMover.merge]]). Every other cell is cleared like a contents `clear` (value, formula and
+   * hyperlink go; its own formatting and comment stay). A hidden dynamic-array anchor releases its
+   * spill first, as `clear` does. The formulas that read a cleared cell are recalculated before the
+   * write (`--no-recalc` keeps every cache), so `SUM` over the merged area sees only the anchor.
    *
    * @param stream
    *   If true, uses the SAX/StAX workbook writer
@@ -43,21 +51,64 @@ object CellCommands:
     rangeStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "merge")
       (targetSheet, refOrRange) = resolved
-      range <- refOrRange match
-        case Right(r) => IO.pure(r)
-        case Left(_) =>
-          IO.raiseError(
-            new Exception("merge requires a range (e.g., A1:C1), not a single cell")
+      // GH-935 review 4: a single cell (`A1`, `A1:A1`) is nothing to merge, as in Excel
+      range = refOrRange.fold(ref => CellRange(ref, ref), identity)
+      // GH-935: an empty upper-left cell receives the first non-empty cell, its readers following
+      merged <- IO.fromEither(
+        CellMover
+          .merge(wb, targetSheet.name, range)
+          .left
+          .map(e => CliException(CliError.fromXLError(e, None)))
+      )
+      updatedSheet <- IO.fromEither(
+        merged(targetSheet.name).left.map(e => CliException(CliError.fromXLError(e, None)))
+      )
+      // the seeds of the dependent refresh: every cell whose content the merge changed
+      // GH-935 review: a dynamic array whose spill range the merge now covers is blocked (#SPILL!),
+      // so its anchor is re-evaluated with the cells the merge changed
+      blockedAnchors = updatedSheet.cells.iterator.collect {
+        case Cell(ref, CellValue.Formula(_, _, k: FormulaKind.ArrayFormula), _, _)
+            if k.mode != ArrayMode.Legacy &&
+              updatedSheet.mergedRanges.exists(_.intersects(k.ref)) =>
+          ref
+      }.toSet
+      modified = (targetSheet.cells.refs.toSet ++ updatedSheet.cells.refs.toSet).filter { r =>
+        targetSheet.cells.get(r).map(_.value) != updatedSheet.cells.get(r).map(_.value)
+      } ++ blockedAnchors
+      // the range actually merged: grown over the merged areas it touched (absorbed)
+      target = SheetEdits.mergeTarget(targetSheet, range)
+      message =
+        if target.start == target.end then
+          s"${target.start.toA1} is a single cell: nothing to merge"
+        else if SheetEdits.mergeIsNoOp(targetSheet, range) then
+          s"${target.toA1} is already merged: nothing to merge"
+        else s"Merged: ${target.toA1}"
+      // A merge that hides nothing (the usual title merge) changes no value: no refresh to run
+      result <-
+        if modified.isEmpty then
+          writeWorkbook(merged, outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          // the cut can rewrite formulas on other sheets and in names: the whole-book refresh
+          // seeds every changed cell (GH-935, Excel oracle)
+          WriteCommands.writeAfterContentEdit(
+            wb,
+            merged,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
           )
-      updatedSheet = targetSheet.merge(range)
-      updatedWb = wb.put(updatedSheet)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Merged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+    yield result
 
   /**
    * Unmerge cells in range.
@@ -71,21 +122,40 @@ object CellCommands:
     rangeStr: String,
     outputPath: Path,
     config: WriterConfig,
-    stream: Boolean = false
+    stream: Boolean = false,
+    policy: WritePolicy = WritePolicy.default,
+    warn: Warning => IO[Unit] = _ => IO.unit
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "unmerge")
       (targetSheet, refOrRange) = resolved
-      range <- refOrRange match
-        case Right(r) => IO.pure(r)
-        case Left(_) =>
-          IO.raiseError(
-            new Exception("unmerge requires a range (e.g., A1:C1), not a single cell")
-          )
+      // a single cell selects the merge it belongs to, as in Excel
+      range = refOrRange.fold(ref => CellRange(ref, ref), identity)
+      // GH-935 review 3: Excel's Unmerge Cells unmerges every merged area the selection touches
+      unmerged = targetSheet.mergesIn(range)
       updatedSheet = targetSheet.unmerge(range)
-      updatedWb = wb.put(updatedSheet)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-    yield s"Unmerged: ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+      message =
+        if unmerged.isEmpty then s"No merged cells in ${range.toA1}: nothing unmerged"
+        else s"Unmerged: ${unmerged.map(_.toA1).mkString(", ")}"
+      // a dynamic array the merge blocked (#SPILL!) spills again once nothing blocks it, and its
+      // readers are refreshed (writeAfterRefresh re-spills truncated arrays of the sheet)
+      result <-
+        if unmerged.isEmpty then
+          writeWorkbook(wb, outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          WriteCommands.writeAfterRefresh(
+            wb.put(updatedSheet),
+            targetSheet.name,
+            Set.empty,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+    yield result
 
   /**
    * Clear cell contents, styles, or comments from range.
@@ -114,7 +184,8 @@ object CellCommands:
     outputPath: Path,
     config: WriterConfig,
     stream: Boolean = false,
-    warn: Warning => IO[Unit] = _ => IO.unit
+    warn: Warning => IO[Unit] = _ => IO.unit,
+    policy: WritePolicy = WritePolicy.default
   ): IO[String] =
     for
       resolved <- SheetResolver.resolveRef(wb, sheetOpt, rangeStr, "clear")
@@ -165,9 +236,6 @@ object CellCommands:
         else sheet3
 
       updatedWb = wb.put(sheet4)
-      _ <- writeWorkbook(updatedWb, outputPath, config, stream)
-      kept = contents.fold(Vector.empty)(_.kept).map(targetSheet.name -> _)
-      _ <- WriteCommands.spillsKeptWarning(kept).fold(IO.unit)(warn)
 
       // Build description of what was cleared
       clearedItems = Vector(
@@ -176,4 +244,35 @@ object CellCommands:
         if clearComments then Some("comments") else None
       ).flatten
       clearedDesc = clearedItems.mkString(", ")
-    yield s"Cleared $clearedDesc from ${range.toA1}\n${Format.saveSuffix(outputPath, stream)}"
+      message = s"Cleared $clearedDesc from ${range.toA1}"
+
+      // Found during #935: a contents clear changes what formulas read, so their caches are
+      // refreshed before the write like any other content edit (--no-recalc keeps them). The
+      // seeds are the range's cells and the released spill cells whose value changed.
+      candidates = targetSheet.cells.inRange(range).map(_.ref).toSet ++
+        contents.fold(Set.empty[ARef])(_.released)
+      modified = candidates.filter(r =>
+        targetSheet.cells.get(r).map(_.value) != sheet4.cells.get(r).map(_.value)
+      )
+      // GH-935 review 3: a styles clear that unmerges can unblock a dynamic array the merge
+      // truncated; the refresh re-spills it
+      unmergedAny = clearStyles && overlappingMerges.nonEmpty
+      result <-
+        if modified.isEmpty && !unmergedAny then
+          writeWorkbook(updatedWb, outputPath, config, stream)
+            .as(s"$message\n${Format.saveSuffix(outputPath, stream)}")
+        else
+          WriteCommands.writeAfterRefresh(
+            updatedWb,
+            targetSheet.name,
+            modified,
+            message,
+            outputPath,
+            config,
+            stream,
+            policy,
+            warn
+          )
+      kept = contents.fold(Vector.empty)(_.kept).map(targetSheet.name -> _)
+      _ <- WriteCommands.spillsKeptWarning(kept).fold(IO.unit)(warn)
+    yield result

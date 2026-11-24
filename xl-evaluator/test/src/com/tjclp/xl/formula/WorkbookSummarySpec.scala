@@ -74,7 +74,7 @@ class WorkbookSummarySpec extends FunSuite:
   ) {
     val sheet = Sheet(SheetName.unsafe("Facets"))
       .put(a1("A1"), "Title")
-      .put(Cell(a1("B1"), CellValue.Text("link")).withHyperlink("https://example.com"))
+      .put(Cell(a1("B3"), CellValue.Text("link")).withHyperlink("https://example.com"))
       .put(a1("A2"), 1)
       .put(a1("A3"), 2)
       .merge(range("A1:C1"))

@@ -72,6 +72,13 @@ enum Edit derives CanEqual:
 
   /** Overlay a partial style onto every cell of `at`, merging or replacing. */
   case Style(at: Area, overlay: StyleOverlay, mode: StyleMode)
+
+  /**
+   * Merge `at` as Excel's Merge Cells does (GH-935): a non-empty upper-left cell keeps its value;
+   * an empty one receives the first non-empty cell (row-major), cut and pasted, its readers pointed
+   * at the upper-left cell through `FormulaSupport.relocateCell` (the text-only support refuses).
+   * The other cells are cleared like Clear Contents (their own formatting and comments stay).
+   */
   case Merge(at: Area)
   case Unmerge(at: Area)
   case ColWidth(sheet: Option[SheetName], cols: ColSpan, width: Double)
@@ -95,8 +102,12 @@ enum Edit derives CanEqual:
   case SetComment(at: Loc, comment: Comment)
   case RemoveComment(at: Loc)
 
-  /** Set a hyperlink, or clear it with `None`. */
-  case Hyperlink(at: Loc, target: Option[String])
+  /**
+   * Link every cell of `at` to `target`, or clear every link in it with `None` (#932). A range is
+   * one link over the selection, as in Excel ([[Sheet.setHyperlink]]); clearing splits any range
+   * hyperlink around `at` ([[Sheet.removeHyperlinks]]).
+   */
+  case Hyperlink(at: Area, target: Option[String])
 
   /** Append one conditional-formatting block over `ranges` (priorities auto-assigned). */
   case AddConditionalFormat(

@@ -28,6 +28,7 @@ import com.tjclp.xl.ooxml.drawing.{DrawingReader, OoxmlDrawing}
 import com.tjclp.xl.ooxml.worksheet.{
   buildHyperlinksElem,
   collectHyperlinks,
+  sourceRangeHyperlinks,
   hyperlinkRelIds,
   hyperlinkTargets,
   unmodeledHyperlinksElem
@@ -2945,11 +2946,20 @@ object XlsxWriter:
               }.toSet
           val reservedIds =
             keptIds ++ sourceRels.iterator.filterNot(_.`type` == XmlUtil.relTypeHyperlink).map(_.id)
-          val links = collectHyperlinks(sheet, reservedIds)
-          val hlRels = links.collect {
-            case entry if entry.external =>
-              Relationship(entry.relId, XmlUtil.relTypeHyperlink, entry.target, Some("External"))
-          }
+          // #931: the range hyperlinks a source element still writes; the rest are generated
+          val fromSource = preservedMetadata
+            .flatMap(_.preservedKnown.get("hyperlinks"))
+            .fold(Vector.empty[com.tjclp.xl.sheets.RangeHyperlink])(
+              sourceRangeHyperlinks(_, sourceTargets)
+            )
+          val links = collectHyperlinks(sheet, reservedIds, fromSource)
+          // the fragments of one split range link share its relationship (#931)
+          val hlRels = links
+            .collect {
+              case entry if entry.external =>
+                Relationship(entry.relId, XmlUtil.relTypeHyperlink, entry.target, Some("External"))
+            }
+            .distinctBy(_.id)
           // GH-557: the rels are planned BEFORE the worksheet is emitted; every sheet-level r:id
           // below (<tablePart>, a generated <legacyDrawing>) derives from this plan.
           val relsPlan = planSheetRels(

@@ -220,6 +220,13 @@ private[xl] object EditInterpreter:
     def workbookLevel(result: XLResult[Workbook]): XLResult[(Workbook, Planned)] =
       result.map(next => (next, Planned(index, edit, None, Vector.empty)))
 
+    /**
+     * GH-936: an authored formula's stored text, its sheet qualifiers spelled as the workbook's own
+     * tab names (Excel respells `=sheet1!A1` as `=Sheet1!A1` on entry).
+     */
+    def authored(formula: String): String =
+      fs.canonicalSheets(formulaText(formula), wb.sheets.map(_.name))
+
     validate(edit).flatMap { _ =>
       edit match
         // ----- cell content -----
@@ -235,19 +242,20 @@ private[xl] object EditInterpreter:
 
         case Edit.PutFormula(at, formula, format) =>
           pure(at.sheet, Vector(CellRange(at.ref, at.ref)))(
-            putHinted(_, at.ref, CellValue.Formula(formulaText(formula), None), format)
+            putHinted(_, at.ref, CellValue.Formula(authored(formula), None), format)
           )
 
         case Edit.PutFormulas(at, formulas, format) =>
           pure(at.sheet, Vector(at.range)) { sheet =>
             at.range.cellsRowMajor.zip(formulas.iterator).foldLeft(sheet) { case (acc, (ref, f)) =>
-              putHinted(acc, ref, CellValue.Formula(formulaText(f), None), format)
+              putHinted(acc, ref, CellValue.Formula(authored(f), None), format)
             }
           }
 
         case Edit.DragFormula(at, formula, anchor, format) =>
           onSheet(at.sheet, Vector(at.range)) { sheet =>
-            val text = formula.trim
+            // canonical before the drag: every shifted copy then carries the tab's own spelling
+            val text = fs.canonicalSheets(formula.trim, wb.sheets.map(_.name))
             foldE(at.range.cellsRowMajor)(sheet) { (acc, ref) =>
               val colDelta = ref.col.index0 - anchor.col.index0
               val rowDelta = ref.row.index0 - anchor.row.index0
@@ -283,7 +291,17 @@ private[xl] object EditInterpreter:
         case Edit.Style(at, overlay, mode) =>
           pure(at.sheet, Vector.empty)(applyStyle(_, at.range, overlay, mode))
 
-        case Edit.Merge(at) => pure(at.sheet, Vector.empty)(_.merge(at.range))
+        // GH-935: merging clears the hidden cells' contents, so the range seeds a recalculation. An
+        // empty upper-left cell receives the first non-empty cell, cut and pasted: every formula
+        // that read it (any sheet, names, CF, DV) is pointed at the upper-left cell first.
+        // GH-935: one merge for every surface, through the formula support (FormulaSupport.merge):
+        // Excel's refusals, the move into an empty upper-left cell with its readers rewritten, and
+        // (EvalFormulaSupport) the release of the dynamic spills the merge blocks
+        case Edit.Merge(at) =>
+          resolve(wb, at.sheet, scope, name).flatMap { sheet =>
+            fs.merge(wb, sheet.name, at.range)
+              .map(next => (next, Planned(index, edit, Some(sheet.name), Vector(at.range))))
+          }
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
         case Edit.ColWidth(sheet, cols, width) =>
@@ -315,7 +333,10 @@ private[xl] object EditInterpreter:
         case Edit.RemoveComment(at) => pure(at.sheet, Vector.empty)(_.removeComment(at.ref))
         case Edit.Hyperlink(at, target) =>
           pure(at.sheet, Vector.empty) { s =>
-            s.put(target.fold(s(at.ref).clearHyperlink)(s(at.ref).withHyperlink))
+            // `#Sheet1!A1` authoring dialect: strip the `#` as Cell.withHyperlink does (GH-406)
+            target.fold(s.removeHyperlinks(at.range)) { t =>
+              s.setHyperlink(at.range, com.tjclp.xl.cells.Hyperlink(t.stripPrefix("#")))
+            }
           }
         case Edit.AddConditionalFormat(sheet, ranges, rules) =>
           pure(sheet, Vector.empty)(_.conditionalFormat(ranges, rules))
@@ -443,6 +464,9 @@ private[xl] object EditInterpreter:
    * off, trim — shared with fx, `FormulaParser.parse` and the CLI.
    */
   private def formulaText(formula: String): String = CellValue.canonicalFormulaText(formula)
+
+  /** Whether formula text may carry a sheet qualifier (GH-936: lowering leaves those alone). */
+  private def qualified(formula: String): Boolean = formula.contains('!')
 
   /**
    * `Sheet.put` plus the hint's style step, mirroring `Sheet.putSingle`: the hint resolves against
@@ -576,9 +600,12 @@ private[xl] object EditInterpreter:
             .toVector
         )
       )
-    case Edit.PutFormula(at, formula, format) =>
+    // GH-936: a sheet-qualified formula needs the workbook's tab names (the formula support
+    // respells its qualifiers), which the kernel does not have
+    case Edit.PutFormula(at, formula, format) if !qualified(formula) =>
       Some(putPatch(existing, at.ref, CellValue.Formula(formulaText(formula), None), format))
-    case Edit.PutFormulas(at, formulas, format) if at.range.cellCount == formulas.size.toLong =>
+    case Edit.PutFormulas(at, formulas, format)
+        if at.range.cellCount == formulas.size.toLong && !formulas.exists(qualified) =>
       Some(
         Patch.Batch(
           at.range.cellsRowMajor
@@ -637,7 +664,9 @@ private[xl] object EditInterpreter:
             .toVector
         )
       )
-    case Edit.Merge(at) => Some(Patch.Merge(at.range))
+    // GH-935: a merge that moves a cell rewrites its readers through the formula support
+    case Edit.Merge(at) if SheetEdits.mergeLowers(existing, at.range) =>
+      Some(Patch.Merge(at.range))
     case Edit.Unmerge(at) => Some(Patch.Unmerge(at.range))
     case Edit.ColWidth(_, cols, width) if width >= 0 && width <= SheetEdits.MaxColumnWidth =>
       Some(columnPatch(existing, cols)(_.copy(width = Some(width))))

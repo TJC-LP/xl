@@ -38,6 +38,8 @@ audit
       "Calc!D1"
     ],
     "cycles": [],
+    "unconvergedCycles": [],
+    "unconvergedVerdict": null,
     "externalRefs": [
       "Calc!G1"
     ],
@@ -71,3 +73,4 @@ audit
   }
 }
 ## stderr
+Error: Audit: 5 findings

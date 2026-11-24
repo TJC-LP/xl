@@ -484,6 +484,79 @@ object WorkbookEvaluator:
       recalculateImpl(wb, clock, None, iterative, generationMemo = memo, built = Some(graph))
     (result, DependentRecalculation.editConeOn(wb, graph, seeds))
 
+  /**
+   * #934: the iterative recalculation of `wb` that `recalc` runs (`recalculate(clock, iterative)`),
+   * on a recalculation graph the caller already built for `wb`, so the audit's convergence check
+   * parses no formula a second time.
+   */
+  /**
+   * #934: whether each cyclic component converges, iterated against the book as saved — the
+   * question `xl audit` asks. Each component runs through the same engine and settings
+   * `recalculate(IterativeCalc)` uses (scheme, sweep order, warm seed from the members' caches,
+   * `maxIter`, `maxChange`), but every cell outside the component reads its saved value instead of
+   * being recomputed, as Excel resumes iterating from the current values. The cost is the members'
+   * rounds alone, not a whole-book recalculation; the verdict equals recalculation's whenever the
+   * saved caches are fresh (stale caches are a separate audit concern). A cycle fed by another
+   * cycle reads that cycle's saved values where recalculation re-iterates it first, so its
+   * last-round change (`maxDelta`) can differ by whatever the upstream cycle still moves.
+   * Components are given in any order; each is reported with its members in canonical grid order,
+   * as recalculation reports them.
+   */
+  private[eval] def convergenceAtCaches(
+    wb: Workbook,
+    clock: Clock,
+    iterative: IterativeCalc,
+    components: Vector[Vector[QualifiedRef]],
+    graph: RecalcGraph,
+    counters: RecalcCounters
+  ): Vector[SccReport] =
+    val pinnedClock = pinnedCalculationClock(clock)
+    val memo = new Evaluator.AggregateMemo(counters = counters)
+    // #790: a member reuses the graph build's parse of its formula
+    memo.passCache.foreach(_.useParses(graph.parses))
+    val sheets = wb.sheets
+    val sheetIndex: Map[SheetName, Int] =
+      sheets.iterator.zipWithIndex.map((s, i) => s.name -> i).toMap
+    def withText(order: Vector[QualifiedRef]): List[(QualifiedRef, Int, String)] =
+      order.toList.flatMap { q =>
+        sheetIndex.get(q.sheet).flatMap { idx =>
+          sheets(idx).cells.valueAt(q.ref) match
+            case CellValue.Formula(expr, _, _) => Some((q, idx, expr))
+            case _ => None
+        }
+      }
+    components.map { component =>
+      val members = withText(component.sortBy(QualifiedRef.gridKey))
+      val sweep = iterative.scheme match
+        case IterationScheme.GaussSeidel =>
+          withText(graph.withinComponentOrder(component.sortBy(QualifiedRef.gridKey)))
+        case IterationScheme.Jacobi => members
+      val seed =
+        if iterative.seedFromCaches then warmSeed(sheets, members)
+        else Map.empty[QualifiedRef, CellValue]
+      val outcome = jacobiFixpoint(
+        wb,
+        sheets,
+        sweep,
+        iterative,
+        pinnedClock,
+        Rng.system,
+        Evaluator.recalculationInstance(_, _),
+        seed,
+        (q, text) => SheetEvaluator.parseFormulaCell(text, q.sheet, Some(q.ref), Some(memo))
+      )
+      SccReport(
+        members = members.map((q, _, _) => (q.sheet, q.ref)).toVector,
+        converged = outcome.converged,
+        rounds = outcome.rounds,
+        maxDelta = outcome.maxDelta,
+        stalled = outcome.stalled,
+        errorValued = members.exists((q, _, _) =>
+          outcome.results.get(q).exists(_.exists(RecalcResult.carriedCellError(_).isDefined))
+        )
+      )
+    }
+
   /** The iterative settings `options` resolve to for `wb` — None when cycles must isolate. */
   private def resolveIterative(wb: Workbook, options: RecalcOptions): Option[IterativeCalc] =
     options.iterative match

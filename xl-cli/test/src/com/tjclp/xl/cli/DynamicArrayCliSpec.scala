@@ -582,7 +582,7 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
   // ---------------------------------------------------------------------------------------------
   // Spill children after a later recalculation (PR #721 review): pinned limitation
 
-  test("a later input change refreshes the anchor's cache only: no re-spill, no resize") {
+  test("a later input change refreshes a spilled anchor's cache only; a 1x1 one re-spills") {
     for
       src <- withSpill()
       // D1:D3 = 3, 1, 2 → F1:F3 = 1, 2, 3; D1 = 0 makes SORT {0; 1; 2}
@@ -593,7 +593,9 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       f3 <- valueAt(changed, ref"F3")
       kind <- kindAt(changed, ref"F1")
       h1 <- cachedNumber(changed, ref"H1")
-      // a growing result: SEQUENCE(D2) at J1 is 1x1 while D2 = 1, and stays 1x1 after D2 = 3
+      // a growing result: SEQUENCE(D2) at J1 is 1x1 while D2 = 1; after D2 = 3 the refresh
+      // re-establishes it as a spill (GH-935 review 3: a dynamic array stored truncated to its
+      // anchor re-spills when its result is larger and nothing blocks it)
       seq <- outPath()
       _ <- putfArray(src, seq, "J1", "=SEQUENCE(D2)")
       grown <- outPath()
@@ -611,8 +613,8 @@ class DynamicArrayCliSpec extends CatsEffectSuite:
       assertEquals(f3, CellValue.Number(3))
       assertEquals(kind, Some(FormulaKind.dynamicArray(CellRange(ref"F1", ref"F3"))))
       assertEquals(h1, BigDecimal(20))
-      assertEquals(seqKind, Some(FormulaKind.dynamicArray(CellRange(ref"J1", ref"J1"))))
-      assertEquals(j2, CellValue.Empty)
+      assertEquals(seqKind, Some(FormulaKind.dynamicArray(CellRange(ref"J1", ref"J3"))))
+      assertEquals(j2, CellValue.Number(2))
   }
 
   // ---------------------------------------------------------------------------------------------

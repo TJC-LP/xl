@@ -1,0 +1,12 @@
+## args
+-f
+<DIR>/diverging.xlsx
+audit
+## exit
+0
+## stdout
+Audit: 1 finding
+Unconverged cycles (1): iterative calculation exhausted 5 round(s) without converging (last values kept)
+  Model!A1, Model!B1: exhausted 5 round(s), max |Δ| = 32
+Calculation: iterative (5 iterations, max change 0.001)
+## stderr

@@ -17,6 +17,7 @@ recalc
     "text": "Recalculated 3 formulas (2 error values: Data!D1 #N/A — VLOOKUP exact match not found: VLOOKUP(42, A1:B3, 2, FALSE); Data!D3 #DIV/0! — Division by zero: 1 / 0)\nSaved: <DIR>/lookup-miss-out.xlsx",
     "saved": "<DIR>/lookup-miss-out.xlsx",
     "written": true,
+    "unconvergedCycles": [],
     "errorValuedCycles": [],
     "errorCells": [
       {

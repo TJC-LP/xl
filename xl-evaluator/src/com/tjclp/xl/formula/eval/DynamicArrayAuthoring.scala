@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.eval
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row, SheetName}
-import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.cells.{Cell, CellError, CellValue, FormulaKind}
 import com.tjclp.xl.error.XLError
 import com.tjclp.xl.formula.Clock
 import com.tjclp.xl.formula.ast.TExpr
@@ -348,6 +348,113 @@ private[xl] object DynamicArrayAuthoring:
       derives CanEqual
 
   /**
+   * GH-935: `Sheet.merge` with the dynamic arrays of the hidden cells released first. When the
+   * upper-left cell is empty, the cell Excel moves into it ([[SheetEdits.mergeWinner]]) is moved
+   * before anything is released, so its own content survives; then a hidden dynamic-array anchor
+   * takes its whole spill with it, as [[clearContents]] clears it, rather than leaving its spilled
+   * values behind with no formula to own them. Readers of a moved cell are not rewritten here (see
+   * `CellMover.merge`). A sheet with no dynamic arrays is `sheet.merge(range)`.
+   */
+  def merge(sheet: Sheet, range: CellRange): Sheet =
+    // a merge Excel refuses (an array formula or a data table in the way) changes nothing here;
+    // the XLResult paths (CellMover.merge, Edit.Merge) report the refusal
+    if SheetEdits.mergeRefusal(sheet, range).isDefined || SheetEdits.mergeIsNoOp(sheet, range)
+    then sheet
+    else mergeChecked(sheet, range)
+
+  private def mergeChecked(sheet: Sheet, range: CellRange): Sheet =
+    // spill children are never the winner (SheetEdits.mergeWinner skips them); the hidden area is
+    // the merge's real extent (absorbed merges)
+    val target = SheetEdits.mergeTarget(sheet, range)
+    val winner = SheetEdits.mergeWinner(sheet, range)
+    // GH-935 review 3: every spill the merge will block is released BEFORE anything moves, so a
+    // moved cell can never be cleared as a spill child, and a moved dynamic-array anchor leaves no
+    // spilled value behind as a constant: it moves as a 1x1 anchor and evaluates to #SPILL! (its
+    // spill now starts in a merged cell), as Excel shows a dynamic array in a merged cell
+    val blocking = spillsOf(sheet).filter(_.extent.intersects(target))
+    val preReleased = blocking.foldLeft(sheet)((acc, s) => blockSpill(acc, s))
+    val moved = winner.fold(preReleased)(w => SheetEdits.moveCell(preReleased, w.ref, target.start))
+    val hidden = SheetEdits.hiddenByMerge(target)
+    val spills = if hidden.isEmpty then Vector.empty else spillsOf(moved)
+    val released = if spills.isEmpty then moved else clearContents(moved, spills, hidden).sheet
+    releaseMergedSpills(released.merge(range))
+
+  /**
+   * GH-935 review: every dynamic array on `sheet` whose spill range now holds a merged cell is
+   * blocked, as Excel blocks it: the anchor shows `#SPILL!` and the spill range is EMPTY, so its
+   * readers see blanks. The spilled values are cleared ([[clearValues]]) and the anchor is left a
+   * 1x1 record cached at `#SPILL!`, the shape `author` gives an anchor that does not spill; the
+   * evaluator keeps it at `#SPILL!` while its result would spill into a merge, and an unmerge
+   * re-spills it ([[respillAfterUnmerge]]).
+   */
+  def releaseMergedSpills(sheet: Sheet): Sheet =
+    if sheet.mergedRanges.isEmpty then sheet
+    else
+      spillsOf(sheet)
+        .filter(s => sheet.mergedRanges.exists(_.intersects(s.extent)))
+        .foldLeft(sheet)(blockSpill)
+
+  /** `s` blocked: its spilled values cleared, its anchor a 1x1 record cached at `#SPILL!`. */
+  private def blockSpill(sheet: Sheet, s: Spill): Sheet =
+    val (cleared, _) = clearOwnSpill(sheet, s.anchor)
+    cleared.put(
+      s.anchor,
+      CellValue.Formula(
+        s.formula,
+        Some(CellValue.Error(CellError.Spill)),
+        FormulaKind.dynamicArray(CellRange(s.anchor, s.anchor))
+      )
+    )
+
+  /**
+   * GH-935 review: after an unmerge, re-spill every dynamic-array anchor of `sheetName` that is
+   * cached at `#SPILL!`: [[author]] evaluates it again and spills it when nothing blocks it any
+   * more. An anchor still blocked (or failing) is left exactly as it was. Returns the workbook and
+   * the cells whose content changed (the anchors and their new spill), the seeds of a refresh.
+   */
+  def respillAfterUnmerge(wb: Workbook, sheetName: SheetName, clock: Clock): (Workbook, Set[ARef]) =
+    respillOnSheet(wb, sheetName, clock)
+
+  /**
+   * GH-935 review 3: re-establish every truncated dynamic array of the book. An anchor stored as a
+   * 1x1 record (the shape a blocked spill is left in) is evaluated again by [[author]], which
+   * spills it when its result is larger and nothing blocks it any more, whatever its cached value
+   * says: so ANY path that removes what blocked it (an unmerge, `clear --styles`/`--all`, a
+   * streamed unmerge) followed by a recalculation restores the spill. An anchor still blocked, a
+   * scalar result, or a failure leaves the record exactly as it was. Returns the book and the cells
+   * whose content changed, by sheet: the seeds of a dependent refresh.
+   */
+  def respillTruncated(wb: Workbook, clock: Clock): (Workbook, Map[SheetName, Set[ARef]]) =
+    wb.sheets.map(_.name).foldLeft((wb, Map.empty[SheetName, Set[ARef]])) {
+      case ((acc, seeds), name) =>
+        val (next, changed) = respillOnSheet(acc, name, clock)
+        (next, if changed.isEmpty then seeds else seeds.updated(name, changed))
+    }
+
+  /** [[respillTruncated]] for one sheet: the book and the cells whose value changed. */
+  def respillOnSheet(wb: Workbook, sheetName: SheetName, clock: Clock): (Workbook, Set[ARef]) =
+    wb(sheetName).toOption.fold((wb, Set.empty[ARef])) { sheet =>
+      val truncated = sheet.cells.iterator.collect {
+        case Cell(ref, CellValue.Formula(text, _, k: FormulaKind.ArrayFormula), _, _)
+            if k.isDynamicArray && k.ref.start == ref && k.ref.cellCount == 1 =>
+          (ref, text)
+      }.toVector
+      truncated.foldLeft((wb, Set.empty[ARef])) { case ((accWb, seeds), (anchor, text)) =>
+        accWb(sheetName).toOption
+          .flatMap(current =>
+            author(accWb, current, anchor, text, clock).toOption
+              .filter(a => a.failure.isEmpty && a.extent.cellCount > 1)
+              .map(a => (current, a))
+          )
+          .fold((accWb, seeds)) { (before, a) =>
+            val changed = a.extent.cells
+              .filter(r => before.cells.get(r).map(_.value) != a.sheet.cells.get(r).map(_.value))
+            (accWb.put(a.sheet), seeds ++ changed)
+          }
+      }
+    }
+
+  /**
    * A contents clear of `ranges` on `sheet`, applied to its dynamic arrays as Excel 365 applies it:
    * every cell of the ranges is emptied, except the cells of a live spill whose anchor the clear
    * leaves in place — Excel keeps a spill's cells while its anchor stays, so clearing them changes
@@ -401,7 +508,11 @@ private[xl] object DynamicArrayAuthoring:
             )
         } ++ pinned)
       else CellStore.from(released.cells.iterator.filterNot(c => emptied(c.ref)))
-    ContentsCleared(released.copy(cells = remaining), cleared, kept)
+    // #931: the cleared ranges lose their range hyperlinks' coverage too, as their own links
+    val unlinked = ranges.foldLeft(released.copy(cells = remaining))(
+      _.removeRangeHyperlinkCoverage(_)
+    )
+    ContentsCleared(unlinked, cleared, kept)
 
   /** The cells two ranges share, as a range; None when they do not meet. */
   private def overlap(a: CellRange, b: CellRange): Option[CellRange] =

@@ -20,6 +20,8 @@ audit
     "volatile": [],
     "dynamic": [],
     "cycles": [],
+    "unconvergedCycles": [],
+    "unconvergedVerdict": null,
     "externalRefs": [],
     "unresolvedReaders": [],
     "calcPr": null,

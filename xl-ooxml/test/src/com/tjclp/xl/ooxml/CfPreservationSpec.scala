@@ -394,6 +394,21 @@ class CfPreservationSpec extends FunSuite:
       )
     Workbook(Vector(sheet))
 
+  test("GH-935 review 5: a single-cell cf range is written A8, as Excel writes it") {
+    val sheet = Sheet(SheetName.unsafe("Case"))
+      .conditionalFormat(
+        CellRange(ref"A8", ref"A8"),
+        CfRule.cellIs(CfOperator.GreaterThan, "1", green)
+      )
+    val out = writeTo(Workbook(Vector(sheet)), "singlecell")
+    val sheetXml = entryText(out, "xl/worksheets/sheet1.xml")
+    assert(sheetXml.contains("<conditionalFormatting sqref=\"A8\">"), sheetXml.take(500))
+    assertEquals(
+      reread(out).sheets(0).typedConditionalFormats.map(_.ranges.map(_.toA1)),
+      Vector(Vector("A8:A8"))
+    )
+  }
+
   test("fresh workbook: authored cf emits on a no-source write and round-trips") {
     val wb = freshCfWorkbook
     val out = writeTo(wb, "fresh")

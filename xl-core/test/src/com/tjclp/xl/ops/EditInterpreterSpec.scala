@@ -495,18 +495,30 @@ class EditInterpreterSpec extends FunSuite:
       Workbook(baseData),
       Edit.SetComment(loc("B1"), Comment.plainText("note", None)),
       Edit.RemoveComment(loc("A2")),
-      Edit.Hyperlink(loc("A1"), Some("https://example.com")),
-      Edit.Hyperlink(loc("A3"), Some("#Other!A1"))
+      Edit.Hyperlink(area("A1"), Some("https://example.com")),
+      Edit.Hyperlink(area("A3"), Some("#Other!A1"))
     )
     assertEquals(s.getComment(a1("B1")).map(_.text.toPlainText), Some("note"))
     assertEquals(s.getComment(a1("A2")), None)
     assertEquals(s(a1("A1")).hyperlink, Some(Hyperlink("https://example.com")))
-    val cleared = sheetAfter(Workbook(s), Edit.Hyperlink(loc("A1"), None))
+    val cleared = sheetAfter(Workbook(s), Edit.Hyperlink(area("A1"), None))
     assertEquals(cleared(a1("A1")).hyperlink, None)
     assertEquals(
-      failure(Workbook(baseData), Edit.Hyperlink(loc("A1"), Some(""))).root,
+      failure(Workbook(baseData), Edit.Hyperlink(area("A1"), Some(""))).root,
       XLError.InvalidArgument("hyperlink", "target cannot be empty (omit it to clear the link)")
     )
+  }
+
+  test("#932: a hyperlink over a range links every cell; clearing part of it splits the range") {
+    val linked = sheetAfter(Workbook(baseData), Edit.Hyperlink(area("H1:H5"), Some("#Other!A1")))
+    assertEquals(linked.rangeHyperlinks.toVector.map(_.range), Vector(rng("H1:H5")))
+    (1 to 5).foreach(r => assertEquals(linked(a1(s"H$r")).hyperlink, Some(Hyperlink("Other!A1"))))
+    assert(!linked.contains(a1("H3")), "a range link must not create cells")
+    val cleared = sheetAfter(Workbook(linked), Edit.Hyperlink(area("H2:H3"), None))
+    assertEquals(cleared(a1("H2")).hyperlink, None)
+    assertEquals(cleared(a1("H3")).hyperlink, None)
+    assertEquals(cleared(a1("H1")).hyperlink, Some(Hyperlink("Other!A1")))
+    assertEquals(cleared(a1("H5")).hyperlink, Some(Hyperlink("Other!A1")))
   }
 
   test(

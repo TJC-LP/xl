@@ -333,8 +333,17 @@ object EditSchema:
       streamable = true
     )
 
-  private val merge = rangeOnly("merge", "Merge a range into one cell.", "merge")
-  private val unmerge = rangeOnly("unmerge", "Unmerge a merged range.", "unmerge")
+  private val merge = rangeOnly(
+    "merge",
+    "Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.",
+    "merge"
+  )
+  private val unmerge =
+    rangeOnly(
+      "unmerge",
+      "Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again.",
+      "unmerge"
+    )
 
   private val colWidth = spec(
     "col-width",
@@ -456,10 +465,15 @@ object EditSchema:
   private val hyperlink = spec(
     "hyperlink",
     Vector(
-      req("ref", Ref, "The cell"),
-      opt("target", Str, "URL or internal location; omit to clear the hyperlink", "url")
+      req("ref", Range, "The cell or range; a range is one link over every cell in it"),
+      opt(
+        "target",
+        Str,
+        "URL or internal location; omit to clear the hyperlink of every cell in ref",
+        "url"
+      )
     ),
-    "Set or clear a cell hyperlink.",
+    "Set or clear the hyperlink of a cell or of every cell in a range.",
     since = "0.10.0",
     batchOp = Some("hyperlink")
   )

@@ -65,8 +65,15 @@ object api:
     DvErrorStyle,
     DvBoundedType,
     DvMessages,
-    AutoFilterState
+    AutoFilterState,
+    RangeHyperlink
   }
+
+  // A sheet's range hyperlinks (#931): a plain final class with a private constructor, exported as
+  // an explicit type + val pair (the CellStore treatment) so `RangeHyperlinks.empty`/`.from` resolve
+  // outside the package.
+  type RangeHyperlinks = sheets.RangeHyperlinks
+  val RangeHyperlinks: sheets.RangeHyperlinks.type = sheets.RangeHyperlinks
 
   // Drawing types (GH-221) — case classes/enums, so plain export forwarders are safe.
   // NEVER export anything named `Anchor` here (taken by addressing above).

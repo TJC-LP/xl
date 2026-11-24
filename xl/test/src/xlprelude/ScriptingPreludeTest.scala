@@ -811,15 +811,22 @@ class ScriptingPreludeTest extends FunSuite:
       dirty.sheets.flatMap(_.cells.iterator).headOption.getOrElse(fail("no cell"))
     assert(loopCell.isUncachedFormula)
     assert(wb.sheets.flatMap(_.cells.iterator).forall(!_.isUncachedFormula))
-    // an intentional circular model (iterative calculation declared, caches present) is clean;
-    // its cycle is reported as a note
+    // an intentional circular model (iterative calculation declared, caches present) that
+    // converges is clean; its cycle is reported as a note
     val model = Workbook(
-      Sheet("Loop").put(ref"A1", CellValue.Formula("A1+1", Some(CellValue.Number(BigDecimal(1)))))
+      Sheet("Loop").put(ref"A1", CellValue.Formula("A1/2+1", Some(CellValue.Number(BigDecimal(2)))))
     ).withCalcPr(CalcPr(iterativeCalculation = true))
     val iterative: WorkbookAudit = model.audit
     assert(iterative.isClean, s"$iterative")
     assertEquals(iterative.cycles, Vector.empty)
     assertEquals(iterative.iterativeCycles.map(_.members.size), Vector(1))
+    // one that never converges (#934) is a finding, worded as recalc words it
+    val diverging: WorkbookAudit = Workbook(
+      Sheet("Loop").put(ref"A1", CellValue.Formula("A1+1", Some(CellValue.Number(BigDecimal(1)))))
+    ).withCalcPr(CalcPr(iterativeCalculation = true)).audit
+    assertEquals(diverging.isClean, false)
+    assertEquals(diverging.unconvergedCycles.map(_.members.size), Vector(1))
+    assertEquals(diverging.iterativeCycles, Vector.empty)
     // the same cycle without the declaration is a finding
     assertEquals(model.withCalcPr(CalcPr()).audit.cycles.map(_.members.size), Vector(1))
 

@@ -4,6 +4,7 @@ import java.nio.file.{FileSystems, Files, Path}
 import java.nio.file.attribute.PosixFilePermissions
 
 import cats.effect.IO
+import cats.syntax.all.*
 import munit.CatsEffectSuite
 
 import com.tjclp.xl.{*, given}
@@ -14,8 +15,7 @@ import com.tjclp.xl.macros.ref
 /**
  * GH-868: the streaming transforms and `Excel.modify` stage their output in an owner-only temp file
  * and rename it into place, so the output used to end up 0600 whatever the umask. A new output now
- * gets the mode any new file gets in its directory; a replaced one keeps its mode, its group bits
- * capped at its others bits.
+ * gets the mode any new file gets in its directory; a replaced one keeps its mode exactly (#930).
  */
 class OutputFileModeSpec extends CatsEffectSuite:
 
@@ -78,4 +78,23 @@ class OutputFileModeSpec extends CatsEffectSuite:
       _ <- IO.blocking(setMode(source, "rw-r--r--"))
       _ <- IO.blocking(Excel.modify(source.toString)(wb => wb))
     yield assertEquals(mode(source), "rw-r--r--")
+  }
+
+  /** #930: group bits used to be capped at the others bits (640 → 600, 664 → 644). */
+  private val groupModes = List("rw-r-----", "rw-rw----", "rw-rw-r--", "rwxr-xr-x")
+
+  test("streaming transform and Excel.modify keep group bits exactly (#930)") {
+    assume(posix, "POSIX permissions only")
+    groupModes.traverse_ { m =>
+      for
+        dir <- IO.blocking(Files.createTempDirectory("xl-930-stream-"))
+        source <- book(dir)
+        _ <- IO.blocking(setMode(source, m))
+        _ <- streamPut(source, source)
+        streamed = mode(source)
+        _ <- IO.blocking(Excel.modify(source.toString)(wb => wb))
+      yield
+        assertEquals(streamed, m, s"streaming transform over a $m file")
+        assertEquals(mode(source), m, s"Excel.modify over a $m file")
+    }
   }

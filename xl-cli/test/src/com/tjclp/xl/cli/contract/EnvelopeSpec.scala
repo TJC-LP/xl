@@ -247,7 +247,8 @@ class EnvelopeSpec extends CatsEffectSuite:
       assertEquals(e("data")("saved"), ujson.Null)
       assert(e("data")("text").str.contains("NOT saved (--strict failure)"), e("data")("text").str)
       assert(e("data")("text").str.contains("STRICT FAILURE (--strict)"), e("data")("text").str)
-      assertEquals(run.stderr, "", "a gate keeps its report as data and prints no Error: line")
+      // #933: the report is data, and the gate still echoes its one Error: line on stderr
+      oneErrorLine(run, e("error")("message").str)
       assert(java.util.Arrays.equals(before, after), "-i leaves the input untouched")
   }
 
@@ -268,7 +269,7 @@ class EnvelopeSpec extends CatsEffectSuite:
         val text = e("data")("text").str
         assert(text.contains(s"NOT saved (--strict failure): nothing written to $out"), text)
         assert(text.contains("STRICT FAILURE (--strict)"), text)
-        assertEquals(run.stderr, "", "a gate keeps its report as data and prints no Error: line")
+        oneErrorLine(run, e("error")("message").str)
         assert(!Files.exists(Path.of(out)), "a failed --strict gate must not create the -o file")
       }
   }
@@ -649,11 +650,12 @@ class EnvelopeSpec extends CatsEffectSuite:
       // no --format under --json: the JSON report, exactly as --format json gives it
       assertEquals(e("data")("identical"), ujson.False)
       assertEquals(e("data"), envelope(typed)("data"))
-      assertEquals(differs.stderr, "", "findings are the report, not an Error: line")
+      // #933: findings keep the report as data and echo their one Error: line
+      oneErrorLine(differs, e("error")("message").str)
 
       assertEquals(typed.exit, 1)
       assertEquals(envelope(typed)("data")("identical"), ujson.False)
-      assertEquals(typed.stderr, "")
+      assertEquals(typed.stderr, differs.stderr)
 
       assertEquals(same.exit, 0, same.stderr)
       val s = envelope(same)
@@ -677,7 +679,7 @@ class EnvelopeSpec extends CatsEffectSuite:
         assertEquals(run.exit, 1)
         val e = envelope(run)
         assert(e("data")("text").str.startsWith("Comparing "), e("data")("text").str)
-        assertEquals(run.stderr, "")
+        oneErrorLine(run, e("error")("message").str)
       }
   }
 

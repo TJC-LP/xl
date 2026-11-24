@@ -163,14 +163,15 @@ object OpRegistry:
     name: String,
     doc: String,
     example: String,
-    verb: String
+    verb: String,
+    cellMutating: Boolean = false
   ): OpSpec = OpSpec(
     name = name,
     aliases = Vector.empty,
     fields = Vector(req("range", Range, "The range")),
     oneOf = Vector.empty,
     sheetScoped = true,
-    cellMutating = false,
+    cellMutating = cellMutating,
     structural = false,
     needsFormula = false,
     streamable = true,
@@ -180,8 +181,22 @@ object OpRegistry:
     example = ujson.Obj("op" -> ujson.Str(name), "range" -> ujson.Str(example))
   )
 
-  private val merge = rangeOnly("merge", "Merge a range into one cell.", "A1:D1", "merge")
-  private val unmerge = rangeOnly("unmerge", "Unmerge a merged range.", "A1:D1", "unmerge")
+  // GH-935: a merge clears every cell it hides but the upper-left one, as Excel does
+  private val merge = rangeOnly(
+    "merge",
+    "Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.",
+    "A1:D1",
+    "merge",
+    cellMutating = true
+  )
+  // GH-935 review 2: unmerging re-spills a dynamic array the merge had blocked
+  private val unmerge = rangeOnly(
+    "unmerge",
+    "Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again.",
+    "A1:D1",
+    "unmerge",
+    cellMutating = true
+  )
 
   private val colwidth = OpSpec(
     name = "colwidth",
@@ -291,8 +306,13 @@ object OpRegistry:
     name = "hyperlink",
     aliases = Vector.empty,
     fields = Vector(
-      req("ref", Ref, "The cell"),
-      opt("target", Str, "URL or internal location; omit to clear the hyperlink", "url")
+      req("ref", Range, "The cell or range; a range is one link over every cell in it"),
+      opt(
+        "target",
+        Str,
+        "URL or internal location; omit to clear the hyperlink of every cell in ref",
+        "url"
+      )
     ),
     oneOf = Vector.empty,
     sheetScoped = true,
@@ -302,7 +322,7 @@ object OpRegistry:
     streamable = false,
     cliVerb = None,
     since = "0.10.0",
-    doc = "Set or clear a cell hyperlink.",
+    doc = "Set or clear the hyperlink of a cell or of every cell in a range.",
     example = ujson.Obj(
       "op" -> ujson.Str("hyperlink"),
       "ref" -> ujson.Str("A1"),
@@ -315,8 +335,12 @@ object OpRegistry:
     aliases = Vector.empty,
     fields = Vector(
       req("range", Range, "The range"),
-      opt("all", Bool, "Clear contents, styles and comments"),
-      opt("styles", Bool, "Clear styles only"),
+      opt("all", Bool, "Clear contents, styles and comments, and unmerge (Excel's Clear All)"),
+      opt(
+        "styles",
+        Bool,
+        "Clear styles only, like Excel's Clear Formats: unmerge every merge the range touches and reset each whole merge"
+      ),
       opt("comments", Bool, "Clear comments only")
     ),
     oneOf = Vector.empty,
@@ -929,7 +953,8 @@ object OpRegistry:
 
   /** The sheet a ref string is qualified with, if any (`Other!A1` → `Other`). */
   def qualifiedSheet(refStr: String): Option[SheetName] =
-    RefType.parse(refStr).toOption.collect {
+    // whole columns/rows too (`Other!A:A`), which the hyperlink op accepts (#932)
+    RefType.parseWithWhole(refStr).toOption.collect {
       case RefType.QualifiedCell(sheet, _) => sheet
       case RefType.QualifiedRange(sheet, _) => sheet
     }

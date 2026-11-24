@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.printer
 
 import java.util.regex.Pattern
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -45,6 +45,77 @@ object FormulaOps:
           )
         case Right(expr) if !FormulaShifter.mentionsSheet(expr, from.value) => Right(text)
         case Right(expr) => Right(reprint(text, FormulaShifter.renameSheet(expr, from, to)))
+
+  /**
+   * GH-936: `text` with every sheet qualifier spelled as the sheet's own name among `names`, as
+   * Excel stores a formula when it is entered (`=sheet1!A1` becomes `=Sheet1!A1`, `='my data'!A1`
+   * becomes `='My Data'!A1`, `=data!rate` becomes `=Data!rate`). A qualifier resolves by
+   * [[SheetName.indexIn]]'s rule (#752); one that matches no sheet, or folds onto two tabs
+   * differing only by case, stays as typed, and an external-workbook reference (`[1]sheet1!A1`) is
+   * never touched. Total: text that needs no respelling — including text that does not parse, which
+   * the caller's own gate reports — comes back byte-identical, so a formula already in canonical
+   * form keeps its spacing and casing exactly. For newly authored formulas only: a formula read
+   * from a file is never passed through here.
+   */
+  def canonicalSheets(text: String, names: IndexedSeq[SheetName]): String =
+    if names.isEmpty || !text.contains('!') then text
+    else
+      def respelled: Option[String] =
+        FormulaSpans.scan(text).filter(_.threeD).map { scan =>
+          val edits = scan.qualifiers.flatMap { q =>
+            SheetName(q.name).toOption
+              .flatMap(typed => SheetName.indexIn(names, typed).toOption.map(names(_)))
+              .filter(_.value != q.name)
+              .map(own => (q.start, q.end, SheetName.quoteForFormula(own.value)))
+          }
+          FormulaSpans.replace(text, edits)
+        }
+      FormulaParser.parse(text) match
+        // GH-936 review 4: text xl cannot parse because it holds a 3-D reference (which the
+        // scanner keeps as one opaque span) still has its other qualifiers respelled, span by
+        // span; any other unparseable text stays as typed
+        case Left(_) => respelled.getOrElse(text)
+        case Right(expr) =>
+          val canonical = FormulaShifter.canonicalSheets(expr, names)
+          if canonical == expr then text
+          else
+            // Excel changes only the qualifier's spelling: rewrite those spans, keep every other
+            // byte, and keep the text as typed when the scanner or the parser disagree
+            FormulaSpans
+              .scan(text)
+              .map { scan =>
+                val edits = scan.qualifiers.flatMap { q =>
+                  SheetName(q.name).toOption
+                    .flatMap(typed => SheetName.indexIn(names, typed).toOption.map(names(_)))
+                    .filter(_.value != q.name)
+                    .map(own => (q.start, q.end, SheetName.quoteForFormula(own.value)))
+                }
+                FormulaSpans.replace(text, edits)
+              }
+              .filter(rewritten => sameFormula(rewritten, canonical))
+              .getOrElse(text)
+
+  /** Whether `text` parses to a formula that prints as `expected` does. */
+  private def sameFormula(text: String, expected: TExpr[?]): Boolean =
+    FormulaParser
+      .parse(text)
+      .exists(e => FormulaPrinter.printFileForm(e) == FormulaPrinter.printFileForm(expected))
+
+  /**
+   * GH-935: `text` rewritten for a cell cut from `sheet!from` and pasted onto `sheet!to`, by
+   * Excel's rule ([[CutReferences]]): references to `from` follow it, references to `to` become
+   * `#REF!`, line ranges with `from` at an end grow or shrink, and a formula none of whose
+   * references depends on either cell is left alone. Only the changed reference spans are replaced;
+   * everything else is byte-identical. Total.
+   */
+  def relocateCell(
+    text: String,
+    host: CutReferences.Host,
+    sheet: SheetName,
+    from: ARef,
+    to: ARef
+  ): String =
+    CutReferences.rewrite(text, host, sheet, from, to)
 
   /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1

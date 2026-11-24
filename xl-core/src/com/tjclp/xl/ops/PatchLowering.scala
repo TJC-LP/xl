@@ -2,7 +2,7 @@ package com.tjclp.xl.ops
 
 import com.tjclp.xl.addressing.{ARef, CellRange, Column, Row}
 import com.tjclp.xl.patch.Patch
-import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet}
+import com.tjclp.xl.sheets.{ColumnProperties, RowProperties, Sheet, SheetEdits}
 
 /**
  * `Patch.toEdits` (ADR-017 §2.12): the kernel's cases desugared into the edits that mean the same
@@ -55,7 +55,10 @@ private[xl] object PatchLowering:
         Vector(Edit.Clear(cell(ref), ClearWhat.styles))
       )
 
-    case Patch.Merge(range) => Some(Vector(Edit.Merge(area(range))))
+    // GH-935: a merge that moves a cell into an empty upper-left one also rewrites that cell's
+    // readers in the Edit algebra (the kernel cannot), so it has no exact desugaring
+    case Patch.Merge(range) =>
+      Option.when(SheetEdits.mergeLowers(sheet, range))(Vector(Edit.Merge(area(range))))
     case Patch.Unmerge(range) => Some(Vector(Edit.Unmerge(area(range))))
 
     case Patch.SetColumnProperties(col, props) => columnEdits(sheet, col, props)

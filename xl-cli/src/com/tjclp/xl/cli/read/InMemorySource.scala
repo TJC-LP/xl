@@ -11,7 +11,7 @@ import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.ViewFormat
 import com.tjclp.xl.cli.contract.{CliError, CliException, ErrorCode, Location, Warning, WarningCode}
 import com.tjclp.xl.cli.helpers.Resolve
-import com.tjclp.xl.cli.output.RendererCommon
+import com.tjclp.xl.cli.output.{Convergence, RendererCommon}
 import com.tjclp.xl.cli.raster.{RasterFormat, RasterizerChain}
 import com.tjclp.xl.formula.{Clock, DependencyGraph, SheetEvaluator}
 import com.tjclp.xl.formula.eval.{CfEvaluation, LiveRender}
@@ -108,7 +108,8 @@ final class InMemorySource(wb: Workbook) extends SheetSource:
       CellDetail(
         record,
         s.getComment(ref),
-        cell.flatMap(_.hyperlink).map(_.target),
+        // #931: the cell's own link, else the range hyperlink covering it
+        s.hyperlinkAt(ref).map(_.target),
         Some(declared),
         Some(listed(graph.dependentsOf(current)))
       )
@@ -502,29 +503,26 @@ object InMemorySource:
         // #917: a cycle the window depends on that ran out of rounds (or stalled) shows its
         // last-round values. `recalc` says so in its summary and gates on it under --strict; the
         // window does the same, in the same words.
-        val convergence = result.unconverged.headOption.zip(result.unconvergedVerdict) match
-          case None => IO.unit
-          case Some((first, verdict)) =>
-            val cycles = result.unconverged.take(3).map(_.render).mkString("; ") +
-              (if result.unconverged.sizeIs > 3 then s"; … and ${result.unconverged.size - 3} more"
-               else "")
-            val message = s"Iterative calculation $verdict: $cycles"
-            val location = first.members.headOption
-              .map((name, ref) => Location(None, Some(name.value), Some(ref.toA1), None))
-            if strict then
-              IO.raiseError(
-                CliException(
-                  CliError(
-                    ErrorCode.RECALC_GATE,
-                    message,
-                    hint = Some(
-                      "drop --strict to render the last-round values and see this as a warning; " +
-                        "raise the workbook's iteration limit or fix the cycle to converge it"
-                    ),
-                    location = location
+        val convergence =
+          result.unconverged.headOption.zip(Convergence.message(result.unconverged)) match
+            case None => IO.unit
+            case Some((first, message)) =>
+              val location = first.members.headOption
+                .map((name, ref) => Location(None, Some(name.value), Some(ref.toA1), None))
+              if strict then
+                IO.raiseError(
+                  CliException(
+                    CliError(
+                      ErrorCode.RECALC_GATE,
+                      message,
+                      hint = Some(
+                        "drop --strict to render the last-round values and see this as a warning; " +
+                          "raise the workbook's iteration limit or fix the cycle to converge it"
+                      ),
+                      location = location
+                    )
                   )
                 )
-              )
-            else warn(Warning(WarningCode.NOT_CONVERGED, message, location))
+              else warn(Warning(WarningCode.NOT_CONVERGED, message, location))
         failures <* convergence
       }

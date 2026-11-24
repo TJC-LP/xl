@@ -87,7 +87,8 @@ object WorkbookSummary:
       uncachedFormulas = uncached,
       mergedRanges = sheet.mergedRanges.size,
       comments = sheet.comments.size,
-      hyperlinks = sheet.cells.iterator.count(_.hyperlink.isDefined),
+      // #931: a link over a range counts once, however many cells it covers
+      hyperlinks = sheet.cells.iterator.count(_.hyperlink.isDefined) + sheet.rangeHyperlinks.size,
       freeze = sheet.freezePane,
       tabColor = sheet.tabColor,
       autoFilter = sheet.autoFilter.collect { case AutoFilterState.Ranged(range) => range },

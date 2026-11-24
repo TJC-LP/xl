@@ -13,9 +13,9 @@ import munit.FunSuite
 /**
  * GH-868: the surgical write stages the output in an owner-only temp file (`createTempFile` makes
  * it 0600) and renames it into place, so the output used to keep 0600 whatever the umask. A new
- * output now gets the mode any new file gets in its directory; an overwritten one keeps its mode,
- * its group bits capped at its others bits (the JVM cannot see the ACL whose mask they may be) —
- * including an owner-only mode, which is never widened to the umask's.
+ * output now gets the mode any new file gets in its directory; an overwritten one keeps its mode
+ * exactly (#930: its group bits used to be capped at its others bits) — including an owner-only
+ * mode, which is never widened to the umask's.
  */
 class XlsxWriterFileModeSpec extends FunSuite:
 
@@ -89,20 +89,20 @@ class XlsxWriterFileModeSpec extends FunSuite:
       catch case _: Exception => false
     }
 
-  test("an overwritten output keeps its group with its mode (GH-868 review)") {
+  test("an overwritten output keeps its group and its exact mode (GH-868 review, #930)") {
     assume(posix, "POSIX permissions only")
     val dir = Files.createTempDirectory("xl-gh868-group-")
     val dest = dir.resolve("dest.xlsx")
     Files.writeString(dest, "old")
-    setMode(dest, "rw-r--r--")
+    setMode(dest, "rw-rw----")
     val other = regroup(dest)
     assume(other.isDefined, "needs a second group the user belongs to")
     assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
     assertEquals(Some(group(dest)), other)
-    assertEquals(mode(dest), "rw-r--r--")
+    assertEquals(mode(dest), "rw-rw----")
   }
 
-  test("group bits are capped at the others bits (GH-868 review)") {
+  test("group bits are capped at the others bits when the group cannot be kept (GH-868 review)") {
     def cap(m: String): String =
       PosixFilePermissions.toString(
         OutputFileMode.groupCappedAtOthers(PosixFilePermissions.fromString(m))
@@ -113,14 +113,16 @@ class XlsxWriterFileModeSpec extends FunSuite:
     assertEquals(cap("rw-------"), "rw-------")
   }
 
-  test("a group-shared output loses only the group's extra rights (GH-868 review)") {
+  test("a group-shared output keeps its group bits (#930)") {
     assume(posix, "POSIX permissions only")
-    val dir = Files.createTempDirectory("xl-gh868-shared-")
-    val dest = dir.resolve("dest.xlsx")
-    Files.writeString(dest, "old")
-    setMode(dest, "rw-rw-r--")
-    assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
-    assertEquals(mode(dest), "rw-r--r--")
+    List("rw-rw-r--", "rw-rw----", "rw-r-----").foreach { m =>
+      val dir = Files.createTempDirectory("xl-930-shared-")
+      val dest = dir.resolve("dest.xlsx")
+      Files.writeString(dest, "old")
+      setMode(dest, m)
+      assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
+      assertEquals(mode(dest), m)
+    }
   }
 
   /** Run a command, true when it exits 0. */
@@ -143,7 +145,7 @@ class XlsxWriterFileModeSpec extends FunSuite:
     proc.waitFor(): Unit
     added && listing.lift(10).contains('+')
 
-  test("an overwritten file with an extended ACL never widens its group (GH-868 review)") {
+  test("an overwritten file with an extended ACL keeps its mode bits, not its ACL (#930)") {
     assume(posix, "POSIX permissions only")
     val dir = Files.createTempDirectory("xl-gh868-acl-")
     val dest = dir.resolve("dest.xlsx")
@@ -151,6 +153,7 @@ class XlsxWriterFileModeSpec extends FunSuite:
     setMode(dest, "rw-rw----")
     assume(addAcl(dest), "needs Linux setfacl")
     assertEquals(XlsxWriter.writeWith(edited(dir), dest), Right(()))
-    // the group bits are the ACL mask, not the group's own entry: capped at the others bits
-    assertEquals(mode(dest), "rw-------")
+    // the documented residual: the JVM can neither read nor copy the ACL, so the replaced file
+    // carries none, and its group bits (the old mask) now apply to the owning group
+    assertEquals(mode(dest), "rw-rw----")
   }

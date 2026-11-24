@@ -75,7 +75,7 @@ object SheetRenamer:
    */
   final case class Refusal(site: Option[Site], error: XLError) derives CanEqual
 
-  private type Refused[A] = Either[Refusal, A]
+  private[eval] type Refused[A] = Either[Refusal, A]
 
   /**
    * `Workbook.rename(from, to)` plus the reference rewrite described above. `Left` with the same
@@ -218,7 +218,7 @@ object SheetRenamer:
    * in color-scale points and data-bar bounds). Text-family rules carry text, not references; Top10
    * has no formula; Preserved payloads are opaque XML and ride verbatim.
    */
-  private def rewriteCf(
+  private[eval] def rewriteCf(
     cf: ConditionalFormat,
     rewrite: String => Refused[String]
   ): Refused[ConditionalFormat] =
@@ -256,7 +256,7 @@ object SheetRenamer:
    * Typed DV formulas follow the rename (List/Custom/Bounded). An inline list literal (`"yes,no"`)
    * never mentions a sheet and rides verbatim; Preserved payloads are opaque XML.
    */
-  private def rewriteDv(
+  private[eval] def rewriteDv(
     dv: DataValidation,
     rewrite: String => Refused[String]
   ): Refused[DataValidation] =

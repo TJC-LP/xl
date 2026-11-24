@@ -376,7 +376,9 @@ class HyperlinkRoundTripSpec extends FunSuite:
         links.foreach { l =>
           val anchor = l.ref.takeWhile(_ != ':')
           val cell = sheet(anchor).fold(e => fail(e.message), identity)
-          assertEquals(cell.hyperlink, Option.unless(l.ref.contains(':'))(Hyperlink(l.target)))
+          // #931: a range link is reported for its cells, but owned by none of them
+          assertEquals(cell.hyperlink, Some(Hyperlink(l.target)))
+          assertEquals(sheet.cells.hyperlinkAt(cell.ref).isDefined, !l.ref.contains(':'))
         }
       checkModel(before)
       val edited = wb.put(before.put(ref"A1", CellValue.Text("edit")))
@@ -476,7 +478,10 @@ class HyperlinkRoundTripSpec extends FunSuite:
       finally zip.close()
       val wb = XlsxReader.read(src).fold(e => fail(e.message), identity)
       val before = wb("Summary").fold(e => fail(e.message), identity)
-      assertEquals(before(ref"D2").hyperlink, None)
+      // #931: the range link is reported at D2, which does not own it (a link inside
+      // mc:AlternateContent is not modeled: the reader reads direct children only)
+      assertEquals(before(ref"D2").hyperlink, Option.unless(inAlternateContent)(Hyperlink(oldUrl)))
+      assertEquals(before.cells.hyperlinkAt(ref"D2"), None)
       val edited = overrides.foldLeft(before) { case (sheet, (ref, target)) =>
         val cell = sheet(ref).fold(e => fail(e.message), identity)
         sheet.put(cell.withHyperlink(target))

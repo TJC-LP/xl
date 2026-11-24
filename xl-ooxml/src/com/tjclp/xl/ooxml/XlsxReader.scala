@@ -1241,6 +1241,15 @@ object XlsxReader:
         }
         if linked.hasNext then cellsMap.putAll(linked) else cellsMap
 
+    // #931: a link over a range (`<hyperlink ref="A1:A5">`) becomes a range hyperlink, reported for
+    // every covered cell without creating one; the source element still writes it (the writer
+    // matches it to this entry through the same rule)
+    val rangeHyperlinks = ooxmlSheet.preservedKnown
+      .get("hyperlinks")
+      .fold(Vector.empty[com.tjclp.xl.sheets.RangeHyperlink])(
+        com.tjclp.xl.ooxml.worksheet.sourceRangeHyperlinks(_, hyperlinkRels)
+      )
+
     // Parse column properties from <cols> element
     val columnProperties = ooxmlSheet.cols match
       case Some(colsElem) => parseColumnProperties(colsElem, styleMapping)
@@ -1302,7 +1311,8 @@ object XlsxReader:
         conditionalFormats = conditionalFormats,
         tabColor = tabColor,
         dataValidations = dataValidations,
-        autoFilter = autoFilter
+        autoFilter = autoFilter,
+        rangeHyperlinks = com.tjclp.xl.sheets.RangeHyperlinks.from(rangeHyperlinks)
       )
     )
 

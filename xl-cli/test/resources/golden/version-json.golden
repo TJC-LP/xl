@@ -1,0 +1,18 @@
+## args
+--version
+--json
+## exit
+0
+## stdout
+{
+  "ok": true,
+  "exitCode": 0,
+  "verb": "",
+  "version": "<VERSION>",
+  "data": {
+    "version": "<VERSION>"
+  },
+  "warnings": [],
+  "error": null
+}
+## stderr

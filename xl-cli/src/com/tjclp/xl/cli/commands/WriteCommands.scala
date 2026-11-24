@@ -20,13 +20,14 @@ import com.tjclp.xl.cli.helpers.{
   StyleBuilder,
   ValueParser
 }
-import com.tjclp.xl.cli.output.Format
+import com.tjclp.xl.cli.output.{Convergence, Format}
 import com.tjclp.xl.cli.MemoryGuard
 import com.tjclp.xl.cli.contract.{
   CliError,
   CliException,
   Diagnostics,
   IntersectionHit,
+  Location,
   OffGridHit,
   Warning,
   WarningCode
@@ -51,6 +52,7 @@ import com.tjclp.xl.formula.eval.{
   StructuralEditor
 }
 import com.tjclp.xl.formula.graph.NameChanges
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.formatted.Formatted
 import com.tjclp.xl.styles.numfmt.NumFmt
 import com.tjclp.xl.io.ExcelIO
@@ -163,10 +165,10 @@ object WriteCommands:
    * GH-468: the targeted dependent refresh every single-target write ends with — suppressed
    * entirely by `--no-recalc`, which leaves every cached value in the file exactly as it was.
    */
-  private def writeAfterRefresh(
-    wb: Workbook,
+  private[cli] def writeAfterRefresh(
+    wb0: Workbook,
     sheetName: SheetName,
-    modifiedRefs: Set[ARef],
+    modifiedRefs0: Set[ARef],
     message: String,
     outputPath: Path,
     config: WriterConfig,
@@ -182,6 +184,12 @@ object WriteCommands:
       else
         // GH-636: the recalculation builds the graph and every result at once — under the guard
         MemoryGuard.blocking(outputPath, "recalc") {
+          // GH-935 review 3: a dynamic array a merge truncated on this sheet spills again once
+          // nothing blocks it (after an unmerge, a styles clear), its new cells joining the seeds
+          val (respilled, respillSeeds) =
+            DynamicArrayAuthoring.respillOnSheet(wb0, sheetName, clock.getOrElse(Clock.system))
+          val wb = respilled
+          val modifiedRefs = modifiedRefs0 ++ respillSeeds
           val result =
             if wb.metadata.calcPr.exists(_.iterativeCalculation) then
               val (full, cone) =
@@ -198,7 +206,7 @@ object WriteCommands:
           Some(result)
         }
     calculation.flatMap { result =>
-      val finalWb = result.fold(wb)(_.workbook)
+      val finalWb = result.fold(wb0)(_.workbook)
       writeWorkbook(finalWb, outputPath, config, stream).flatMap { report =>
         val note = result match
           case None => noRecalcSuffix(policy)
@@ -536,6 +544,34 @@ object WriteCommands:
     policy: WritePolicy = WritePolicy.default,
     warn: Warning => IO[Unit] = _ => IO.unit,
     array: Boolean = false
+  ): IO[String] =
+    // GH-936: each sheet qualifier is stored as the tab's own name, as Excel stores an entered
+    // formula (`=sheet1!A1` becomes `=Sheet1!A1`); a drag shifts the respelled text
+    val tabs = wb.sheets.map(_.name)
+    putFormulaAuthored(
+      wb,
+      sheetOpt,
+      refStr,
+      formulas.map(FormulaOps.canonicalSheets(_, tabs)),
+      outputPath,
+      config,
+      stream,
+      policy,
+      warn,
+      array
+    )
+
+  private def putFormulaAuthored(
+    wb: Workbook,
+    sheetOpt: Option[Sheet],
+    refStr: String,
+    formulas: List[String],
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit],
+    array: Boolean
   ): IO[String] =
     for
       // GH-430: TABLE(...) is a data-table record's display text, not a writable formula
@@ -1356,15 +1392,15 @@ object WriteCommands:
    * Whether a batch op can change a cell's value or formula, requiring recalculation before write
    * (GH-352).
    *
-   * Rule: recalculate whenever any op writes, clears, or copies cell content — such an op can
+   * Rule: recalculate whenever any op writes, clears, or copies cell content (a merge clears the
+   * cells it hides, and an unmerge may re-spill a blocked dynamic array, GH-935) — such an op can
    * invalidate cached formula values anywhere in the workbook (cross-sheet dependents included),
    * and `BatchParser` stores batch formulas uncached (`Formula(expr, None)`). Ops that only touch
-   * presentation or non-formula metadata (styles, comments, widths, visibility, merges, freeze
-   * panes, sheet management, hyperlinks) leave every existing cached value correct — `rename-sheet`
-   * (GH-559) rewrites referencing formulas and names without changing a value — so a batch made
-   * exclusively of them skips the recalculation and preserves the input's caches as-is.
-   * Defined-name edits are checked separately in `batch`: they invalidate readers without writing
-   * any cell content.
+   * presentation or non-formula metadata (styles, comments, widths, visibility, freeze panes, sheet
+   * management, hyperlinks) leave every existing cached value correct — `rename-sheet` (GH-559)
+   * rewrites referencing formulas and names without changing a value — so a batch made exclusively
+   * of them skips the recalculation and preserves the input's caches as-is. Defined-name edits are
+   * checked separately in `batch`: they invalidate readers without writing any cell content.
    *
    * The match is deliberately exhaustive (no wildcard): a future `BatchOp` must be consciously
    * classified here or the match fails loudly — in practice as a MatchError in the batch specs (the
@@ -1378,11 +1414,13 @@ object WriteCommands:
           _: BatchParser.BatchOp.PutFormulaDragging | _: BatchParser.BatchOp.PutFormulas |
           _: BatchParser.BatchOp.PutValues | _: BatchParser.BatchOp.CopyRange =>
         true
+      // GH-935: a merge clears every cell it hides but the upper-left one, as Excel does; an
+      // unmerge can re-spill a dynamic array the merge had blocked
+      case _: BatchParser.BatchOp.Merge | _: BatchParser.BatchOp.Unmerge => true
       // A styles-only or comments-only clear leaves every cell value intact — mirror
       // BatchParser.applyClear's clearContents condition so those take the no-recalc path.
       case c: BatchParser.BatchOp.Clear => c.all || (!c.styles && !c.comments)
-      case _: BatchParser.BatchOp.Style | _: BatchParser.BatchOp.Merge |
-          _: BatchParser.BatchOp.Unmerge | _: BatchParser.BatchOp.ColWidth |
+      case _: BatchParser.BatchOp.Style | _: BatchParser.BatchOp.ColWidth |
           _: BatchParser.BatchOp.RowHeight | _: BatchParser.BatchOp.AddComment |
           _: BatchParser.BatchOp.RemoveComment | _: BatchParser.BatchOp.ColHide |
           _: BatchParser.BatchOp.ColShow | _: BatchParser.BatchOp.RowHide |
@@ -1654,9 +1692,12 @@ object WriteCommands:
    */
   private def scopedRecalc(
     before: Workbook,
-    edited: Workbook,
+    editedRaw: Workbook,
     clock: Clock = Clock.system
   ): (Workbook, RecalcResult) =
+    // GH-935 review 3: a dynamic array a merge truncated spills again once nothing blocks it (an
+    // unmerge, a styles clear); its new cells are changes like any other
+    val edited = DynamicArrayAuthoring.respillTruncated(editedRaw, clock)._1
     val changed = changedRefs(before, edited)
     // A name's binding can change while every cell retains its text and cache. Seed its readers
     // explicitly before closing the cell graph, including readers of removed names and aliases.
@@ -1717,6 +1758,31 @@ object WriteCommands:
     warn: Warning => IO[Unit]
   ): IO[String] =
     refreshDependents(before, edited, changesNames(before, edited), outputPath, policy).flatMap {
+      (finalWb, recalcOpt, refreshLine) =>
+        writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
+          val recalcLine = refreshLine.fold("")(line => s"$line\n")
+          val rendered = s"$message\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+          strictGate(policy, rendered, recalcOpt, Vector.empty, warn)
+        }
+    }
+
+  /**
+   * GH-935: the write tail of an edit that may change cells on several sheets at once — a merge
+   * whose cut rewrites formulas on other sheets and in names: every cell whose value or formula
+   * text changed, on any sheet, seeds the dependent refresh (the batch's scoped refresh), so a
+   * reader rewritten to `#REF!` elsewhere is recalculated too. `--no-recalc` keeps every cache.
+   */
+  def writeAfterContentEdit(
+    before: Workbook,
+    edited: Workbook,
+    message: String,
+    outputPath: Path,
+    config: WriterConfig,
+    stream: Boolean,
+    policy: WritePolicy,
+    warn: Warning => IO[Unit]
+  ): IO[String] =
+    refreshDependents(before, edited, mutating = true, outputPath, policy).flatMap {
       (finalWb, recalcOpt, refreshLine) =>
         writeWorkbook(finalWb, outputPath, config, stream).flatMap { _ =>
           val recalcLine = refreshLine.fold("")(line => s"$line\n")
@@ -1836,7 +1902,14 @@ object WriteCommands:
                 case _: BatchParser.BatchOp.DefineName | _: BatchParser.BatchOp.RemoveName => true
                 case _ => false
               } && changesNames(wb, updatedWb)
-              val mutating = result.scoped.map(_.op).exists(isCellMutating) || nameEdit
+              // GH-935 review 3: a batch that removed a merge (a styles clear) can unblock a dynamic
+              // array the merge truncated; the refresh re-spills it
+              val unmerged = wb.sheets.exists { before =>
+                updatedWb(before.name).toOption
+                  .exists(after => !before.mergedRanges.subsetOf(after.mergedRanges))
+              }
+              val mutating =
+                result.scoped.map(_.op).exists(isCellMutating) || nameEdit || unmerged
               refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
                 (finalWb, recalcOpt, refreshLine) =>
                   writeWorkbook(finalWb, outputPath, config, stream).flatMap { written =>
@@ -1904,11 +1977,13 @@ object WriteCommands:
 
   /**
    * [[recalc]] with the typed facts its `--json` payload adds after `{text, saved, written}`:
-   * `errorValuedCycles` (#678), each converged cycle that settled on an Excel error, as its member
-   * refs, and `errorCells` (#692), the first `RecalcResult.MaxNamedErrorCells` (10) error-valued
-   * cells (the text names the first `MaxSummaryErrorCells`, 3) — `{ref, error, reason}`, `reason`
-   * null when the evaluator gave none — both always present, `[]` when there is none. A `--strict`
-   * failure carries the same facts.
+   * `unconvergedCycles` (#933), each iterative cycle that exhausted its rounds or stalled as
+   * `{cells, verdict, rounds, maxChange, stalled}` (raised as one `NOT_CONVERGED` warning too,
+   * unless `--strict` makes it the gate's reason), `errorValuedCycles` (#678), each converged cycle
+   * that settled on an Excel error, as its member refs, and `errorCells` (#692), the first
+   * `RecalcResult.MaxNamedErrorCells` (10) error-valued cells (the text names the first
+   * `MaxSummaryErrorCells`, 3) — `{ref, error, reason}`, `reason` null when the evaluator gave none
+   * — both always present, `[]` when there is none. A `--strict` failure carries the same facts.
    */
   def recalcReport(
     wb: Workbook,
@@ -1925,7 +2000,12 @@ object WriteCommands:
     // memory guard (GH-636): a heap the whole-book recalculation exhausts is RESOURCE_LIMIT.
     MemoryGuard
       .blocking(outputPath, "recalc")(
-        recalcHonoringCalcPr(wb, parallel, seedTables = seedTables)
+        // GH-935 review 3: a dynamic array a merge truncated spills again once nothing blocks it
+        recalcHonoringCalcPr(
+          DynamicArrayAuthoring.respillTruncated(wb, Clock.system)._1,
+          parallel,
+          seedTables = seedTables
+        )
       )
       .flatMap { run =>
         val result = run.result
@@ -1939,15 +2019,34 @@ object WriteCommands:
             val rendered =
               s"${formatRecalcSummary(result)}$tableNote$advisory$warningLines\n${Format.saveSuffix(outputPath, stream)}"
             val facts = recalcFacts(result)
-            strictGate(policy, rendered, Some(result), warnings, warn)
+            // #933: a cycle that ran out of rounds (or stalled) is one NOT_CONVERGED warning, in
+            // the words `view --eval` uses (#917); under --strict it is the gate's reason instead
+            val convergence =
+              if policy.strict then IO.unit
+              else notConvergedWarning(result.unconverged).traverse_(warn)
+            convergence *> strictGate(policy, rendered, Some(result), warnings, warn)
               .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
               .map(_ -> facts)
           }
         }
       }
 
+  /**
+   * #933: the `NOT_CONVERGED` warning of a recalculation whose iterative cycles did not all
+   * converge, located at the first such cycle's first member; `None` when every cycle converged.
+   */
+  private def notConvergedWarning(unconverged: Vector[SccReport]): Option[Warning] =
+    Convergence.message(unconverged).map { message =>
+      val location = unconverged.headOption
+        .flatMap(_.members.headOption)
+        .map((sheet, ref) => Location(None, Some(sheet.value), Some(ref.toA1), None))
+      Warning(WarningCode.NOT_CONVERGED, message, location)
+    }
+
   private def recalcFacts(result: RecalcResult): Vector[(String, ujson.Value)] =
     Vector(
+      // #933: every cycle that exhausted its rounds or stalled, as `audit --json` lists them
+      "unconvergedCycles" -> Convergence.json(result.unconverged),
       "errorValuedCycles" -> ujson.Arr.from(result.errorValuedCycles.map { scc =>
         ujson.Arr.from(
           scc.members.map((sheet, ref) =>

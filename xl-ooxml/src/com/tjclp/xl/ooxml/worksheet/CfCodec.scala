@@ -416,7 +416,10 @@ object CfCodec:
         Option.when(ruleElems.nonEmpty) {
           val attrs =
             (if pivot then Seq("pivot" -> "1") else Seq.empty) :+
-              ("sqref" -> ranges.map(_.toA1).mkString(" "))
+              // a single cell is written `A8`, as Excel writes it (never `A8:A8`)
+              ("sqref" -> ranges
+                .map(r => if r.start == r.end then r.start.toA1 else r.toA1)
+                .mkString(" "))
           elemOrdered("conditionalFormatting", attrs*)(ruleElems*)
         }
       case _: ConditionalFormat.Rules => None

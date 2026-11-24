@@ -1,0 +1,13 @@
+## args
+-f
+<DIR>/diverging.xlsx
+-o
+<DIR>/recalc-unconverged-text.xlsx
+recalc
+## exit
+0
+## stdout
+Recalculated 2 formulas; WARNING: iterative calculation exhausted 5 round(s) without converging (last values kept)
+Saved: <DIR>/recalc-unconverged-text.xlsx
+## stderr
+Warning[NOT_CONVERGED]: Iterative calculation exhausted 5 round(s) without converging (last values kept): Model!A1, Model!B1: exhausted 5 round(s), max |Δ| = 32

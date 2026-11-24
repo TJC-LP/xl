@@ -680,7 +680,7 @@ explicit `recalculate().toEither` pattern above when a dirty result must abort *
 lands on disk.
 
 For one-off questions, `wb.evaluateFormula("=SUM(Data!A1:A9)", "Summary")` returns
-`XLResult[CellValue]` with cross-sheet context wired automatically (128 functions supported —
+`XLResult[CellValue]` with cross-sheet context wired automatically (the function registry —
 see the [skill API reference](../../plugin/skills/xl-scripting/reference/API.md) for the full
 list).
 
@@ -753,6 +753,7 @@ val audit: WorkbookAudit = wb.audit                 // buckets, each in workbook
 if !audit.isClean then                              // error cells, uncached/unparseable formulas, cycles, unresolved names
   audit.errorCells.foreach((ref, err) => println(s"$ref ${err.toExcel}"))
 audit.volatile                                      // TODAY/NOW/RAND/RANDBETWEEN cells: a note, not a finding
+audit.unconvergedCycles                             // since 0.27.1: iterative cycles that do not converge (a finding)
 audit.restrictTo(SheetName.unsafe("Summary"))       // what `xl audit -s Summary` reports
 WorkbookAudit.of(wb, Clock.system, checkDataTables = false) // since 0.27.0: `xl audit --skip-data-tables`; `.dataTablesChecked` says which
 

@@ -20,13 +20,13 @@ a property answers to. An op the streaming writer cannot apply is refused by ind
 | `put` | — | yes | yes | yes | `put` | 0.1.0 | Write a value (or a row-major array of values) with optional number format. |
 | `putf` | — | yes | yes | yes | `putf` | 0.1.0 | Write a formula: one cell, dragged across a range from an anchor, or explicit per cell. Every formula must parse (the putf verb's gate): an unparseable one is BATCH_OP_INVALID before anything is written, --dry-run included. `"array": true` stores one cell as an Excel 365 dynamic array that spills (putf --array). |
 | `style` | — | yes | no | yes | `style` | 0.1.0 | Style a range: font, fill, alignment, number format, borders (merged unless `replace`). |
-| `merge` | — | yes | no | yes | `merge` | 0.1.0 | Merge a range into one cell. |
-| `unmerge` | — | yes | no | yes | `unmerge` | 0.1.0 | Unmerge a merged range. |
+| `merge` | — | yes | yes | yes | `merge` | 0.1.0 | Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared. |
+| `unmerge` | — | yes | yes | yes | `unmerge` | 0.1.0 | Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again. |
 | `colwidth` | — | yes | no | yes | `col` | 0.1.0 | Set a column's width. |
 | `rowheight` | — | yes | no | yes | `row` | 0.1.0 | Set a row's height. |
 | `comment` | — | no | no | yes | `comment` | 0.9.6 | Add or replace a cell comment. |
 | `remove-comment` | — | no | no | yes | `remove-comment` | 0.9.6 | Remove a cell's comment. |
-| `hyperlink` | — | no | no | yes | — | 0.10.0 | Set or clear a cell hyperlink. |
+| `hyperlink` | — | no | no | yes | — | 0.10.0 | Set or clear the hyperlink of a cell or of every cell in a range. |
 | `clear` | — | no | yes | yes | `clear` | 0.9.6 | Clear a range: contents by default (formatting and merges kept), or styles/comments/all. |
 | `col-hide` | — | yes | no | yes | `col` | 0.9.6 | Hide a column. |
 | `col-show` | — | yes | no | yes | `col` | 0.9.6 | Show a hidden column. |
@@ -129,7 +129,7 @@ Style a range: font, fill, alignment, number format, borders (merged unless `rep
 
 ### `merge`
 
-Merge a range into one cell.
+Merge a range into one cell as Excel does: the upper-left value stays, or, when that cell is empty, the first non-empty cell moves there (its readers follow); the other cells are cleared.
 
 ```json
 {"op":"merge","range":"A1:D1"}
@@ -143,7 +143,7 @@ Merge a range into one cell.
 
 ### `unmerge`
 
-Unmerge a merged range.
+Unmerge every merged area the range (or cell) touches; a dynamic array a merge blocked spills again.
 
 ```json
 {"op":"unmerge","range":"A1:D1"}
@@ -217,7 +217,7 @@ Remove a cell's comment.
 
 ### `hyperlink`
 
-Set or clear a cell hyperlink.
+Set or clear the hyperlink of a cell or of every cell in a range.
 
 ```json
 {"op":"hyperlink","ref":"A1","target":"https://example.com"}
@@ -227,8 +227,8 @@ Set or clear a cell hyperlink.
 | --- | --- | --- | --- | --- |
 | `op` | const "hyperlink" | yes | — | — |
 | `sheet` | string | no | — | Sheet for the op's unqualified refs: a sheet-qualified ref wins, then this key, then -s/--sheet |
-| `ref` | string | yes | — | The cell |
-| `target` | string | no | `url` | URL or internal location; omit to clear the hyperlink |
+| `ref` | string | yes | — | The cell or range; a range is one link over every cell in it |
+| `target` | string | no | `url` | URL or internal location; omit to clear the hyperlink of every cell in ref |
 
 ### `clear`
 
@@ -243,8 +243,8 @@ Clear a range: contents by default (formatting and merges kept), or styles/comme
 | `op` | const "clear" | yes | — | — |
 | `sheet` | string | no | — | Sheet for the op's unqualified refs: a sheet-qualified ref wins, then this key, then -s/--sheet |
 | `range` | string | yes | — | The range |
-| `all` | boolean | no | — | Clear contents, styles and comments |
-| `styles` | boolean | no | — | Clear styles only |
+| `all` | boolean | no | — | Clear contents, styles and comments, and unmerge (Excel's Clear All) |
+| `styles` | boolean | no | — | Clear styles only, like Excel's Clear Formats: unmerge every merge the range touches and reset each whole merge |
 | `comments` | boolean | no | — | Clear comments only |
 
 ### `col-hide`

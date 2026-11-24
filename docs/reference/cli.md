@@ -198,7 +198,7 @@ Unaffected caches keep the values supplied by their original calculator.
 
 `--no-recalc` (alias `--preserve-caches`) skips the post-edit recalculation. The edit still lands;
 newly written formulas can carry caches produced by the verb's authoring step. Use it when an external calculator owns the numbers. Honored by `put`,
-`putf`, `fill`, `copy`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
+`putf`, `fill`, `copy`, `clear`, `merge`, `batch`, `insert-rows`, `insert-cols`, `delete-rows`, `delete-cols`;
 `recalc` rejects it as a contradiction.
 
 How completely caches survive depends on the verb:
@@ -791,8 +791,13 @@ bare error cell; `Uncached formulas` — no cached value (`xl recalc` fills them
 formulas` — this evaluator cannot parse them, one line per cell: the formula (quoted to 80
 characters, as `xl lint` quotes it) and the parser's reason; `Cycles` —
 circular references (one line per strongly connected component; a note, not a finding, when the
-workbook's calcPr enables iterative calculation — `iterativeCycles` in the JSON report, so
-`cycles` holds only findings); `Unresolved names` — formulas
+workbook's calcPr enables iterative calculation and the cycle converges — `iterativeCycles` in
+the JSON report, so `cycles` holds only findings); `Unconverged cycles` (#934) — with iterative
+calculation on, a cycle that exhausts its rounds or stalls under the book's own settings, found by
+running the iterative recalculation `recalc` runs (only when the book iterates and has a cycle)
+and worded as `recalc` words it: `Unconverged cycles (n): iterative calculation <verdict>`, then
+one line per cycle (`unconvergedCycles` in the JSON report, `[{cells, verdict, rounds, maxChange,
+stalled}]`, with `unconvergedVerdict`); `Unresolved names` — formulas
 reading a defined name the graph cannot resolve (undefined, unparseable, a cycle of names, or a
 chain more than 100 names deep, #691). **Notes** (reported, never findings): `Volatile`
 (TODAY/NOW/RAND/RANDBETWEEN cells, directly or through defined names), `Dynamic` (INDIRECT/OFFSET
@@ -810,8 +815,8 @@ leaves the note out — `dataTableCheck` is `"skipped"` instead of `"checked"` a
 Text mode prints the headline, then one section per non-empty bucket, findings before notes, every
 list in workbook order (sheet, row, column). `-s <sheet>` restricts the cell buckets to one sheet (a
 cycle stays when any member is on it). Exit 0 regardless of findings; `--fail-on-findings` exits 1
-with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it with no
-`Error:` line; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
+with code `AUDIT_FINDINGS` on a dirty book and keeps the report (text mode prints it on stdout and
+its `Error:` block on stderr, #933; `--json` keeps it as `data`), so a CI lane can gate on it. Not available under
 `--stream`.
 
 ```bash
@@ -2598,9 +2603,11 @@ findings, `audit --fail-on-findings` on a dirty book and a `--strict` write that
 recalculation summary), so nothing text mode showed is lost.
 
 **Channels.** With `--json` the envelope is the only thing on stdout. When a run fails (exit `2`
-or `3`), stderr also carries the single line `Error: <message>` so a human tailing a log still
-sees it; the `code:` and `hint:` lines live in the envelope instead. Findings and gates (exit `1`)
-print nothing on stderr, exactly as text mode does — the report is in `data`. A wrong command line (unknown verb, a
+or `3`) or completes with findings or a failed gate (exit `1`), stderr also carries the single
+line `Error: <message>` so a human tailing a log still sees it; the `code:` and `hint:` lines live
+in the envelope instead, and a finding's report stays in `data`. In text mode the report of a
+finding or gate is on stdout and its `Error:` block (with `code:` and any `hint:`) on stderr, as
+for a failure (#933). A wrong command line (unknown verb, a
 verb-owned flag before the verb, `-i` with `-o`) also produces the envelope — exit `2`,
 `code: USAGE` — when `--json` is among the arguments.
 

@@ -7,6 +7,299 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Batch `hyperlink` takes a range** (#932): `{"op":"hyperlink","ref":"A1:A5","target":"…"}`
+  links every cell of the range as one link over the selection, the way Excel applies a link to a
+  selected range. It is written as a single `<hyperlink ref="A1:A5">` with one relationship, and
+  no cell is created per position. With no `target` the op clears every link in the range: the
+  cells' own links, and the covered part of any range link, which splits around it. The library
+  equivalents are `Sheet.setHyperlink(range, link)` and `Sheet.removeHyperlinks(range)`, and
+  `Edit.Hyperlink` now targets an `Area` instead of a `Loc` (**Breaking** for code that builds it
+  directly: wrap a cell with `Area.cell(loc)`). A whole column or row (`"ref":"A:A"`,
+  `"Summary!B:C"`, `"3:3"`) is accepted and stays one range link, never a cell per position.
+  The op stays refused under `--stream`.
+  `xl batch --schema` and `docs/reference/generated/batch-ops.md` say a range is accepted.
+
+### Fixed
+
+- **A replaced file keeps its permission bits exactly** (#930): `-i`, `-o` over an existing file,
+  the streaming writes and `Excel.modify` used to cap the group bits at the others bits, so `640`
+  became `600`, `660` became `600` and `664` became `644`. The staged file now takes the
+  original's group and its whole mode, as `cp -p` and editors do; the cap remains only when the
+  writer may not give the staged file the original's group. A new output still follows the umask
+  (pinned under `022`, `002` and `077`). Residual: the JVM can neither read nor copy a POSIX.1e
+  ACL (Linux `setfacl`), so a replaced file with one loses it, and its group bits, which were the
+  ACL mask, now apply to the owning group.
+- **`xl --version --json` is a success envelope** (#937): it exited 2 with `USAGE` ("Unexpected
+  option: --version"). It now prints the `ok:true` envelope with `data.version` and exits 0, in
+  either order and with `-v`; plain `xl --version` still prints the bare version.
+- **Cells under a range hyperlink report it** (#931): a worksheet link over a range
+  (`<hyperlink ref="A1:A5" r:id=… tooltip=…/>`, which Excel writes when a link is applied to a
+  selection) is now read into `Sheet.rangeHyperlinks`, a `RangeHyperlinks` value (immutable, equal
+  by its links; `RangeHyperlinks.empty` / `.from(...)`, `toVector`, `at(ref)`) holding
+  `RangeHyperlink`s (range, target, tooltip, display). `sheet(ref).hyperlink`, `sheet.getRange(…)` and the new `sheet.hyperlinkAt(ref)` report
+  it for every covered cell that has no link of its own, and `xl cell` / `cell --json` show it
+  where they printed nothing or `null`. Covered cells are not materialised, so a whole-column link
+  stays one entry. `describe --full` counts a range link once, and `diff` reports range links by
+  the rectangles they cover. An unedited book writes the same bytes as before: the source element
+  is kept whenever the model still holds that link unchanged. Removing the link from part of the
+  range (batch `hyperlink` with no target, a contents clear, `Sheet.removeHyperlinks`) splits the
+  range around it as Excel does, keeping the source tooltip and display on the remaining parts,
+  and removing all of it drops the element and its relationship. Putting back a cell read through
+  `sheet(ref)` keeps the link inherited rather than splitting the range. `Sheet.put` of a cell whose
+  `hyperlink` is `None` does not remove a range link from that cell; use `removeHyperlinks`.
+  Range links nested in `mc:AlternateContent` are still kept as preserved XML without being
+  reported, and range links do not yet move with structural edits (#924). Lookups and writes stay
+  fast on sheets with a range link per row: the covering link is found through an index that the
+  `RangeHyperlinks` value builds on its first lookup and that a sheet's copies share (O(log n) per
+  cell, no cache outside the value), and the writer matches source elements to model links
+  through a map, so the cost range links add to a write or a recalc grows linearly with their
+  number instead of quadratically.
+- **Merging keeps one value, as Excel's Merge Cells does** (#935). Checked against Excel for Mac
+  16.115: 93 merge scenarios (477 cell expectations, every name and merged area), including 69
+  cut-and-paste controls in which cutting the winner onto the anchor produced the merge's formulas
+  and names character for character; the scenarios ship as
+  `xl-evaluator/test/resources/excel-oracle/merge-references.json` and `ExcelMergeOracleSpec`
+  replays all 93 — plus 14 union and intersection cases checked by hand in Excel (`f8-*`) and 17
+  scenarios from a fourth review's Excel runs (`f9-*` function argument kinds, `f10-01` 3-D,
+  `f11-01` data validation, `f12-*` assorted) and 3 from a fifth (`f9b-01` array-typed arguments
+  of formulas xl cannot parse, `f11-02`/`f11-03` validation rules over a bare range) and 1 from a
+  sixth (`f9b-02` argument separators and the newer array functions), 128 in all —
+  through the workbook-level merge (formula text exactly, values after recalculation, names,
+  merged areas) plus a sample through the `merge` verb. Excel's merge is
+  "cut the winner onto the anchor, then clear the rest":
+  - The final area grows to the bounding box of the range and every merged area it touches, to a
+    fixpoint; the absorbed merges are replaced by the one area. Merging inside an existing merged
+    area, or the same range again, changes nothing.
+  - A non-empty upper-left cell (the anchor) keeps its value, the other cells are cleared, and no
+    formula or name anywhere is rewritten. When the anchor is empty, the winner is the first
+    non-empty cell in row-major order (a formula returning `""` counts, as do 0 and FALSE), skipping
+    the hidden cells of an absorbed merge (cleared, never moved); it is cut onto the anchor — value
+    or formula verbatim apart from the rewrite below, its format and hyperlink — and the rest is
+    cleared. No winner: nothing moves and nothing is rewritten.
+  - The rewrite (`CutReferences`, behind `FormulaOps.relocateCell` and `CellMover`) is Excel's cut
+    rule, applied to every formula on every sheet (the winner's own included) and every defined
+    name, for references to the merge sheet: a reference to the winner (cell or one-cell range,
+    `$` flags kept per end) follows it to the anchor; a reference to the anchor becomes `#REF!`
+    (`Sheet1!#REF!` when qualified) — the pasted cell overwrote it; a one-row range on a horizontal
+    move or one-column range on a vertical move with the winner at an end grows (`B1:C1` →
+    `A1:C1`) or, with the winner last and the anchor inside, drops it (`A1:A5` → `A1:A4`);
+    everything else (2-D ranges, the winner in the middle, diagonal moves, whole columns, unions,
+    INDIRECT text) is unchanged, and references to cleared cells never change. A formula is
+    touched only when one of its reference expressions depends on the winner or the anchor: a
+    reference, an intersection (`B1:C1 B1:B3`) or a parenthesised union (`(B1:C1,D5)`); Excel's
+    dependency for an intersection or union is conservative — every cell of every operand area,
+    not the cells the areas share, wherever the formula sits. Only a lone range that is a bare
+    value in a plain cell (`=B1:C1+0`, `=(B1:C1)`) narrows to its implicit intersection with the
+    formula's own row or column; as a whole function argument (or in an array formula) it depends
+    on all its cells. So
+    `=SUM((B1:C1,D5))` → `=SUM((A1:C1,D5))`, `=SUM(B1:C1 C1:C3)` → `=SUM(A1:C1 C1:C3)` (the
+    areas share C1, not the winner), an empty intersection `=B1 C1` → `=A1 C1`, a bare union
+    `=(B1:C1,D5)` → `=(A1:C1,D5)` (in F1 or in Z10 alike), while `=SUM(C1:D1 C1:C3)` (no operand holds the winner or
+    the anchor) is untouched and `=SUM(B1:B3 A1:C1)` passes the gate yet stays byte-identical (no
+    rule applies to either area). An argument whose parameter Excel types as an array —
+    SUMPRODUCT's, INDEX's first, ROWS' and COLUMNS' (declared on the function registry as
+    `FunctionFlags.arrayArguments`) — depends on every cell of every range anywhere inside it, even
+    in a plain cell: `=SUMPRODUCT((B1:C1>0)*B1:C1)` → `=SUMPRODUCT((A1:C1>0)*A1:C1)`,
+    `=INDEX(B1:C1*1,1,1)` → `=INDEX(A1:C1*1,1,1)`, while value-typed contexts (`SUM(B1:C1*1)`,
+    `MAX(B1:C1*2)`) keep the implicit-intersection rule. A formula xl cannot parse is judged by
+    the same rule from its text, through a table of Excel's array-typed parameters
+    (`CutReferences.ArrayParameters`, a superset of the registry flags, pinned by a law): a
+    reference anywhere inside such an argument depends on all its cells. Checked in Excel:
+    LOOKUP's vectors, IRR's and MIRR's values, XLOOKUP's lookup and return arrays, XMATCH's lookup
+    array, SORT's and UNIQUE's array, MMULT, SUMX2MY2, CORREL, FILTER, SORTBY, TOCOL, VSTACK,
+    FORECAST.LINEAR's known values, COVARIANCE.P (`=XLOOKUP(7,B1:C1*1,B1:C1*1)` →
+    `=XLOOKUP(7,A1:C1*1,A1:C1*1)`); taken from Excel's function reference without a merge check:
+    SUMX2PY2, SUMXMY2, PEARSON, RSQ, SLOPE, INTERCEPT, COVAR, FORECAST, FREQUENCY, TREND, GROWTH,
+    LINEST, LOGEST, MDETERM, MINVERSE, HSTACK, TOROW, TAKE, DROP, CHOOSECOLS, CHOOSEROWS,
+    WRAPROWS, WRAPCOLS, EXPAND, COVARIANCE.S and the FORECAST.ETS family. Value-typed arguments
+    stay out (checked: LARGE, SMALL, PERCENTILE, QUARTILE, TRIMMEAN, MATCH, TRANSPOSE, SUM, LET, a
+    LAMBDA call). Arguments are counted on the formula's own commas: those inside array constants
+    (`=XLOOKUP(1,{1,2},B1:C1*1)` → `=XLOOKUP(1,{1,2},A1:C1*1)`), quoted sheet names
+    (`=XMATCH('a,b'!A1,B1:C1*1)` → `=XMATCH('a,b'!A1,A1:C1*1)`), strings and structured references
+    do not separate arguments, and their parentheses do not open or close a call. A 3-D reference (`Sheet1:Sheet2!B1`) is
+    kept verbatim and the formula's other references still follow the cut
+    (`=SUM(Sheet1:Sheet2!B1)+Sheet1!B1` → `=SUM(Sheet1:Sheet2!B1)+Sheet1!A1`). Only
+    the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
+    refresh is seeded with every cell the merge changed on any sheet, so a reader rewritten to
+    `#REF!` elsewhere is recalculated, not left on its old cached value.
+  - Every other cell is cleared the way Clear Contents clears it: the value or formula and the
+    hyperlinks go (its own link and its part of a range hyperlink, which splits around the merge),
+    a cell's own formatting and its comment stay, an unstyled cell is removed. A moved cell carries
+    its effective link (its own, or the range hyperlink covering it) to the anchor.
+  - Data-validation formulas follow the full cut rule, judged at the rule's first cell (checked in
+    Excel: with the winner B1 of `A1:C1`, `SUM(B1:C1)>0` → `SUM(A1:C1)>0`, `A1>0` → `#REF!>0`,
+    `B1>0` → `A1>0`), as array formulas: a bare range in a rule is never narrowed to the rule
+    cell's row or column (checked in Excel: a list or custom rule over `$C$1:$D$1` follows the
+    winner D1 to `$C$1:$C$1` whether the rule sits in A5 or C5). Conditional-format formulas follow
+    the same rule (not verifiable through Excel's AppleScript, so not Excel-checked). A validation
+    or conditional format over a single cell is written `sqref="A5"`, as Excel writes it (it used
+    to be `A5:A5`).
+  - Merging a single cell (`A1`, `A1:A1`) does nothing, as in Excel, on every path (the verb says
+    "A1 is a single cell: nothing to merge", and the batch summary "MERGE A1 (a single cell:
+    nothing to merge)", in memory as streamed, sheet-qualified or not); no one-cell `<mergeCell>` is ever written (the verb
+    used to exit `INTERNAL`, the batch wrote `A1:A1`). Files that already hold one are left as
+    they are.
+  - Not determined by the oracle, kept as before: circular winner formulas, spills (below),
+    relative defined names, structured and external references (left as typed). Pending in
+    `ExcelMergeOracleSpec` (formula text matches in every case, the VALUE differs for an evaluator
+    reason that holds before the merge too): four winner formulas naming their own cell in
+    ROW/COLUMN/ROWS/COLUMNS (`f4-13`…`f4-16`, reported circular where Excel reads only the
+    address); `ROWS(A1:C1*1)` in a plain cell (`f9-03`: xl intersects the argument, #VALUE!, where
+    Excel types it as an array, 1); 3-D references (`f10-01`, not evaluated by xl); a defined name
+    whose definition is a union (`f12-05`). Known gaps: `SUM(TRANSPOSE(B1:C1))` in a cell off the
+    merged row is rewritten where Excel keeps it (a whole function argument depends on all its
+    cells, and xl does not yet model the value-typed parameter beneath it); in a formula xl cannot
+    parse, a 3-D span keeps the sheet-name case it was typed in when the other qualifiers are
+    respelled to the tab's case.
+  - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
+    member of a legacy array other than its anchor, is never the cell moved into an empty
+    upper-left cell (nothing becomes a constant), and a spilled value AT the upper-left cell does
+    not win either: the first cell holding real content of its own does (with `=SEQUENCE(3)` in
+    A1, B2 = 5 and `D1 = B2*10`, merging `A2:B3` moves 5 to A2 and D1 reads `=A2*10`, 50). When the
+    cell moved is itself a dynamic-array anchor, its old spill is released first and it moves as
+    a one-cell anchor, which evaluates to `#SPILL!` in the merged cell; its spilled values never
+    stay behind as constants. A merge that covers part of the range a dynamic
+    array's result spills into blocks it, as in Excel: the anchor evaluates to `#SPILL!` (reason
+    "spill range is merged", judged on the evaluated result's shape, so every later recalculation
+    agrees) and its spill range is EMPTY — the merge clears the spilled values and leaves the
+    anchor a one-cell record cached at `#SPILL!`, so a reader of a spill cell reads blank (with
+    `=SEQUENCE(3)` in A1 and `C1 = A3*10`, merging `A2:B2` or `A1:A2` gives `#SPILL!` and C1 = 0).
+    Any path that removes the blocking merge re-spills it and refreshes its readers (C1 = 30
+    again): the `unmerge` verb and batch op (now cell-mutating), `clear --styles`/`--all` and the
+    batch `clear` with styles, and a streamed `unmerge` followed by `recalc`. Every write's
+    dependent refresh and `recalc` re-establish a dynamic array stored truncated to its anchor
+    (`DynamicArrayAuthoring.respillTruncated`) when its result is larger and nothing blocks it,
+    whatever its cached value says. **Behaviour change:** this also re-spills a dynamic array
+    authored as one cell whose result later grows (`=SEQUENCE(D2)` after `D2` goes from 1 to 3),
+    which used to stay one cell; an array authored with a larger spill still keeps its authored
+    extent on a later input change (the pinned limitation; Excel re-spills on open).
+  - `unmerge` unmerges every merged area its range touches, as Excel's Unmerge Cells does for a
+    selection (`Sheet.unmerge`, `Patch.Unmerge`, `Edit.Unmerge`, the verb, the batch op in memory
+    and streamed); a single cell selects its merge (it used to fail with `INTERNAL`). The verb
+    names the areas it unmerged, and a range that touches no merge is a no-op that says so
+    ("nothing unmerged"). **Behaviour change:** `unmerge` used to remove only an exactly matching
+    merge and report success otherwise.
+  - A merge whose range (grown over existing merges) touches a legacy array formula or a data
+    table is refused, as Excel refuses it (it cannot change part of an array, and array formulas
+    are not valid in merged cells): `InvalidRange` from `Edit.Merge`, `CellMover.merge`, the verb
+    and the batch op, in memory and streamed, with nothing written. The total `Sheet.merge` (and
+    `Patch.Merge`, the `range.merge` DSL) leaves the sheet unchanged in that case rather than
+    produce a merge Excel cannot hold. A dynamic array is not refused: merging over its spill
+    blocks it (above); merging its anchor in as a hidden cell discards it like any other hidden
+    content, and an anchor that is the upper-left cell stays the merged cell's value (blocked if
+    its spill meets the merge) — that last case is not verified against Excel.
+  - Merging a range that touches existing merged areas absorbs them, as Excel extends a selection
+    over the merged cells it touches: the merge covers the bounding box of the range and every
+    merged area it intersects (grown until stable), the absorbed merges are removed, and the
+    one-value rule applies over the whole box, so no two `<mergeCell>` entries ever overlap (an
+    overlap made Excel repair the file; 0.27.0 wrote one). The verb reports the range it merged.
+    This holds in memory and in a streamed batch, which now also keeps the file's other merges.
+  - Paths: the `merge` verb (with or without `--stream`, which loads the book for this verb) and
+    the batch `merge` op in memory use `CellMover.merge`; `wb.edit(Edit.Merge(...))` rewrites
+    readers through the new `FormulaSupport.relocateCell` (`EvalFormulaSupport`; the text-only
+    support refuses a moving merge with `UnsupportedCapability`). The parser-less sheet-level
+    paths — `Sheet.merge`, `Patch.Merge` and the `range.merge` DSL — cannot rewrite readers, and
+    moving the cell without them would silently change their values, so over an empty upper-left
+    cell they leave the first non-empty cell where it is and clear only the other cells: every
+    reader keeps Excel's value (`=B1+1` still reads 8, `SUM` over the area is the kept value) and
+    only the merged cell's display differs from Excel. For Excel's move, use
+    `wb.edit(Edit.Merge(...))` or `CellMover.merge` (`CellMover.mergeSheet` moves and rewrites the
+    readers on the same sheet). `Edit.Merge` runs through the new `FormulaSupport.merge`, which
+    `EvalFormulaSupport` implements as `CellMover.merge`, so the library edit, the verb and the
+    batch op share one merge. A streamed batch writes exactly the file the in-memory batch writes,
+    or refuses: it replays the batch's merges and unmerges first so every merge's grown range is
+    known, reads those ranges' cells, every array-formula, data-table and hyperlink range in one
+    pass, and refuses (`BATCH_OP_FAILED`, before anything is written, "drop --stream") a merge that
+    would move a cell, touches any array formula or data table, or hides a linked cell. (A streamed
+    merge that grew over an existing merge used to judge only the requested range and could clear
+    the value the in-memory merge moves.)
+  - The formulas that read a cleared or moved cell are recalculated by the verb and the batch op
+    as for any other content edit (`--no-recalc` keeps their caches; a streamed batch never
+    recalculates), so the issue's `put A1 1; put B1 2; put A2 3; merge A1:B2;
+    putf D1 =SUM(A1:B2)` gives 1, not 6, and a later `clear` of the merged cell leaves nothing
+    hidden under it.
+  - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
+    whose merges already hide values is read and rewritten unchanged: only the merge operation
+    clears. A streamed batch is checked against the in-memory batch on random merge, unmerge and
+    put sequences: the files agree or the stream refuses. (It used to drop the clearing of a cell
+    an earlier merge in the same batch had emptied, so a second merge over it brought the value
+    back.) Residuals: `Sheet.merge` does not release spills; comments are not moved with a moved
+    cell; a streamed batch `unmerge` re-spills only at the next recalculation (the stream never
+    recalculates); the library's `wb.recalculate()` does not re-spill a truncated dynamic array by
+    itself (the CLI's refresh and `recalc` do, through `respillTruncated`); a value a streamed
+    merge clears from an unstyled cell leaves an empty `<c>` record where the in-memory merge
+    removes it. A moved array formula or data-table master
+    carries its anchored result range.
+  - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
+    by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now
+    cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports
+    its range as touched content, and `Edit.lower` / `Patch.toEdits` do not lower a merge that
+    moves a cell.
+- **`clear` refreshes the formulas that read the cleared cells** (found during #935). The `clear`
+  verb wrote the cleared book without recalculating dependents, so `clear B1` left
+  `D1 = SUM(A1:B2)` with its stale cached value. A contents clear now ends with the same scoped
+  dependent refresh as `put`, `merge` and the batch `clear` op (which already had it):
+  `--no-recalc` keeps every cache and `--strict` gates on the recalculation. A styles- or
+  comments-only clear changes no value and refreshes nothing. **Behaviour change:** the verb's
+  summary gains the `Recalculated N formula(s)` line when readers were refreshed.
+- **Authored formulas store each sheet qualifier in the sheet's own spelling** (#936). Since #752 a
+  qualifier resolves ignoring case, but the text kept what was typed; Excel respells it when the
+  formula is entered. `putf` (one cell, a drag, an explicit list; in memory and under `--stream`)
+  and the batch `putf` op (one cell, `from` drag, `values`; in memory and streamed, an earlier
+  `add-sheet` of the same batch included) now store `=sheet1!A1` as `=Sheet1!A1`, `='my data'!A1`
+  as `='My Data'!A1` and `=data!rate` as `=Data!rate`. A qualifier that names no sheet (or folds
+  onto two tabs differing only by case), an external-workbook reference (`[1]sheet1!A1`) and a
+  string literal (`INDIRECT("sheet1!A1")`) stay as typed, and a formula already in canonical form
+  is stored byte-identical. Only the qualifier's spelling changes, as in Excel: every other byte
+  of the formula (spacing, parentheses, `1E3`, `-(-x)`, function-name case) is kept as typed. A
+  structured reference (`Table1[Col]`) does not hide the qualifiers after it; only an
+  external-workbook prefix (`[1]Sheet1!A1`) guards its own. A formula the qualifier scanner finds
+  ambiguous is stored as typed; a 3-D reference (`Sheet1:Sheet2!A1`) is kept verbatim as one span
+  and no longer stops the formula's other qualifiers from being respelled. In the library, `Edit.PutFormula`, `Edit.PutFormulas` and
+  `Edit.DragFormula` respell through the new `FormulaSupport.canonicalSheets` (identity in
+  `FormulaSupport.textOnly`; `EvalFormulaSupport` uses `FormulaOps.canonicalSheets`, built on
+  `FormulaShifter.canonicalSheets`), so `wb.edit(...)` behaves like the CLI; `Edit.lower` no longer
+  lowers a sheet-qualified formula (the kernel has no tab names). Formulas read from a file are
+  never rewritten. Evaluation is unchanged. **Behaviour change:** the stored formula text (and the
+  text `view --formulas` shows) differs from the typed text when a qualifier's case differs.
+  Not covered: `Sheet.put(ref, fx"…")` (no workbook in scope), defined-name `refersTo`,
+  conditional-format and data-validation formulas, and `fill`/`copy` of existing formulas.
+
+### Changed
+
+- **Behaviour change: `audit` reports a cycle that does not converge as a finding** (#934). With
+  iterative calculation on, every cycle used to be listed under "Cycles (iterative calculation
+  on, not a finding)", so a book whose cycle exhausts its rounds was `Audit: clean` and passed
+  `audit --fail-on-findings`. The audit now runs the book's iterative recalculation (only when the
+  book iterates and has a cycle, on the audit's own graph) and moves each cycle that exhausts its
+  rounds or stalls to a new finding bucket, `unconvergedCycles`, worded as `recalc` words it: the
+  text report adds an `Unconverged cycles (n): iterative calculation <verdict>` section with one
+  line per cycle, and `audit --json` adds `unconvergedCycles` (`[{cells, verdict, rounds,
+  maxChange, stalled}]`) and `unconvergedVerdict`. A converging cycle stays a note in
+  `iterativeCycles`. Library side: `WorkbookAudit.unconvergedCycles: Vector[SccReport]` and
+  `WorkbookAudit.unconvergedVerdict`. `unconvergedCycles` is a new field of the `WorkbookAudit`
+  case class: it defaults to `Vector.empty`, takes part in equality and `findings`, and changes the
+  shapes of `copy` and `unapply`; `iterativeCycles` no longer lists the unconverged cycles.
+- **Behaviour change: `recalc` flags a cycle that does not converge as structured data** (#933).
+  The verdict used to live only in the text summary. `recalc` now raises one `NOT_CONVERGED`
+  warning (`Warning[NOT_CONVERGED]: …` on stderr in text mode, `warnings[]` under `--json`), in
+  the words `view --eval` already used (#917), located at the first cycle's first member, and
+  `recalc --json` always carries `data.unconvergedCycles` (`[{cells, verdict, rounds, maxChange,
+  stalled}]`, `[]` when every cycle converged), the same shape `audit --json` gives. Under
+  `--strict` the non-convergence is the gate's reason, as before, and no warning is raised.
+- **Behaviour change: findings and failed gates write their `Error:` line to stderr** (#933).
+  `recalc --strict`, `put --strict` and every other `--strict` write that fails its gate, `audit
+  --fail-on-findings`, `diff` with differences and `lint` with findings exited 1 with an empty
+  stderr, while the xl-cli skill promises one `Error: <message>` line (only `view --eval --strict`
+  gave one). Every such run now writes its error to stderr as a failure does: in text mode the
+  diagnostics block (`Error: <message>`, `code:`, and `hint:` when there is one) after the report,
+  which stays on stdout unchanged; under `--json` the one-line `Error: <message>` echo beside the
+  envelope, whose `data` still holds the report. A `--strict` gate's error now carries a hint (the
+  summary on stdout names the failing cells; drop `--strict` to write the file anyway), and
+  `audit --fail-on-findings` on an unconverged cycle hints at the iteration limit.
+
 ## [0.27.0] - 2026-11-23
 
 **"Bedrock storage."** `xl audit` is 3–20× faster on real models (#891): `Sheet.cells` is a

@@ -1148,9 +1148,10 @@ USAGE:
   private val auditHelp = """Find every reason a number can be wrong, in one pass.
 
 Findings: cached error values (#DIV/0!, #REF!, ...), uncached formulas, formulas this evaluator
-cannot parse, circular references, and readers of names that do not resolve. Notes (reported,
-never findings): volatile TODAY/NOW/RAND/RANDBETWEEN cells, dynamic INDIRECT/OFFSET readers,
-external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
+cannot parse, circular references, readers of names that do not resolve, and, when the calcPr
+enables iterative calculation, cycles that do not converge under its settings (recalc's verdict).
+Notes (reported, never findings): converging iterative cycles, volatile TODAY/NOW/RAND/RANDBETWEEN
+cells, dynamic INDIRECT/OFFSET readers, external-workbook references, and the file's calcPr. Text mode prints one section per non-empty
 bucket; -s restricts the cell buckets to one sheet.
 
 Exit 0 whether or not there are findings; --fail-on-findings exits 1 (AUDIT_FINDINGS) on a dirty
@@ -1701,8 +1702,14 @@ USAGE:
     }
 
   // --- Clear command ---
-  private val clearAllOpt = Opts.flag("all", "Clear contents, styles, and comments").orFalse
-  private val clearStylesOpt = Opts.flag("styles", "Clear styles only (reset to default)").orFalse
+  private val clearAllOpt =
+    Opts.flag("all", "Clear contents, styles and comments, and unmerge (Excel's Clear All)").orFalse
+  private val clearStylesOpt = Opts
+    .flag(
+      "styles",
+      "Clear styles only, like Excel's Clear Formats: reset each touched merge's whole area to the default style and unmerge it"
+    )
+    .orFalse
   private val clearCommentsOpt = Opts.flag("comments", "Clear comments only").orFalse
 
   val clearCmd: Opts[CliCommand] =
@@ -2112,7 +2119,11 @@ EXAMPLES:
               Outcome.signal(
                 cmd.verb,
                 Payload.Text(summary, None, false, strict.facts),
-                CliError(ErrorCode.RECALC_GATE, strictReason(summary)),
+                CliError(
+                  ErrorCode.RECALC_GATE,
+                  strictReason(summary),
+                  hint = Some(strictHint)
+                ),
                 collected
               )
             // ADR-017 §2.10: a read verb that completed with findings (`audit --fail-on-findings`)
@@ -2140,6 +2151,10 @@ EXAMPLES:
   private def strictReason(summary: String): String =
     val lines = summary.linesIterator.toVector
     lines.find(_.startsWith("STRICT FAILURE")).orElse(lines.headOption).getOrElse(summary)
+
+  /** #933: what the gate's `Error:` block on stderr suggests; the summary is on stdout. */
+  private val strictHint: String =
+    "the summary on stdout names the failing cells; drop --strict to write the file anyway"
 
   /**
    * The GH-464 temp→target rewrite on a prose payload; JSON payloads never name the staging file.
@@ -3638,12 +3653,12 @@ EXAMPLES:
     // Cell commands
     case CliCommand.Merge(rangeStr) =>
       requireOutput("merge", outputOpt, backendOpt, stream, policy)(
-        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _)
+        CellCommands.merge(wb, sheetOpt, rangeStr, _, _, _, policy, warn)
       )
 
     case CliCommand.Unmerge(rangeStr) =>
       requireOutput("unmerge", outputOpt, backendOpt, stream, policy)(
-        CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _)
+        CellCommands.unmerge(wb, sheetOpt, rangeStr, _, _, _, policy, warn)
       )
 
     case CliCommand.AddComment(refStr, text, author) =>
@@ -3658,7 +3673,7 @@ EXAMPLES:
 
     case CliCommand.Clear(rangeStr, all, styles, comments) =>
       requireOutput("clear", outputOpt, backendOpt, stream, policy)(
-        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn)
+        CellCommands.clear(wb, sheetOpt, rangeStr, all, styles, comments, _, _, _, warn, policy)
       )
 
     case CliCommand.Fill(source, target, direction) =>

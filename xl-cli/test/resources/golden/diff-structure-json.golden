@@ -68,3 +68,5 @@ json
   ]
 }
 ## stderr
+Error: Differences found: <DIR>/simple.xlsx vs <DIR>/resized.xlsx
+  code: DIFFERENCES_FOUND

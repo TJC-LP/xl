@@ -52,7 +52,12 @@ enum Patch:
   /** Clear style for a cell */
   case ClearStyle(ref: ARef)
 
-  /** Merge cells in a range */
+  /**
+   * Merge cells in a range ([[com.tjclp.xl.sheets.Sheet.merge]], GH-935): a non-empty upper-left
+   * cell keeps its value and the others are cleared like Clear Contents. Over an empty upper-left
+   * cell the first non-empty cell is kept in place (the kernel cannot rewrite readers of a moved
+   * cell); `Edit.Merge` performs Excel's move.
+   */
   case Merge(range: CellRange)
 
   /** Unmerge cells in a range */

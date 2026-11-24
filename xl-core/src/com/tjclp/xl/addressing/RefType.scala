@@ -140,6 +140,34 @@ object RefType:
     }
 
   /**
+   * Like [[parse]], and a range may also be a whole column (`A:A`, `B:D`) or a whole row (`3:3`),
+   * bare or sheet-qualified (`'Q1 Data'!A:A`), read as [[CellRange.parse]] reads them (#932). A
+   * string neither form reads keeps [[parse]]'s error.
+   */
+  def parseWithWhole(s: String): Either[String, RefType] =
+    parse(s).left.flatMap { err =>
+      val bang = RefParser.findUnquotedBang(s)
+      val (sheetPart, refPart) = if bang < 0 then ("", s) else (s.take(bang), s.drop(bang + 1))
+      val whole = refPart.split(':') match
+        case Array(a, b) =>
+          (CellRange.spellsWholeColumn(a) && CellRange.spellsWholeColumn(b)) ||
+          (CellRange.spellsWholeRow(a) && CellRange.spellsWholeRow(b))
+        case _ => false
+      if !whole then Left(err)
+      else
+        // anchors dropped, as parse drops them for A1:B2
+        CellRange.parse(refPart).map(r => CellRange(r.start, r.end)).flatMap { range =>
+          if bang < 0 then Right(Range(range))
+          else
+            // the sheet part validates and unescapes as in any qualified ref
+            parse(s"$sheetPart!A1").map {
+              case QualifiedCell(sheet, _) => QualifiedRange(sheet, range)
+              case _ => Range(range)
+            }
+        }
+    }
+
+  /**
    * Parse ref string with XLError wrapping.
    *
    * Used by runtime string interpolation macro.

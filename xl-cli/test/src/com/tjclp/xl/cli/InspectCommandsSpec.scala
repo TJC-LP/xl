@@ -246,6 +246,8 @@ class InspectCommandsSpec extends CatsEffectSuite:
           "volatile",
           "dynamic",
           "cycles",
+          "unconvergedCycles",
+          "unconvergedVerdict",
           "externalRefs",
           "unresolvedReaders",
           "calcPr",
@@ -288,15 +290,19 @@ class InspectCommandsSpec extends CatsEffectSuite:
       assertEquals(e("error")("code"), ujson.Str("AUDIT_FINDINGS"))
       assertEquals(e("data")("clean"), ujson.False)
       assertEquals(e("data")("findings").num.toInt, 5)
-      assertEquals(run.stderr, "", "findings keep their report as data: no Error: line, as in text")
+      // #933: findings keep their report as data and echo their one Error: line
+      assertEquals(run.stderr.trim, "Error: Audit: 5 findings")
     }
   }
 
-  test("audit --fail-on-findings in text mode prints the report, not an Error: line") {
+  test("audit --fail-on-findings in text mode prints the report and one Error: line (#933)") {
     CliHarness.run("-f", file("dirty.xlsx"), "audit", "--fail-on-findings").map { run =>
       assertEquals(run.exit, 1)
       assert(run.stdout.startsWith("Audit: 5 findings"), run.stdout)
-      assertEquals(run.stderr, "")
+      val stderr = run.stderr.linesIterator.toList
+      assertEquals(stderr.headOption, Some("Error: Audit: 5 findings"), run.stderr)
+      assertEquals(stderr.count(_.startsWith("Error: ")), 1, run.stderr)
+      assert(stderr.contains("  code: AUDIT_FINDINGS"), run.stderr)
     }
   }
 

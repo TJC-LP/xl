@@ -27,7 +27,8 @@ import com.tjclp.xl.formula.{
   TExpr
 }
 import com.tjclp.xl.formula.Clock
-import com.tjclp.xl.formula.eval.{DynamicArrayAuthoring, ImplicitIntersection}
+import com.tjclp.xl.formula.eval.{CellMover, DynamicArrayAuthoring, ImplicitIntersection}
+import com.tjclp.xl.formula.printer.FormulaOps
 import com.tjclp.xl.sheets.SheetEdits
 import com.tjclp.xl.ops.OffGridRef
 import com.tjclp.xl.styles.CellStyle
@@ -243,6 +244,15 @@ object BatchParser:
       case BatchOp.PutValues(range, values) =>
         s"  PUT $range = [${values.length} values]"
       case BatchOp.Style(range, _) => s"  STYLE $range"
+      // GH-935 review 5/6: the note the streamed batch prints for a single cell (qualified or
+      // not), a no-op
+      case BatchOp.Merge(range) if RefType.parse(range).toOption.exists {
+            case RefType.Cell(_) | RefType.QualifiedCell(_, _) => true
+            case RefType.Range(r) => r.start == r.end
+            case RefType.QualifiedRange(_, r) => r.start == r.end
+            case _ => false
+          } =>
+        s"  MERGE $range (a single cell: nothing to merge)"
       case BatchOp.Merge(range) => s"  MERGE $range"
       case BatchOp.Unmerge(range) => s"  UNMERGE $range"
       case BatchOp.ColWidth(col, width) => s"  COLWIDTH $col = $width"
@@ -1424,7 +1434,7 @@ object BatchParser:
   private def applyOne(
     wb: Workbook,
     default: Option[SheetName],
-    scoped: ScopedOp,
+    requested: ScopedOp,
     recalcDependents: Boolean,
     spills: SpillIndex,
     scanSpills: Sheet => Vector[DynamicArrayAuthoring.Spill],
@@ -1432,6 +1442,7 @@ object BatchParser:
   ): IO[
     (Workbook, Vector[OffGridHit], SpillIndex, Vector[(SheetName, DynamicArrayAuthoring.KeptSpill)])
   ] =
+    val scoped = requested.copy(op = canonicalFormulas(requested.op, wb.sheets.map(_.name)))
     IO.fromEither(opSheet(wb, default, scoped).left.map(CliException(_))).flatMap { requested =>
       val sheetName = requested.map(tab(wb, _))
       // #752: the index is keyed by each tab's own spelling, whatever case a ref qualifier uses
@@ -1475,6 +1486,21 @@ object BatchParser:
         )
       }
     }
+
+  /**
+   * GH-936: the op with each authored formula's sheet qualifiers spelled as the tabs' own names
+   * among `tabs` — the sheets the batch has at this op, an earlier `add-sheet` included — as Excel
+   * stores an entered formula (`=sheet1!A1` becomes `=Sheet1!A1`). A dragged formula is respelled
+   * before it is shifted. Unknown sheets and external references stay as typed; every other op is
+   * returned as is. Shared with the streamed batch.
+   */
+  private[cli] def canonicalFormulas(op: BatchOp, tabs: IndexedSeq[SheetName]): BatchOp =
+    def canon(text: String): String = FormulaOps.canonicalSheets(text, tabs)
+    op match
+      case p: BatchOp.PutFormula => p.copy(formula = canon(p.formula))
+      case p: BatchOp.PutFormulaDragging => p.copy(formula = canon(p.formula))
+      case p: BatchOp.PutFormulas => p.copy(formulas = p.formulas.map(canon))
+      case other => other
 
   /**
    * THE sheet rule for one op ([[Resolve.forOp]], ADR-017 §2.5), before dispatch. An op whose
@@ -2167,7 +2193,15 @@ object BatchParser:
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
-      result <- updateSheet(wb, sheetName)(_.merge(range))
+      // GH-935: the hidden cells are cleared (and their dynamic arrays released) as Excel does; an
+      // empty upper-left cell receives the first non-empty cell, its readers following
+      sheet <- IO.fromEither(Resolve.named(wb, sheetName).left.map(CliException(_)))
+      result <- IO.fromEither(
+        CellMover
+          .merge(wb, sheet.name, range)
+          .left
+          .map(e => CliException(CliError.fromXLError(e, None)))
+      )
     yield result
 
   /** Apply an unmerge operation. */
@@ -2179,6 +2213,8 @@ object BatchParser:
     for
       rangeRef <- parseRangeRef(wb, rangeStr, defaultSheetName)
       (sheetName, range) = rangeRef
+      // GH-935 review 3: every merged area the range touches; the batch's trailing refresh
+      // re-spills a dynamic array the merge had blocked
       result <- updateSheet(wb, sheetName)(_.unmerge(range))
     yield result
 
@@ -2248,25 +2284,33 @@ object BatchParser:
         IO.raiseError(new Exception(s"batch comment requires single cell ref, not range: $refStr"))
     }
 
-  /** Remove a comment from a cell. */
+  /**
+   * Set or clear the hyperlink of a cell or of every cell in a range (#932). A range gets one link
+   * over the selection, as Excel applies it ([[Sheet.setHyperlink]]: one `<hyperlink ref="A1:A5">`,
+   * no cell per position); clearing removes the cells' own links and splits any range hyperlink
+   * around the range ([[Sheet.removeHyperlinks]]).
+   */
   private def applyHyperlink(
     wb: Workbook,
     defaultSheetName: Option[SheetName],
     refStr: String,
     target: Option[String]
   ): IO[Workbook] =
-    def setOn(sheetName: SheetName, ref: ARef): IO[Workbook] =
-      updateSheet(wb, sheetName)(s =>
-        s.put(target.fold(s(ref).clearHyperlink)(s(ref).withHyperlink))
-      )
-    IO.fromEither(RefType.parse(refStr).left.map(e => new Exception(e))).flatMap {
-      case RefType.Cell(ref) =>
-        sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, ref))
-      case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, ref)
-      case _ =>
-        IO.raiseError(
-          new Exception(s"batch hyperlink requires single cell ref, not range: $refStr")
+    def setOn(sheetName: SheetName, range: CellRange): IO[Workbook] =
+      updateSheet(wb, sheetName) { s =>
+        // `#Sheet1!A1` is the authoring dialect for an internal location (GH-406)
+        target.fold(s.removeHyperlinks(range))(t =>
+          s.setHyperlink(range, Hyperlink(t.stripPrefix("#")))
         )
+      }
+    def onDefault(range: CellRange): IO[Workbook] =
+      sheetFor(wb, defaultSheetName, "hyperlink").flatMap(setOn(_, range))
+    // a whole column or row (`A:A`, `3:3`) is one range link, never a cell per position
+    IO.fromEither(RefType.parseWithWhole(refStr).left.map(e => new Exception(e))).flatMap {
+      case RefType.Cell(ref) => onDefault(CellRange(ref, ref))
+      case RefType.Range(range) => onDefault(range)
+      case RefType.QualifiedCell(sheetName, ref) => setOn(sheetName, CellRange(ref, ref))
+      case RefType.QualifiedRange(sheetName, range) => setOn(sheetName, range)
     }
 
   /**
