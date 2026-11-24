@@ -319,6 +319,26 @@ class FormulaOpsSpec extends FunSuite:
     assertEquals(canon("=sheet1!"), "=sheet1!")
   }
 
+  test("GH-936 review: only the qualifier changes; every other byte is kept as typed") {
+    assertEquals(canon("=(data!A1) + 1"), "=(Data!A1) + 1")
+    assertEquals(canon("=-(-data!A1)"), "=-(-Data!A1)")
+    assertEquals(canon("=1E3+data!A1"), "=1E3+Data!A1")
+    assertEquals(canon("=sum( data!A1 ,\"x!y\")"), "=sum( Data!A1 ,\"x!y\")")
+    assertEquals(canon("=data!$A$1:$B2 + 'q1 data'!C3"), "=Data!$A$1:$B2 + 'Q1 Data'!C3")
+    assertEquals(canon("=data!#REF!+1"), "=Data!#REF!+1")
+    // a 3-D reference is ambiguous to the scanner: left as typed
+    assertEquals(canon("=SUM(sheet1:data!A1)"), "=SUM(sheet1:data!A1)")
+  }
+
+  test("GH-935 review: relocateCell rewrites only the reference, keeping every other byte") {
+    def rel(t: String) = FormulaOps.relocateCell(t, Some(Sheet1), Sheet1, ref"B1", ref"A1")
+    assertEquals(rel("=( B1 ) + 1E3"), "=( A1 ) + 1E3")
+    assertEquals(rel("=-(-$B$1)"), "=-(-$A$1)")
+    assertEquals(rel("=sum(b1:b1, B10, Sheet1!B1)"), "=sum(A1:A1, B10, Sheet1!A1)")
+    assertEquals(rel("=SUM(B1:B3)"), "=SUM(B1:B3)")
+    assertEquals(rel("=\"B1\"&B1"), "=\"B1\"&A1")
+  }
+
   test("GH-936: tabs differing only by case keep the typed spelling (ambiguous)") {
     val twins = Vector(SheetName.unsafe("Data"), SheetName.unsafe("DATA"))
     assertEquals(FormulaOps.canonicalSheets("=data!A1", twins), "=data!A1")

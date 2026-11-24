@@ -61,7 +61,9 @@ object CellMover:
     wb(sheetName).flatMap { sheet =>
       val relocated = SheetEdits
         .mergeWinner(sheet, range)
-        .fold(wb)(w => relocateReferences(wb, sheet.name, w.ref, range.start))
+        .fold(wb)(w =>
+          relocateReferences(wb, sheet.name, w.ref, SheetEdits.mergeAnchor(sheet, range))
+        )
       relocated(sheet.name).map(s => relocated.put(DynamicArrayAuthoring.merge(s, range)))
     }
 
@@ -72,7 +74,7 @@ object CellMover:
   def mergeSheet(sheet: Sheet, range: CellRange): Sheet =
     val relocated = SheetEdits
       .mergeWinner(sheet, range)
-      .fold(sheet)(w => relocateOnSheet(sheet, w.ref, range.start))
+      .fold(sheet)(w => relocateOnSheet(sheet, w.ref, SheetEdits.mergeAnchor(sheet, range)))
     DynamicArrayAuthoring.merge(relocated, range)
 
   /** The sheet with its readers of `target!from` rewritten; the same instance when none changed. */

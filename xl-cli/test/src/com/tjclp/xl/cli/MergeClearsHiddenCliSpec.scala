@@ -367,3 +367,141 @@ class MergeClearsHiddenCliSpec extends FunSuite:
       assertEquals(cached(read(out), "D1"), Some(num(4)))
     }
   }
+
+  // ===== GH-935 review =====
+
+  private def worksheetXml(path: Path): String =
+    val zip = new java.util.zip.ZipFile(path.toFile)
+    try
+      val entry = zip.getEntry("xl/worksheets/sheet1.xml")
+      new String(zip.getInputStream(entry).readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)
+    finally zip.close()
+
+  private def emptyBook(dir: Path): Path =
+    val p = dir.resolve("new.xlsx")
+    write(Workbook(Sheet("Sheet1")), p)
+    p
+
+  test("GH-935 review: merge moves the winner's range link to the anchor; hidden cells lose it") {
+    withDir { dir =>
+      val h1 = dir.resolve("h1.xlsx")
+      val ops =
+        """[{"op":"put","ref":"B1","value":"x"},{"op":"hyperlink","ref":"B1:C1","target":"https://example.com"}]"""
+      assertEquals(
+        runIn(ops, "-f", emptyBook(dir).toString, "-o", h1.toString, "batch", "-").exit,
+        0
+      )
+      for viaBatch <- List(false, true) do
+        val out = dir.resolve(s"h2-$viaBatch.xlsx")
+        val r =
+          if viaBatch then
+            runIn(
+              """[{"op":"merge","range":"A1:C1"}]""",
+              "-f",
+              h1.toString,
+              "-o",
+              out.toString,
+              "batch",
+              "-"
+            )
+          else run("-f", h1.toString, "-s", "Sheet1", "-o", out.toString, "merge", "A1:C1")
+        assertEquals(r.exit, 0, r.stderr)
+        val s = read(out)
+        assertEquals(value(s, "A1"), CellValue.Text("x"), s"batch=$viaBatch")
+        assertEquals(s.hyperlinkAt(ARef.from1(1, 1)).map(_.target), Some("https://example.com"))
+        assertEquals(s.hyperlinkAt(ARef.from1(2, 1)), None, s"batch=$viaBatch")
+        assertEquals(s.hyperlinkAt(ARef.from1(3, 1)), None, s"batch=$viaBatch")
+        assert(!worksheetXml(out).contains("ref=\"B1:C1\""), s"batch=$viaBatch")
+    }
+  }
+
+  test("GH-935 review: a range link on hidden cells goes when the anchor wins") {
+    withDir { dir =>
+      val k1 = dir.resolve("k1.xlsx")
+      val k2 = dir.resolve("k2.xlsx")
+      val ops =
+        """[{"op":"put","ref":"A3","value":"keep"},{"op":"hyperlink","ref":"B3:C3","target":"https://example.com"}]"""
+      assertEquals(
+        runIn(ops, "-f", emptyBook(dir).toString, "-o", k1.toString, "batch", "-").exit,
+        0
+      )
+      assertEquals(
+        run("-f", k1.toString, "-s", "Sheet1", "-o", k2.toString, "merge", "A3:C3").exit,
+        0
+      )
+      val s = read(k2)
+      assertEquals(value(s, "A3"), CellValue.Text("keep"))
+      assertEquals(s.hyperlinkAt(ARef.from1(2, 3)), None)
+      assert(!worksheetXml(k2).contains("<hyperlink "), worksheetXml(k2))
+    }
+  }
+
+  test(
+    "GH-935 review: merging into a spill range keeps the spill's values out; recalc is #SPILL!"
+  ) {
+    withDir { dir =>
+      val s1 = dir.resolve("s1.xlsx")
+      val s2 = dir.resolve("s2.xlsx")
+      val s3 = dir.resolve("s3.xlsx")
+      val base = emptyBook(dir).toString
+      assertEquals(
+        run("-f", base, "-o", s1.toString, "putf", "C1", "=SEQUENCE(3,1)", "--array").exit,
+        0
+      )
+      assertEquals(run("-f", s1.toString, "-o", s2.toString, "merge", "B2:C3").exit, 0)
+      assertEquals(value(read(s2), "B2"), CellValue.Empty)
+      assertEquals(cached(read(s2), "C1"), Some(CellValue.Error(CellError.Spill)))
+      assertEquals(run("-f", s2.toString, "-o", s3.toString, "recalc").exit, 0)
+      val s = read(s3)
+      assertEquals(value(s, "B2"), CellValue.Empty)
+      assertEquals(cached(s, "C1"), Some(CellValue.Error(CellError.Spill)))
+    }
+  }
+
+  test("GH-935 review: merging over an existing merge absorbs it (no overlapping mergeCells)") {
+    withDir { dir =>
+      val m1 = dir.resolve("m1.xlsx")
+      assertEquals(run("-f", emptyBook(dir).toString, "-o", m1.toString, "merge", "B1:C2").exit, 0)
+      for mode <- List("verb", "batch", "stream") do
+        val out = dir.resolve(s"m2-$mode.xlsx")
+        val r = mode match
+          case "verb" => run("-f", m1.toString, "-o", out.toString, "merge", "A1:B1")
+          case "batch" =>
+            runIn(
+              """[{"op":"merge","range":"A1:B1"}]""",
+              "-f",
+              m1.toString,
+              "-o",
+              out.toString,
+              "batch",
+              "-"
+            )
+          case _ =>
+            runIn(
+              """[{"op":"merge","range":"A1:B1"}]""",
+              "-f",
+              m1.toString,
+              "-o",
+              out.toString,
+              "--stream",
+              "batch",
+              "-"
+            )
+        assertEquals(r.exit, 0, s"$mode: ${r.stderr}")
+        assertEquals(read(out).mergedRanges.map(_.toA1), Set("A1:C2"), mode)
+      // a streamed merge elsewhere keeps the file's merge
+      val other = dir.resolve("m3.xlsx")
+      val r = runIn(
+        """[{"op":"merge","range":"E1:F1"}]""",
+        "-f",
+        m1.toString,
+        "-o",
+        other.toString,
+        "--stream",
+        "batch",
+        "-"
+      )
+      assertEquals(r.exit, 0, r.stderr)
+      assertEquals(read(other).mergedRanges.map(_.toA1), Set("B1:C2", "E1:F1"))
+    }
+  }

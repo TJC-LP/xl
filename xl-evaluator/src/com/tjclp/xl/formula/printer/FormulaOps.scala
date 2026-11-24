@@ -64,7 +64,29 @@ object FormulaOps:
         case Left(_) => text
         case Right(expr) =>
           val canonical = FormulaShifter.canonicalSheets(expr, names)
-          if canonical == expr then text else reprint(text, canonical)
+          if canonical == expr then text
+          else
+            // Excel changes only the qualifier's spelling: rewrite those spans, keep every other
+            // byte, and keep the text as typed when the scanner or the parser disagree
+            FormulaSpans
+              .scan(text)
+              .map { scan =>
+                val edits = scan.qualifiers.flatMap { q =>
+                  SheetName(q.name).toOption
+                    .flatMap(typed => SheetName.indexIn(names, typed).toOption.map(names(_)))
+                    .filter(_.value != q.name)
+                    .map(own => (q.start, q.end, SheetName.quoteForFormula(own.value)))
+                }
+                FormulaSpans.replace(text, edits)
+              }
+              .filter(rewritten => sameFormula(rewritten, canonical))
+              .getOrElse(text)
+
+  /** Whether `text` parses to a formula that prints as `expected` does. */
+  private def sameFormula(text: String, expected: TExpr[?]): Boolean =
+    FormulaParser
+      .parse(text)
+      .exists(e => FormulaPrinter.printFileForm(e) == FormulaPrinter.printFileForm(expected))
 
   /**
    * GH-935: `text` with every reference to the single cell `sheet!from` respelled as `sheet!to`
@@ -86,7 +108,32 @@ object FormulaOps:
         case Left(_) => text
         case Right(expr) =>
           val moved = FormulaShifter.relocateCell(expr, host, sheet, from, to)
-          if moved == expr then text else reprint(text, moved)
+          if moved == expr then text
+          else
+            // Excel's paste rewrites only the reference: replace those spans, keep every other
+            // byte; when the scanner and the parser disagree, the parser's reprint is the answer
+            def onSheet(q: Option[FormulaSpans.Qualifier]): Boolean =
+              q.fold(host.exists(_.value.equalsIgnoreCase(sheet.value)))(
+                _.name.equalsIgnoreCase(sheet.value)
+              )
+            FormulaSpans
+              .scan(text)
+              .map { scan =>
+                val edits = scan.references.filter(r => onSheet(r.qualifier)).flatMap {
+                  case FormulaSpans.Reference(_, first, None) if first.ref == from =>
+                    Vector((first.start, first.end, first.spelledAt(to)))
+                  case FormulaSpans.Reference(_, first, Some(second))
+                      if first.ref == from && second.ref == from =>
+                    Vector(
+                      (first.start, first.end, first.spelledAt(to)),
+                      (second.start, second.end, second.spelledAt(to))
+                    )
+                  case _ => Vector.empty
+                }
+                FormulaSpans.replace(text, edits)
+              }
+              .filter(rewritten => sameFormula(rewritten, moved))
+              .getOrElse(reprint(text, moved))
 
   /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1

@@ -301,11 +301,18 @@ private[xl] object EditInterpreter:
               case None => Right((wb.put(sheet.merge(at.range)), planned))
               case Some(winner) =>
                 for
-                  relocated <- fs.relocateCell(wb, sheet.name, winner.ref, at.range.start)
+                  relocated <- fs.relocateCell(
+                    wb,
+                    sheet.name,
+                    winner.ref,
+                    SheetEdits.mergeAnchor(sheet, at.range)
+                  )
                   target <- findSheet(relocated, sheet.name)
                 yield (
                   relocated.put(
-                    SheetEdits.moveCell(target, winner.ref, at.range.start).merge(at.range)
+                    SheetEdits
+                      .moveCell(target, winner.ref, SheetEdits.mergeAnchor(sheet, at.range))
+                      .merge(at.range)
                   ),
                   planned
                 )

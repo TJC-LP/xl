@@ -207,6 +207,69 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(values(loaded.unmerge(rng("A1:B2")), "A1:B2"), values(loaded, "A1:B2"))
   }
 
+  // ===== GH-935 review: range hyperlinks, spill children, overlapping merges =====
+
+  private val link = Hyperlink("https://example.com")
+
+  test("GH-935 review: hidden cells lose range-link coverage as they lose own links") {
+    val s = Sheet(name)
+      .put(a1("A3"), CellValue.Text("keep"))
+      .setHyperlink(rng("B3:C3"), link)
+    val merged = s.merge(rng("A3:C3"))
+    assertEquals(merged.hyperlinkAt(a1("B3")), None)
+    assertEquals(merged.hyperlinkAt(a1("C3")), None)
+    assertEquals(merged.rangeHyperlinks, Vector.empty)
+    // a range link reaching outside the merge keeps its outside part
+    val wide =
+      Sheet(name).put(a1("A1"), num(1)).setHyperlink(rng("B1:D1"), link).merge(rng("A1:C1"))
+    assertEquals(wide.hyperlinkAt(a1("B1")), None)
+    assertEquals(wide.hyperlinkAt(a1("D1")), Some(link))
+  }
+
+  test("GH-935 review: moveCell carries the winner's effective (range) link to the anchor") {
+    val s = Sheet(name).put(a1("B1"), CellValue.Text("x")).setHyperlink(rng("B1:C1"), link)
+    val moved = SheetEdits.moveCell(s, a1("B1"), a1("A1"))
+    assertEquals(moved(a1("A1")).value, CellValue.Text("x"))
+    assertEquals(moved.hyperlinkAt(a1("A1")), Some(link))
+    assertEquals(moved.hyperlinkAt(a1("B1")), None)
+    // the kept-in-place winner of the parser-less merge keeps its link; the other hidden cell
+    // loses its coverage
+    val kept = s.merge(rng("A1:C1"))
+    assertEquals(kept.hyperlinkAt(a1("B1")), Some(link))
+    assertEquals(kept.hyperlinkAt(a1("C1")), None)
+  }
+
+  test("GH-935 review: a spill child is never the winner and is never made a constant") {
+    import com.tjclp.xl.cells.FormulaKind
+    val dyn = FormulaKind.dynamicArray(rng("C1:C3"))
+    val s = Sheet(name)
+      .put(a1("C1"), CellValue.Formula("SEQUENCE(3,1)", Some(num(1)), dyn))
+      .put(a1("C2"), num(2))
+      .put(a1("C3"), num(3))
+    assertEquals(SheetEdits.mergeWinner(s, rng("B2:C3")), None)
+    val merged = s.merge(rng("B2:C3"))
+    assertEquals(merged.cells.get(a1("B2")), None)
+    // a legacy array's members are spill children too
+    val cse = Sheet(name)
+      .put(a1("B1"), CellValue.Formula("D1:D2*2", None, FormulaKind.ArrayFormula(rng("B1:B2"))))
+      .put(a1("B2"), num(4))
+    assertEquals(SheetEdits.mergeWinner(cse, rng("A2:B2")), None)
+  }
+
+  test("GH-935 review: merging over existing merges absorbs them (never overlapping merges)") {
+    val s = Sheet(name).put(a1("A1"), num(1)).put(a1("C2"), num(5)).merge(rng("B1:C2"))
+    assertEquals(s.mergedRanges, Set(rng("B1:C2")))
+    // A1:B1 touches B1:C2: the merge grows to A1:C2 and absorbs it
+    val grown = s.merge(rng("A1:B1"))
+    assertEquals(grown.mergedRanges, Set(rng("A1:C2")))
+    assertEquals(values(grown, "A1:C2").count(_ != CellValue.Empty), 1)
+    assertEquals(grown(a1("A1")).value, num(1))
+    // a merge inside an existing one is absorbed by it
+    assertEquals(grown.merge(rng("B2:C2")).mergedRanges, Set(rng("A1:C2")))
+    // disjoint merges stay
+    assertEquals(grown.merge(rng("E1:F1")).mergedRanges, Set(rng("A1:C2"), rng("E1:F1")))
+  }
+
   test("GH-935: merging a whole column walks stored cells, not positions") {
     val s = Sheet(name).put(a1("A1"), num(1)).put(a1("A1000000"), num(2))
     val merged = s.merge(rng("A1:A1048576"))

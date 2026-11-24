@@ -514,36 +514,87 @@ private[xl] object SheetEdits:
    * its stored cells, so a whole-column merge does not visit a million positions.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
-    val kept = mergeWinner(sheet, range)
-    val cleared = hiddenByMerge(range).foldLeft(sheet)(clearContentsKeepingStyles)
+    val target = mergeTarget(sheet, range)
+    // Excel widens a selection to the merged areas it touches and merges the whole: the absorbed
+    // merges go, so the sheet never holds overlapping merges (Excel repairs a file that does)
+    val base = sheet.copy(mergedRanges = sheet.mergedRanges.filterNot(_.intersects(target)))
+    val kept = mergeWinner(base, target).map(w => w.copy(hyperlink = base.hyperlinkAt(w.ref)))
+    // a hidden cell loses its links as it loses its value: its own and range-link coverage
+    val cleared = hiddenByMerge(target).foldLeft(base)((s, r) =>
+      clearContentsKeepingStyles(s, r).removeRangeHyperlinkCoverage(r)
+    )
     val restored = kept.fold(cleared)(cleared.put)
-    restored.copy(mergedRanges = restored.mergedRanges + range)
+    restored.copy(mergedRanges = restored.mergedRanges + target)
 
   /**
-   * The cell a merge of `range` moves into its upper-left cell (GH-935): `None` when the upper-left
-   * cell holds a value (it wins) or nothing in the range does; otherwise the first non-empty cell
-   * in row-major order, as Excel picks it.
+   * The range a merge of `range` actually merges (GH-935 review): `range` grown, until stable, to
+   * the bounding box of every merged area it intersects, as Excel extends a selection over the
+   * merged cells it touches. The existing merges inside the result are absorbed by the merge.
+   */
+  private[xl] def mergeTarget(sheet: Sheet, range: CellRange): CellRange =
+    @annotation.tailrec
+    def grow(r: CellRange): CellRange =
+      val grown = sheet.mergedRanges.filter(_.intersects(r)).foldLeft(r) { (acc, m) =>
+        CellRange(
+          ARef.from0(
+            acc.colStart.index0.min(m.colStart.index0),
+            acc.rowStart.index0.min(m.rowStart.index0)
+          ),
+          ARef.from0(acc.colEnd.index0.max(m.colEnd.index0), acc.rowEnd.index0.max(m.rowEnd.index0))
+        )
+      }
+      if grown == r then r else grow(grown)
+    grow(range)
+
+  /**
+   * The cell Excel moves into the upper-left cell of a merge of `range` (GH-935), judged over the
+   * range the merge actually covers ([[mergeTarget]]): `None` when the upper-left cell holds a
+   * value (it wins) or nothing in the range does; otherwise the first non-empty cell in row-major
+   * order. A spill child is never merge content (GH-935 review): a cell inside an array formula's
+   * result range other than its anchor (a dynamic spill's cached value, a legacy array member) is
+   * skipped, as Excel leaves the spill to its anchor (which then shows #SPILL!). [[merge]] keeps
+   * the winner in place; the workbook-level merges move it ([[moveCell]]) after rewriting its
+   * readers.
    */
   private[xl] def mergeWinner(sheet: Sheet, range: CellRange): Option[Cell] =
-    val anchor = range.start
+    val target = mergeTarget(sheet, range)
+    val anchor = target.start
     if sheet.cells.get(anchor).exists(_.value != CellValue.Empty) then None
     else
+      val arrays = sheet.cells.iterator.flatMap { c =>
+        c.value match
+          case CellValue.Formula(_, _, k: FormulaKind.ArrayFormula) if k.ref.intersects(target) =>
+            Some((c.ref, k.ref))
+          case _ => None
+      }.toVector
+      def spillChild(ref: ARef): Boolean = arrays.exists((a, r) => a != ref && r.contains(ref))
       sheet.cells
-        .inRange(range)
-        .filter(c => c.ref != anchor && c.value != CellValue.Empty)
+        .inRange(target)
+        .filter(c => c.ref != anchor && c.value != CellValue.Empty && !spillChild(c.ref))
         .minByOption(c => (c.ref.row.index0, c.ref.col.index0))
+
+  /** The upper-left cell of the range a merge of `range` covers ([[mergeTarget]]). */
+  private[xl] def mergeAnchor(sheet: Sheet, range: CellRange): ARef =
+    mergeTarget(sheet, range).start
 
   /**
    * Cut the cell at `from` and paste it at `to` on the same sheet: the record (value or formula
-   * verbatim, style, hyperlink) lands at `to`, replacing what was there, and `from` is left with no
-   * record. References to `from` are not rewritten here (no parser in xl-core). No record at `from`
-   * leaves the sheet unchanged.
+   * verbatim, style, effective hyperlink) lands at `to`, replacing what was there, and `from` is
+   * left with no record and no link. References to `from` are not rewritten here (no parser in
+   * xl-core). No record at `from` leaves the sheet unchanged.
    */
   private[xl] def moveCell(sheet: Sheet, from: ARef, to: ARef): Sheet =
     if from == to then sheet
     else
       sheet.cells.get(from).fold(sheet) { cell =>
-        sheet.remove(from).put(cell.copy(ref = to, value = movedGeometry(cell.value, from, to)))
+        // the cut carries the cell's EFFECTIVE link (its own, else the range link covering it) and
+        // replaces whatever linked the destination; the source is left unlinked
+        val link = sheet.hyperlinkAt(from)
+        sheet
+          .remove(from)
+          .removeRangeHyperlinkCoverage(CellRange(from, from))
+          .removeRangeHyperlinkCoverage(CellRange(to, to))
+          .put(cell.copy(ref = to, value = movedGeometry(cell.value, from, to), hyperlink = link))
       }
 
   /**
