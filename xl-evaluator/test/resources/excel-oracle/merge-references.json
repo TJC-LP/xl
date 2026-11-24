@@ -6480,5 +6480,169 @@
       "Sheet1!A1:C1"
     ],
     "source": "Excel for Mac (review 4, data validation read back with Validation formula 1)"
+  },
+  {
+    "id": "f11-02",
+    "family": 11,
+    "description": "list validations with a bare range follow the cut wherever the rule sits (C1 empty, D1 winner)",
+    "sheets": {
+      "Sheet1": {
+        "D1": "x"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "C1:D1"
+    },
+    "dataValidations": {
+      "Sheet1!A5": {
+        "type": "list",
+        "formula": "$C$1:$D$1"
+      },
+      "Sheet1!C5": {
+        "type": "list",
+        "formula": "$C$1:$D$1"
+      }
+    },
+    "expectedAfter": {
+      "Sheet1!C1": {
+        "formula": "x",
+        "value": "x"
+      },
+      "Sheet1!D1": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "dataValidationsAfter": {
+      "Sheet1!A5": "$C$1:$C$1",
+      "Sheet1!C5": "$C$1:$C$1"
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!C1:D1"
+    ],
+    "source": "Excel for Mac (review 5, t3.applescript: formula1 of each validation after the merge)"
+  },
+  {
+    "id": "f11-03",
+    "family": 11,
+    "description": "custom validations with a bare range follow the cut wherever the rule sits (C2 empty, D2 winner)",
+    "sheets": {
+      "Sheet1": {
+        "D2": 3
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "C2:D2"
+    },
+    "dataValidations": {
+      "Sheet1!A7": "$C$2:$D$2>0",
+      "Sheet1!C7": "$C$2:$D$2>0"
+    },
+    "expectedAfter": {
+      "Sheet1!C2": {
+        "formula": "3",
+        "value": 3
+      },
+      "Sheet1!D2": {
+        "formula": "",
+        "value": null
+      }
+    },
+    "dataValidationsAfter": {
+      "Sheet1!A7": "$C$2:$C$2>0",
+      "Sheet1!C7": "$C$2:$C$2>0"
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!C2:D2"
+    ],
+    "source": "Excel for Mac (review 5, t3.applescript: formula1 of each validation after the merge)"
+  },
+  {
+    "id": "f9b-01",
+    "family": "9b",
+    "description": "array-typed arguments in formulas xl cannot parse follow the cut (formula text only)",
+    "sheets": {
+      "Sheet1": {
+        "B1": 7,
+        "C1": 1,
+        "F6": "=LOOKUP(7,B1:C1*1)",
+        "F7": "=LOOKUP(7,B1:C1*1,B1:C1*1)",
+        "F8": "=IRR(B1:C1*1-4)",
+        "F9": "=MIRR(B1:C1*1-4,0.1,0.1)",
+        "F10": "=XLOOKUP(7,B1:C1*1,B1:C1*1)",
+        "F11": "=XMATCH(7,B1:C1*1)",
+        "F12": "=SUM(SORT(B1:C1*1))",
+        "F13": "=SUM(UNIQUE(B1:C1*1))",
+        "F14": "=MMULT(B1:C1*1,{1;1})",
+        "F15": "=SUMX2MY2(B1:C1*1,B1:C1*1)",
+        "F16": "=CORREL(B1:C1*1,B1:C1*1)"
+      }
+    },
+    "names": {},
+    "mergedAreasBefore": [],
+    "merge": {
+      "sheet": "Sheet1",
+      "range": "A1:B1"
+    },
+    "expectedAfter": {
+      "Sheet1!A1": {
+        "formula": "7",
+        "value": 7
+      },
+      "Sheet1!B1": {
+        "formula": "",
+        "value": null
+      },
+      "Sheet1!C1": {
+        "formula": "1",
+        "value": 1
+      },
+      "Sheet1!F6": {
+        "formula": "=LOOKUP(7,A1:C1*1)"
+      },
+      "Sheet1!F7": {
+        "formula": "=LOOKUP(7,A1:C1*1,A1:C1*1)"
+      },
+      "Sheet1!F8": {
+        "formula": "=IRR(A1:C1*1-4)"
+      },
+      "Sheet1!F9": {
+        "formula": "=MIRR(A1:C1*1-4,0.1,0.1)"
+      },
+      "Sheet1!F10": {
+        "formula": "=XLOOKUP(7,A1:C1*1,A1:C1*1)"
+      },
+      "Sheet1!F11": {
+        "formula": "=XMATCH(7,A1:C1*1)"
+      },
+      "Sheet1!F12": {
+        "formula": "=SUM(SORT(A1:C1*1))"
+      },
+      "Sheet1!F13": {
+        "formula": "=SUM(UNIQUE(A1:C1*1))"
+      },
+      "Sheet1!F14": {
+        "formula": "=MMULT(A1:C1*1,{1;1})"
+      },
+      "Sheet1!F15": {
+        "formula": "=SUMX2MY2(A1:C1*1,A1:C1*1)"
+      },
+      "Sheet1!F16": {
+        "formula": "=CORREL(A1:C1*1,A1:C1*1)"
+      }
+    },
+    "namesAfter": {},
+    "mergedAreasAfter": [
+      "Sheet1!A1:B1"
+    ],
+    "source": "Excel for Mac (review 5, t1/t2.applescript: formula after the merge; values not recorded, and xl cannot evaluate these formulas)"
   }
 ]

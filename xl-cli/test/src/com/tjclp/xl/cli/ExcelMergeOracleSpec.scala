@@ -114,7 +114,11 @@ class ExcelMergeOracleSpec extends FunSuite:
         val (name, a1) = (qualified.takeWhile(_ != '!'), qualified.dropWhile(_ != '!').drop(1))
         acc.map(s =>
           if s.name.value == name then
-            s.withDataValidation(range(s"$a1:$a1"), DataValidation.custom(formula.str))
+            // a custom formula, or {"type": "list", "formula": …}
+            val rule = formula match
+              case ujson.Str(f) => DataValidation.custom(f)
+              case obj => DataValidation.list(obj("formula").str)
+            s.withDataValidation(range(s"$a1:$a1"), rule)
           else s
         )
     }
@@ -168,8 +172,10 @@ class ExcelMergeOracleSpec extends FunSuite:
         val (_, value) = actual(recalculated, cell)
         if formula != exp("formula").str then
           problems += s"$cell formula: expected ${exp("formula").str}, got $formula"
-        if !skipValues.contains(cell) && !sameValue(exp("value"), value) then
-          problems += s"$cell value: expected ${exp("value")}, got $value"
+        // a formula-only expectation (no "value": xl cannot evaluate it, f9b-*) checks the text
+        if exp.obj.contains("value") && !skipValues.contains(cell) &&
+          !sameValue(exp("value"), value)
+        then problems += s"$cell value: expected ${exp("value")}, got $value"
       }
       val names = after.metadata.definedNames
         .filterNot(_.name.startsWith("_xlfn."))
@@ -190,6 +196,7 @@ class ExcelMergeOracleSpec extends FunSuite:
               case r: DataValidation.Rules if r.ranges.exists(_.contains(ref(a1))) =>
                 r.kind match
                   case DvKind.Custom(f) => f
+                  case DvKind.List(f) => f
                   case other => other.toString
             }
           if got != List(formula.str) then
@@ -214,12 +221,14 @@ class ExcelMergeOracleSpec extends FunSuite:
       }
     }
 
-  test("oracle: the fixture holds the 124 scenarios Excel ran") {
+  test("oracle: the fixture holds the 127 scenarios Excel ran") {
     // 93 from the oracle harness (477 cells) + 14 union/intersection cases checked by hand (f8-*)
     // + 17 from review 4's Excel runner (f9-* argument kinds, f10-01 3-D, f11-01 data validation,
     // f12-* assorted)
-    assertEquals(scenarios.size, 124)
-    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 690)
+    // + 3 from the fifth review (f9b-01 unparseable array-typed arguments, f11-02/03 bare-range
+    // validation rules)
+    assertEquals(scenarios.size, 127)
+    assertEquals(scenarios.map(_("expectedAfter").obj.size).sum, 708)
   }
 
   // ===== the CLI merge verb over a sample of the scenarios =====
@@ -274,7 +283,8 @@ class ExcelMergeOracleSpec extends FunSuite:
           val (formula, value) = actual(wb, cell)
           assertEquals(formula, exp("formula").str, s"$id $cell")
           assert(
-            pendingCells.contains(cell) || sameValue(exp("value"), value),
+            !exp.obj.contains("value") || pendingCells.contains(cell) ||
+              sameValue(exp("value"), value),
             s"$id $cell value: expected ${exp("value")}, got $value"
           )
         }
@@ -287,6 +297,7 @@ class ExcelMergeOracleSpec extends FunSuite:
                 case r: DataValidation.Rules if r.ranges.exists(_.contains(ref(a1))) =>
                   r.kind match
                     case DvKind.Custom(f) => f
+                    case DvKind.List(f) => f
                     case other => other.toString
               }
             assertEquals(got, List(formula.str), s"$id $qualified")
