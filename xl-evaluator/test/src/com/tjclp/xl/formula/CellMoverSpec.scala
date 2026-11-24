@@ -194,6 +194,40 @@ class CellMoverSpec extends FunSuite:
     assertEquals(cached(spilled.recalculate().workbook, S1, ref"C1"), Some(num(1)))
   }
 
+  test("GH-935 review 3: a moved dynamic anchor leaves no constant; an unmerge re-spills it") {
+    val wb0 = Workbook(
+      Sheet(S1)
+        .put(
+          ref"A2",
+          CellValue.Formula(
+            "SEQUENCE(3)",
+            Some(num(1)),
+            FormulaKind.dynamicArray(CellRange(ref"A2", ref"A4"))
+          )
+        )
+        .put(ref"A3", num(2))
+        .put(ref"A4", num(3))
+    )
+    val merged = CellMover
+      .merge(wb0, S1, CellRange(ref"A1", ref"A2"))
+      .fold(e => fail(e.message), identity)
+    val s = merged(S1).fold(e => fail(e.message), identity)
+    assertEquals(text(merged, S1, ref"A1"), "SEQUENCE(3)")
+    for r <- List(ref"A2", ref"A3", ref"A4") do
+      assertEquals(s.cells.get(r).map(_.value).getOrElse(CellValue.Empty), CellValue.Empty)
+    val recalculated = merged.recalculate().workbook
+    assertEquals(cached(recalculated, S1, ref"A1"), Some(CellValue.Error(CellError.Spill)))
+    // the merge gone, respillTruncated restores 1, 2, 3
+    val unmerged =
+      merged.update(S1, _.unmerge(CellRange(ref"A1", ref"A2"))).fold(e => fail(e.message), identity)
+    val (respilled, seeds) =
+      com.tjclp.xl.formula.eval.DynamicArrayAuthoring.respillTruncated(unmerged, Clock.system)
+    val r = respilled(S1).fold(e => fail(e.message), identity)
+    assertEquals(r.cells.get(ref"A2").map(_.value), Some(num(2)))
+    assertEquals(r.cells.get(ref"A3").map(_.value), Some(num(3)))
+    assertEquals(seeds.get(S1).exists(_.contains(ref"A3")), true)
+  }
+
   test("GH-935: the sheet-level merge rewrites only this sheet's readers") {
     val s = book(S1).fold(e => fail(e.message), identity)
     val merged = CellMover.mergeSheet(s, CellRange(ref"A1", ref"B1"))

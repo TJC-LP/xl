@@ -362,12 +362,17 @@ private[xl] object DynamicArrayAuthoring:
     else mergeChecked(sheet, range)
 
   private def mergeChecked(sheet: Sheet, range: CellRange): Sheet =
-    // spill children are never the winner (SheetEdits.mergeWinner skips them), so the spills are
-    // known before anything moves; the hidden area is the merge's real extent (absorbed merges)
+    // spill children are never the winner (SheetEdits.mergeWinner skips them); the hidden area is
+    // the merge's real extent (absorbed merges)
     val target = SheetEdits.mergeTarget(sheet, range)
-    val moved = SheetEdits
-      .mergeWinner(sheet, range)
-      .fold(sheet)(w => SheetEdits.moveCell(sheet, w.ref, target.start))
+    val winner = SheetEdits.mergeWinner(sheet, range)
+    // GH-935 review 3: every spill the merge will block is released BEFORE anything moves, so a
+    // moved cell can never be cleared as a spill child, and a moved dynamic-array anchor leaves no
+    // spilled value behind as a constant: it moves as a 1x1 anchor and evaluates to #SPILL! (its
+    // spill now starts in a merged cell), as Excel shows a dynamic array in a merged cell
+    val blocking = spillsOf(sheet).filter(_.extent.intersects(target))
+    val preReleased = blocking.foldLeft(sheet)((acc, s) => blockSpill(acc, s))
+    val moved = winner.fold(preReleased)(w => SheetEdits.moveCell(preReleased, w.ref, target.start))
     val hidden = SheetEdits.hiddenByMerge(target)
     val spills = if hidden.isEmpty then Vector.empty else spillsOf(moved)
     val released = if spills.isEmpty then moved else clearContents(moved, spills, hidden).sheet
@@ -386,17 +391,19 @@ private[xl] object DynamicArrayAuthoring:
     else
       spillsOf(sheet)
         .filter(s => sheet.mergedRanges.exists(_.intersects(s.extent)))
-        .foldLeft(sheet) { (acc, s) =>
-          val (cleared, _) = clearOwnSpill(acc, s.anchor)
-          cleared.put(
-            s.anchor,
-            CellValue.Formula(
-              s.formula,
-              Some(CellValue.Error(CellError.Spill)),
-              FormulaKind.dynamicArray(CellRange(s.anchor, s.anchor))
-            )
-          )
-        }
+        .foldLeft(sheet)(blockSpill)
+
+  /** `s` blocked: its spilled values cleared, its anchor a 1x1 record cached at `#SPILL!`. */
+  private def blockSpill(sheet: Sheet, s: Spill): Sheet =
+    val (cleared, _) = clearOwnSpill(sheet, s.anchor)
+    cleared.put(
+      s.anchor,
+      CellValue.Formula(
+        s.formula,
+        Some(CellValue.Error(CellError.Spill)),
+        FormulaKind.dynamicArray(CellRange(s.anchor, s.anchor))
+      )
+    )
 
   /**
    * GH-935 review: after an unmerge, re-spill every dynamic-array anchor of `sheetName` that is
@@ -405,17 +412,44 @@ private[xl] object DynamicArrayAuthoring:
    * the cells whose content changed (the anchors and their new spill), the seeds of a refresh.
    */
   def respillAfterUnmerge(wb: Workbook, sheetName: SheetName, clock: Clock): (Workbook, Set[ARef]) =
+    respillOnSheet(wb, sheetName, clock)
+
+  /**
+   * GH-935 review 3: re-establish every truncated dynamic array of the book. An anchor stored as a
+   * 1x1 record (the shape a blocked spill is left in) is evaluated again by [[author]], which
+   * spills it when its result is larger and nothing blocks it any more, whatever its cached value
+   * says: so ANY path that removes what blocked it (an unmerge, `clear --styles`/`--all`, a
+   * streamed unmerge) followed by a recalculation restores the spill. An anchor still blocked, a
+   * scalar result, or a failure leaves the record exactly as it was. Returns the book and the cells
+   * whose content changed, by sheet: the seeds of a dependent refresh.
+   */
+  def respillTruncated(wb: Workbook, clock: Clock): (Workbook, Map[SheetName, Set[ARef]]) =
+    wb.sheets.map(_.name).foldLeft((wb, Map.empty[SheetName, Set[ARef]])) {
+      case ((acc, seeds), name) =>
+        val (next, changed) = respillOnSheet(acc, name, clock)
+        (next, if changed.isEmpty then seeds else seeds.updated(name, changed))
+    }
+
+  /** [[respillTruncated]] for one sheet: the book and the cells whose value changed. */
+  def respillOnSheet(wb: Workbook, sheetName: SheetName, clock: Clock): (Workbook, Set[ARef]) =
     wb(sheetName).toOption.fold((wb, Set.empty[ARef])) { sheet =>
-      val blocked = sheet.cells.iterator.collect {
-        case Cell(ref, CellValue.Formula(text, Some(CellValue.Error(CellError.Spill)), k), _, _)
-            if k.isDynamicArray =>
+      val truncated = sheet.cells.iterator.collect {
+        case Cell(ref, CellValue.Formula(text, _, k: FormulaKind.ArrayFormula), _, _)
+            if k.isDynamicArray && k.ref.start == ref && k.ref.cellCount == 1 =>
           (ref, text)
       }.toVector
-      blocked.foldLeft((wb, Set.empty[ARef])) { case ((accWb, seeds), (anchor, text)) =>
+      truncated.foldLeft((wb, Set.empty[ARef])) { case ((accWb, seeds), (anchor, text)) =>
         accWb(sheetName).toOption
-          .flatMap(current => author(accWb, current, anchor, text, clock).toOption)
-          .filter(_.failure.isEmpty)
-          .fold((accWb, seeds))(a => (accWb.put(a.sheet), seeds ++ a.touched ++ a.extent.cells))
+          .flatMap(current =>
+            author(accWb, current, anchor, text, clock).toOption
+              .filter(a => a.failure.isEmpty && a.extent.cellCount > 1)
+              .map(a => (current, a))
+          )
+          .fold((accWb, seeds)) { (before, a) =>
+            val changed = a.extent.cells
+              .filter(r => before.cells.get(r).map(_.value) != a.sheet.cells.get(r).map(_.value))
+            (accWb.put(a.sheet), seeds ++ changed)
+          }
       }
     }
 
