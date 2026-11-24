@@ -17,15 +17,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cell (with `E1 = B1+1`, merging `A1:B1` over an empty A1 gives `E1 = A1+1`). The reader rewrite
   covers single-cell references and a range that is exactly that cell, on every sheet, in defined
   names and in conditional-format and data-validation formulas (`CellMover`, built on the new
-  `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`). Every other cell is cleared the way
+  `FormulaShifter.relocateCell` / `FormulaOps.relocateCell`); a wider range keeps its cells, as
+  Excel does (checked: with B1:B3 = 7, 1, 1, the same merge leaves `=SUM(B1:B3)` at 2 and rewrites
+  `=SUM(B1:B1)` to `=SUM(A1:A1)` and `=$B$1*2` to `=$A$1*2`, 14). Every other cell is cleared the way
   Clear Contents clears it: the value or formula and the hyperlink go, a cell's own formatting and
   its comment stay, an unstyled cell is removed.
   - Paths: the `merge` verb (with or without `--stream`, which loads the book for this verb) and
     the batch `merge` op in memory use `CellMover.merge`; `wb.edit(Edit.Merge(...))` rewrites
     readers through the new `FormulaSupport.relocateCell` (`EvalFormulaSupport`; the text-only
-    support refuses a moving merge with `UnsupportedCapability`). `Sheet.merge`, `Patch.Merge`
-    and the `range.merge` DSL move the cell but cannot rewrite its readers (xl-core has no
-    parser); `CellMover.mergeSheet` rewrites the readers on the same sheet. A streamed batch
+    support refuses a moving merge with `UnsupportedCapability`). The parser-less sheet-level
+    paths — `Sheet.merge`, `Patch.Merge` and the `range.merge` DSL — cannot rewrite readers, and
+    moving the cell without them would silently change their values, so over an empty upper-left
+    cell they leave the first non-empty cell where it is and clear only the other cells: every
+    reader keeps Excel's value (`=B1+1` still reads 8, `SUM` over the area is the kept value) and
+    only the merged cell's display differs from Excel. For Excel's move, use
+    `wb.edit(Edit.Merge(...))` or `CellMover.merge` (`CellMover.mergeSheet` moves and rewrites the
+    readers on the same sheet). A streamed batch
     applies a merge whose upper-left cell holds a value and refuses (`BATCH_OP_FAILED`, before
     anything is written, "drop --stream") one that would move a cell.
   - The formulas that read a cleared or moved cell are recalculated by the verb and the batch op
@@ -36,7 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - In memory a hidden dynamic-array anchor releases its spill first, as `clear` does. A file
     whose merges already hide values is read and rewritten unchanged: only the merge operation
     clears. Residuals: a streamed batch leaves the hidden cells' hyperlinks and dynamic arrays;
-    `Sheet.merge` does not release spills; comments are not moved with a moved cell.
+    `Sheet.merge` does not release spills; comments are not moved with a moved cell. A moved array
+    formula or data-table master carries its anchored result range.
   - **Behaviour change:** merging used to keep every hidden value, invisible in Excel yet counted
     by `SUM`, and never moved a value into an empty upper-left cell. The batch `merge` op is now
     cell-mutating (a batch holding one runs the trailing dependent refresh), `Edit.Merge` reports

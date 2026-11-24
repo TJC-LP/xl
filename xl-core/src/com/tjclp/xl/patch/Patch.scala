@@ -54,9 +54,9 @@ enum Patch:
 
   /**
    * Merge cells in a range ([[com.tjclp.xl.sheets.Sheet.merge]], GH-935): a non-empty upper-left
-   * cell keeps its value, an empty one receives the first non-empty cell of the range, and the
-   * others are cleared like Clear Contents, as Excel does. The kernel cannot rewrite a moved cell's
-   * readers; `Edit.Merge` does.
+   * cell keeps its value and the others are cleared like Clear Contents. Over an empty upper-left
+   * cell the first non-empty cell is kept in place (the kernel cannot rewrite readers of a moved
+   * cell); `Edit.Merge` performs Excel's move.
    */
   case Merge(range: CellRange)
 

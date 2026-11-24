@@ -493,25 +493,29 @@ private[xl] object SheetEdits:
   // ===== Merge (GH-935) =====
 
   /**
-   * Merge `range` the way Excel's Merge Cells does (checked against Excel for Mac):
-   *   - a non-empty upper-left cell keeps its value; every other cell is cleared;
-   *   - an empty upper-left cell receives the FIRST non-empty cell of the range in row-major order,
-   *     moved as a cut moves it ([[mergeWinner]], [[moveCell]]): value or formula verbatim (not
-   *     shifted), style and hyperlink; the rest is then cleared.
+   * Merge `range` without a formula parser (GH-935). Excel's Merge Cells (checked against Excel for
+   * Mac) keeps a non-empty upper-left cell and clears the rest; when the upper-left cell is empty
+   * it MOVES the first non-empty cell of the range (row-major) into it and points every reader of
+   * that cell at the upper-left cell. xl-core cannot rewrite those readers, and moving the cell
+   * without them would silently change their values (`=B1+1` would read the emptied B1). So here:
+   *   - a non-empty upper-left cell keeps its value; every other cell is cleared (as Excel);
+   *   - an empty upper-left cell stays empty and the first non-empty cell ([[mergeWinner]]) stays
+   *     where it is, untouched; every OTHER cell is cleared. Every reader keeps Excel's value (the
+   *     kept cell holds what Excel would move); only the merged cell's display differs from Excel.
+   *
+   * For Excel's move with reader rewriting use the workbook-level paths: `wb.edit(Edit.Merge(...))`
+   * (through `FormulaSupport.relocateCell`) or xl-evaluator's `CellMover.merge`.
    *
    * A cleared cell is cleared as Clear Contents clears it ([[clearContentsKeepingStyles]]): its
    * value or formula and its hyperlink go, a cell that keeps a record keeps its own style, an
    * unstyled cell is removed. Comments stay (Clear Contents keeps them too). The store is walked by
    * its stored cells, so a whole-column merge does not visit a million positions.
-   *
-   * xl-core has no formula parser, so this does NOT rewrite the formulas that read a moved cell
-   * (Excel points them at the upper-left cell). The workbook-level paths do: `Edit.Merge` through
-   * `FormulaSupport.relocateCell`, and xl-evaluator's `CellMover.merge` / `CellMover.mergeSheet`.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
-    val moved = mergeWinner(sheet, range).fold(sheet)(w => moveCell(sheet, w.ref, range.start))
-    val cleared = hiddenByMerge(range).foldLeft(moved)(clearContentsKeepingStyles)
-    cleared.copy(mergedRanges = cleared.mergedRanges + range)
+    val kept = mergeWinner(sheet, range)
+    val cleared = hiddenByMerge(range).foldLeft(sheet)(clearContentsKeepingStyles)
+    val restored = kept.fold(cleared)(cleared.put)
+    restored.copy(mergedRanges = restored.mergedRanges + range)
 
   /**
    * The cell a merge of `range` moves into its upper-left cell (GH-935): `None` when the upper-left

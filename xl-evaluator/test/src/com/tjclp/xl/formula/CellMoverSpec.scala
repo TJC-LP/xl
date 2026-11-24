@@ -109,6 +109,64 @@ class CellMoverSpec extends FunSuite:
     assertEquals(wb(S1).toOption.map(_(ref"A1").value), Some(num(7)))
   }
 
+  // ===== the Excel for Mac checks (`merge range`, alerts off), through the workbook-level merge =====
+
+  private def mergeOne(sheet: Sheet, range: String): Sheet =
+    val r = CellRange.parse(range).fold(e => fail(e), identity)
+    CellMover
+      .merge(Workbook(sheet), sheet.name, r)
+      .flatMap(_(sheet.name))
+      .fold(e => fail(e.message), identity)
+
+  test("GH-935 (Excel): an empty anchor receives the only value; a non-empty anchor wins") {
+    val a = mergeOne(Sheet(S1).put(ref"B1", CellValue.Text("onlyB1")), "A1:B1")
+    assertEquals(a(ref"A1").value, CellValue.Text("onlyB1"))
+    assertEquals(a.cells.get(ref"B1"), None)
+    val b = mergeOne(
+      Sheet(S1).put(ref"A3", CellValue.Text("a3")).put(ref"B3", CellValue.Text("b3")),
+      "A3:B3"
+    )
+    assertEquals(b(ref"A3").value, CellValue.Text("a3"))
+    assertEquals(b.cells.get(ref"B3"), None)
+  }
+
+  test("GH-935 (Excel): the FIRST non-empty cell in row-major order moves, formula verbatim") {
+    val c = mergeOne(
+      Sheet(S1).put(ref"B5", CellValue.Text("b5")).put(ref"A6", CellValue.Text("a6")),
+      "A5:B6"
+    )
+    assertEquals(c(ref"A5").value, CellValue.Text("b5"))
+    assert(Vector(ref"B5", ref"A6", ref"B6").forall(r => c.cells.get(r).isEmpty))
+    val d = mergeOne(
+      Sheet(S1).put(ref"D1", num(5)).put(ref"B1", CellValue.Formula("D1*2", Some(num(10)))),
+      "A1:B1"
+    )
+    assertEquals(d(ref"A1").value, CellValue.Formula("D1*2", Some(num(10))))
+  }
+
+  test("GH-935 (Excel): only a reference to exactly the moved cell follows it, ranges stay") {
+    // Excel: B1=7, B2=1, B3=1, E1 =SUM(B1:B3), E2 =SUM(B1:B1), E3 =$B$1*2; merge A1:B1 (A1 empty)
+    // gives E1 =SUM(B1:B3) (2), E2 =SUM(A1:A1), E3 =$A$1*2 (14)
+    val wb0 = Workbook(
+      Sheet(S1)
+        .put(ref"B1", num(7))
+        .put(ref"B2", num(1))
+        .put(ref"B3", num(1))
+        .put(ref"E1", f("SUM(B1:B3)"))
+        .put(ref"E2", f("SUM(B1:B1)"))
+        .put(ref"E3", f("$B$1*2"))
+    )
+    val wb =
+      CellMover.merge(wb0, S1, CellRange(ref"A1", ref"B1")).fold(e => fail(e.message), identity)
+    assertEquals(text(wb, S1, ref"E1"), "SUM(B1:B3)")
+    assertEquals(text(wb, S1, ref"E2"), "SUM(A1:A1)")
+    assertEquals(text(wb, S1, ref"E3"), "$A$1*2")
+    val recalculated = wb.recalculate().workbook
+    assertEquals(cached(recalculated, S1, ref"E1"), Some(num(2)))
+    assertEquals(cached(recalculated, S1, ref"E2"), Some(num(7)))
+    assertEquals(cached(recalculated, S1, ref"E3"), Some(num(14)))
+  }
+
   test("GH-935: the sheet-level merge rewrites only this sheet's readers") {
     val s = book(S1).fold(e => fail(e.message), identity)
     val merged = CellMover.mergeSheet(s, CellRange(ref"A1", ref"B1"))

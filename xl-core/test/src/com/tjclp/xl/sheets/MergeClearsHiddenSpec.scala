@@ -12,11 +12,12 @@ import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
 /**
- * GH-935: merging keeps one value, as Excel's Merge Cells does: the upper-left cell's when it has
- * one, else the first non-empty cell's (row-major), which is moved into the upper-left cell. Every
- * other cell of the range is cleared the way Clear Contents clears it: the value, formula and
- * hyperlink go; the cell's own formatting and its comment stay. Reading a file whose merge already
- * hides values rewrites nothing: only the merge operation clears.
+ * GH-935: merging keeps one value. A non-empty upper-left cell wins, as in Excel's Merge Cells;
+ * over an empty one the parser-less Sheet.merge keeps the first non-empty cell (row-major) where it
+ * is (Excel moves it and rewrites its readers: the workbook-level merge). Every other cell of the
+ * range is cleared the way Clear Contents clears it: the value, formula and hyperlink go; the
+ * cell's own formatting and its comment stay. Reading a file whose merge already hides values
+ * rewrites nothing: only the merge operation clears.
  */
 class MergeClearsHiddenSpec extends FunSuite:
 
@@ -53,13 +54,15 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(merged(a1("A1")).value, num(1))
   }
 
-  // The five cases below were checked against Excel for Mac (`merge range`, alerts off).
+  // Sheet.merge has no parser, so over an empty upper-left cell it keeps the cell Excel would move
+  // in place (Excel's move, checked against Excel for Mac, is CellMover.merge / Edit.Merge, pinned
+  // in xl-evaluator's CellMoverSpec): every reader keeps Excel's value.
 
-  test("GH-935 (Excel): an empty anchor receives the only value of the range") {
+  test("GH-935: over an empty anchor Sheet.merge keeps the only value where it is") {
     val s = Sheet(name).put(a1("B1"), CellValue.Text("onlyB1"))
     val merged = s.merge(rng("A1:B1"))
-    assertEquals(merged(a1("A1")).value, CellValue.Text("onlyB1"))
-    assertEquals(merged.cells.get(a1("B1")), None)
+    assertEquals(merged.cells.get(a1("A1")), None)
+    assertEquals(merged(a1("B1")).value, CellValue.Text("onlyB1"))
   }
 
   test("GH-935 (Excel): a non-empty anchor wins and the other value is cleared") {
@@ -69,42 +72,51 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(merged.cells.get(a1("B3")), None)
   }
 
-  test("GH-935 (Excel): the FIRST non-empty cell in row-major order is moved into the anchor") {
-    val s = Sheet(name).put(a1("B5"), CellValue.Text("b5")).put(a1("A6"), CellValue.Text("a6"))
+  test("GH-935: over an empty anchor the FIRST non-empty cell (row-major) stays; the rest clear") {
+    val s = Sheet(name)
+      .put(a1("B5"), CellValue.Text("b5"))
+      .put(a1("A6"), CellValue.Text("a6"))
+      .put(a1("B6"), num(1))
     val merged = s.merge(rng("A5:B6"))
-    assertEquals(merged(a1("A5")).value, CellValue.Text("b5"))
-    assert(Vector("B5", "A6", "B6").forall(r => merged.cells.get(a1(r)).isEmpty))
+    assertEquals(merged(a1("B5")).value, CellValue.Text("b5"))
+    assert(Vector("A5", "A6", "B6").forall(r => merged.cells.get(a1(r)).isEmpty))
   }
 
-  test("GH-935 (Excel): the moved cell keeps its formula verbatim and its format") {
+  test("GH-935: readers of the kept cell keep Excel's value; SUM over the area is that value") {
     val s = Sheet(name)
-      .put(a1("D1"), num(5))
+      .put(a1("B1"), num(7))
+      .put(a1("B2"), num(3))
+      .put(a1("E1"), CellValue.Formula("B1+1", None))
+    val merged = s.merge(rng("A1:B2"))
+    assertEquals(merged(a1("B1")).value, num(7))
+    assertEquals(merged.cells.get(a1("B2")), None)
+    assertEquals(merged(a1("E1")).value, CellValue.Formula("B1+1", None))
+    // the kept cell keeps its own style and formula untouched
+    val styled = Sheet(name)
       .put(a1("B1"), CellValue.Formula("D1*2", Some(num(10))))
       .withCellStyle(a1("B1"), CellStyle.default.withNumFmt(NumFmt.Percent))
-      // the empty anchor's own format is replaced by the moved cell's
-      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Date))
-    val merged = s.merge(rng("A1:B1"))
-    assertEquals(merged(a1("A1")).value, CellValue.Formula("D1*2", Some(num(10))))
-    assertEquals(merged.getCellStyle(a1("A1")).map(_.numFmt), Some(NumFmt.Percent))
-    assertEquals(merged.cells.get(a1("B1")), None)
+      .merge(rng("A1:B1"))
+    assertEquals(styled(a1("B1")).value, CellValue.Formula("D1*2", Some(num(10))))
+    assertEquals(styled.getCellStyle(a1("B1")).map(_.numFmt), Some(NumFmt.Percent))
   }
 
-  test("GH-935: a moved array formula carries its result range with it") {
+  test("GH-935: moveCell (Excel's cut) carries value, format and an anchored array range") {
     import com.tjclp.xl.cells.FormulaKind
+    val s = Sheet(name)
+      .put(a1("B1"), CellValue.Formula("D1*2", Some(num(10))))
+      .withCellStyle(a1("B1"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Date))
+    val moved = SheetEdits.moveCell(s, a1("B1"), a1("A1"))
+    assertEquals(moved(a1("A1")).value, CellValue.Formula("D1*2", Some(num(10))))
+    assertEquals(moved.getCellStyle(a1("A1")).map(_.numFmt), Some(NumFmt.Percent))
+    assertEquals(moved.cells.get(a1("B1")), None)
     def dyn(r: String) =
       CellValue.Formula("SEQUENCE(1)", Some(num(1)), FormulaKind.dynamicArray(rng(r)))
     def cse(r: String) = CellValue.Formula("D1*2", Some(num(2)), FormulaKind.ArrayFormula(rng(r)))
-    val a = Sheet(name).put(a1("B2"), dyn("B2:B2")).merge(rng("A1:B2"))
+    val a = SheetEdits.moveCell(Sheet(name).put(a1("B2"), dyn("B2:B2")), a1("B2"), a1("A1"))
     assertEquals(a(a1("A1")).value, dyn("A1:A1"))
-    val b = Sheet(name).put(a1("C3"), cse("C3:C3")).merge(rng("B2:C3"))
+    val b = SheetEdits.moveCell(Sheet(name).put(a1("C3"), cse("C3:C3")), a1("C3"), a1("B2"))
     assertEquals(b(a1("B2")).value, cse("B2:B2"))
-  }
-
-  test("GH-935: Sheet.merge cannot rewrite the moved cell's readers (no parser in xl-core)") {
-    val s = Sheet(name).put(a1("B1"), num(7)).put(a1("E1"), CellValue.Formula("B1+1", None))
-    val merged = s.merge(rng("A1:B1"))
-    assertEquals(merged(a1("A1")).value, num(7))
-    assertEquals(merged(a1("E1")).value, CellValue.Formula("B1+1", None))
   }
 
   test("GH-935: a moving merge needs the formula support in the Edit algebra (text-only refuses)") {

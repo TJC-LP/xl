@@ -303,7 +303,12 @@ private[xl] object EditInterpreter:
                 for
                   relocated <- fs.relocateCell(wb, sheet.name, winner.ref, at.range.start)
                   target <- findSheet(relocated, sheet.name)
-                yield (relocated.put(target.merge(at.range)), planned)
+                yield (
+                  relocated.put(
+                    SheetEdits.moveCell(target, winner.ref, at.range.start).merge(at.range)
+                  ),
+                  planned
+                )
           }
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
