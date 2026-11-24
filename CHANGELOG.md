@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Date text is its serial wherever a single value converts text to a number** (#953):
   `=VALUE("12/31/2028")`, `="12/31/2028"+0` and `=A1+0` over the text `12/31/2028` are 47118,
   and a numeric, integer or date argument reads date text the same way (`=YEAR("31-Dec-2028")`
-  is 2028), in the forms `DATEVALUE` reads. One parser, `DateText`, serves all of them.
+  is 2028), in the forms `DATEVALUE` reads. TEXT formats it as that date too
+  (`=TEXT("12/31/2028","yyyy")` is `2028`, not the text unchanged). One parser, `DateText`, serves all of them.
   **Behaviour change:** these were `#VALUE!`. Range folds and aggregate arguments still skip or
   refuse date text (`=SUM("12/31/2028")` is `#VALUE!`; the XIRR/XNPV dates range is unchanged).
 

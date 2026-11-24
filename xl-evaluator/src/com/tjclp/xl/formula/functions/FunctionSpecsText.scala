@@ -355,8 +355,9 @@ trait FunctionSpecsText extends FunctionSpecsBase:
   /**
    * Coerce ExprValue → CellValue for TEXT. Empty cells are treated as Number(0) per Excel
    * convention, and a non-blank numeric string is a number before a section is chosen (#693:
-   * `TEXT("123","0.00")` is `123.00`, not the text section); other types pass through the standard
-   * toCellValue path.
+   * `TEXT("123","0.00")` is `123.00`, not the text section), and so is date text, as its serial
+   * (#953: `TEXT("12/31/2028","yyyy")` is `2028`, as VALUE reads it); other types pass through the
+   * standard toCellValue path.
    */
   private def exprValueForTextFn(ev: ExprValue): CellValue =
     ev match
@@ -364,5 +365,7 @@ trait FunctionSpecsText extends FunctionSpecsBase:
       case other =>
         toCellValue(other) match
           case text @ CellValue.Text(s) if s.trim.nonEmpty =>
-            parseExcelNumber(s).fold(_ => text, CellValue.Number(_))
+            parseExcelNumber(s).toOption
+              .orElse(DateText.serial(s))
+              .fold(text)(CellValue.Number(_))
           case cv => cv
