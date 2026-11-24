@@ -63,7 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `xl-evaluator/test/resources/excel-oracle/merge-references.json` and `ExcelMergeOracleSpec`
   replays all 93 — plus 14 union and intersection cases checked by hand in Excel (`f8-*`) and 17
   scenarios from a fourth review's Excel runs (`f9-*` function argument kinds, `f10-01` 3-D,
-  `f11-01` data validation, `f12-*` assorted), 124 in all — through the workbook-level merge (formula text exactly, values after recalculation, names,
+  `f11-01` data validation, `f12-*` assorted) and 3 from a fifth (`f9b-01` array-typed arguments
+  of formulas xl cannot parse, `f11-02`/`f11-03` validation rules over a bare range), 127 in all —
+  through the workbook-level merge (formula text exactly, values after recalculation, names,
   merged areas) plus a sample through the `merge` verb. Excel's merge is
   "cut the winner onto the anchor, then clear the rest":
   - The final area grows to the bounding box of the range and every merged area it touches, to a
@@ -100,7 +102,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `FunctionFlags.arrayArguments`) — depends on every cell of every range anywhere inside it, even
     in a plain cell: `=SUMPRODUCT((B1:C1>0)*B1:C1)` → `=SUMPRODUCT((A1:C1>0)*A1:C1)`,
     `=INDEX(B1:C1*1,1,1)` → `=INDEX(A1:C1*1,1,1)`, while value-typed contexts (`SUM(B1:C1*1)`,
-    `MAX(B1:C1*2)`) keep the implicit-intersection rule. A 3-D reference (`Sheet1:Sheet2!B1`) is
+    `MAX(B1:C1*2)`) keep the implicit-intersection rule. A formula xl cannot parse is judged by
+    the same rule from its text, through a table of Excel's array-typed parameters
+    (`CutReferences.ArrayParameters`, a superset of the registry flags, pinned by a law): a
+    reference anywhere inside such an argument depends on all its cells. Checked in Excel:
+    LOOKUP's vectors, IRR's and MIRR's values, XLOOKUP's lookup and return arrays, XMATCH's lookup
+    array, SORT's and UNIQUE's array, MMULT, SUMX2MY2, CORREL (`=XLOOKUP(7,B1:C1*1,B1:C1*1)` →
+    `=XLOOKUP(7,A1:C1*1,A1:C1*1)`); taken from Excel's function reference without a merge check:
+    SUMX2PY2, SUMXMY2, PEARSON, RSQ, SLOPE, INTERCEPT, COVAR, FORECAST, FREQUENCY, TREND, GROWTH,
+    LINEST, LOGEST, MDETERM, MINVERSE. A 3-D reference (`Sheet1:Sheet2!B1`) is
     kept verbatim and the formula's other references still follow the cut
     (`=SUM(Sheet1:Sheet2!B1)+Sheet1!B1` → `=SUM(Sheet1:Sheet2!B1)+Sheet1!A1`). Only
     the changed reference spans are replaced; everything else is byte-identical. The `merge` verb's
@@ -112,10 +122,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     its effective link (its own, or the range hyperlink covering it) to the anchor.
   - Data-validation formulas follow the full cut rule, judged at the rule's first cell (checked in
     Excel: with the winner B1 of `A1:C1`, `SUM(B1:C1)>0` → `SUM(A1:C1)>0`, `A1>0` → `#REF!>0`,
-    `B1>0` → `A1>0`); conditional-format formulas follow the same rule (not verifiable through
-    Excel's AppleScript, so not Excel-checked).
+    `B1>0` → `A1>0`), as array formulas: a bare range in a rule is never narrowed to the rule
+    cell's row or column (checked in Excel: a list or custom rule over `$C$1:$D$1` follows the
+    winner D1 to `$C$1:$C$1` whether the rule sits in A5 or C5). Conditional-format formulas follow
+    the same rule (not verifiable through Excel's AppleScript, so not Excel-checked). A validation
+    over a single cell is written `sqref="A5"`, as Excel writes it (it used to be `A5:A5`).
   - Merging a single cell (`A1`, `A1:A1`) does nothing, as in Excel, on every path (the verb says
-    "A1 is a single cell: nothing to merge"); no one-cell `<mergeCell>` is ever written (the verb
+    "A1 is a single cell: nothing to merge", and the batch summary "MERGE A1 (a single cell:
+    nothing to merge)", in memory as streamed); no one-cell `<mergeCell>` is ever written (the verb
     used to exit `INTERNAL`, the batch wrote `A1:A1`). Files that already hold one are left as
     they are.
   - Not determined by the oracle, kept as before: circular winner formulas, spills (below),
@@ -125,7 +139,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     ROW/COLUMN/ROWS/COLUMNS (`f4-13`…`f4-16`, reported circular where Excel reads only the
     address); `ROWS(A1:C1*1)` in a plain cell (`f9-03`: xl intersects the argument, #VALUE!, where
     Excel types it as an array, 1); 3-D references (`f10-01`, not evaluated by xl); a defined name
-    whose definition is a union (`f12-05`).
+    whose definition is a union (`f12-05`). Known gaps: `SUM(TRANSPOSE(B1:C1))` in a cell off the
+    merged row is rewritten where Excel keeps it (a whole function argument depends on all its
+    cells, and xl does not yet model the value-typed parameter beneath it); in a formula xl cannot
+    parse, a 3-D span keeps the sheet-name case it was typed in when the other qualifiers are
+    respelled to the tab's case.
   - Spill children are not merge content: a cell holding a dynamic array's spilled value, or a
     member of a legacy array other than its anchor, is never the cell moved into an empty
     upper-left cell (nothing becomes a constant), and a spilled value AT the upper-left cell does
