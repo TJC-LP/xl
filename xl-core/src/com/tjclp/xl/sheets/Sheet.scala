@@ -687,10 +687,14 @@ final case class Sheet(
     cells.inRange(range).toSeq
 
   /**
-   * Merge cells in range, as Excel's Merge Cells does (GH-935): the upper-left cell keeps its value
-   * and every other cell of the range is cleared like Clear Contents (value, formula and hyperlink
-   * go; the cell's own style and comment stay). An empty upper-left cell stays empty. Only this
-   * operation clears: a sheet read from a file whose merge already hides values keeps them.
+   * Merge cells in range, as Excel's Merge Cells does (GH-935): a non-empty upper-left cell keeps
+   * its value; an empty one receives the first non-empty cell of the range (row-major), moved with
+   * its formula verbatim, style and hyperlink. Every other cell is then cleared like Clear Contents
+   * (value, formula and hyperlink go; the cell's own style and comment stay). Only this operation
+   * clears: a sheet read from a file whose merge already hides values keeps them.
+   *
+   * No formula parser here: the formulas that read a moved cell are NOT pointed at the upper-left
+   * cell. Use `wb.edit(Edit.Merge(...))` or xl-evaluator's `CellMover.merge` for that.
    */
   def merge(range: CellRange): Sheet =
     SheetEdits.merge(this, range)

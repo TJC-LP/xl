@@ -12,11 +12,11 @@ import com.tjclp.xl.workbooks.Workbook
 import munit.FunSuite
 
 /**
- * GH-935: merging keeps only the upper-left cell's value, as Excel's Merge Cells does ("Merging
- * cells only keeps the upper-left value and discards other values"). Every other cell of the range
- * is cleared the way Clear Contents clears it: the value, formula and hyperlink go; the cell's own
- * formatting and its comment stay. Reading a file whose merge already hides values rewrites
- * nothing: only the merge operation clears.
+ * GH-935: merging keeps one value, as Excel's Merge Cells does: the upper-left cell's when it has
+ * one, else the first non-empty cell's (row-major), which is moved into the upper-left cell. Every
+ * other cell of the range is cleared the way Clear Contents clears it: the value, formula and
+ * hyperlink go; the cell's own formatting and its comment stay. Reading a file whose merge already
+ * hides values rewrites nothing: only the merge operation clears.
  */
 class MergeClearsHiddenSpec extends FunSuite:
 
@@ -53,10 +53,68 @@ class MergeClearsHiddenSpec extends FunSuite:
     assertEquals(merged(a1("A1")).value, num(1))
   }
 
-  test("GH-935: an empty anchor stays empty; the values elsewhere are discarded, as in Excel") {
-    val s = Sheet(name).put(a1("B1"), num(2)).put(a1("B2"), num(4))
+  // The five cases below were checked against Excel for Mac (`merge range`, alerts off).
+
+  test("GH-935 (Excel): an empty anchor receives the only value of the range") {
+    val s = Sheet(name).put(a1("B1"), CellValue.Text("onlyB1"))
+    val merged = s.merge(rng("A1:B1"))
+    assertEquals(merged(a1("A1")).value, CellValue.Text("onlyB1"))
+    assertEquals(merged.cells.get(a1("B1")), None)
+  }
+
+  test("GH-935 (Excel): a non-empty anchor wins and the other value is cleared") {
+    val s = Sheet(name).put(a1("A3"), CellValue.Text("a3")).put(a1("B3"), CellValue.Text("b3"))
+    val merged = s.merge(rng("A3:B3"))
+    assertEquals(merged(a1("A3")).value, CellValue.Text("a3"))
+    assertEquals(merged.cells.get(a1("B3")), None)
+  }
+
+  test("GH-935 (Excel): the FIRST non-empty cell in row-major order is moved into the anchor") {
+    val s = Sheet(name).put(a1("B5"), CellValue.Text("b5")).put(a1("A6"), CellValue.Text("a6"))
+    val merged = s.merge(rng("A5:B6"))
+    assertEquals(merged(a1("A5")).value, CellValue.Text("b5"))
+    assert(Vector("B5", "A6", "B6").forall(r => merged.cells.get(a1(r)).isEmpty))
+  }
+
+  test("GH-935 (Excel): the moved cell keeps its formula verbatim and its format") {
+    val s = Sheet(name)
+      .put(a1("D1"), num(5))
+      .put(a1("B1"), CellValue.Formula("D1*2", Some(num(10))))
+      .withCellStyle(a1("B1"), CellStyle.default.withNumFmt(NumFmt.Percent))
+      // the empty anchor's own format is replaced by the moved cell's
+      .withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Date))
+    val merged = s.merge(rng("A1:B1"))
+    assertEquals(merged(a1("A1")).value, CellValue.Formula("D1*2", Some(num(10))))
+    assertEquals(merged.getCellStyle(a1("A1")).map(_.numFmt), Some(NumFmt.Percent))
+    assertEquals(merged.cells.get(a1("B1")), None)
+  }
+
+  test("GH-935: Sheet.merge cannot rewrite the moved cell's readers (no parser in xl-core)") {
+    val s = Sheet(name).put(a1("B1"), num(7)).put(a1("E1"), CellValue.Formula("B1+1", None))
+    val merged = s.merge(rng("A1:B1"))
+    assertEquals(merged(a1("A1")).value, num(7))
+    assertEquals(merged(a1("E1")).value, CellValue.Formula("B1+1", None))
+  }
+
+  test("GH-935: a moving merge needs the formula support in the Edit algebra (text-only refuses)") {
+    val s = Sheet(name).put(a1("B1"), num(7))
+    val edit = Edit.Merge(Area(None, rng("A1:B1")))
+    assertEquals(Edit.lower(edit, s), None)
+    assertEquals(Patch.toEdits(Patch.Merge(rng("A1:B1")), s), None)
+    Edit.applyAll(Workbook(s), Vector(edit), Scope.none) match
+      case Left(
+            com.tjclp.xl.error.XLError
+              .EditFailed(1, "merge", _: com.tjclp.xl.error.XLError.UnsupportedCapability)
+          ) =>
+        ()
+      case other => fail(s"expected an UnsupportedCapability refusal, got $other")
+  }
+
+  test("GH-935: an empty range merges to nothing; a styled empty anchor is not a value") {
+    val s = Sheet(name).withCellStyle(a1("A1"), CellStyle.default.withNumFmt(NumFmt.Percent))
     val merged = s.merge(rng("A1:B2"))
-    assert(rng("A1:B2").cells.forall(r => merged.cells.get(r).forall(_.value == CellValue.Empty)))
+    assertEquals(merged(a1("A1")).value, CellValue.Empty)
+    assertEquals(merged.mergedRanges, Set(rng("A1:B2")))
   }
 
   test("GH-935: a hidden cell keeps its formatting and comment; its hyperlink goes") {

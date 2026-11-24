@@ -348,16 +348,20 @@ private[xl] object DynamicArrayAuthoring:
       derives CanEqual
 
   /**
-   * GH-935: `Sheet.merge` with the dynamic arrays of the hidden cells released first. The merge
-   * clears every cell but the upper-left one as a contents clear does; a hidden dynamic-array
-   * anchor takes its whole spill with it, as [[clearContents]] clears it, rather than leaving its
-   * spilled values behind with no formula to own them. A sheet with no dynamic arrays is
-   * `sheet.merge(range)`.
+   * GH-935: `Sheet.merge` with the dynamic arrays of the hidden cells released first. When the
+   * upper-left cell is empty, the cell Excel moves into it ([[SheetEdits.mergeWinner]]) is moved
+   * before anything is released, so its own content survives; then a hidden dynamic-array anchor
+   * takes its whole spill with it, as [[clearContents]] clears it, rather than leaving its spilled
+   * values behind with no formula to own them. Readers of a moved cell are not rewritten here (see
+   * `CellMover.merge`). A sheet with no dynamic arrays is `sheet.merge(range)`.
    */
   def merge(sheet: Sheet, range: CellRange): Sheet =
+    val moved = SheetEdits
+      .mergeWinner(sheet, range)
+      .fold(sheet)(w => SheetEdits.moveCell(sheet, w.ref, range.start))
     val hidden = SheetEdits.hiddenByMerge(range)
-    val spills = if hidden.isEmpty then Vector.empty else spillsOf(sheet)
-    val released = if spills.isEmpty then sheet else clearContents(sheet, spills, hidden).sheet
+    val spills = if hidden.isEmpty then Vector.empty else spillsOf(moved)
+    val released = if spills.isEmpty then moved else clearContents(moved, spills, hidden).sheet
     released.merge(range)
 
   /**

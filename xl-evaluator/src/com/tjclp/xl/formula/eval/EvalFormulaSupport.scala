@@ -1,6 +1,6 @@
 package com.tjclp.xl.formula.eval
 
-import com.tjclp.xl.addressing.{Column, Row, SheetName}
+import com.tjclp.xl.addressing.{ARef, Column, Row, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
 import com.tjclp.xl.formula.printer.FormulaOps
@@ -38,6 +38,15 @@ object EvalFormulaSupport extends FormulaSupport:
     rowDelta: Int
   ): XLResult[FormulaSupport.Shifted] =
     FormulaOps.shiftReporting(formula, colDelta, rowDelta)
+
+  /** GH-935: a cut cell's readers follow it (`CellMover.relocateReferences`). */
+  override def relocateCell(
+    wb: Workbook,
+    sheet: SheetName,
+    from: ARef,
+    to: ARef
+  ): XLResult[Workbook] =
+    Right(CellMover.relocateReferences(wb, sheet, from, to))
 
   /** GH-936: respell each sheet qualifier as the tab's own name, as Excel does on entry. */
   override def canonicalSheets(formula: String, sheets: IndexedSeq[SheetName]): String =

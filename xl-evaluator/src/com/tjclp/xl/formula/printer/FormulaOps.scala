@@ -2,7 +2,7 @@ package com.tjclp.xl.formula.printer
 
 import java.util.regex.Pattern
 
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{ARef, SheetName}
 import com.tjclp.xl.error.{XLError, XLResult}
 import com.tjclp.xl.formula.ast.TExpr
 import com.tjclp.xl.formula.parser.{FormulaParser, ParseError}
@@ -65,6 +65,28 @@ object FormulaOps:
         case Right(expr) =>
           val canonical = FormulaShifter.canonicalSheets(expr, names)
           if canonical == expr then text else reprint(text, canonical)
+
+  /**
+   * GH-935: `text` with every reference to the single cell `sheet!from` respelled as `sheet!to`
+   * ([[FormulaShifter.relocateCell]]), as Excel rewrites a cut cell's readers on paste. `host` is
+   * the sheet the formula lives on (`None` for a defined name: only qualified references count).
+   * Total: text that names no such reference, or does not parse, comes back byte-identical.
+   */
+  def relocateCell(
+    text: String,
+    host: Option[SheetName],
+    sheet: SheetName,
+    from: ARef,
+    to: ARef
+  ): String =
+    if from == to || !text.replace("$", "").toUpperCase(java.util.Locale.ROOT).contains(from.toA1)
+    then text
+    else
+      FormulaParser.parse(text) match
+        case Left(_) => text
+        case Right(expr) =>
+          val moved = FormulaShifter.relocateCell(expr, host, sheet, from, to)
+          if moved == expr then text else reprint(text, moved)
 
   /**
    * True when `text` carries a sheet qualifier naming `sheet` — bare (`Sheet1!`), quoted (`'Q1

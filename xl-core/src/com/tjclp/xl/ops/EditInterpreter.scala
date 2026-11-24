@@ -291,8 +291,20 @@ private[xl] object EditInterpreter:
         case Edit.Style(at, overlay, mode) =>
           pure(at.sheet, Vector.empty)(applyStyle(_, at.range, overlay, mode))
 
-        // GH-935: merging clears the hidden cells' contents, so the range seeds a recalculation
-        case Edit.Merge(at) => pure(at.sheet, Vector(at.range))(_.merge(at.range))
+        // GH-935: merging clears the hidden cells' contents, so the range seeds a recalculation. An
+        // empty upper-left cell receives the first non-empty cell, cut and pasted: every formula
+        // that read it (any sheet, names, CF, DV) is pointed at the upper-left cell first.
+        case Edit.Merge(at) =>
+          resolve(wb, at.sheet, scope, name).flatMap { sheet =>
+            val planned = Planned(index, edit, Some(sheet.name), Vector(at.range))
+            SheetEdits.mergeWinner(sheet, at.range) match
+              case None => Right((wb.put(sheet.merge(at.range)), planned))
+              case Some(winner) =>
+                for
+                  relocated <- fs.relocateCell(wb, sheet.name, winner.ref, at.range.start)
+                  target <- findSheet(relocated, sheet.name)
+                yield (relocated.put(target.merge(at.range)), planned)
+          }
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
         case Edit.ColWidth(sheet, cols, width) =>
@@ -652,7 +664,9 @@ private[xl] object EditInterpreter:
             .toVector
         )
       )
-    case Edit.Merge(at) => Some(Patch.Merge(at.range))
+    // GH-935: a merge that moves a cell rewrites its readers through the formula support
+    case Edit.Merge(at) if SheetEdits.mergeWinner(existing, at.range).isEmpty =>
+      Some(Patch.Merge(at.range))
     case Edit.Unmerge(at) => Some(Patch.Unmerge(at.range))
     case Edit.ColWidth(_, cols, width) if width >= 0 && width <= SheetEdits.MaxColumnWidth =>
       Some(columnPatch(existing, cols)(_.copy(width = Some(width))))
