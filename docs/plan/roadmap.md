@@ -10,9 +10,9 @@
 
 ## TL;DR
 
-**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 10,588 tests (0.27.0 release branch, 2026-11-23).
+**Current Status**: Production-ready with **128 formula functions** (incl. dynamic arrays SEQUENCE/SORT/UNIQUE/FILTER, OFFSET, RRI, the `@` implicit-intersection operator and the `x#` spill reference), **structural editing** (insert/delete rows & columns with formula rewriting), the **scripting prelude** (`com.tjclp.xl.scripting`), whole-workbook `recalculate`, named-range & hyperlink authoring, **typed charts + embedded pictures** (0.12.0), **conditional formatting** (0.12.1), SAX streaming (36% faster than POI), Excel tables, and full OOXML round-trip. 10,907 tests (0.28.0 release branch, 2026-11-24).
 
-**Current Version**: **0.27.0** (`xl audit` 3–20× faster on a `CellStore` sheet model and one-graph recalculation (#891, #920); `SheetEvaluator.evaluateAt` (#741), `Workbook.adopt` (#526), table-column and computed references (#669, #723); case-insensitive sheet names (#752); Excel clear semantics (#886, #894, #909))
+**Current Version**: **0.28.0** (merge follows Excel, checked against Excel itself (#935); range hyperlinks (#931, #932); unconverged cycles gate audit and recalc (#933, #934); exact file modes (#930); canonical sheet spelling (#936))
 
 ---
 
@@ -22,6 +22,17 @@ The full open backlog (triaged 2026-06-10) is scheduled as **six waves → four 
 executed as a parallel multi-agent run via `.claude/workflows/issue-wave.js` (baseline gate →
 worktree-isolated TDD clusters → adversarial review → integration). This roadmap is the single
 source of truth for scheduling.
+
+### v0.28.0 — Excel's own rules: dogfood fixes, merge as Excel does it (Released 2026-11-24)
+
+**Dogfood fixes (#930–#938).** A Weaver dev dogfood of 0.27.0 found nine problems. All are fixed:
+exact file modes, range hyperlinks read and authored, structured non-convergence in `recalc
+--json`, gate errors on stderr, unconverged cycles as audit findings, merge parity, canonical sheet
+spelling, `--version --json`, and skill docs.
+
+**Merge (#935).** Rebuilt on Excel's cut rule. Golden-tested against an Excel oracle of 128
+scenarios (720 cell expectations) run in Excel for Mac, including 69 cut-and-paste controls. Four
+oracle values wait on evaluator gaps filed as #940–#942; known gaps are #943.
 
 ### v0.27.0 — Audit performance on a new cell store, library closure evaluation (Released 2026-11-23)
 

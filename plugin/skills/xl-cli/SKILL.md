@@ -5,9 +5,9 @@ description: "LLM-friendly Excel operations via the `xl` CLI. Read cells, view r
 
 # XL CLI - Excel Operations
 
-**Requires xl >= 0.27.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
+**Requires xl >= 0.28.0.** Check with `xl --version`. Older binaries lack `--json`, `xl schema`,
 `xl batch --schema`, `describe`, `audit`, `deps`, the 0/1/2/3 exit table and globals-anywhere; every
-statement in this skill assumes 0.27.0 or later.
+statement in this skill assumes 0.28.0 or later.
 
 The binary documents itself and is the reference: `xl <verb> --help` for a verb's flags,
 `xl schema` for every verb, `xl batch --schema` for every batch op and field, `xl functions --json`
@@ -15,7 +15,7 @@ for every formula function. This skill is the map; those are the territory.
 
 ## Environment
 
-- `xl --version` must print `0.27.0` or later. Not installed, or older: follow
+- `xl --version` must print `0.28.0` or later. Not installed, or older: follow
   [reference/INSTALL.md](reference/INSTALL.md) (native binaries for macOS, Linux and Windows, the
   JAR fallback, the rasterizer for image export).
 - A deployment that vendors this skill may place a `reference/LOCAL.md` beside this file: where
@@ -105,7 +105,7 @@ xl -f model.xlsx -s Data -o out.xlsx --json batch ops.json | jq -e '.ok' >/dev/n
 | Used range, numeric summary | `bounds`, `stats <range>` | |
 | What-if without writing | `eval "=…" --with "A1=5"` (`--at D5`: the value the plain cell at D5 would show), `evala "=…"` (arrays; `--at B2` anchors the displayed result at B2) | no `-f` for constants. Both are reads: `eval --at` and `evala --at` write nothing, and `-o` beside it is `USAGE` (`evala is read-only and does not take -o/--output`) — `putf` writes a plain formula, which Excel evaluates with implicit intersection (see `reference/FORMULAS.md`; use SUMPRODUCT for array math in one cell, with conditions as `--(r>0)` factors rather than IF, or `putf --array`) |
 | Write values / formulas | `put`, `putf` — or a `batch` | one formula over a range drags with `$` anchoring; `putf --array A1 "=SORT(B1:B3)"` (batch `"array": true`) stores an Excel 365 dynamic array that spills |
-| Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops | styles merge unless `--replace` |
+| Style, merge, comments, hyperlinks | `style`, `merge`/`unmerge`, `comment`/`remove-comment` — or `batch` ops (`hyperlink` takes a range or `A:A`) | styles merge unless `--replace`. `merge` is Excel's Merge Cells (0.28.0): it grows over merges it touches, keeps one value (an empty upper-left receives the first non-empty cell, CUT with its readers rewritten as Excel does), refuses arrays/data tables, blocks spills with `#SPILL!`; `unmerge` unmerges every merge the range touches. Under `--stream`, a merge that would move a value or touch an array/spill/linked cell is refused, never written differently |
 | Copy, fill, sort or clear a block | `copy <source> <target> [--values-only]`, `fill <source> <target> [--right]`, `sort <range> --by <col>`, `clear <range> [--all\|--styles\|--comments]` — or the batch ops `copy` and `clear` | `copy` shifts relative references like Excel; the target is a cell (expanded to the source's size) or a range, and either side may be sheet-qualified: `{"op":"copy","source":"Data!A1:B2","target":"Summary!A1","valuesOnly":false}`. `clear` follows Excel: plain `clear` (Clear Contents) keeps formatting and merges; `--styles` (Clear Formats) unmerges every merge the range touches and resets each whole merge, values kept; `--all` does both. `fill` and `sort` have no batch twin |
 | Rows and columns | `row <n>`, `col <letter>`, `autofit [--columns A:F]`, `group-rows <10:20>`/`group-cols <E:H>` (`--level n`, `--collapsed`), `insert-rows <at-row> [count]`/`delete-rows <at-row> [count]`, `insert-cols <at-col\|C:E> [count]`/`delete-cols <at-col\|C:E> [count]` | `at-row` is one 1-based row and `count` defaults to 1: `delete-rows 7 5` deletes rows 7-11 — there is **no** `7:11` form (only the column verbs take `C:E`). Structural edits rewrite formulas on every sheet, `#REF!` on loss; they have no batch twin |
 | Sheets | `add-sheet`, `remove-sheet`, `rename-sheet`, `move-sheet`, `copy-sheet`, `sheets hide\|show`, `name add\|rm` | `rename-sheet` rewrites every reference to the sheet. `name add\|rm` are workbook-scoped unless `-s` names the scope sheet: `-s Sheet1 name add _xlnm.Print_Area 'Sheet1!$A$1:$D$20'` sets that sheet's print area; names match case-insensitively (`case` replaces `CASE`) |
