@@ -249,8 +249,10 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
 
   // Issue repro: a thin one-entry/one-exit strip whose exit approaches zero. Newton
   // overshoots below -1 and diverges doubly-exponentially until BigDecimal's int scale
-  // overflows (java.lang.ArithmeticException from checkScale). Totality requires the same
-  // contained EvalFailed as the documented non-convergence path — never a thrown exception.
+  // overflows (java.lang.ArithmeticException from checkScale). Totality requires the overflow
+  // to be contained — never a thrown exception. #954: the strip has a real rate,
+  // (0.0001/228)^(1/5) - 1 ≈ -0.94649, which the bracketing fallback now finds once the
+  // contained Newton attempt fails.
   private def divergingStrip: Sheet = sheetWith(
     ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-228")),
     ARef.from0(0, 1) -> CellValue.Number(BigDecimal("0")),
@@ -260,16 +262,32 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     ARef.from0(0, 5) -> CellValue.Number(BigDecimal("0.0001"))
   )
 
-  test("IRR: Newton divergence returns contained error, never throws (GH-388)") {
+  // Sign change but no rate: -228 + 0.0001x - 0.0001x^5 (x = 1/(1+r)) stays below zero, so
+  // Newton diverges and the fallback finds no bracket — the result must stay a contained #NUM!.
+  private def noRateStrip: Sheet = sheetWith(
+    ARef.from0(0, 0) -> CellValue.Number(BigDecimal("-228")),
+    ARef.from0(0, 1) -> CellValue.Number(BigDecimal("0.0001")),
+    ARef.from0(0, 2) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 3) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 4) -> CellValue.Number(BigDecimal("0")),
+    ARef.from0(0, 5) -> CellValue.Number(BigDecimal("-0.0001"))
+  )
+
+  test("IRR: Newton divergence is contained and falls back to the real rate (GH-388, #954)") {
     val expr = TExpr.irr(CellRange.parse("A1:A6").getOrElse(fail("Invalid range")))
-    evalErr(expr, divergingStrip) match
+    assertApprox(evalOk(expr, divergingStrip).toDouble, -0.9464927007702812, 1e-7)
+  }
+
+  test("IRR: divergence with no rate returns contained error, never throws (GH-388)") {
+    val expr = TExpr.irr(CellRange.parse("A1:A6").getOrElse(fail("Invalid range")))
+    evalErr(expr, noRateStrip) match
       case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
         assert(ctx.contains("IRR"), s"unexpected context: $ctx")
       case other => fail(s"Expected ErrorValue(Num, ctx), got $other")
   }
 
   test("IRR: Newton divergence inside recalculate() is a per-cell error, never throws (GH-388)") {
-    val s = divergingStrip
+    val s = noRateStrip
       .put(ARef.from0(1, 0), CellValue.Formula("=IRR(A1:A6)", None))
       .put(ARef.from0(1, 1), CellValue.Formula("=SUM(A1:A6)", None))
     // Documented contract (see also LetFunctionSpec): recalculate is total — per-cell
@@ -280,8 +298,121 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertEquals(evaluated.get(ARef.from0(1, 0)), Some(CellValue.Error(CellError.Num)))
     assertEquals(
       evaluated.get(ARef.from0(1, 1)),
-      Some(CellValue.Number(BigDecimal("-227.9999")))
+      Some(CellValue.Number(BigDecimal("-228.0000")))
     )
+  }
+
+  // ==================== IRR/XIRR root finding when Newton fails (#954) ====================
+  // Excel finds these rates; plain Newton from the guess overshoots past -100% or diverges.
+  // Expected values from the issue (made-up flows); the guess-5 IRR case is not yet confirmed
+  // in desktop Excel, only that it is the unique root of the NPV.
+
+  private def column(values: String*): Sheet =
+    sheetWith(values.zipWithIndex.map { case (v, i) =>
+      ARef.from0(0, i) -> CellValue.Number(BigDecimal(v))
+    }*)
+
+  private def datedColumn(flows: (String, Int)*): Sheet =
+    sheetWith(flows.zipWithIndex.flatMap { case ((v, serial), i) =>
+      Seq(
+        ARef.from0(0, i) -> CellValue.Number(BigDecimal(v)),
+        ARef.from0(1, i) -> CellValue.Number(BigDecimal(serial))
+      )
+    }*)
+
+  test("#954: IRR of -100, 50 is -0.5 from the default guess") {
+    assertApprox(evalNumeric("=IRR(A1:A2)", column("-100", "50")), -0.5, 1e-7)
+  }
+
+  test("#954: IRR of -100, 0.5 is -0.995") {
+    assertApprox(evalNumeric("=IRR(A1:A2)", column("-100", "0.5")), -0.995, 1e-7)
+  }
+
+  test("#954: IRR with guess 5 still finds 0.18555") {
+    val s = column("-1000", "250", "350", "900")
+    assertApprox(evalNumeric("=IRR(A1:A4, 5)", s), 0.18555, 1e-5)
+  }
+
+  test("#954: IRR of -100, 100 with guess 1 is 0") {
+    assertApprox(evalNumeric("=IRR(A1:A2, 1)", column("-100", "100")), 0.0, 1e-9)
+  }
+
+  test("#954: XIRR with guess 2 finds 0.174329") {
+    val s = datedColumn(("-1000", 43831), ("300", 43890), ("900", 44377))
+    assertApprox(evalNumeric("=XIRR(A1:A3, B1:B3, 2)", s), 0.174329, 1e-6)
+  }
+
+  test("#954: XIRR with guess 1 finds about 0.25003") {
+    val s = datedColumn(("-100", 45231), ("317", 47118))
+    assertApprox(evalNumeric("=XIRR(A1:A2, B1:B2, 1)", s), 0.25003, 1e-5)
+  }
+
+  test("#954: results Newton already finds are unchanged") {
+    // Newton converges from the default guess here: the fallback must not run or move it
+    val s = column("-1000", "250", "350", "900")
+    assertApprox(evalNumeric("=IRR(A1:A4)", s), 0.18555000880353856, 1e-9)
+    val x = datedColumn(("-1000", 43831), ("300", 43890), ("900", 44377))
+    assertApprox(evalNumeric("=XIRR(A1:A3, B1:B3)", x), 0.17432922593135303, 1e-9)
+  }
+
+  test("#954: a long steep schedule converges whatever the guess") {
+    // -1000 now, 3649 zero periods, 2000 at the end: rate = 2^(1/3650) - 1. From guess 0.12
+    // Newton fails and the refinement starts on the convex side of a steep NPV, where plain
+    // in-bracket Newton steps crawl; the rtsafe progress check must bisect instead.
+    val flows = "-1000" +: Seq.fill(3649)("0") :+ "2000"
+    val s = column(flows*)
+    val expected = math.pow(2.0, 1.0 / 3650) - 1
+    assertApprox(evalNumeric("=IRR(A1:A3651, 0.12)", s), expected, 1e-9)
+    assertApprox(evalNumeric("=IRR(A1:A3651)", s), expected, 1e-9)
+  }
+
+  test("#954: a very long schedule whose scan sample overflows still brackets the rate") {
+    // 10,000 periods: from guess 0.12 the grid point below the root sits ~0.087 lower in
+    // ln(1+rate), so the Double NPV there is -Infinity (2000·e^866). An overflowed sample keeps
+    // its sign and must still count as one end of the bracket.
+    val flows = "-1000" +: Seq.fill(9999)("0") :+ "2000"
+    val s = column(flows*)
+    val expected = math.pow(2.0, 1.0 / 10000) - 1
+    assertApprox(evalNumeric("=IRR(A1:A10001, 0.12)", s), expected, 1e-9)
+  }
+
+  test("#954: leading zero periods: an underflowed scan sample is not a root") {
+    // NPV = x^365 · (-100 + 10x), x = 1/(1+rate): the rate is -0.9 (Excel gives -0.9). Above the
+    // guess the Double NPV underflows to -0.0; that exact zero must not end the scan at a false
+    // bracket before the real sign change below the guess is reached.
+    val s = column(Seq.fill(365)("0") ++ Seq("-100", "10")*)
+    assertApprox(evalNumeric("=IRR(A1:A367)", s), -0.9, 1e-9)
+  }
+
+  test("#954: leading zero periods: more zeros, and a different tail") {
+    val moreZeros = column(Seq.fill(730)("0") ++ Seq("-100", "10")*)
+    assertApprox(evalNumeric("=IRR(A1:A732)", moreZeros), -0.9, 1e-9)
+    // -100 + 50x = 0 at x = 2: rate -0.5
+    val otherTail = column(Seq.fill(365)("0") ++ Seq("-100", "50")*)
+    assertApprox(evalNumeric("=IRR(A1:A367)", otherTail), -0.5, 1e-9)
+  }
+
+  test("#954: a crossing several steps below the guess is bracketed below the guess") {
+    // NPV = x^1100 · (2.5 - 5.5x + x^2), x = 1/(1+rate): rates -0.8 (x = 5) and 1.0 (x = 0.5).
+    // Above the guess the Double NPV underflows to 0.0, so the scan finds only the crossing well
+    // below the guess; its bracket must end at the last sample below the guess, not at the
+    // mirrored point above it (where both ends would be positive and refine would give up).
+    // Which of the two rates Excel returns here is not verified; this pins that a rate is found.
+    val s = column(Seq.fill(1100)("0") ++ Seq("2.5", "-5.5", "1")*)
+    val rate = evalNumeric("=IRR(A1:A1103)", s)
+    assert(
+      math.abs(rate - -0.8) < 1e-9 || math.abs(rate - 1.0) < 1e-9,
+      s"expected one of the rates -0.8 or 1.0, got $rate"
+    )
+  }
+
+  test("#954: flows whose NPV never crosses zero stay #NUM!") {
+    // -100 + 300x - 250x^2 (x = 1/(1+r)) has no real root: no rate exists, Newton and the
+    // bracket search both fail, and the error stays a contained #NUM!
+    val expr = TExpr.irr(CellRange.parse("A1:A3").getOrElse(fail("Invalid range")))
+    evalErr(expr, column("-100", "300", "-250")) match
+      case EvalError.ErrorValue(CellError.Num, _) => ()
+      case other => fail(s"Expected #NUM!, got $other")
   }
 
   // ==================== XNPV / XIRR Evaluation Tests ====================
@@ -322,15 +453,26 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
-  test("XIRR: Newton divergence returns contained error, never throws (GH-388)") {
+  test("XIRR: Newton divergence is contained and falls back to the real rate (GH-388, #954)") {
     // Same shape as the IRR repro: near-zero exit five years out. Newton overshoots to a
     // hugely negative rate; math.pow(negative base, fractional exponent) yields NaN, and
-    // BigDecimal(NaN) must not escape as a NumberFormatException.
+    // BigDecimal(NaN) must not escape as a NumberFormatException. #954: the flows have a real
+    // rate, (0.0001/228)^(365/1827) - 1, which the bracketing fallback finds.
     val expr = TExpr.xirr(
       CellRange.parse("A1:A2").getOrElse(fail("Invalid range")),
       CellRange.parse("B1:B2").getOrElse(fail("Invalid range"))
     )
     val sheet = xSchedule(BigDecimal("-228"), BigDecimal("0.0001"), LocalDate.of(2025, 1, 1))
+    assertApprox(evalOk(expr, sheet).toDouble, -0.9463209247963447, 1e-7)
+  }
+
+  test("XIRR: divergence with no rate returns contained error, never throws (GH-388)") {
+    // -228 now, +0.0001 in a year, -0.0001 in five: XNPV stays below zero at every rate
+    val expr = TExpr.xirr(
+      CellRange.parse("A1:A3").getOrElse(fail("Invalid range")),
+      CellRange.parse("B1:B3").getOrElse(fail("Invalid range"))
+    )
+    val sheet = datedColumn(("-228", 43831), ("0.0001", 44197), ("-0.0001", 45658))
     evalErr(expr, sheet) match
       case EvalError.ErrorValue(CellError.Num, Some(ctx)) =>
         assert(ctx.contains("XIRR"), s"unexpected context: $ctx")
