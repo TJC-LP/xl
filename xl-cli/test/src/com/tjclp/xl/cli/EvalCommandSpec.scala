@@ -1419,3 +1419,25 @@ class EvalCommandSpec extends CatsEffectSuite:
       assert(relative.stdout.contains(expected), relative.stdout)
       assert(absolute.stdout.contains(expected), absolute.stdout)
   }
+
+  test("#959 CLI: an unreadable input is still named as typed, not by its absolute path") {
+    for
+      cwd <- IO.blocking(Path.of("").toAbsolutePath)
+      path <- IO.blocking(Files.createTempFile(cwd, "xl-959-locked-", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(Workbook(Sheet("Summary")), path)
+      _ <- IO.blocking(path.toFile.deleteOnExit())
+      // unreadable: the IO error's own message names the path it was given
+      _ <- IO.blocking(path.toFile.setReadable(false, false))
+      readable <- IO.blocking(Files.isReadable(path))
+      _ = assume(!readable, "this user can read a file without read permission (root?)")
+      name = path.getFileName.toString
+      run <- CliHarness.run("-f", name, "view", "A1")
+      _ <- IO.blocking(Files.deleteIfExists(path))
+    yield
+      assertEquals(run.exit, 3, run.stderr)
+      // the message is main's: the file as typed, then the resolution suffix with the full path
+      val firstLine = run.stderr.linesIterator.next()
+      assert(firstLine.startsWith("Error: "), run.stderr)
+      val message = firstLine.takeWhile(_ != '(')
+      assert(!message.contains(cwd.toString), s"the absolute path leaked into: $message")
+  }

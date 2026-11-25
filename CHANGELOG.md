@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`CELL` reads a column's width, a cell's contents and type, and the file it was opened from**
   (#959): `=CELL("width",A1)` is the column's width in whole characters, as Excel shows it
   (8 for a default column, 0 for a hidden one); `=CELL("contents",A1)` is A1's value;
-  `=CELL("type",A1)` is `b` for a blank cell, `l` for text and `v` for anything else.
+  `=CELL("type",A1)` is `b` for a blank cell, `l` for text and `v` for anything else. Without a
+  reference, `contents` and `type` are `#VALUE!` (Excel reads the selected cell).
   **Behaviour change:** these were `#VALUE!`. `=CELL("filename",A1)` in a workbook read from a
   file is `dir/[file]sheet` for that file, as when the embedder passes the path; **behaviour
   change:** it was `""` unless the embedder did, so at the CLI it was always `""`. The CLI

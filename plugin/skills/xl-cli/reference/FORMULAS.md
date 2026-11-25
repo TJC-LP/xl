@@ -222,7 +222,7 @@ the range (`ROW(A1:A1000)`) when every row must count.
 (empty for a book never saved), `CELL("address", ref)`, `CELL("row", ref)` and `CELL("col", ref)`
 the reference parts, `CELL("width", ref)` the column width in whole characters (0 when hidden),
 `CELL("contents", ref)` the top-left cell's value and `CELL("type", ref)` `b` (blank), `l` (text)
-or `v` (anything else). `format`, `color`, `parentheses`, `prefix` and `protect` are `#VALUE!`.
+or `v` (anything else); these two need a reference. `format`, `color`, `parentheses`, `prefix` and `protect` are `#VALUE!`.
 
 **Arrays (dynamic arrays).** `TRANSPOSE`, `SEQUENCE`, `SORT`, `UNIQUE` and `FILTER` return a grid.
 Use `xl evala "=..."` to display it (`--at <ref>` anchors the displayed result; `evala` writes

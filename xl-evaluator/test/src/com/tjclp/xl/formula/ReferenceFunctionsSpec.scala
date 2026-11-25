@@ -643,6 +643,17 @@ class ReferenceFunctionsSpec extends FunSuite:
     )
   }
 
+  test(
+    "#959 CELL: contents and type with no reference are #VALUE!, never a read of their own cell"
+  ) {
+    // Excel reads the selected cell; the current cell would be a circular read of itself
+    val sheet = emptySheet
+      .put(ref"B5", CellValue.Formula("CELL(\"contents\")", None))
+      .put(ref"B6", CellValue.Formula("CELL(\"type\")", None))
+    assertEquals(sheet.evaluateCell(ref"B5"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(sheet.evaluateCell(ref"B6"), Right(CellValue.Error(CellError.Value)))
+  }
+
   test("#959 CELL: every info type xl does not support is #VALUE!") {
     List("format", "prefix", "protect", "color", "parentheses", "no_such_arm").foreach { info =>
       assertEquals(

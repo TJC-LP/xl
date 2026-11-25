@@ -359,8 +359,10 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
    * "contents" and "type" reads only the reference's address and sheet, never its value
    * ([[com.tjclp.xl.formula.graph.ValueDependencies.cellAddressOnlyInfoTypes]]); omitted, the arms
    * fall back to the current cell (ROW()/COLUMN() convention; "filename" needs only the ambient
-   * sheet). The arms xl does not model (format, color, parentheses, prefix, protect) and unknown
-   * ones are Excel's #VALUE! as a clean per-cell error value, never a throw.
+   * sheet), except "contents" and "type", which need a reference (#959: Excel reads the selected
+   * cell; the current cell would read itself). The arms xl does not model (format, color,
+   * parentheses, prefix, protect) and unknown ones are Excel's #VALUE! as a clean per-cell error
+   * value, never a throw.
    *
    * Volatile like NOW(): the value derives from the evaluation context (workbook path, position),
    * never from cell data, so full recalculation always recomputes it fresh.
@@ -421,7 +423,18 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
               if qualified then TExpr.SheetPolyRef(sheetName, aref) else TExpr.PolyRef(aref)
             )
           }
-        infoType.toLowerCase match
+        // #959: an arm that reads the value needs a reference. Without one Excel reads the
+        // selected cell, which xl has no notion of; the current cell would read itself (circular)
+        def readingArm(arm: String): Either[EvalError, Unit] =
+          if refOpt.isDefined then Right(())
+          else
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"CELL(\"$arm\") needs a reference: without one Excel reads the selected cell")
+              )
+            )
+        infoType.toLowerCase(java.util.Locale.ROOT) match
           case "filename" =>
             target.map { case (_, sheetName) =>
               ctx.workbookPath.orElse(sourcePath(ctx)) match
@@ -440,10 +453,10 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
           case "width" =>
             located.map((aref, sheet) => CellValue.Number(BigDecimal(cellWidth(sheet, aref))))
           case "contents" =>
-            topLeftValue.map(toCellValue)
+            readingArm("contents").flatMap(_ => topLeftValue.map(toCellValue))
           case "type" =>
             // blank is the cell holding nothing, not a formula whose result is empty
-            located.flatMap { (aref, sheet) =>
+            readingArm("type").flatMap(_ => located).flatMap { (aref, sheet) =>
               if sheet(aref).value == CellValue.Empty then Right(CellValue.Text("b"))
               else
                 topLeftValue match
