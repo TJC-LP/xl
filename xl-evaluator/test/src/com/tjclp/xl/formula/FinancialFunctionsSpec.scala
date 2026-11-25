@@ -1308,6 +1308,27 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
+  test("#964: an error element of an array constant: NPV skips it, IRR returns it") {
+    // Excel's NPV documentation: error values in an array or reference are ignored. Its IRR
+    // documentation names only text, logicals and blanks as ignored, so IRR returning the error is
+    // inferred from it (not checked in Excel); both follow xl's range policy
+    sameAs964("=NPV(0.1,{-100,#DIV/0!,60,60})", "=NPV(0.1,A1:A3)")
+    assertEquals(
+      flows964.evaluateFormula("=IRR({-100,#N/A,60,60})"),
+      Right(CellValue.Error(CellError.NA))
+    )
+  }
+
+  test("#964: messages name an array element by its place, not a cell address") {
+    val expr = FormulaParser
+      .parse("=XIRR({-100,60},{45292,\"no date\"})")
+      .getOrElse(fail("XIRR with array constants should parse"))
+    evalErr(expr, flows964) match
+      case EvalError.ErrorValue(CellError.Value, Some(message)) =>
+        assert(message.contains("invalid date at array element 2"), message)
+      case other => fail(s"Expected ErrorValue(Value, message), got $other")
+  }
+
   test("#964: a LET name bound to an array constant reads like the constant") {
     assertApprox(number964("=LET(x,{-100,50},IRR(x))").toDouble, -0.5, 1e-9)
     sameAs964("=LET(v,{-100,60,60},d,{45292,45474,45658},XIRR(v,d))", "=XIRR(A1:A3,B1:B3)")

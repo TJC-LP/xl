@@ -168,6 +168,17 @@ private[functions] object RateSolver:
 private[functions] def numError(detail: String, usage: String): EvalError =
   EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
+/**
+ * #964: where a cash flow or date came from — a cell of a range, or the nth element of an array.
+ */
+private enum FlowAt derives CanEqual:
+  case At(ref: ARef)
+  case Element(n: Int)
+
+  def label: String = this match
+    case At(ref) => ref.toA1
+    case Element(n) => s"array element $n"
+
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   /**
    * A cash-flow argument's cells in row-major order, each with the place its messages name: a
@@ -178,7 +189,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   private def flowCells(
     arg: ArgSpec.ValuesArg,
     ctx: EvalContext
-  ): Either[EvalError, Vector[(Cell, String)]] =
+  ): Either[EvalError, Vector[(Cell, FlowAt)]] =
     // a LET name bound to an array value, not a reference (LET(x, {-100,50}, IRR(x))): its
     // elements, as INDEX reads such a binding
     def boundArray(location: TExpr.RangeLocation): Option[ArrayResult] = location match
@@ -192,23 +203,24 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           case None =>
             ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
               val readCell = rangeCellReader(targetSheet, ctx)
-              range.cellsRowMajor.foldLeft[Either[EvalError, Vector[(Cell, String)]]](
+              range.cellsRowMajor.foldLeft[Either[EvalError, Vector[(Cell, FlowAt)]]](
                 Right(Vector.empty)
               ) { (result, at) =>
-                result
-                  .flatMap(cells => readCell(at).map(value => cells :+ (Cell(at, value), at.toA1)))
+                result.flatMap(cells =>
+                  readCell(at).map(value => cells :+ (Cell(at, value), FlowAt.At(at)))
+                )
               }
             }
       case ArgSpec.ValuesArg.Constant(expr) =>
         ctx.evalArrayExpr(expr).map(value => arrayCells(toCellArray(value)))
 
   /** An array's elements as cells at their offset in it, row-major, named "array element n". */
-  private def arrayCells(array: ArrayResult): Vector[(Cell, String)] =
+  private def arrayCells(array: ArrayResult): Vector[(Cell, FlowAt)] =
     Vector
       .tabulate(array.rows, array.cols) { (row, col) =>
         (
           Cell(ARef.from0(col, row), array(row, col)),
-          s"array element ${row * array.cols + col + 1}"
+          FlowAt.Element(row * array.cols + col + 1)
         )
       }
       .flatten
@@ -224,7 +236,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   ): Either[EvalError, List[BigDecimal]] =
     flowCells(arg, ctx).flatMap { cells =>
       cells
-        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(Nil)) { case (result, (cell, _)) =>
+        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(Nil)) { case (result, (cell, at)) =>
           result.flatMap { values =>
             cell.value match
               case CellValue.Empty | CellValue.Text(_) | CellValue.RichText(_) |
@@ -236,7 +248,16 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                 TExpr
                   .decodeNumeric(cell)
                   .left
-                  .map(error => EvalError.CodecFailed(cell.ref, error))
+                  .map { error =>
+                    at match
+                      case FlowAt.At(ref) => EvalError.CodecFailed(ref, error)
+                      // an array element has no cell: name its place, not a made-up address
+                      case FlowAt.Element(_) =>
+                        EvalError.ErrorValue(
+                          CellError.Value,
+                          Some(s"$function: invalid cash flow at ${at.label}")
+                        )
+                  }
                   .map(_ :: values)
           }
         }
@@ -276,7 +297,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                     Left(
                       mismatched(
                         "values and dates must have the same length and aligned positions " +
-                          s"($valueAt, $dateAt)"
+                          s"(${valueAt.label}, ${dateAt.label})"
                       )
                     )
                   else
@@ -288,7 +309,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                           TExpr
                             .decodeNumeric(valueCell)
                             .left
-                            .map(_ => invalid(s"invalid cash flow at $valueAt"))
+                            .map(_ => invalid(s"invalid cash flow at ${valueAt.label}"))
                       date <- dateCell.value match
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
@@ -308,7 +329,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                               TExpr
                                 .decodeAsDate(dateCell)
                                 .left
-                                .map(_ => invalid(s"invalid date at $dateAt"))
+                                .map(_ => invalid(s"invalid date at ${dateAt.label}"))
                     yield (value, date) :: acc
                 }
             }
