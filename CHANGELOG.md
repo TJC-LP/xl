@@ -24,8 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   flows in cells, either orientation: text and logical elements are skipped, a missing sign change
   or a count mismatch is `#NUM!`. Other array-valued expressions in these slots
   (`=IRR(A1:A3*1)`) are still a parse error (#940). **Behaviour change:** these formulas were a
-  `FORMULA_ERROR` ("expected range") and now compute; a LET name bound to an array constant
-  (`=LET(x,{-100,50},IRR(x))`) reads like the constant (it was `#VALUE!`). **API:** the
+  `FORMULA_ERROR` ("expected range") and now compute; a LET name bound to an array value
+  (`=LET(x,{-100,50},IRR(x))`) reads like that array (it was `#VALUE!`). **API:** the
   `FunctionSpecs.NpvArgs`, `IrrArgs`, `XnpvArgs` and `XirrArgs` slots for cash flows and dates
   are now `ArgSpec.ValuesArg` (`Range(location)` or `Constant(expr)`), not `TExpr.RangeLocation`;
   the `TExpr.npv`/`irr`/`xnpv`/`xirr` builders keep their signatures.

@@ -172,27 +172,33 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   /**
    * A cash-flow argument's cells in row-major order, each with the place its messages name: a
    * range's cells by address; #964: an array constant's elements as cells at their offset in the
-   * array, named "array element n" (Excel reads both alike).
+   * array, named "array element n" (Excel reads both alike), as are the elements of a LET name
+   * bound to an array value.
    */
   private def flowCells(
     arg: ArgSpec.ValuesArg,
     ctx: EvalContext
   ): Either[EvalError, Vector[(Cell, String)]] =
+    // a LET name bound to an array value, not a reference (LET(x, {-100,50}, IRR(x))): its
+    // elements, as INDEX reads such a binding
+    def boundArray(location: TExpr.RangeLocation): Option[ArrayResult] = location match
+      case TExpr.RangeLocation.Binding(name) =>
+        ctx.bindings.get(name).collect { case array: ArrayResult => array }
+      case _ => None
     arg match
-      // a LET name bound to an array value, not a reference (LET(x, {-100,50}, IRR(x))): its
-      // elements, as INDEX reads such a binding
-      case ArgSpec.ValuesArg.Range(TExpr.RangeLocation.Binding(name))
-          if ctx.bindings.get(name).exists(_.isInstanceOf[ArrayResult]) =>
-        Right(ctx.bindings.get(name).fold(Vector.empty)(value => arrayCells(toCellArray(value))))
       case ArgSpec.ValuesArg.Range(location) =>
-        ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
-          val readCell = rangeCellReader(targetSheet, ctx)
-          range.cellsRowMajor.foldLeft[Either[EvalError, Vector[(Cell, String)]]](
-            Right(Vector.empty)
-          ) { (result, at) =>
-            result.flatMap(cells => readCell(at).map(value => cells :+ (Cell(at, value), at.toA1)))
-          }
-        }
+        boundArray(location) match
+          case Some(array) => Right(arrayCells(array))
+          case None =>
+            ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+              val readCell = rangeCellReader(targetSheet, ctx)
+              range.cellsRowMajor.foldLeft[Either[EvalError, Vector[(Cell, String)]]](
+                Right(Vector.empty)
+              ) { (result, at) =>
+                result
+                  .flatMap(cells => readCell(at).map(value => cells :+ (Cell(at, value), at.toA1)))
+              }
+            }
       case ArgSpec.ValuesArg.Constant(expr) =>
         ctx.evalArrayExpr(expr).map(value => arrayCells(toCellArray(value)))
 
