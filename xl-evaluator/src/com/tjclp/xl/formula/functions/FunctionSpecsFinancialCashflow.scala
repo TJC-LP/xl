@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{DateText, EvalError, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -223,6 +223,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
       EvalError.ErrorValue(CellError.Num, Some(s"$function: $message"))
     def invalid(message: String): EvalError =
       EvalError.ErrorValue(CellError.Value, Some(s"$function: $message"))
+    val date1904 = ctx.workbook.exists(_.metadata.date1904)
 
     for
       values <- rangeValues(valuesLocation, ctx)
@@ -259,11 +260,23 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                       date <- dateCell.value match
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
-                        case _ =>
-                          TExpr
-                            .decodeAsDate(dateCell)
-                            .left
-                            .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                        case other =>
+                          // #956: date text, typed or a formula's text, is the date it spells, as
+                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md). Not in a
+                          // 1904 book: its serials mix two systems (the file's, and the 1900 ones
+                          // xl computes), so no reading of the text agrees with both, and the text
+                          // stays #VALUE! as before rather than a wrong rate
+                          val fromText =
+                            if date1904 then None
+                            else ScalarCoercion.cellText(other).flatMap(DateText.serial)
+                          fromText match
+                            case Some(serial) =>
+                              Right(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
+                            case None =>
+                              TExpr
+                                .decodeAsDate(dateCell)
+                                .left
+                                .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
                     yield (value, date) :: acc
                 }
             }

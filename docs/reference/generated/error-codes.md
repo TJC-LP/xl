@@ -90,3 +90,4 @@ the error code alone. Warnings are `Warning[<CODE>]: <message>` lines on stderr 
 | `SPILL_CELLS_SKIPPED` |
 | `FILLED_SPILLS_OVERLAP` |
 | `INTERSECTION_SAMPLED` |
+| `ADDIN_CACHE_KEPT` |

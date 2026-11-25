@@ -118,6 +118,13 @@ object WarningCode:
    */
   val INTERSECTION_SAMPLED: String = "INTERSECTION_SAMPLED"
 
+  /**
+   * #962: `recalc` kept formulas that call an add-in function (the `_xll.` namespace) at the values
+   * the file was saved with, as Excel does when the add-in is not loaded, and recalculated the
+   * cells that read them from those values. Names the cells. Informational: never gates.
+   */
+  val ADDIN_CACHE_KEPT: String = "ADDIN_CACHE_KEPT"
+
   val all: Vector[String] = Vector(
     READER_WARNING,
     TRUNCATED,
@@ -139,5 +146,6 @@ object WarningCode:
     DYNAMIC_ARRAY_DOWNGRADED,
     SPILL_CELLS_SKIPPED,
     FILLED_SPILLS_OVERLAP,
-    INTERSECTION_SAMPLED
+    INTERSECTION_SAMPLED,
+    ADDIN_CACHE_KEPT
   )

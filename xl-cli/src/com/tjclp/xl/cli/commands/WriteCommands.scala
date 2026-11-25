@@ -2044,7 +2044,10 @@ object WriteCommands:
             val convergence =
               if policy.strict then IO.unit
               else notConvergedWarning(result.unconverged).traverse_(warn)
-            convergence *> strictGate(policy, rendered, Some(result), warnings, warn)
+            // #962: informational on both paths — never a --strict reason
+            val addins =
+              addinCacheWarning(SheetEvaluator.addinCachedCells(workbook)).traverse_(warn)
+            addins *> convergence *> strictGate(policy, rendered, Some(result), warnings, warn)
               .adaptError { case strict: StrictFailure => new StrictFailure(strict.summary, facts) }
               .map(_ -> facts)
           }
@@ -2062,6 +2065,34 @@ object WriteCommands:
         .map((sheet, ref) => Location(None, Some(sheet.value), Some(ref.toA1), None))
       Warning(WarningCode.NOT_CONVERGED, message, location)
     }
+
+  /**
+   * #962: the `ADDIN_CACHE_KEPT` warning naming the add-in formulas a recalculation kept at their
+   * saved values (the first [[MaxAddinCellsNamed]], then a count of the rest), located at the
+   * first; `None` when there is none.
+   */
+  private[cli] def addinCacheWarning(
+    cells: Vector[DependencyGraph.QualifiedRef]
+  ): Option[Warning] =
+    cells.headOption.map { first =>
+      val count = cells.size
+      val named = cells.take(MaxAddinCellsNamed).mkString(", ")
+      val more =
+        if count > MaxAddinCellsNamed then s" and ${count - MaxAddinCellsNamed} more" else ""
+      Warning(
+        WarningCode.ADDIN_CACHE_KEPT,
+        s"$count formula${if count == 1 then "" else "s"} calling an add-in function (_xll.) " +
+          s"kept ${
+              if count == 1 then "its" else "their"
+            } saved value${if count == 1 then "" else "s"}" +
+          s" (xl cannot run add-ins; cells that read ${if count == 1 then "it" else "them"} " +
+          s"recalculated from ${if count == 1 then "that value" else "those values"}): $named$more",
+        Some(Location(None, Some(first.sheet.value), Some(first.ref.toA1), None))
+      )
+    }
+
+  /** #962: how many add-in cells the `ADDIN_CACHE_KEPT` warning names before counting the rest. */
+  private val MaxAddinCellsNamed = 10
 
   private def recalcFacts(result: RecalcResult): Vector[(String, ujson.Value)] =
     Vector(
