@@ -223,35 +223,45 @@ class DateTextCoercionSpec extends FunSuite:
     }
   }
 
-  // A 1904-system workbook stores its date cells as 1904 serials; XIRR/XNPV read every kind of
-  // dates cell there as its true date, so a range mixing date text, 1904 serials and in-memory
-  // DateTime cells keeps its true gaps. 2028-01-01 is 1904 serial 45291, 2028-12-31 is 45656.
-  test("#956: in a 1904 workbook, date text, serials and DateTime cells mix on one footing") {
-    def evalIn(first: CellValue, second: CellValue, formula: String): BigDecimal =
-      val sheet = Sheet("Flows")
-        .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
-        .put(ref"A2", CellValue.Number(BigDecimal(1100)))
-        .put(ref"B1", first)
-        .put(ref"B2", second)
-      val wb = Workbook(sheet).copy(metadata = WorkbookMetadata(date1904 = true))
-      sheet.evaluateFormula(formula, workbook = Some(wb)) match
-        case Right(CellValue.Number(n)) => n
-        case other => fail(s"$formula over ($first, $second): expected a number, got $other")
-    val jan1 = List(
-      CellValue.Number(BigDecimal(45291)),
-      CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay()),
-      CellValue.Formula("B9", Some(CellValue.Number(BigDecimal(45291)))),
-      CellValue.Text("1/1/2028")
-    )
-    val dec31 = List(
-      CellValue.Number(BigDecimal(45656)),
-      CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()),
-      CellValue.Formula("B9", Some(CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()))),
-      CellValue.Text("12/31/2028")
-    )
-    for first <- jan1; second <- dec31 do
-      assertEqualsDouble(evalIn(first, second, "=XIRR(A1:A2,B1:B2)").toDouble, 0.1, 1e-9)
-      assertEqualsDouble(evalIn(first, second, "=XNPV(0.1,A1:A2,B1:B2)").toDouble, 0.0, 1e-9)
+  // A 1904-system workbook mixes serials of two systems the cells cannot tell apart: the file's
+  // own (1904) and the ones xl computes (1900; docs/LIMITATIONS.md). Date text has no footing that
+  // agrees with both, so a 1904 book keeps refusing it and every other dates cell decodes as on
+  // main. 2028-01-01 is 1900 serial 46753; xl caches =B1+365 over it as 47118.
+  private def in1904(first: CellValue, second: CellValue, formula: String): Either[?, CellValue] =
+    val sheet = Sheet("Flows")
+      .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
+      .put(ref"A2", CellValue.Number(BigDecimal(1100)))
+      .put(ref"B1", first)
+      .put(ref"B2", second)
+    val wb = Workbook(sheet).copy(metadata = WorkbookMetadata(date1904 = true))
+    sheet.evaluateFormula(formula, workbook = Some(wb))
+
+  test("#956: in a 1904 workbook, date text in the dates range stays #VALUE!") {
+    val jan1 = CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay())
+    List(
+      CellValue.Text("12/31/2028"),
+      CellValue.Formula("IF(1=2,\"x\",\"12/31/2028\")", Some(CellValue.Text("12/31/2028")))
+    ).foreach { text =>
+      assertEquals(
+        in1904(jan1, text, "=XIRR(A1:A2,B1:B2)"),
+        Right(CellValue.Error(CellError.Value))
+      )
+      assertEquals(
+        in1904(jan1, text, "=XNPV(0.1,A1:A2,B1:B2)"),
+        Right(CellValue.Error(CellError.Value))
+      )
+    }
+  }
+
+  test("#956: in a 1904 workbook, a date xl computed keeps its true date (as on main)") {
+    val jan1 = CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay())
+    val computed = CellValue.Formula("B1+365", Some(CellValue.Number(BigDecimal(47118))))
+    in1904(jan1, computed, "=XIRR(A1:A2,B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, 0.1, 1e-9)
+      case other => fail(s"expected 0.1, got $other")
+    in1904(jan1, computed, "=XNPV(0.1,A1:A2,B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, 0.0, 1e-9)
+      case other => fail(s"expected 0, got $other")
   }
 
   test("#956: other text in the dates range is still #VALUE!") {

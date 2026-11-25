@@ -27,10 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuse date text (`=SUM("12/31/2028")` is `#VALUE!`).
 - **XIRR and XNPV read date text in the dates range** (#956): a dates cell holding the text
   `12/31/2028`, typed or returned by a formula such as `=IF(1=2,"x","12/31/2028")`, is that date,
-  as in Excel, in the forms `DATEVALUE` reads. In a 1904-date-system workbook every dates cell
-  reads as its true date (a serial in the 1904 system, date text and in-memory dates alike), so
-  a range mixing them keeps its true gaps; a range mixing date cells and serials there used to
-  be off by 1,462 days.
+  as in Excel, in the forms `DATEVALUE` reads. A 1904-date-system workbook keeps refusing it
+  (`#VALUE!`, as before), because its serials can come from either date system.
   Numeric text there (`'45000`) is still `#VALUE!`.
   **Behaviour change:** these were `#VALUE!`.
 

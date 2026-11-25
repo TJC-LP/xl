@@ -39,9 +39,6 @@ private[functions] def numError(detail: String, usage: String): EvalError =
   EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
-  /** The largest 1904-system serial (9999-12-31), the 1900 maximum less the systems' 1462 days. */
-  private val MaxDate1904Serial = ScalarCoercion.MaxExcelDateSerial - 1462
-
   private def rangeValues(
     location: TExpr.RangeLocation,
     ctx: EvalContext
@@ -134,31 +131,22 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
                         case other =>
-                          def refused = invalid(s"invalid date at ${dateCell.ref.toA1}")
                           // #956: date text, typed or a formula's text, is the date it spells, as
-                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md). Every dates
-                          // cell decodes to its true calendar date, so in a 1904 book a serial is
-                          // read in that system: a range mixing text, serials and DateTime cells
-                          // keeps its true gaps
-                          def serial1904(n: BigDecimal): Either[EvalError, LocalDate] =
-                            if n < 0 || n > MaxDate1904Serial then Left(refused)
-                            else
-                              Right(
-                                CellValue
-                                  .excelSerialToDateTime(n.toDouble, date1904 = true)
-                                  .toLocalDate
-                              )
-                          ScalarCoercion.cellText(other).flatMap(DateText.serial) match
+                          // in Excel; numeric text stays refused (docs/LIMITATIONS.md). Not in a
+                          // 1904 book: its serials mix two systems (the file's, and the 1900 ones
+                          // xl computes), so no reading of the text agrees with both, and the text
+                          // stays #VALUE! as before rather than a wrong rate
+                          val fromText =
+                            if date1904 then None
+                            else ScalarCoercion.cellText(other).flatMap(DateText.serial)
+                          fromText match
                             case Some(serial) =>
                               Right(CellValue.excelSerialToDateTime(serial.toDouble).toLocalDate)
                             case None =>
-                              other match
-                                case CellValue.Number(n) if date1904 => serial1904(n)
-                                case CellValue.Formula(_, Some(CellValue.Number(n)), _)
-                                    if date1904 =>
-                                  serial1904(n)
-                                case _ =>
-                                  TExpr.decodeAsDate(dateCell).left.map(_ => refused)
+                              TExpr
+                                .decodeAsDate(dateCell)
+                                .left
+                                .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
                     yield (value, date) :: acc
                 }
             }
