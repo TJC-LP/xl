@@ -77,7 +77,7 @@ object ArrayArithmetic:
    *   - DateTime -> Excel serial number (GH-449: dates are numbers in arithmetic, the
    *     [[normalizeForCompare]] convention extended to the broadcast operand path so `=A1:A3-B1`
    *     over date cells agrees with the scalar `=A1-B1`)
-   *   - Text containing number -> parsed value
+   *   - Text containing a number or a date -> its value (a date's serial, #953)
    *   - Other -> error
    */
   def cellValueToNumeric(cv: CellValue): Either[EvalError, BigDecimal] = cv match
@@ -87,7 +87,7 @@ object ArrayArithmetic:
     case CellValue.DateTime(dt) => Right(BigDecimal(CellValue.dateTimeToExcelSerial(dt)))
     case CellValue.Formula(_, Some(cached), _) => cellValueToNumeric(cached)
     case CellValue.Text(s) =>
-      ScalarCoercion.parseNumericText(s) match
+      ScalarCoercion.parseValueText(s) match
         case Some(n) => Right(n)
         case None => Left(EvalError.TypeMismatch("arithmetic", "number", s"text: $s"))
     case other =>

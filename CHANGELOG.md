@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#869): OOXML's `customWidth` flag (true when a width was set on purpose; `withWidth` sets a
   width and marks it so) and `<sheetFormatPr baseColWidth>`. Both have defaults, so existing code
   compiles unchanged; code that sets a width with `copy(width = …)` should use `withWidth`.
+- **`DATEVALUE`** (#953): `=DATEVALUE("12/31/2028")` is 47118, the date's serial, as in Excel.
+  It reads Excel's US date forms: `m/d/yyyy`, `m-d-yyyy`, `m/d/yy`, `yyyy-m-d`, `yyyy/m/d`,
+  `d-mmm-yyyy`, `d mmm yyyy`, `d-mmm-yy`, `mmm d, yyyy` and `mmm yyyy`, with three-letter or full
+  month names. It takes text only: a number, a date cell, a logical, text that is no date, or a
+  date outside 1900–9999 is `#VALUE!`. A time part and dates without a year are not read yet
+  (`docs/LIMITATIONS.md`).
 
 ### Fixed
 
@@ -36,6 +42,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   written from the model alone. Both now round-trip. **Behaviour change:** written worksheets
   carry `baseColWidth` when the source had it, and `customWidth` only when the source or the edit
   set it.
+- **Date text is its serial wherever a single value converts text to a number** (#953):
+  `=VALUE("12/31/2028")`, `="12/31/2028"+0` and `=A1+0` over the text `12/31/2028` are 47118,
+  and a numeric, integer or date argument reads date text the same way (`=YEAR("31-Dec-2028")`
+  is 2028), in the forms `DATEVALUE` reads. TEXT formats it as that date too
+  (`=TEXT("12/31/2028","yyyy")` is `2028`, not the text unchanged). One parser, `DateText`, serves all of them.
+  **Behaviour change:** these were `#VALUE!`. Range folds and aggregate arguments still skip or
+  refuse date text (`=SUM("12/31/2028")` is `#VALUE!`; the XIRR/XNPV dates range is unchanged).
+
 - **IRR and XIRR find the rate when Newton from the guess fails** (#954): the solver was plain
   Newton–Raphson, so a step that overshot past -100% or ran away from a large guess ended in
   `#NUM!` where Excel returns a rate. Newton still runs first, so every rate it already found is

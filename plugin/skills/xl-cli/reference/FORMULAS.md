@@ -38,6 +38,7 @@ it are hand-written semantics worth knowing.
 | `COUNTIFS` | 2+ | range, value... | — |
 | `DATE` | 3 | integer, integer, integer | date |
 | `DATEDIF` | 3 | date, date, text | — |
+| `DATEVALUE` | 1 | text | — |
 | `DAY` | 1 | date | — |
 | `EDATE` | 2 | date, integer | date |
 | `EOMONTH` | 2 | date, integer | date |
