@@ -32,6 +32,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Numeric text there (`'45000`) is still `#VALUE!`.
   **Behaviour change:** these were `#VALUE!`.
 
+- **IRR and XIRR find the rate when Newton from the guess fails** (#954): the solver was plain
+  Newton–Raphson, so a step that overshot past -100% or ran away from a large guess ended in
+  `#NUM!` where Excel returns a rate. Newton still runs first, so every rate it already found is
+  unchanged; when it fails, a bracketing search finds the sign change of the NPV nearest the
+  guess (rates above -100%) and safeguarded Newton refines it to the same tolerance. Flows whose
+  NPV never crosses zero stay `#NUM!`.
+  **Behaviour change:** `IRR` of -100, 50 is -0.5 (was `#NUM!`); of -100, 0.5 is -0.995; of
+  -100, 100 with guess 1 is 0; `XIRR` of -1000, 300, 900 on serials 43831, 43890, 44377 with
+  guess 2 is 0.174329; `XIRR` of -100, 317 on serials 45231, 47118 with guess 1 is about
+  0.25003.
+
 ## [0.28.0] - 2026-11-24
 
 **"Excel's own rules."** Fixes for everything a Weaver dogfood of 0.27.0 found (#930–#938). Merge
