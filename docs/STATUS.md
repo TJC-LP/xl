@@ -133,7 +133,7 @@
 - ✅ **Two-variable Data Table authoring** (#419) — `sheet.dataTable(range, rowInput, colInput)` authors native `<f t="dataTable">` records with autoNoTable-safe cache seeding (design-panel-verified against Excel fixtures); the house sensitivity engine is authorable
 - ✅ **AutoFilter + outline grouping CLI** (#432, #421) — `xl autofilter <range>`/`--clear`, `group-rows`/`group-cols`/`ungroup-*` + 5 batch twins (32 ops); authored filters shift under structural edits
 - ✅ **Underline enum** (#423, breaking w/ deprecated bridge) — singleAccounting/doubleAccounting round-trip typed; **configurable Normal font** (#425) — `WorkbookMetadata.defaultFont` on both backends
-- ✅ **CELL()** (#424) — filename/address/row/col arms, volatile (109 functions); **name→name chains in range slots** (#411)
+- ✅ **CELL()** (#424, #959) — filename/address/row/col/width/contents/type arms, volatile (109 functions); **name→name chains in range slots** (#411)
 - ✅ **Pie per-slice colors** (#418) — `--series-colors` → typed `Series.pointFills` → `<c:dPt>` fills
 
 **New in 0.17.0** (2026-07-29):

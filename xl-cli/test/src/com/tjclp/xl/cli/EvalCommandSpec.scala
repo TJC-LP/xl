@@ -1398,3 +1398,24 @@ class EvalCommandSpec extends CatsEffectSuite:
         assert(plain.contains("Result: 13 (number)"), plain)
         assert(table.contains("Result: 13 (number)"), table)
     }
+
+  // --- #959: CELL("filename") names the file the CLI read, as Excel's full path ---------------
+
+  test("#959 CLI: CELL(\"filename\") is the input's full dir/[file]sheet, for a relative -f too") {
+    val sheet = Sheet("Summary").put(ref"A1", CellValue.Number(1))
+    for
+      // a file in the working directory, named relative to it the way a user types -f
+      cwd <- IO.blocking(Path.of("").toAbsolutePath)
+      path <- IO.blocking(Files.createTempFile(cwd, "xl-959-", ".xlsx"))
+      _ <- IO.blocking(path.toFile.deleteOnExit())
+      _ <- ExcelIO.instance[IO].write(Workbook(sheet), path)
+      name = path.getFileName.toString
+      relative <- CliHarness.run("-f", name, "eval", "=CELL(\"filename\",A1)")
+      absolute <- CliHarness.run("-f", path.toString, "eval", "=CELL(\"filename\")")
+      _ <- IO.blocking(Files.deleteIfExists(path))
+    yield
+      val expected = s"Result: \"$cwd${java.io.File.separator}[$name]Summary\" (text)"
+      assertEquals(relative.exit, 0, relative.stderr)
+      assert(relative.stdout.contains(expected), relative.stdout)
+      assert(absolute.stdout.contains(expected), absolute.stdout)
+  }

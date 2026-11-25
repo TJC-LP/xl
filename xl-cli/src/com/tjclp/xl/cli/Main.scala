@@ -2439,9 +2439,13 @@ EXAMPLES:
   /**
    * Read the input through `excel` under [[classifyRead]]. Every in-memory load of the CLI goes
    * through here with a [[MemoryGuard.excel]] instance, so one seam owns the heap (GH-636).
+   *
+   * #959: the workbook records the input's absolute path as its source, so `CELL("filename")`
+   * reports the full `dir/[file]sheet` Excel shows for a relative `-f`. Writes are staged beside
+   * their destination, so the source is never the write target whatever its spelling.
    */
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
-    classifyRead(path)(excel.readWith(path, config))
+    classifyRead(path)(IO(path.toAbsolutePath).flatMap(excel.readWith(_, config)))
 
   /**
    * Classify a failure while producing the output at `target` — allocating its staging file,
