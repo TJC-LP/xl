@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.EvalError
+import com.tjclp.xl.formula.eval.{DateText, EvalError}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -137,6 +137,27 @@ trait FunctionSpecsDateTime extends FunctionSpecsBase:
         case Some(date) if !date.isBefore(LocalDate.of(1900, 1, 1)) && date.getYear <= 9999 =>
           Right(date)
         case _ => numError
+
+  /**
+   * #953: DATEVALUE(date_text) is the serial of the date the text spells, in Excel's US forms
+   * ([[DateText]]): `=DATEVALUE("12/31/2028")` is 47118. It takes text only: a number, a date cell
+   * or a logical reaches it as text (`"47118"`, `"TRUE"`) that spells no date, so `#VALUE!`, as in
+   * Excel.
+   */
+  val datevalue: FunctionSpec[BigDecimal] { type Args = UnaryText } =
+    FunctionSpec.simple[BigDecimal, UnaryText](
+      "DATEVALUE",
+      Arity.one,
+      flags = FunctionFlags(returnsNumeric = true, lift = ArrayLift.all)
+    ) { (textExpr, ctx) =>
+      ctx.evalExpr(textExpr).flatMap { text =>
+        DateText
+          .serial(text)
+          .toRight(
+            EvalError.ErrorValue(CellError.Value, Some(s"DATEVALUE: '$text' is not a date"))
+          )
+      }
+    }
 
   val year: FunctionSpec[BigDecimal] { type Args = UnaryDate } =
     FunctionSpec.simple[BigDecimal, UnaryDate](

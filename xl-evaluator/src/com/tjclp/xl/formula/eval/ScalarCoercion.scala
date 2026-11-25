@@ -20,9 +20,10 @@ import scala.math.BigDecimal
  *   - number → text renders via numberText (Excel's General text conversion, GH-665 — the
  *     decodeAsString/concatText convention)
  *   - number → boolean is zero/non-zero (Excel: 0 = FALSE, anything else = TRUE)
- *   - numeric text → number/integer/date parses ("3" coerces); any other text is Excel's #VALUE!
- *     (#709), in a logical slot every text but TRUE/FALSE — an error value the cell caches and
- *     IFERROR sees, never a host failure
+ *   - numeric text → number/integer/date parses ("3" coerces), and date text is its serial (#953:
+ *     "12/31/2028" coerces to 47118, [[DateText]]); any other text is Excel's #VALUE! (#709), in a
+ *     logical slot every text but TRUE/FALSE — an error value the cell caches and IFERROR sees,
+ *     never a host failure
  *   - fractional → integer TRUNCATES toward zero (Excel truncates months/days/num_chars)
  *   - boolean → number is TRUE=1/FALSE=0; dates ARE numbers (Excel serial)
  *   - Empty → ""/0/FALSE per target (the decodeResolvedValue zero convention)
@@ -217,7 +218,7 @@ private[formula] object ScalarCoercion:
     case i: Int => Right(i)
     case b: Boolean => Right(if b then 1 else 0)
     case s: String =>
-      parseNumericText(s) match
+      parseValueText(s) match
         case Some(bd) => truncateToInt(label, bd)
         case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(0)
@@ -249,7 +250,7 @@ private[formula] object ScalarCoercion:
     case ldt: java.time.LocalDateTime =>
       Right(BigDecimal(CellValue.dateTimeToExcelSerial(ldt)))
     case s: String =>
-      parseNumericText(s) match
+      parseValueText(s) match
         case Some(bd) => Right(bd)
         case None => textRefused(label, "a number", s)
     case CellValue.Empty => Right(BigDecimal(0))
@@ -269,11 +270,10 @@ private[formula] object ScalarCoercion:
     // value, as through a reference (#726): #NUM! via [[dateSerialOutOfRange]]
     case bd: BigDecimal => Left(dateSerialOutOfRange(label, bd.toString))
     case i: Int => Left(dateSerialOutOfRange(label, i.toString))
-    // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023); other text is
-    // #VALUE! (#709) — date-shaped text included, which Excel and LibreOffice read as a date here
-    // (not modeled, see docs/LIMITATIONS.md)
+    // numeric text is its serial, as in a numeric slot (=YEAR("45000") is 2023), and so is date
+    // text (#953: =YEAR("12/31/2028") is 2028); other text is #VALUE! (#709)
     case s: String =>
-      parseNumericText(s) match
+      parseValueText(s) match
         case Some(bd) => coerceDate(label, bd)
         case None => textRefused(label, "a date serial", s)
     // GH-396: a blank in a date position renders like Excel's serial-0 year/month (see
@@ -329,6 +329,15 @@ private[formula] object ScalarCoercion:
               n.abs >= MinNumericText && n.abs <= MaxNumericText
             }
           }
+
+  /**
+   * #953: the number a single value's text stands for, wherever Excel converts text to a number
+   * (arithmetic, numeric, integer and date arguments): numeric text ([[parseNumericText]]) or date
+   * text, as its serial ([[DateText.serial]]). Range folds and aggregate arguments keep
+   * [[parseNumericText]].
+   */
+  private[formula] def parseValueText(s: String): Option[BigDecimal] =
+    parseNumericText(s).orElse(DateText.serial(s))
 
   /**
    * #709: the text a cell holds — plain, rich (its plain text), or a formula's cached text — if it
