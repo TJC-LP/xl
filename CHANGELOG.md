@@ -18,6 +18,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`IRR`, `NPV`, `XIRR` and `XNPV` take array constants** (#964): `=IRR({-100,50})` is -0.5 and
+  `=NPV(0.1,{50,60})` about 95.04, as in Excel; XIRR and XNPV take one for the values, the dates
+  or both (`=XIRR({-100,60,60},{45292,45474,45658})`). An array constant reads like the same
+  flows in cells, either orientation: text and logical elements are skipped, an error element is
+  skipped by NPV and returned by IRR, a missing sign change or a count mismatch is `#NUM!`. Other array-valued expressions in these slots
+  (`=IRR(A1:A3*1)`) are still a parse error (#940). **Behaviour change:** these formulas were a
+  `FORMULA_ERROR` ("expected range") and now compute; a LET name bound to an array value
+  (`=LET(x,{-100,50},IRR(x))`) reads like that array (it was `#VALUE!`). **API:** the
+  `FunctionSpecs.NpvArgs`, `IrrArgs`, `XnpvArgs` and `XirrArgs` slots for cash flows and dates
+  are now `ArgSpec.ValuesArg` (`Range(location)` or `Constant(expr)`), not `TExpr.RangeLocation`;
+  the `TExpr.npv`/`irr`/`xnpv`/`xirr` builders keep their signatures.
 - **A cached add-in formula keeps its saved value and its dependents recalculate** (#962): a
   formula calling a worksheet function from an add-in, stored as `=_xll.SomeAddin.FETCH("x",1)`,
   does not parse in xl, so `recalc` left it uncached and every formula reading it failed too.

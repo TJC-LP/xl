@@ -4,6 +4,7 @@ import com.tjclp.xl.CellRange
 import com.tjclp.xl.addressing.ARef
 import com.tjclp.xl.cells.{CellError, CellValue}
 import com.tjclp.xl.formula.eval.Evaluator
+import com.tjclp.xl.formula.functions.ArgSpec
 import com.tjclp.xl.macros.ref
 import com.tjclp.xl.sheets.Sheet
 import munit.ScalaCheckSuite
@@ -1921,7 +1922,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xnpv =>
-        val (_, values, dates) = call.args.asInstanceOf[FunctionSpecs.XnpvArgs]
+        val (_, ArgSpec.ValuesArg.Range(values), ArgSpec.ValuesArg.Range(dates)) =
+          call.args.asInstanceOf[FunctionSpecs.XnpvArgs]: @unchecked
         // GH-394: cashflow/date args are RangeLocations now; literal ranges parse as Local
         assert(values.staticRange.map(_.start).contains(ref"A1"))
         assert(values.staticRange.map(_.end).contains(ref"A5"))
@@ -1935,7 +1937,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
-        val (values, dates, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
+        val (ArgSpec.ValuesArg.Range(values), ArgSpec.ValuesArg.Range(dates), guess) =
+          call.args.asInstanceOf[FunctionSpecs.XirrArgs]: @unchecked
         // GH-394: cashflow/date args are RangeLocations now; literal ranges parse as Local
         assert(values.staticRange.map(_.start).contains(ref"A1"))
         assert(values.staticRange.map(_.end).contains(ref"A5"))
@@ -1950,7 +1953,8 @@ class FormulaParserSpec extends ScalaCheckSuite:
     assert(result.isRight)
     result match
       case Right(call: TExpr.Call[?]) if call.spec == FunctionSpecs.xirr =>
-        val (values, _, guess) = call.args.asInstanceOf[FunctionSpecs.XirrArgs]
+        val (ArgSpec.ValuesArg.Range(values), _, guess) =
+          call.args.asInstanceOf[FunctionSpecs.XirrArgs]: @unchecked
         assert(values.staticRange.map(_.start).contains(ref"A1"))
         assert(values.staticRange.map(_.end).contains(ref"A5"))
         assert(guess.isDefined)
