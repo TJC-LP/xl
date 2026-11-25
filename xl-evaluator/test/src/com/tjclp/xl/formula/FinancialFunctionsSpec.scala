@@ -392,6 +392,20 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     assertApprox(evalNumeric("=IRR(A1:A367)", otherTail), -0.5, 1e-9)
   }
 
+  test("#954: a crossing several steps below the guess is bracketed below the guess") {
+    // NPV = x^1100 · (2.5 - 5.5x + x^2), x = 1/(1+rate): rates -0.8 (x = 5) and 1.0 (x = 0.5).
+    // Above the guess the Double NPV underflows to 0.0, so the scan finds only the crossing well
+    // below the guess; its bracket must end at the last sample below the guess, not at the
+    // mirrored point above it (where both ends would be positive and refine would give up).
+    // Which of the two rates Excel returns here is not verified; this pins that a rate is found.
+    val s = column(Seq.fill(1100)("0") ++ Seq("2.5", "-5.5", "1")*)
+    val rate = evalNumeric("=IRR(A1:A1103)", s)
+    assert(
+      math.abs(rate - -0.8) < 1e-9 || math.abs(rate - 1.0) < 1e-9,
+      s"expected one of the rates -0.8 or 1.0, got $rate"
+    )
+  }
+
   test("#954: flows whose NPV never crosses zero stay #NUM!") {
     // -100 + 300x - 250x^2 (x = 1/(1+r)) has no real root: no rate exists, Newton and the
     // bracket search both fail, and the error stays a contained #NUM!

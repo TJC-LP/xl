@@ -102,7 +102,8 @@ private[functions] object RateSolver:
             val fUp = f(rateAt(k))
             val fDown = f(rateAt(-k))
             val up = changes(above, fUp).map(j => (rateAt(j), rateAt(k)))
-            val down = changes(below, fDown).map(j => (rateAt(-k), rateAt(-j)))
+            // `below` stores its grid index as -k (j ≤ 0), so its sample is rateAt(j)
+            val down = changes(below, fDown).map(j => (rateAt(-k), rateAt(j)))
             Some((up.toList ++ down.toList, (k + 1, keep(above, k, fUp), keep(below, -k, fDown))))
         }
         .flatten
