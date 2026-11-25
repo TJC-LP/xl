@@ -530,6 +530,14 @@ class ReferenceFunctionsSpec extends FunSuite:
     )
   }
 
+  test("#959 CELL: filename drops the . and .. segments of the path the file was opened by") {
+    val book = bookReadFrom("/models/./deals/../lbo.xlsx", emptySheet)
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"filename\",A1)", workbook = Some(book)),
+      Right(CellValue.Text("/models/[lbo.xlsx]Test"))
+    )
+  }
+
   test("#959 CELL: filename of a workbook never read from a file is still empty") {
     assertEquals(
       emptySheet.evaluateFormula("=CELL(\"filename\",A1)", workbook = Some(Workbook(emptySheet))),

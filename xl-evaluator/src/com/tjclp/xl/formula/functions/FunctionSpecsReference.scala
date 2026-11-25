@@ -311,10 +311,14 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
             case None => refStr
     }
 
-  /** #959: the file a workbook was read from, when it was read from a file. */
+  /**
+   * #959: the file a workbook was read from, when it was read from a file, without the `.` and `..`
+   * segments of the path it was opened by (`./book.xlsx`), as Excel shows it. Lexical only: the
+   * recorded path keeps its spelling for IO.
+   */
   private def sourcePath(ctx: EvalContext): Option[String] =
     ctx.workbook.flatMap(_.sourceContext).map(_.content).collect {
-      case SourceContent.OnDisk(path) => path.toString
+      case SourceContent.OnDisk(path) => path.normalize.toString
     }
 
   /**

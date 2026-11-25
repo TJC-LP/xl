@@ -1421,23 +1421,28 @@ class EvalCommandSpec extends CatsEffectSuite:
   }
 
   test("#959 CLI: an unreadable input is still named as typed, not by its absolute path") {
-    for
-      cwd <- IO.blocking(Path.of("").toAbsolutePath)
+    val cwd = Path.of("").toAbsolutePath
+    val locked = for
       path <- IO.blocking(Files.createTempFile(cwd, "xl-959-locked-", ".xlsx"))
       _ <- ExcelIO.instance[IO].write(Workbook(Sheet("Summary")), path)
-      _ <- IO.blocking(path.toFile.deleteOnExit())
       // unreadable: the IO error's own message names the path it was given
       _ <- IO.blocking(path.toFile.setReadable(false, false))
-      readable <- IO.blocking(Files.isReadable(path))
-      _ = assume(!readable, "this user can read a file without read permission (root?)")
-      name = path.getFileName.toString
-      run <- CliHarness.run("-f", name, "view", "A1")
-      _ <- IO.blocking(Files.deleteIfExists(path))
-    yield
-      assertEquals(run.exit, 3, run.stderr)
-      // the message is main's: the file as typed, then the resolution suffix with the full path
-      val firstLine = run.stderr.linesIterator.next()
-      assert(firstLine.startsWith("Error: "), run.stderr)
-      val message = firstLine.takeWhile(_ != '(')
-      assert(!message.contains(cwd.toString), s"the absolute path leaked into: $message")
+    yield path
+    locked
+      .bracket { path =>
+        for
+          readable <- IO.blocking(Files.isReadable(path))
+          // a user who reads a file without read permission (root) cannot run this check
+          _ <- IO(assume(!readable, "this user reads files without read permission (root?)"))
+          run <- CliHarness.run("-f", path.getFileName.toString, "view", "A1")
+        yield run
+      }(path => IO.blocking(Files.deleteIfExists(path)).void)
+      .map { run =>
+        assertEquals(run.exit, 3, run.stderr)
+        // the message is main's: the file as typed, then the resolution suffix with the full path
+        val firstLine = run.stderr.linesIterator.next()
+        assert(firstLine.startsWith("Error: "), run.stderr)
+        val message = firstLine.takeWhile(_ != '(')
+        assert(!message.contains(cwd.toString), s"the absolute path leaked into: $message")
+      }
   }
