@@ -1179,6 +1179,15 @@ Write value(s) to a cell or range.
 Use `--no-detect` to preserve all positional values as text, including numbers and ISO date-like
 strings.
 
+**Column width** (#869): like typing into Excel, a number or date written with a non-General
+format (`$1,234,567.89`, `45.5%`, `2024-01-15`) that is wider than its column widens that column to
+fit, so the saved book does not open showing `#####`. A width set on purpose (`col --width`,
+`autofit`, batch `colwidth`) and a hidden column are left alone, as are text (which spills into the
+next cell instead) and General numbers, and a column is never narrowed. A width an earlier `put`
+wrote is not set on purpose, so a wider value in a later command widens it again. `putf` and
+`batch` `put`/`putf` do the same, measuring a formula by the value it computes. `--stream` writes
+do not widen; run `autofit` on the result.
+
 **Negative numbers**: use the `--value` flag (a leading `-` is parsed as a flag), or put the value
 after `--`, which makes every following token data:
 ```bash

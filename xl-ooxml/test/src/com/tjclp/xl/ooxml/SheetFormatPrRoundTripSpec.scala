@@ -211,6 +211,65 @@ class SheetFormatPrRoundTripSpec extends FunSuite:
    * `<sheetData>` (the SheetViewRoundTripSpec pattern) — for feeding foreign `<sheetFormatPr>`
    * shapes the XL writer never produces.
    */
+  // ===== #869 review: baseColWidth and customWidth are modeled =====
+
+  test("#869: baseColWidth is read into Sheet.baseColumnWidth and rides an edit unchanged") {
+    val src = rawWorksheetFixture("""<sheetFormatPr baseColWidth="10" defaultRowHeight="16"/>""")
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet0 = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet0.baseColumnWidth, Some(10))
+    assertEquals(sheet0.defaultColumnWidth, None)
+
+    val out = Files.createTempFile("sheetformatpr-base", ".xlsx")
+    XlsxWriter
+      .write(wb.put(sheet0.put(ref"B1" -> 2)), out)
+      .fold(e => fail(s"write failed: $e"), identity)
+    val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+    assert(xml.contains("baseColWidth=\"10\""), s"baseColWidth lost on rewrite: $xml")
+    Files.deleteIfExists(src)
+    Files.deleteIfExists(out)
+  }
+
+  test("#869: a model-set baseColumnWidth is written on both backends") {
+    for config <- List(WriterConfig(), WriterConfig.saxStax) do
+      val wb = Workbook(Sheet("Sheet1").put(ref"A1" -> 1).copy(baseColumnWidth = Some(10)))
+      val (reread, out) = writeRead(wb, config)
+      val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+      assert(xml.contains("baseColWidth=\"10\""), s"baseColWidth missing ($config): $xml")
+      val sheet = reread("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+      assertEquals(sheet.baseColumnWidth, Some(10))
+      Files.deleteIfExists(out)
+  }
+
+  test("#869: a width without customWidth reads as not custom and is written back without it") {
+    val src = rawWorksheetFixture(
+      """<cols><col min="2" max="2" width="15.29"/><col min="3" max="3" width="7" customWidth="1"/></cols>"""
+    )
+    val wb = XlsxReader.read(src).fold(e => fail(s"read failed: $e"), identity)
+    val sheet0 = wb("Sheet1").fold(e => fail(s"sheet missing: $e"), identity)
+    assertEquals(sheet0.getColumnProperties(Column.from0(1)).customWidth, false)
+    assertEquals(sheet0.getColumnProperties(Column.from0(2)).customWidth, true)
+
+    for config <- List(WriterConfig(), WriterConfig.saxStax) do
+      val out = Files.createTempFile("cols-custom", ".xlsx")
+      XlsxWriter
+        .writeWith(wb.put(sheet0.put(ref"A1" -> 2)), out, config)
+        .fold(e => fail(s"write failed: $e"), identity)
+      val xml = zipEntryString(out, "xl/worksheets/sheet1.xml")
+      def col(n: Int): String =
+        s"""<col [^>]*min="$n"[^>]*>""".r.findFirstIn(xml).getOrElse(fail(s"no col $n: $xml"))
+      assert(col(2).contains("width=\"15.29\""), s"entry width lost ($config): $xml")
+      assert(!col(2).contains("customWidth"), s"entry width must stay not custom ($config): $xml")
+      assert(col(3).contains("customWidth=\"1\""), s"set width keeps customWidth ($config): $xml")
+      Files.deleteIfExists(out)
+    Files.deleteIfExists(src)
+  }
+
+  test("#869: ColumnProperties.withWidth marks a width custom") {
+    val entry = ColumnProperties(width = Some(15.29), customWidth = false)
+    assertEquals(entry.withWidth(7.0), ColumnProperties(width = Some(7.0), customWidth = true))
+  }
+
   private def rawWorksheetFixture(preSheetDataXml: String): Path =
     val path = Files.createTempFile("sheetformatpr-fixture", ".xlsx")
     val out = new ZipOutputStream(Files.newOutputStream(path))

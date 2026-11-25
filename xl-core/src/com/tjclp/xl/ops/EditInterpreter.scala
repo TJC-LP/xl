@@ -305,7 +305,7 @@ private[xl] object EditInterpreter:
         case Edit.Unmerge(at) => pure(at.sheet, Vector.empty)(_.unmerge(at.range))
 
         case Edit.ColWidth(sheet, cols, width) =>
-          pure(sheet, Vector.empty)(columns(_, cols)(_.copy(width = Some(width))))
+          pure(sheet, Vector.empty)(columns(_, cols)(_.withWidth(width)))
         case Edit.RowHeight(sheet, rows, height) =>
           pure(sheet, Vector.empty)(rowsOf(_, rows)(_.copy(height = Some(height))))
         case Edit.HideCols(sheet, cols) =>
@@ -669,7 +669,7 @@ private[xl] object EditInterpreter:
       Some(Patch.Merge(at.range))
     case Edit.Unmerge(at) => Some(Patch.Unmerge(at.range))
     case Edit.ColWidth(_, cols, width) if width >= 0 && width <= SheetEdits.MaxColumnWidth =>
-      Some(columnPatch(existing, cols)(_.copy(width = Some(width))))
+      Some(columnPatch(existing, cols)(_.withWidth(width)))
     case Edit.RowHeight(_, rows, height) if height >= 0 && height <= SheetEdits.MaxRowHeight =>
       Some(rowPatch(existing, rows)(_.copy(height = Some(height))))
     case Edit.HideCols(_, cols) => Some(columnPatch(existing, cols)(_.copy(hidden = true)))
@@ -720,7 +720,7 @@ private[xl] object EditInterpreter:
             .autoFitWidths(existing, targets)
             .map((c, width) =>
               Patch
-                .SetColumnProperties(c, existing.getColumnProperties(c).copy(width = Some(width)))
+                .SetColumnProperties(c, existing.getColumnProperties(c).withWidth(width))
             )
         )
       )

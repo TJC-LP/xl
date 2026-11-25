@@ -1087,7 +1087,7 @@ object StreamingWriteCommands:
             val col = Column.fromLetter(colStr) match
               case Right(c) => c
               case Left(e) => throw new Exception(s"Invalid column '$colStr': $e")
-            columns(col) = columns.getOrElse(col, ColumnProperties()).copy(width = Some(width))
+            columns(col) = columns.getOrElse(col, ColumnProperties()).withWidth(width)
             summaryLines += s"  COLWIDTH $colStr = $width"
 
           case BatchParser.BatchOp.RowHeight(rowNum, height) =>
@@ -1351,7 +1351,9 @@ object StreamingWriteCommands:
         hidden = isXmlTrue(attributes.getValue("hidden")),
         styleId = styleId,
         outlineLevel = outlineLevel,
-        collapsed = isXmlTrue(attributes.getValue("collapsed"))
+        collapsed = isXmlTrue(attributes.getValue("collapsed")),
+        // #869 review: a width without customWidth was not set manually (an entry widening)
+        customWidth = width.isEmpty || isXmlTrue(attributes.getValue("customWidth"))
       )
       (minCol, maxCol, props)
 

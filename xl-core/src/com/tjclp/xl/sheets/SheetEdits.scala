@@ -806,6 +806,141 @@ private[xl] object SheetEdits:
         px => (px + CellPaddingPx) / MaxDigitWidthPx
       )
 
+  /**
+   * GH-869: what Excel does to a column when a formatted number is typed into it. A number or date
+   * whose formatted text is wider than its column shows `#####` (text spills into the next cell
+   * instead), so Excel widens the column to fit the entry — but only a column whose width was never
+   * set on purpose: an explicit width, including one from `autofit`, is the user's and is kept
+   * (`ColumnProperties.customWidth`), as is a hidden column. A width an earlier entry wrote is not
+   * custom, so a wider later entry widens it again. Excel never narrows a column on entry.
+   *
+   * Only cells in `refs` count, and only those that display a number under a non-General format
+   * (currency, percent, dates, …): a General number is shortened to fit rather than shown as
+   * `#####`, and xl's General text is not Excel's, so it is left alone. A formula counts by its
+   * cached value; an uncached one has nothing to measure. A cell inside a merge is skipped (its
+   * width is the merge's, not the column's).
+   *
+   * Returns the sheet with each such column's width set to what its widest entry needs (measured
+   * like [[autoFitWidth]]), and the columns widened with their new widths, in column order.
+   */
+  private[xl] def widenForEntries(
+    sheet: Sheet,
+    refs: Iterable[ARef]
+  ): (Sheet, Vector[(Column, Double)]) =
+    val unsized = unsizedColumnWidth(sheet)
+    val widened = refs.iterator
+      .filter(ref => !sheet.mergedRanges.exists(_.contains(ref)))
+      .flatMap(sheet.cells.get)
+      .filter(displaysFormattedNumber(_, sheet))
+      .toVector
+      .groupBy(_.ref.col)
+      .iterator
+      .flatMap((col, cells) =>
+        entryBaseline(sheet, col, unsized).map(current => (col, cells, current))
+      )
+      .map((col, cells, current) =>
+        (col, cells, current, cells.map(entryFit(_, sheet)).maxOption.getOrElse(0.0))
+      )
+      .collect {
+        // the written width is autofit's, never below the scaled need, so it never narrows
+        case (col, cells, current, need) if need > current =>
+          col -> math.max(fitWidth(sheet, cells), roundUp(need))
+      }
+      .toVector
+      .sortBy(_._1.index0)
+    val updated = widened.foldLeft(sheet) { case (s, (col, width)) =>
+      s.setColumnProperties(
+        col,
+        s.getColumnProperties(col).copy(width = Some(width), customWidth = false)
+      )
+    }
+    (updated, widened)
+
+  /**
+   * The width an entry in `col` must exceed before the column is widened, or None when entry never
+   * widens it: a hidden column, or one whose width was set on purpose (`customWidth`). A width an
+   * earlier entry wrote is the baseline itself, so a wider later entry widens it again (#869
+   * review); a column with no width has the sheet's unsized width.
+   */
+  private def entryBaseline(sheet: Sheet, col: Column, unsized: Double): Option[Double] =
+    sheet.columnProperties.get(col) match
+      case Some(p) if p.hidden => None
+      case Some(p) =>
+        p.width match
+          case Some(_) if p.customWidth => None
+          case Some(w) => Some(w)
+          case None => Some(unsized)
+      case None => Some(unsized)
+
+  /**
+   * GH-869: the width of a column with no `<col>` entry and no sheet default, in the units
+   * [[autoFitWidth]] returns (the file's `width`, padding included). Excel draws such a column 64
+   * px wide — the "8.43" its UI shows is the same column without the 5 px of padding — so a fitted
+   * width up to 64 / 7 = 9.14 already fits it. Comparing against 8.43 would widen a short date such
+   * as `3/15/26` that Excel shows in full.
+   */
+  private val UnsizedColumnFitWidth: Double = 64.0 / MaxDigitWidthPx
+
+  /**
+   * The width an unsized column of `sheet` has, in [[autoFitWidth]]'s units: the sheet's
+   * `defaultColWidth`, else the column Excel draws for its `baseColWidth`, else Excel's 64 px
+   * ([[UnsizedColumnFitWidth]]). Comparing against 64 px on a sheet whose unsized columns are wider
+   * would write a width narrower than the column already shows (#869 review).
+   */
+  private[sheets] def unsizedColumnWidth(sheet: Sheet): Double =
+    sheet.defaultColumnWidth
+      .orElse(sheet.baseColumnWidth.map(baseColumnPx(_) / MaxDigitWidthPx))
+      .getOrElse(UnsizedColumnFitWidth)
+
+  /**
+   * The pixel width Excel draws an unsized column at for `<sheetFormatPr baseColWidth=b>`: `b`
+   * digits plus the 5 px of padding, rounded up to a multiple of 8 px. So 8 (the default, which
+   * openpyxl writes explicitly) is the same 64 px as no attribute at all, and 10 (Excel for Mac) is
+   * 80 px (#869 review).
+   */
+  private[sheets] def baseColumnPx(baseColWidth: Int): Double =
+    val px = baseColWidth * MaxDigitWidthPx + CellPaddingPx
+    math.ceil(px / 8.0) * 8.0
+
+  /**
+   * The width `cell`'s formatted text needs, judged in Excel's units: the text's measured width is
+   * rescaled by the measuring font's own digit width (the default font's `0`) to Calibri 11's 7 px
+   * digit. Without that, a host lacking Calibri measures with a wider fallback font and widens a
+   * short date such as `12/31/26` that Excel shows in full (#869 review). The width then written is
+   * still [[fitWidth]], the same as `autofit` gives the column. When fonts cannot be measured at
+   * all, the char-count heuristic decides.
+   */
+  private def entryFit(cell: Cell, sheet: Sheet): Double =
+    val styleOpt = cell.styleId.flatMap(sheet.styleRegistry.get)
+    val numFmt = styleOpt.map(_.numFmt).getOrElse(NumFmt.General)
+    val text = RenderUtils.cellValueToText(cell.value, numFmt)
+    Try(
+      scaledFit(
+        RenderUtils.measureTextWidth(text, styleOpt.map(_.font)),
+        RenderUtils.measureTextWidth("0", None)
+      )
+    ).getOrElse(heuristicWidth(text, styleOpt))
+
+  /**
+   * The width (in [[autoFitWidth]]'s units) text `textPx` wide needs once rescaled to a 7 px digit,
+   * when the font that measured it draws its default-size `0` `digitPx` wide.
+   */
+  private[sheets] def scaledFit(textPx: Int, digitPx: Int): Double =
+    val scale = if digitPx > 0 then MaxDigitWidthPx / digitPx else 1.0
+    (textPx * scale + CellPaddingPx) / MaxDigitWidthPx
+
+  private def roundUp(width: Double): Double =
+    BigDecimal(width).setScale(2, BigDecimal.RoundingMode.CEILING).toDouble
+
+  /** Whether `cell` displays a number or date under a non-General format (GH-869). */
+  private def displaysFormattedNumber(cell: Cell, sheet: Sheet): Boolean =
+    val numFmt = cell.styleId.flatMap(sheet.styleRegistry.get).map(_.numFmt)
+    val numeric = cell.value match
+      case CellValue.Number(_) | CellValue.DateTime(_) => true
+      case CellValue.Formula(_, Some(CellValue.Number(_) | CellValue.DateTime(_)), _) => true
+      case _ => false
+    numeric && numFmt.exists(f => f != NumFmt.General && f != NumFmt.Text)
+
   private def heuristicWidth(text: String, styleOpt: Option[CellStyle]): Double =
     val boldFactor = if styleOpt.exists(_.font.bold) then 1.1 else 1.0
     text.length * boldFactor * 0.90 + 1.5
@@ -817,7 +952,7 @@ private[xl] object SheetEdits:
    */
   def autoFit(sheet: Sheet, columns: Iterable[Column]): Sheet =
     autoFitWidths(sheet, columns).foldLeft(sheet) { case (s, (col, width)) =>
-      s.setColumnProperties(col, s.getColumnProperties(col).copy(width = Some(width)))
+      s.setColumnProperties(col, s.getColumnProperties(col).withWidth(width))
     }
 
   // ===== Row/column outline grouping (GH-421) =====

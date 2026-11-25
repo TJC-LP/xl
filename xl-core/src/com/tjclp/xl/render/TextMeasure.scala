@@ -4,6 +4,7 @@ import com.tjclp.xl.styles.font.Font
 
 import java.awt.{Font as AwtFont, Graphics2D}
 import java.awt.image.BufferedImage
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * JVM text measurement: AWT FontMetrics with a pure heuristic fallback.
@@ -29,15 +30,39 @@ private[xl] object TextMeasure:
       Some(img.createGraphics())
     catch case _: Throwable => None // Headless environment (catches UnsatisfiedLinkError too)
 
+  /** Set once AWT font metrics have failed in this process; every later call estimates. */
+  private val awtFailed = new AtomicBoolean(false)
+
   /** Measure text width using AWT FontMetrics, with fallback estimation. */
   def measureTextWidth(text: String, font: Option[Font]): Int =
     graphics match
       case Some(g) =>
-        val awtFont = toAwtFont(font)
-        g.setFont(awtFont)
-        g.getFontMetrics.stringWidth(text)
+        measuredOr(text, font, awtFailed) {
+          g.setFont(toAwtFont(font))
+          g.getFontMetrics.stringWidth(text)
+        }
       case None =>
         RenderUtils.estimateTextWidth(text, font)
+
+  /**
+   * `awt`, or the [[RenderUtils.estimateTextWidth]] heuristic when it fails or has failed before
+   * (`failed`). A graphics context can exist on a host whose fonts cannot load (a slim JRE with no
+   * fontconfig): the first metrics call then throws `InternalError` from the font manager, or a
+   * `LinkageError` when its native library is missing, neither of which `scala.util.Try` catches.
+   * Once one fails, every measurement in the process estimates, so two widths a caller compares
+   * (text and the digit `0`, #869) never come from different backends. Out-of-memory and other VM
+   * errors still propagate.
+   */
+  private[render] def measuredOr(text: String, font: Option[Font], failed: AtomicBoolean)(
+    awt: => Int
+  ): Int =
+    if failed.get then RenderUtils.estimateTextWidth(text, font)
+    else
+      try awt
+      catch
+        case _: (InternalError | LinkageError | Exception) =>
+          failed.set(true)
+          RenderUtils.estimateTextWidth(text, font)
 
   /**
    * Convert our Font to AWT Font for text measurement.

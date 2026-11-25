@@ -466,3 +466,35 @@ class RenderUtilsSpec extends ScalaCheckSuite:
     assertEquals(bodies.filter(_.nonEmpty), List.fill(cells)("X"), s"every cell shows X: $html")
     assert(!html.contains("text-align: right") && !html.contains("text-align: center"), html)
   }
+
+  // ===== #869 review: AWT font failures fall back, once and for good =====
+
+  test("#869: a font-manager InternalError falls back to the estimate and is remembered") {
+    val failed = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val estimate = RenderUtils.estimateTextWidth("$1,234.56", None)
+    val first =
+      TextMeasure.measuredOr("$1,234.56", None, failed)(throw new InternalError("no fonts"))
+    assertEquals(first, estimate)
+    assert(failed.get, "the failure is remembered")
+    // later calls estimate too, though AWT would now answer: one backend per process
+    assertEquals(TextMeasure.measuredOr("$1,234.56", None, failed)(42), estimate)
+  }
+
+  test("#869: a missing native font library (LinkageError) falls back too") {
+    val failed = new java.util.concurrent.atomic.AtomicBoolean(false)
+    val width =
+      TextMeasure.measuredOr("0", None, failed)(throw new UnsatisfiedLinkError("libfontmanager"))
+    assertEquals(width, RenderUtils.estimateTextWidth("0", None))
+  }
+
+  test("#869: out of memory still propagates from measurement") {
+    val failed = new java.util.concurrent.atomic.AtomicBoolean(false)
+    // munit's intercept rethrows fatal errors, so catch it by hand
+    val propagated =
+      try
+        TextMeasure.measuredOr("0", None, failed)(throw new OutOfMemoryError("heap"))
+        false
+      catch case _: OutOfMemoryError => true
+    assert(propagated, "an OutOfMemoryError must not be swallowed as a font failure")
+    assert(!failed.get)
+  }

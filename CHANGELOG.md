@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ColumnProperties.customWidth`, `ColumnProperties.withWidth` and `Sheet.baseColumnWidth`**
+  (#869): OOXML's `customWidth` flag (true when a width was set on purpose; `withWidth` sets a
+  width and marks it so) and `<sheetFormatPr baseColWidth>`. Both have defaults, so existing code
+  compiles unchanged; code that sets a width with `copy(width = …)` should use `withWidth`.
 - **`DATEVALUE`** (#953): `=DATEVALUE("12/31/2028")` is 47118, the date's serial, as in Excel.
   It reads Excel's US date forms: `m/d/yyyy`, `m-d-yyyy`, `m/d/yy`, `yyyy-m-d`, `yyyy/m/d`,
   `d-mmm-yyyy`, `d mmm yyyy`, `d-mmm-yy`, `mmm d, yyyy` and `mmm yyyy`, with three-letter or full
@@ -18,6 +22,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`put`, `putf` and `batch` widen a column a formatted number would overflow** (#869). A
+  currency, percent or date written into a column too narrow for it opened in Excel as `#####`
+  until the column was autofitted. Typing the same value into Excel widens the column, so xl now
+  does what Excel's entry does: when a written number or date with a non-General format is wider
+  than its column, the column is set to the width `autofit` would give it. A width set on purpose
+  (`col --width`, `autofit`, batch `colwidth`, the API), a hidden column, text and General numbers
+  are left alone, and a column is never narrowed. A width an earlier `put` wrote is not "set on
+  purpose", so a wider value in a later command widens the column again. An unsized column's
+  width comes from the sheet's `defaultColWidth`, else its `baseColWidth` (Excel for Mac writes
+  10), else Excel's 64 px, and the overflow is judged in Excel's digit units whatever font xl
+  measures with, so a short date that Excel shows in full is not widened. The write's summary
+  names each widened column. `--stream` writes are unchanged. **Behaviour change:** a
+  put/putf/batch write of an overflowing formatted number now also writes a `<col width>` for its
+  column (without `customWidth`, as it was not set by hand), and the summary gains a
+  `Widened column(s) …` line.
+- **`customWidth` and `baseColWidth` are kept** (#869). A `<col width>` without `customWidth="1"`
+  was written back with it, and `<sheetFormatPr baseColWidth>` was dropped when a sheet was
+  written from the model alone. Both now round-trip. **Behaviour change:** written worksheets
+  carry `baseColWidth` when the source had it, and `customWidth` only when the source or the edit
+  set it.
 - **A cached add-in formula keeps its saved value and its dependents recalculate** (#962): a
   formula calling a worksheet function from an add-in, stored as `=_xll.SomeAddin.FETCH("x",1)`,
   does not parse in xl, so `recalc` left it uncached and every formula reading it failed too.

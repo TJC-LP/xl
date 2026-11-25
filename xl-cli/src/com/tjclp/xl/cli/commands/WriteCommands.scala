@@ -177,7 +177,8 @@ object WriteCommands:
     warn: Warning => IO[Unit],
     offGrid: Vector[OffGridHit] = Vector.empty,
     advisories: Workbook => Vector[Warning] = _ => Vector.empty,
-    clock: Option[Clock] = None
+    clock: Option[Clock] = None,
+    widen: Boolean = false
   ): IO[String] =
     val calculation: IO[Option[RecalcResult]] =
       if policy.noRecalc then IO.pure(None)
@@ -206,7 +207,13 @@ object WriteCommands:
           Some(result)
         }
     calculation.flatMap { result =>
-      val finalWb = result.fold(wb0)(_.workbook)
+      // GH-869: put/putf widen a never-sized column a formatted number would overflow, as Excel's
+      // entry does — measured after the refresh, so a formula counts by the value it displays
+      val (finalWb, widened) =
+        val recalculated = result.fold(wb0)(_.workbook)
+        if widen then ColumnAutoFit.widenForWrites(recalculated, modifiedRefs0.map(sheetName -> _))
+        else (recalculated, Vector.empty)
+      val widenedLine = ColumnAutoFit.widenedNote(widened)
       writeWorkbook(finalWb, outputPath, config, stream).flatMap { report =>
         val note = result match
           case None => noRecalcSuffix(policy)
@@ -218,7 +225,7 @@ object WriteCommands:
           .flatMap { extra =>
             strictGate(
               policy,
-              s"$message$note\n${Format.saveSuffix(outputPath, stream)}",
+              s"$message$widenedLine$note\n${Format.saveSuffix(outputPath, stream)}",
               result,
               Vector.empty,
               warn,
@@ -422,7 +429,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        widen = true
       )
     }
 
@@ -485,7 +493,8 @@ object WriteCommands:
         config,
         stream,
         policy,
-        warn
+        warn,
+        widen = true
       )
     }
 
@@ -523,7 +532,8 @@ object WriteCommands:
             config,
             stream,
             policy,
-            warn
+            warn,
+            widen = true
           )
         }
 
@@ -722,7 +732,8 @@ object WriteCommands:
         policy,
         warn,
         advisories = intersectionAdvisory(Vector(sheet.name -> ref), clock = clock),
-        clock = Some(clock)
+        clock = Some(clock),
+        widen = true
       )
     yield result
 
@@ -796,7 +807,8 @@ object WriteCommands:
         stream,
         policy,
         warn,
-        clock = Some(clock)
+        clock = Some(clock),
+        widen = true
       )
     yield result
 
@@ -921,7 +933,8 @@ object WriteCommands:
         warn,
         OffGridHit.of(sheet.name, offGrid),
         intersectionAdvisory(targets, known, clock),
-        clock = Some(clock)
+        clock = Some(clock),
+        widen = true
       )
     yield result
 
@@ -1002,7 +1015,8 @@ object WriteCommands:
             warn,
             advisories =
               intersectionAdvisory(updates.map((r, _) => sheet.name -> r).toVector, clock = clock),
-            clock = Some(clock)
+            clock = Some(clock),
+            widen = true
           )
         yield result
 
@@ -1236,10 +1250,10 @@ object WriteCommands:
               val effectiveWidth: Option[Double] =
                 if autoFit then Some(calculateAutoFitWidth(measured, colRef))
                 else width
-              val newProps = currentProps.copy(
-                width = effectiveWidth.orElse(currentProps.width),
-                hidden = if hide then true else if show then false else currentProps.hidden
-              )
+              // a width given here (or auto-fitted) is set on purpose: entry never changes it
+              val newProps = effectiveWidth
+                .fold(currentProps)(currentProps.withWidth)
+                .copy(hidden = if hide then true else if show then false else currentProps.hidden)
               val newSheet = s.setColumnProperties(colRef, newProps)
               val changes = List(
                 effectiveWidth.map(w => f"$w%.2f${if autoFit then " (auto)" else ""}"),
@@ -1357,7 +1371,7 @@ object WriteCommands:
             case ((s, ws), colRef) =>
               val w = calculateAutoFitWidth(measured, colRef)
               val currentProps = s.getColumnProperties(colRef)
-              val newProps = currentProps.copy(width = Some(w))
+              val newProps = currentProps.withWidth(w)
               (s.setColumnProperties(colRef, newProps), ws :+ (colRef, w))
           }
           val updatedWb = wb.put(updatedSheet)
@@ -1911,13 +1925,19 @@ object WriteCommands:
               val mutating =
                 result.scoped.map(_.op).exists(isCellMutating) || nameEdit || unmerged
               refreshDependents(wb, updatedWb, mutating, outputPath, policy, clock).flatMap {
-                (finalWb, recalcOpt, refreshLine) =>
+                (refreshedWb, recalcOpt, refreshLine) =>
+                  // GH-869: widen the never-sized columns a put/putf number would overflow
+                  val written0 = BatchParser
+                    .putTargets(refreshedWb, sheetOpt, result.scoped)
+                    .flatMap((name, r) => r.cells.map(name -> _))
+                  val (finalWb, widened) = ColumnAutoFit.widenForWrites(refreshedWb, written0)
+                  val widenedLine = ColumnAutoFit.widenedNote(widened)
                   writeWorkbook(finalWb, outputPath, config, stream).flatMap { written =>
                     val ops = result.ops
                     val summary = BatchParser.formatScopedSummary(result.scoped)
                     val recalcLine = refreshLine.fold("")(line => s"$line\n")
                     val rendered =
-                      s"Applied ${ops.size} operations:\n$summary\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
+                      s"Applied ${ops.size} operations:\n$summary$widenedLine\n$recalcLine${Format.saveSuffix(outputPath, stream)}"
                     // GH-714: the batch's plain putf cells, checked once on the final workbook;
                     // the written areas are expanded lazily, only as far as the check's budget
                     advisoriesAfterWrite(outputPath) {

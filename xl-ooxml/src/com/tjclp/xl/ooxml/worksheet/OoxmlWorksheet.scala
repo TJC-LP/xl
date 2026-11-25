@@ -625,7 +625,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
               sheet.defaultColumnWidth,
               sheet.defaultRowHeight,
               maxRowOutline,
-              maxColOutline
+              maxColOutline,
+              baseColumnWidth = sheet.baseColumnWidth
             )
           },
           // GH-558: the domain columnProperties is authoritative — the reader models every
@@ -679,7 +680,8 @@ object OoxmlWorksheet extends com.tjclp.xl.ooxml.XmlReadable[OoxmlWorksheet]:
               sheet.defaultColumnWidth,
               sheet.defaultRowHeight,
               maxRowOutline,
-              maxColOutline
+              maxColOutline,
+              baseColumnWidth = sheet.baseColumnWidth
             )
           },
           cols = generatedCols,

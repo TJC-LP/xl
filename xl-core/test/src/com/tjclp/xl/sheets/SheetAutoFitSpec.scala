@@ -125,3 +125,110 @@ class SheetAutoFitSpec extends ScalaCheckSuite:
       perColumn(s, ColSpan(Column.from0(0), Column.from0(2)).columns)
     )
   }
+
+  // ===== GH-869: widening on entry, as Excel does for a formatted number =====
+
+  private val currency = com.tjclp.xl.styles.CellStyle.default
+    .withNumFmt(com.tjclp.xl.styles.numfmt.NumFmt.Currency)
+
+  private def withCurrency(sheet: Sheet, ref: ARef, n: BigDecimal): Sheet =
+    sheet.put(ref, CellValue.Number(n)).withCellStyle(ref, currency)
+
+  test("GH-869: an overflowing currency entry widens its column to the autofit width") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val (widened, cols) = SheetEdits.widenForEntries(s, List(a1))
+    val fit = s.autoFitWidth(Column.from0(0))
+    assertEquals(cols, Vector(Column.from0(0) -> fit))
+    assertEquals(widened.getColumnProperties(Column.from0(0)).width, Some(fit))
+  }
+
+  test("GH-869: only the written refs count, and a column is never narrowed") {
+    val a1 = ARef.from0(0, 0)
+    val a2 = ARef.from0(0, 1)
+    val s = withCurrency(
+      withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89")),
+      a2,
+      BigDecimal(1)
+    )
+    // writing only the short A2 leaves the column as it is, though A1 overflows
+    assertEquals(SheetEdits.widenForEntries(s, List(a2))._2, Vector.empty)
+    // a sheet default already wider than the entry needs is not narrowed
+    val wide = s.copy(defaultColumnWidth = Some(40.0))
+    assertEquals(SheetEdits.widenForEntries(wide, List(a1))._2, Vector.empty)
+  }
+
+  test("GH-869: a number inside a merge is measured by the merge, not its column") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+      .copy(mergedRanges = Set(com.tjclp.xl.addressing.CellRange(a1, ARef.from0(2, 0))))
+    assertEquals(SheetEdits.widenForEntries(s, List(a1))._2, Vector.empty)
+  }
+
+  test("GH-869 review: overflow is judged in 7 px digits, whatever font measured it") {
+    val unsized = 64.0 / 7.0
+    // Calibri metrics: 59 px of text plus 5 px padding is exactly the unsized column's 64 px
+    assert(SheetEdits.scaledFit(59, 7) <= unsized)
+    assert(SheetEdits.scaledFit(60, 7) > unsized)
+    // a fallback font with a 9 px digit: 8 characters of `12/31/26` measure 64 px, which is
+    // 64 * 7/9 = 49.8 px in Calibri terms and fits; unscaled it would have widened
+    assert(SheetEdits.scaledFit(64, 9) <= unsized)
+    assert(SheetEdits.scaledFit(81, 9) > unsized)
+  }
+
+  test("#869 review: baseColWidth sets the unsized baseline, so a fitting entry never narrows") {
+    val a1 = ARef.from0(0, 0)
+    val s = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val fit = s.autoFitWidth(Column.from0(0))
+    // a base wide enough for the value: an unsized column already shows it in full
+    val base = math.ceil(fit).toInt + 1
+    val wide = s.copy(baseColumnWidth = Some(base))
+    assertEqualsDouble(
+      SheetEdits.unsizedColumnWidth(wide),
+      math.ceil((base * 7 + 5) / 8.0) * 8 / 7.0,
+      1e-9
+    )
+    assertEquals(SheetEdits.widenForEntries(wide, List(a1))._2, Vector.empty)
+    // Excel for Mac's 10 draws an 80 px column (75 px rounded up to a multiple of 8)
+    assertEqualsDouble(
+      SheetEdits.unsizedColumnWidth(s.copy(baseColumnWidth = Some(10))),
+      80.0 / 7,
+      1e-9
+    )
+    // an explicit 8 (openpyxl's default) is the same 64 px column as no attribute (#869 review)
+    assertEquals(
+      SheetEdits.unsizedColumnWidth(s.copy(baseColumnWidth = Some(8))),
+      SheetEdits.unsizedColumnWidth(s)
+    )
+    // defaultColWidth wins over baseColWidth when both are set
+    assertEquals(
+      SheetEdits.unsizedColumnWidth(
+        s.copy(baseColumnWidth = Some(10), defaultColumnWidth = Some(40))
+      ),
+      40.0
+    )
+  }
+
+  test("#869 review: a width entry wrote is widened again by a wider entry, never narrowed") {
+    val a1 = ARef.from0(0, 0)
+    val a2 = ARef.from0(0, 1)
+    val small = withCurrency(Sheet(SheetName.unsafe("S")), a1, BigDecimal("1234567.89"))
+    val (once, first) = SheetEdits.widenForEntries(small, List(a1))
+    val w1 = first.headOption.map(_._2).getOrElse(fail("A was not widened"))
+    assertEquals(once.getColumnProperties(Column.from0(0)).customWidth, false)
+    // a later, wider entry widens the entry-written width again
+    val bigger = withCurrency(once, a2, BigDecimal("987654321098.76"))
+    val (twice, second) = SheetEdits.widenForEntries(bigger, List(a2))
+    val w2 = second.headOption.map(_._2).getOrElse(fail("A was not widened again"))
+    assert(w2 > w1, s"$w2 should exceed $w1")
+    assertEquals(twice.getColumnProperties(Column.from0(0)).customWidth, false)
+    // a narrower later entry leaves it as it is
+    val narrower = withCurrency(twice, ARef.from0(0, 2), BigDecimal(5))
+    assertEquals(SheetEdits.widenForEntries(narrower, List(ARef.from0(0, 2)))._2, Vector.empty)
+    // a width set on purpose (withWidth, as col --width and autofit set it) is never changed
+    val locked = bigger.setColumnProperties(
+      Column.from0(0),
+      bigger.getColumnProperties(Column.from0(0)).withWidth(w1)
+    )
+    assertEquals(SheetEdits.widenForEntries(locked, List(a2))._2, Vector.empty)
+  }
