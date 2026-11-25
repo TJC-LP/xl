@@ -1041,7 +1041,69 @@ object SheetEvaluator:
     value match
       case CellValue.Formula(_, cached, _: FormulaKind.DataTable) =>
         Some(cached.getOrElse(CellValue.Empty))
-      case _ => pinnedExternalCache(value, parse)
+      case _ => pinnedSourceCache(value, parse)
+
+  /**
+   * The caches pinned because the formula reads a source xl cannot load: a closed external workbook
+   * ([[pinnedExternalCache]]) or an add-in function ([[pinnedAddinCache]]).
+   */
+  private[formula] def pinnedSourceCache(value: CellValue): Option[CellValue] =
+    pinnedSourceCache(value, FormulaParser.parse)
+
+  /** [[pinnedSourceCache]] with the formula text parsed by `parse`. */
+  private[formula] def pinnedSourceCache[E](
+    value: CellValue,
+    parse: String => Either[E, TExpr[?]]
+  ): Option[CellValue] =
+    pinnedExternalCache(value, parse).orElse(pinnedAddinCache(value, parse))
+
+  /**
+   * #962: Some(cached) when this is a CACHED formula cell that calls an add-in worksheet function
+   * (the `_xll.` namespace, e.g. `=_xll.SomeAddin.FETCH("x",1)`) xl cannot parse. When the add-in
+   * is not loaded, Excel keeps the value the cell was saved with and its dependents calculate from
+   * it; xl never has the add-in, so the saved value is the cell's only source of truth, pinned the
+   * way a closed-workbook external reference is. An UNCACHED add-in call falls through to normal
+   * evaluation and fails per cell, blocking its dependents as before.
+   *
+   * The check is lexical, like the external parse-failure fallback: the text mentions `_xll.` (any
+   * case) and does not parse. A formula that parses is evaluated normally even when `_xll.` appears
+   * inside one of its strings. `parse` runs only for a cached formula whose text mentions `_xll.`.
+   */
+  private[formula] def pinnedAddinCache[E](
+    value: CellValue,
+    parse: String => Either[E, TExpr[?]]
+  ): Option[CellValue] =
+    value match
+      case CellValue.Formula(expr, Some(cached), _) if mentionsAddin(expr) =>
+        if parse(expr).isLeft then Some(cached) else None
+      case _ => None
+
+  /** #962: the text holds the add-in namespace prefix `_xll.`, ignoring case. */
+  private def mentionsAddin(expr: String): Boolean =
+    val at = expr.indexOf('_')
+    at >= 0 && addinPrefixPattern.matcher(expr).region(at, expr.length).find()
+
+  /** #962: the add-in function namespace, `_xll.` in any case. */
+  private val addinPrefixPattern =
+    java.util.regex.Pattern.compile("_xll\\.", java.util.regex.Pattern.CASE_INSENSITIVE)
+
+  /**
+   * #962: every formula cell recalculation keeps at its saved value because it calls an add-in
+   * function xl cannot run ([[pinnedAddinCache]]), in sheet order then row, column. The `xl recalc`
+   * warning names them.
+   */
+  private[xl] def addinCachedCells(workbook: Workbook): Vector[QualifiedRef] =
+    workbook.sheets.flatMap { sheet =>
+      sheet.cells.iterator
+        .collect {
+          case cell @ Cell(ref, _, _, _)
+              if pinnedAddinCache(cell.value, FormulaParser.parse).isDefined =>
+            ref
+        }
+        .toVector
+        .sortBy(ref => (ref.row.index0, ref.col.index0))
+        .map(QualifiedRef(sheet.name, _))
+    }
 
   /** GH-353: lexical external-workbook prefix — `[2]Book1!`, `'[3]Sheet Name'!`, `[2]!name`. */
   private val externalPrefixPattern = java.util.regex.Pattern.compile("""'?\[\d+\]""")
