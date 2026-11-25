@@ -29,6 +29,21 @@ private[xl] object ValueDependencies:
   private[graph] val inspectors = Set("ROW", "COLUMN", "ROWS", "COLUMNS", "AREAS")
 
   /**
+   * #959: the CELL info types that read only the reference's address, sheet or column, never the
+   * referenced value. "contents" and "type" read the value; an info type known only at run time may
+   * name either kind, so it reads too. ValueDependenciesSpec checks this set against what CELL
+   * evaluates.
+   */
+  private[formula] val cellAddressOnlyInfoTypes =
+    Set("address", "col", "filename", "row", "width")
+
+  /** Whether CELL's reference is address-only for the info type `infoType` (its first argument). */
+  private def cellReferenceAddressOnly(infoType: Option[ArgValue]): Boolean = infoType match
+    case Some(ArgValue.Expr(TExpr.Lit(text: String))) =>
+      cellAddressOnlyInfoTypes.contains(text.toLowerCase(java.util.Locale.ROOT))
+    case _ => false
+
+  /**
    * The functions whose result can be a reference, each with the arguments (by index, given the
    * argument count) its reference passes through. In a reference-only position (ROWS(...), a LET
    * binding that ROW inspects) those arguments are not read; the others still are. INDIRECT passes
@@ -242,13 +257,12 @@ private[xl] object ValueDependencies:
           val inner = ReferenceOperators.operandReader(call, ReferenceOperators.staticShape, at)
           val passes = if referenceOnly then referencePassing.get(name) else None
           args.zipWithIndex.foldLeft(Set.empty[CellRange]) { case (acc, (a, index)) =>
-            // CELL's reference is address-only because every info type `cellFn` supports
-            // (FunctionSpecsReference: filename, address, row, col) reads the address, never the
-            // value; info_type itself is a value read. An arm that reads the value ("contents",
-            // "type") must make this a read, at least when info_type names that arm.
-            // ValueDependenciesSpec pins the supported arms, so adding one fails until this is
+            // CELL's reference is address-only when its literal info_type names an arm that
+            // never reads the value (#959: "contents" and "type" do); info_type itself is a value
+            // read. ValueDependenciesSpec pins the arms, so adding one fails until this is
             // revisited.
-            val addressOnly = inspectors.contains(name) || (name == "CELL" && index == 1) ||
+            val addressOnly = inspectors.contains(name) ||
+              (name == "CELL" && index == 1 && cellReferenceAddressOnly(args.headOption)) ||
               passes.exists(_(index, args.size))
             acc ++ arg(a, addressOnly, inner)
           }

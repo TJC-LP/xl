@@ -23,6 +23,7 @@ import com.monovore.decline.*
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.io.ExcelIO
 import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.context.SourceContent
 import com.tjclp.xl.error.XLException
 import com.tjclp.xl.ooxml.XlsxReader.ReaderConfig
 import com.tjclp.xl.ooxml.writer.{WriterConfig, XmlBackend}
@@ -2439,9 +2440,23 @@ EXAMPLES:
   /**
    * Read the input through `excel` under [[classifyRead]]. Every in-memory load of the CLI goes
    * through here with a [[MemoryGuard.excel]] instance, so one seam owns the heap (GH-636).
+   *
+   * #959: the workbook records the input's absolute path as its source, so `CELL("filename")`
+   * reports the full `dir/[file]sheet` Excel shows for a relative `-f`. The read itself uses the
+   * path as typed, so its errors name the file as the user did. Writes are staged beside their
+   * destination, so the source is never the write target whatever its spelling.
    */
   private def readWorkbook(excel: ExcelIO[IO], path: Path, config: ReaderConfig): IO[Workbook] =
-    classifyRead(path)(excel.readWith(path, config))
+    classifyRead(path)(excel.readWith(path, config)).flatMap(wb => IO(withAbsoluteSource(wb)))
+
+  /** #959: `wb` with an on-disk source recorded by its absolute path. */
+  private def withAbsoluteSource(wb: Workbook): Workbook =
+    wb.copy(sourceContext = wb.sourceContext.map { context =>
+      context.content match
+        case SourceContent.OnDisk(source) =>
+          context.copy(content = SourceContent.OnDisk(source.toAbsolutePath))
+        case SourceContent.InMemory(_) => context
+    })
 
   /**
    * Classify a failure while producing the output at `target` — allocating its staging file,

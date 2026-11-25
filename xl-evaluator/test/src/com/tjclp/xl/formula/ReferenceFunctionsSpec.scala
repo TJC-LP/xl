@@ -1,9 +1,16 @@
 package com.tjclp.xl.formula
 
+import java.nio.file.Path
+
+import scala.collection.immutable.ArraySeq
+
 import com.tjclp.xl.{*, given}
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.cells.{CellError, CellValue}
-import com.tjclp.xl.addressing.SheetName
+import com.tjclp.xl.addressing.{Column, SheetName}
+import com.tjclp.xl.context.{SourceContext, SourceFingerprint}
+import com.tjclp.xl.ooxml.PartManifest
+import com.tjclp.xl.sheets.ColumnProperties
 import munit.FunSuite
 
 /**
@@ -499,6 +506,170 @@ class ReferenceFunctionsSpec extends FunSuite:
       emptySheet.evaluateFormula("=CELL(\"no_such_arm\", A1)"),
       Right(CellValue.Error(CellError.Value))
     )
+  }
+
+  // ----- #959: width, contents, type; filename from the workbook's own file -----
+
+  /** A workbook holding `sheets`, read from `path` the way XlsxReader records a file source. */
+  private def bookReadFrom(path: String, sheets: Sheet*): Workbook =
+    Workbook(sheets.toVector).copy(sourceContext =
+      Some(
+        SourceContext.fromFile(
+          Path.of(path),
+          PartManifest.empty,
+          SourceFingerprint(0L, ArraySeq.empty[Byte])
+        )
+      )
+    )
+
+  test("#959 CELL: filename comes from the file the workbook was read from") {
+    val book = bookReadFrom("/models/lbo.xlsx", emptySheet)
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"filename\",A1)", workbook = Some(book)),
+      Right(CellValue.Text("/models/[lbo.xlsx]Test"))
+    )
+  }
+
+  test("#959 CELL: filename drops the . and .. segments of the path the file was opened by") {
+    val book = bookReadFrom("/models/./deals/../lbo.xlsx", emptySheet)
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"filename\",A1)", workbook = Some(book)),
+      Right(CellValue.Text("/models/[lbo.xlsx]Test"))
+    )
+  }
+
+  test("#959 CELL: filename of a workbook never read from a file is still empty") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"filename\",A1)", workbook = Some(Workbook(emptySheet))),
+      Right(CellValue.Text(""))
+    )
+  }
+
+  test("#959 CELL: an explicit workbook path wins over the file the workbook was read from") {
+    val book = bookReadFrom("/old/in.xlsx", emptySheet)
+    val expr = parseOrFail("=CELL(\"filename\",A1)")
+    Evaluator
+      .instance(workbookPath = Some("/new/out.xlsx"))
+      .eval(expr, emptySheet, workbook = Some(book)) match
+      case Right(CellValue.Text(s)) => assertEquals(s, "/new/[out.xlsx]Test")
+      case other => fail(s"expected filename text, got $other")
+  }
+
+  test("#959 CELL: width of a default-width column is 8 (Excel's 8.43 characters, truncated)") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"width\",A1)"),
+      Right(CellValue.Number(BigDecimal(8)))
+    )
+  }
+
+  test("#959 CELL: width reads the column's stored width as whole characters, padding removed") {
+    // <col width> carries 5px of padding at the default font's 7px digit: Excel shows a column
+    // stored as 11.42578125 as 10.71 characters and one stored as 15 as 14.29
+    val sheet = emptySheet
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(11.42578125)))
+      .setColumnProperties(Column.from0(2), ColumnProperties(width = Some(15.0)))
+    assertEquals(sheet.evaluateFormula("=CELL(\"width\",B1)"), Right(CellValue.Number(10)))
+    assertEquals(sheet.evaluateFormula("=CELL(\"width\",C7)"), Right(CellValue.Number(14)))
+    // a range reports its top-left cell's column
+    assertEquals(sheet.evaluateFormula("=CELL(\"width\",C1:D9)"), Right(CellValue.Number(14)))
+  }
+
+  test("#959 CELL: width of a hidden column is 0") {
+    val sheet = emptySheet.setColumnProperties(
+      Column.from0(1),
+      ColumnProperties(width = Some(20.0), hidden = true)
+    )
+    assertEquals(sheet.evaluateFormula("=CELL(\"width\",B1)"), Right(CellValue.Number(0)))
+  }
+
+  test("#959 CELL: width of an unsized column follows the sheet's default column width") {
+    val sheet = emptySheet.copy(defaultColumnWidth = Some(12.0))
+    assertEquals(sheet.evaluateFormula("=CELL(\"width\",E1)"), Right(CellValue.Number(11)))
+  }
+
+  test("#959 CELL: width of a cross-sheet reference reads that sheet's columns") {
+    val other = Sheet("Other")
+      .setColumnProperties(Column.from0(0), ColumnProperties(width = Some(30.0)))
+    val book = Workbook(Vector(emptySheet, other))
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"width\",Other!A1)", workbook = Some(book)),
+      Right(CellValue.Number(29))
+    )
+  }
+
+  test("#959 CELL: width with no reference uses the formula's own column") {
+    val sheet = emptySheet
+      .setColumnProperties(Column.from0(1), ColumnProperties(width = Some(15.0)))
+      .put(ref"B5", CellValue.Formula("CELL(\"width\")", None))
+    assertEquals(sheet.evaluateCell(ref"B5"), Right(CellValue.Number(14)))
+  }
+
+  test("#959 CELL: contents is the value of the top-left cell, not its formula") {
+    val sheet = sheetWith(
+      ref"A1" -> CellValue.Number(BigDecimal(42)),
+      ref"A2" -> CellValue.Text("Revenue"),
+      ref"A3" -> CellValue.Formula("1+2", None),
+      ref"A4" -> CellValue.Bool(true)
+    )
+    assertEquals(sheet.evaluateFormula("=CELL(\"contents\",A1)"), Right(CellValue.Number(42)))
+    assertEquals(
+      sheet.evaluateFormula("=CELL(\"contents\",A2:B9)"),
+      Right(CellValue.Text("Revenue"))
+    )
+    assertEquals(sheet.evaluateFormula("=CELL(\"contents\",A3)"), Right(CellValue.Number(3)))
+    assertEquals(sheet.evaluateFormula("=CELL(\"contents\",A4)"), Right(CellValue.Bool(true)))
+  }
+
+  test("#959 CELL: contents of an error cell is that error") {
+    val sheet = sheetWith(ref"A1" -> CellValue.Error(CellError.Div0))
+    assertEquals(
+      sheet.evaluateFormula("=CELL(\"contents\",A1)"),
+      Right(CellValue.Error(CellError.Div0))
+    )
+  }
+
+  test("#959 CELL: contents of a blank cell is what a plain reference to it gives") {
+    assertEquals(
+      emptySheet.evaluateFormula("=CELL(\"contents\",A1)"),
+      emptySheet.evaluateFormula("=A1")
+    )
+  }
+
+  test("#959 CELL: type is b for blank, l for text, v for anything else") {
+    val sheet = sheetWith(
+      ref"A2" -> CellValue.Text("Revenue"),
+      ref"A3" -> CellValue.Number(BigDecimal(1)),
+      ref"A4" -> CellValue.Formula("\"x\"&\"y\"", None),
+      ref"A5" -> CellValue.Formula("1/0", None),
+      ref"A6" -> CellValue.Bool(false),
+      ref"A7" -> CellValue.Formula("\"\"", None)
+    )
+    val types = (1 to 7).map(r => sheet.evaluateFormula(s"=CELL(\"type\",A$r)"))
+    assertEquals(
+      types.toList,
+      List("b", "l", "v", "l", "v", "v", "l").map(t => Right(CellValue.Text(t)))
+    )
+  }
+
+  test(
+    "#959 CELL: contents and type with no reference are #VALUE!, never a read of their own cell"
+  ) {
+    // Excel reads the selected cell; the current cell would be a circular read of itself
+    val sheet = emptySheet
+      .put(ref"B5", CellValue.Formula("CELL(\"contents\")", None))
+      .put(ref"B6", CellValue.Formula("CELL(\"type\")", None))
+    assertEquals(sheet.evaluateCell(ref"B5"), Right(CellValue.Error(CellError.Value)))
+    assertEquals(sheet.evaluateCell(ref"B6"), Right(CellValue.Error(CellError.Value)))
+  }
+
+  test("#959 CELL: every info type xl does not support is #VALUE!") {
+    List("format", "prefix", "protect", "color", "parentheses", "no_such_arm").foreach { info =>
+      assertEquals(
+        emptySheet.evaluateFormula(s"=CELL(\"$info\",A1)"),
+        Right(CellValue.Error(CellError.Value)),
+        info
+      )
+    }
   }
 
   test("CELL: non-reference second argument is a clean error, never a throw") {

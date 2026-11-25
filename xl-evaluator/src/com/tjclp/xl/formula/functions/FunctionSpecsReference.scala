@@ -7,7 +7,8 @@ import com.tjclp.xl.formula.eval.{
   EvalError,
   EvalResult,
   Evaluator,
-  RangeOperand
+  RangeOperand,
+  ScalarCoercion
 }
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.printer.FormulaPrinter
@@ -15,6 +16,7 @@ import com.tjclp.xl.formula.{Clock, Arity}
 
 import com.tjclp.xl.addressing.{ARef, CellRange, SheetName}
 import com.tjclp.xl.cells.{CellError, CellValue, FormulaKind}
+import com.tjclp.xl.context.SourceContent
 import com.tjclp.xl.sheets.Sheet
 
 trait FunctionSpecsReference extends FunctionSpecsBase:
@@ -310,16 +312,61 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
     }
 
   /**
+   * #959: the file a workbook was read from, when it was read from a file, without the `.` and `..`
+   * segments of the path it was opened by (`./book.xlsx`), as Excel shows it. Lexical only: the
+   * recorded path keeps its spelling for IO.
+   */
+  private def sourcePath(ctx: EvalContext): Option[String] =
+    ctx.workbook.flatMap(_.sourceContext).map(_.content).collect {
+      case SourceContent.OnDisk(path) => path.normalize.toString
+    }
+
+  /**
+   * #959: CELL("width") — a column's width as Excel reports it, in whole characters of the default
+   * font's widest digit. A stored width (`<col width>`, `<sheetFormatPr defaultColWidth>`) carries
+   * 5px of cell padding; ECMA-376 §18.3.1.13 turns it into pixels and back into characters, at the
+   * 7px digit of Excel's default Calibri 11, and Excel drops the fraction (8.43 characters → 8). A
+   * hidden column is 0 wide. An unsized column takes the sheet's default width, else Excel's stock
+   * 8.43 characters.
+   */
+  private def cellWidth(sheet: Sheet, at: ARef): Int =
+    val props = sheet.getColumnProperties(at.col)
+    if props.hidden then 0
+    else
+      props.width.orElse(sheet.defaultColumnWidth) match
+        case None => StockColumnCharacters
+        case Some(stored) =>
+          val pixels = math.floor((256 * stored + math.floor(128.0 / DigitPx)) / 256 * DigitPx)
+          math.max(0, math.floor((pixels - PaddingPx) / DigitPx)).toInt
+
+  // unreachable: topLeft reports positional's error first when there is no cell
+  private val noCell = EvalError.EvalFailed("CELL: no cell to read", None)
+
+  private val DigitPx = 7.0
+  private val PaddingPx = 5.0
+  private val StockColumnCharacters = 8
+
+  /** #959: CELL("type") of a non-blank cell — "l" (label) for text, "v" for any other value. */
+  private def cellType(value: ExprValue): String =
+    if ScalarCoercion.cellText(toCellValue(value)).isDefined then "l" else "v"
+
+  /**
    * GH-424: CELL(info_type, [reference]) — the info arms the house corpus uses. Every print tab in
    * the exemplar books carries `=CELL("Filename",$B$2)` as its path + tab self-label.
    *
    * Supported arms (case-insensitive like Excel): "filename" (directory + [file] + sheet from the
-   * eval context's workbook path — the empty string when no path is known, Excel's pre-save
-   * behavior), "address" (absolute A1 form of the reference's top-left cell), "row" and "col"
-   * (1-based coordinates). The reference argument is positional — its ADDRESS is the datum, so it
-   * is never evaluated; omitted, the arms fall back to the current cell (ROW()/COLUMN() convention;
-   * "filename" needs only the ambient sheet). Exotic arms (format, contents, parentheses, prefix,
-   * ...) are Excel's #VALUE! as a clean per-cell error value, never a throw.
+   * eval context's workbook path, else the file the workbook was read from (#959) — the empty
+   * string when neither is known, Excel's pre-save behavior), "address" (absolute A1 form of the
+   * reference's top-left cell), "row" and "col" (1-based coordinates), "width" (#959: the top-left
+   * cell's column width in whole characters, see [[cellWidth]]), "contents" (#959: the top-left
+   * cell's value) and "type" (#959: "b" blank, "l" text, "v" anything else). Every arm but
+   * "contents" and "type" reads only the reference's address and sheet, never its value
+   * ([[com.tjclp.xl.formula.graph.ValueDependencies.cellAddressOnlyInfoTypes]]); omitted, the arms
+   * fall back to the current cell (ROW()/COLUMN() convention; "filename" needs only the ambient
+   * sheet), except "contents" and "type", which need a reference (#959: Excel reads the selected
+   * cell; the current cell would read itself). The arms xl does not model (format, color,
+   * parentheses, prefix, protect) and unknown ones are Excel's #VALUE! as a clean per-cell error
+   * value, never a throw.
    *
    * Volatile like NOW(): the value derives from the evaluation context (workbook path, position),
    * never from cell data, so full recalculation always recomputes it fresh.
@@ -353,10 +400,48 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
                 )
               )
           }
-        infoType.toLowerCase match
+        // #959: the top-left cell, for the arms that read the cell itself
+        def topLeft: Either[EvalError, (ARef, SheetName)] =
+          target.flatMap {
+            case (Some(aref), sheetName) => Right((aref, sheetName))
+            case (None, _) => positional(_ => CellValue.Empty).flatMap(_ => Left(noCell))
+          }
+        def located: Either[EvalError, (ARef, Sheet)] =
+          topLeft.flatMap {
+            case (aref, sheetName) if sheetName == ctx.sheet.name => Right((aref, ctx.sheet))
+            case (aref, sheetName) =>
+              Evaluator
+                .resolveRangeLocation(
+                  TExpr.RangeLocation.CrossSheet(sheetName, CellRange(aref, aref)),
+                  ctx.sheet,
+                  ctx.workbook
+                )
+                .map((sheet, _) => (aref, sheet))
+          }
+        // read as a plain reference to that one cell reads it
+        def topLeftValue: Either[EvalError, ExprValue] =
+          topLeft.flatMap { (aref, sheetName) =>
+            val qualified = refOpt.exists(extractSheetName(_).isDefined)
+            evalValue(
+              ctx,
+              if qualified then TExpr.SheetPolyRef(sheetName, aref) else TExpr.PolyRef(aref)
+            )
+          }
+        // #959: an arm that reads the value needs a reference. Without one Excel reads the
+        // selected cell, which xl has no notion of; the current cell would read itself (circular)
+        def readingArm(arm: String): Either[EvalError, Unit] =
+          if refOpt.isDefined then Right(())
+          else
+            Left(
+              EvalError.ErrorValue(
+                CellError.Value,
+                Some(s"CELL(\"$arm\") needs a reference: without one Excel reads the selected cell")
+              )
+            )
+        infoType.toLowerCase(java.util.Locale.ROOT) match
           case "filename" =>
             target.map { case (_, sheetName) =>
-              ctx.workbookPath match
+              ctx.workbookPath.orElse(sourcePath(ctx)) match
                 case None => CellValue.Text("") // Excel: empty until the workbook is saved
                 case Some(path) =>
                   // Excel's shape: directory + [file] + sheet, e.g. /models/[lbo.xlsx]DCF
@@ -369,13 +454,27 @@ trait FunctionSpecsReference extends FunctionSpecsBase:
             )
           case "row" => positional(aref => CellValue.Number(BigDecimal(aref.row.index0 + 1)))
           case "col" => positional(aref => CellValue.Number(BigDecimal(aref.col.index0 + 1)))
+          case "width" =>
+            located.map((aref, sheet) => CellValue.Number(BigDecimal(cellWidth(sheet, aref))))
+          case "contents" =>
+            readingArm("contents").flatMap(_ => topLeftValue.map(toCellValue))
+          case "type" =>
+            // blank is the cell holding nothing, not a formula whose result is empty
+            readingArm("type").flatMap(_ => located).flatMap { (aref, sheet) =>
+              if sheet(aref).value == CellValue.Empty then Right(CellValue.Text("b"))
+              else
+                topLeftValue match
+                  // an error in the cell is a value: Excel's "v"
+                  case Left(EvalError.ErrorValue(_, _)) => Right(CellValue.Text("v"))
+                  case other => other.map(value => CellValue.Text(cellType(value)))
+            }
           case other =>
             Left(
               EvalError.ErrorValue(
                 CellError.Value,
                 Some(
                   s"CELL: info_type '$other' is not supported " +
-                    "(supported: filename, address, row, col)"
+                    "(supported: filename, address, row, col, width, contents, type)"
                 )
               )
             )

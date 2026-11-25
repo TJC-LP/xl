@@ -1398,3 +1398,51 @@ class EvalCommandSpec extends CatsEffectSuite:
         assert(plain.contains("Result: 13 (number)"), plain)
         assert(table.contains("Result: 13 (number)"), table)
     }
+
+  // --- #959: CELL("filename") names the file the CLI read, as Excel's full path ---------------
+
+  test("#959 CLI: CELL(\"filename\") is the input's full dir/[file]sheet, for a relative -f too") {
+    val sheet = Sheet("Summary").put(ref"A1", CellValue.Number(1))
+    for
+      // a file in the working directory, named relative to it the way a user types -f
+      cwd <- IO.blocking(Path.of("").toAbsolutePath)
+      path <- IO.blocking(Files.createTempFile(cwd, "xl-959-", ".xlsx"))
+      _ <- IO.blocking(path.toFile.deleteOnExit())
+      _ <- ExcelIO.instance[IO].write(Workbook(sheet), path)
+      name = path.getFileName.toString
+      relative <- CliHarness.run("-f", name, "eval", "=CELL(\"filename\",A1)")
+      absolute <- CliHarness.run("-f", path.toString, "eval", "=CELL(\"filename\")")
+      _ <- IO.blocking(Files.deleteIfExists(path))
+    yield
+      val expected = s"Result: \"$cwd${java.io.File.separator}[$name]Summary\" (text)"
+      assertEquals(relative.exit, 0, relative.stderr)
+      assert(relative.stdout.contains(expected), relative.stdout)
+      assert(absolute.stdout.contains(expected), absolute.stdout)
+  }
+
+  test("#959 CLI: an unreadable input is still named as typed, not by its absolute path") {
+    val cwd = Path.of("").toAbsolutePath
+    val locked = for
+      path <- IO.blocking(Files.createTempFile(cwd, "xl-959-locked-", ".xlsx"))
+      _ <- ExcelIO.instance[IO].write(Workbook(Sheet("Summary")), path)
+      // unreadable: the IO error's own message names the path it was given
+      _ <- IO.blocking(path.toFile.setReadable(false, false))
+    yield path
+    locked
+      .bracket { path =>
+        for
+          readable <- IO.blocking(Files.isReadable(path))
+          // a user who reads a file without read permission (root) cannot run this check
+          _ <- IO(assume(!readable, "this user reads files without read permission (root?)"))
+          run <- CliHarness.run("-f", path.getFileName.toString, "view", "A1")
+        yield run
+      }(path => IO.blocking(Files.deleteIfExists(path)).void)
+      .map { run =>
+        assertEquals(run.exit, 3, run.stderr)
+        // the message is main's: the file as typed, then the resolution suffix with the full path
+        val firstLine = run.stderr.linesIterator.next()
+        assert(firstLine.startsWith("Error: "), run.stderr)
+        val message = firstLine.takeWhile(_ != '(')
+        assert(!message.contains(cwd.toString), s"the absolute path leaked into: $message")
+      }
+  }

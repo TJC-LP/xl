@@ -38,7 +38,9 @@ class ValueDependenciesSpec extends FunSuite:
     "LET(outer,D5,LET(inner,outer,COLUMN(inner)))",
     "LET(chosen,D5,LET(chosen,A1,ROWS(chosen)))",
     "CELL(\"address\",D5)",
-    "CELL(\"filename\",D5)"
+    "CELL(\"filename\",D5)",
+    "CELL(\"width\",D5)",
+    "CELL(\"WIDTH\",D5)"
   ).foreach { formula =>
     test(s"$formula inspects LET reference identity without reading referenced values") {
       assertEquals(reads(formula), Set.empty[ARef])
@@ -57,7 +59,12 @@ class ValueDependenciesSpec extends FunSuite:
     "LET(outer,D5,LET(inner,outer,inner+1))" -> Set(ref"D5"),
     "LET(chosen,D5,LET(chosen,chosen+1,chosen))" -> Set(ref"D5"),
     "ROWS(XLOOKUP(9,A1:A2,B1:B2,D5))" -> Set(ref"A1", ref"A2", ref"D5"),
-    "CELL(D5,D5)" -> Set(ref"D5")
+    "CELL(D5,D5)" -> Set(ref"D5"),
+    // #959: contents and type read the referenced value
+    "CELL(\"contents\",D5)" -> Set(ref"D5"),
+    "CELL(\"Type\",D5:E6)" -> Set(ref"D5", ref"D6", ref"E5", ref"E6"),
+    // an info_type known only at run time may name a reading arm
+    "CELL(A1,D5)" -> Set(ref"A1", ref"D5")
   ).foreach { (formula, expected) =>
     test(s"$formula retains scalar, selector and fallback value reads") {
       assertEquals(reads(formula), expected)
@@ -162,10 +169,10 @@ class ValueDependenciesSpec extends FunSuite:
     }
   }
 
-  test("CELL's supported info types are exactly the address-only arms the CELL rule assumes") {
-    // Every info type Excel documents. If CELL learns one that reads the referenced value
-    // ("contents", "type"), the supported set grows and this fails: revisit the CELL rule in
-    // ValueDependencies.Reader before updating the expected set.
+  test("CELL's address-only arms are exactly the supported arms that ignore the value") {
+    // Every info type Excel documents. If CELL learns another, the supported set grows and this
+    // fails: decide whether it reads the referenced value, and revisit
+    // ValueDependencies.cellAddressOnlyInfoTypes before updating the expected sets.
     val excel = List(
       "address",
       "col",
@@ -184,9 +191,13 @@ class ValueDependenciesSpec extends FunSuite:
     val supported = excel.filter { info =>
       evaluatedOver(CellValue.Number(BigDecimal(42)), s"=CELL(\"$info\",A1)") != unsupported
     }
-    assertEquals(supported.toSet, Set("address", "col", "filename", "row"))
-    supported.foreach(info =>
-      assert(addressOnly(s"=CELL(\"$info\",A1)"), s"CELL(\"$info\") depends on A1's value")
+    assertEquals(
+      supported.toSet,
+      Set("address", "col", "contents", "filename", "row", "type", "width")
+    )
+    assertEquals(
+      supported.filter(info => addressOnly(s"=CELL(\"$info\",A1)")).toSet,
+      ValueDependencies.cellAddressOnlyInfoTypes
     )
   }
 

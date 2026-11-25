@@ -218,8 +218,11 @@ is 1, as in legacy Excel), so fold ROW's array with SUMPRODUCT. Inside SUMPRODUC
 is trimmed to the sheet's used rows, so `=SUMPRODUCT((A:A="x")*ROW(A:A))` lines up, but
 `=SUMPRODUCT(ROW(A:A))` sums only the used rows' numbers where Excel sums 1 to 1,048,576: bound
 the range (`ROW(A1:A1000)`) when every row must count.
-`CELL("filename")` reports the workbook's saved path, `CELL("address", ref)`, `CELL("row", ref)` and
-`CELL("col", ref)` the reference parts.
+`CELL("filename")` reports the path of the file the workbook was read from as `dir/[file]sheet`
+(empty for a book never saved), `CELL("address", ref)`, `CELL("row", ref)` and `CELL("col", ref)`
+the reference parts, `CELL("width", ref)` the column width in whole characters (0 when hidden),
+`CELL("contents", ref)` the top-left cell's value and `CELL("type", ref)` `b` (blank), `l` (text)
+or `v` (anything else); these two need a reference. `format`, `color`, `parentheses`, `prefix` and `protect` are `#VALUE!`.
 
 **Arrays (dynamic arrays).** `TRANSPOSE`, `SEQUENCE`, `SORT`, `UNIQUE` and `FILTER` return a grid.
 Use `xl evala "=..."` to display it (`--at <ref>` anchors the displayed result; `evala` writes
