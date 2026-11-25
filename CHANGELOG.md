@@ -24,7 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is 2028), in the forms `DATEVALUE` reads. TEXT formats it as that date too
   (`=TEXT("12/31/2028","yyyy")` is `2028`, not the text unchanged). One parser, `DateText`, serves all of them.
   **Behaviour change:** these were `#VALUE!`. Range folds and aggregate arguments still skip or
-  refuse date text (`=SUM("12/31/2028")` is `#VALUE!`; the XIRR/XNPV dates range is unchanged).
+  refuse date text (`=SUM("12/31/2028")` is `#VALUE!`).
+- **XIRR and XNPV read date text in the dates range** (#956): a dates cell holding the text
+  `12/31/2028`, typed or returned by a formula such as `=IF(1=2,"x","12/31/2028")`, is that date,
+  as in Excel, in the forms `DATEVALUE` reads. A 1904-date-system workbook keeps refusing it
+  (`#VALUE!`, as before), because its serials can come from either date system.
+  Numeric text there (`'45000`) is still `#VALUE!`.
+  **Behaviour change:** these were `#VALUE!`.
 
 - **IRR and XIRR find the rate when Newton from the guess fails** (#954): the solver was plain
   Newton–Raphson, so a step that overshot past -100% or ran away from a large guess ended in

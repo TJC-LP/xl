@@ -9,6 +9,7 @@ import com.tjclp.xl.formula.eval.DateText
 import com.tjclp.xl.formula.eval.SheetEvaluator.*
 import com.tjclp.xl.sheets.Sheet
 import com.tjclp.xl.syntax.*
+import com.tjclp.xl.workbooks.{Workbook, WorkbookMetadata}
 
 /**
  * #953: DATEVALUE, and date text read as its serial wherever a single value coerces text to a
@@ -185,4 +186,97 @@ class DateTextCoercionSpec extends FunSuite:
 
   test("#953: a range's date text is still skipped by SUM (range folds are out of scope)") {
     assertEquals(eval("=SUM(A1:A2)"), Right(CellValue.Number(BigDecimal(0))))
+  }
+
+  // ===== #956: XIRR and XNPV read date text in the dates range =====
+
+  // -1000 on 1/1/2028 and 1100 on 12/31/2028, 365 days apart: XIRR is 0.1 and XNPV at 10% is 0.
+  private def flows(second: CellValue): Sheet =
+    Sheet("Flows")
+      .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
+      .put(ref"A2", CellValue.Number(BigDecimal(1100)))
+      .put(ref"B1", CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay()))
+      .put(ref"B2", second)
+
+  private def numberOf(sheet: Sheet, formula: String): BigDecimal =
+    sheet.evaluateFormula(formula) match
+      case Right(CellValue.Number(n)) => n
+      case other => fail(s"$formula: expected a number, got $other")
+
+  private val dateTextCells: List[(String, CellValue)] = List(
+    "plain text 12/31/2028" -> CellValue.Text("12/31/2028"),
+    "plain text 31-Dec-2028" -> CellValue.Text("31-Dec-2028"),
+    "plain text 2028-12-31" -> CellValue.Text("2028-12-31"),
+    "a formula returning the text" -> CellValue.Formula("IF(1=2,\"x\",\"12/31/2028\")", None)
+  )
+
+  dateTextCells.foreach { case (label, cell) =>
+    test(s"#956: XIRR and XNPV read date text in the dates range ($label)") {
+      val withText = flows(cell)
+      val withDate = flows(CellValue.DateTime(LocalDate.of(2028, 12, 31).atStartOfDay()))
+      val rate = numberOf(withText, "=XIRR(A1:A2,B1:B2)")
+      assertEqualsDouble(rate.toDouble, 0.1, 1e-9)
+      assertEquals(rate, numberOf(withDate, "=XIRR(A1:A2,B1:B2)"))
+      val npv = numberOf(withText, "=XNPV(0.1,A1:A2,B1:B2)")
+      assertEqualsDouble(npv.toDouble, 0.0, 1e-9)
+      assertEquals(npv, numberOf(withDate, "=XNPV(0.1,A1:A2,B1:B2)"))
+    }
+  }
+
+  // A 1904-system workbook mixes serials of two systems the cells cannot tell apart: the file's
+  // own (1904) and the ones xl computes (1900; docs/LIMITATIONS.md). Date text has no footing that
+  // agrees with both, so a 1904 book keeps refusing it and every other dates cell decodes as on
+  // main. 2028-01-01 is 1900 serial 46753; xl caches =B1+365 over it as 47118.
+  private def in1904(first: CellValue, second: CellValue, formula: String): Either[?, CellValue] =
+    val sheet = Sheet("Flows")
+      .put(ref"A1", CellValue.Number(BigDecimal(-1000)))
+      .put(ref"A2", CellValue.Number(BigDecimal(1100)))
+      .put(ref"B1", first)
+      .put(ref"B2", second)
+    val wb = Workbook(sheet).copy(metadata = WorkbookMetadata(date1904 = true))
+    sheet.evaluateFormula(formula, workbook = Some(wb))
+
+  test("#956: in a 1904 workbook, date text in the dates range stays #VALUE!") {
+    val jan1 = CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay())
+    List(
+      CellValue.Text("12/31/2028"),
+      CellValue.Formula("IF(1=2,\"x\",\"12/31/2028\")", Some(CellValue.Text("12/31/2028")))
+    ).foreach { text =>
+      assertEquals(
+        in1904(jan1, text, "=XIRR(A1:A2,B1:B2)"),
+        Right(CellValue.Error(CellError.Value))
+      )
+      assertEquals(
+        in1904(jan1, text, "=XNPV(0.1,A1:A2,B1:B2)"),
+        Right(CellValue.Error(CellError.Value))
+      )
+    }
+  }
+
+  test("#956: in a 1904 workbook, a date xl computed keeps its true date (as on main)") {
+    val jan1 = CellValue.DateTime(LocalDate.of(2028, 1, 1).atStartOfDay())
+    val computed = CellValue.Formula("B1+365", Some(CellValue.Number(BigDecimal(47118))))
+    in1904(jan1, computed, "=XIRR(A1:A2,B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, 0.1, 1e-9)
+      case other => fail(s"expected 0.1, got $other")
+    in1904(jan1, computed, "=XNPV(0.1,A1:A2,B1:B2)") match
+      case Right(CellValue.Number(n)) => assertEqualsDouble(n.toDouble, 0.0, 1e-9)
+      case other => fail(s"expected 0, got $other")
+  }
+
+  test("#956: other text in the dates range is still #VALUE!") {
+    List(CellValue.Text("not a date"), CellValue.Text("12/31"), CellValue.Text("47118")).foreach {
+      cell =>
+        val sheet = flows(cell)
+        assertEquals(
+          sheet.evaluateFormula("=XIRR(A1:A2,B1:B2)"),
+          Right(CellValue.Error(CellError.Value)),
+          cell.toString
+        )
+        assertEquals(
+          sheet.evaluateFormula("=XNPV(0.1,A1:A2,B1:B2)"),
+          Right(CellValue.Error(CellError.Value)),
+          cell.toString
+        )
+    }
   }
