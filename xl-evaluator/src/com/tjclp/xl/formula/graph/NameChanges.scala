@@ -86,7 +86,7 @@ private[xl] object NameChanges:
           case cell @ Cell(ref, _, _, _) if (cell.value match
                 case CellValue.Formula(_, _, _: FormulaKind.DataTable) => false
                 case CellValue.Formula(text, _, _) =>
-                  SheetEvaluator.pinnedExternalCache(cell.value).isEmpty &&
+                  SheetEvaluator.pinnedSourceCache(cell.value).isEmpty &&
                   mayRead(text, sheet.name, nameChanged)
                 case _ => false
               ) =>

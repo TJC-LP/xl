@@ -269,10 +269,11 @@ object DependencyGraph:
         case cell @ Cell(ref, _, _, _) if (cell.value match
               case CellValue.Formula(_, _, _: FormulaKind.DataTable) => false
               case CellValue.Formula(text, _, _) =>
-                // Closed-workbook external caches are pinned by the explicit evaluation contract.
-                val external = text.contains('[') &&
-                  com.tjclp.xl.formula.eval.SheetEvaluator.pinnedExternalCache(cell.value).isDefined
-                !external && parses
+                // Closed-workbook external and add-in (#962) caches are pinned by the explicit
+                // evaluation contract.
+                val pinned =
+                  com.tjclp.xl.formula.eval.SheetEvaluator.pinnedSourceCache(cell.value).isDefined
+                !pinned && parses
                   .parse(sheet.name, ref, text)
                   .toOption
                   .fold(true)(expressionUnknown(_, sheet.name))
