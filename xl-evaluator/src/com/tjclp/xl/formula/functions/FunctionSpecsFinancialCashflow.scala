@@ -31,6 +31,136 @@ private[functions] object NumericGuard:
         Left(EvalError.ErrorValue(CellError.Num, Some(s"$fn diverged (numeric overflow): $usage")))
 
 /**
+ * #954: the fallback IRR and XIRR use when Newton from the guess fails (no convergence, zero slope,
+ * numeric overflow). Excel still finds a rate for flows such as -100, 50 (-50%), where a Newton
+ * step from 10% overshoots past -100% and runs away.
+ *
+ * Two stages, both bounded:
+ *   1. [[brackets]] samples the NPV on a grid of `ln(1 + rate)` around the guess, outward one step
+ *      at a time on each side, and yields the intervals whose ends differ in sign, nearest the
+ *      guess first. Rates stay above -100%, where the NPV is continuous, so a sign change always
+ *      holds a root. Sampling uses a `Double` NPV; ±Infinity counts by its sign, NaN and an exact
+ *      0.0 (usually an underflow) carry none.
+ *   2. [[refine]] narrows that bracket with safeguarded Newton (`rtsafe`): a Newton step is taken
+ *      only when it lands inside the bracket and is under half the step before last, otherwise the
+ *      bracket is bisected. It stops at the caller's tolerance, the same one Newton uses, within
+ *      [[MaxRefineIterations]] steps. A bracket it rejects (equal signs in BigDecimal) hands the
+ *      search back to stage 1.
+ *
+ * Flows whose NPV never changes sign have no rate, and the caller keeps its `#NUM!`.
+ */
+private[functions] object RateSolver:
+  // ±20 in ln(1 + rate) around the guess: from -99.9999998% up to ~e^20, 401 samples at most
+  private val Step = 0.1
+  private val MaxSteps = 200
+  private val MaxRefineIterations = 100
+
+  /**
+   * Root of `f` nearest `guess`, or None when no bracket refines to a root or the guess is ≤ -100%.
+   * A bracket whose ends `refine` finds equally signed in BigDecimal (a Double sample that rounded
+   * the wrong way) does not end the search: the scan goes on to the next one.
+   */
+  def fallback(
+    guess: BigDecimal,
+    fDouble: Double => Double,
+    f: BigDecimal => BigDecimal,
+    df: BigDecimal => BigDecimal,
+    tolerance: BigDecimal
+  ): Option[BigDecimal] =
+    brackets(guess.toDouble, fDouble)
+      .flatMap { case (lo, hi) => refine(BigDecimal(lo), BigDecimal(hi), f, df, tolerance) }
+      .nextOption()
+
+  /**
+   * Sign-change intervals `(lo, hi)` (as rates, `lo < hi`), nearest `guess` first, sampled lazily.
+   *
+   * A crossing is a sign change between the current sample and the last SIGNED sample on the same
+   * side. NaN carries no sign, and neither does an exact 0.0: in Double it is usually an underflow
+   * (leading zero periods push `x^n` below the smallest Double), not a root. A true root on a grid
+   * point is still bracketed by the signed samples either side of it. An overflowed sample keeps
+   * its sign (with 1 + rate > 0 the dominant term decides it), so ±Infinity counts.
+   */
+  def brackets(guess: Double, f: Double => Double): Iterator[(Double, Double)] =
+    val center = math.log1p(guess)
+    if guess <= -1.0 || !center.isFinite then Iterator.empty
+    else
+      def rateAt(j: Int): Double = math.expm1(center + j * Step)
+      def signed(v: Double): Boolean = !v.isNaN && v != 0.0
+      def changes(last: Option[(Int, Double)], v: Double): Option[Int] =
+        last.collect { case (j, w) if signed(v) && (w < 0.0) != (v < 0.0) => j }
+      def keep(last: Option[(Int, Double)], j: Int, v: Double): Option[(Int, Double)] =
+        if signed(v) then Some((j, v)) else last
+
+      val fCenter = f(rateAt(0))
+      val start = keep(None, 0, fCenter)
+      // State: next step k, and the last signed sample above and below the guess. Each step
+      // evaluates one point on each side and yields the crossings it closes.
+      Iterator
+        .unfold((1, start, start)) { case (k, above, below) =>
+          if k > MaxSteps then None
+          else
+            val fUp = f(rateAt(k))
+            val fDown = f(rateAt(-k))
+            val up = changes(above, fUp).map(j => (rateAt(j), rateAt(k)))
+            // `below` stores its grid index as -k (j ≤ 0), so its sample is rateAt(j)
+            val down = changes(below, fDown).map(j => (rateAt(-k), rateAt(j)))
+            Some((up.toList ++ down.toList, (k + 1, keep(above, k, fUp), keep(below, -k, fDown))))
+        }
+        .flatten
+
+  /** Safeguarded Newton inside `[lo, hi]`, whose ends must bracket a root of `f`. */
+  def refine(
+    lo: BigDecimal,
+    hi: BigDecimal,
+    f: BigDecimal => BigDecimal,
+    df: BigDecimal => BigDecimal,
+    tolerance: BigDecimal
+  ): Option[BigDecimal] =
+    val zero = BigDecimal(0)
+    val two = BigDecimal(2)
+    val fLo = f(lo)
+    val fHi = f(hi)
+    if fLo == zero then Some(lo)
+    else if fHi == zero then Some(hi)
+    else if fLo.signum == fHi.signum then None
+    else
+      // Orient so that f(neg) < 0 < f(pos); neg may lie above pos.
+      val (neg0, pos0) = if fLo < zero then (lo, hi) else (hi, lo)
+
+      // rtsafe: a Newton step is taken only when it lands inside the bracket AND is less than
+      // half the step before last. Otherwise the bracket is bisected, so the bracket shrinks at
+      // least geometrically: on the convex side of a steep NPV, in-bracket Newton steps alone
+      // can crawl far slower than bisection.
+      @annotation.tailrec
+      def loop(
+        iter: Int,
+        x: BigDecimal,
+        neg: BigDecimal,
+        pos: BigDecimal,
+        lastStep: BigDecimal,
+        stepBeforeLast: BigDecimal
+      ): Option[BigDecimal] =
+        if iter >= MaxRefineIterations then None
+        else
+          val fx = f(x)
+          if fx == zero then Some(x)
+          else
+            val (nNeg, nPos) = if fx < zero then (x, pos) else (neg, x)
+            val low = nNeg.min(nPos)
+            val high = nNeg.max(nPos)
+            val dfx = df(x)
+            val newton =
+              if dfx == zero || (two * fx).abs > (stepBeforeLast * dfx).abs then None
+              else Some(x - fx / dfx).filter(n => n > low && n < high)
+            val next = newton.getOrElse((low + high) / two)
+            val step = (next - x).abs
+            if step <= tolerance || (high - low) <= tolerance then Some(next)
+            else loop(iter + 1, next, nNeg, nPos, step, lastStep)
+
+      val width = (hi - lo).abs
+      loop(0, (lo + hi) / two, neg0, pos0, width, width)
+
+/**
  * #670(h): a financial function's argument failure as Excel's `#NUM!` — XIRR/XNPV over values and
  * dates of different counts, IRR/XIRR without a sign change, a Newton step with no slope — so the
  * cell caches the error value (visible to IFERROR and ERROR.TYPE) instead of reading as uncached.
@@ -229,7 +359,23 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                   if (next - r).abs <= tolerance then Right(next)
                   else loop(iter + 1, next)
 
-            NumericGuard.contained("IRR", "IRR(values[, guess])")(loop(0, guess0))
+            // Horner in x = 1/(1+rate), for the fallback's bracket scan. The flows are converted
+            // once, and only if the fallback runs: BigDecimal.toDouble per sample dominated the scan.
+            lazy val flowsLastFirst: Array[Double] =
+              cashFlows.reverseIterator.map(_.toDouble).toArray
+            def npvDouble(rate: Double): Double =
+              val x = 1.0 / (1.0 + rate)
+              flowsLastFirst.foldLeft(0.0)((acc, cf) => cf + x * acc)
+
+            val usage = "IRR(values[, guess])"
+            // #954: Newton first, so every rate it already finds is unchanged
+            NumericGuard.contained("IRR", usage)(loop(0, guess0)).left.flatMap { newtonError =>
+              NumericGuard.contained("IRR", usage)(
+                RateSolver
+                  .fallback(guess0, npvDouble, npvAt, dNpvAt, tolerance)
+                  .toRight(newtonError)
+              )
+            }
           }
       }
     }
@@ -367,7 +513,24 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                         if (next - r).abs <= tolerance then Right(next)
                         else loop(iter + 1, next)
 
-                  NumericGuard.contained("XIRR", "XIRR(values, dates[, guess])")(loop(0, guess0))
+                  // Converted once, and only if the fallback runs
+                  lazy val cfDouble: Array[Double] = values.map(_.toDouble).toArray
+                  lazy val yfDouble: Array[Double] = yearFractions.map(_.toDouble).toArray
+                  def xnpvDouble(rate: Double): Double =
+                    cfDouble.indices.foldLeft(0.0) { (acc, i) =>
+                      acc + cfDouble(i) / math.pow(1.0 + rate, yfDouble(i))
+                    }
+
+                  val usage = "XIRR(values, dates[, guess])"
+                  // #954: Newton first, so every rate it already finds is unchanged
+                  NumericGuard.contained("XIRR", usage)(loop(0, guess0)).left.flatMap {
+                    newtonError =>
+                      NumericGuard.contained("XIRR", usage)(
+                        RateSolver
+                          .fallback(guess0, xnpvDouble, xnpvAt, dXnpvAt, tolerance)
+                          .toRight(newtonError)
+                      )
+                  }
                 case Nil =>
                   Left(numError("XIRR: dates cannot be empty", "XIRR(values, dates[, guess])"))
             }
