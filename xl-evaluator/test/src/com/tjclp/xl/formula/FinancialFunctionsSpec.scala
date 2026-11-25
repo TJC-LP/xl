@@ -1308,6 +1308,13 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     )
   }
 
+  test("#964: a LET name bound to an array constant reads like the constant") {
+    assertApprox(number964("=LET(x,{-100,50},IRR(x))").toDouble, -0.5, 1e-9)
+    sameAs964("=LET(v,{-100,60,60},d,{45292,45474,45658},XIRR(v,d))", "=XIRR(A1:A3,B1:B3)")
+    // a LET name bound to a range is still that range
+    sameAs964("=LET(r,A1:A3,NPV(0.1,r))", "=NPV(0.1,A1:A3)")
+  }
+
   test("#964: array-constant arguments print back as written") {
     List(
       "=IRR({-100,50})",

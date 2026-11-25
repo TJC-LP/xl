@@ -1,7 +1,7 @@
 package com.tjclp.xl.formula.functions
 
 import com.tjclp.xl.formula.ast.{TExpr, ExprValue}
-import com.tjclp.xl.formula.eval.{DateText, EvalError, ScalarCoercion}
+import com.tjclp.xl.formula.eval.{ArrayResult, DateText, EvalError, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
@@ -179,6 +179,11 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     ctx: EvalContext
   ): Either[EvalError, Vector[(Cell, String)]] =
     arg match
+      // a LET name bound to an array value, not a reference (LET(x, {-100,50}, IRR(x))): its
+      // elements, as INDEX reads such a binding
+      case ArgSpec.ValuesArg.Range(TExpr.RangeLocation.Binding(name))
+          if ctx.bindings.get(name).exists(_.isInstanceOf[ArrayResult]) =>
+        Right(ctx.bindings.get(name).fold(Vector.empty)(value => arrayCells(toCellArray(value))))
       case ArgSpec.ValuesArg.Range(location) =>
         ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
           val readCell = rangeCellReader(targetSheet, ctx)
@@ -189,17 +194,18 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           }
         }
       case ArgSpec.ValuesArg.Constant(expr) =>
-        ctx.evalArrayExpr(expr).map { value =>
-          val array = toCellArray(value)
-          Vector
-            .tabulate(array.rows, array.cols) { (row, col) =>
-              (
-                Cell(ARef.from0(col, row), array(row, col)),
-                s"array element ${row * array.cols + col + 1}"
-              )
-            }
-            .flatten
-        }
+        ctx.evalArrayExpr(expr).map(value => arrayCells(toCellArray(value)))
+
+  /** An array's elements as cells at their offset in it, row-major, named "array element n". */
+  private def arrayCells(array: ArrayResult): Vector[(Cell, String)] =
+    Vector
+      .tabulate(array.rows, array.cols) { (row, col) =>
+        (
+          Cell(ARef.from0(col, row), array(row, col)),
+          s"array element ${row * array.cols + col + 1}"
+        )
+      }
+      .flatten
 
   /**
    * Resolve before applying the function's skip policy: an unevaluated formula is never a blank.
