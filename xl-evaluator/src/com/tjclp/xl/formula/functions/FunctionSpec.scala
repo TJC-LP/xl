@@ -1037,3 +1037,48 @@ object ArgSpec:
       args match
         case Left(loc) => Left(mapRange(loc))
         case Right(expr) => Right(mapExpr(expr).asInstanceOf[TExpr[Any]])
+
+  /**
+   * #964: a cash-flow argument — IRR's and NPV's values, XIRR's and XNPV's values and dates. Excel
+   * takes "an array or a reference" there: a range location as before, or an array constant
+   * (`IRR({-100,50})`, or an operation over array constants). Other array-valued expressions stay
+   * outside the slot, a parse error as before (per-parameter array typing, #940).
+   */
+  enum ValuesArg derives CanEqual:
+    case Range(location: TExpr.RangeLocation)
+    case Constant(expr: TExpr[Any])
+
+  @SuppressWarnings(Array("org.wartremover.warts.AsInstanceOf"))
+  given cashflowValues: ArgSpec[ValuesArg] with
+    // still described as a range, as INDEX's array slot is a "reference" that also takes an array
+    // constant: the slot kind the registry documents and the grammar laws generate from
+    def describeParts: List[String] = List("range")
+
+    def parse(
+      args: List[TExpr[?]],
+      pos: Int,
+      fnName: String
+    ): Either[ParseError, (ValuesArg, List[TExpr[?]])] =
+      rangeLocation.parse(args, pos, fnName) match
+        case Right((location, tail)) => Right((ValuesArg.Range(location), tail))
+        case Left(_) =>
+          args match
+            case head :: tail if Evaluator.isArrayConstant(head) =>
+              Right((ValuesArg.Constant(head.asInstanceOf[TExpr[Any]]), tail))
+            case _ =>
+              Left(ParseError.InvalidArguments(fnName, pos, describe, s"${args.length} arguments"))
+
+    def toValues(args: ValuesArg): List[ArgValue] =
+      args match
+        case ValuesArg.Range(location) => List(ArgValue.Range(location))
+        case ValuesArg.Constant(expr) => List(ArgValue.Expr(expr))
+
+    def map(
+      args: ValuesArg
+    )(
+      mapExpr: TExpr[?] => TExpr[?],
+      mapRange: TExpr.RangeLocation => TExpr.RangeLocation
+    ): ValuesArg =
+      args match
+        case ValuesArg.Range(location) => ValuesArg.Range(mapRange(location))
+        case ValuesArg.Constant(expr) => ValuesArg.Constant(mapExpr(expr).asInstanceOf[TExpr[Any]])

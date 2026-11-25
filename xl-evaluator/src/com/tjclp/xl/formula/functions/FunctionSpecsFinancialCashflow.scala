@@ -5,7 +5,7 @@ import com.tjclp.xl.formula.eval.{DateText, EvalError, ScalarCoercion}
 import com.tjclp.xl.formula.parser.ParseError
 import com.tjclp.xl.formula.{Clock, Arity}
 
-import com.tjclp.xl.addressing.CellRange
+import com.tjclp.xl.addressing.{ARef, CellRange}
 import com.tjclp.xl.cells.{Cell, CellError, CellValue}
 import java.time.LocalDate
 import java.time.temporal.ChronoUnit
@@ -169,17 +169,37 @@ private[functions] def numError(detail: String, usage: String): EvalError =
   EvalError.ErrorValue(CellError.Num, Some(s"$detail: $usage"))
 
 trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
-  private def rangeValues(
-    location: TExpr.RangeLocation,
+  /**
+   * A cash-flow argument's cells in row-major order, each with the place its messages name: a
+   * range's cells by address; #964: an array constant's elements as cells at their offset in the
+   * array, named "array element n" (Excel reads both alike).
+   */
+  private def flowCells(
+    arg: ArgSpec.ValuesArg,
     ctx: EvalContext
-  ): Either[EvalError, Vector[Cell]] =
-    ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
-      val readCell = rangeCellReader(targetSheet, ctx)
-      range.cellsRowMajor.foldLeft[Either[EvalError, Vector[Cell]]](Right(Vector.empty)) {
-        (result, at) =>
-          result.flatMap(cells => readCell(at).map(value => cells :+ Cell(at, value)))
-      }
-    }
+  ): Either[EvalError, Vector[(Cell, String)]] =
+    arg match
+      case ArgSpec.ValuesArg.Range(location) =>
+        ctx.resolveRange(location).flatMap { case (targetSheet, range) =>
+          val readCell = rangeCellReader(targetSheet, ctx)
+          range.cellsRowMajor.foldLeft[Either[EvalError, Vector[(Cell, String)]]](
+            Right(Vector.empty)
+          ) { (result, at) =>
+            result.flatMap(cells => readCell(at).map(value => cells :+ (Cell(at, value), at.toA1)))
+          }
+        }
+      case ArgSpec.ValuesArg.Constant(expr) =>
+        ctx.evalArrayExpr(expr).map { value =>
+          val array = toCellArray(value)
+          Vector
+            .tabulate(array.rows, array.cols) { (row, col) =>
+              (
+                Cell(ARef.from0(col, row), array(row, col)),
+                s"array element ${row * array.cols + col + 1}"
+              )
+            }
+            .flatten
+        }
 
   /**
    * Resolve before applying the function's skip policy: an unevaluated formula is never a blank.
@@ -187,12 +207,12 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
    */
   private def numericValues(
     function: String,
-    location: TExpr.RangeLocation,
+    arg: ArgSpec.ValuesArg,
     ctx: EvalContext
   ): Either[EvalError, List[BigDecimal]] =
-    rangeValues(location, ctx).flatMap { cells =>
+    flowCells(arg, ctx).flatMap { cells =>
       cells
-        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(Nil)) { (result, cell) =>
+        .foldLeft[Either[EvalError, List[BigDecimal]]](Right(Nil)) { case (result, (cell, _)) =>
           result.flatMap { values =>
             cell.value match
               case CellValue.Empty | CellValue.Text(_) | CellValue.RichText(_) |
@@ -214,8 +234,8 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
   /** GH-499: validate each original pair before filtering aligned blank rows. */
   private def datedValues(
     function: String,
-    valuesLocation: TExpr.RangeLocation,
-    datesLocation: TExpr.RangeLocation,
+    valuesArg: ArgSpec.ValuesArg,
+    datesArg: ArgSpec.ValuesArg,
     ctx: EvalContext
   ): Either[EvalError, (List[BigDecimal], List[LocalDate])] =
     // Excel: differing counts are #NUM!, a value or date it cannot read #VALUE!
@@ -226,8 +246,8 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
     val date1904 = ctx.workbook.exists(_.metadata.date1904)
 
     for
-      values <- rangeValues(valuesLocation, ctx)
-      dates <- rangeValues(datesLocation, ctx)
+      values <- flowCells(valuesArg, ctx)
+      dates <- flowCells(datesArg, ctx)
       pairs <-
         if values.size != dates.size then
           Left(mismatched("values and dates must have the same length"))
@@ -235,7 +255,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
           values
             .zip(dates)
             .foldLeft[Either[EvalError, List[(BigDecimal, LocalDate)]]](Right(Nil)) {
-              case (result, (valueCell, dateCell)) =>
+              case (result, ((valueCell, valueAt), (dateCell, dateAt))) =>
                 result.flatMap { acc =>
                   if valueCell.value == CellValue.Empty && dateCell.value == CellValue.Empty then
                     Right(acc)
@@ -244,7 +264,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                     Left(
                       mismatched(
                         "values and dates must have the same length and aligned positions " +
-                          s"(${valueCell.ref.toA1}, ${dateCell.ref.toA1})"
+                          s"($valueAt, $dateAt)"
                       )
                     )
                   else
@@ -256,7 +276,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                           TExpr
                             .decodeNumeric(valueCell)
                             .left
-                            .map(_ => invalid(s"invalid cash flow at ${valueCell.ref.toA1}"))
+                            .map(_ => invalid(s"invalid cash flow at $valueAt"))
                       date <- dateCell.value match
                         case CellValue.Error(error) =>
                           Left(EvalError.ErrorValue(error, Some(function)))
@@ -276,7 +296,7 @@ trait FunctionSpecsFinancialCashflow extends FunctionSpecsBase:
                               TExpr
                                 .decodeAsDate(dateCell)
                                 .left
-                                .map(_ => invalid(s"invalid date at ${dateCell.ref.toA1}"))
+                                .map(_ => invalid(s"invalid date at $dateAt"))
                     yield (value, date) :: acc
                 }
             }

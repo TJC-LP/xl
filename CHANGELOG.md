@@ -18,6 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`IRR`, `NPV`, `XIRR` and `XNPV` take array constants** (#964): `=IRR({-100,50})` is -0.5 and
+  `=NPV(0.1,{50,60})` about 95.04, as in Excel; XIRR and XNPV take one for the values, the dates
+  or both (`=XIRR({-100,60,60},{45292,45474,45658})`). An array constant reads like the same
+  flows in cells, either orientation: text and logical elements are skipped, a missing sign change
+  or a count mismatch is `#NUM!`. Other array-valued expressions in these slots
+  (`=IRR(A1:A3*1)`) are still a parse error (#940). **Behaviour change:** these formulas were a
+  `FORMULA_ERROR` ("expected range") and now compute.
+
 - **Date text is its serial wherever a single value converts text to a number** (#953):
   `=VALUE("12/31/2028")`, `="12/31/2028"+0` and `=A1+0` over the text `12/31/2028` are 47118,
   and a numeric, integer or date argument reads date text the same way (`=YEAR("31-Dec-2028")`

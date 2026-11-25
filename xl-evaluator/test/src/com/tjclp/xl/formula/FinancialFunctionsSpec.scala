@@ -1246,3 +1246,76 @@ class FinancialFunctionsSpec extends ScalaCheckSuite:
     val evaluated = result.evaluated.getOrElse(SheetName.unsafe("Test"), Map.empty)
     assertEquals(evaluated.get(ARef.from0(3, 5)), Some(CellValue.Error(CellError.Num)))
   }
+
+  // ==================== #964: array constants in the cash-flow arguments ====================
+
+  // Excel values from the issue's report (IRR({-100,50}) is -0.5, NPV(0.1,{50,60}) about 95.04);
+  // the rest compare an array constant with the same flows read from cells, the reading Excel
+  // documents for both ("an array or a reference").
+  private val flows964: Sheet = sheetWith(
+    ARef.from0(0, 0) -> CellValue.Number(BigDecimal(-100)),
+    ARef.from0(0, 1) -> CellValue.Number(BigDecimal(60)),
+    ARef.from0(0, 2) -> CellValue.Number(BigDecimal(60)),
+    ARef.from0(1, 0) -> CellValue.Number(BigDecimal(45292)), // 2024-01-01
+    ARef.from0(1, 1) -> CellValue.Number(BigDecimal(45474)), // 2024-07-01
+    ARef.from0(1, 2) -> CellValue.Number(BigDecimal(45658)) // 2025-01-01
+  )
+
+  private def number964(formula: String)(implicit loc: munit.Location): BigDecimal =
+    flows964.evaluateFormula(formula) match
+      case Right(CellValue.Number(n)) => n
+      case other => fail(s"$formula: expected a number, got $other")
+
+  private def sameAs964(arrayForm: String, rangeForm: String)(implicit
+    loc: munit.Location
+  ): Unit =
+    assertApprox(number964(arrayForm).toDouble, number964(rangeForm).toDouble, 1e-12)
+
+  test("#964: IRR and NPV take an array constant (the issue's values)") {
+    assertApprox(number964("=IRR({-100,50})").toDouble, -0.5, 1e-9)
+    assertApprox(number964("=IRR({-100,50},0.2)").toDouble, -0.5, 1e-9)
+    assertApprox(number964("=NPV(0.1,{50,60})").toDouble, 50 / 1.1 + 60 / 1.21, 1e-9)
+  }
+
+  test("#964: an array constant reads like the same flows in cells, either orientation") {
+    sameAs964("=IRR({-100,60,60})", "=IRR(A1:A3)")
+    sameAs964("=IRR({-100;60;60})", "=IRR(A1:A3)")
+    sameAs964("=NPV(0.1,{-100;60;60})", "=NPV(0.1,A1:A3)")
+  }
+
+  test("#964: XIRR and XNPV take array constants for values, dates or both") {
+    sameAs964("=XIRR({-100,60,60},{45292,45474,45658})", "=XIRR(A1:A3,B1:B3)")
+    sameAs964("=XIRR(A1:A3,{45292,45474,45658})", "=XIRR(A1:A3,B1:B3)")
+    sameAs964("=XIRR({-100;60;60},B1:B3,0.2)", "=XIRR(A1:A3,B1:B3)")
+    sameAs964("=XNPV(0.1,{-100,60,60},{45292,45474,45658})", "=XNPV(0.1,A1:A3,B1:B3)")
+  }
+
+  test("#964: text and logical elements of an array constant are skipped, as in a range") {
+    // Excel's IRR and NPV documentation: text, logical values and blanks in an array or
+    // reference are ignored
+    sameAs964("=IRR({-100,\"x\",TRUE,60,60})", "=IRR(A1:A3)")
+    sameAs964("=NPV(0.1,{-100,FALSE,60,\"y\",60})", "=NPV(0.1,A1:A3)")
+  }
+
+  test("#964: an array-constant flow still needs a sign change, and counts must match") {
+    assertEquals(
+      flows964.evaluateFormula("=IRR({100,50})"),
+      Right(CellValue.Error(CellError.Num))
+    )
+    assertEquals(
+      flows964.evaluateFormula("=XIRR({-100,60,60},{45292,45474})"),
+      Right(CellValue.Error(CellError.Num))
+    )
+  }
+
+  test("#964: array-constant arguments print back as written") {
+    List(
+      "=IRR({-100,50})",
+      "=NPV(0.1,{50;60})",
+      "=XIRR({-100,60,60},{45292,45474,45658},0.2)",
+      "=XNPV(0.1,A1:A3,{45292,45474,45658})"
+    ).foreach { formula =>
+      val printed = FormulaParser.parse(formula).map(FormulaPrinter.printFileForm)
+      assertEquals(printed, Right(formula.drop(1)), formula)
+    }
+  }

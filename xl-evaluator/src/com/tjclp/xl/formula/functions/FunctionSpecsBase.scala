@@ -134,9 +134,10 @@ trait FunctionSpecsBase:
   type UnaryDate = TExpr[LocalDate]
   type AnyExpr = TExpr[Any]
   // GH-394: cashflow/date ranges are RangeLocations — `=XIRR(S!A1:B1, S!A2:B2)` and named
-  // ranges resolve at evaluation; the CellRange-taking public builders wrap RangeLocation.Local
-  type NpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation)
-  type IrrArgs = (TExpr.RangeLocation, Option[TExpr[BigDecimal]])
+  // ranges resolve at evaluation; the CellRange-taking public builders wrap RangeLocation.Local.
+  // #964: each cash-flow slot also takes an array constant (ArgSpec.ValuesArg)
+  type NpvArgs = (TExpr[BigDecimal], ArgSpec.ValuesArg)
+  type IrrArgs = (ArgSpec.ValuesArg, Option[TExpr[BigDecimal]])
   type VlookupArgs = (TExpr[CellValue], TExpr.RangeLocation, TExpr[Int], Option[TExpr[Boolean]])
   // GH-197: Changed to accept both ranges AND array expressions
   type SumProductArgs = List[ArgSpec.SumProductArg]
@@ -176,8 +177,8 @@ trait FunctionSpecsBase:
   type CellArgs = (TExpr[String], Option[AnyExpr])
   // GH-476 HYPERLINK: link_location + optional friendly_name (the displayed text)
   type HyperlinkArgs = (TExpr[String], Option[TExpr[String]])
-  type XnpvArgs = (TExpr[BigDecimal], TExpr.RangeLocation, TExpr.RangeLocation)
-  type XirrArgs = (TExpr.RangeLocation, TExpr.RangeLocation, Option[TExpr[BigDecimal]])
+  type XnpvArgs = (TExpr[BigDecimal], ArgSpec.ValuesArg, ArgSpec.ValuesArg)
+  type XirrArgs = (ArgSpec.ValuesArg, ArgSpec.ValuesArg, Option[TExpr[BigDecimal]])
   type TvmArgs = (
     TExpr[BigDecimal],
     TExpr[BigDecimal],
